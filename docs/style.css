@@ -702,6 +702,10 @@ html.dark .nav-tabs-underline {
   text-underline-offset: 3px;
 }
 
+.maturity-category-docs p {
+  margin: 0;
+}
+
 .maturity-level-list {
   display: grid;
   margin: 12px 0 28px;

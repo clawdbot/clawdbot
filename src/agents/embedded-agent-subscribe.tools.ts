@@ -1,6 +1,5 @@
-/**
- * Sanitizes, extracts, and classifies embedded-agent tool execution results.
- */
+/** Sanitizes, extracts, and classifies embedded-agent tool execution results. */
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
@@ -13,7 +12,10 @@ import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.
 import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
-import { normalizeInteractiveReply, normalizeMessagePresentation } from "../interactive/payload.js";
+import {
+  normalizeLegacyInteractiveReply,
+  normalizeMessagePresentation,
+} from "../interactive/payload.js";
 import {
   redactSecrets,
   redactSensitiveFieldValue,
@@ -32,6 +34,7 @@ import {
   readToolResultDetails,
   readToolResultStatus,
 } from "./tool-result-error.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
 export { isToolResultError };
 
@@ -285,7 +288,8 @@ export function sanitizeToolResult(result: unknown): unknown {
       const entry = item as Record<string, unknown>;
       if (readStringValue(entry.type) === "image") {
         const data = readStringValue(entry.data);
-        const bytes = data?.length ?? (typeof entry.bytes === "number" ? entry.bytes : undefined);
+        const existingBytes = typeof entry.bytes === "number" ? entry.bytes : undefined;
+        const bytes = data === undefined ? existingBytes : estimateBase64DecodedBytes(data);
         const cleaned = { ...entry };
         delete cleaned.data;
         return Object.assign({}, cleaned, { bytes, omitted: true });
@@ -576,7 +580,7 @@ export function extractMessagingToolSourceReplyPayload(
   if (presentation) {
     payload.presentation = presentation;
   }
-  const interactive = normalizeInteractiveReply(sourceReply.interactive);
+  const interactive = normalizeLegacyInteractiveReply(sourceReply.interactive);
   if (interactive) {
     payload.interactive = interactive;
   }
@@ -599,7 +603,7 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "apply_patch",
   "browser",
   "canvas",
-  "cron",
+  AUTOMATIONS_TOOL_NAME,
   "edit",
   "exec",
   "gateway",
@@ -643,7 +647,7 @@ function isExternalToolResult(result: unknown): boolean {
   return typeof details.mcpServer === "string" || typeof details.mcpTool === "string";
 }
 
-export function isToolResultMediaTrusted(
+function isToolResultMediaTrusted(
   toolName?: string,
   result?: unknown,
   trustedLocalMediaToolNames?: ReadonlySet<string>,
@@ -656,6 +660,12 @@ export function isToolResultMediaTrusted(
     return true;
   }
   return isCoreToolResultMediaTrustedName(toolName);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.embeddedSubscribeToolsTestApi")
+  ] = { isToolResultMediaTrusted };
 }
 
 function isTrustedOwnedTtsLocalMedia(
@@ -1018,6 +1028,16 @@ export function extractMessagingToolSend(
   // Provider docking: new provider tools must implement plugin.actions.extractToolSend.
   const action = normalizeOptionalString(args.action) ?? "";
   const accountId = normalizeOptionalString(args.accountId);
+  if (toolName === "conversations_send" || toolName === "conversations_turn") {
+    const conversationRef = normalizeOptionalString(args.conversationRef);
+    return conversationRef
+      ? {
+          tool: toolName,
+          provider: "conversation",
+          to: conversationRef,
+        }
+      : undefined;
+  }
   if (toolName === "message") {
     if (!isMessagingToolTargetEvidenceAction(toolName, args)) {
       return undefined;
@@ -1157,3 +1177,4 @@ export function extractMessagingToolSendResult(
     threadSuppressed: threadEvidence.threadSuppressed === true ? true : undefined,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

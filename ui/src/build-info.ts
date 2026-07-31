@@ -13,3 +13,11 @@ declare global {
 const injectedBuildInfo = globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO;
 
 export const CONTROL_UI_BUILD_INFO = normalizeControlUiBuildInfo(injectedBuildInfo);
+
+export function controlUiVersionDiffersFrom(gatewayVersion: string | undefined): boolean {
+  const controlUiVersion = CONTROL_UI_BUILD_INFO.version?.trim();
+  const normalizedGatewayVersion = gatewayVersion?.trim();
+  return Boolean(
+    controlUiVersion && normalizedGatewayVersion && controlUiVersion !== normalizedGatewayVersion,
+  );
+}

@@ -194,6 +194,41 @@ describe("createLocalShellRunner", () => {
     expect(harness.messages.join("\n")).not.toMatch(/[\uD800-\uDFFF]/u);
   });
 
+  it("preserves UTF-8 characters split across stdout and stderr chunks", async () => {
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const spawnCommand = vi.fn(() => ({
+      stdout,
+      stderr,
+      on: (event: string, callback: (...args: unknown[]) => void) => {
+        if (event === "close") {
+          setImmediate(() => {
+            const stdoutBytes = Buffer.from("猫", "utf8");
+            const stderrBytes = Buffer.from("😀", "utf8");
+            stdout.emit("data", stdoutBytes.subarray(0, 1));
+            stderr.emit("data", stderrBytes.subarray(0, 2));
+            setImmediate(() => {
+              stdout.emit("data", stdoutBytes.subarray(1));
+              stderr.emit("data", stderrBytes.subarray(2));
+              callback(0, null);
+            });
+          });
+        }
+      },
+    }));
+    const harness = createShellHarness({
+      spawnCommand: spawnCommand as unknown as typeof import("node:child_process").spawn,
+    });
+
+    const run = harness.runLocalShellLine("!unicode");
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+    await run;
+
+    expect(harness.messages).toContain("[local] 猫");
+    expect(harness.messages).toContain("[local] 😀");
+    expect(harness.messages.join("\n")).not.toContain("�");
+  });
+
   it("refuses to retarget local commands after the working directory is deleted", async () => {
     const harness = createShellHarness({ getCwd: () => undefined });
 

@@ -372,6 +372,28 @@ describe("nostr-profile-http", () => {
       expect(res["_getStatusCode"]()).toBe(403);
     });
 
+    it.each([
+      ["http://localhost:18789", 200],
+      ["http://127.0.0.1:18789", 200],
+      ["http://127.0.0.2:18789", 200],
+      ["http://127.255.255.254:18789", 200],
+      ["http://[::1]:18789", 200],
+      ["http://[::ffff:127.0.0.2]:18789", 200],
+      ["http://128.0.0.1:18789", 403],
+      ["http://127.0.0.1.evil.com:18789", 403],
+    ] as const)("classifies profile mutation origin %s", async (origin, expectedStatusCode) => {
+      const { res, run } = createProfileHttpHarness("PUT", "/api/channels/nostr/default/profile", {
+        body: { name: "satoshi" },
+        req: { headers: { origin } },
+      });
+      if (expectedStatusCode === 200) {
+        mockPublishSuccess();
+      }
+
+      await run();
+      expect(res["_getStatusCode"]()).toBe(expectedStatusCode);
+    });
+
     it("rejects profile mutation with cross-site sec-fetch-site header", async () => {
       const { res, run } = createProfileHttpHarness("PUT", "/api/channels/nostr/default/profile", {
         body: { name: "attacker" },
@@ -592,38 +614,7 @@ describe("nostr-profile-http", () => {
 
       const data = expectImportSuccessResponse(res);
       expect(data.saved).toBe(true);
-      expect(data.merged).toEqual({
-        name: "imported",
-        displayName: "Imported User",
-        about: "local bio",
-      });
-      expect(ctx.updateConfigProfile).toHaveBeenCalledWith("default", data.merged);
-    });
-
-    it("does not mutate config for an explicit draft import", async () => {
-      const { ctx, res, run } = createProfileHttpHarness(
-        "POST",
-        "/api/channels/nostr/default/profile/import",
-        {
-          body: { autoMerge: false },
-          ctx: {
-            getConfigProfile: vi.fn().mockReturnValue({ about: "local bio" }),
-          },
-        },
-      );
-
-      mockSuccessfulProfileImport();
-
-      await run();
-
-      const data = expectImportSuccessResponse(res);
-      expect(data.saved).toBe(false);
-      expect(data.merged).toEqual({
-        name: "imported",
-        displayName: "Imported User",
-        about: "local bio",
-      });
-      expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
+      expect(ctx.updateConfigProfile).toHaveBeenCalled();
     });
 
     it("returns error when account not found", async () => {

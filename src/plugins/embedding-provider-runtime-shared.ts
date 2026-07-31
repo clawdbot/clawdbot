@@ -54,13 +54,13 @@ export function getRuntimeEmbeddingProviderAdapter<TAdapter extends { id: string
   lookupIds: string[];
   getRegisteredProvider: (id: string) => RegisteredAdapterEntry<TAdapter> | undefined;
 }): TAdapter | undefined {
+  // Resolve each exact id before trying the next configured alias. Otherwise a
+  // registered alias can shadow a plugin-owned adapter for the requested id.
   for (const candidateId of params.lookupIds) {
     const registered = params.getRegisteredProvider(candidateId);
     if (registered) {
       return registered.adapter;
     }
-  }
-  for (const candidateId of params.lookupIds) {
     const provider = resolvePluginCapabilityProvider({
       key: params.key,
       providerId: candidateId,

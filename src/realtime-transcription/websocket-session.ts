@@ -1,6 +1,6 @@
 // Realtime transcription websocket session streams audio to transcription providers.
 import { randomUUID } from "node:crypto";
-import WebSocket, { type RawData } from "ws";
+import WebSocket from "ws";
 import { RetrySupervisor } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
@@ -57,17 +57,7 @@ const RECONNECT_STABLE_RESET_MS = 30_000;
 // Bound inbound messages before ws buffers them for JSON parsing. The 16 MiB cap
 // matches realtime voice; ws rejects larger messages with close 1009 before
 // they reach onMessage, replacing its 100 MiB client default.
-export const REALTIME_TRANSCRIPTION_WS_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
-
-function rawWsDataToBuffer(data: RawData): Buffer {
-  if (Buffer.isBuffer(data)) {
-    return data;
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data);
-  }
-  return Buffer.from(data);
-}
+const REALTIME_TRANSCRIPTION_WS_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 
 function defaultParseMessage(payload: Buffer): unknown {
   try {
@@ -266,6 +256,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
             maxPayload: REALTIME_TRANSCRIPTION_WS_MAX_PAYLOAD_BYTES,
             ...(proxyAgent ? { agent: proxyAgent } : {}),
           });
+          this.ws.binaryType = "nodebuffer";
         } catch (error) {
           failConnect(normalizeError(error));
           return;
@@ -286,7 +277,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
         });
 
         this.ws.on("message", (data) => {
-          const payload = rawWsDataToBuffer(data);
+          const payload = data as Buffer;
           this.captureFrame("inbound", payload);
           try {
             if (!this.options.onMessage) {

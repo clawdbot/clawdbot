@@ -1,14 +1,15 @@
 /** Write-side cron codec: converts a finished service event into a run-history entry.
  * Kept separate from task-run-detail.ts so the read/history codec stays free of the
  * agents failover tree (which transitively pulls the sandbox module graph). */
-import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
+import { resolveCronRunErrorReason } from "./run-error-reason.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
 import type { CronEvent } from "./service/state.js";
+import type { CronRunErrorClassification } from "./types.js";
 
 type CronFinishedEvent = CronEvent & { action: "finished" };
 
 /** Uses execution timing for one timestamp shared by ledger and legacy dual-write paths. */
-export function resolveCronRunEndedAt(event: CronFinishedEvent, fallbackTs: number): number {
+function resolveCronRunEndedAt(event: CronFinishedEvent, fallbackTs: number): number {
   if (
     typeof event.runAtMs === "number" &&
     Number.isFinite(event.runAtMs) &&
@@ -24,8 +25,9 @@ export function resolveCronRunEndedAt(event: CronFinishedEvent, fallbackTs: numb
 export function cronRunLogEntryFromEvent(
   event: CronFinishedEvent,
   fallbackTs: number,
+  errorClassification?: CronRunErrorClassification,
 ): CronRunLogEntry {
-  const errorReason = resolveFailoverReasonFromError(event.error, event.provider) ?? undefined;
+  const errorReason = resolveCronRunErrorReason(event.error, event.provider, errorClassification);
   return {
     ts: resolveCronRunEndedAt(event, fallbackTs),
     jobId: event.jobId,

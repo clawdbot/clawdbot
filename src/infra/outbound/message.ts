@@ -2,12 +2,13 @@
 // requirements, payload plans, gateway fallback, and optional mirroring.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
-import { deriveDurableFinalDeliveryRequirements } from "../../channels/message/capabilities.js";
+import { deriveDurableFinalDeliveryRequirementsForBatch } from "../../channels/message/capabilities.js";
 import {
   sendDurableMessageBatch,
   serializeDurableMessagePayloadOutcomes,
   type SerializedDurableMessagePayloadOutcome,
 } from "../../channels/message/runtime.js";
+import type { DurableMessageSendIntent } from "../../channels/message/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
@@ -23,6 +24,7 @@ import {
   type OutboundDeliveryQueuePolicy,
   type OutboundSendDeps,
 } from "./deliver.js";
+import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import {
   resolveOutboundMessageGatewayOptions,
   type OutboundMessageGatewayOptionsInput,
@@ -32,6 +34,7 @@ import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
   projectOutboundPayloadPlanForMirror,
+  type NormalizedOutboundPayload,
 } from "./payloads.js";
 import { buildOutboundSessionContext } from "./session-context.js";
 import { resolveOutboundTarget } from "./targets.js";
@@ -47,8 +50,6 @@ const loadMessageConfigRuntime = createLazyRuntimeModule(
 const loadMessageGatewayRuntime = createLazyRuntimeModule(
   () => import("./message.gateway.runtime.js"),
 );
-
-type MessageGatewayOptions = OutboundMessageGatewayOptionsInput;
 
 type MessageSendParams = {
   to: string;
@@ -79,6 +80,7 @@ type MessageSendParams = {
   accountId?: string;
   /** Known destination conversation kind prepared by the caller. */
   conversationType?: ChatType;
+  conversationReadOrigin?: "delegated" | "direct-operator";
   replyToId?: string;
   threadId?: string | number;
   dryRun?: boolean;
@@ -88,9 +90,25 @@ type MessageSendParams = {
   mediaAccess?: OutboundMediaAccess;
   deps?: OutboundSendDeps;
   cfg?: OpenClawConfig;
-  gateway?: MessageGatewayOptions;
+  gateway?: OutboundMessageGatewayOptionsInput;
   idempotencyKey?: string;
+  /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
+  preparedMessageId?: string;
+  /** @internal Use the active adapter directly when already executing inside the Gateway. */
+  gatewayOwnedDelivery?: boolean;
+  /** @internal Stable producer id for idempotent durable queue creation. */
+  deliveryIntentId?: string;
+  /** @internal Serializable owner state finalized by live send or recovery. */
+  deliveryCompletion?: DurableDeliveryCompletion;
+  /** @internal Override provider unknown-send reconciliation independently from queue durability. */
+  requireUnknownSendReconciliation?: boolean;
+  /** @internal Runs after queue persistence and before platform I/O. */
+  onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
+  /** @internal Runs on identified platform evidence before queue acknowledgement. */
+  onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
   mirror?: OutboundMirror;
+  /** @internal Reports the effective payload only after an identified direct send. */
+  onDeliveredPayload?: (payload: NormalizedOutboundPayload) => void;
   abortSignal?: AbortSignal;
   silent?: boolean;
   parseMode?: "HTML";
@@ -125,7 +143,7 @@ type MessagePollParams = {
   isAnonymous?: boolean;
   dryRun?: boolean;
   cfg?: OpenClawConfig;
-  gateway?: MessageGatewayOptions;
+  gateway?: OutboundMessageGatewayOptionsInput;
   idempotencyKey?: string;
 };
 
@@ -196,12 +214,11 @@ async function resolveRequiredChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
 }): Promise<string> {
-  return (
-    await resolveMessageChannelSelection({
-      cfg: params.cfg,
-      channel: params.channel,
-    })
-  ).channel;
+  const selection = await resolveMessageChannelSelection({
+    cfg: params.cfg,
+    channel: params.channel,
+  });
+  return selection.channel;
 }
 
 function resolveRequiredPlugin(channel: string, cfg: OpenClawConfig) {
@@ -212,51 +229,16 @@ function resolveRequiredPlugin(channel: string, cfg: OpenClawConfig) {
   return plugin;
 }
 
-function payloadRequiresDurablePayloadTransport(payload: ReplyPayload): boolean {
-  return (
-    payload.presentation !== undefined ||
-    payload.delivery !== undefined ||
-    payload.interactive !== undefined ||
-    (payload.channelData !== undefined && Object.keys(payload.channelData).length > 0)
-  );
-}
-
-function mergeDurableRequirements(
-  target: DurableFinalDeliveryRequirements,
-  source: DurableFinalDeliveryRequirements,
-): DurableFinalDeliveryRequirements {
-  for (const [capability, required] of Object.entries(source) as Array<
-    [keyof DurableFinalDeliveryRequirements, boolean | undefined]
-  >) {
-    if (required === true) {
-      target[capability] = true;
-    }
-  }
-  return target;
-}
-
 function deriveRequiredMessageSendCapabilities(params: {
   payloads: ReplyPayload[];
   replyToId?: string | null;
   threadId?: string | number | null;
   silent?: boolean;
 }): DurableFinalDeliveryRequirements {
-  const requirements: DurableFinalDeliveryRequirements = { reconcileUnknownSend: true };
-  for (const payload of params.payloads) {
-    mergeDurableRequirements(
-      requirements,
-      deriveDurableFinalDeliveryRequirements({
-        payload,
-        replyToId: params.replyToId,
-        threadId: params.threadId,
-        silent: params.silent,
-        payloadTransport: payloadRequiresDurablePayloadTransport(payload),
-        batch: params.payloads.length > 1,
-        reconcileUnknownSend: true,
-      }),
-    );
-  }
-  return requirements;
+  return deriveDurableFinalDeliveryRequirementsForBatch({
+    ...params,
+    reconcileUnknownSend: true,
+  });
 }
 
 async function assertRequiredMessageSendDurability(params: {
@@ -285,12 +267,12 @@ async function assertRequiredMessageSendDurability(params: {
   );
 }
 
-function resolveGatewayOptions(opts?: MessageGatewayOptions) {
+function resolveGatewayOptions(opts?: OutboundMessageGatewayOptionsInput) {
   return resolveOutboundMessageGatewayOptions(opts);
 }
 
 async function callMessageGateway<T>(params: {
-  gateway?: MessageGatewayOptions;
+  gateway?: OutboundMessageGatewayOptionsInput;
   method: string;
   params: Record<string, unknown>;
 }): Promise<T> {
@@ -366,7 +348,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     };
   }
 
-  if (deliveryMode !== "gateway") {
+  if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
     const outboundChannel = channel;
     const resolvedTarget = resolveOutboundTarget({
       channel: outboundChannel,
@@ -392,7 +374,8 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     });
     // Public queuePolicy:"required" is the exact-delivery contract preflighted below.
     // Lower-level queue-required callers must leave this internal opt-in unset.
-    const requireUnknownSendReconciliation = params.queuePolicy === "required";
+    const requireUnknownSendReconciliation =
+      params.requireUnknownSendReconciliation ?? params.queuePolicy === "required";
     if (requireUnknownSendReconciliation) {
       await assertRequiredMessageSendDurability({
         cfg,
@@ -409,6 +392,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       to: resolvedTarget.to,
       session: outboundSession,
       accountId: params.accountId,
+      conversationReadOrigin: params.conversationReadOrigin,
       payloads: normalizedPayloads,
       replyToId: params.replyToId,
       threadId: params.threadId,
@@ -423,6 +407,12 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       silent: params.silent,
       mediaAccess: params.mediaAccess,
       formatting: params.parseMode ? { parseMode: params.parseMode } : undefined,
+      preparedMessageId: params.preparedMessageId,
+      deliveryIntentId: params.deliveryIntentId,
+      deliveryCompletion: params.deliveryCompletion,
+      ...(params.onDeliveryIntent ? { onDeliveryIntent: params.onDeliveryIntent } : {}),
+      ...(params.onDeliveryResult ? { onDeliveryResult: params.onDeliveryResult } : {}),
+      ...(params.onDeliveredPayload ? { onDeliveredPayload: params.onDeliveredPayload } : {}),
       mirror: params.mirror
         ? {
             ...params.mirror,

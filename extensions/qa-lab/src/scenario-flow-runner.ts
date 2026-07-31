@@ -10,7 +10,7 @@ type QaSuiteStep = {
 
 type QaSuiteScenarioResult = {
   name: string;
-  status: "pass" | "fail";
+  status: "pass" | "fail" | "skip";
   steps: Array<{
     name: string;
     status: "pass" | "fail" | "skip";
@@ -36,6 +36,48 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as
 const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
   "./auth-profile.fixture.js": () => import("./auth-profile.fixture.js"),
   "./codex-plugin.fixture.js": () => import("./codex-plugin.fixture.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-allowbots.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-allowbots.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-approval.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-approval.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-config.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-config.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-dm.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-dm.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-account.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-account.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-gateway.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-gateway.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-recovery.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-recovery.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-verification.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-verification.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-messages.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-messages.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-recovery.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-recovery.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-verification.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-verification.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-edit.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-edit.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-media.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-media.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-policy.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-policy.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-reaction.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-reaction.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-restart.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-restart.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-room.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-room.js"),
+  "./live-transports/discord/scenario-runtime.js": () =>
+    import("./live-transports/discord/scenario-runtime.js"),
+  "./live-transports/slack/scenario-runtime.js": () =>
+    import("./live-transports/slack/scenario-runtime.js"),
+  "./live-transports/whatsapp/scenario-runtime.js": () =>
+    import("./live-transports/whatsapp/scenario-runtime.js"),
   "./tool-search-gateway.fixture.js": () => import("./tool-search-gateway.fixture.js"),
 };
 
@@ -309,8 +351,9 @@ export async function runScenarioFlow(params: {
   api: QaFlowApi;
   flow: QaScenarioFlow;
   scenarioTitle: string;
+  vars?: QaFlowVars;
 }) {
-  const vars: QaFlowVars = {};
+  const vars = params.vars ?? {};
   const steps: QaSuiteStep[] = params.flow.steps.map((step) => ({
     name: step.name,
     run: async () => {

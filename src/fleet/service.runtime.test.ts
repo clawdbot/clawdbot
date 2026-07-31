@@ -6,10 +6,9 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { cellAuthSecretDir, cellOwnerId } from "./cell-profile.js";
 import type { FleetContainerInspectResult, FleetContainerRuntime } from "./containers.runtime.js";
 import { deleteFleetCell, getFleetCell, listFleetCells } from "./registry.js";
-import {
-  createFleetService as createFleetServiceRuntime,
-  type FleetServiceOptions,
-} from "./service.runtime.js";
+import { createFleetService as createFleetServiceRuntime } from "./service.runtime.js";
+
+type FleetServiceOptions = NonNullable<Parameters<typeof createFleetServiceRuntime>[0]>;
 
 let root: string;
 const TEST_ATTEMPT_ID = "22222222222222222222222222222222";
@@ -33,6 +32,7 @@ function runningInspection(
 ): Extract<FleetContainerInspectResult, { kind: "ok" }> {
   return {
     kind: "ok",
+    containerId: "container-id",
     state: "running",
     running: true,
     labels: fleetLabels(),
@@ -88,6 +88,7 @@ function createContainerMock(
         running: start,
         labels: fleetLabels(profile.tenantId, profile.attemptId),
         environment: { ...profile.environment },
+        containerId: `container-${profile.attemptId}`,
         imageId: `sha256:${profile.attemptId}`,
         memory: profile.memory,
         cpus: profile.cpus,
@@ -546,7 +547,7 @@ describe("fleet service", () => {
     expect(containers[action]).toHaveBeenCalledWith("docker", "openclaw-cell-acme");
   });
 
-  it("streams logs only after proving container ownership", async () => {
+  it("pins logs to the inspected container generation after proving ownership", async () => {
     const containers = createContainerMock();
     const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
     await service.create({ tenant: "acme", gatewayToken: "token" });
@@ -556,7 +557,7 @@ describe("fleet service", () => {
       service.logs({ tenant: "acme", follow: true, tail: 100, since: "10m" }),
     ).resolves.toBeUndefined();
 
-    expect(containers.logs).toHaveBeenCalledWith("docker", "openclaw-cell-acme", {
+    expect(containers.logs).toHaveBeenCalledWith("docker", "container-id", {
       follow: true,
       tail: 100,
       since: "10m",

@@ -3,7 +3,13 @@ type AnthropicUsagePayload = {
   output_tokens?: unknown;
   cache_read_input_tokens?: unknown;
   cache_creation_input_tokens?: unknown;
+  cache_creation?: unknown;
   iterations?: unknown;
+};
+
+export type AnthropicCacheWriteUsage = {
+  cacheWrite5m?: number;
+  cacheWrite1h?: number;
 };
 
 export type AnthropicPromptUsageSnapshot = {
@@ -24,6 +30,21 @@ export type AnthropicIterationUsageResult =
 
 export function readAnthropicUsageTokenCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+export function readAnthropicCacheWriteUsage(
+  usage: AnthropicUsagePayload,
+): AnthropicCacheWriteUsage {
+  if (!usage.cache_creation || typeof usage.cache_creation !== "object") {
+    return {};
+  }
+  const cacheCreation = usage.cache_creation as Record<string, unknown>;
+  const cacheWrite5m = readAnthropicUsageTokenCount(cacheCreation.ephemeral_5m_input_tokens);
+  const cacheWrite1h = readAnthropicUsageTokenCount(cacheCreation.ephemeral_1h_input_tokens);
+  return {
+    ...(cacheWrite5m !== undefined ? { cacheWrite5m } : {}),
+    ...(cacheWrite1h !== undefined ? { cacheWrite1h } : {}),
+  };
 }
 
 export function readAnthropicPromptUsageSnapshot(

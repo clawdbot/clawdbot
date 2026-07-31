@@ -8,10 +8,6 @@ import { renderChatControls } from "./components/chat-controls.ts";
 
 type ChatControlsProps = Parameters<typeof renderChatControls>[0];
 
-vi.mock("../../components/icons.ts", () => ({
-  icons: {},
-}));
-
 function createSettings(): UiSettings {
   return {
     gatewayUrl: "ws://localhost:18789",
@@ -22,11 +18,10 @@ function createSettings(): UiSettings {
     themeMode: "dark",
     chatShowThinking: true,
     chatShowToolCalls: true,
-    chatPersistCommentary: false,
-    splitRatio: 0.6,
+    chatPersistCommentary: true,
     navCollapsed: false,
     navWidth: 280,
-    sidebarPinnedRoutes: ["workboard", "tasks"],
+    sidebarEntries: ["route:workboard", "route:tasks"],
   };
 }
 
@@ -55,7 +50,11 @@ function createProps(overrides: Record<string, unknown> = {}): ChatControlsProps
 }
 
 function menuItems(container: HTMLElement) {
-  return Array.from(container.querySelectorAll<HTMLButtonElement>(".chat-view-menu__item"));
+  return Array.from(
+    container.querySelectorAll<HTMLElement & { checked: boolean; disabled: boolean }>(
+      ".chat-view-menu__item",
+    ),
+  );
 }
 
 describe("chat composer view menu", () => {
@@ -69,11 +68,7 @@ describe("chat composer view menu", () => {
       t("chat.view.toolCalls"),
       t("chat.view.commentary"),
     ]);
-    expect(items.map((item) => item.getAttribute("aria-checked"))).toEqual([
-      "true",
-      "true",
-      "false",
-    ]);
+    expect(items.map((item) => item.checked)).toEqual([true, true, true]);
   });
 
   it("toggles settings from the menu rows", () => {
@@ -82,17 +77,27 @@ describe("chat composer view menu", () => {
     render(renderChatControls(createProps({ onSettingsChange })), container);
 
     const [reasoning, toolCalls, commentary] = menuItems(container);
-    reasoning?.click();
+    const dropdown = container.querySelector("wa-dropdown");
+    const select = (item: HTMLElement) =>
+      dropdown?.dispatchEvent(
+        new CustomEvent("wa-select", {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          detail: { item },
+        }),
+      );
+    select(reasoning!);
     expect(onSettingsChange).toHaveBeenLastCalledWith(
       expect.objectContaining({ chatShowThinking: false }),
     );
-    toolCalls?.click();
+    select(toolCalls!);
     expect(onSettingsChange).toHaveBeenLastCalledWith(
       expect.objectContaining({ chatShowToolCalls: false }),
     );
-    commentary?.click();
+    select(commentary!);
     expect(onSettingsChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({ chatPersistCommentary: true }),
+      expect.objectContaining({ chatPersistCommentary: false }),
     );
   });
 
@@ -104,12 +109,15 @@ describe("chat composer view menu", () => {
     const items = menuItems(container);
     expect(items.every((item) => item.disabled)).toBe(true);
     // Onboarding forces thinking hidden and tool calls visible.
-    expect(items.map((item) => item.getAttribute("aria-checked"))).toEqual([
-      "false",
-      "true",
-      "false",
-    ]);
-    items[0]?.click();
+    expect(items.map((item) => item.checked)).toEqual([false, true, true]);
+    container.querySelector("wa-dropdown")?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        detail: { item: items[0] },
+      }),
+    );
     expect(onSettingsChange).not.toHaveBeenCalled();
   });
 

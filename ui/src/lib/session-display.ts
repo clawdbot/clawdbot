@@ -1,4 +1,6 @@
 // Control UI module implements session display behavior.
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { t } from "../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 
 const CHANNEL_LABELS: Record<string, string> = {
@@ -15,16 +17,10 @@ const CHANNEL_LABELS: Record<string, string> = {
 
 const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
 
-/** Human channel label for group headers and name fallbacks. */
-export function channelDisplayLabel(channel: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(channel);
-  return CHANNEL_LABELS[normalized] ?? capitalize(normalized || channel);
-}
-
 /** Raw peer ids stay out of the sidebar; keep a short recognizable tail only. */
 function shortenPeerId(identifier: string): string {
   const trimmed = identifier.trim();
-  return trimmed.length <= 10 ? trimmed : `…${trimmed.slice(-6)}`;
+  return trimmed.length <= 10 ? trimmed : `…${sliceUtf16Safe(trimmed, -6)}`;
 }
 
 // Long hex/uuid runs inside keys and node ids are machine ids, not names;
@@ -84,18 +80,35 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   return checkout ?? node;
 }
 
+/** Machine identity of a typed session, derived from the session key. */
+type SessionTypedKind = "subagent" | "automation";
+
 /** Parsed type / context extracted from a session key. */
 type SessionKeyInfo = {
-  /** Prefix for typed sessions (Subagent:/Cron:). Empty for others. */
+  /** Typed-session identity; display branching keys off this, not label text. */
+  kind?: SessionTypedKind;
+  /** Catalog-backed prefix for typed sessions. Empty for others. */
   prefix: string;
   /** Human-readable fallback when no label / displayName is available. */
   fallbackName: string;
 };
 
+/** Typed-session prefixes come from the i18n catalog (RFC 0026). */
+function typedSessionPrefix(kind: SessionTypedKind): string {
+  return kind === "subagent"
+    ? t("sessionsView.subagentPrefix")
+    : t("sessionsView.automationPrefix");
+}
+
 type SessionDisplayRow = {
   label?: string;
   displayName?: string;
+  derivedTitle?: string;
 } & SessionWorktreeDisplayRow;
+
+type SessionDisplayOptions = {
+  includeSubagentPrefix?: boolean;
+};
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -109,18 +122,21 @@ function parseSessionKey(key: string): SessionKeyInfo {
   const normalized = normalizeLowercaseStringOrEmpty(key);
 
   // Main session.
-  if (key === "main" || key === "agent:main:main") {
-    return { prefix: "", fallbackName: "Main Session" };
+  if (key === "main" || /^agent:[^:]+:main$/u.test(key)) {
+    return { prefix: "", fallbackName: "Main Thread" };
   }
 
   // Subagent.
   if (key.includes(":subagent:")) {
-    return { prefix: "Subagent:", fallbackName: "Subagent:" };
+    const prefix = typedSessionPrefix("subagent");
+    return { kind: "subagent", prefix, fallbackName: prefix };
   }
 
-  // Cron job.
+  // Automation (cron) job. Session keys keep the `cron:` prefix; only the
+  // display strings use the Automations feature name.
   if (normalized.startsWith("cron:") || key.includes(":cron:")) {
-    return { prefix: "Cron:", fallbackName: "Cron Job:" };
+    const prefix = typedSessionPrefix("automation");
+    return { kind: "automation", prefix, fallbackName: prefix };
   }
 
   // Direct chat: agent:<x>:<channel>:direct:<id>. Never render the raw peer
@@ -151,14 +167,14 @@ function parseSessionKey(key: string): SessionKeyInfo {
   // pre-agent-scoped builds still surface in session lists; label, don't leak keys.
   for (const ch of KNOWN_CHANNEL_KEYS) {
     if (key === ch || key.startsWith(`${ch}:`)) {
-      return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Session` };
+      return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Thread` };
     }
   }
 
   // Dashboard sessions get generated titles asynchronously; the opaque uuid key
   // must not flash in the sidebar while that title is pending.
   if (/^agent:[^:]+:dashboard:/.test(key)) {
-    return { prefix: "", fallbackName: "New session" };
+    return { prefix: "", fallbackName: "New thread" };
   }
 
   // Remaining agent keys are named subsessions (CLI --session-id and friends):
@@ -174,16 +190,31 @@ function parseSessionKey(key: string): SessionKeyInfo {
   return { prefix: "", fallbackName: key };
 }
 
-export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow): string {
+export function resolveSessionDisplayName(
+  key: string,
+  row?: SessionDisplayRow,
+  options: SessionDisplayOptions = {},
+): string {
   const label = normalizeOptionalString(row?.label) ?? "";
   const displayName = normalizeOptionalString(row?.displayName) ?? "";
-  const { prefix, fallbackName } = parseSessionKey(key);
+  const derivedTitle = normalizeOptionalString(row?.derivedTitle) ?? "";
+  const { kind, prefix, fallbackName } = parseSessionKey(key);
 
-  const applyTypedPrefix = (name: string): string => {
-    if (!prefix) {
-      return name;
+  const applyTypedPrefix = (rawName: string): string => {
+    if (!kind || !prefix) {
+      return rawName;
     }
+    // Persisted automation sessions carry pre-rename "Cron:"/"Cron Job:"
+    // labels; strip them so the renamed prefix does not double up as
+    // "Automation: Cron: …".
+    const name =
+      kind === "automation"
+        ? rawName.replace(/^cron(\s+job)?:\s*/i, "").trim() || rawName
+        : rawName;
     const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s*`, "i");
+    if (kind === "subagent" && options.includeSubagentPrefix === false) {
+      return name.replace(prefixPattern, "").trim() || fallbackName;
+    }
     return prefixPattern.test(name) ? name : `${prefix} ${name}`;
   };
 
@@ -197,6 +228,9 @@ export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow):
   const workSubtitle = row ? resolveSessionWorkSubtitle(row) : undefined;
   if (workSubtitle && row?.worktree) {
     return applyTypedPrefix(workSubtitle);
+  }
+  if (derivedTitle && derivedTitle !== key) {
+    return applyTypedPrefix(derivedTitle);
   }
   return fallbackName;
 }

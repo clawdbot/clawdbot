@@ -14,7 +14,6 @@ import {
 } from "../test-utils/npm-spec-install-test-helpers.js";
 import { isAddressInUseError } from "./gmail-watcher-errors.js";
 
-type InstallHooksFromArchive = typeof import("./install.js").installHooksFromArchive;
 type InstallHooksFromPath = typeof import("./install.js").installHooksFromPath;
 
 const runCommandWithTimeoutMock = vi.fn();
@@ -33,12 +32,8 @@ vi.mock("../plugins/install-security-scan.js", () => ({
 
 vi.resetModules();
 
-const {
-  HOOK_INSTALL_ERROR_CODE,
-  installHooksFromArchive,
-  installHooksFromNpmSpec,
-  installHooksFromPath,
-} = await import("./install.js");
+const { HOOK_INSTALL_ERROR_CODE, installHooksFromNpmSpec, installHooksFromPath } =
+  await import("./install.js");
 const hookInstallRuntime = await import("./install.runtime.js");
 
 const fixtureRoot = path.join(process.cwd(), ".tmp", `openclaw-hook-install-${randomUUID()}`);
@@ -110,7 +105,7 @@ function writeArchiveFixture(params: { fileName: string; contents: Buffer }) {
 }
 
 function expectInstallFailureContains(
-  result: Awaited<ReturnType<InstallHooksFromArchive>>,
+  result: Awaited<ReturnType<InstallHooksFromPath>>,
   snippets: string[],
 ) {
   expect(result.ok).toBe(false);
@@ -234,8 +229,8 @@ async function createTarGzHookPackBuffer(params: {
 
 async function installArchiveFixture(params: { fileName: string; contents: Buffer }) {
   const fixture = writeArchiveFixture(params);
-  const result = await installHooksFromArchive({
-    archivePath: fixture.archivePath,
+  const result = await installHooksFromPath({
+    path: fixture.archivePath,
     hooksDir: fixture.hooksDir,
   });
   return { fixture, result };
@@ -252,7 +247,7 @@ function expectPathInstallFailureContains(
   expect(result.error).toContain(snippet);
 }
 
-describe("installHooksFromArchive", () => {
+describe("installHooksFromPath archives", () => {
   it.each([
     {
       name: "zip",
@@ -722,8 +717,8 @@ describe("installHooksFromPath", () => {
     });
 
     const hooksDir = path.join(stateDir, "hooks");
-    const result = await installHooksFromArchive({
-      archivePath,
+    const result = await installHooksFromPath({
+      path: archivePath,
       hooksDir,
     });
 

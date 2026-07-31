@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { buildCliAgentSystemPrompt } from "./helpers.js";
 
-vi.mock("../../tts/tts.js", () => ({
+vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
 }));
 
@@ -162,21 +162,18 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).toContain("sessionId=session-123");
   });
 
-  it("includes Telegram rich text guidance for CLI final replies", () => {
+  it("includes Telegram channel context for CLI final replies without core rich guidance", () => {
     const prompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       tools: [],
       modelDisplay: "anthropic/claude-opus-4-8",
       runtimeChannel: "telegram",
       runtimeChatType: "direct",
-      runtimeCapabilities: ["richText"],
     });
 
-    expect(prompt).toContain("Telegram rich ON");
-    expect(prompt).toContain("headings, tables");
-    expect(prompt).toContain("media tags block-only");
-    expect(prompt).toContain("Not MarkdownV2/parse_mode");
     expect(prompt).toContain("channel=telegram");
+    expect(prompt).not.toContain("Telegram rich ON");
+    expect(prompt).not.toContain("Telegram rich OFF");
     expect(prompt).not.toContain("### message tool");
   });
 

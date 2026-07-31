@@ -4,8 +4,8 @@ import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import {
   buildAuthChoiceGroups,
-  buildAuthChoiceOptions,
   formatAuthChoiceChoicesForCli,
+  isFeaturedAuthChoiceGroup,
 } from "./auth-choice-options.js";
 import { formatStaticAuthChoiceChoicesForCli } from "./auth-choice-options.static.js";
 
@@ -93,10 +93,12 @@ vi.mock("../flows/provider-flow.js", () => ({
 const EMPTY_STORE: AuthProfileStore = { version: 1, profiles: {} };
 
 function getOptions(includeSkip = false) {
-  return buildAuthChoiceOptions({
+  const { groups, skipOption } = buildAuthChoiceGroups({
     store: EMPTY_STORE,
     includeSkip,
+    assistantVisibleOnly: false,
   });
+  return [...groups.flatMap((group) => group.options), ...(skipOption ? [skipOption] : [])];
 }
 
 function requireChoiceGroup(
@@ -524,6 +526,16 @@ describe("buildAuthChoiceOptions", () => {
         groupId: "openrouter",
         groupLabel: "OpenRouter",
       },
+      {
+        pluginId: "meta",
+        providerId: "meta",
+        methodId: "api-key",
+        choiceId: "meta-api-key",
+        choiceLabel: "Meta API key",
+        groupId: "meta",
+        groupLabel: "Meta",
+        onboardingFeatured: true,
+      },
     ]);
 
     const { groups } = buildAuthChoiceGroups({
@@ -533,13 +545,21 @@ describe("buildAuthChoiceOptions", () => {
 
     expect(groups.map((group) => group.label)).toEqual([
       "OpenAI",
-      "Anthropic",
+      "OpenRouter",
       "xAI (Grok)",
       "Google",
-      "OpenRouter",
+      "Anthropic",
       "BytePlus",
       "Custom Provider",
       "LiteLLM",
+      "Meta",
+    ]);
+    expect(groups.filter(isFeaturedAuthChoiceGroup).map((group) => group.label)).toEqual([
+      "OpenAI",
+      "OpenRouter",
+      "xAI (Grok)",
+      "Google",
+      "Anthropic",
     ]);
   });
 
@@ -632,6 +652,37 @@ describe("buildAuthChoiceOptions", () => {
     ]);
     expect(openAIGroup.providerIds).toEqual(["openai"]);
     expect(openAIGroup.options[0]?.onboardingFeatured).toBe(true);
+  });
+
+  it("includes manual-only methods when the grouped CLI picker requests them", () => {
+    resolveProviderWizardOptions.mockReturnValue([
+      {
+        value: "openai-device-code",
+        label: "ChatGPT Device Pairing",
+        groupId: "openai",
+        groupLabel: "OpenAI",
+        assistantPriority: -10,
+        assistantVisibility: "manual-only",
+      },
+      {
+        value: "openai-api-key",
+        label: "OpenAI API Key",
+        groupId: "openai",
+        groupLabel: "OpenAI",
+        assistantPriority: 5,
+      },
+    ]);
+
+    const { groups } = buildAuthChoiceGroups({
+      store: EMPTY_STORE,
+      includeSkip: false,
+      assistantVisibleOnly: false,
+    });
+
+    expect(requireChoiceGroup(groups, "openai").options.map((option) => option.value)).toEqual([
+      "openai-device-code",
+      "openai-api-key",
+    ]);
   });
 
   it("groups OpenCode Zen and Go under one OpenCode entry", () => {

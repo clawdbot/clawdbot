@@ -6,7 +6,7 @@ import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { ThinkLevel } from "../thinking.js";
-import { withFastReplyConfig } from "./get-reply-fast-path.js";
+import { withFastReplyConfig } from "./get-reply-fast-path.test-support.js";
 import {
   buildGetReplyCtx,
   createGetReplyContinueDirectivesResult,

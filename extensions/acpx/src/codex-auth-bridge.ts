@@ -9,20 +9,25 @@ import os from "node:os";
 import path from "node:path";
 import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import {
+  parse as parseToml,
+  stringify as stringifyToml,
+  type TomlTableWithoutBigInt,
+} from "smol-toml";
+import {
+  CODEX_ACP_BIN,
+  CODEX_ACP_PACKAGE,
+  LEGACY_CODEX_ACP_PACKAGE,
+  OPENCLAW_CODEX_CONFIG_ARG,
+} from "./codex-adapter.js";
+import {
   extractTrustedCodexProjectPaths,
   renderIsolatedCodexConfig,
 } from "./codex-trust-config.js";
 import { quoteCommandPart, splitCommandParts } from "./command-line.js";
 import { resolveAcpxPluginRoot } from "./config.js";
 import type { ResolvedAcpxPluginConfig } from "./config.js";
-import {
-  OPENCLAW_ACPX_LEASE_ID_ARG,
-  OPENCLAW_ACPX_LEASE_ID_ENV,
-  OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
-} from "./process-lease.js";
+import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 
-const CODEX_ACP_PACKAGE = "@zed-industries/codex-acp";
-const CODEX_ACP_BIN = "codex-acp";
 const CLAUDE_ACP_PACKAGE = "@agentclientprotocol/claude-agent-acp";
 const CLAUDE_ACP_BIN = "claude-agent-acp";
 const RUN_CONFIGURED_COMMAND_SENTINEL = "--openclaw-run-configured";
@@ -229,10 +234,12 @@ function buildAdapterWrapperScript(params: {
   binName: string;
   installedBinPath?: string;
   envSetup: string;
+  envConfigSetup?: string;
+  openClawWrapperArgs?: string[];
   stderrLogFileNamePrefix?: string;
 }): string {
   return `#!/usr/bin/env node
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
@@ -245,6 +252,7 @@ const stderrLogMaxChars = 256 * 1024;
 const openClawWrapperArgs = new Set([
   ${quoteCommandPart(OPENCLAW_ACPX_LEASE_ID_ARG)},
   ${quoteCommandPart(OPENCLAW_GATEWAY_INSTANCE_ID_ARG)},
+  ${(params.openClawWrapperArgs ?? []).map(quoteCommandPart).join(",\n  ")}
 ]);
 
 function readOpenClawWrapperArg(args, name) {
@@ -254,6 +262,21 @@ function readOpenClawWrapperArg(args, name) {
   }
   const value = args[index + 1];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readOpenClawWrapperArgs(args, name) {
+  const values = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] !== name) {
+      continue;
+    }
+    const value = args[index + 1];
+    if (typeof value === "string" && value.trim()) {
+      values.push(value.trim());
+    }
+    index += 1;
+  }
+  return values;
 }
 
 function safeDiagnosticFilePart(value) {
@@ -266,7 +289,6 @@ function resolveStderrLogPath(args) {
     return undefined;
   }
   const leaseId =
-    process.env[${JSON.stringify(OPENCLAW_ACPX_LEASE_ID_ENV)}] ||
     readOpenClawWrapperArg(args, ${quoteCommandPart(OPENCLAW_ACPX_LEASE_ID_ARG)}) ||
     "pid-" + process.pid;
   const fileName = stderrLogFileNamePrefix + "." + safeDiagnosticFilePart(leaseId) + ".log";
@@ -400,14 +422,14 @@ function stripOpenClawWrapperArgs(args) {
 }
 
 const rawConfiguredArgs = process.argv.slice(2);
+${params.envConfigSetup ?? ""}
 const stderrLogPath = resolveStderrLogPath(rawConfiguredArgs);
-
-try {
-  if (stderrLogPath) {
-    writeFileSync(stderrLogPath, "", "utf8");
+if (stderrLogPath) {
+  try {
+    rmSync(stderrLogPath, { force: true });
+  } catch {
+    // Diagnostic cleanup must never prevent the adapter from starting.
   }
-} catch {
-  // Stderr capture is diagnostic-only; never break the ACP adapter.
 }
 
 const configuredArgs = stripOpenClawWrapperArgs(rawConfiguredArgs);
@@ -557,6 +579,7 @@ function buildCodexAcpWrapperScript(installedBinPath?: string): string {
     binName: CODEX_ACP_BIN,
     installedBinPath,
     stderrLogFileNamePrefix: "codex-acp-wrapper.stderr",
+    openClawWrapperArgs: [OPENCLAW_CODEX_CONFIG_ARG],
     envSetup: `const codexHome = fileURLToPath(new URL("./codex-home/", import.meta.url));
 const codexAuthPath = fileURLToPath(new URL("./codex-home/auth.json", import.meta.url));
 const codexApiKey = (process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY || "").trim();
@@ -591,6 +614,58 @@ const env = {
   ...process.env,
   CODEX_HOME: codexHome,
 };`,
+    envConfigSetup: `function isCodexConfigObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function mergeCodexConfig(base, override) {
+  const merged = Object.assign(Object.create(null), base);
+  for (const [key, value] of Object.entries(override)) {
+    const existing = merged[key];
+    merged[key] =
+      isCodexConfigObject(existing) && isCodexConfigObject(value)
+        ? mergeCodexConfig(existing, value)
+        : value;
+  }
+  return merged;
+}
+
+const openClawCodexConfigs = readOpenClawWrapperArgs(
+  rawConfiguredArgs,
+  ${quoteCommandPart(OPENCLAW_CODEX_CONFIG_ARG)},
+);
+if (openClawCodexConfigs.length > 0) {
+  let existingCodexConfig = {};
+  if (typeof env.CODEX_CONFIG === "string" && env.CODEX_CONFIG.trim()) {
+    try {
+      const parsedCodexConfig = JSON.parse(env.CODEX_CONFIG);
+      if (!parsedCodexConfig || typeof parsedCodexConfig !== "object" || Array.isArray(parsedCodexConfig)) {
+        throw new Error("CODEX_CONFIG must be a JSON object");
+      }
+      existingCodexConfig = parsedCodexConfig;
+    } catch {
+      console.error("[openclaw] CODEX_CONFIG must be a valid JSON object");
+      process.exit(1);
+    }
+  }
+  for (const openClawCodexConfig of openClawCodexConfigs) {
+    try {
+      const parsedOpenClawCodexConfig = JSON.parse(openClawCodexConfig);
+      if (
+        !parsedOpenClawCodexConfig ||
+        typeof parsedOpenClawCodexConfig !== "object" ||
+        Array.isArray(parsedOpenClawCodexConfig)
+      ) {
+        throw new Error("invalid OpenClaw Codex config");
+      }
+      existingCodexConfig = mergeCodexConfig(existingCodexConfig, parsedOpenClawCodexConfig);
+    } catch {
+      console.error("[openclaw] invalid generated Codex ACP startup config");
+      process.exit(1);
+    }
+  }
+  env.CODEX_CONFIG = JSON.stringify(existingCodexConfig);
+}`,
   });
 }
 
@@ -727,19 +802,140 @@ function extractConfiguredAdapterArgs(params: {
   return undefined;
 }
 
-function buildCodexAcpWrapperCommand(wrapperPath: string, configuredCommand?: string): string {
-  const configuredAdapterArgs = extractConfiguredAdapterArgs({
+function isConfigRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function mergeConfigRecords(
+  base: Record<string, unknown>,
+  override: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    const existing = merged[key];
+    const nextValue =
+      isConfigRecord(existing) && isConfigRecord(value)
+        ? mergeConfigRecords(existing, value)
+        : value;
+    Object.defineProperty(merged, key, {
+      value: nextValue,
+      configurable: true,
+      enumerable: true,
+      writable: true,
+    });
+  }
+  return merged;
+}
+
+function parseLegacyCodexConfigAssignment(assignment: string): Record<string, unknown> {
+  const separator = assignment.indexOf("=");
+  if (separator <= 0) {
+    throw new Error(`Invalid legacy Codex ACP config override: ${assignment}`);
+  }
+  const rawKey = assignment.slice(0, separator).trim();
+  const key = rawKey === "use_legacy_landlock" ? "features.use_legacy_landlock" : rawKey;
+  const rawValue = assignment.slice(separator + 1).trim();
+  try {
+    return parseToml(`${key} = ${rawValue}`) as Record<string, unknown>;
+  } catch {
+    const literal = rawValue.replace(/^["']+|["']+$/g, "");
+    return parseToml(`${key} = ${JSON.stringify(literal)}`) as Record<string, unknown>;
+  }
+}
+
+type LegacyCodexArgsMigration = {
+  config: Record<string, unknown>;
+  forwardedArgs: string[];
+  hadOverrides: boolean;
+};
+
+function migrateLegacyCodexArgs(args: string[]): LegacyCodexArgsMigration {
+  let config: Record<string, unknown> = {};
+  const forwardedArgs: string[] = [];
+  let hadOverrides = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    let assignment: string | undefined;
+    if (arg === "-c" || arg === "--config") {
+      assignment = args[(index += 1)];
+    } else if (arg.startsWith("--config=")) {
+      assignment = arg.slice("--config=".length);
+    } else if (arg.startsWith("-c=")) {
+      assignment = arg.slice("-c=".length);
+    } else if (arg.startsWith("-c") && arg.length > 2) {
+      assignment = arg.slice(2);
+    } else {
+      forwardedArgs.push(arg);
+      continue;
+    }
+    if (!assignment) {
+      throw new Error(`Missing value for legacy Codex ACP option ${arg}`);
+    }
+    hadOverrides = true;
+    config = mergeConfigRecords(config, parseLegacyCodexConfigAssignment(assignment));
+  }
+  return { config, forwardedArgs, hadOverrides };
+}
+
+type CodexAdapterLaunch = {
+  args: string[];
+  migratedConfig?: Record<string, unknown>;
+};
+
+function resolveCodexAdapterLaunch(configuredCommand?: string): CodexAdapterLaunch | undefined {
+  const legacyAdapterArgs = extractConfiguredAdapterArgs({
+    configuredCommand,
+    packageName: LEGACY_CODEX_ACP_PACKAGE,
+    binName: CODEX_ACP_BIN,
+  });
+  if (legacyAdapterArgs) {
+    const migration = migrateLegacyCodexArgs(legacyAdapterArgs);
+    return {
+      args: [
+        ...(migration.hadOverrides
+          ? [OPENCLAW_CODEX_CONFIG_ARG, JSON.stringify(migration.config)]
+          : []),
+        ...migration.forwardedArgs,
+      ],
+      ...(migration.hadOverrides ? { migratedConfig: migration.config } : {}),
+    };
+  }
+  const maintainedAdapterArgs = extractConfiguredAdapterArgs({
     configuredCommand,
     packageName: CODEX_ACP_PACKAGE,
     binName: CODEX_ACP_BIN,
   });
-  if (configuredAdapterArgs) {
-    return buildWrapperCommand(wrapperPath, configuredAdapterArgs);
+  if (!maintainedAdapterArgs) {
+    return undefined;
+  }
+  // The maintained adapter owns its CLI subcommands and forwarded Codex flags.
+  // Only the Zed package and bare legacy forms reach the migration branch above.
+  return { args: maintainedAdapterArgs };
+}
+
+function buildCodexAcpWrapperCommand(wrapperPath: string, configuredCommand?: string): string {
+  const launch = resolveCodexAdapterLaunch(configuredCommand);
+  if (launch) {
+    return buildWrapperCommand(wrapperPath, launch.args);
   }
   return buildWrapperCommand(wrapperPath, [
     RUN_CONFIGURED_COMMAND_SENTINEL,
     ...splitCommandParts(configuredCommand?.trim() ?? ""),
   ]);
+}
+
+async function persistMigratedCodexMcpConfig(params: {
+  codexHome: string;
+  migratedConfig: Record<string, unknown> | undefined;
+}): Promise<void> {
+  const mcpServers = params.migratedConfig?.mcp_servers;
+  if (!isConfigRecord(mcpServers)) {
+    return;
+  }
+  const configPath = path.join(params.codexHome, "config.toml");
+  const current = parseToml(await fs.readFile(configPath, "utf8")) as Record<string, unknown>;
+  const merged = mergeConfigRecords(current, { mcp_servers: mcpServers });
+  await fs.writeFile(configPath, stringifyToml(merged as TomlTableWithoutBigInt), "utf8");
 }
 
 function buildClaudeAcpWrapperCommand(wrapperPath: string, configuredCommand?: string): string {
@@ -764,9 +960,16 @@ export async function prepareAcpxCodexAuthConfig(params: {
 }): Promise<ResolvedAcpxPluginConfig> {
   void params.logger;
   const codexBaseDir = path.join(params.stateDir, "acpx");
-  await prepareIsolatedCodexHome({
+  const configuredCodexCommand = params.pluginConfig.agents.codex;
+  const configuredClaudeCommand = params.pluginConfig.agents.claude;
+  const codexLaunch = resolveCodexAdapterLaunch(configuredCodexCommand);
+  const codexHome = await prepareIsolatedCodexHome({
     baseDir: codexBaseDir,
     workspaceDir: params.pluginConfig.cwd,
+  });
+  await persistMigratedCodexMcpConfig({
+    codexHome,
+    migratedConfig: codexLaunch?.migratedConfig,
   });
   const installedCodexBinPath = await (
     params.resolveInstalledCodexAcpBinPath ?? resolveInstalledCodexAcpBinPath
@@ -776,8 +979,6 @@ export async function prepareAcpxCodexAuthConfig(params: {
   )();
   const wrapperPath = await writeCodexAcpWrapper(codexBaseDir, installedCodexBinPath);
   const claudeWrapperPath = await writeClaudeAcpWrapper(codexBaseDir, installedClaudeBinPath);
-  const configuredCodexCommand = params.pluginConfig.agents.codex;
-  const configuredClaudeCommand = params.pluginConfig.agents.claude;
 
   return {
     ...params.pluginConfig,
@@ -788,3 +989,4 @@ export async function prepareAcpxCodexAuthConfig(params: {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

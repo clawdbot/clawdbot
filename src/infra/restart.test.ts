@@ -47,6 +47,7 @@ beforeEach(() => {
   resolveGatewayPortMock.mockReset();
   resolveLsofCommandSyncMock.mockReturnValue("/usr/sbin/lsof");
   resolveGatewayPortMock.mockReturnValue(18789);
+  vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
 });
 
 afterEach(() => {

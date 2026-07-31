@@ -2,7 +2,9 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { vi } from "vitest";
 import type { OpenClawConfig, TelegramAccountConfig } from "../runtime-api.js";
-import type { RegisterTelegramNativeCommandsParams } from "./bot-native-commands.js";
+import type { registerTelegramNativeCommands } from "./bot-native-commands.js";
+
+type RegisterTelegramNativeCommandsParams = Parameters<typeof registerTelegramNativeCommands>[0];
 
 export type NativeCommandTestParams = RegisterTelegramNativeCommandsParams & {
   allowFrom?: RegisterTelegramNativeCommandsParams["opts"]["allowFrom"];

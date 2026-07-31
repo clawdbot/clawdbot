@@ -5,31 +5,7 @@ import path from "node:path";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-type EdgeTTSDeps = {
-  EdgeTTS: new (
-    ...args: ConstructorParameters<typeof import("node-edge-tts").EdgeTTS>
-  ) => Pick<import("node-edge-tts").EdgeTTS, "ttsPromise">;
-};
-
-function isMissingOutputFileError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "ENOENT"
-  );
-}
-
-function readOutputSize(outputPath: string): number {
-  try {
-    return statSync(outputPath).size;
-  } catch (error) {
-    if (isMissingOutputFileError(error)) {
-      return 0;
-    }
-    throw error;
-  }
-}
+type EdgeTTSClient = Pick<import("node-edge-tts").EdgeTTS, "ttsPromise">;
 
 export function inferEdgeExtension(outputFormat: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(outputFormat);
@@ -65,31 +41,37 @@ export async function edgeTTS(
     };
     timeoutMs: number;
   },
-  deps?: EdgeTTSDeps,
+  ttsOverride?: EdgeTTSClient,
 ): Promise<void> {
   const { text, outputPath, config, timeoutMs } = params;
   if (text.trim().length === 0) {
     throw new Error("Microsoft TTS text cannot be empty");
   }
 
-  const EdgeTTSClass = deps?.EdgeTTS ?? (await import("node-edge-tts")).EdgeTTS;
-  const tts = new EdgeTTSClass({
-    voice: config.voice,
-    lang: config.lang,
-    outputFormat: config.outputFormat,
-    saveSubtitles: config.saveSubtitles,
-    proxy: config.proxy,
-    rate: config.rate,
-    pitch: config.pitch,
-    volume: config.volume,
-    timeout: config.timeoutMs ?? timeoutMs,
-  });
+  const tts =
+    ttsOverride ??
+    new (await import("node-edge-tts")).EdgeTTS({
+      voice: config.voice,
+      lang: config.lang,
+      outputFormat: config.outputFormat,
+      saveSubtitles: config.saveSubtitles,
+      proxy: config.proxy,
+      rate: config.rate,
+      pitch: config.pitch,
+      volume: config.volume,
+      timeout: config.timeoutMs ?? timeoutMs,
+    });
 
+  await mkdir(path.dirname(outputPath), { recursive: true });
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const outputSize = await writeEdgeTtsOutput({
-      outputPath,
-      ttsPromise: async (tempPath) => {
+    let outputSize = 0;
+    await writeExternalFileWithinRoot({
+      rootDir: path.dirname(outputPath),
+      path: path.basename(outputPath),
+      write: async (tempPath) => {
+        writeFileSync(tempPath, "");
         await tts.ttsPromise(text, tempPath);
+        outputSize = statSync(tempPath).size;
       },
     });
     if (outputSize > 0) {
@@ -97,25 +79,4 @@ export async function edgeTTS(
     }
   }
   throw new Error("Edge TTS produced empty audio file after retry");
-}
-
-async function writeEdgeTtsOutput(params: {
-  outputPath: string;
-  ttsPromise: (tempPath: string) => Promise<void>;
-}): Promise<number> {
-  const rootDir = path.dirname(params.outputPath);
-  await mkdir(rootDir, { recursive: true });
-  let outputSize = 0;
-  await writeExternalFileWithinRoot({
-    rootDir,
-    path: path.basename(params.outputPath),
-    write: async (tempPath) => {
-      await params.ttsPromise(tempPath);
-      outputSize = readOutputSize(tempPath);
-      if (outputSize === 0) {
-        writeFileSync(tempPath, "");
-      }
-    },
-  });
-  return outputSize;
 }

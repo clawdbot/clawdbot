@@ -12,7 +12,6 @@ import {
 import {
   CODEX_PLUGIN_CURRENT_VERSION,
   CODEX_PLUGIN_LIFECYCLE_MESSAGES,
-  createCodexPluginInstallGate,
   evaluateCodexPluginLifecycle,
   seedCodexPluginAt,
   snapshotCodexPluginState,
@@ -145,31 +144,6 @@ describe("codex plugin lifecycle: pinned-new codex plugin with old OpenClaw", ()
 
     expect(result.status).toBe("blocked");
     expect(result.remediation).toContain("requires a newer OpenClaw host than 2026.5.21");
-  });
-});
-
-describe("codex plugin lifecycle: install racing first agent turn", () => {
-  it("gates the first turn on install completion without sleeps, lost tokens, or duplicate responses", async () => {
-    const gate = createCodexPluginInstallGate();
-    const turn = gate.runFirstTurnAfterInstall({
-      inputTokens: 17,
-      run: () => "QA_CODEX_PLUGIN_TURN_OK",
-    });
-
-    expect(gate.events).toEqual(["agent-turn:waiting-for-codex-plugin"]);
-
-    gate.markInstalled();
-    await expect(turn).resolves.toEqual({
-      text: "QA_CODEX_PLUGIN_TURN_OK",
-      inputTokens: 17,
-      responseCount: 1,
-    });
-    expect(gate.events).toEqual([
-      "agent-turn:waiting-for-codex-plugin",
-      "codex-plugin:installed",
-      "agent-turn:started",
-      "agent-turn:completed",
-    ]);
   });
 });
 

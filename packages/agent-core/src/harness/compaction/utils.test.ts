@@ -1,5 +1,5 @@
+import type { Message } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
-import type { Message } from "../../../../llm-core/src/index.js";
 import { serializeConversation } from "./utils.js";
 
 describe("serializeConversation", () => {

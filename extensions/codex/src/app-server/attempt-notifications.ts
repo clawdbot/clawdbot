@@ -12,10 +12,6 @@ import {
 
 const CODEX_TURN_ABORT_MARKER_START = "<turn_aborted>";
 const CODEX_TURN_ABORT_MARKER_END = "</turn_aborted>";
-const CODEX_INTERRUPTED_USER_GUIDANCE =
-  "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
-const CODEX_INTERRUPTED_DEVELOPER_GUIDANCE =
-  "The previous turn was interrupted on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
 
 /** Builds compact activity metadata for watchdog and diagnostic updates. */
 export function describeNotificationActivity(
@@ -345,7 +341,11 @@ export function isCodexTurnAbortMarkerNotification(
   }
   const item = notification.params.item;
   const role = isJsonObject(item) ? readString(item, "role") : undefined;
-  if (!isJsonObject(item) || (role !== "user" && role !== "developer")) {
+  if (
+    !isJsonObject(item) ||
+    readString(item, "type") !== "message" ||
+    (role !== "user" && role !== "developer")
+  ) {
     return false;
   }
   const text = extractRawResponseItemText(item).trim();
@@ -355,11 +355,7 @@ export function isCodexTurnAbortMarkerNotification(
   if (role === "user" && currentPromptTexts.includes(text)) {
     return false;
   }
-  const markerBody = readCodexTurnAbortMarkerBody(text);
-  return (
-    markerBody === CODEX_INTERRUPTED_USER_GUIDANCE ||
-    markerBody === CODEX_INTERRUPTED_DEVELOPER_GUIDANCE
-  );
+  return readCodexTurnAbortMarkerBody(text) !== undefined;
 }
 
 function readCodexTurnAbortMarkerBody(text: string): string | undefined {

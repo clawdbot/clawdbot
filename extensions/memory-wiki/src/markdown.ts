@@ -109,6 +109,7 @@ export type WikiPageSummary = {
   sourcePath?: string;
   bridgeRelativePath?: string;
   bridgeWorkspaceDir?: string;
+  bridgeAgentIds: string[];
   unsafeLocalConfiguredPath?: string;
   unsafeLocalRelativePath?: string;
   lastRefreshedAt?: string;
@@ -445,7 +446,7 @@ function maskMarkdownCode(markdown: string): string {
   return masked.join("");
 }
 
-export function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
+function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
   const withoutRelatedBlock = markdown.replace(RELATED_BLOCK_PATTERN, "");
   const searchable = maskMarkdownCode(withoutRelatedBlock);
   const links: string[] = [];
@@ -741,6 +742,7 @@ export function scanWikiPageSummary(params: {
       sourcePath: normalizeOptionalString(parsed.frontmatter.sourcePath),
       bridgeRelativePath: normalizeOptionalString(parsed.frontmatter.bridgeRelativePath),
       bridgeWorkspaceDir: normalizeOptionalString(parsed.frontmatter.bridgeWorkspaceDir),
+      bridgeAgentIds: normalizeSingleOrTrimmedStringList(parsed.frontmatter.bridgeAgentIds),
       unsafeLocalConfiguredPath: normalizeOptionalString(
         parsed.frontmatter.unsafeLocalConfiguredPath,
       ),
@@ -759,3 +761,4 @@ export function toWikiPageSummary(params: {
   const result = scanWikiPageSummary(params);
   return result.status === "valid" ? result.page : null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

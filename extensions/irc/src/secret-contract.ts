@@ -49,6 +49,8 @@ export function collectRuntimeConfigAssignments(params: {
       isBaseFieldActiveForChannelSurface(surface, "nickserv") &&
       isRecord(irc.nickserv) &&
       isEnabledFlag(irc.nickserv),
+    topLevelInheritedAccountActive: ({ account, enabled }) =>
+      enabled && !Object.hasOwn(account, "nickserv") && isEnabledFlag(irc.nickserv),
     topInactiveReason:
       "no enabled account inherits this top-level IRC nickserv config or NickServ is disabled.",
     accountActive: ({ account, enabled }) =>

@@ -6,7 +6,7 @@ import {
   TRUSTED_CLIENT_TOKEN,
   generateSecMsGecToken,
 } from "node-edge-tts/dist/drm.js";
-import { isVoiceCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
+import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import {
   assertOkOrThrowProviderError,
   readProviderJsonResponse,
@@ -45,17 +45,6 @@ type MicrosoftProviderConfig = {
   saveSubtitles: boolean;
   proxy?: string;
   timeoutMs?: number;
-};
-
-type MicrosoftVoiceListEntry = {
-  ShortName?: string;
-  FriendlyName?: string;
-  Locale?: string;
-  Gender?: string;
-  VoiceTag?: {
-    ContentCategories?: string[];
-    VoicePersonalities?: string[];
-  };
 };
 
 function normalizeMicrosoftProviderConfig(
@@ -114,12 +103,13 @@ function buildMicrosoftVoiceHeaders(): Record<string, string> {
   };
 }
 
-function formatMicrosoftVoiceDescription(entry: MicrosoftVoiceListEntry): string | undefined {
-  const personalities = entry.VoiceTag?.VoicePersonalities?.filter(Boolean) ?? [];
-  return personalities.length > 0 ? personalities.join(", ") : undefined;
+function readMicrosoftVoiceTagStrings(value: unknown): string[] | undefined {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    : undefined;
 }
 
-export function isCjkDominant(text: string): boolean {
+function isCjkDominant(text: string): boolean {
   const stripped = text.replace(/\s+/g, "");
   if (stripped.length === 0) {
     return false;
@@ -142,7 +132,7 @@ export function isCjkDominant(text: string): boolean {
 const DEFAULT_CHINESE_EDGE_VOICE = "zh-CN-XiaoxiaoNeural";
 const DEFAULT_CHINESE_EDGE_LANG = "zh-CN";
 
-export async function listMicrosoftVoices(
+async function listMicrosoftVoices(
   timeoutMs = DEFAULT_MICROSOFT_VOICE_LIST_TIMEOUT_MS,
 ): Promise<SpeechVoiceOption[]> {
   const url =
@@ -173,24 +163,29 @@ export async function listMicrosoftVoices(
       });
     }
     await assertOkOrThrowProviderError(response, "Microsoft voices API error");
-    const voices = await readProviderJsonResponse<MicrosoftVoiceListEntry[]>(
-      response,
-      "microsoft.speech-voices",
-    );
+    const voices = await readProviderJsonResponse<unknown>(response, "microsoft.speech-voices");
     return Array.isArray(voices)
-      ? voices
-          .map((voice) => ({
-            id: voice.ShortName?.trim() ?? "",
-            name: trimToUndefined(voice.FriendlyName) ?? trimToUndefined(voice.ShortName),
-            category: voice.VoiceTag?.ContentCategories?.find((value) => value.trim().length > 0),
-            description: formatMicrosoftVoiceDescription(voice),
-            locale: trimToUndefined(voice.Locale),
-            gender: trimToUndefined(voice.Gender),
-            personalities: voice.VoiceTag?.VoicePersonalities?.filter(
-              (value): value is string => value.trim().length > 0,
-            ),
-          }))
-          .filter((voice) => voice.id.length > 0)
+      ? voices.flatMap((value) => {
+          const voice = asObject(value);
+          const id = trimToUndefined(voice?.ShortName);
+          if (!voice || !id) {
+            return [];
+          }
+          const voiceTag = asObject(voice.VoiceTag);
+          const categories = readMicrosoftVoiceTagStrings(voiceTag?.ContentCategories);
+          const personalities = readMicrosoftVoiceTagStrings(voiceTag?.VoicePersonalities);
+          return [
+            {
+              id,
+              name: trimToUndefined(voice.FriendlyName) ?? id,
+              category: categories?.[0],
+              description: personalities?.length ? personalities.join(", ") : undefined,
+              locale: trimToUndefined(voice.Locale),
+              gender: trimToUndefined(voice.Gender),
+              personalities,
+            },
+          ];
+        })
       : [];
   } finally {
     await release();
@@ -288,7 +283,7 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
             audioBuffer,
             outputFormat: format,
             fileExtension,
-            voiceCompatible: isVoiceCompatibleAudio({ fileName: outputPath }),
+            voiceCompatible: isVoiceMessageCompatibleAudio({ fileName: outputPath }),
           };
         };
 

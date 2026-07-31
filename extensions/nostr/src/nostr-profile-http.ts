@@ -9,6 +9,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -166,8 +167,7 @@ function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
 function isLoopbackOriginLike(value: string): boolean {
   try {
     const url = new URL(value);
-    const hostname = normalizeLowercaseStringOrEmpty(url.hostname);
-    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+    return isLoopbackHost(url.hostname);
   } catch {
     return false;
   }
@@ -490,6 +490,7 @@ async function handleImportProfile(
     return true;
   }
 
+  // Parse options from body
   let autoMerge = false;
   try {
     const body = await readJsonBody(req);
@@ -497,7 +498,7 @@ async function handleImportProfile(
       autoMerge = (body as { autoMerge?: boolean }).autoMerge === true;
     }
   } catch {
-    // Ignore body parse errors and keep the safe draft default.
+    // Ignore body parse errors - use defaults
   }
 
   ctx.log?.info(`[${accountId}] Importing profile for ${pubkey.slice(0, 8)}...`);
@@ -518,10 +519,10 @@ async function handleImportProfile(
     return true;
   }
 
-  const localProfile = ctx.getConfigProfile(accountId);
-  const merged = mergeProfiles(localProfile, result.profile);
-
+  // If autoMerge is requested, merge and save
   if (autoMerge && result.profile) {
+    const localProfile = ctx.getConfigProfile(accountId);
+    const merged = mergeProfiles(localProfile, result.profile);
     await ctx.updateConfigProfile(accountId, merged);
     ctx.log?.info(`[${accountId}] Profile imported and merged`);
 
@@ -537,11 +538,10 @@ async function handleImportProfile(
     return true;
   }
 
-  // Draft imports do not mutate config, so Cancel cannot hide a persisted change.
+  // Otherwise, just return the imported profile for review
   sendJson(res, 200, {
     ok: true,
     imported: result.profile,
-    merged,
     saved: false,
     event: result.event,
     sourceRelay: result.sourceRelay,

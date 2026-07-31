@@ -18,7 +18,7 @@ import { XAI_BASE_URL } from "./model-definitions.js";
 type XaiRealtimeVoice = "eve" | "ara" | "rex" | "sal" | "leo";
 type XaiRealtimeReasoningEffort = "high" | "none";
 
-export type XaiRealtimeVoiceProviderConfig = {
+type XaiRealtimeVoiceProviderConfig = {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
@@ -117,7 +117,7 @@ export const XAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX =
 export const XAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR =
   "Cancellation failed: no active response found";
 
-const XAI_REALTIME_VOICES = [
+export const XAI_REALTIME_VOICES = [
   "eve",
   "ara",
   "rex",

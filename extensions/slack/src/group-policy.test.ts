@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Slack tests cover group policy plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
 
@@ -52,5 +52,46 @@ describe("slack group policy", () => {
       senderId: "user:bob",
     });
     expect(wildcardTools).toEqual({ deny: ["exec"] });
+  });
+
+  it("keeps wildcard fields hidden by a matched whole entry", () => {
+    const partialCfg = {
+      channels: {
+        slack: {
+          channels: {
+            partial: {},
+            "*": { requireMention: false, tools: { deny: ["exec"] } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSlackGroupRequireMention({ cfg: partialCfg, groupId: "partial" })).toBe(true);
+    expect(resolveSlackGroupToolPolicy({ cfg: partialCfg, groupId: "partial" })).toBeUndefined();
+  });
+
+  it("does not match channel-prefixed toolsBySender without a message provider", () => {
+    const channelSenderCfg = {
+      channels: {
+        slack: {
+          channels: {
+            alerts: {
+              tools: { deny: ["exec"] },
+              toolsBySender: {
+                "channel:slack:user:alice": { allow: ["exec"] },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSlackGroupToolPolicy({
+        cfg: channelSenderCfg,
+        groupId: "alerts",
+        senderId: "user:alice",
+      }),
+    ).toEqual({ deny: ["exec"] });
   });
 });

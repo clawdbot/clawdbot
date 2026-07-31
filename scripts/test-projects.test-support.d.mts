@@ -70,19 +70,16 @@ export function buildVitestRunPlans(
 
 export function buildFullSuiteVitestRunPlans(args: string[], cwd?: string): VitestRunPlan[];
 
-export function shouldUseLocalFullSuiteParallelByDefault(
-  env?: Record<string, string | undefined>,
-): boolean;
-
-export function shouldExpandLocalFullSuiteShardsByDefault(
-  env?: Record<string, string | undefined>,
-): boolean;
-
 export function resolveParallelFullSuiteConcurrency(
   specCount: number,
   env?: Record<string, string | undefined>,
   hostInfo?: VitestHostInfo,
 ): number;
+
+export function applyFullExtensionsHeapBudget<T extends { config: string; env: NodeJS.ProcessEnv }>(
+  specs: T[],
+  params?: { env?: Record<string, string | undefined> },
+): Array<Omit<T, "env"> & { env: NodeJS.ProcessEnv }>;
 
 export function resolveChangedTargetArgs(
   args: string[],
@@ -161,6 +158,9 @@ export function applyParallelVitestCachePaths<T extends { config: string; env: N
 ): Array<Omit<T, "env"> & { env: NodeJS.ProcessEnv }>;
 
 export function shouldRetryVitestNoOutputTimeout(env?: Record<string, string | undefined>): boolean;
+export function withRetryNoOutputTimeout<T extends { env?: Record<string, string | undefined> }>(
+  spec: T,
+): T;
 
 export function shouldAcquireLocalHeavyCheckLock(
   runSpecs: Array<Pick<VitestRunSpec, "config" | "includePatterns" | "watchMode">>,

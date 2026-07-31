@@ -17,7 +17,9 @@ function normalizeLowercaseStringOrEmpty(value: unknown): string {
 export type ParsedIpAddress = ipaddr.IPv4 | ipaddr.IPv6;
 type Ipv4Range = ReturnType<ipaddr.IPv4["range"]>;
 type Ipv6Range = ReturnType<ipaddr.IPv6["range"]>;
-type BlockedIpv6Range = Ipv6Range | "discard";
+// Older co-installed ipaddr.js declarations can merge with 2.4's ambient module and
+// omit newer runtime ranges from ReturnType, so preserve the policy's known labels.
+type BlockedIpv6Range = Ipv6Range | "benchmarking" | "discard" | "orchid2";
 type Ipv6Hextets = readonly [number, number, number, number, number, number, number, number];
 
 // ipaddr.js guarantees 8 hextets; throw loudly on an impossible shape instead of
@@ -92,49 +94,6 @@ export type Ipv6SpecialUseBlockOptions = {
    */
   allowUniqueLocalRange?: boolean;
 };
-
-const EMBEDDED_IPV4_SENTINEL_RULES: Array<{
-  matches: (parts: Ipv6Hextets) => boolean;
-  toHextets: (parts: Ipv6Hextets) => [high: number, low: number];
-}> = [
-  {
-    // IPv4-compatible form ::w.x.y.z (deprecated, but still seen in parser edge-cases).
-    matches: (parts) =>
-      parts[0] === 0 &&
-      parts[1] === 0 &&
-      parts[2] === 0 &&
-      parts[3] === 0 &&
-      parts[4] === 0 &&
-      parts[5] === 0,
-    toHextets: (parts) => [parts[6], parts[7]],
-  },
-  {
-    // NAT64 local-use prefix: 64:ff9b:1::/48.
-    matches: (parts) =>
-      parts[0] === 0x0064 &&
-      parts[1] === 0xff9b &&
-      parts[2] === 0x0001 &&
-      parts[3] === 0 &&
-      parts[4] === 0 &&
-      parts[5] === 0,
-    toHextets: (parts) => [parts[6], parts[7]],
-  },
-  {
-    // 6to4 prefix: 2002::/16 (IPv4 lives in hextets 1..2).
-    matches: (parts) => parts[0] === 0x2002,
-    toHextets: (parts) => [parts[1], parts[2]],
-  },
-  {
-    // Teredo prefix: 2001:0000::/32 (client IPv4 XOR 0xffff in hextets 6..7).
-    matches: (parts) => parts[0] === 0x2001 && parts[1] === 0x0000,
-    toHextets: (parts) => [parts[6] ^ 0xffff, parts[7] ^ 0xffff],
-  },
-  {
-    // ISATAP IID marker: ....:0000:5efe:w.x.y.z with u/g bits allowed in hextet 4.
-    matches: (parts) => (parts[4] & 0xfcff) === 0 && parts[5] === 0x5efe,
-    toHextets: (parts) => [parts[6], parts[7]],
-  },
-];
 
 function stripIpv6Brackets(value: string): string {
   if (value.startsWith("[") && value.endsWith("]")) {
@@ -349,22 +308,32 @@ function decodeIpv4FromHextets(high: number, low: number): ipaddr.IPv4 {
 
 /** Extracts embedded IPv4 addresses from mapped and transition IPv6 prefixes. */
 export function extractEmbeddedIpv4FromIpv6(address: ipaddr.IPv6): ipaddr.IPv4 | undefined {
-  if (address.isIPv4MappedAddress()) {
-    return address.toIPv4Address();
-  }
   const parts = expectIpv6Hextets(address.parts);
-  if (address.range() === "rfc6145") {
-    return decodeIpv4FromHextets(parts[6], parts[7]);
+  switch (address.range()) {
+    case "ipv4Mapped":
+      return address.toIPv4Address();
+    case "rfc6145":
+    case "rfc6052":
+      return decodeIpv4FromHextets(parts[6], parts[7]);
+    case "6to4":
+      return decodeIpv4FromHextets(parts[1], parts[2]);
+    case "teredo":
+      return decodeIpv4FromHextets(parts[6] ^ 0xffff, parts[7] ^ 0xffff);
+    default:
+      break;
   }
-  if (address.range() === "rfc6052") {
+
+  // ipaddr.js classifies transition prefixes, but not compatible or ISATAP forms.
+  const isIpv4Compatible =
+    parts[0] === 0 &&
+    parts[1] === 0 &&
+    parts[2] === 0 &&
+    parts[3] === 0 &&
+    parts[4] === 0 &&
+    parts[5] === 0;
+  const isIsatap = (parts[4] & 0xfcff) === 0 && parts[5] === 0x5efe;
+  if (isIpv4Compatible || isIsatap) {
     return decodeIpv4FromHextets(parts[6], parts[7]);
-  }
-  for (const rule of EMBEDDED_IPV4_SENTINEL_RULES) {
-    if (!rule.matches(parts)) {
-      continue;
-    }
-    const [high, low] = rule.toHextets(parts);
-    return decodeIpv4FromHextets(high, low);
   }
   return undefined;
 }
@@ -395,10 +364,13 @@ export function isIpInCidr(ip: string, cidr: string): boolean {
   try {
     const [baseAddress, prefixLength] = ipaddr.parseCIDR(candidate);
     const comparableBase = normalizeIpv4MappedAddress(baseAddress);
-    return (
-      comparableIp.kind() === comparableBase.kind() &&
-      comparableIp.match([comparableBase, prefixLength])
-    );
+    if (isIpv4Address(comparableIp) && isIpv4Address(comparableBase)) {
+      return comparableIp.match([comparableBase, prefixLength]);
+    }
+    if (isIpv6Address(comparableIp) && isIpv6Address(comparableBase)) {
+      return comparableIp.match([comparableBase, prefixLength]);
+    }
+    return false;
   } catch {
     return false;
   }

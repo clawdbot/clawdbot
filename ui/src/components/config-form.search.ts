@@ -67,7 +67,8 @@ export function resolveConfigFieldMeta(
   hints: ConfigUiHints,
 ): ConfigFieldMeta {
   const hint = hintForPath(path, hints);
-  const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
+  const fallbackSegment = path.findLast((segment) => typeof segment === "string") ?? path.at(-1);
+  const label = hint?.label ?? schema.title ?? humanize(String(fallbackSegment));
   const help = hint?.help ?? schema.description;
   const schemaTags = normalizeTags(schema["x-tags"] ?? schema.tags);
   const hintTags = normalizeTags(hint?.tags);

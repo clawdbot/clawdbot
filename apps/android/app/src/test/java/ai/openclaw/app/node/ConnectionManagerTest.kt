@@ -10,6 +10,7 @@ import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawCapability
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
+import ai.openclaw.app.protocol.OpenClawMobileUiCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawPhotosCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
@@ -433,12 +434,27 @@ class ConnectionManagerTest {
       listOf(
         "operator.admin",
         "operator.approvals",
+        "operator.questions",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",
       ),
       options.scopes,
     )
+    assertEquals(
+      listOf(
+        ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY,
+        ConnectionManager.INLINE_WIDGETS_CLIENT_CAPABILITY,
+      ),
+      options.caps,
+    )
+  }
+
+  @Test
+  fun buildOperatorConnectOptions_omitsInlineWidgetsWithoutIsolatedWebViews() {
+    val options = newManager(inlineWidgetsAvailable = false).buildOperatorConnectOptions()
+
+    assertEquals(listOf(ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY), options.caps)
   }
 
   @Test
@@ -539,6 +555,30 @@ class ConnectionManagerTest {
   }
 
   @Test
+  fun buildNodeConnectOptions_advertisesVoiceWakeOnlyWhenEnabledAndAvailable() {
+    val disabled = newManager(voiceWakeEnabled = false).buildNodeConnectOptions()
+    val unavailable = newManager(voiceWakeEnabled = true, voiceWakeAvailable = false).buildNodeConnectOptions()
+    val enabled = newManager(voiceWakeEnabled = true).buildNodeConnectOptions()
+
+    assertFalse(disabled.caps.contains(OpenClawCapability.VoiceWake.rawValue))
+    assertFalse(unavailable.caps.contains(OpenClawCapability.VoiceWake.rawValue))
+    assertTrue(enabled.caps.contains(OpenClawCapability.VoiceWake.rawValue))
+  }
+
+  @Test
+  fun buildNodeConnectOptions_advertisesMobileUiOnlyWhileAvailable() {
+    val unavailable = newManager(mobileUiAvailable = false).buildNodeConnectOptions()
+    val available = newManager(mobileUiAvailable = true).buildNodeConnectOptions()
+
+    assertFalse(unavailable.caps.contains(OpenClawCapability.MobileUI.rawValue))
+    assertFalse(unavailable.commands.contains(OpenClawMobileUiCommand.Observe.rawValue))
+    assertFalse(unavailable.commands.contains(OpenClawMobileUiCommand.Act.rawValue))
+    assertTrue(available.caps.contains(OpenClawCapability.MobileUI.rawValue))
+    assertTrue(available.commands.contains(OpenClawMobileUiCommand.Observe.rawValue))
+    assertTrue(available.commands.contains(OpenClawMobileUiCommand.Act.rawValue))
+  }
+
+  @Test
   fun buildNodeConnectOptions_advertisesDeviceAppsOnlyWhenUserOptedIn() {
     val disabled = newManager(installedAppsSharingEnabled = false).buildNodeConnectOptions()
     val enabled = newManager(installedAppsSharingEnabled = true).buildNodeConnectOptions()
@@ -595,6 +635,21 @@ class ConnectionManagerTest {
     assertFalse(options.caps.contains(OpenClawCapability.Motion.rawValue))
   }
 
+  @Test
+  fun buildNodeConnectOptions_advertisesCurrentPermissionSnapshot() {
+    val permissionSnapshot =
+      emptyPermissionSnapshot().copy(
+        camera = true,
+        location = true,
+        locationPrecise = false,
+        smsSend = true,
+      )
+
+    val options = newManager(permissionSnapshot = permissionSnapshot).buildNodeConnectOptions()
+
+    assertEquals(permissionSnapshot.gatewayPermissions(), options.permissions)
+  }
+
   private fun newManager(
     cameraEnabled: Boolean = false,
     locationMode: LocationMode = LocationMode.Off,
@@ -606,13 +661,24 @@ class ConnectionManagerTest {
     callLogAvailable: Boolean = false,
     photosAvailable: Boolean = false,
     installedAppsSharingEnabled: Boolean = false,
+    voiceWakeEnabled: Boolean = false,
+    voiceWakeAvailable: Boolean = true,
+    mobileUiAvailable: Boolean = false,
+    inlineWidgetsAvailable: Boolean = true,
+    permissionSnapshot: AndroidPermissionSnapshot = emptyPermissionSnapshot(),
   ): ConnectionManager {
     val context = RuntimeEnvironment.getApplication()
+    context
+      .getSharedPreferences("openclaw.node", android.content.Context.MODE_PRIVATE)
+      .edit()
+      .clear()
+      .commit()
     val prefs =
       SecurePrefs(
         context,
         securePrefsOverride = context.getSharedPreferences("connection-manager-test", android.content.Context.MODE_PRIVATE),
       )
+    prefs.setVoiceWakeEnabled(voiceWakeEnabled)
 
     return ConnectionManager(
       prefs = prefs,
@@ -626,7 +692,31 @@ class ConnectionManagerTest {
       callLogAvailable = { callLogAvailable },
       photosAvailable = { photosAvailable },
       installedAppsSharingEnabled = { installedAppsSharingEnabled },
+      voiceWakeAvailable = { voiceWakeAvailable },
+      mobileUiAvailable = { mobileUiAvailable },
+      inlineWidgetsAvailable = { inlineWidgetsAvailable },
+      permissionSnapshot = { permissionSnapshot },
       manualTls = { false },
     )
   }
+
+  private fun emptyPermissionSnapshot(): AndroidPermissionSnapshot =
+    AndroidPermissionSnapshot(
+      camera = false,
+      microphone = false,
+      location = false,
+      locationPrecise = false,
+      locationBackground = false,
+      smsSend = false,
+      smsRead = false,
+      notificationListener = false,
+      notifications = false,
+      photos = false,
+      contactsRead = false,
+      contactsWrite = false,
+      calendarRead = false,
+      calendarWrite = false,
+      callLog = false,
+      motion = false,
+    )
 }

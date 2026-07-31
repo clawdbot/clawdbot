@@ -31,8 +31,8 @@ import {
   resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
-import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
+import { loadPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import {
@@ -328,6 +328,7 @@ async function maybeResolveUnresolvedRefIssue(params: {
 /** Builds probe targets plus preflight failures for missing/invalid credentials. */
 export async function buildProbeTargets(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   providers: string[];
@@ -350,7 +351,12 @@ export async function buildProbeTargets(params: {
   const providerFilterKey = providerFilter ? normalizeProviderId(providerFilter) : null;
   const profileFilter = new Set(normalizeUniqueStringEntries(options.profileIds));
   const refResolveCache: SecretRefResolveCache = {};
-  const catalog = await loadModelCatalog({ config: cfg });
+  const catalog = await loadPreparedModelCatalog({
+    config: cfg,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(agentDir ? { agentDir } : {}),
+    ...(workspaceDir ? { workspaceDir } : {}),
+  });
   const candidates = buildProbeCandidateMap(modelCandidates);
   const targets: AuthProbeTarget[] = [];
   const results: AuthProbeResult[] = [];
@@ -903,6 +909,7 @@ export async function runAuthProbes(params: {
   const startedAt = Date.now();
   const plan = await buildProbeTargets({
     cfg: params.cfg,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     providers: params.providers,
@@ -967,3 +974,4 @@ export function describeProbeSummary(summary: AuthProbeSummary): string {
   }
   return `Probed ${summary.totalTargets} target${summary.totalTargets === 1 ? "" : "s"} in ${formatMs(summary.durationMs)}`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

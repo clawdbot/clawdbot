@@ -1,15 +1,11 @@
 /** Tests unsupported SecretRef surface policy matching and messages. */
 import { describe, expect, it } from "vitest";
-import {
-  collectUnsupportedSecretRefConfigCandidates,
-  getUnsupportedSecretRefSurfacePatterns,
-} from "./unsupported-surface-policy.js";
+import { unsupportedSecretRefSurfacePolicy } from "./unsupported-surface-policy.js";
 
 describe("unsupported SecretRef surface policy metadata", () => {
   it("exposes the canonical unsupported surface patterns", () => {
-    expect(getUnsupportedSecretRefSurfacePatterns().toSorted()).toEqual(
+    expect(unsupportedSecretRefSurfacePolicy.listPatterns().toSorted()).toEqual(
       [
-        "commands.ownerDisplaySecret",
         "hooks.token",
         "hooks.gmail.pushToken",
         "hooks.mappings[].sessionKey",
@@ -23,8 +19,7 @@ describe("unsupported SecretRef surface policy metadata", () => {
   });
 
   it("discovers concrete config candidates for unsupported mutable surfaces", () => {
-    const candidates = collectUnsupportedSecretRefConfigCandidates({
-      commands: { ownerDisplaySecret: { source: "env", provider: "default", id: "OWNER" } },
+    const candidates = unsupportedSecretRefSurfacePolicy.collectConfigCandidates({
       hooks: {
         token: { source: "env", provider: "default", id: "HOOK_TOKEN" },
         gmail: { pushToken: { source: "env", provider: "default", id: "GMAIL_PUSH" } },
@@ -62,7 +57,6 @@ describe("unsupported SecretRef surface policy metadata", () => {
 
     expect(candidates.map((candidate) => candidate.path).toSorted()).toEqual(
       [
-        "commands.ownerDisplaySecret",
         "hooks.token",
         "hooks.gmail.pushToken",
         "hooks.mappings.0.sessionKey",

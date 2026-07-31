@@ -41,10 +41,13 @@ OAuth client.
     openclaw models auth login --provider xai --method oauth
     ```
 
-    Apply Grok as the default model separately:
+    With no existing primary model, OAuth setup selects `xai/auto`. The plugin
+    resolves that stable ref from xAI's authenticated model catalog and remote
+    default, so future xAI default changes do not require an OpenClaw update.
+    It preserves an existing primary; opt in explicitly when needed:
 
     ```bash
-    openclaw models set xai/grok-4.3
+    openclaw models set xai/auto
     ```
 
     Rerun full onboarding only if you intentionally want to change Gateway,
@@ -53,7 +56,8 @@ OAuth client.
   </Step>
   <Step title="API-key path">
     API-key setup still works for xAI Console keys and for media surfaces
-    that need key-backed provider config:
+    that need key-backed provider config. It keeps Grok 4.3 as the
+    regional-safe setup default:
 
     ```bash
     openclaw models auth login --provider xai --method api-key
@@ -64,7 +68,7 @@ OAuth client.
   <Step title="Pick a model">
     ```json5
     {
-      agents: { defaults: { model: { primary: "xai/grok-4.3" } } },
+      agents: { defaults: { model: { primary: "xai/auto" } } },
     }
     ```
   </Step>
@@ -85,7 +89,8 @@ bundled xAI model provider reuses it as a fallback too.
   `openclaw models auth login --provider xai --method oauth`; it uses
   device-code verification, not a localhost callback.
 - If sign-in succeeds but Grok is not the default model, run
-  `openclaw models set xai/grok-4.3`.
+  `openclaw models set xai/auto`. OAuth login preserves an existing
+  primary model unless you explicitly change it.
 - Inspect saved xAI auth profiles:
 
   ```bash
@@ -116,10 +121,19 @@ see [legacy compatibility and moving aliases](#legacy-compatibility-and-moving-a
 | Grok 4.20      | `grok-4.20-0309-reasoning`, `grok-4.20-0309-non-reasoning`   |
 
 <Tip>
-Use `grok-4.5` for general chat, coding, and agentic work where it is available.
-Grok 4.3 remains the regional-safe setup default; `grok-build-0.1` and both
-dated Grok 4.20 variants remain selectable.
+Use `xai/auto` to follow xAI's authenticated OAuth default, or select a concrete
+id such as `xai/grok-4.5` to remain pinned. API-key setup keeps Grok 4.3 as the
+regional-safe default; `grok-build-0.1` and both dated Grok 4.20 variants remain
+selectable.
 </Tip>
+
+Catalog context and token-cost metadata follows xAI's live
+[model pages](https://docs.x.ai/developers/models) and
+[pricing page](https://docs.x.ai/developers/pricing). xAI applies higher rates
+when a request crosses its documented long-context threshold; OpenClaw's flat
+catalog cost fields record the short-context rates. Grok Build, xAI's separate
+coding-agent CLI, is available at [x.ai/cli](https://x.ai/cli) and currently
+uses Grok 4.5.
 
 ## Feature coverage
 
@@ -135,7 +149,7 @@ below or under known limits.
 | Server-side code execution | `code_execution` tool                   | Yes                                                  |
 | Images                     | `image_generate`                        | Yes                                                  |
 | Videos                     | `video_generate`                        | Yes                                                  |
-| Batch text-to-speech       | `messages.tts.provider: "xai"` / `tts`  | Yes                                                  |
+| Batch text-to-speech       | `tts.provider: "xai"` / `tts`           | Yes                                                  |
 | Streaming TTS              | `textToSpeechStream`                    | Yes via `wss://api.x.ai/v1/tts` (not realtime voice) |
 | Batch speech-to-text       | `tools.media.audio` media understanding | Yes                                                  |
 | Streaming speech-to-text   | Voice Call `streaming.provider: "xai"`  | Yes                                                  |
@@ -236,7 +250,7 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     - Video edit/extend inherit the input video's aspect ratio and resolution;
       those operations do not accept geometry overrides
     - Default operation timeout: 600 seconds unless `video_generate.timeoutMs`
-      or `agents.defaults.videoGenerationModel.timeoutMs` is set
+      or `agents.defaults.mediaModels.video.timeoutMs` is set
 
     <Warning>
     Local video buffers are not accepted. Use remote `http(s)` URLs for video
@@ -282,7 +296,7 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
     - Resolutions: `1K`, `2K`
     - Count: up to 4 images
     - Default operation timeout: 600 seconds unless `image_generate.timeoutMs`
-      or `agents.defaults.imageGenerationModel.timeoutMs` is set
+      or `agents.defaults.mediaModels.image.timeoutMs` is set
 
     OpenClaw asks xAI for `b64_json` image responses so generated media can be
     stored and delivered through the normal channel attachment path. Local
@@ -330,13 +344,11 @@ stale context metadata on active 4.20 rows. It does not pin active 4.20
 
     ```json5
     {
-      messages: {
-        tts: {
-          provider: "xai",
-          providers: {
-            xai: {
-              voiceId: "eve",
-            },
+      tts: {
+        provider: "xai",
+        providers: {
+          xai: {
+            voiceId: "eve",
           },
         },
       },

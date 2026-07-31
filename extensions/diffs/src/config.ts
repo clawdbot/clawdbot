@@ -76,7 +76,7 @@ const DEFAULT_IMAGE_QUALITY_PROFILES = {
   { scale: number; maxWidth: number; maxPixels: number }
 >;
 
-export const DEFAULT_DIFFS_TOOL_DEFAULTS: DiffToolDefaults = {
+const DEFAULT_DIFFS_TOOL_DEFAULTS: DiffToolDefaults = {
   fontFamily: "Fira Code",
   fontSize: 15,
   lineSpacing: 1.6,
@@ -98,7 +98,7 @@ type DiffsPluginSecurityConfig = {
   allowRemoteViewer: boolean;
 };
 
-export const DEFAULT_DIFFS_PLUGIN_SECURITY: DiffsPluginSecurityConfig = {
+const DEFAULT_DIFFS_PLUGIN_SECURITY: DiffsPluginSecurityConfig = {
   allowRemoteViewer: false,
 };
 

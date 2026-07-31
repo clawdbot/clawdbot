@@ -1,6 +1,7 @@
 // Feishu plugin module implements send behavior.
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -10,6 +11,11 @@ import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
+import {
+  assertFeishuPostWithinEnvelope,
+  buildFeishuPostMessageContent,
+  materializeFeishuPostMarkdownSoftBreaks,
+} from "./markdown.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { resolveFeishuCardTemplate } from "./native-card.js";
@@ -129,7 +135,7 @@ async function sendFallbackDirect(
   return toFeishuSendResult(response, params.receiveId, resolveFeishuReceiptKind(params.msgType));
 }
 
-async function sendReplyOrFallbackDirect(
+export async function sendReplyOrFallbackDirect(
   client: FeishuCreateMessageClient,
   params: {
     replyToMessageId?: string;
@@ -313,7 +319,11 @@ function parseInteractiveCardContent(parsed: unknown): string {
   return parseInteractivePostFallback(parsed) ?? INTERACTIVE_CARD_FALLBACK_TEXT;
 }
 
-function parseFeishuMessageContent(rawContent: string, msgType: string): string {
+function parseFeishuMessageContent(
+  rawContent: string,
+  msgType: string,
+  messageId?: string,
+): string {
   if (!rawContent) {
     return "";
   }
@@ -322,6 +332,8 @@ function parseFeishuMessageContent(rawContent: string, msgType: string): string 
   try {
     parsed = JSON.parse(rawContent);
   } catch {
+    const safeId = messageId ? ` (id: ${messageId})` : "";
+    logVerbose(`feishu message content parse failed for ${msgType} message${safeId}`);
     return rawContent;
   }
 
@@ -374,7 +386,7 @@ function parseFeishuMessageItem(
     senderId: item.sender?.id,
     senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
     senderType: item.sender?.sender_type,
-    content: parseFeishuMessageContent(rawContent, msgType),
+    content: parseFeishuMessageContent(rawContent, msgType, item.message_id),
     contentType: msgType,
     createTime: parseStrictNonNegativeInteger(item.create_time),
     threadId: item.thread_id || undefined,
@@ -532,56 +544,6 @@ type SendFeishuMessageParams = {
   accountId?: string;
 };
 
-type FeishuPostMessageElement =
-  | { tag: "at"; user_id: string; user_name?: string }
-  | { tag: "md"; text: string };
-
-function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostMessageElement[] {
-  if (!mentions?.length) {
-    return [];
-  }
-
-  const elements: FeishuPostMessageElement[] = [];
-  for (const mention of mentions) {
-    const userId = mention.openId.trim();
-    if (!userId) {
-      continue;
-    }
-    const userName = mention.name.trim();
-    elements.push({
-      tag: "at",
-      user_id: userId,
-      ...(userName ? { user_name: userName } : {}),
-    });
-  }
-  return elements;
-}
-
-function buildFeishuPostMessagePayload(params: {
-  messageText: string;
-  mentions?: MentionTarget[];
-}): {
-  content: string;
-  msgType: string;
-} {
-  const { messageText, mentions } = params;
-  const content: FeishuPostMessageElement[] = [
-    ...buildFeishuPostMentionElements(mentions),
-    {
-      tag: "md",
-      text: messageText,
-    },
-  ];
-  return {
-    content: JSON.stringify({
-      zh_cn: {
-        content: [content],
-      },
-    }),
-    msgType: "post",
-  };
-}
-
 export async function sendMessageFeishu(
   params: SendFeishuMessageParams,
 ): Promise<FeishuSendResult> {
@@ -601,9 +563,13 @@ export async function sendMessageFeishu(
     channel: "feishu",
   });
 
-  const messageText = convertMarkdownTables(text ?? "", tableMode);
+  const messageText = materializeFeishuPostMarkdownSoftBreaks(
+    convertMarkdownTables(text ?? "", tableMode),
+  );
 
-  const { content, msgType } = buildFeishuPostMessagePayload({ messageText, mentions });
+  const content = buildFeishuPostMessageContent({ messageText, mentions });
+  const msgType = "post";
+  assertFeishuPostWithinEnvelope(content, "Feishu post");
 
   const directParams = { receiveId, receiveIdType, content, msgType };
   return sendReplyOrFallbackDirect(client, {
@@ -688,10 +654,12 @@ export async function editMessageFeishu(params: {
     channel: "feishu",
   });
   const messageText = convertMarkdownTables(text!, tableMode);
-  const payload = buildFeishuPostMessagePayload({ messageText });
+  const normalizedText = materializeFeishuPostMarkdownSoftBreaks(messageText);
+  const content = buildFeishuPostMessageContent({ messageText: normalizedText });
+  assertFeishuPostWithinEnvelope(content, "Feishu message edit");
   const response = await client.im.message.patch({
     path: { message_id: messageId },
-    data: { content: payload.content },
+    data: { content },
   });
 
   if (response.code !== 0) {

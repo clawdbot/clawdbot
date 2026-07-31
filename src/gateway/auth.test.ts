@@ -23,10 +23,16 @@ function createLimiterSpy(): AuthRateLimiter & {
     (_ip, _scope) => ({ allowed: true, remaining: 10, retryAfterMs: 0 }) as const,
   );
   const recordFailure = vi.fn<AuthRateLimiter["recordFailure"]>((_ip, _scope) => {});
+  const recordFailureAndDelay = vi.fn<AuthRateLimiter["recordFailureAndDelay"]>(
+    async (ip, scope) => {
+      recordFailure(ip, scope);
+    },
+  );
   const reset = vi.fn<AuthRateLimiter["reset"]>((_ip, _scope) => {});
   return {
     check,
     recordFailure,
+    recordFailureAndDelay,
     reset,
     size: () => 0,
     prune: () => {},
@@ -1394,3 +1400,4 @@ describe("trusted-proxy auth", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

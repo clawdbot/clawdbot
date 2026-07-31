@@ -7,7 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 let listSkillCommandsForAgents: typeof import("./chat-commands.js").listSkillCommandsForAgents;
 let listSkillCommandsForWorkspace: typeof import("./chat-commands.js").listSkillCommandsForWorkspace;
 let resolveSkillCommandInvocation: typeof import("./chat-commands.js").resolveSkillCommandInvocation;
-let skillCommandsTesting: typeof import("./chat-commands.js").testing;
+let resolveSkillReferenceInvocations: typeof import("./chat-commands.js").resolveSkillReferenceInvocations;
 
 const tempDirs: string[] = [];
 const resolveNodeExecEligibilityMock = vi.hoisted(() =>
@@ -166,7 +166,7 @@ beforeAll(async () => {
     listSkillCommandsForAgents,
     listSkillCommandsForWorkspace,
     resolveSkillCommandInvocation,
-    testing: skillCommandsTesting,
+    resolveSkillReferenceInvocations,
   } = await import("./chat-commands.js"));
 });
 
@@ -231,6 +231,83 @@ describe("resolveSkillCommandInvocation", () => {
       skillCommands: [{ name: "demo_skill", skillName: "demo-skill", description: "Demo" }],
     });
     expect(invocation).toBeNull();
+  });
+});
+
+describe("resolveSkillReferenceInvocations", () => {
+  const skillCommands = [
+    { name: "demo_skill", skillName: "demo-skill", description: "Demo" },
+    { name: "release_notes", skillName: "Release Notes", description: "Release notes" },
+  ];
+
+  it("resolves and deduplicates composable skill references", () => {
+    expect(
+      resolveSkillReferenceInvocations({
+        text: "Use $demo_skill with $release-notes, then check $demo_skill again.",
+        skillCommands,
+      }).map((command) => command.name),
+    ).toEqual(["demo_skill", "release_notes"]);
+  });
+
+  it("keeps trailing prose punctuation outside the skill reference", () => {
+    expect(
+      resolveSkillReferenceInvocations({
+        text: "Use $demo_skill: then continue.",
+        skillCommands,
+      }).map((command) => command.name),
+    ).toEqual(["demo_skill"]);
+  });
+
+  it("does not fall back to a shorter skill from a trailing hyphen", () => {
+    expect(
+      resolveSkillReferenceInvocations({
+        text: "Use $demo_skill- later.",
+        skillCommands,
+      }),
+    ).toEqual([]);
+  });
+
+  it("ignores common shell variables, escaped references, and unknown names", () => {
+    expect(
+      resolveSkillReferenceInvocations({
+        text: String.raw`Keep $HOME and \$demo_skill literal; $unknown is not installed.`,
+        skillCommands,
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps lowercase skill names that overlap common shell variables", () => {
+    expect(
+      resolveSkillReferenceInvocations({
+        text: "Use $home but keep $HOME and $EDITOR literal.",
+        skillCommands: [{ name: "home", skillName: "home", description: "Home automation" }],
+      }).map((command) => command.name),
+    ).toEqual(["home"]);
+  });
+
+  it("treats only odd backslash runs as escaping a reference", () => {
+    expect(
+      resolveSkillReferenceInvocations({
+        text: String.raw`Ignore \$demo_skill but resolve \\$demo_skill.`,
+        skillCommands,
+      }).map((command) => command.name),
+    ).toEqual(["demo_skill"]);
+  });
+
+  it("excludes slash-only skills that are hidden from the model prompt", () => {
+    expect(
+      resolveSkillReferenceInvocations({
+        text: "Use $hidden_skill.",
+        skillCommands: [
+          {
+            name: "hidden_skill",
+            skillName: "hidden-skill",
+            description: "Slash only",
+            modelVisible: false,
+          },
+        ],
+      }),
+    ).toEqual([]);
   });
 });
 
@@ -455,40 +532,5 @@ describe("listSkillCommandsForWorkspace", () => {
         execOverrides: { security: "allowlist" },
       }),
     );
-  });
-});
-
-describe("dedupeBySkillName", () => {
-  it("keeps the first entry when multiple commands share a skillName", () => {
-    const input = [
-      { name: "github", skillName: "github", description: "GitHub" },
-      { name: "github_2", skillName: "github", description: "GitHub" },
-      { name: "weather", skillName: "weather", description: "Weather" },
-      { name: "weather_2", skillName: "weather", description: "Weather" },
-    ];
-    const output = skillCommandsTesting.dedupeBySkillName(input);
-    expect(output.map((e) => e.name)).toEqual(["github", "weather"]);
-  });
-
-  it("matches skillName case-insensitively", () => {
-    const input = [
-      { name: "ClawHub", skillName: "ClawHub", description: "ClawHub" },
-      { name: "clawhub_2", skillName: "clawhub", description: "ClawHub" },
-    ];
-    const output = skillCommandsTesting.dedupeBySkillName(input);
-    expect(output).toHaveLength(1);
-    expect(output[0]?.name).toBe("ClawHub");
-  });
-
-  it("passes through commands with an empty skillName", () => {
-    const input = [
-      { name: "a", skillName: "", description: "A" },
-      { name: "b", skillName: "", description: "B" },
-    ];
-    expect(skillCommandsTesting.dedupeBySkillName(input)).toHaveLength(2);
-  });
-
-  it("returns an empty array for empty input", () => {
-    expect(skillCommandsTesting.dedupeBySkillName([])).toStrictEqual([]);
   });
 });

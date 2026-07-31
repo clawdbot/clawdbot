@@ -1,3 +1,4 @@
+import { flattenMarkdownDetails } from "./markdown-details.js";
 // Plain-text sanitization strips internal runtime scaffolding and converts a
 // conservative subset of model-produced HTML into channel-friendly text.
 import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
@@ -32,7 +33,7 @@ function stripRemainingHtmlTags(text: string): string {
 export function sanitizeForPlainText(text: string, options: { style?: "markdown" } = {}): string {
   const boldMarker = options.style === "markdown" ? "**" : "*";
   const strikeMarker = options.style === "markdown" ? "~~" : "~";
-  const converted = stripInternalRuntimeScaffolding(text)
+  const converted = flattenMarkdownDetails(stripInternalRuntimeScaffolding(text))
     // Preserve angle-bracket autolinks as plain URLs before tag stripping.
     .replace(/<((?:https?:\/\/|mailto:)[^<>\s]+)>/gi, "$1")
     // Normalize attributes once; conversions below only need exact bare tag names.

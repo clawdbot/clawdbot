@@ -72,7 +72,6 @@ function getDiscordExecApprovalApproversForTests(params: { cfg: OpenClawConfig }
   return resolveApprovalApprovers({
     explicit: discord?.execApprovals?.approvers,
     allowFrom: discord?.allowFrom,
-    extraAllowFrom: discord?.dm?.allowFrom,
     defaultTo: discord?.defaultTo,
     normalizeApprover: normalizeDiscordDirectApproverId,
     normalizeDefaultTo: (value) => normalizeDiscordDirectApproverId(value),
@@ -1099,3 +1098,4 @@ describe("handleApproveCommand", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

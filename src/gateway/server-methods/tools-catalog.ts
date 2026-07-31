@@ -1,9 +1,6 @@
 // Gateway RPC handler for the tool catalog shown by clients and Control UI.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
   type ToolsCatalogResult,
   validateToolsCatalogParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -12,6 +9,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
+import { resolveSwarmConfig } from "../../agents/swarm-config.js";
 import {
   listCoreToolSections,
   PROFILE_OPTIONS,
@@ -29,6 +27,7 @@ import {
 } from "../../plugins/tools.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 type ToolCatalogEntry = {
   id: string;
@@ -50,10 +49,11 @@ type ToolCatalogGroup = {
   tools: ToolCatalogEntry[];
 };
 
-function buildCoreGroups(): ToolCatalogGroup[] {
+function buildCoreGroups(params: { cfg: OpenClawConfig; agentId: string }): ToolCatalogGroup[] {
   // Core catalog rows come from static tool sections so profile chips remain
   // stable even before any runtime agent session exists.
-  return listCoreToolSections().map((section) => ({
+  const swarmEnabled = resolveSwarmConfig(params.cfg, params.agentId).enabled;
+  return listCoreToolSections({ swarmEnabled }).map((section) => ({
     id: section.id,
     label: section.label,
     source: "core",
@@ -201,7 +201,7 @@ function buildToolsCatalogResult(params: {
 }): ToolsCatalogResult {
   const agentId = normalizeOptionalString(params.agentId) || resolveDefaultAgentId(params.cfg);
   const includePlugins = params.includePlugins !== false;
-  const groups = buildCoreGroups();
+  const groups = buildCoreGroups({ cfg: params.cfg, agentId });
   if (includePlugins) {
     const existingToolNames = new Set(
       groups.flatMap((group) => group.tools.map((tool) => tool.id)),
@@ -224,15 +224,7 @@ function buildToolsCatalogResult(params: {
 /** Gateway request handlers for tool catalog queries. */
 export const toolsCatalogHandlers: GatewayRequestHandlers = {
   "tools.catalog": ({ params, respond, context }) => {
-    if (!validateToolsCatalogParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid tools.catalog params: ${formatValidationErrors(validateToolsCatalogParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateToolsCatalogParams, "tools.catalog", respond)) {
       return;
     }
     const resolved = resolveAgentIdOrRespondError({

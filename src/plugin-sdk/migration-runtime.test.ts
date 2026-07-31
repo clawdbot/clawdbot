@@ -204,6 +204,37 @@ describe("copyMemoryMigrationFileItem", () => {
     await expect(fs.access(target)).rejects.toThrow();
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects a hardlinked memory source without creating the destination",
+    async () => {
+      const root = await fs.realpath(tempDirs.make("openclaw-memory-copy-"));
+      const workspaceDir = path.join(root, "workspace");
+      const outside = path.join(root, "outside", "outside.md");
+      const source = path.join(root, "source", "MEMORY.md");
+      const target = path.join(workspaceDir, "memory", "imports", "codex", "MEMORY.md");
+      await writeFile(outside, "outside bytes");
+      await fs.mkdir(path.dirname(source), { recursive: true });
+      await fs.link(outside, source);
+      expect((await fs.stat(source)).nlink).toBeGreaterThan(1);
+
+      const result = await copyMemoryMigrationFileItem(
+        createMigrationItem({
+          id: "memory:codex:MEMORY.md",
+          kind: "memory",
+          action: "copy",
+          source,
+          target,
+        }),
+        path.join(root, "report"),
+        { workspaceDir },
+      );
+
+      expect(result.status).toBe("error");
+      expect(result.reason).toContain("hardlink");
+      await expect(fs.access(target)).rejects.toThrow();
+    },
+  );
+
   it("does not read source paths for non-actionable memory items", async () => {
     const missingSource = path.join(tempDirs.make("openclaw-memory-copy-"), "missing.md");
     const item = createMigrationItem({

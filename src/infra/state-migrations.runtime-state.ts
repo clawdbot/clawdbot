@@ -14,14 +14,13 @@ import { normalizeConversationRef } from "./outbound/session-binding-normalizati
 import type { SessionBindingRecord } from "./outbound/session-binding.types.js";
 import { fileExists } from "./state-migrations.fs.js";
 import { archiveLegacyImportSource } from "./state-migrations.storage.js";
-import type { LegacyStateDetection } from "./state-migrations.types.js";
+import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 import { normalizeVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 
 type LegacyVoiceWakeImportDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "voicewake_routing_config" | "voicewake_routing_routes" | "voicewake_triggers"
 >;
-type LegacyUpdateCheckImportDatabase = Pick<OpenClawStateKyselyDatabase, "update_check_state">;
 type LegacyConfigHealthImportDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
 type LegacyPluginBindingApprovalsImportDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -138,9 +137,10 @@ function legacyVoiceWakeRoutingMatches(
 export function migrateLegacyVoiceWakeSettings(params: {
   detected: LegacyStateDetection["voiceWake"];
   stateDir: string;
-}): { changes: string[]; warnings: string[] } {
+}): MigrationMessages {
   const changes: string[] = [];
   const warnings: string[] = [];
+  const notices: string[] = [];
   const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
   if (fileExists(params.detected.triggersPath)) {
     let triggers: string[];
@@ -171,12 +171,12 @@ export function migrateLegacyVoiceWakeSettings(params: {
             ).rows;
             if (existing.length > 0) {
               if (!legacyVoiceWakeTriggersMatch(existing, triggers)) {
-                warnings.push(
-                  `Left legacy voice wake triggers in place because shared SQLite state already has different triggers: ${params.detected.triggersPath}`,
+                // SQLite is canonical; retaining divergent JSON would block every startup.
+                notices.push(
+                  `Kept shared SQLite voice wake triggers because legacy file differs: ${params.detected.triggersPath}`,
                 );
-              } else {
-                shouldArchive = true;
               }
+              shouldArchive = true;
               return;
             }
             const updatedAtMs = Date.now();
@@ -256,9 +256,11 @@ export function migrateLegacyVoiceWakeSettings(params: {
               if (legacyVoiceWakeRoutingMatches(existing, routeRows, routingConfig)) {
                 shouldArchive = true;
               } else {
-                warnings.push(
-                  `Left legacy voice wake routing in place because shared SQLite routing already exists with different routes: ${params.detected.routingPath}`,
+                // SQLite is canonical; retaining divergent JSON would block every startup.
+                notices.push(
+                  `Kept shared SQLite voice wake routing because legacy file differs: ${params.detected.routingPath}`,
                 );
+                shouldArchive = true;
               }
               return;
             }
@@ -318,173 +320,7 @@ export function migrateLegacyVoiceWakeSettings(params: {
     }
   }
 
-  return { changes, warnings };
-}
-
-const UPDATE_CHECK_STATE_KEY = "default";
-
-type LegacyUpdateCheckState = {
-  lastCheckedAt?: string;
-  lastNotifiedVersion?: string;
-  lastNotifiedTag?: string;
-  lastAvailableVersion?: string;
-  lastAvailableTag?: string;
-  autoInstallId?: string;
-  autoFirstSeenVersion?: string;
-  autoFirstSeenTag?: string;
-  autoFirstSeenAt?: string;
-  autoLastAttemptVersion?: string;
-  autoLastAttemptAt?: string;
-  autoLastSuccessVersion?: string;
-  autoLastSuccessAt?: string;
-};
-
-export function resolveLegacyUpdateCheckPath(stateDir: string): string {
-  return path.join(stateDir, "update-check.json");
-}
-
-function optionalLegacyString(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-
-function normalizeLegacyUpdateCheckState(input: unknown): LegacyUpdateCheckState {
-  const record = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
-  return {
-    lastCheckedAt: optionalLegacyString(record, "lastCheckedAt"),
-    lastNotifiedVersion: optionalLegacyString(record, "lastNotifiedVersion"),
-    lastNotifiedTag: optionalLegacyString(record, "lastNotifiedTag"),
-    lastAvailableVersion: optionalLegacyString(record, "lastAvailableVersion"),
-    lastAvailableTag: optionalLegacyString(record, "lastAvailableTag"),
-    autoInstallId: optionalLegacyString(record, "autoInstallId"),
-    autoFirstSeenVersion: optionalLegacyString(record, "autoFirstSeenVersion"),
-    autoFirstSeenTag: optionalLegacyString(record, "autoFirstSeenTag"),
-    autoFirstSeenAt: optionalLegacyString(record, "autoFirstSeenAt"),
-    autoLastAttemptVersion: optionalLegacyString(record, "autoLastAttemptVersion"),
-    autoLastAttemptAt: optionalLegacyString(record, "autoLastAttemptAt"),
-    autoLastSuccessVersion: optionalLegacyString(record, "autoLastSuccessVersion"),
-    autoLastSuccessAt: optionalLegacyString(record, "autoLastSuccessAt"),
-  };
-}
-
-function legacyUpdateCheckStateMatches(
-  row: {
-    last_checked_at: string | null;
-    last_notified_version: string | null;
-    last_notified_tag: string | null;
-    last_available_version: string | null;
-    last_available_tag: string | null;
-    auto_install_id: string | null;
-    auto_first_seen_version: string | null;
-    auto_first_seen_tag: string | null;
-    auto_first_seen_at: string | null;
-    auto_last_attempt_version: string | null;
-    auto_last_attempt_at: string | null;
-    auto_last_success_version: string | null;
-    auto_last_success_at: string | null;
-  },
-  state: LegacyUpdateCheckState,
-): boolean {
-  return (
-    (state.lastCheckedAt ?? null) === row.last_checked_at &&
-    (state.lastNotifiedVersion ?? null) === row.last_notified_version &&
-    (state.lastNotifiedTag ?? null) === row.last_notified_tag &&
-    (state.lastAvailableVersion ?? null) === row.last_available_version &&
-    (state.lastAvailableTag ?? null) === row.last_available_tag &&
-    (state.autoInstallId ?? null) === row.auto_install_id &&
-    (state.autoFirstSeenVersion ?? null) === row.auto_first_seen_version &&
-    (state.autoFirstSeenTag ?? null) === row.auto_first_seen_tag &&
-    (state.autoFirstSeenAt ?? null) === row.auto_first_seen_at &&
-    (state.autoLastAttemptVersion ?? null) === row.auto_last_attempt_version &&
-    (state.autoLastAttemptAt ?? null) === row.auto_last_attempt_at &&
-    (state.autoLastSuccessVersion ?? null) === row.auto_last_success_version &&
-    (state.autoLastSuccessAt ?? null) === row.auto_last_success_at
-  );
-}
-
-export function migrateLegacyUpdateCheckState(params: {
-  detected: LegacyStateDetection["updateCheck"];
-  stateDir: string;
-}): { changes: string[]; warnings: string[] } {
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  if (!fileExists(params.detected.sourcePath)) {
-    return { changes, warnings };
-  }
-
-  let state: LegacyUpdateCheckState;
-  try {
-    state = normalizeLegacyUpdateCheckState(readLegacyJsonObject(params.detected.sourcePath));
-  } catch (err) {
-    warnings.push(
-      `Failed reading legacy update-check state ${params.detected.sourcePath}: ${String(err)}`,
-    );
-    return { changes, warnings };
-  }
-
-  let imported = false;
-  let shouldArchive = false;
-  try {
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const stateDb = getNodeSqliteKysely<LegacyUpdateCheckImportDatabase>(db);
-        const existing = executeSqliteQueryTakeFirstSync(
-          db,
-          stateDb
-            .selectFrom("update_check_state")
-            .selectAll()
-            .where("state_key", "=", UPDATE_CHECK_STATE_KEY),
-        );
-        if (existing) {
-          if (legacyUpdateCheckStateMatches(existing, state)) {
-            shouldArchive = true;
-          } else {
-            warnings.push(
-              `Left legacy update-check state in place because shared SQLite state already differs: ${params.detected.sourcePath}`,
-            );
-          }
-          return;
-        }
-        executeSqliteQuerySync(
-          db,
-          stateDb.insertInto("update_check_state").values({
-            state_key: UPDATE_CHECK_STATE_KEY,
-            last_checked_at: state.lastCheckedAt ?? null,
-            last_notified_version: state.lastNotifiedVersion ?? null,
-            last_notified_tag: state.lastNotifiedTag ?? null,
-            last_available_version: state.lastAvailableVersion ?? null,
-            last_available_tag: state.lastAvailableTag ?? null,
-            auto_install_id: state.autoInstallId ?? null,
-            auto_first_seen_version: state.autoFirstSeenVersion ?? null,
-            auto_first_seen_tag: state.autoFirstSeenTag ?? null,
-            auto_first_seen_at: state.autoFirstSeenAt ?? null,
-            auto_last_attempt_version: state.autoLastAttemptVersion ?? null,
-            auto_last_attempt_at: state.autoLastAttemptAt ?? null,
-            auto_last_success_version: state.autoLastSuccessVersion ?? null,
-            auto_last_success_at: state.autoLastSuccessAt ?? null,
-            updated_at_ms: Date.now(),
-          }),
-        );
-        imported = true;
-        shouldArchive = true;
-      },
-      { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
-    );
-  } catch (err) {
-    warnings.push(`Failed migrating legacy update-check state: ${String(err)}`);
-  }
-  if (imported) {
-    changes.push("Migrated update-check state → shared SQLite state");
-  }
-  if (shouldArchive) {
-    archiveLegacyImportSource({
-      sourcePath: params.detected.sourcePath,
-      label: "update-check state",
-      changes,
-      warnings,
-    });
-  }
-  return { changes, warnings };
+  return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
 }
 
 type LegacyConfigHealthFile = {
@@ -813,11 +649,12 @@ function pluginBindingApprovalComparable(entry: LegacyPluginBindingApprovalEntry
 export function migrateLegacyPluginBindingApprovals(params: {
   detected: LegacyStateDetection["pluginBindingApprovals"];
   stateDir: string;
-}): { changes: string[]; warnings: string[] } {
+}): MigrationMessages {
   const changes: string[] = [];
   const warnings: string[] = [];
-  // hasLegacy is the detection verdict (it stays false for suppressed
-  // cross-state-dir sources); fileExists re-checks for races since detection.
+  const notices: string[] = [];
+  // Detection requires the source to belong to this state root; fileExists
+  // re-checks for races before the import mutates the same trust scope.
   if (!params.detected.hasLegacy || !fileExists(params.detected.sourcePath)) {
     return { changes, warnings };
   }
@@ -833,10 +670,13 @@ export function migrateLegacyPluginBindingApprovals(params: {
     return { changes, warnings };
   }
 
-  let importedCount = 0;
-  let shouldArchive = approvals.length === 0;
+  let outcome = {
+    conflictCount: 0,
+    importedCount: 0,
+    shouldArchive: false,
+  };
   try {
-    runOpenClawStateWriteTransaction(
+    outcome = runOpenClawStateWriteTransaction(
       ({ db }) => {
         const stateDb = getNodeSqliteKysely<LegacyPluginBindingApprovalsImportDatabase>(db);
         const existing = executeSqliteQuerySync(
@@ -890,26 +730,30 @@ export function migrateLegacyPluginBindingApprovals(params: {
               .insertInto("plugin_binding_approvals")
               .values(approvalsToInsert.map(pluginBindingApprovalRow)),
           );
-          importedCount = approvalsToInsert.length;
         }
-        shouldArchive = conflictCount === 0;
-        if (conflictCount > 0) {
-          warnings.push(
-            `Left legacy plugin binding approvals in place because ${conflictCount} ${conflictCount === 1 ? "approval conflicts" : "approvals conflict"} with shared SQLite state: ${params.detected.sourcePath}`,
-          );
-        }
+        // Publish archive/count state only after COMMIT succeeds; otherwise retry needs the source.
+        return {
+          conflictCount,
+          importedCount: approvalsToInsert.length,
+          shouldArchive: true,
+        };
       },
       { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
     );
   } catch (err) {
     warnings.push(`Failed migrating legacy plugin binding approvals: ${String(err)}`);
   }
-  if (importedCount > 0) {
-    changes.push(
-      `Migrated ${importedCount} plugin binding ${importedCount === 1 ? "approval" : "approvals"} → shared SQLite state`,
+  if (outcome.conflictCount > 0) {
+    notices.push(
+      `Kept shared SQLite plugin binding approvals because ${outcome.conflictCount} ${outcome.conflictCount === 1 ? "legacy approval conflicts" : "legacy approvals conflict"}: ${params.detected.sourcePath}`,
     );
   }
-  if (shouldArchive) {
+  if (outcome.importedCount > 0) {
+    changes.push(
+      `Migrated ${outcome.importedCount} plugin binding ${outcome.importedCount === 1 ? "approval" : "approvals"} → shared SQLite state`,
+    );
+  }
+  if (outcome.shouldArchive) {
     archiveLegacyImportSource({
       sourcePath: params.detected.sourcePath,
       label: "plugin binding approvals",
@@ -917,7 +761,7 @@ export function migrateLegacyPluginBindingApprovals(params: {
       warnings,
     });
   }
-  return { changes, warnings };
+  return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
 }
 
 const CURRENT_BINDING_CONVERSATION_KIND = "current";
@@ -1039,9 +883,10 @@ function currentConversationBindingRow(record: SessionBindingRecord): {
 export function migrateLegacyCurrentConversationBindings(params: {
   detected: LegacyStateDetection["currentConversationBindings"];
   stateDir: string;
-}): { changes: string[]; warnings: string[] } {
+}): MigrationMessages {
   const changes: string[] = [];
   const warnings: string[] = [];
+  const notices: string[] = [];
   if (!fileExists(params.detected.sourcePath)) {
     return { changes, warnings };
   }
@@ -1057,10 +902,13 @@ export function migrateLegacyCurrentConversationBindings(params: {
     return { changes, warnings };
   }
 
-  let importedCount = 0;
-  let shouldArchive = records.length === 0;
+  let outcome = {
+    conflictCount: 0,
+    importedCount: 0,
+    shouldArchive: false,
+  };
   try {
-    runOpenClawStateWriteTransaction(
+    outcome = runOpenClawStateWriteTransaction(
       ({ db }) => {
         const stateDb = getNodeSqliteKysely<LegacyCurrentConversationBindingsImportDatabase>(db);
         const existing = executeSqliteQuerySync(
@@ -1083,40 +931,37 @@ export function migrateLegacyCurrentConversationBindings(params: {
             conflictCount += 1;
           }
         }
-        if (recordsToInsert.length === 0) {
-          shouldArchive = conflictCount === 0;
-          if (conflictCount > 0) {
-            warnings.push(
-              `Left legacy current-conversation bindings in place because ${conflictCount} ${conflictCount === 1 ? "binding conflicts" : "bindings conflict"} with shared SQLite state: ${params.detected.sourcePath}`,
-            );
-          }
-          return;
-        }
-        executeSqliteQuerySync(
-          db,
-          stateDb
-            .insertInto("current_conversation_bindings")
-            .values(recordsToInsert.map(currentConversationBindingRow)),
-        );
-        importedCount = recordsToInsert.length;
-        shouldArchive = conflictCount === 0;
-        if (conflictCount > 0) {
-          warnings.push(
-            `Left legacy current-conversation bindings in place because ${conflictCount} ${conflictCount === 1 ? "binding conflicts" : "bindings conflict"} with shared SQLite state: ${params.detected.sourcePath}`,
+        if (recordsToInsert.length > 0) {
+          executeSqliteQuerySync(
+            db,
+            stateDb
+              .insertInto("current_conversation_bindings")
+              .values(recordsToInsert.map(currentConversationBindingRow)),
           );
         }
+        // Publish archive/count state only after COMMIT succeeds; otherwise retry needs the source.
+        return {
+          conflictCount,
+          importedCount: recordsToInsert.length,
+          shouldArchive: true,
+        };
       },
       { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
     );
   } catch (err) {
     warnings.push(`Failed migrating legacy current-conversation bindings: ${String(err)}`);
   }
-  if (importedCount > 0) {
-    changes.push(
-      `Migrated ${importedCount} current-conversation ${importedCount === 1 ? "binding" : "bindings"} → shared SQLite state`,
+  if (outcome.conflictCount > 0) {
+    notices.push(
+      `Kept shared SQLite current-conversation bindings because ${outcome.conflictCount} ${outcome.conflictCount === 1 ? "legacy binding conflicts" : "legacy bindings conflict"}: ${params.detected.sourcePath}`,
     );
   }
-  if (shouldArchive) {
+  if (outcome.importedCount > 0) {
+    changes.push(
+      `Migrated ${outcome.importedCount} current-conversation ${outcome.importedCount === 1 ? "binding" : "bindings"} → shared SQLite state`,
+    );
+  }
+  if (outcome.shouldArchive) {
     archiveLegacyImportSource({
       sourcePath: params.detected.sourcePath,
       label: "current-conversation bindings",
@@ -1124,5 +969,6 @@ export function migrateLegacyCurrentConversationBindings(params: {
       warnings,
     });
   }
-  return { changes, warnings };
+  return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

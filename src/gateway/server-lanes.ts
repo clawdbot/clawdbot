@@ -18,7 +18,7 @@ type GatewayLaneConcurrency = {
 
 export function resolveGatewayLaneConcurrency(cfg: OpenClawConfig): GatewayLaneConcurrency {
   return {
-    cron: resolveCronMaxConcurrentRuns(cfg.cron),
+    cron: resolveCronMaxConcurrentRuns(),
     main: resolveAgentMaxConcurrent(cfg),
     subagent: resolveSubagentMaxConcurrent(cfg),
   };

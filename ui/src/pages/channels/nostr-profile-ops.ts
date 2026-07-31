@@ -72,8 +72,50 @@ export function isCurrentNostrOperation(
     context.gateway === operation.gateway &&
     context.channels === operation.channels &&
     operation.gateway.snapshot.client === operation.client &&
-    operation.gateway.snapshot.connected
+    operation.gateway.snapshot.phase === "connected"
   );
+}
+
+const NOSTR_PROFILE_REQUEST_TIMEOUT_MS = 30_000;
+
+type NostrProfileHttpResult<T> = {
+  data: T | null;
+  response: Response;
+};
+
+async function requestNostrProfile<T>(
+  url: string,
+  init: RequestInit,
+): Promise<NostrProfileHttpResult<T>> {
+  const controller = new AbortController();
+  const abortFromCaller = () => controller.abort(init.signal?.reason);
+  if (init.signal?.aborted) {
+    abortFromCaller();
+  } else {
+    init.signal?.addEventListener("abort", abortFromCaller, { once: true });
+  }
+  const timeout = setTimeout(
+    () =>
+      controller.abort(
+        new DOMException("Nostr profile request timed out after 30 seconds", "TimeoutError"),
+      ),
+    NOSTR_PROFILE_REQUEST_TIMEOUT_MS,
+  );
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    let data: T | null = null;
+    try {
+      data = (await response.json()) as T;
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw controller.signal.reason ?? error;
+      }
+    }
+    return { data, response };
+  } finally {
+    clearTimeout(timeout);
+    init.signal?.removeEventListener("abort", abortFromCaller);
+  }
 }
 
 export function parseValidationErrors(details: unknown): Record<string, string> {
@@ -108,7 +150,12 @@ export async function putNostrProfile(params: {
   values: NostrProfile;
   signal?: AbortSignal;
 }) {
-  const response = await fetch(buildNostrProfileUrl(params.accountId), {
+  return await requestNostrProfile<{
+    ok?: boolean;
+    error?: string;
+    details?: unknown;
+    persisted?: boolean;
+  }>(buildNostrProfileUrl(params.accountId), {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
@@ -117,13 +164,6 @@ export async function putNostrProfile(params: {
     body: JSON.stringify(params.values),
     signal: params.signal,
   });
-  const data = (await response.json().catch(() => null)) as {
-    ok?: boolean;
-    error?: string;
-    details?: unknown;
-    persisted?: boolean;
-  } | null;
-  return { data, response };
 }
 
 export async function importNostrProfile(params: {
@@ -131,7 +171,13 @@ export async function importNostrProfile(params: {
   headers: Record<string, string>;
   signal?: AbortSignal;
 }) {
-  const response = await fetch(buildNostrProfileUrl(params.accountId, "/import"), {
+  return await requestNostrProfile<{
+    ok?: boolean;
+    error?: string;
+    imported?: NostrProfile;
+    merged?: NostrProfile;
+    saved?: boolean;
+  }>(buildNostrProfileUrl(params.accountId, "/import"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -140,11 +186,4 @@ export async function importNostrProfile(params: {
     body: JSON.stringify({ autoMerge: false }),
     signal: params.signal,
   });
-  const data = (await response.json().catch(() => null)) as {
-    ok?: boolean;
-    error?: string;
-    imported?: NostrProfile;
-    merged?: NostrProfile;
-  } | null;
-  return { data, response };
 }

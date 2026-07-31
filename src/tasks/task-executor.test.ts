@@ -5,11 +5,7 @@ import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { captureEnv } from "../test-utils/env.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
-import {
-  getDetachedTaskLifecycleRuntime,
-  resetDetachedTaskLifecycleRuntimeForTests,
-  setDetachedTaskLifecycleRuntime,
-} from "./detached-task-runtime.js";
+import { getDetachedTaskLifecycleRuntime } from "./detached-task-runtime.js";
 import {
   cancelFlowById,
   cancelFlowByIdForOwner,
@@ -19,7 +15,6 @@ import {
   createRunningTaskRun as createRunningTaskRunOrNull,
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
-  runTaskInFlow,
   runTaskInFlowForOwner,
   setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
@@ -28,22 +23,26 @@ import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   getTaskFlowById,
   listTaskFlowRecords,
-  resetTaskFlowRegistryForTests,
 } from "./task-flow-registry.js";
-import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
-  setTaskRegistryDeliveryRuntimeForTests,
   getTaskById,
-  findLatestTaskForFlowId,
   findTaskByRunId,
+  listTasksForFlowId,
   markTaskTerminalById,
+} from "./task-registry.js";
+import type { TaskRecord } from "./task-registry.types.js";
+import {
+  configureTaskFlowRegistryRuntime,
+  resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
+  resetTaskFlowRegistryForTests,
+  setDetachedTaskLifecycleRuntime,
   setTaskRegistryControlRuntimeForTests,
-} from "./task-registry.js";
-import type { TaskRecord } from "./task-registry.types.js";
+  setTaskRegistryDeliveryRuntimeForTests,
+} from "./task-runtime.test-helpers.js";
 
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 
@@ -73,6 +72,15 @@ function createManagedTaskFlow(
     throw new Error("expected managed TaskFlow creation to succeed");
   }
   return flow;
+}
+
+function runTaskInFlow(
+  params: Omit<Parameters<typeof runTaskInFlowForOwner>[0], "callerOwnerKey">,
+) {
+  return runTaskInFlowForOwner({
+    ...params,
+    callerOwnerKey: "agent:main:main",
+  });
 }
 const hoisted = vi.hoisted(() => {
   const sendMessageMock = vi.fn();
@@ -727,7 +735,7 @@ describe("task-executor", () => {
       expect(created.found).toBe(false);
       expect(created.created).toBe(false);
       expect(created.reason).toBe("Flow not found.");
-      expect(findLatestTaskForFlowId(flow.flowId)).toBeUndefined();
+      expect(listTasksForFlowId(flow.flowId)[0]).toBeUndefined();
     });
   });
 
@@ -1123,3 +1131,4 @@ describe("task-executor", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -17,6 +17,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import { STATE_DIR } from "../config/paths.js";
+import { queuePluginSessionsChanged, subscribePluginSessionsChanged } from "./gateway-events.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
 import {
   pinActivePluginHttpRouteRegistry,
@@ -166,6 +167,221 @@ describe("startPluginServices", () => {
     await handle.stop();
 
     expectServiceLifecycleState({ starts, stops, contexts, config });
+  });
+
+  it("binds gateway events to the owning plugin namespace and scope", async () => {
+    const broadcastPluginEvent = vi.fn();
+    await startPluginServices({
+      registry: createRegistry(
+        [
+          {
+            id: "events",
+            start: (ctx) => {
+              ctx.gatewayEvents?.emit("changed", { revision: 1 }, { scope: "operator.read" });
+            },
+          },
+        ],
+        "workboard",
+      ),
+      config: createServiceConfig(),
+      broadcastPluginEvent,
+    });
+
+    expect(broadcastPluginEvent).toHaveBeenCalledWith(
+      "plugin.workboard.changed",
+      { revision: 1 },
+      "operator.read",
+    );
+  });
+
+  it("omits gateway events entirely when no broadcaster exists", async () => {
+    let context: OpenClawPluginServiceContext | undefined;
+    const handle = await startPluginServices({
+      registry: createRegistry([
+        {
+          id: "events",
+          start: (ctx) => {
+            context = ctx;
+          },
+        },
+      ]),
+      config: createServiceConfig(),
+    });
+
+    // Presence of ctx.gatewayEvents is the capability signal plugins
+    // feature-detect; a facade with a dropping emit would defeat fallbacks.
+    expect(context?.gatewayEvents).toBeUndefined();
+    await handle.stop();
+  });
+
+  it("subscribes services to sessions.changed and revokes them on stop", async () => {
+    const received = vi.fn();
+    let context: OpenClawPluginServiceContext | undefined;
+    const handle = await startPluginServices({
+      registry: createRegistry([
+        {
+          id: "events",
+          start: (ctx) => {
+            context = ctx;
+            ctx.gatewayEvents?.onSessionsChanged(received);
+          },
+        },
+      ]),
+      config: createServiceConfig(),
+      broadcastPluginEvent: vi.fn(),
+    });
+
+    queuePluginSessionsChanged({ sessionKey: "agent:main:main", reason: "rename", ignored: 1 });
+    await Promise.resolve();
+    expect(received).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      reason: "rename",
+    });
+    expect(() =>
+      context?.gatewayEvents?.emit("changed", {}, { scope: "operator.read" }),
+    ).not.toThrow();
+
+    await handle.stop();
+    queuePluginSessionsChanged({ sessionKey: "agent:main:main", reason: "archive" });
+    await Promise.resolve();
+    expect(received).toHaveBeenCalledOnce();
+  });
+
+  it("keeps duplicate handler subscriptions independent", async () => {
+    const received = vi.fn();
+    const unsubscribeFirst = subscribePluginSessionsChanged(received);
+    const unsubscribeSecond = subscribePluginSessionsChanged(received);
+
+    unsubscribeFirst();
+    queuePluginSessionsChanged({ sessionKey: "agent:main:main" });
+    await Promise.resolve();
+
+    expect(received).toHaveBeenCalledOnce();
+    unsubscribeSecond();
+  });
+
+  it("uses a stable sessions.changed subscription snapshot", async () => {
+    const received = vi.fn();
+    let unsubscribe: () => void = () => undefined;
+    const handler = () => {
+      received();
+      unsubscribe();
+      unsubscribe = subscribePluginSessionsChanged(handler);
+    };
+    unsubscribe = subscribePluginSessionsChanged(handler);
+
+    queuePluginSessionsChanged({ sessionKey: "agent:main:main" });
+    await Promise.resolve();
+
+    expect(received).toHaveBeenCalledOnce();
+    unsubscribe();
+  });
+
+  it("logs a throwing sessions.changed handler without blocking siblings", async () => {
+    const received = vi.fn();
+    const rejectingHandler = (() =>
+      Promise.reject(new Error("async handler failed"))) as () => void;
+    const handle = await startPluginServices({
+      registry: createRegistry([
+        {
+          id: "events",
+          start: (ctx) => {
+            ctx.gatewayEvents?.onSessionsChanged(() => {
+              throw new Error("handler failed");
+            });
+            ctx.gatewayEvents?.onSessionsChanged(rejectingHandler);
+            ctx.gatewayEvents?.onSessionsChanged(received);
+          },
+        },
+      ]),
+      config: createServiceConfig(),
+      broadcastPluginEvent: vi.fn(),
+    });
+
+    queuePluginSessionsChanged({ sessionKey: "agent:main:main", phase: "message" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(received).toHaveBeenCalledOnce();
+    expect(mockedLogger.warn).toHaveBeenCalledWith(
+      "plugin sessions.changed handler failed: Error: handler failed",
+    );
+    expect(mockedLogger.warn).toHaveBeenCalledWith(
+      "plugin sessions.changed handler failed: Error: async handler failed",
+    );
+    await handle.stop();
+  });
+
+  it("rejects unsafe event names, scopes, and payloads", async () => {
+    let context: OpenClawPluginServiceContext | undefined;
+    const broadcastPluginEvent = vi.fn();
+    await startPluginServices({
+      registry: createRegistry([
+        {
+          id: "events",
+          start: (ctx) => {
+            context = ctx;
+          },
+        },
+      ]),
+      config: createServiceConfig(),
+      broadcastPluginEvent,
+    });
+    const emit = context?.gatewayEvents?.emit as unknown as (
+      event: string,
+      payload: unknown,
+      opts: { scope: string },
+    ) => void;
+
+    expect(() => emit("other.changed", {}, { scope: "operator.read" })).toThrow(
+      "invalid plugin gateway event name",
+    );
+    expect(() => emit("changed", { value: Number.NaN }, { scope: "operator.read" })).toThrow(
+      "bounded JSON",
+    );
+    expect(() => emit("changed", {}, { scope: "operator.approvals" })).toThrow("operator scope");
+    expect(broadcastPluginEvent).not.toHaveBeenCalled();
+  });
+
+  it("revokes gateway event emitters after failed start and stop", async () => {
+    const contexts: OpenClawPluginServiceContext[] = [];
+    const broadcastPluginEvent = vi.fn();
+    const handle = await startPluginServices({
+      registry: createRegistry([
+        {
+          id: "events",
+          start: (ctx) => {
+            contexts.push(ctx);
+          },
+          stop: (ctx) => {
+            ctx.gatewayEvents?.emit("stopping", {}, { scope: "operator.read" });
+          },
+        },
+        {
+          id: "failed-events",
+          start: (ctx) => {
+            contexts.push(ctx);
+            throw new Error("start failed");
+          },
+        },
+      ]),
+      config: createServiceConfig(),
+      broadcastPluginEvent,
+    });
+
+    expect(() =>
+      contexts[1]?.gatewayEvents?.emit("changed", {}, { scope: "operator.read" }),
+    ).toThrow("no longer active");
+    await handle.stop();
+    expect(() =>
+      contexts[0]?.gatewayEvents?.emit("changed", {}, { scope: "operator.read" }),
+    ).toThrow("no longer active");
+    expect(broadcastPluginEvent).toHaveBeenCalledOnce();
+    expect(broadcastPluginEvent).toHaveBeenCalledWith(
+      "plugin.plugin:test.stopping",
+      {},
+      "operator.read",
+    );
   });
 
   it("registers dynamic HTTP routes into the service registry scope", async () => {

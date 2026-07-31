@@ -21,6 +21,9 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "autoreview"
+FIXTURES = Path(__file__).with_name("fixtures")
+PRIVATE_KEY_BEGIN_TEXT = "BEGIN " + "PRIVATE KEY"
+RSA_PRIVATE_KEY_BEGIN_TEXT = "BEGIN RSA " + "PRIVATE KEY"
 
 
 def load_helper() -> dict[str, object]:
@@ -62,9 +65,450 @@ def realistic_secret_value() -> str:
     return "A7f9K2m4Q8v6" + "N3x5R1p0T9z8"
 
 
+def add_fake_trufflehog(
+    helper: dict[str, object],
+    root: Path,
+    env: dict[str, str],
+) -> None:
+    helper["write_executable"](
+        root / "trufflehog",
+        "#!/usr/bin/env python3\nraise SystemExit(0)\n",
+    )
+    env["PATH"] = f"{root}{os.pathsep}{env.get('PATH', '')}"
+
+
 class AutoreviewHardeningTests(unittest.TestCase):
     def setUp(self) -> None:
         self.helper = load_helper()
+
+    def test_trufflehog_missing_binary_has_platform_neutral_guidance(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            with mock.patch.dict(
+                self.helper["run_trufflehog_preflight"].__globals__,
+                {"find_command": lambda _name, _repo: None},
+            ):
+                with self.assertRaises(SystemExit) as error:
+                    self.helper["run_trufflehog_preflight"](
+                        repo,
+                        "local",
+                        None,
+                        "HEAD",
+                    )
+
+        message = str(error.exception)
+        self.assertIn("TruffleHog is required but was not found", message)
+        self.assertIn(self.helper["TRUFFLEHOG_INSTALL_URL"], message)
+        self.assertNotIn("brew", message.casefold())
+
+    def test_trufflehog_scans_staged_and_working_versions_separately(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            source = repo / "runtime.txt"
+            source.write_text("base\n", encoding="utf-8")
+            git(repo, "add", "runtime.txt")
+            git(repo, "commit", "-q", "-m", "base")
+            source.write_text("staged version\n", encoding="utf-8")
+            git(repo, "add", "runtime.txt")
+            source.write_text("working version\n", encoding="utf-8")
+
+            original_find_command = self.helper["find_command"]
+            original_run = self.helper["run"]
+            scanned: dict[str, str] = {}
+
+            def find_command(name: str, checkout: Path) -> str | None:
+                if name == "trufflehog":
+                    return "/trusted/trufflehog"
+                return original_find_command(name, checkout)
+
+            def run_scanner(
+                command: list[str],
+                cwd: Path,
+                **_kwargs: object,
+            ) -> subprocess.CompletedProcess[str]:
+                if command[0] != "/trusted/trufflehog":
+                    return original_run(command, cwd, **_kwargs)
+                self.assertEqual(
+                    command[0:2],
+                    [
+                        "/trusted/trufflehog",
+                        "git",
+                    ],
+                )
+                self.assertEqual(command[3], "--since-commit")
+                self.assertEqual(command[5:7], ["--branch", "HEAD"])
+                self.assertEqual(
+                    command[7:],
+                    [
+                        "--no-update",
+                        "--no-color",
+                        "--results=verified,unknown",
+                        "--fail",
+                        "--fail-on-scan-errors",
+                    ],
+                )
+                scan_path = command[2].removeprefix("file://")
+                if os.name == "nt":
+                    scan_path = scan_path.lstrip("/")
+                scan_repo = Path(scan_path)
+                commits = git(
+                    scan_repo,
+                    "log",
+                    "--reverse",
+                    "--format=%H",
+                ).splitlines()
+                scanned["staged"] = git(
+                    scan_repo,
+                    "show",
+                    f"{commits[1]}:runtime.txt",
+                )
+                scanned["working"] = git(
+                    scan_repo,
+                    "show",
+                    f"{commits[2]}:runtime.txt",
+                )
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with mock.patch.dict(
+                self.helper["run_trufflehog_preflight"].__globals__,
+                {
+                    "find_command": find_command,
+                    "run": run_scanner,
+                },
+            ):
+                self.helper["run_trufflehog_preflight"](
+                    repo,
+                    "local",
+                    None,
+                    "HEAD",
+                )
+
+        self.assertEqual(
+            scanned,
+            {
+                "staged": "staged version\n",
+                "working": "working version\n",
+            },
+        )
+
+    def test_trufflehog_scans_only_changed_content_at_reviewed_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            unchanged = repo / "unchanged.txt"
+            changed = repo / "changed.txt"
+            unchanged.write_text("unchanged\n", encoding="utf-8")
+            changed.write_text("base\n", encoding="utf-8")
+            git(repo, "add", "unchanged.txt", "changed.txt")
+            git(repo, "commit", "-q", "-m", "base")
+            base = git(repo, "rev-parse", "HEAD").strip()
+            changed.write_text("reviewed version\n", encoding="utf-8")
+            git(repo, "add", "changed.txt")
+            git(repo, "commit", "-q", "-m", "change")
+            reviewed_commit = git(repo, "rev-parse", "HEAD").strip()
+            changed.write_text("later working version\n", encoding="utf-8")
+
+            for target, target_ref, commit_ref in (
+                ("branch", base, "HEAD"),
+                ("commit", None, reviewed_commit),
+            ):
+                with self.subTest(target=target), tempfile.TemporaryDirectory() as scan_dir:
+                    scan_repo = Path(scan_dir)
+                    base_commit = self.helper["prepare_trufflehog_history"](
+                        repo,
+                        target,
+                        target_ref,
+                        commit_ref,
+                        scan_repo,
+                    )
+
+                    commits = git(
+                        scan_repo,
+                        "log",
+                        "--reverse",
+                        "--format=%H",
+                    ).splitlines()
+                    self.assertEqual(commits[0], base_commit)
+                    self.assertEqual(len(commits), 3)
+                    self.assertEqual(
+                        git(
+                            scan_repo,
+                            "show",
+                            f"{commits[1]}:changed.txt",
+                        ),
+                        "reviewed version\n",
+                    )
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        subprocess.run(
+                            [
+                                "git",
+                                "show",
+                                f"{commits[1]}:unchanged.txt",
+                            ],
+                            cwd=scan_repo,
+                            check=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                        )
+
+    def test_trufflehog_history_scans_deleted_content_in_reverse_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            source = repo / "removed.txt"
+            source.write_text("removed baseline content\n", encoding="utf-8")
+            git(repo, "add", "removed.txt")
+            git(repo, "commit", "-q", "-m", "base")
+            base = git(repo, "rev-parse", "HEAD").strip()
+            source.unlink()
+            git(repo, "add", "removed.txt")
+            git(repo, "commit", "-q", "-m", "remove credential")
+
+            with tempfile.TemporaryDirectory() as scan_dir:
+                scan_repo = Path(scan_dir)
+                scan_base = self.helper["prepare_trufflehog_history"](
+                    repo,
+                    "branch",
+                    base,
+                    "HEAD",
+                    scan_repo,
+                )
+                commits = git(
+                    scan_repo,
+                    "log",
+                    "--reverse",
+                    "--format=%H",
+                ).splitlines()
+
+                self.assertEqual(commits[0], scan_base)
+                self.assertEqual(len(commits), 3)
+                self.assertEqual(
+                    git(scan_repo, "show", f"{commits[2]}:removed.txt"),
+                    "removed baseline content\n",
+                )
+                with self.assertRaises(subprocess.CalledProcessError):
+                    subprocess.run(
+                        ["git", "show", f"{commits[1]}:removed.txt"],
+                        cwd=scan_repo,
+                        check=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+
+    def test_trufflehog_snapshot_supports_directory_to_file_transition(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            nested = repo / "entry" / "nested.txt"
+            nested.parent.mkdir()
+            nested.write_text("nested\n", encoding="utf-8")
+            git(repo, "add", "entry/nested.txt")
+            git(repo, "commit", "-q", "-m", "directory")
+            base = git(repo, "rev-parse", "HEAD").strip()
+            nested.unlink()
+            nested.parent.rmdir()
+            (repo / "entry").write_text("file\n", encoding="utf-8")
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", "file")
+
+            with tempfile.TemporaryDirectory() as scan_dir:
+                scan_repo = Path(scan_dir)
+                self.helper["prepare_trufflehog_history"](
+                    repo,
+                    "branch",
+                    base,
+                    "HEAD",
+                    scan_repo,
+                )
+                commits = git(
+                    scan_repo,
+                    "log",
+                    "--reverse",
+                    "--format=%H",
+                ).splitlines()
+                self.assertEqual(
+                    git(scan_repo, "show", f"{commits[1]}:entry"),
+                    "file\n",
+                )
+
+    @unittest.skipIf(os.name == "nt", "Windows filenames cannot use Git pathspec magic prefixes")
+    def test_trufflehog_snapshot_treats_git_paths_as_literals(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            rel = ":(exclude).txt"
+            source = repo / rel
+            source.write_text("base\n", encoding="utf-8")
+            git(repo, "--literal-pathspecs", "add", "--", rel)
+            git(repo, "commit", "-q", "-m", "base")
+            source.write_text("staged\n", encoding="utf-8")
+            git(repo, "--literal-pathspecs", "add", "--", rel)
+
+            with tempfile.TemporaryDirectory() as index_dir:
+                index_root = Path(index_dir)
+                self.helper["materialize_index_snapshot"](
+                    repo,
+                    index_root,
+                    [rel],
+                )
+                self.assertEqual(
+                    (index_root / rel).read_text(encoding="utf-8"),
+                    "staged\n",
+                )
+
+            git(repo, "commit", "-q", "-m", "staged")
+            with tempfile.TemporaryDirectory() as tree_dir:
+                tree_root = Path(tree_dir)
+                self.helper["materialize_tree_snapshot"](
+                    repo,
+                    tree_root,
+                    "HEAD",
+                    [rel],
+                )
+                self.assertEqual(
+                    (tree_root / rel).read_text(encoding="utf-8"),
+                    "staged\n",
+                )
+
+    def test_trufflehog_snapshot_force_stages_ignored_materialized_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            (repo / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+            (repo / "ignored.txt").write_text("review me\n", encoding="utf-8")
+
+            commit = self.helper["commit_snapshot"](repo, "snapshot")
+
+            self.assertEqual(
+                git(repo, "show", f"{commit}:ignored.txt"),
+                "review me\n",
+            )
+
+    def test_trufflehog_snapshot_rejects_symlinked_parent_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "review.txt").write_text("outside\n", encoding="utf-8")
+            parent = repo / "nested"
+            try:
+                parent.symlink_to(outside, target_is_directory=True)
+            except OSError as exc:
+                if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+                    self.skipTest("Windows symlink privilege is not available")
+                raise
+
+            with tempfile.TemporaryDirectory() as snapshot_dir:
+                with self.assertRaisesRegex(SystemExit, "symlinked parent"):
+                    self.helper["copy_worktree_file"](
+                        repo,
+                        Path(snapshot_dir),
+                        "nested/review.txt",
+                    )
+
+    def test_local_trufflehog_snapshot_supports_path_type_transitions(self) -> None:
+        for transition in ("directory-to-file", "file-to-directory"):
+            with self.subTest(transition=transition), tempfile.TemporaryDirectory() as tempdir:
+                repo = init_repo(Path(tempdir))
+                entry = repo / "entry"
+                nested = entry / "nested.txt"
+                if transition == "directory-to-file":
+                    entry.mkdir()
+                    nested.write_text("nested\n", encoding="utf-8")
+                    git(repo, "add", "entry/nested.txt")
+                else:
+                    entry.write_text("file\n", encoding="utf-8")
+                    git(repo, "add", "entry")
+                git(repo, "commit", "-q", "-m", "base")
+
+                if transition == "directory-to-file":
+                    nested.unlink()
+                    entry.rmdir()
+                    entry.write_text("file\n", encoding="utf-8")
+                    expected_path = "entry"
+                    expected_content = "file\n"
+                else:
+                    entry.unlink()
+                    entry.mkdir()
+                    nested.write_text("nested\n", encoding="utf-8")
+                    expected_path = "entry/nested.txt"
+                    expected_content = "nested\n"
+
+                with tempfile.TemporaryDirectory() as scan_dir:
+                    scan_repo = Path(scan_dir)
+                    self.helper["prepare_trufflehog_history"](
+                        repo,
+                        "local",
+                        None,
+                        "HEAD",
+                        scan_repo,
+                    )
+                    commits = git(
+                        scan_repo,
+                        "log",
+                        "--reverse",
+                        "--format=%H",
+                    ).splitlines()
+                    self.assertEqual(
+                        git(scan_repo, "show", f"{commits[2]}:{expected_path}"),
+                        expected_content,
+                    )
+
+    def test_trufflehog_findings_and_errors_do_not_leak_scanner_output(self) -> None:
+        for returncode, expected in (
+            (
+                self.helper["TRUFFLEHOG_FINDINGS_EXIT_CODE"],
+                "found verified or unknown credentials",
+            ),
+            (1, "could not complete the credential scan"),
+        ):
+            with self.subTest(returncode=returncode), tempfile.TemporaryDirectory() as tempdir:
+                repo = init_repo(Path(tempdir))
+                (repo / "runtime.txt").write_text("review me\n", encoding="utf-8")
+                original_find_command = self.helper["find_command"]
+                original_run = self.helper["run"]
+                scanner_output = "detected-value-that-must-not-leak"
+
+                def find_command(name: str, checkout: Path) -> str | None:
+                    if name == "trufflehog":
+                        return "/trusted/trufflehog"
+                    return original_find_command(name, checkout)
+
+                def run_scanner(
+                    command: list[str],
+                    cwd: Path,
+                    **_kwargs: object,
+                ) -> subprocess.CompletedProcess[str]:
+                    if command[0] != "/trusted/trufflehog":
+                        return original_run(command, cwd, **_kwargs)
+                    return subprocess.CompletedProcess(
+                        command,
+                        returncode,
+                        scanner_output,
+                        scanner_output,
+                    )
+
+                output = io.StringIO()
+                with (
+                    mock.patch.dict(
+                        self.helper["run_trufflehog_preflight"].__globals__,
+                        {
+                            "find_command": find_command,
+                            "run": run_scanner,
+                        },
+                    ),
+                    contextlib.redirect_stdout(output),
+                    contextlib.redirect_stderr(output),
+                    self.assertRaises(SystemExit) as error,
+                ):
+                    self.helper["run_trufflehog_preflight"](
+                        repo,
+                        "local",
+                        None,
+                        "HEAD",
+                    )
+
+                combined = output.getvalue() + str(error.exception)
+                self.assertIn(expected, combined)
+                self.assertNotIn(scanner_output, combined)
 
     def test_powershell_harness_exposes_runnable_engines_only(self) -> None:
         harness = SCRIPT.with_name("test-review-harness.ps1").read_text(encoding="utf-8")
@@ -73,16 +517,23 @@ class AutoreviewHardeningTests(unittest.TestCase):
         for disabled_engine in ("droid", "copilot", "opencode", "cursor"):
             self.assertNotIn(f"'{disabled_engine}'", harness)
 
-    def test_local_bundle_blocks_sensitive_untracked_file(self) -> None:
+    def test_local_bundle_omits_sensitive_untracked_file_without_blocking(self) -> None:
         for rel in (".env", "tokens/session.dat", "secrets/local.py"):
             with self.subTest(rel=rel), tempfile.TemporaryDirectory() as tempdir:
                 repo = init_repo(Path(tempdir))
                 path = repo / rel
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("placeholder=true\n", encoding="utf-8")
+                (repo / "review.py").write_text("print('review me')\n", encoding="utf-8")
 
-                with self.assertRaisesRegex(SystemExit, "untracked sensitive files"):
-                    self.helper["local_bundle"](repo)
+                bundle, truncated = self.helper["local_bundle"](repo)
+
+                self.assertIn("# Review Input Redactions", bundle)
+                self.assertIn(self.helper["REVIEW_SECURITY_REDACTION"], bundle)
+                self.assertNotIn(rel, bundle)
+                self.assertNotIn("placeholder=true", bundle)
+                self.assertIn("print('review me')", bundle)
+                self.assertFalse(truncated)
 
     def test_local_bundle_marks_untracked_binary_input_incomplete(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -91,7 +542,11 @@ class AutoreviewHardeningTests(unittest.TestCase):
 
             bundle, truncated = self.helper["local_bundle"](repo)
 
-            self.assertIn("## image.bin\n[binary file omitted]", bundle)
+            self.assertIn(
+                '# Untracked File\npath: "image.bin"\n'
+                'source-line 1: "[binary file omitted]"',
+                bundle,
+            )
             self.assertTrue(truncated)
 
     def test_local_bundle_rejects_non_utf8_untracked_text(self) -> None:
@@ -122,7 +577,12 @@ class AutoreviewHardeningTests(unittest.TestCase):
             ):
                 bundle, truncated = self.helper["local_bundle"](repo)
 
-            self.assertIn("## notes.txt\nreview me", bundle)
+            expected_record = json.dumps("review me" + os.linesep)
+            self.assertIn(
+                '# Untracked File\npath: "notes.txt"\n'
+                f"source-line 1: {expected_record}",
+                bundle,
+            )
             self.assertFalse(truncated)
             self.assertEqual(reads, 1)
 
@@ -365,71 +825,479 @@ class AutoreviewHardeningTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, r"12 bytes; limit 10"):
             self.helper["validate_review_patch"]("local staged diff", ["safe.txt"], "界" * 4, 10)
 
-    def test_review_patch_escapes_controls_in_blocked_paths(self) -> None:
-        path = ".env.\x1b]52;c;VEVTVA==\x07\udc9b"
-
-        with self.assertRaises(SystemExit) as raised:
-            self.helper["validate_review_patch"](
-                "local staged diff",
-                [path],
-                "",
-            )
-
-        message = str(raised.exception)
-        self.assertNotIn("\x1b", message)
-        self.assertNotIn("\x07", message)
-        self.assertNotIn("\udc9b", message)
-        self.assertIn(
-            r".env.\x1b]52;c;VEVTVA==\x07\udc9b",
-            message,
-        )
-
-    def test_review_patch_scans_reconstructed_content_not_diff_markers(
-        self,
-    ) -> None:
+    def test_review_patch_accepts_large_content_without_explicit_limit(self) -> None:
         patch = (
-            "@@ -0,0 +1,4 @@\n"
-            '+            "https://token=" + "hardcoded123@host/repo",\n'
-            '+            "DATABASE_URL=https:"\n'
-            '+            + f"//token={literal_username}:${{PASSWORD}}@host",\n'
-            '+            \'curl "https:\'\n'
+            "diff --git a/safe.txt b/safe.txt\n"
+            "--- a/safe.txt\n"
+            "+++ b/safe.txt\n"
+            "@@ -0,0 +1,100000 @@\n"
+            + "+safe review content\n" * 100_000
         )
 
-        self.assertTrue(self.helper["secret_text_risk"](patch))
-        self.assertFalse(
-            any(
-                self.helper["secret_text_risk"](line)
-                for line in patch.splitlines()
-            )
-        )
         self.assertEqual(
             self.helper["validate_review_patch"](
-                "local unstaged diff",
-                ["safe.py"],
+                "local staged diff",
+                ["safe.txt"],
                 patch,
             ),
             patch,
         )
 
-    def test_review_patch_scans_diff_metadata_line_by_line(self) -> None:
-        credential = "AKIA" + "ABCDEFGHIJKLMNOP"
-        patch = (
-            f"diff --git a/{credential}.txt b/{credential}.txt\n"
-            "new file mode 100644\n"
-            "--- /dev/null\n"
-            f"+++ b/{credential}.txt\n"
-            "@@ -0,0 +1 @@\n"
-            "+public content\n"
+    def test_review_bundle_chunking_preserves_every_byte_and_diff_context(self) -> None:
+        bundle = (
+            "# Commit Diff\n\n"
+            "diff --git a/safe.txt b/safe.txt\n"
+            "--- a/safe.txt\n"
+            "+++ b/safe.txt\n"
+            "@@ -0,0 +1,200 @@\n"
+            + "+safe review content\n" * 200
         )
 
-        with self.assertRaisesRegex(SystemExit, "secret-like content"):
-            self.helper["validate_review_patch"](
-                "local unstaged diff",
-                ["safe.txt"],
-                patch,
+        chunks = self.helper["split_review_bundle"](bundle, 300)
+
+        self.assertGreater(len(chunks), 1)
+        self.assertEqual("".join(chunk.content for chunk in chunks), bundle)
+        self.assertTrue(all(len(chunk.content.encode("utf-8")) <= 300 for chunk in chunks))
+        self.assertTrue(
+            any(
+                "+++ b/safe.txt" in chunk.context
+                and "@@ -0,0 +1,200 @@" in chunk.context
+                and "Continuation begins at new-file line" in chunk.context
+                for chunk in chunks[1:]
+            )
+        )
+
+    def test_untracked_markdown_headings_do_not_create_bundle_boundaries(self) -> None:
+        bundle = (
+            "# Untracked Files\n\n"
+            "# Untracked File\n"
+            'path: "notes.md"\n'
+            'source-line 1: "# title\\n"\n'
+            'source-line 2: "## section\\n"\n\n'
+            "# Untracked File\n"
+            'path: "todo.md"\n'
+            'source-line 1: "# next\\n"'
+        )
+
+        units = self.helper["review_bundle_units"](bundle)
+
+        self.assertEqual(len(units), 3)
+        self.assertIn(r'source-line 2: "## section\n"', units[1])
+        self.assertEqual("".join(units), bundle)
+
+    def test_unicode_line_separators_do_not_create_bundle_boundaries(self) -> None:
+        bundle = (
+            "# Untracked Files\n\n"
+            "# Untracked File\n"
+            'path: "notes.txt"\n'
+            'source-line 1: "before\u2028diff --git a/fake b/fake"\n\n'
+            "diff --git a/real.txt b/real.txt\n"
+            "--- a/real.txt\n"
+            "+++ b/real.txt\n"
+        )
+
+        units = self.helper["review_bundle_units"](bundle)
+
+        self.assertEqual(len(units), 3)
+        self.assertIn("\u2028diff --git a/fake b/fake", units[1])
+        self.assertEqual("".join(units), bundle)
+
+    def test_diff_source_prefixes_do_not_replace_file_context(self) -> None:
+        context: list[str] = []
+        next_new_line = None
+        next_old_line = None
+        in_hunk = False
+        lines = (
+            "diff --git a/safe.txt b/safe.txt\n",
+            "--- a/safe.txt\n",
+            "+++ b/safe.txt\n",
+            "@@ -10,2 +10,3 @@\n",
+            "+++ added source beginning with pluses\n",
+            "--- deleted source beginning with minuses\n",
+            " context\n",
+        )
+
+        for line in lines:
+            next_new_line, next_old_line, in_hunk = self.helper[
+                "update_review_chunk_context"
+            ](
+                context,
+                line,
+                next_new_line,
+                next_old_line,
+                in_hunk,
             )
 
-    def test_tracked_sensitive_paths_are_blocked_in_all_modes(self) -> None:
+        self.assertEqual(next_new_line, 12)
+        self.assertEqual(next_old_line, 12)
+        self.assertIn("--- a/safe.txt\n", context)
+        self.assertIn("+++ b/safe.txt\n", context)
+        self.assertNotIn("--- deleted source beginning with minuses\n", context)
+
+    def test_hunk_header_that_fits_fresh_chunk_is_not_split(self) -> None:
+        unit = (
+            "diff --git a/abcdefghijk b/abcdefghijk\n"
+            "--- a/abcdefghijk\n"
+            "+++ b/abcdefghijk\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+        )
+
+        chunks = self.helper["split_oversized_review_unit"](unit, 85)
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(any("@@ -1 +1 @@\n" in chunk.content for chunk in chunks))
+        self.assertEqual("".join(chunk.content for chunk in chunks), unit)
+
+    def test_long_diff_line_continuations_keep_their_original_marker(self) -> None:
+        for marker in ("+", "-", " "):
+            with self.subTest(marker=marker):
+                unit = (
+                    "diff --git a/large.txt b/large.txt\n"
+                    "--- a/large.txt\n"
+                    "+++ b/large.txt\n"
+                    "@@ -1 +1 @@\n"
+                    f"{marker}{'x' * 400}\n"
+                )
+
+                chunks = self.helper["split_oversized_review_unit"](unit, 140)
+
+                self.assertTrue(
+                    any(
+                        f"original marker is `{marker}`" in chunk.context
+                        for chunk in chunks[1:]
+                    )
+                )
+                self.assertEqual("".join(chunk.content for chunk in chunks), unit)
+
+    def test_modified_file_deletion_context_keeps_old_and_new_offsets(self) -> None:
+        context: list[str] = []
+        next_new_line = None
+        next_old_line = None
+        in_hunk = False
+        for line in (
+            "diff --git a/safe.txt b/safe.txt\n",
+            "--- a/safe.txt\n",
+            "+++ b/safe.txt\n",
+            "@@ -10,3 +10,2 @@\n",
+            "-first deleted line\n",
+        ):
+            next_new_line, next_old_line, in_hunk = self.helper[
+                "update_review_chunk_context"
+            ](
+                context,
+                line,
+                next_new_line,
+                next_old_line,
+                in_hunk,
+            )
+
+        rendered = self.helper["review_chunk_context"](
+            context,
+            next_new_line,
+            next_old_line,
+        )
+
+        self.assertIn("new-file line 10", rendered)
+        self.assertIn("old-file line 11", rendered)
+
+    def test_multiple_long_line_tails_pack_into_following_chunks(self) -> None:
+        limit = 200
+        unit = (
+            "diff --git a/large.txt b/large.txt\n"
+            "--- a/large.txt\n"
+            "+++ b/large.txt\n"
+            "@@ -1,5 +1,5 @@\n"
+            + ("+" + "x" * 205 + "\n") * 5
+        )
+
+        chunks = self.helper["split_oversized_review_unit"](unit, limit)
+        minimum_chunks = (len(unit.encode("utf-8")) + limit - 1) // limit
+
+        self.assertLessEqual(len(chunks), minimum_chunks + 1)
+        self.assertEqual("".join(chunk.content for chunk in chunks), unit)
+        self.assertTrue(all(len(chunk.content.encode("utf-8")) <= limit for chunk in chunks))
+
+    def test_untracked_continuation_context_keeps_source_line(self) -> None:
+        unit = (
+            "# Untracked File\n"
+            'path: "notes.txt"\n'
+            'source-line 1: "short\\n"\n'
+            f'source-line 2: "{"x" * 300}"\n'
+        )
+
+        chunks = self.helper["split_oversized_review_unit"](unit, 120)
+
+        self.assertGreater(len(chunks), 2)
+        self.assertTrue(
+            any(
+                "Continuation begins at untracked source line 2" in chunk.context
+                for chunk in chunks[1:]
+            )
+        )
+        self.assertEqual("".join(chunk.content for chunk in chunks), unit)
+
+    def test_deleted_file_continuation_uses_positive_old_line(self) -> None:
+        unit = (
+            "diff --git a/removed.txt b/removed.txt\n"
+            "--- a/removed.txt\n"
+            "+++ /dev/null\n"
+            "@@ -40,50 +0,0 @@\n"
+            + "-deleted content\n" * 50
+        )
+
+        chunks = self.helper["split_oversized_review_unit"](unit, 180)
+
+        deletion_contexts = [
+            chunk.context for chunk in chunks[1:] if "old-file line" in chunk.context
+        ]
+        self.assertTrue(deletion_contexts)
+        self.assertTrue(all("line 0" not in context for context in deletion_contexts))
+        self.assertTrue(all("--- a/removed.txt" in context for context in deletion_contexts))
+
+    def test_long_complete_context_is_retained_or_rejected(self) -> None:
+        path = "nested/" + "x" * 10_000 + ".txt"
+        context = [
+            f'diff --git "a/{path}" "b/{path}"\n',
+            f'--- "a/{path}"\n',
+            f'+++ "b/{path}"\n',
+            "@@ -1 +1 @@\n",
+        ]
+
+        rendered = self.helper["review_chunk_context"](context, 2, 2)
+
+        self.assertIn(f'+++ "b/{path}"', rendered)
+        self.assertIn("@@ -1 +1 @@", rendered)
+        self.assertIn("Continuation begins at new-file line 2", rendered)
+
+    def test_review_bundle_packs_oversized_unit_tails_globally(self) -> None:
+        limit = 1_000
+        units = []
+        for index in range(5):
+            header = (
+                f"diff --git a/file-{index}.txt b/file-{index}.txt\n"
+                f"--- a/file-{index}.txt\n"
+                f"+++ b/file-{index}.txt\n"
+                "@@ -0,0 +1 @@\n"
+            )
+            body = "+" + "x" * (1_100 - len(header.encode("utf-8")) - 2) + "\n"
+            units.append(header + body)
+        bundle = "".join(units)
+
+        chunks = self.helper["split_review_bundle"](bundle, limit)
+
+        self.assertEqual(len(chunks), 6)
+        self.assertEqual("".join(chunk.content for chunk in chunks), bundle)
+        self.assertTrue(all(len(chunk.content.encode("utf-8")) <= limit for chunk in chunks))
+
+    def test_large_bundle_stays_single_pass_until_prompt_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            prompts = self.helper["build_review_prompts"](
+                repo,
+                "commit",
+                "HEAD",
+                "# Commit Diff\n" + "safe review content\n" * 18_000,
+                "",
+                "",
+            )
+
+        self.assertEqual(len(prompts), 1)
+
+    def test_bundle_above_prompt_limit_uses_complete_bounded_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            prompts = self.helper["build_review_prompts"](
+                repo,
+                "commit",
+                "HEAD",
+                "# Commit Diff\n" + "safe review content\n" * 35_000,
+                "",
+                "",
+            )
+
+        self.assertGreater(len(prompts), 1)
+        self.assertTrue(
+            all(
+                len(prompt.encode("utf-8"))
+                <= self.helper["MAX_REVIEW_PROMPT_BYTES"]
+                for prompt in prompts
+            )
+        )
+        self.assertTrue(all("Oversized review bundle chunk:" in prompt for prompt in prompts))
+
+    def test_review_prompt_preserves_bundle_ending_whitespace(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            bundle = "# Commit Diff\n+Markdown hard break  \n+\n"
+            prompt = self.helper["render_review_prompt"](
+                repo,
+                "commit",
+                "HEAD",
+                self.helper["ReviewChunk"](bundle),
+                "",
+                "",
+            )
+
+        self.assertTrue(prompt.endswith(bundle))
+
+    def test_review_pass_count_is_bounded(self) -> None:
+        builder = self.helper["build_review_prompts"]
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            with mock.patch.dict(builder.__globals__, {"MAX_REVIEW_PASSES": 1}):
+                with self.assertRaisesRegex(SystemExit, "more than 1 bounded passes"):
+                    builder(
+                        repo,
+                        "commit",
+                        "HEAD",
+                        "# Commit Diff\n" + "safe review content\n" * 35_000,
+                        "",
+                        "",
+                    )
+
+    def test_review_patch_does_not_disclose_controls_in_omitted_paths(self) -> None:
+        path = ".env.\x1b]52;c;VEVTVA==\x07\udc9b"
+
+        redacted = self.helper["validate_review_patch"](
+            "local staged diff",
+            [path],
+            "",
+        )
+
+        self.assertEqual(
+            redacted,
+            self.helper["REVIEW_SECURITY_REDACTION"] + "\n",
+        )
+        self.assertNotIn("\x1b", redacted)
+        self.assertNotIn("\x07", redacted)
+        self.assertNotIn("\udc9b", redacted)
+
+    def test_review_patch_omits_everything_when_sensitive_paths_cannot_be_mapped(
+        self,
+    ) -> None:
+        patch = (
+            "commit metadata that must not survive a mapping failure\n"
+            "diff --cc .env\n"
+            "@@@ -1,1 -1,1 +1,1 @@@\n"
+            "++placeholder=true\n"
+        )
+
+        redacted = self.helper["validate_review_patch"](
+            "branch diff",
+            [".env"],
+            patch,
+        )
+
+        self.assertEqual(
+            redacted,
+            self.helper["REVIEW_SECURITY_REDACTION"] + "\n",
+        )
+        self.assertNotIn("placeholder", redacted)
+        self.assertNotIn("commit metadata", redacted)
+
+    def test_review_metadata_redaction_is_independent_of_path_classification(
+        self,
+    ) -> None:
+        credential = "ghp_" + "A" * 24
+        metadata = f" M {credential}.txt\n"
+
+        self.assertEqual(
+            self.helper["redact_secret_like_review_metadata"](metadata),
+            self.helper["REVIEW_SECURITY_REDACTION"],
+        )
+        self.assertNotIn(
+            credential,
+            self.helper["redact_secret_like_review_metadata"](metadata),
+        )
+
+    def test_review_patch_redacts_metadata_but_preserves_code_content(self) -> None:
+        patch = (
+            "Authorization: Basic dXNlcjpwYXNzd29yZA==\n"
+            "diff --git a/src/runtime.ts b/src/runtime.ts\n"
+            "--- a/src/runtime.ts\n"
+            "+++ b/src/runtime.ts\n"
+            "@@ -0,0 +1 @@\n"
+            '+const token = "ordinary-hardcoded-value-12345";\n'
+        )
+
+        validated = self.helper["validate_review_patch"](
+            "commit diff",
+            ["src/runtime.ts"],
+            patch,
+        )
+
+        self.assertNotIn("dXNlcjpwYXNzd29yZA==", validated)
+        self.assertIn("ordinary-hardcoded-value-12345", validated)
+
+    def test_review_patch_redacts_standard_diff_paths_but_preserves_hunks(self) -> None:
+        credential = "ghp_" + "A" * 24
+        patch = (
+            f"diff --git a/{credential}.ts b/{credential}.ts\n"
+            f"--- a/{credential}.ts\n"
+            f"+++ b/{credential}.ts\n"
+            "@@ -0,0 +1 @@\n"
+            '+const token = "ordinary-hardcoded-value-12345";\n'
+        )
+
+        validated = self.helper["validate_review_patch"](
+            "commit diff",
+            ["src/runtime.ts"],
+            patch,
+        )
+
+        self.assertNotIn(credential, validated)
+        self.assertIn("ordinary-hardcoded-value-12345", validated)
+
+    def test_review_patch_preserves_combined_and_headerless_hunk_content(self) -> None:
+        credential_shaped_code = '+token = "ordinary-hardcoded-value-12345"\n'
+        for patch in (
+            "@@ -0,0 +1 @@\n" + credential_shaped_code,
+            "diff --cc src/runtime.ts\n"
+            "@@@ -0,0 -0,0 +1 @@@\n"
+            "++token = \"ordinary-hardcoded-value-12345\"\n",
+        ):
+            with self.subTest(patch=patch):
+                validated = self.helper["validate_review_patch"](
+                    "commit diff",
+                    ["src/runtime.ts"],
+                    patch,
+                )
+                self.assertIn("ordinary-hardcoded-value-12345", validated)
+
+    def test_review_patch_stops_hunk_classification_at_declared_counts(self) -> None:
+        credential = "ghp_" + "A" * 24
+        patch = (
+            "@@ -0,0 +1 @@\n"
+            "+first file content\n"
+            f"--- a/{credential}.ts\n"
+            f"+++ b/{credential}.ts\n"
+            "@@ -0,0 +1 @@\n"
+            '+token = "ordinary-hardcoded-value-12345"\n'
+        )
+
+        validated = self.helper["validate_review_patch"](
+            "commit diff",
+            ["first.ts", "second.ts"],
+            patch,
+        )
+
+        self.assertNotIn(credential, validated)
+        self.assertIn("ordinary-hardcoded-value-12345", validated)
+
+    def test_review_patch_enforces_limit_after_metadata_redaction(self) -> None:
+        patch = "ghp_" + "A" * 24
+
+        with self.assertRaisesRegex(SystemExit, "after metadata redaction"):
+            self.helper["validate_review_patch"](
+                "commit diff",
+                [],
+                patch,
+                40,
+            )
+
+    def test_tracked_sensitive_paths_are_omitted_in_all_modes(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             repo = init_repo(Path(tempdir))
             (repo / "base.txt").write_text("base\n", encoding="utf-8")
@@ -438,15 +1306,61 @@ class AutoreviewHardeningTests(unittest.TestCase):
             base = git(repo, "rev-parse", "HEAD").strip()
 
             (repo / ".env").write_text("placeholder=true\n", encoding="utf-8")
-            git(repo, "add", ".env")
-            with self.assertRaisesRegex(SystemExit, "tracked sensitive paths"):
-                self.helper["local_bundle"](repo)
+            (repo / "base.txt").write_text("base\nreview me\n", encoding="utf-8")
+            git(repo, "add", ".env", "base.txt")
+            local, local_truncated = self.helper["local_bundle"](repo)
+            self.assertIn(self.helper["REVIEW_SECURITY_REDACTION"], local)
+            self.assertNotIn(".env", local)
+            self.assertNotIn("placeholder=true", local)
+            self.assertIn("+review me", local)
+            self.assertFalse(local_truncated)
 
             git(repo, "commit", "-q", "-m", "sensitive path")
-            with self.assertRaisesRegex(SystemExit, "tracked sensitive paths"):
-                self.helper["branch_bundle"](repo, base)
-            with self.assertRaisesRegex(SystemExit, "tracked sensitive paths"):
-                self.helper["commit_bundle"](repo, "HEAD")
+            for bundle, truncated in (
+                self.helper["branch_bundle"](repo, base),
+                self.helper["commit_bundle"](repo, "HEAD"),
+            ):
+                self.assertIn(self.helper["REVIEW_SECURITY_REDACTION"], bundle)
+                self.assertNotIn(".env", bundle)
+                self.assertNotIn("placeholder=true", bundle)
+                self.assertIn("+review me", bundle)
+                self.assertFalse(truncated)
+
+    def test_secret_named_workflows_are_reviewable_in_all_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            (repo / "base.txt").write_text("base\n", encoding="utf-8")
+            git(repo, "add", "base.txt")
+            git(repo, "commit", "-q", "-m", "base")
+            base = git(repo, "rev-parse", "HEAD").strip()
+
+            workflow = repo / ".github" / "workflows" / "secret-scan.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text("name: Secret scan\n", encoding="utf-8")
+            untracked_bundle, _ = self.helper["local_bundle"](repo)
+            self.assertIn("secret-scan.yml", untracked_bundle)
+
+            git(repo, "add", str(workflow.relative_to(repo)))
+            tracked_bundle, _ = self.helper["local_bundle"](repo)
+            self.assertIn("secret-scan.yml", tracked_bundle)
+
+            git(repo, "commit", "-q", "-m", "add secret scanner")
+            branch_bundle, _ = self.helper["branch_bundle"](repo, base)
+            commit_bundle, _ = self.helper["commit_bundle"](repo, "HEAD")
+            self.assertIn("secret-scan.yml", branch_bundle)
+            self.assertIn("secret-scan.yml", commit_bundle)
+
+    def test_case_variant_secret_named_workflows_remain_sensitive(self) -> None:
+        for rel in (
+            ".GitHub/workflows/secret-scan.yml",
+            ".github/Workflows/secret-scan.yml",
+            ".github/workflows/secret-scan.YML",
+        ):
+            with self.subTest(rel=rel):
+                self.assertIsNotNone(self.helper["sensitive_repo_path_risk"](rel))
+                self.assertIsNotNone(
+                    self.helper["tracked_sensitive_repo_path_risk"](rel)
+                )
 
     def test_tracked_source_names_and_env_templates_remain_reviewable(self) -> None:
         for rel in (
@@ -475,6 +1389,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             "token_count/generated.py",
             ".docker/Dockerfile",
             ".docker/scripts/build.sh",
+            ".github/workflows/secret-scan.yml",
         ):
             with self.subTest(rel=rel):
                 self.assertIsNone(self.helper["tracked_sensitive_repo_path_risk"](rel))
@@ -490,6 +1405,19 @@ class AutoreviewHardeningTests(unittest.TestCase):
         ):
             with self.subTest(rel=rel):
                 self.assertIsNone(self.helper["sensitive_repo_path_risk"](rel))
+
+    def test_untracked_credential_shaped_source_content_is_reviewed(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            source = 'const token = "ordinary-hardcoded-value-12345";\n'
+            path = repo / "src" / "runtime.ts"
+            path.parent.mkdir()
+            path.write_text(source, encoding="utf-8")
+
+            bundle, truncated = self.helper["local_bundle"](repo)
+
+            self.assertIn("ordinary-hardcoded-value-12345", bundle)
+            self.assertFalse(truncated)
 
     def test_untracked_design_token_artifacts_remain_reviewable(self) -> None:
         for rel in (
@@ -1421,6 +2349,44 @@ class AutoreviewHardeningTests(unittest.TestCase):
             )
         )
 
+    def test_secret_detector_allows_typescript_function_parameter_types(self) -> None:
+        signature = (
+            "function formatCredentialLabel("
+            + "credential"
+            + ": ClaudeCliReadableCredential"
+            + "): string {"
+        )
+        access_key = "AKIA" + "ABCDEFGHIJKLMNOP"
+        secret_assignment = "const api" + 'Key = "' + access_key + '";'
+        literal_value = "actual-production-" + "secret"
+        parameter_name = "api" + "Key"
+        type_name = "Api" + "Credential"
+        typed_default = (
+            "function connect("
+            + parameter_name
+            + ": "
+            + type_name
+            + ' = "'
+            + literal_value
+            + '") {}'
+        )
+        benign_default = (
+            "function connect("
+            + parameter_name
+            + ": "
+            + type_name
+            + " = defaultCredential) {}"
+        )
+
+        self.assertFalse(self.helper["secret_text_risk"](signature))
+        self.assertFalse(self.helper["secret_text_risk"](benign_default))
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                signature + "\n  " + secret_assignment + "\n}"
+            )
+        )
+        self.assertTrue(self.helper["secret_text_risk"](typed_default))
+
     def test_secret_detector_handles_punctuation_and_multiline_diff_values(self) -> None:
         value = "Correct-Horse!" + "@Battery$Staple"
         patch = (
@@ -1479,6 +2445,792 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 "pass" + "word = process.env.PASSWORD   "
             )
         )
+
+    def test_review_patch_allows_provider_references_and_test_placeholders(
+        self,
+    ) -> None:
+        token_name = "to" + "ken"
+        key_name = "api_" + "key"
+        secret_name = "api_" + "secret"
+        safe_patch = (
+            "diff --git a/provider.ts b/provider.ts\n"
+            "--- a/provider.ts\n"
+            "+++ b/provider.ts\n"
+            "@@ -1 +1,6 @@\n"
+            f"-const {token_name} = data.session?.access_token;\n"
+            f"+const {token_name} = data.session?.access_token;\n"
+            "+const api" + f"Key = providerConfig.{key_name};\n"
+            "+const api" + "Sec" + f"ret = providerConfig.{secret_name};\n"
+            f'+const fixture = {{ {key_name}: "test-key" }};\n'
+            f'+const fixtureSecret = {{ {secret_name}: "test-secret" }};\n'
+            f'+const session = {{ access_{token_name}: "test-token" }};\n'
+        )
+
+        self.assertEqual(
+            self.helper["validate_review_patch"](
+                "branch diff",
+                ["provider.ts"],
+                safe_patch,
+            ),
+            safe_patch,
+        )
+
+    def test_provider_reference_allowlist_still_rejects_real_credentials(
+        self,
+    ) -> None:
+        key_name = "api_" + "key"
+        literal_value = "actual-production-" + "secret"
+        structured_value = "ghp_" + "ActualToken1234567890"
+        unsafe_values = (
+            f'const config = {{ {key_name}: "{literal_value}" }};',
+            f'const config = {{ {key_name}: "{structured_value}" }};',
+            f'const config = {{ {key_name}: "test-key-extra" }};',
+        )
+
+        for content in unsafe_values:
+            with self.subTest(content=content):
+                self.assertTrue(
+                    self.helper["secret_text_risk"](
+                        content,
+                        javascript_dialect="typescript",
+                    )
+                )
+
+    def test_secret_detector_allows_typescript_object_secret_references(self) -> None:
+        content = (
+            "async function configure(context: RuntimeContext) {\n"
+            "  const cliDevice = await login();\n"
+            "  const driverPassword = readPassword();\n"
+            "  return {\n"
+            "    access"
+            + "Token"
+            + ": cliDevice.access"
+            + "Token,\n"
+            + "    pass"
+            + "word: driverPass"
+            + "word,\n"
+            + "    ...(context.driverPass"
+            + "word ? { pass"
+            + "word: context.driverPass"
+            + "word } : {}),\n"
+            + "  };\n"
+            + "}"
+        )
+        yaml_literal = "pass" + "word: actualProductionSecret,"
+        yaml_reference = "pass" + "word: context.driverPass" + "word"
+        yaml_flow_reference = (
+            "{ pass" + "word: context.driverPass" + "word, enabled: true }"
+        )
+        sut_reference = (
+            "const pass"
+            + "word = context.sutPass"
+            + "word;"
+        )
+        literal_value = "actual-production-" + "secret"
+        source_literal = (
+            "function configure() { return { pass"
+            + 'word: "'
+            + literal_value
+            + '" }; }'
+        )
+        jwt_like = "eyJhbGciOiJIUzI1NiJ9" + ".payload." + "signature"
+        undeclared_member = (
+            "const config = { pass"
+            + "word: "
+            + jwt_like
+            + " };"
+        )
+        jwt_root = jwt_like.split(".", 1)[0]
+        declared_member = (
+            f"const {jwt_root} = {{}};\n"
+            + "const config = { pass"
+            + "word: "
+            + jwt_like
+            + " };"
+        )
+        prefixed_member = (
+            "const session = {};\n"
+            + "const config = { pass"
+            + "word: session."
+            + jwt_like
+            + " };"
+        )
+        declared_identifier = "CorrectHorseBattery" + "Staple123"
+        declared_identifier_value = (
+            f"const {declared_identifier} = 0;\n"
+            + "const config = { pass"
+            + "word: "
+            + declared_identifier
+            + " };"
+        )
+        suffixed_reference = (
+            "const config = { pass"
+            + "word: context.driverPass"
+            + "wordExtra };"
+        )
+        prefixed_reference = (
+            "const config = { pass"
+            + "word: xcontext.driverPass"
+            + "word };"
+        )
+        final_property = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + "word }; }"
+        )
+        inline_property = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + "word, enabled: true }; }"
+        )
+        asserted_property = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + "word! }; }"
+        )
+        cast_property = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + "word as string }; }"
+        )
+        union_cast_property = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + "word as string | undefined }; }"
+        )
+        next_statement = (
+            "function configure(context: RuntimeContext) {\n"
+            + "  const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + "  return consume();\n"
+            + "}"
+        )
+        line_comment = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word // supplied by CI\n"
+            + "consume();"
+        )
+        block_comment = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word /* supplied by CI */;"
+        )
+        concatenated_literal = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + 'word + "'
+            + literal_value
+            + '" }; }'
+        )
+        continued_literal = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + "word\n"
+            + '  + "'
+            + literal_value
+            + '" }; }'
+        )
+        fallback_literal = (
+            "function configure(context: RuntimeContext) { return { pass"
+            + "word: context.driverPass"
+            + 'word ?? "'
+            + literal_value
+            + '" }; }'
+        )
+        assigned_literal = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + '  = "'
+            + literal_value
+            + '";'
+        )
+        newline_cast_literal = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + "  as string + \""
+            + literal_value
+            + '";'
+        )
+        commented_continuation = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word // supplied by CI\n"
+            + '  + "'
+            + literal_value
+            + '";'
+        )
+        unicode_comment_continuation = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word // supplied by CI"
+            + chr(0x2028)
+            + '  + "'
+            + literal_value
+            + '";'
+        )
+        unicode_space_continuation = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + chr(0x00A0)
+            + '+ "'
+            + literal_value
+            + '";'
+        )
+        multiline_cast_literal = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word as string\n"
+            + '+ "'
+            + literal_value
+            + '";'
+        )
+        leading_comma_statement = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + ', username = "'
+            + literal_value
+            + '";'
+        )
+        unary_statement = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + '!audit("'
+            + literal_value
+            + '");'
+        )
+        inequality_literal = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + '!== "'
+            + literal_value
+            + '";'
+        )
+        member_call_literal = (
+            "const pass"
+            + "word = context.driverPass"
+            + 'word["concat"]("safe", "'
+            + literal_value
+            + '");'
+        )
+        continued_then_unary_statement = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word + suffix\n"
+            + '!audit("'
+            + literal_value
+            + '");'
+        )
+        trailing_operator_literal = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word + suffix +\n"
+            + '  "'
+            + literal_value
+            + '";'
+        )
+        plain_javascript_as_statement = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + 'as("'
+            + literal_value
+            + '");'
+        )
+        typescript_dollar_identifier = (
+            "const pass"
+            + "word = context.driverPass"
+            + "word\n"
+            + 'as$logger("'
+            + literal_value
+            + '");'
+        )
+
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                content,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                sut_reference,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertTrue(self.helper["secret_text_risk"](sut_reference))
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                plain_javascript_as_statement,
+                javascript_dialect="javascript",
+            )
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                typescript_dollar_identifier,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                final_property,
+                javascript_dialect="typescript",
+            )
+        )
+        for source_reference in (
+            inline_property,
+            asserted_property,
+            cast_property,
+            union_cast_property,
+            next_statement,
+            line_comment,
+            block_comment,
+            leading_comma_statement,
+            unary_statement,
+            continued_then_unary_statement,
+        ):
+            with self.subTest(source_reference=source_reference):
+                self.assertFalse(
+                    self.helper["secret_text_risk"](
+                        source_reference,
+                        javascript_dialect="typescript",
+                    )
+                )
+        for unsafe_source_reference in (
+            concatenated_literal,
+            continued_literal,
+            fallback_literal,
+            assigned_literal,
+            newline_cast_literal,
+            commented_continuation,
+            unicode_comment_continuation,
+            unicode_space_continuation,
+            multiline_cast_literal,
+            inequality_literal,
+            member_call_literal,
+            trailing_operator_literal,
+        ):
+            with self.subTest(unsafe_source_reference=unsafe_source_reference):
+                self.assertTrue(
+                    self.helper["secret_text_risk"](
+                        unsafe_source_reference,
+                        javascript_dialect="typescript",
+                    )
+                )
+        self.assertTrue(self.helper["secret_text_risk"](yaml_literal))
+        self.assertTrue(self.helper["secret_text_risk"](yaml_reference))
+        self.assertTrue(self.helper["secret_text_risk"](yaml_flow_reference))
+        self.assertTrue(self.helper["secret_text_risk"](source_literal))
+        self.assertTrue(self.helper["secret_text_risk"](undeclared_member))
+        self.assertTrue(self.helper["secret_text_risk"](declared_member))
+        self.assertTrue(self.helper["secret_text_risk"](prefixed_member))
+        self.assertTrue(
+            self.helper["secret_text_risk"](declared_identifier_value)
+        )
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                suffixed_reference,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                prefixed_reference,
+                javascript_dialect="typescript",
+            )
+        )
+
+    def test_secret_detector_allows_lifecycle_named_typescript_references(self) -> None:
+        key_term = "Api" + "Key"
+        key_field = key_term[0].lower() + key_term[1:]
+        credential_term = "Cred" + "ential"
+        source = (
+            f"const resolvedStream{key_term} = resolveAttemptDispatch{key_term}({{\n"
+            f"  {key_field}Info,\n"
+            "  runtimeAuthState,\n"
+            "});\n"
+            f"const successful{credential_term} = successfulProfileId\n"
+            "  ? attemptAuthProfileStore.profiles[successfulProfileId]\n"
+            "  : undefined;\n"
+            f"const successful{key_term}Info = get{key_term}Info();\n"
+            f"const {key_field} = successful{key_term}Info?.{key_field};\n"
+            f"const resolved{key_term} = resolveSecretSentinel({key_field});\n"
+            "return {\n"
+            f"  resolved{key_term}: resolvedStream{key_term},\n"
+            f"  {credential_term.lower()}: successful{credential_term},\n"
+            f"  {key_field}: resolved{key_term},\n"
+            "};\n"
+        )
+        literal_value = "actual-production-" + "secret"
+        unsafe_sources = (
+            f'const resolved{key_term} = "' + literal_value + '";',
+            "const config = { pass"
+            + "word: resolved"
+            + key_term
+            + ' + "'
+            + literal_value
+            + "\" };",
+            "const config = { pass"
+            + "word: Abcdefghijklmnop.Qrstuvwxyzabcdef };",
+        )
+
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                source,
+                javascript_dialect="typescript",
+            )
+        )
+        for unsafe_source in unsafe_sources:
+            with self.subTest(unsafe_source=unsafe_source):
+                self.assertTrue(
+                    self.helper["secret_text_risk"](
+                        unsafe_source,
+                        javascript_dialect="typescript",
+                    )
+                )
+
+        store_reference = (
+            "const cred"
+            + "ential = attemptAuthProfileStore.profiles[successfulProfileId];"
+        )
+        optional_store_reference = (
+            "const cred"
+            + "ential = attemptAuthProfileStore?.[successfulProfileId];"
+        )
+        quoted_store_reference = (
+            "const cred"
+            + 'ential = attemptAuthProfileStore["profiles"][successfulProfileId];'
+        )
+        yaml_store_literal = (
+            "pass"
+            + 'word: attemptAuthProfileStore["'
+            + literal_value
+            + '"]'
+        )
+        quoted_secret_key = "N7xQ2mP9vK4r" + "T8wZ"
+        typescript_store_literal = (
+            "const pass"
+            + 'word = attemptAuthProfileStore["'
+            + quoted_secret_key
+            + '"];'
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                store_reference,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                optional_store_reference,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                quoted_store_reference,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertTrue(self.helper["secret_text_risk"](yaml_store_literal))
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                typescript_store_literal,
+                javascript_dialect="typescript",
+            )
+        )
+
+    def test_secret_detector_allows_typescript_credential_plumbing_fixture(self) -> None:
+        source = (FIXTURES / "typescript-benign-references.ts").read_text(
+            encoding="utf-8"
+        )
+
+        patch = (
+            "diff --git a/src/credential-plumbing.ts b/src/credential-plumbing.ts\n"
+            "new file mode 100644\n"
+            "--- /dev/null\n"
+            "+++ b/src/credential-plumbing.ts\n"
+            f"@@ -0,0 +1,{len(source.splitlines())} @@\n"
+            + "".join(f"+{line}\n" for line in source.splitlines())
+        )
+        validated = self.helper["validate_review_patch"](
+            "typescript credential plumbing fixture",
+            ["src/credential-plumbing.ts"],
+            patch,
+        )
+        for reference in (
+            "filePassword",
+            "passwordResolution.password",
+            "tokenResolution.token",
+            "CredentialUnavailableDiagnostic",
+            "tokenRef",
+            "keyRef",
+        ):
+            self.assertIn(reference, validated)
+
+    def test_secret_detector_allows_typescript_member_reference_assignment(self) -> None:
+        source = "legacyXSearchResolvedRecord.apiKey = resolution.value;"
+        patch = (
+            "diff --git a/src/runtime-web-tools.ts b/src/runtime-web-tools.ts\n"
+            "--- a/src/runtime-web-tools.ts\n"
+            "+++ b/src/runtime-web-tools.ts\n"
+            "@@ -20,2 +20,3 @@ function resolveLegacySearch() {\n"
+            f" {source}\n"
+            "+const contractDigest = digestRuntimeWebOwnerContract(contract);\n"
+        )
+
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                source,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertEqual(
+            self.helper["validate_review_patch"](
+                "typescript member reference assignment",
+                ["src/runtime-web-tools.ts"],
+                patch,
+            ),
+            patch,
+        )
+
+        fake_literal = next(
+            line
+            for line in (FIXTURES / "typescript-sensitive-literals.ts")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip()
+        )
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                fake_literal,
+                javascript_dialect="typescript",
+            )
+        )
+    def test_review_bundle_preserves_typescript_config_paths(self) -> None:
+        source = (FIXTURES / "typescript-benign-config-path-references.ts").read_text(
+            encoding="utf-8"
+        )
+        patch = (
+            "diff --git a/src/config-path-references.ts b/src/config-path-references.ts\n"
+            "new file mode 100644\n"
+            "--- /dev/null\n"
+            "+++ b/src/config-path-references.ts\n"
+            f"@@ -0,0 +1,{len(source.splitlines())} @@\n"
+            + "".join(f"+{line}\n" for line in source.splitlines())
+        )
+
+        validated = self.helper["validate_review_patch"](
+            "typescript config path references",
+            ["src/config-path-references.ts"],
+            patch,
+        )
+
+        for config_path in (
+            "channels.irc.accounts.${accountId}.passwordFile",
+            "channels.irc.accounts.${accountId}.nickserv.passwordFile",
+            "channels.nextcloud-talk.accounts.${accountId}.botSecret",
+            "channels.nextcloud-talk.accounts.${accountId}.botSecretFile",
+            "channels.telegram.accounts.${accountId}.tokenFile",
+        ):
+            self.assertIn(config_path, validated)
+
+        token_term = "To" + "ken"
+        truncated_call_patch = (
+            "diff --git a/src/token.ts b/src/token.ts\n"
+            "--- a/src/token.ts\n"
+            "+++ b/src/token.ts\n"
+            "@@ -40,3 +40,4 @@ function resolveAccountToken() {\n"
+            f"+  const account{token_term} = resolveRuntime{token_term}Value({{\n"
+            "+    value: accountConfig.token,\n"
+            "@@ -70,3 +71,4 @@ function resolveConfigToken() {\n"
+            f"+  const config{token_term} = resolveRuntime{token_term}Value({{\n"
+            "+    value: merged.token,\n"
+        )
+        self.assertEqual(
+            self.helper["validate_review_patch"](
+                "typescript truncated credential calls fixture",
+                ["src/token.ts"],
+                truncated_call_patch,
+            ),
+            truncated_call_patch,
+        )
+
+    def test_secret_detector_rejects_sensitive_literal_fixture_corpus(self) -> None:
+        source = (FIXTURES / "typescript-sensitive-literals.ts").read_text(
+            encoding="utf-8"
+        )
+        corpus = [line for line in source.splitlines() if line.strip()]
+
+        self.assertGreaterEqual(len(corpus), 7)
+        for literal_assignment in corpus:
+            with self.subTest(literal_assignment=literal_assignment):
+                self.assertTrue(
+                    self.helper["secret_text_risk"](
+                        literal_assignment,
+                        javascript_dialect="typescript",
+                    )
+                )
+        truncated_literal = (
+            "const incompleteToken = resolveToken({ value: \""
+            + realistic_secret_value()
+            + "\";"
+        )
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                truncated_literal,
+                javascript_dialect="typescript",
+            )
+        )
+        truncated_short_literal = (
+            "const incompleteToken = resolveToken({ value: \""
+            + "short"
+            + "pwd"
+            + "\";"
+        )
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                truncated_short_literal,
+                javascript_dialect="typescript",
+            )
+        )
+
+    def test_known_secret_fragment_scan_handles_many_javascript_regexes(self) -> None:
+        fragment = "password file"
+        regex_count = 2_000
+        source = ";".join(f"/{fragment} {index}/" for index in range(regex_count))
+        pattern = self.helper["known_secret_fragment_pattern"]([fragment])
+
+        spans = self.helper["repeated_secret_fragment_spans"](
+            source,
+            pattern,
+            javascript_dialect="typescript",
+        )
+
+        self.assertEqual(len(spans), regex_count)
+
+    def test_lifecycle_reference_scan_is_bounded_for_non_matching_identifier(self) -> None:
+        source = "const value = resolved" + "A" * 100_000 + "X;"
+
+        started = time.monotonic()
+        spans = self.helper["javascript_reference_spans"](source)
+
+        self.assertEqual(spans, frozenset())
+        self.assertLess(time.monotonic() - started, 5.0)
+
+    def test_review_patch_decodes_git_quoted_source_paths(self) -> None:
+        property_name = "pass" + "word"
+        reference = "context.driverPass" + "word"
+        patch = (
+            'diff --git "a/\\303\\251.ts" "b/\\303\\251.ts"\n'
+            '--- "a/\\303\\251.ts"\n'
+            '+++ "b/\\303\\251.ts"\n'
+            "@@ -40,2 +40,3 @@ function configure(context: RuntimeContext) {\n"
+            "   return {\n"
+            "+    "
+            + property_name
+            + ": "
+            + reference
+            + ",\n"
+            "   };\n"
+        )
+
+        self.assertEqual(
+            self.helper["validate_review_patch"](
+                "local staged diff",
+                ["é.ts"],
+                patch,
+            ),
+            patch,
+        )
+        self.assertEqual(
+            self.helper["javascript_review_dialect"]("module.mts"),
+            "typescript",
+        )
+        self.assertEqual(
+            self.helper["javascript_review_dialect"]("module.cts"),
+            "typescript",
+        )
+
+    def test_secret_detector_allows_generated_fixture_credentials(self) -> None:
+        property_name = "pass" + "word"
+        variable_name = "to" + "ken"
+        access_property = "access" + "Token"
+        generated_fixture = (
+            f"function register() {{ return {{ {property_name}: "
+            + "`matrix-qa-${randomUUID()}` }; }"
+        )
+        generated_marker = (
+            f"const {variable_name} = "
+            + 'buildMatrixQaToken("MATRIX_QA_E2EE_THREAD");'
+        )
+        decoy_fixture = (
+            f"const config = {{ {access_property}: "
+            + 'decoy-'
+            + 'token" };'
+        )
+        invalid_recovery_fixture = (
+            'const recoveryKey = "not-'
+            + 'a-valid-matrix-recovery-key";'
+        )
+        literal_value = "actual-production-" + "secret"
+        fixture_shaped_literal = "PROD_TEST_ACTUAL_" + "SECRET_0123456789"
+        adversarial_label = "TEST_Q7WX9M2NK4PV8R6DH3JC"
+        unsafe_template = (
+            f"const {property_name} = "
+            + "`prod-live-secret-${randomUUID()}`;"
+        )
+        unsafe_string_template = (
+            f"const {property_name} = "
+            + "`prod-test-live-secret-${String()}`;"
+        )
+        unsafe_suffix_template = (
+            f"const {property_name} = "
+            + "`prod-live-secret-test-${randomUUID()}`;"
+        )
+        unsafe_call = (
+            f"const {variable_name} = "
+            + f'buildToken("{literal_value}");'
+        )
+        unsafe_fixture_label = (
+            f"const {property_name} = "
+            + f'"{fixture_shaped_literal}";'
+        )
+        unsafe_generator_label = (
+            f"const {variable_name} = "
+            + f'buildMatrixQaToken("{fixture_shaped_literal}");'
+        )
+        unsafe_identity_call = (
+            f"const {variable_name} = "
+            + f'buildTestToken("{adversarial_label}");'
+        )
+
+        for content in (
+            generated_fixture,
+            generated_marker,
+            decoy_fixture,
+            invalid_recovery_fixture,
+        ):
+            with self.subTest(content=content):
+                self.assertFalse(self.helper["secret_text_risk"](content))
+        for content in (
+            unsafe_template,
+            unsafe_string_template,
+            unsafe_suffix_template,
+            unsafe_call,
+            unsafe_fixture_label,
+            unsafe_generator_label,
+            unsafe_identity_call,
+        ):
+            with self.subTest(content=content):
+                self.assertTrue(self.helper["secret_text_risk"](content))
 
     def test_fallback_self_test_ignores_ambient_model_overrides(self) -> None:
         with mock.patch.dict(
@@ -1675,6 +3427,32 @@ class AutoreviewHardeningTests(unittest.TestCase):
         ):
             with self.subTest(content=content):
                 self.assertFalse(self.helper["secret_text_risk"](content))
+
+    def test_review_patch_preserves_safe_uri_userinfo(self) -> None:
+        safe_lines = (
+            'url = f"ssh://{ssh_user}@git.example.invalid/org/repo.git"',
+            'url = "https://alice@github.com/example/repo"',
+            'url = "https://username:@host/repo"',
+            'remote = "ssh://git@github.com/org/repo.git"',
+        )
+        for line in safe_lines:
+            with self.subTest(line=line):
+                patch = (
+                    "diff --git a/fixture.py b/fixture.py\n"
+                    "--- a/fixture.py\n"
+                    "+++ b/fixture.py\n"
+                    "@@ -0,0 +1 @@\n"
+                    f"+{line}\n"
+                )
+
+                validated = self.helper["validate_review_patch"](
+                    "local unstaged diff",
+                    ["fixture.py"],
+                    patch,
+                )
+
+                self.assertIn(f"+{line}", validated)
+                self.assertNotIn("redacted@", validated)
 
     def test_secret_detector_allows_referenced_uri_credentials(self) -> None:
         for content in (
@@ -1912,9 +3690,27 @@ class AutoreviewHardeningTests(unittest.TestCase):
             'token: "token-oversized"',
             'API_KEY = "clawrouter-e2e-secret"',
             'token: "very-long-browser-token-0123456789"',
+            'token: "config-token"',
         ):
             with self.subTest(content=content):
                 self.assertFalse(self.helper["secret_text_risk"](content))
+
+    def test_synthetic_secret_fixture_prefixes_are_generic(self) -> None:
+        for prefix in self.helper["SYNTHETIC_SECRET_PREFIXES"]:
+            with self.subTest(prefix=prefix):
+                self.assertTrue(
+                    self.helper["synthetic_secret_fixture"](
+                        f"{prefix}-token",
+                        "token",
+                    )
+                )
+
+        self.assertFalse(
+            self.helper["synthetic_secret_fixture"](
+                "test-correct-horse-battery-staple",
+                "password",
+            )
+        )
 
     def test_secret_detector_does_not_trust_in_band_suppressions(self) -> None:
         for marker in ("pragma: allowlist secret", "gitleaks:allow"):
@@ -1944,6 +3740,11 @@ class AutoreviewHardeningTests(unittest.TestCase):
 
         self.assertTrue(self.helper["secret_text_risk"](content))
 
+    def test_secret_detector_allows_openclaw_redaction_sentinel(self) -> None:
+        self.assertFalse(
+            self.helper["secret_text_risk"]('token: "__OPENCLAW_REDACTED__"')
+        )
+
     def test_normalized_secret_scan_does_not_cross_hunks(self) -> None:
         patch = (
             "@@ -1 +1 @@\n"
@@ -1955,6 +3756,100 @@ class AutoreviewHardeningTests(unittest.TestCase):
         self.assertFalse(
             any(
                 self.helper["secret_text_risk"](content)
+                for content in self.helper["unified_diff_contents"](patch)
+            )
+        )
+
+    def test_typescript_credential_property_scan_does_not_cross_hunks(self) -> None:
+        patch = (
+            "diff --git a/src/runtime-web-tools.ts b/src/runtime-web-tools.ts\n"
+            "--- a/src/runtime-web-tools.ts\n"
+            "+++ b/src/runtime-web-tools.ts\n"
+            "@@ -85,12 +84,9 @@ type RuntimeWebProviderSelectionParams<\n"
+            "     toolConfig: TToolConfig;\n"
+            "   }) => { path: string; value: unknown } | undefined;\n"
+            "   /** Resolves inline/env/SecretRef credentials and reports the winning source. */\n"
+            "-  resolveSecretInput: (params: {\n"
+            "-    providerId: string;\n"
+            "-    value: unknown;\n"
+            "-    path: string;\n"
+            "-    envVars: string[];\n"
+            "-  }) => Promise<SecretResolutionResult<TSource>>;\n"
+            "+  resolveSecretInput: (\n"
+            "+    params: RuntimeWebResolveSecretInputParams,\n"
+            "+  ) => Promise<SecretResolutionResult<TSource>>;\n"
+            "   /** Writes the selected credential into the resolved runtime config snapshot. */\n"
+            "   setResolvedCredential: (params: {\n"
+            "     resolvedConfig: OpenClawConfig;\n"
+            "@@ -418,6 +414,7 @@ function resolveRuntimeWebProviderSelection() {\n"
+            "     let keylessFallbackProvider: TProvider | undefined;\n"
+            " \n"
+            "     for (const provider of candidates) {\n"
+            "+      const contractDigest = resolveProviderContractDigest(provider.id);\n"
+            "       const isKeyless = provider.requiresCredential === false;\n"
+            "       if (isKeyless) {\n"
+            "         if (!params.configuredProvider && !params.allowKeylessAutoSelect) {\n"
+            "@@ -440,6 +437,7 @@ function resolveRuntimeWebProviderSelection() {\n"
+            "         value,\n"
+            "         path,\n"
+            "         envVars: getProviderEnvVars(provider),\n"
+            "+        contractDigest,\n"
+            "       });\n"
+            "       let selectedCandidatePath = path;\n"
+            "       let selectedCandidateResolution = resolution;\n"
+            "@@ -457,6 +455,7 @@ function resolveRuntimeWebProviderSelection() {\n"
+            "             value: fallback.value,\n"
+            "             path: fallback.path,\n"
+            "             envVars: getProviderEnvVars(provider),\n"
+            "+            contractDigest,\n"
+            "           });\n"
+            "         }\n"
+            "       } else if (resolution.source === \"env\" && !resolution.secretRefConfigured) {\n"
+        )
+
+        old_content, new_content = self.helper["unified_diff_contents"](patch)
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                old_content,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                new_content,
+                javascript_dialect="typescript",
+            )
+        )
+        self.assertEqual(
+            self.helper["validate_review_patch"](
+                "typescript credential property diff",
+                ["src/runtime-web-tools.ts"],
+                patch,
+            ),
+            patch,
+        )
+
+    def test_typescript_hunk_scan_still_flags_sensitive_literal_fixture(self) -> None:
+        sensitive_line = next(
+            line
+            for line in (FIXTURES / "typescript-sensitive-literals.ts")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line.strip()
+        )
+        patch = (
+            "@@ -1 +1 @@\n"
+            "+const tokenRef: SecretRef | undefined = candidate.tokenRef;\n"
+            "@@ -20 +20 @@\n"
+            f"+{sensitive_line}\n"
+        )
+
+        self.assertTrue(
+            any(
+                self.helper["secret_text_risk"](
+                    content,
+                    javascript_dialect="typescript",
+                )
                 for content in self.helper["unified_diff_contents"](patch)
             )
         )
@@ -1997,28 +3892,241 @@ class AutoreviewHardeningTests(unittest.TestCase):
             with self.subTest(key=key):
                 self.assertTrue(self.helper["secret_text_risk"](content))
 
-    def test_secret_like_patch_content_is_blocked_in_all_modes(self) -> None:
+    def test_secret_detector_allows_safe_self_references(self) -> None:
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                "private" + "_key = private_key or fallback_private_key",
+                javascript_dialect="javascript",
+            )
+        )
+        self.assertFalse(
+            self.helper["secret_text_risk"](
+                "old_private"
+                + "_key = old_private_key or old_line\nnew_private"
+                + "_key = new_private_key or new_line",
+                javascript_dialect="javascript",
+            )
+        )
+        colon_assignment = self.helper["SECRET_ASSIGNMENT_PATTERN"].search(
+            "pass" + "word: password"
+        )
+        self.assertIsNotNone(colon_assignment)
+        self.assertFalse(
+            self.helper["safe_self_reference_assignment"](
+                "pass" + "word: password",
+                colon_assignment,
+                javascript_dialect="javascript",
+            )
+        )
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                "client" + "secret" + "=" + "clientsecret"
+            )
+        )
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                "if (ready) send({pass"
+                + 'word: "'
+                + realistic_secret_value()
+                + '"})'
+            )
+        )
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                "private"
+                + '_key = private_key or "'
+                + realistic_secret_value()
+                + '"'
+            )
+        )
+        self.assertTrue(
+            self.helper["secret_text_risk"](
+                "pass"
+                + 'word = password\n  || "'
+                + realistic_secret_value()
+                + '"',
+                javascript_dialect="javascript",
+            )
+        )
+        for trivia in ("\n\n  ", "\n  /* comment */\n  ", " // comment\n  "):
+            with self.subTest(trivia=trivia):
+                self.assertTrue(
+                    self.helper["secret_text_risk"](
+                        "pass"
+                        + "word = password"
+                        + trivia
+                        + '|| "'
+                        + realistic_secret_value()
+                        + '"',
+                        javascript_dialect="javascript",
+                    )
+                )
+
+    def test_review_patch_preserves_redaction_placeholder_fallback(self) -> None:
+        patch = (
+            "diff --git a/runtime.py b/runtime.py\n"
+            "--- a/runtime.py\n"
+            "+++ b/runtime.py\n"
+            "@@ -0,0 +1 @@\n"
+            + "+pass"
+            + 'word = getenv("PASSWORD") or "redacted"\n'
+        )
+
+        self.assertEqual(
+            self.helper["validate_review_patch"](
+                "local unstaged diff",
+                ["runtime.py"],
+                patch,
+            ),
+            patch,
+        )
+
+    def test_review_patch_preserves_ambiguous_short_markerless_lines(self) -> None:
+        chunks = ["AB12", "CDef", "GH34", "ijKL", "MN56", "opQR"]
+        patch = (
+            "diff --git a/fixture.txt b/fixture.txt\n"
+            "--- a/fixture.txt\n"
+            "+++ b/fixture.txt\n"
+            f"@@ -0,0 +1,{len(chunks)} @@\n"
+            + "".join(f"+{chunk}\n" for chunk in chunks)
+        )
+
+        redacted_patch = self.helper["validate_review_patch"](
+            "local unstaged diff",
+            ["fixture.txt"],
+            patch,
+        )
+
+        self.assertEqual(redacted_patch, patch)
+
+    def test_review_patch_preserves_long_non_pem_identifier_lines(self) -> None:
+        identifier = "runDangerousOperationWithLongIdentifier"
+        patch = (
+            "diff --git a/runtime.ts b/runtime.ts\n"
+            "--- a/runtime.ts\n"
+            "+++ b/runtime.ts\n"
+            "@@ -0,0 +1 @@\n"
+            + f"+{identifier}\n"
+        )
+
+        redacted = self.helper["validate_review_patch"](
+            "local unstaged diff",
+            ["runtime.ts"],
+            patch,
+        )
+
+        self.assertIn("+" + identifier, redacted)
+
+    def test_review_patch_preserves_hash_and_submodule_lines(self) -> None:
+        digest = "abcdef0123456789abcdef0123456789abcdef01"
+        patch = (
+            "diff --git a/vendor b/vendor\n"
+            "--- a/vendor\n"
+            "+++ b/vendor\n"
+            "@@ -1 +1,2 @@\n"
+            + f"+{digest}\n"
+            + f"+Subproject commit {digest}\n"
+        )
+
+        redacted = self.helper["validate_review_patch"](
+            "local unstaged diff",
+            ["vendor"],
+            patch,
+        )
+
+        self.assertIn("+" + digest, redacted)
+        self.assertIn("+Subproject commit " + digest, redacted)
+
+    def test_review_patch_preserves_unwrapped_alphabetic_identifier(self) -> None:
+        identifier = "AbCdEfGh" + "IjKlMnOp"
+        patch = (
+            "diff --git a/runtime.ts b/runtime.ts\n"
+            "--- a/runtime.ts\n"
+            "+++ b/runtime.ts\n"
+            "@@ -0,0 +1 @@\n"
+            + f"+const {identifier} = true;\n"
+        )
+
+        redacted_patch = self.helper["validate_review_patch"](
+            "local unstaged diff",
+            ["runtime.ts"],
+            patch,
+        )
+
+        self.assertIn(identifier, redacted_patch)
+
+    def test_review_patch_preserves_punctuation_wrapped_alphabetic_identifier(self) -> None:
+        identifier = "AbCdEfGh" + "IjKlMnOp"
+        patch = (
+            "diff --git a/runtime.ts b/runtime.ts\n"
+            "--- a/runtime.ts\n"
+            "+++ b/runtime.ts\n"
+            "@@ -0,0 +1 @@\n"
+            + f"+  {identifier},\n"
+        )
+
+        redacted_patch = self.helper["validate_review_patch"](
+            "local unstaged diff",
+            ["runtime.ts"],
+            patch,
+        )
+
+        self.assertIn(identifier, redacted_patch)
+
+    def test_review_patch_preserves_escaped_newline_beside_alphabetic_identifier(self) -> None:
+        identifier = "AbCdEfGh" + "IjKlMnOp"
+        patch = (
+            "diff --git a/runtime.ts b/runtime.ts\n"
+            "--- a/runtime.ts\n"
+            "+++ b/runtime.ts\n"
+            "@@ -0,0 +1 @@\n"
+            + f'+[{identifier}, "\\\\n"];\n'
+        )
+
+        redacted_patch = self.helper["validate_review_patch"](
+            "local unstaged diff",
+            ["runtime.ts"],
+            patch,
+        )
+
+        self.assertIn(identifier, redacted_patch)
+
+    def test_review_patch_preserves_bare_identifier_in_escaped_pem_concatenation(self) -> None:
+        identifier = "AbCdEfGh" + "IjKlMnOp"
+        patch = (
+            "diff --git a/runtime.ts b/runtime.ts\n"
+            "--- a/runtime.ts\n"
+            "+++ b/runtime.ts\n"
+            "@@ -0,0 +1 @@\n"
+            '+const fixture = "-----BEGIN '
+            + "PRIVATE KEY-----\\n\" + "
+            + identifier
+            + ' + "\\n-----END '
+            + 'PRIVATE KEY-----";\n'
+        )
+
+        redacted_patch = self.helper["validate_review_patch"](
+            "local unstaged diff",
+            ["runtime.ts"],
+            patch,
+        )
+
+        self.assertIn(identifier, redacted_patch)
+
+    def test_local_bundle_allows_deleted_test_token_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             repo = init_repo(Path(tempdir))
-            path = repo / "settings.txt"
-            path.write_text("base\n", encoding="utf-8")
-            git(repo, "add", "settings.txt")
+            path = repo / "fixture.test.ts"
+            path.write_text('const request = { token: "test-token" };\n', encoding="utf-8")
+            git(repo, "add", path.name)
             git(repo, "commit", "-q", "-m", "base")
-            base = git(repo, "rev-parse", "HEAD").strip()
 
-            path.write_text(
-                "api" + "_key=" + realistic_secret_value() + "\n",
-                encoding="utf-8",
-            )
-            git(repo, "add", "settings.txt")
-            with self.assertRaisesRegex(SystemExit, "secret-like content"):
-                self.helper["local_bundle"](repo)
+            path.write_text('const request = { token: String() };\n', encoding="utf-8")
 
-            git(repo, "commit", "-q", "-m", "secret content")
-            with self.assertRaisesRegex(SystemExit, "secret-like content"):
-                self.helper["branch_bundle"](repo, base)
-            with self.assertRaisesRegex(SystemExit, "secret-like content"):
-                self.helper["commit_bundle"](repo, "HEAD")
+            bundle, truncated = self.helper["local_bundle"](repo)
+
+            self.assertIn('-const request = { token: "test-token" };', bundle)
+            self.assertFalse(truncated)
 
     def test_pi_refuses_truncated_review_input(self) -> None:
         reviewer = argparse.Namespace(engine="pi", tools=True)
@@ -2108,7 +4216,15 @@ class AutoreviewHardeningTests(unittest.TestCase):
             repo = init_repo(Path(tempdir))
             prompt = self.helper["build_prompt"](repo, "local", None, "diff", "", "")
 
-            self.assertIn("Repository root: .", prompt)
+            self.assertIn(
+                "Review sandbox: . (intentionally contains no reviewed repository files)",
+                prompt,
+            )
+            self.assertIn("Read-only tools cannot access unchanged repository files", prompt)
+            self.assertIn(
+                "Do not report a missing import, symbol, definition, call site, config entry",
+                prompt,
+            )
             self.assertNotIn(str(repo), prompt)
             with self.assertRaisesRegex(SystemExit, "aggregate limit"):
                 self.helper["build_prompt"](
@@ -2684,6 +4800,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             )
             record_path = root / "record.json"
             env = os.environ.copy()
+            add_fake_trufflehog(self.helper, root, env)
             env.update(
                 {
                     "AUTOREVIEW_FAKE_RECORD": str(record_path),
@@ -2731,6 +4848,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             )
             record_path = root / "record.json"
             env = os.environ.copy()
+            add_fake_trufflehog(self.helper, root, env)
             env.update(
                 {
                     "AUTOREVIEW_FAKE_MUTATE": str(source),
@@ -3097,6 +5215,53 @@ class AutoreviewHardeningTests(unittest.TestCase):
             ):
                 self.helper["safe_temp_root"](repo)
 
+    @unittest.skipIf(os.name == "nt", "POSIX Testbox temp-root behavior")
+    def test_testbox_parallel_test_temp_root_stays_within_socket_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            long_temp = root / ("macos-temp-root-" + "x" * 96)
+            long_temp.mkdir()
+
+            with mock.patch.object(
+                tempfile,
+                "gettempdir",
+                return_value=str(long_temp),
+            ), mock.patch.dict(
+                os.environ,
+                {"OPENCLAW_TESTBOX": "1"},
+            ):
+                selected = self.helper["parallel_test_temp_root"](repo)
+
+            self.assertEqual(selected, Path("/tmp").resolve())
+            socket_path = (
+                selected
+                / ("autoreview-test-home-" + "x" * 8)
+                / ".blacksmith"
+                / "c"
+                / "6d146d2f25180c1d.sock"
+            )
+            self.assertLess(len(os.fsencode(socket_path)), 104)
+
+    def test_parallel_test_temp_root_keeps_configured_root_without_testbox(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            configured_temp = root / "configured-temp"
+            configured_temp.mkdir()
+
+            with mock.patch.object(
+                tempfile,
+                "gettempdir",
+                return_value=str(configured_temp),
+            ), mock.patch.dict(
+                os.environ,
+                {"OPENCLAW_TESTBOX": "0"},
+            ):
+                selected = self.helper["parallel_test_temp_root"](repo)
+
+            self.assertEqual(selected, configured_temp.resolve())
+
     def test_claude_fable_alias_requires_fable_safe_mode_version(self) -> None:
         args = argparse.Namespace(
             claude_bin="claude",
@@ -3171,25 +5336,29 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 "1",
             )
 
-    def test_build_prompt_rejects_secret_like_git_metadata(self) -> None:
+    def test_build_prompt_redacts_secret_like_git_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             repo = init_repo(Path(tempdir))
             secret = "ghp_" + "A" * 24
             git(repo, "checkout", "-q", "-b", f"feature/{secret}")
 
-            with self.assertRaisesRegex(SystemExit, "secret-like content"):
-                self.helper["build_prompt"](repo, "local", None, "diff", "", "")
+            prompt = self.helper["build_prompt"](
+                repo, "local", None, "diff", "", ""
+            )
+            self.assertIn(self.helper["REVIEW_SECURITY_REDACTION"], prompt)
+            self.assertNotIn(secret, prompt)
 
             git(repo, "checkout", "-q", "-B", "safe-branch")
-            with self.assertRaisesRegex(SystemExit, "secret-like content"):
-                self.helper["build_prompt"](
-                    repo,
-                    "branch",
-                    f"origin/{secret}",
-                    "diff",
-                    "",
-                    "",
-                )
+            prompt = self.helper["build_prompt"](
+                repo,
+                "branch",
+                f"origin/{secret}",
+                "diff",
+                "",
+                "",
+            )
+            self.assertIn(self.helper["REVIEW_SECURITY_REDACTION"], prompt)
+            self.assertNotIn(secret, prompt)
 
     def test_codex_env_rejects_executable_dbus_transport(self) -> None:
         old = os.environ.copy()
@@ -4454,27 +6623,6 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 f'//user:{{{formatted_reference}:N}}@host/{{password}}";'
             )
         )
-
-    def test_review_patch_scans_multiline_diff_metadata(self) -> None:
-        patch = (
-            "Subject: example\n"
-            "    Author"
-            + "ization: Basic\n"
-            "    dXNlcjpwYXNzd29yZA==\n"
-            "diff --git a/safe.txt b/safe.txt\n"
-            "--- a/safe.txt\n"
-            "+++ b/safe.txt\n"
-            "@@ -1 +1 @@\n"
-            "-old\n"
-            "+new\n"
-        )
-
-        with self.assertRaisesRegex(SystemExit, "secret-like content"):
-            self.helper["validate_review_patch"](
-                "local unstaged diff",
-                ["safe.txt"],
-                patch,
-            )
 
     def test_secret_detector_handles_additional_credential_keys(self) -> None:
         for content in (

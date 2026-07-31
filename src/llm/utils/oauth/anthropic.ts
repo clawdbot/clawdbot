@@ -433,7 +433,7 @@ async function loginAnthropic(options: {
 /**
  * Refresh Anthropic OAuth token
  */
-export async function refreshAnthropicToken(refreshToken: string): Promise<OAuthCredentials> {
+async function refreshAnthropicToken(refreshToken: string): Promise<OAuthCredentials> {
   let responseBody: string;
   try {
     responseBody = await postJson(TOKEN_URL, {
@@ -476,9 +476,4 @@ export const anthropicOAuthProvider: OAuthProviderInterface = {
   getApiKey(credentials: OAuthCredentials): string {
     return credentials.access;
   },
-};
-
-export const testing = {
-  resolveCallbackHost,
-  redirectUri: REDIRECT_URI,
 };

@@ -14,9 +14,7 @@ export {
 } from "../../infra/process-respawn.js";
 export {
   resolveGatewayRestartDeferralTimeoutMs,
-  consumeGatewayRestartIntentPayloadSync,
   consumeGatewaySigusr1RestartIntent,
-  consumeGatewayRestartIntentSync,
   consumeGatewaySigusr1RestartAuthorization,
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
@@ -26,11 +24,18 @@ export {
   rollbackGatewayRestartSignalAdmission,
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
+export {
+  consumeGatewayRestartIntentPayloadSync,
+  consumeGatewayRestartIntentSync,
+} from "../../infra/restart-intent.js";
 export { writeGatewayRestartHandoffSync } from "../../infra/restart-handoff.js";
 export { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../../infra/gateway-suspend-coordinator.js";
 export { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 export { markUpdateRestartSentinelFailure } from "../../infra/restart-sentinel.js";
-export { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
+export {
+  detectGatewayRespawnSupervisor,
+  detectRespawnSupervisor,
+} from "../../infra/supervisor-markers.js";
 export { writeDiagnosticStabilityBundleForFailureSync } from "../../logging/diagnostic-stability-bundle.js";
 export {
   advanceCronActiveJobGeneration,

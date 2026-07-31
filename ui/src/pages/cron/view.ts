@@ -1,9 +1,9 @@
-// Control UI view renders the Automations (cron) screen: a full-width list
-// view (stats, task table, starter ideas) and a full-page detail view for
-// creating or editing a single automation.
+// Control UI view renders the Automations (cron) screen: a full-width list (stats, task table,
+// starter ideas) and a full-page detail view for creating or editing a single automation.
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { repeat } from "lit/directives/repeat.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../../api/types.ts";
 import "../../styles/chat/text.css";
 import "../../styles/cron.css";
@@ -15,6 +15,7 @@ import type {
   CronSortDir,
 } from "../../api/types.ts";
 import { icon, icons } from "../../components/icons.ts";
+import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
@@ -23,19 +24,22 @@ import {
   renderSettingsToggleRow,
 } from "../../components/settings-ui.ts";
 import "../../components/tooltip.ts";
+import "../../components/web-awesome.ts";
+import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { isCronJobActiveFailure, resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
+import { parseCronEveryMs } from "../../lib/cron/decimal.ts";
 import type {
   CronFieldErrors,
   CronFieldKey,
+  CronFormState,
   CronJobsLastStatusFilter,
   CronJobsScheduleKindFilter,
 } from "../../lib/cron/index.ts";
-import type { CronFormState } from "../../lib/cron/index.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { normalizeStringEntries, uniqueStrings } from "../../lib/string-coerce.ts";
-import { handleTabListKeydown } from "../../lib/tab-list.ts";
+import { renderSegmented } from "./segmented-control.ts";
 import { renderCronStats } from "./stats.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
 import { renderRunsSection, runStatusLabel } from "./view-runs.ts";
@@ -47,7 +51,10 @@ export type CronDetailTab = "settings" | "history";
 
 type CronProps = {
   basePath: string;
+  agentId: string;
   loading: boolean;
+  /** Canonical gateway capability for every mutation-capable cron control. */
+  canManage: boolean;
   jobsLoadingMore: boolean;
   status: CronStatus | null;
   failingCount: number | null;
@@ -304,55 +311,13 @@ function renderRequiredTitle(label: string) {
   `;
 }
 
-// Mirrors renderSettingsSegmented markup exactly; local only so options can
-// carry the stable data-test-id hooks used by colocated and e2e tests, and so
-// view switchers can opt into real tablist semantics (roving tabindex + arrow
-// keys) wired to the panel they control.
-function renderSegmented<T extends string>(params: {
-  value: T;
-  options: ReadonlyArray<{ value: T; label: string; testId?: string }>;
-  ariaLabel?: string;
-  onChange: (value: T) => void;
-  /** Render as a tablist controlling `panelId`; option ids are `idPrefix` + value. */
-  tabs?: { idPrefix: string; panelId: string };
-}) {
-  const tabs = params.tabs;
-  return html`
-    <div
-      class="settings-segmented"
-      role=${tabs ? "tablist" : "group"}
-      aria-label=${ifDefined(params.ariaLabel)}
-    >
-      ${params.options.map((option) => {
-        const active = option.value === params.value;
-        return html`
-          <button
-            type="button"
-            role=${ifDefined(tabs ? "tab" : undefined)}
-            id=${ifDefined(tabs ? `${tabs.idPrefix}${option.value}` : undefined)}
-            class="settings-segmented__btn ${active ? "settings-segmented__btn--active" : ""}"
-            aria-pressed=${tabs ? nothing : active ? "true" : "false"}
-            aria-selected=${tabs ? (active ? "true" : "false") : nothing}
-            aria-controls=${ifDefined(tabs?.panelId)}
-            .tabIndex=${tabs && !active ? -1 : 0}
-            data-test-id=${ifDefined(option.testId)}
-            @keydown=${tabs ? handleTabListKeydown : nothing}
-            @click=${() => params.onChange(option.value)}
-          >
-            ${option.label}
-          </button>
-        `;
-      })}
-    </div>
-  `;
-}
-
-// Settings row whose control keeps its own validation message underneath.
-// Mirrors renderSettingsRow markup; local only so the title can be a real
-// <label for> that gives the wrapped control its accessible name (including
-// the visually-hidden required marker).
+// Settings row whose control keeps its own validation message underneath. Mirrors
+// renderSettingsRow markup; local only so the title can be a real <label for> that gives the
+// wrapped control its accessible name (including the visually-hidden required marker).
 function renderFieldRow(params: {
   label: string;
+  // Blank when the control is not labelable (e.g. a code block); the label then
+  // has no `for` target and the control carries its own aria-label.
   controlId: string;
   control: unknown;
   required?: boolean;
@@ -370,7 +335,7 @@ function renderFieldRow(params: {
     : html`<div class=${controlClass}>${params.control}</div>`;
   return html`
     <div class=${params.stacked ? "settings-row settings-row--stacked" : "settings-row"}>
-      <label class="settings-row__text" for=${params.controlId}>
+      <label class="settings-row__text" for=${ifDefined(params.controlId || undefined)}>
         <span class="settings-row__title">
           ${params.required ? renderRequiredTitle(params.label) : params.label}
         </span>
@@ -412,6 +377,12 @@ export function renderCron(props: CronProps) {
   `;
 }
 
+function renderAdminRequired(props: CronProps) {
+  return props.canManage
+    ? nothing
+    : html`<div class="callout warning" role="note">${t("cron.adminRequired")}</div>`;
+}
+
 // ── List view ──
 
 const ENABLED_TABS: Array<{ value: CronJobsEnabledFilter; labelKey: string }> = [
@@ -432,6 +403,7 @@ function renderListView(props: CronProps) {
     props.jobsEnabledFilter !== "all";
   const children = [
     renderSettingsSection({}, renderCronStats(props)),
+    renderAdminRequired(props),
     props.status && !props.status.enabled
       ? html`
           <div class="cron-error-banner" data-test-id="cron-scheduler-banner">
@@ -455,7 +427,7 @@ function renderListView(props: CronProps) {
             )
           : [
               renderSettingsSection({}, renderJobsTable(props, hasAnyJobsFilters)),
-              hasAnyJobsFilters ? nothing : renderSuggestions(props),
+              hasAnyJobsFilters || !props.canManage ? nothing : renderSuggestions(props),
             ]}
       </div>
     `,
@@ -475,13 +447,12 @@ function renderListTabs(props: CronProps) {
       { value: "activity", label: t("cron.list.activityTab"), testId: "cron-list-tab-activity" },
     ],
     ariaLabel: t("cron.list.viewLabel"),
-    tabs: { idPrefix: "cron-list-tab-", panelId: "cron-list-panel" },
+    tabs: { id: "cron-list", panelId: "cron-list-panel" },
     onChange: props.onListTabChange,
   });
 }
 
-// One toolbar row for both list tabs: view switch on the left, tab-specific
-// filters in the middle, refresh + New automation pinned right.
+// One toolbar row for both list tabs: view switch left, tab filters middle, refresh + New right.
 function renderToolbar(props: CronProps, hasAdvancedJobsFilters: boolean) {
   return html`
     <div class="cron-toolbar">
@@ -528,14 +499,18 @@ function renderToolbar(props: CronProps, hasAdvancedJobsFilters: boolean) {
         >
           ${icon("refresh")}
         </button>
-        <button
-          type="button"
-          class="btn primary btn--sm cron-new-task"
-          data-test-id="cron-new-task"
-          @click=${() => props.onOpenCreate()}
-        >
-          ${icon("plus")} ${t("cron.list.newTask")}
-        </button>
+        ${props.canManage
+          ? html`
+              <button
+                type="button"
+                class="btn primary btn--sm cron-new-task"
+                data-test-id="cron-new-task"
+                @click=${() => props.onOpenCreate()}
+              >
+                ${icon("plus")} ${t("cron.list.newTask")}
+              </button>
+            `
+          : nothing}
       </div>
     </div>
   `;
@@ -543,18 +518,40 @@ function renderToolbar(props: CronProps, hasAdvancedJobsFilters: boolean) {
 
 function renderJobsFilterPopover(props: CronProps, active: boolean) {
   return html`
-    <details class="cron-filter-popover">
-      <summary
-        class="btn btn--sm cron-filter-popover__trigger ${active ? "active" : ""}"
-        title=${t("cron.list.filters")}
-        aria-label=${t("cron.list.filters")}
-      >
-        ${icon("listFilter")}
-      </summary>
+    <button
+      id="cron-jobs-filter-trigger"
+      type="button"
+      class="btn btn--sm cron-filter-popover__trigger ${active ? "active" : ""}"
+      title=${t("cron.list.filters")}
+      aria-label=${t("cron.list.filters")}
+      aria-haspopup="dialog"
+      aria-expanded="false"
+    >
+      ${icon("listFilter")}
+    </button>
+    <wa-popover
+      class="cron-filter-popover"
+      for="cron-jobs-filter-trigger"
+      placement="bottom-end"
+      without-arrow
+      @wa-show=${(event: Event) => {
+        (event.currentTarget as Element).previousElementSibling?.setAttribute(
+          "aria-expanded",
+          "true",
+        );
+      }}
+      @wa-hide=${(event: Event) => {
+        (event.currentTarget as Element).previousElementSibling?.setAttribute(
+          "aria-expanded",
+          "false",
+        );
+      }}
+    >
       <div class="cron-filter-popover__panel">
         <label class="field">
           <span>${t("cron.jobs.schedule")}</span>
           <select
+            class="settings-select"
             data-test-id="cron-jobs-schedule-filter"
             .value=${props.jobsScheduleKindFilter}
             @change=${(e: Event) =>
@@ -572,6 +569,7 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
         <label class="field">
           <span>${t("cron.jobs.lastRun")}</span>
           <select
+            class="settings-select"
             data-test-id="cron-jobs-last-status-filter"
             .value=${props.jobsLastStatusFilter}
             @change=${(e: Event) =>
@@ -590,6 +588,7 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
         <label class="field">
           <span>${t("cron.jobs.sort")}</span>
           <select
+            class="settings-select"
             .value=${props.jobsSortBy}
             @change=${(e: Event) =>
               props.onJobsFiltersChange({
@@ -604,6 +603,7 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
         <label class="field">
           <span>${t("cron.jobs.direction")}</span>
           <select
+            class="settings-select"
             .value=${props.jobsSortDir}
             @change=${(e: Event) =>
               props.onJobsFiltersChange({
@@ -623,7 +623,7 @@ function renderJobsFilterPopover(props: CronProps, active: boolean) {
           ${t("cron.jobs.reset")}
         </button>
       </div>
-    </details>
+    </wa-popover>
   `;
 }
 
@@ -715,22 +715,26 @@ function renderJobRow(job: CronJob, props: CronProps) {
         @click=${(e: Event) => e.stopPropagation()}
         @keydown=${(e: Event) => e.stopPropagation()}
       >
-        <button
-          type="button"
-          class="btn btn--sm btn--ghost cron-row-run"
-          data-test-id=${`cron-row-run-${job.id}`}
-          title=${t("cron.actions.runNow")}
-          aria-label=${t("cron.actions.runNow")}
-          ?disabled=${props.busy}
-          @click=${() => props.onRun(job, "force")}
-        >
-          ${icon("play")}
-        </button>
-        ${renderEnabledSwitch(props, job, {
-          compact: true,
-          testId: `cron-row-toggle-${job.id}`,
-        })}
-        ${renderJobMenu(props, job)}
+        ${props.canManage
+          ? html`
+              <button
+                type="button"
+                class="btn btn--sm btn--ghost cron-row-run"
+                data-test-id=${`cron-row-run-${job.id}`}
+                title=${t("cron.actions.runNow")}
+                aria-label=${t("cron.actions.runNow")}
+                ?disabled=${props.busy}
+                @click=${() => props.onRun(job, "force")}
+              >
+                ${icon("play")}
+              </button>
+              ${renderEnabledSwitch(props, job, {
+                compact: true,
+                testId: `cron-row-toggle-${job.id}`,
+              })}
+              ${renderJobMenu(props, job)}
+            `
+          : nothing}
       </span>
     </div>
   `;
@@ -766,25 +770,45 @@ function renderLastRunCell(job: CronJob) {
 // Run now and pause/resume are visible controls (rows and detail header);
 // the menu only carries the low-traffic actions.
 function renderJobMenu(props: CronProps, job: CronJob) {
+  if (!props.canManage) {
+    return nothing;
+  }
   return html`
-    <details class="cron-job-menu">
-      <summary
+    <wa-dropdown
+      class="cron-job-menu"
+      placement="bottom-end"
+      @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+        if (!props.canManage) {
+          return;
+        }
+        switch (event.detail.item.value) {
+          case "run-if-due":
+            props.onRun(job, "due");
+            break;
+          case "clone":
+            props.onClone(job);
+            break;
+          case "remove":
+            props.onRemove(job);
+            break;
+          case undefined:
+            break;
+        }
+      }}
+    >
+      <button
+        slot="trigger"
+        type="button"
         class="btn btn--sm btn--ghost cron-job-menu__trigger"
-        role="button"
-        aria-haspopup="menu"
         aria-label=${t("cron.actions.more")}
         title=${t("cron.actions.more")}
       >
         ${icon("moreHorizontal")}
-      </summary>
-      <div class="cron-job-menu__panel" role="menu">
-        ${renderMenuItem(props, t("cron.actions.runIfDue"), () => props.onRun(job, "due"))}
-        ${renderMenuItem(props, t("cron.actions.clone"), () => props.onClone(job))}
-        ${renderMenuItem(props, t("cron.actions.remove"), () => props.onRemove(job), {
-          danger: true,
-        })}
-      </div>
-    </details>
+      </button>
+      ${renderMenuItem(props, "run-if-due", t("cron.actions.runIfDue"))}
+      ${renderMenuItem(props, "clone", t("cron.actions.clone"))}
+      ${renderMenuItem(props, "remove", t("cron.actions.remove"), { danger: true })}
+    </wa-dropdown>
   `;
 }
 
@@ -838,6 +862,7 @@ function renderDetailView(props: CronProps, mode: CronPanelMode) {
       </div>
     `,
     renderDetailHeader(props, mode, selectedJob),
+    renderAdminRequired(props),
     hasDetailTabs ? renderDetailTabs(props) : nothing,
     props.error ? html`<div class="cron-error-banner">${props.error}</div>` : nothing,
     html`
@@ -881,12 +906,14 @@ function renderDetailHeader(props: CronProps, mode: CronPanelMode, selectedJob?:
       <div class="cron-detail-header__copy">
         <div class="cron-detail-title">${title}</div>
         <div class="cron-detail-meta">
-          ${mode === "job" && selectedJob ? renderEnabledSwitch(props, selectedJob) : nothing}
+          ${mode === "job" && selectedJob && props.canManage
+            ? renderEnabledSwitch(props, selectedJob)
+            : nothing}
           <span class="cron-detail-sub">${subtitle}</span>
         </div>
       </div>
       <div class="cron-detail-actions">
-        ${mode === "job" && selectedJob
+        ${mode === "job" && selectedJob && props.canManage
           ? html`
               <button
                 type="button"
@@ -920,9 +947,13 @@ function renderEnabledSwitch(
     >
       ${renderSettingsToggle({
         checked: job.enabled,
-        disabled: props.busy,
+        disabled: props.busy || !props.canManage,
         ariaLabel: opts?.compact ? actionLabel : stateLabel,
-        onChange: (checked) => props.onToggle(job, checked),
+        onChange: (checked) => {
+          if (props.canManage) {
+            props.onToggle(job, checked);
+          }
+        },
       })}
       ${opts?.compact ? nothing : html`<span class="cron-detail-sub">${stateLabel}</span>`}
     </span>
@@ -941,7 +972,7 @@ function renderDetailTabs(props: CronProps) {
       { value: "history", label: t("cron.detail.historyTitle"), testId: "cron-detail-tab-history" },
     ],
     ariaLabel: t("cron.detail.tabsLabel"),
-    tabs: { idPrefix: "cron-detail-tab-", panelId: "cron-detail-panel" },
+    tabs: { id: "cron-detail", panelId: "cron-detail-panel", variant: "sub" },
     onChange: props.onDetailTabChange,
   });
 }
@@ -955,7 +986,7 @@ function renderEditor(props: CronProps, mode: CronPanelMode) {
   const selectedDeliveryMode =
     props.form.deliveryMode === "announce" && !supportsAnnounce ? "none" : props.form.deliveryMode;
   const blockingFields = collectBlockingFields(props.fieldErrors, props.form, selectedDeliveryMode);
-  const blockedByValidation = !props.busy && blockingFields.length > 0;
+  const blockedByValidation = props.canManage && !props.busy && blockingFields.length > 0;
   const submitDisabledReason =
     blockedByValidation && !props.canSubmit
       ? blockingFields.length === 1
@@ -963,7 +994,11 @@ function renderEditor(props: CronProps, mode: CronPanelMode) {
         : t("cron.form.fixFieldsPlural", { count: String(blockingFields.length) })
       : "";
   return html`
-    <fieldset class="cron-editor" ?disabled=${props.busy} aria-busy=${String(props.busy)}>
+    <fieldset
+      class="cron-editor"
+      ?disabled=${props.busy || !props.canManage}
+      aria-busy=${String(props.busy)}
+    >
       ${renderPromptSection(props, { payloadLocked, isAgentTurn })} ${renderGeneralSection(props)}
       ${renderScheduleSection(props)}
       ${renderDeliverySection(props, { supportsAnnounce, selectedDeliveryMode })}
@@ -995,106 +1030,137 @@ function renderEditor(props: CronProps, mode: CronPanelMode) {
             </div>
           `
         : nothing}
-      <div class="cron-editor-actions">
-        <button
-          class="btn primary"
-          data-test-id="cron-submit"
-          ?disabled=${props.busy || !props.canSubmit}
-          @click=${props.onSubmit}
-        >
-          ${props.busy
-            ? t("cron.form.saving")
-            : mode === "job"
-              ? t("cron.form.saveChanges")
-              : t("cron.form.createTask")}
-        </button>
-        ${mode === "create"
-          ? html`
+      ${props.canManage
+        ? html`
+            <div class="cron-editor-actions">
               <button
-                class="btn"
-                data-test-id="cron-submit-run"
+                class="btn primary"
+                data-test-id="cron-submit"
                 ?disabled=${props.busy || !props.canSubmit}
-                @click=${props.onSubmitRunNow}
+                @click=${props.onSubmit}
               >
-                ${t("cron.form.createAndRun")}
+                ${props.busy
+                  ? t("cron.form.saving")
+                  : mode === "job"
+                    ? t("cron.form.saveChanges")
+                    : t("cron.form.createTask")}
               </button>
-            `
-          : nothing}
-        <button class="btn" ?disabled=${props.busy} @click=${props.onClosePanel}>
-          ${t("cron.form.cancel")}
-        </button>
-        ${submitDisabledReason
-          ? html` <div class="cron-submit-reason" aria-live="polite">${submitDisabledReason}</div> `
-          : nothing}
-      </div>
+              ${mode === "create"
+                ? html`
+                    <button
+                      class="btn"
+                      data-test-id="cron-submit-run"
+                      ?disabled=${props.busy || !props.canSubmit}
+                      @click=${props.onSubmitRunNow}
+                    >
+                      ${t("cron.form.createAndRun")}
+                    </button>
+                  `
+                : nothing}
+              <button class="btn" ?disabled=${props.busy} @click=${props.onClosePanel}>
+                ${t("cron.form.cancel")}
+              </button>
+              ${submitDisabledReason
+                ? html`<div class="cron-submit-reason" aria-live="polite">
+                    ${submitDisabledReason}
+                  </div>`
+                : nothing}
+            </div>
+          `
+        : nothing}
     </fieldset>
   `;
 }
 
 function renderMenuItem(
   props: CronProps,
+  value: string,
   label: string,
-  action: () => void,
   options?: { danger?: boolean },
 ) {
   return html`
-    <button
+    <wa-dropdown-item
       class=${options?.danger ? "cron-job-menu__item danger" : "cron-job-menu__item"}
-      role="menuitem"
-      ?disabled=${props.busy}
-      @click=${(event: Event) => {
-        // Close the details-based menu before acting so it does not linger open.
-        (event.currentTarget as HTMLElement).closest("details")?.removeAttribute("open");
-        action();
-      }}
+      value=${value}
+      variant=${options?.danger ? "danger" : "default"}
+      ?disabled=${props.busy || !props.canManage}
     >
       ${label}
-    </button>
+    </wa-dropdown-item>
   `;
 }
 
 // ── Editor sections ──
 
+// Only the read-only payload kinds carry source text; the rest are prose prompts,
+// so an empty language keeps them on the plain editable textarea.
+const CRON_PAYLOAD_CODE_LANGUAGES: Record<CronFormState["payloadKind"], string> = {
+  script: "javascript",
+  command: "bash",
+  heartbeat: "",
+  systemEvent: "",
+  agentTurn: "",
+};
+
 function renderPromptSection(
   props: CronProps,
   ctx: { payloadLocked: boolean; isAgentTurn: boolean },
 ) {
+  const lockedPayloadLabel =
+    props.form.payloadKind === "script" ? t("cron.form.script") : t("cron.form.command");
   const promptLabel = ctx.payloadLocked
-    ? t("cron.form.command")
+    ? lockedPayloadLabel
     : props.form.payloadKind === "systemEvent"
       ? t("cron.form.mainTimelineMessage")
       : t("cron.form.assistantTaskPrompt");
   const promptHelp = ctx.payloadLocked
-    ? undefined
+    ? t("cron.form.readOnlyPayloadHelp")
     : props.form.payloadKind === "systemEvent"
       ? t("cron.form.systemEventHelp")
       : t("cron.form.agentTurnHelp");
+  // Script/command payloads are always read-only here, so they render as a highlighted
+  // code block instead of a textarea; every other kind stays an editable field. The code
+  // block carries no aria-invalid/describedby because validateCronForm skips payloadText
+  // for locked payloads, so this branch can never render a payload error.
+  const codeLanguage = ctx.payloadLocked ? CRON_PAYLOAD_CODE_LANGUAGES[props.form.payloadKind] : "";
   const promptRow = renderFieldRow({
     label: promptLabel,
-    controlId: "cron-payload-text",
+    controlId: codeLanguage ? "" : "cron-payload-text",
     required: true,
     help: promptHelp,
     stacked: true,
     wide: true,
     error: props.fieldErrors.payloadText,
     errorId: errorIdForField("payloadText"),
-    control: html`
-      <textarea
-        id="cron-payload-text"
-        class="settings-input"
-        rows="6"
-        .value=${props.form.payloadText}
-        ?readonly=${ctx.payloadLocked}
-        aria-required="true"
-        placeholder=${t("cron.form.promptPlaceholder")}
-        aria-invalid=${props.fieldErrors.payloadText ? "true" : "false"}
-        aria-describedby=${ifDefined(
-          props.fieldErrors.payloadText ? errorIdForField("payloadText") : undefined,
-        )}
-        @input=${(e: Event) =>
-          props.onFormChange({ payloadText: (e.target as HTMLTextAreaElement).value })}
-      ></textarea>
-    `,
+    control: codeLanguage
+      ? html`
+          <pre
+            id="cron-payload-text"
+            class="code-block cron-payload-code"
+            data-test-id="cron-payload-code"
+            tabindex="0"
+            aria-label=${promptLabel}
+          ><code class="hljs">${unsafeHTML(
+            highlightCodeHtml(props.form.payloadText, codeLanguage),
+          )}</code></pre>
+        `
+      : html`
+          <textarea
+            id="cron-payload-text"
+            class="settings-input"
+            rows="6"
+            .value=${props.form.payloadText}
+            ?readonly=${ctx.payloadLocked}
+            aria-required="true"
+            placeholder=${t("cron.form.promptPlaceholder")}
+            aria-invalid=${props.fieldErrors.payloadText ? "true" : "false"}
+            aria-describedby=${ifDefined(
+              props.fieldErrors.payloadText ? errorIdForField("payloadText") : undefined,
+            )}
+            @input=${(e: Event) =>
+              props.onFormChange({ payloadText: (e.target as HTMLTextAreaElement).value })}
+          ></textarea>
+        `,
   });
   const actionRow = renderFieldRow({
     label: t("cron.form.action"),
@@ -1104,7 +1170,7 @@ function renderPromptSection(
           <input
             id="cron-payload-kind"
             class="settings-input"
-            .value=${t("cron.form.command")}
+            .value=${lockedPayloadLabel}
             readonly
           />
         `
@@ -1240,29 +1306,32 @@ function renderGeneralSection(props: CronProps) {
   );
 }
 
-// Human-readable line under the schedule pills; null while inputs are invalid
-// so the summary never lies about what would be saved.
+// Human-readable schedule summary; null while invalid so it never disagrees with the saved value.
 function describeFormSchedule(form: CronFormState): string | null {
   if (form.scheduleKind === "every") {
     const amount = form.everyAmount.trim();
-    if (!amount || !Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+    if (parseCronEveryMs(amount, form.everyUnit) === undefined) {
       return null;
     }
     if (Number(amount) === 1) {
       const singularKey =
-        form.everyUnit === "minutes"
-          ? "cron.form.summaryEveryMinuteOne"
-          : form.everyUnit === "hours"
-            ? "cron.form.summaryEveryHourOne"
-            : "cron.form.summaryEveryDayOne";
+        form.everyUnit === "seconds"
+          ? "cron.form.summaryEverySecondOne"
+          : form.everyUnit === "minutes"
+            ? "cron.form.summaryEveryMinuteOne"
+            : form.everyUnit === "hours"
+              ? "cron.form.summaryEveryHourOne"
+              : "cron.form.summaryEveryDayOne";
       return t(singularKey);
     }
     const key =
-      form.everyUnit === "minutes"
-        ? "cron.form.summaryEveryMinutes"
-        : form.everyUnit === "hours"
-          ? "cron.form.summaryEveryHours"
-          : "cron.form.summaryEveryDays";
+      form.everyUnit === "seconds"
+        ? "cron.form.summaryEverySeconds"
+        : form.everyUnit === "minutes"
+          ? "cron.form.summaryEveryMinutes"
+          : form.everyUnit === "hours"
+            ? "cron.form.summaryEveryHours"
+            : "cron.form.summaryEveryDays";
     return t(key, { amount });
   }
   if (form.scheduleKind === "at") {
@@ -1277,14 +1346,18 @@ function describeFormSchedule(form: CronFormState): string | null {
     const tz = form.cronTz.trim();
     return tz ? t("cron.form.summaryCronTz", { expr, tz }) : t("cron.form.summaryCron", { expr });
   }
-  return form.scheduleKind === "on-exit" ? t("cron.form.repeatOnExit") : null;
+  if (form.scheduleKind === "on-exit") {
+    return t("cron.form.repeatOnExit");
+  }
+  return form.scheduleKind === "stream" ? t("cron.form.repeatStream") : null;
 }
 
 function renderScheduleSection(props: CronProps) {
   const form = props.form;
   const isOnExit = form.scheduleKind === "on-exit";
-  // on-exit stays selectable only while it is the current value: jobs can
-  // convert to an editable schedule, but never back to a watched command.
+  const isStream = form.scheduleKind === "stream";
+  // Process-backed schedules stay selectable only while current: jobs can
+  // convert to an editable schedule, but never synthesize a command in the UI.
   const kinds: Array<{ value: CronFormState["scheduleKind"]; label: string; testId: string }> = [
     ...(isOnExit
       ? [
@@ -1292,6 +1365,15 @@ function renderScheduleSection(props: CronProps) {
             value: "on-exit" as const,
             label: t("cron.form.repeatOnExit"),
             testId: "cron-schedule-kind-on-exit",
+          },
+        ]
+      : []),
+    ...(isStream
+      ? [
+          {
+            value: "stream" as const,
+            label: t("cron.form.repeatStream"),
+            testId: "cron-schedule-kind-stream",
           },
         ]
       : []),
@@ -1311,7 +1393,15 @@ function renderScheduleSection(props: CronProps) {
           value: form.scheduleKind,
           options: kinds,
           ariaLabel: t("cron.form.repeat"),
-          onChange: (value) => props.onFormChange({ scheduleKind: value }),
+          onChange: (value) =>
+            props.onFormChange({
+              scheduleKind: value,
+              ...(value === "at" && (form.scheduleKind === "every" || form.scheduleKind === "cron")
+                ? { deleteAfterRun: true }
+                : value === "every" || value === "cron"
+                  ? { deleteAfterRun: false }
+                  : {}),
+            }),
         }),
       })}
       ${form.scheduleKind === "at"
@@ -1370,6 +1460,7 @@ function renderScheduleSection(props: CronProps) {
                         .value as CronFormState["everyUnit"],
                     })}
                 >
+                  <option value="seconds">${t("cron.form.seconds")}</option>
                   <option value="minutes">${t("cron.form.minutes")}</option>
                   <option value="hours">${t("cron.form.hours")}</option>
                   <option value="days">${t("cron.form.days")}</option>
@@ -1617,12 +1708,14 @@ function renderAdvanced(
                 `,
               })
             : nothing}
-          ${renderToggleRow({
-            label: t("cron.form.deleteAfterRun"),
-            checked: props.form.deleteAfterRun,
-            help: t("cron.form.deleteAfterRunHelp"),
-            onChange: (checked) => props.onFormChange({ deleteAfterRun: checked }),
-          })}
+          ${props.form.scheduleKind === "at" || props.form.scheduleKind === "on-exit"
+            ? renderToggleRow({
+                label: t("cron.form.deleteAfterRun"),
+                checked: props.form.deleteAfterRun,
+                help: t("cron.form.deleteAfterRunHelp"),
+                onChange: (checked) => props.onFormChange({ deleteAfterRun: checked }),
+              })
+            : nothing}
           ${renderToggleRow({
             label: t("cron.form.clearAgentOverride"),
             checked: props.form.clearAgent,
@@ -1887,3 +1980,4 @@ function renderFailureAlertRows(props: CronProps, channelOptions: string[]) {
       : nothing}
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

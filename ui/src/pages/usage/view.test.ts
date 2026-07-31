@@ -92,10 +92,12 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       timeSeriesBreakdownMode: "total",
       timeSeries: null,
       timeSeriesLoading: false,
+      timeSeriesStatus: { error: null, hasLoaded: false, stale: false },
       timeSeriesCursorStart: null,
       timeSeriesCursorEnd: null,
       sessionLogs: null,
       sessionLogsLoading: false,
+      sessionLogsStatus: { error: null, hasLoaded: false, stale: false },
       sessionLogsExpanded: false,
       logFilters: {
         roles: [],
@@ -143,6 +145,8 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
         onTimeSeriesModeChange: noop,
         onTimeSeriesBreakdownChange: noop,
         onTimeSeriesCursorRangeChange: noop,
+        onRetryTimeSeries: noop,
+        onRetrySessionLogs: noop,
       },
     },
     ...overrides,
@@ -283,6 +287,30 @@ describe("renderUsage", () => {
     );
 
     expect(container.querySelector('input[name="usage-agent-scope"]')).toBeNull();
+  });
+
+  it("keeps filter option values distinct from menu commands", () => {
+    const container = document.createElement("div");
+    const onQueryDraftChange = vi.fn();
+    const session = usageSession("agent:main:main", "main", "clear");
+    const props = createUsageProps({
+      data: {
+        ...createUsageProps().data,
+        sessions: [session],
+        aggregates: buildAggregatesFromSessions([session]),
+      },
+    });
+    props.callbacks.filters.onQueryDraftChange = onQueryDraftChange;
+
+    render(renderUsage(props), container);
+    const option = [...container.querySelectorAll<HTMLElement>(".usage-filter-option")].find(
+      (item) => item.textContent?.trim() === "clear",
+    );
+    option
+      ?.closest("wa-dropdown")
+      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: option }, bubbles: true }));
+
+    expect(onQueryDraftChange).toHaveBeenCalledWith(expect.stringContaining("provider:clear"));
   });
 
   it("renders provider plans, quotas, and billing independently of session usage", () => {

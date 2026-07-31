@@ -18,20 +18,17 @@ export function createWhatsAppLoginTool(): ChannelAgentTool {
     label: "WhatsApp Login",
     name: "whatsapp_login",
     description: "Generate a WhatsApp QR code for linking, or wait for the scan to complete.",
-    // NOTE: Using Type.Unsafe for action enum instead of Type.Union([Type.Literal(...)]
-    // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
     parameters: Type.Object({
-      action: Type.Unsafe<"start" | "wait">({
-        type: "string",
-        enum: ["start", "wait"],
-      }),
+      action: Type.Enum(["start", "wait"], { type: "string" }),
       timeoutMs: optionalPositiveIntegerSchema(),
       force: Type.Optional(Type.Boolean()),
       accountId: Type.Optional(Type.String()),
       currentQrDataUrl: Type.Optional(
         Type.String({
           maxLength: QR_DATA_URL_MAX_LENGTH,
-          pattern: "^data:image/png;base64,",
+          // llama.cpp rejects a whole tool catalog when a model-facing pattern
+          // lacks either anchor; real QR images also require a nonempty payload.
+          pattern: "^data:image/png;base64,.+$",
         }),
       ),
     }),

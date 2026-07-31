@@ -142,7 +142,7 @@ describe("mantis Slack desktop smoke runtime", () => {
           expect(outputDir).toBeTypeOf("string");
           await fs.mkdir(outputDir as string, { recursive: true });
           if (String(outputDir).endsWith("slack-qa/")) {
-            await fs.writeFile(path.join(outputDir as string, "slack-qa-report.md"), "# Slack\n");
+            await fs.writeFile(path.join(outputDir as string, "qa-suite-report.md"), "# Slack\n");
           } else {
             await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
             await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.mp4"), "mp4");
@@ -200,14 +200,29 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(remoteScript).toContain("build-essential python3");
     expect(remoteScript).toContain("node_supports_type_stripping");
     expect(remoteScript).toContain("scripts/crabbox-untrusted-bootstrap.sh");
-    expect(remoteScript).toContain("https://nodejs.org/dist/v$node_version");
+    expect(remoteScript).toContain(
+      "curl -fsSL --connect-timeout 10 --max-time 120 https://deb.nodesource.com/setup_22.x",
+    );
+    expect(remoteScript).toContain(
+      'curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-max-time 120 --retry-all-errors "$node_base_url/SHASUMS256.txt"',
+    );
+    expect(remoteScript).toContain(
+      'curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-max-time 120 --retry-all-errors "$node_base_url/$node_archive"',
+    );
     expect(remoteScript).toContain('grep "  $node_archive$" SHASUMS256.txt | sha256sum -c -');
     expect(remoteScript).toContain('export PATH="$node_root/bin:$PATH"');
     expect(remoteScript).toContain("packageManager ??");
     expect(remoteScript).toContain("[0-9a-f]{128}");
     expect(remoteScript).toContain('console.log(match[1] + " " + match[2])');
     expect(remoteScript).toContain('active_pnpm_version="$(pnpm --version 2>/dev/null || true)"');
-    expect(remoteScript).toContain("https://registry.npmjs.org/pnpm/-/pnpm-$pnpm_version.tgz");
+    expect(remoteScript).toContain(
+      "curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-max-time 120 --retry-all-errors",
+    );
+    expect(remoteScript).toContain('"https://registry.npmjs.org/pnpm/-/pnpm-$pnpm_version.tgz"');
+    expect(remoteScript?.match(/--connect-timeout 10 --max-time 120/gu)?.length).toBe(4);
+    expect(remoteScript?.match(/--retry 3 --retry-max-time 120 --retry-all-errors/gu)?.length).toBe(
+      3,
+    );
     expect(remoteScript).toContain('sha512sum "$pnpm_archive"');
     expect(remoteScript).toContain('chmod +x "$pnpm_cli"');
     expect(remoteScript).toContain('ln -sfn "$pnpm_cli" "$pnpm_bin_dir/pnpm"');
@@ -235,13 +250,19 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(remoteScript).toContain("MANTIS_REMOTE_HEARTBEAT");
     expect(remoteScript).toContain("qa_status=$?");
     expect(remoteScript).toContain("MANTIS_REMOTE_FAILURE_DIAGNOSTICS_BEGIN");
-    expect(remoteScript).toContain("$out/slack-qa/slack-qa-report.md");
-    expect(remoteScript).toContain("$out/slack-qa/slack-qa-summary.json");
-    expect(remoteScript).toContain("$out/slack-qa/slack-qa-observed-messages.json");
+    expect(remoteScript).toContain("$out/slack-qa/qa-suite-report.md");
+    expect(remoteScript).toContain("$out/slack-qa/qa-suite-summary.json");
+    expect(remoteScript).toContain("$out/slack-qa/qa-evidence.json");
     expect(remoteScript).toContain('tail -n 200 "$diagnostic_file"');
     expect(remoteScript).toContain("Slack desktop screenshot is missing or empty");
     expect(remoteScript).not.toContain('test -s "$out/slack-desktop-smoke.png"');
     expect(remoteScript).toContain("OPENCLAW_MANTIS_SLACK_BROWSER_PROFILE_DIR");
+    expect(remoteScript)
+      .toContain(`const response = await fetch("https://slack.com/api/auth.test", {
+  method: "POST",
+  headers: { authorization: \`Bearer \${token}\` },
+  signal: AbortSignal.timeout(15_000),
+});`);
     const rsyncArgs = commands
       .filter((entry) => entry.command === "rsync")
       .flatMap((entry) => entry.args);
@@ -300,7 +321,7 @@ describe("mantis Slack desktop smoke runtime", () => {
         const outputDir = args.at(-1);
         await fs.mkdir(outputDir as string, { recursive: true });
         if (String(outputDir).endsWith("slack-qa/")) {
-          await fs.writeFile(path.join(outputDir as string, "slack-qa-report.md"), "# Slack\n");
+          await fs.writeFile(path.join(outputDir as string, "qa-suite-report.md"), "# Slack\n");
         } else {
           await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
           await fs.writeFile(
@@ -872,7 +893,7 @@ describe("mantis Slack desktop smoke runtime", () => {
         const outputDir = args.at(-1);
         await fs.mkdir(outputDir as string, { recursive: true });
         if (String(outputDir).endsWith("slack-qa/")) {
-          await fs.writeFile(path.join(outputDir as string, "slack-qa-report.md"), "# Slack\n");
+          await fs.writeFile(path.join(outputDir as string, "qa-suite-report.md"), "# Slack\n");
         } else {
           await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
           await fs.writeFile(
@@ -1040,7 +1061,7 @@ describe("mantis Slack desktop smoke runtime", () => {
         const outputDir = args.at(-1);
         await fs.mkdir(outputDir as string, { recursive: true });
         if (String(outputDir).endsWith("slack-qa/")) {
-          await fs.writeFile(path.join(outputDir as string, "slack-qa-report.md"), "# Slack\n");
+          await fs.writeFile(path.join(outputDir as string, "qa-suite-report.md"), "# Slack\n");
         } else {
           await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
           await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.mp4"), "mp4");
@@ -1133,3 +1154,4 @@ describe("mantis Slack desktop smoke runtime", () => {
     vi.doUnmock("./cli.runtime.js");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

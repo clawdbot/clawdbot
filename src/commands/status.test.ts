@@ -830,7 +830,8 @@ import {
   resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
-import { resolvePairingRecoveryContext, statusCommand } from "./status.command.js";
+import { statusCommand } from "./status.command.js";
+import { resolvePairingRecoveryContext } from "./status.command.test-support.js";
 
 const runtime = {
   log: vi.fn(),
@@ -1012,7 +1013,7 @@ describe("statusCommand", () => {
 
   it("prints JSON and includes security audit only when all is requested", async () => {
     mocks.buildPluginCompatibilityNotices.mockReturnValue([
-      createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
+      createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" }),
     ]);
     await statusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(getRuntimeLog(0));
@@ -1136,7 +1137,7 @@ describe("statusCommand", () => {
 
   it("prints formatted lines with verbose cache details", async () => {
     mocks.buildPluginCompatibilityNotices.mockReturnValue([
-      createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
+      createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" }),
     ]);
     const logs = await runStatusAndGetLogs({ verbose: true });
     for (const token of [
@@ -1163,7 +1164,7 @@ describe("statusCommand", () => {
     ]) {
       expectLogsInclude(logs, token);
     }
-    expectLogsInclude(logs, "legacy-plugin still uses legacy before_agent_start");
+    expectLogsInclude(logs, "legacy-plugin is hook-only");
     expectLogsMatch(logs, /openclaw (?:--profile isolated )?status --all/);
     expectLogsInclude(logs, "Cache");
     expectLogsInclude(logs, "40% hit");
@@ -1551,3 +1552,4 @@ describe("statusCommand", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

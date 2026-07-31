@@ -83,6 +83,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
         <label class="field">
           <span>${t("modelProviders.defaults.primary")}</span>
           <select
+            class="settings-select"
             .value=${props.selection.primary}
             ?disabled=${disabled || saving}
             title=${title}
@@ -98,6 +99,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
         <label class="field">
           <span>${t("modelProviders.defaults.utility")}</span>
           <select
+            class="settings-select"
             .value=${props.selection.utilityModel ?? AUTOMATIC_UTILITY_VALUE}
             ?disabled=${disabled || saving}
             title=${title}
@@ -139,6 +141,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
         <label class="field model-providers__fallback-add">
           <span>${t("modelProviders.defaults.addFallback")}</span>
           <select
+            class="settings-select"
             .value=${""}
             ?disabled=${disabled || saving || !props.selection.primary}
             title=${title}

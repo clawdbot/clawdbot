@@ -1,18 +1,23 @@
-// Control UI view renders the Model Providers settings page content.
+// Control UI view renders the Models settings page content.
 import { html, nothing } from "lit";
-import type { ModelsProbeResult } from "../../api/types.ts";
+import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
+import type { FastMode, ModelsProbeResult } from "../../api/types.ts";
 import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
 import {
   renderSettingsEmpty,
   renderSettingsGroup,
   renderSettingsPage,
+  renderSettingsRow,
   renderSettingsSection,
+  renderSettingsSegmented,
   renderSettingsStatus,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { BASE_THINKING_LEVELS } from "../../lib/chat/thinking.ts";
 import { formatCost, formatTimeMs, formatTokens } from "../../lib/format.ts";
+import { MODEL_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
 import type {
@@ -34,10 +39,14 @@ type ModelProvidersViewProps = {
   error: string | null;
   updatedAt: number | null;
   costDays: number;
+  credentialAgentLabel: string;
   cards: ModelProviderCard[];
   configuredModels: ModelPickerEntry[];
   defaultModels: DefaultModelSelection;
   defaultModelsDirty: boolean;
+  thinkingLevel: string;
+  fastMode: FastMode | undefined;
+  configBusy: boolean;
   unconfiguredProviders: ProviderOption[];
   canMutate: boolean;
   mutationBlockedReason: string | null;
@@ -71,7 +80,57 @@ type ModelProvidersViewProps = {
   onUtilityChange: (model: string | null) => void;
   onDefaultModelsSave: () => void;
   onDefaultModelsReset: () => void;
+  onThinkingChange: (level: string) => void;
+  onFastModeChange: (mode: FastMode) => void;
+  onOpenModelSetup: () => void;
 };
+
+// The global default intentionally omits "minimal"; the full list stays
+// available on session-level pickers.
+const THINKING_LEVELS = BASE_THINKING_LEVELS.filter((level) => level !== "minimal");
+
+function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
+  return value === "auto" ? "auto" : value === "on";
+}
+
+function renderModelBehavior(props: ModelProvidersViewProps) {
+  const fastMode = formatFastModeValue(props.fastMode);
+  return html`
+    <div id=${MODEL_SETTINGS_TARGET_IDS.behavior}>
+      ${renderSettingsSection({ title: t("quickSettings.model.title") }, [
+        renderSettingsRow({
+          title: t("quickSettings.model.thinking"),
+          control: renderSettingsSegmented({
+            value: props.thinkingLevel,
+            options: THINKING_LEVELS.map((level) => ({
+              value: level,
+              label: t(`quickSettings.model.thinkingLevels.${level}`),
+            })),
+            disabled: props.configBusy,
+            onChange: props.onThinkingChange,
+          }),
+        }),
+        renderSettingsRow({
+          title: t("quickSettings.model.fastMode"),
+          control: renderSettingsSegmented<"auto" | "on" | "off">({
+            value: fastMode,
+            options: [
+              { value: "auto", label: t("quickSettings.model.fastModes.auto") },
+              { value: "on", label: t("quickSettings.model.fastModes.fast") },
+              { value: "off", label: t("quickSettings.model.fastModes.standard") },
+            ],
+            disabled: props.configBusy,
+            onChange: (value) => {
+              if (value !== fastMode) {
+                props.onFastModeChange(fastModeOptionValue(value));
+              }
+            },
+          }),
+        }),
+      ])}
+    </div>
+  `;
+}
 
 const AUTH_KIND_I18N: Record<ModelProviderAuthKind, string> = {
   ok: "modelProviders.status.ok",
@@ -105,6 +164,38 @@ function renderAuthStatus(card: ModelProviderCard) {
   `;
 }
 
+function hasProviderCredentials(card: ModelProviderCard): boolean {
+  return card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
+}
+
+function hasValidProviderSignIn(card: ModelProviderCard): boolean {
+  return card.auth?.kind === "ok";
+}
+
+function renderProviderStatus(card: ModelProviderCard) {
+  if (card.auth?.kind === "expired" || card.auth?.kind === "missing") {
+    return renderAuthStatus(card);
+  }
+  if (card.auth?.kind === "expiring") {
+    return renderAuthStatus(card);
+  }
+  if (!hasProviderCredentials(card)) {
+    return renderAuthStatus(card);
+  }
+  if (card.availableModelCount > 0 && (hasValidProviderSignIn(card) || !card.auth)) {
+    return renderSettingsStatus({
+      kind: "ok",
+      label: t("modelProviders.status.ready"),
+    });
+  }
+  return hasValidProviderSignIn(card)
+    ? renderSettingsStatus({
+        kind: "muted",
+        label: t("modelProviders.status.ok"),
+      })
+    : renderAuthStatus(card);
+}
+
 function modelsText(card: ModelProviderCard): string | null {
   if (card.modelCount === 0) {
     return null;
@@ -119,8 +210,7 @@ function modelsText(card: ModelProviderCard): string | null {
       : t("modelProviders.models", { count: String(card.modelCount) });
 }
 
-// formatTokens tops out at "M"; month-scale provider totals can cross a
-// billion tokens, which would render as e.g. "4132M".
+// formatTokens tops out at "M"; month-scale totals can cross a billion (e.g. "4132M").
 function formatTokenTotal(tokens: number): string {
   if (tokens >= 1_000_000_000) {
     const billions = tokens / 1_000_000_000;
@@ -150,7 +240,7 @@ function renderLocalCost(card: ModelProviderCard, costDays: number) {
   `;
 }
 
-function renderCredentialSummary(card: ModelProviderCard) {
+function renderCredentialSummary(card: ModelProviderCard, agentLabel: string) {
   const oauthCount = card.profiles.filter((profile) => profile.type === "oauth").length;
   const tokenCount = card.profiles.filter((profile) => profile.type === "token").length;
   const apiProfileCount = card.profiles.filter((profile) => profile.type === "api_key").length;
@@ -174,7 +264,7 @@ function renderCredentialSummary(card: ModelProviderCard) {
   }
   return html`
     <div class="model-providers__credentials">
-      <span>${t("modelProviders.credentials.label")}</span>
+      <span>${t("modelProviders.credentials.label", { agent: agentLabel })}</span>
       <strong
         >${parts.length > 0 ? parts.join(" · ") : t("modelProviders.credentials.none")}</strong
       >
@@ -371,15 +461,19 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
         </div>
         <div class="settings-row__control">
           ${card.usage?.plan ? renderSettingsValue(card.usage.plan) : nothing}
-          ${renderAuthStatus(card)}
+          ${renderProviderStatus(card)}
         </div>
       </div>
-      ${renderCredentialSummary(card)}
-      ${card.usage
-        ? renderProviderUsageDetails(card.usage)
-        : html`<div class="model-providers__no-stats">${t("modelProviders.noStats")}</div>`}
-      ${renderLocalCost(card, props.costDays)} ${renderProviderActions(card, props)}
-      ${renderKeyEditor(card, props)} ${renderProbeResult(props.probeResults[card.id])}
+      ${renderCredentialSummary(card, props.credentialAgentLabel)}
+      <div class="model-providers__global-metrics">
+        <div class="model-providers__global-metrics-title">${t("modelProviders.globalUsage")}</div>
+        ${card.usage
+          ? renderProviderUsageDetails(card.usage)
+          : html`<div class="model-providers__no-stats">${t("modelProviders.noStats")}</div>`}
+        ${renderLocalCost(card, props.costDays)}
+      </div>
+      ${renderProviderActions(card, props)} ${renderKeyEditor(card, props)}
+      ${renderProbeResult(props.probeResults[card.id])}
       ${message
         ? html`<div class="callout ${message.kind}" role="status">${message.text}</div>`
         : nothing}
@@ -399,6 +493,7 @@ function renderAddProvider(props: ModelProvidersViewProps) {
               <label class="field">
                 <span>${t("modelProviders.add.provider")}</span>
                 <select
+                  class="settings-select"
                   .value=${props.addProviderId}
                   @change=${(event: Event) =>
                     props.onAddProviderIdChange((event.target as HTMLSelectElement).value)}
@@ -459,6 +554,34 @@ function renderAddProvider(props: ModelProvidersViewProps) {
   );
 }
 
+function renderModelReadiness(props: ModelProvidersViewProps) {
+  const signedIn = props.cards.some(hasValidProviderSignIn);
+  return html`
+    <div class="model-providers__setup" data-model-readiness="model-required">
+      ${renderSettingsSection(
+        { title: t("modelProviders.readiness.title") },
+        renderSettingsRow({
+          title: t("modelProviders.readiness.heading"),
+          description: signedIn
+            ? t("modelProviders.readiness.signedInNoModels")
+            : t("modelProviders.readiness.notConfigured"),
+          control: html`
+            ${renderSettingsStatus({
+              kind: "warn",
+              label: signedIn
+                ? t("modelProviders.readiness.noModels")
+                : t("modelProviders.readiness.modelRequired"),
+            })}
+            <button class="btn primary" @click=${props.onOpenModelSetup}>
+              ${signedIn ? t("modelProviders.readiness.chooseProvider") : t("modelSetup.heading")}
+            </button>
+          `,
+        }),
+      )}
+    </div>
+  `;
+}
+
 export function renderModelProviders(props: ModelProvidersViewProps) {
   if (!props.connected) {
     return renderSettingsPage(
@@ -466,11 +589,10 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
     );
   }
   if (props.loading) {
-    return renderSettingsPage(
-      html`<div aria-busy="true">
-        ${renderSettingsGroup(renderSettingsEmpty(t("common.loading")))}
-      </div>`,
-    );
+    return renderSettingsPage(html`
+      ${renderModelBehavior(props)}
+      <div aria-busy="true">${renderSettingsGroup(renderSettingsEmpty(t("common.loading")))}</div>
+    `);
   }
   const providerRows = html`
     ${props.error
@@ -490,22 +612,26 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
         )
       : props.cards.map((card) => renderProviderRow(card, props))}
   `;
+  const needsModelSetup = !props.configuredModels.some((model) => model.available !== false);
   return renderSettingsPage(html`
-    ${renderDefaultModels({
-      models: props.configuredModels,
-      selection: props.defaultModels,
-      dirty: props.defaultModelsDirty,
-      canMutate: props.canMutate,
-      mutationBlockedReason: props.mutationBlockedReason,
-      busy: props.busy,
-      message: props.messages.defaults,
-      onPrimaryChange: props.onPrimaryChange,
-      onFallbackAdd: props.onFallbackAdd,
-      onFallbackRemove: props.onFallbackRemove,
-      onUtilityChange: props.onUtilityChange,
-      onSave: props.onDefaultModelsSave,
-      onReset: props.onDefaultModelsReset,
-    })}
+    ${needsModelSetup
+      ? renderModelReadiness(props)
+      : renderDefaultModels({
+          models: props.configuredModels,
+          selection: props.defaultModels,
+          dirty: props.defaultModelsDirty,
+          canMutate: props.canMutate,
+          mutationBlockedReason: props.mutationBlockedReason,
+          busy: props.busy,
+          message: props.messages.defaults,
+          onPrimaryChange: props.onPrimaryChange,
+          onFallbackAdd: props.onFallbackAdd,
+          onFallbackRemove: props.onFallbackRemove,
+          onUtilityChange: props.onUtilityChange,
+          onSave: props.onDefaultModelsSave,
+          onReset: props.onDefaultModelsReset,
+        })}
+    ${renderModelBehavior(props)}
     ${renderSettingsSection(
       {
         title: t("modelProviders.title"),
