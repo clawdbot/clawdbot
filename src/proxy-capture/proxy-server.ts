@@ -6,6 +6,7 @@ import { request as httpsRequest } from "node:https";
 import net from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import { URL } from "node:url";
+import { DEFAULT_HOST } from "../constants/defaults.js";
 import { ensureDebugProxyCa } from "./ca.js";
 import type { DebugProxySettings } from "./env.js";
 import { redactedCaptureHeaders } from "./header-redaction.js";
@@ -78,12 +79,12 @@ function parseConnectTarget(rawTarget: string | undefined): {
 } {
   const trimmed = rawTarget?.trim() ?? "";
   if (!trimmed) {
-    return { hostname: "127.0.0.1", port: 443 };
+    return { hostname: DEFAULT_HOST, port: 443 };
   }
 
   const bracketedMatch = trimmed.match(/^\[([^\]]+)\](?::(\d+))?$/);
   if (bracketedMatch) {
-    const hostname = bracketedMatch[1]?.trim() || "127.0.0.1";
+    const hostname = bracketedMatch[1]?.trim() || DEFAULT_HOST;
     const port = Number(bracketedMatch[2] || 443);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       throw new Error("Invalid CONNECT target port");
@@ -95,7 +96,7 @@ function parseConnectTarget(rawTarget: string | undefined): {
   if (lastColon <= 0 || lastColon === trimmed.length - 1) {
     return { hostname: trimmed, port: 443 };
   }
-  const hostname = trimmed.slice(0, lastColon).trim() || "127.0.0.1";
+  const hostname = trimmed.slice(0, lastColon).trim() || DEFAULT_HOST;
   const portText = trimmed.slice(lastColon + 1).trim();
   if (!/^\d+$/.test(portText)) {
     throw new Error("Invalid CONNECT target port");
@@ -111,7 +112,7 @@ function normalizeTargetUrl(req: IncomingMessage): URL {
   if (req.url?.startsWith("http://") || req.url?.startsWith("https://")) {
     return new URL(req.url);
   }
-  const host = req.headers.host ?? "127.0.0.1";
+  const host = req.headers.host ?? DEFAULT_HOST;
   return new URL(`http://${host}${req.url ?? "/"}`);
 }
 
@@ -179,7 +180,7 @@ export async function startDebugProxyServer(params: {
   await ensureDebugProxyCa(params.settings.certDir);
   const store = getDebugProxyCaptureStore();
   const recordProxyEvent = createProxyCaptureRecorder({ store, settings: params.settings });
-  const host = params.host?.trim() || "127.0.0.1";
+  const host = params.host?.trim() || DEFAULT_HOST;
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
@@ -364,7 +365,7 @@ export async function startDebugProxyServer(params: {
 
   server.on("connect", (req, clientSocket, head) => {
     const flowId = randomUUID();
-    let hostname = "127.0.0.1";
+    let hostname = DEFAULT_HOST;
     let port;
     try {
       const parsed = parseConnectTarget(req.url);

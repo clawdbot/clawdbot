@@ -17,6 +17,7 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { DEFAULT_HOST } from "../constants/defaults.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { probeGatewayUrl, probeLocalCommand, type LocalCommandProbe } from "./probes.js";
@@ -155,7 +156,7 @@ export async function loadSystemAgentOverview(
     resolveAgentEffectiveModelPrimary(cfg, defaultAgentId) ??
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model);
   const configPath = snapshot.path || (deps.resolveConfigPath ?? resolveConfigPath)(env);
-  let gatewayUrl = `ws://127.0.0.1:${(deps.resolveGatewayPort ?? resolveGatewayPort)(cfg, env)}`;
+  let gatewayUrl = `ws://${DEFAULT_HOST}:${(deps.resolveGatewayPort ?? resolveGatewayPort)(cfg, env)}`;
   let gatewaySource = "local loopback";
   let gatewayError: string | undefined;
   try {
