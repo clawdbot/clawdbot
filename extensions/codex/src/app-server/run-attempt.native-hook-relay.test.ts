@@ -10,7 +10,10 @@ import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "openclaw/plugin-sdk/hook-runtime";
 import {
   createEmptyPluginRegistry,
   createMockPluginRegistry,
@@ -40,6 +43,9 @@ setupRunAttemptTestHooks();
 
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
+  // The relay guard reads live before-tool policy state, so a hook runner left
+  // behind by one test would change the next test's relay shape.
+  resetGlobalHookRunner();
 });
 
 const testing = {
@@ -923,6 +929,40 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect((await readCodexAppServerBinding(sessionFile))?.nativeHookRelayGeneration).toBe(
       currentGeneration,
     );
+    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
+  });
+
+  it("retains the pre_tool_use relay when a before-tool policy is active under explicit yolo", async () => {
+    // Explicit `approvalPolicy: "never"` plus a live before_tool_call hook. If the
+    // opt-out emitted `features.hooks: false` here, the relay that executes and can
+    // block that policy would never run for this attempt.
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
+    );
+    const sessionFile = path.join(tempDir, "policy-yolo.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-policy-yolo");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      pluginConfig: { appServer: { mode: "yolo", approvalPolicy: "never" } },
+      nativeHookRelay: { enabled: false },
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const startParams = startRequest?.params as
+      | { approvalPolicy?: unknown; config?: Record<string, unknown> }
+      | undefined;
+    expect(startParams?.approvalPolicy).toBe("never");
+    expect(startParams?.config?.["features.hooks"]).toBe(true);
+    const preToolUse = startParams?.config?.["hooks.PreToolUse"];
+    expect(Array.isArray(preToolUse) && preToolUse.length > 0).toBe(true);
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(
+      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)?.allowedEvents,
+    ).toEqual(["pre_tool_use"]);
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
   });
 

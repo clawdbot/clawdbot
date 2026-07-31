@@ -1,3 +1,4 @@
+import type { NativeHookRelayEvent } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ProviderAuthAliasLookupParams } from "openclaw/plugin-sdk/agent-runtime";
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 import type { z } from "zod";
@@ -214,6 +215,16 @@ export type CodexAppServerRuntimeOptions = {
   networkProxy?: ResolvedCodexAppServerNetworkProxyConfig;
 };
 
+/** Public `appServer.nativeHookRelay` surface: the relay kill-switch only. */
+export type CodexNativeHookRelayConfig = {
+  enabled?: boolean;
+};
+
+export type CodexNativeHookRelayOptions = {
+  enabled: boolean;
+  events?: readonly NativeHookRelayEvent[];
+};
+
 export type CodexModelBackedReviewerContext = {
   modelProvider?: string;
   model?: string;
@@ -245,6 +256,7 @@ export type CodexPluginConfig = {
     remoteWorkspaceRoot?: string;
     codeModeOnly?: boolean;
     loopDetectionPreToolUseRelay?: boolean;
+    nativeHookRelay?: CodexNativeHookRelayConfig;
     requestTimeoutMs?: number;
     turnCompletionIdleTimeoutMs?: number;
     turnAssistantCompletionIdleTimeoutMs?: number;

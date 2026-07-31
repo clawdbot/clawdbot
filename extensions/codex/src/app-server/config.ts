@@ -12,6 +12,8 @@ export type {
   CodexComputerUseConfig,
   CodexDynamicToolsLoading,
   CodexManagedCommandOrder,
+  CodexNativeHookRelayConfig,
+  CodexNativeHookRelayOptions,
   CodexPluginConfig,
   CodexPluginDestructiveApprovalMode,
   CodexPluginMarketplaceName,
@@ -25,6 +27,7 @@ export { resolveOpenClawExecPolicyForCodexAppServer } from "./config-exec-policy
 export {
   isCodexSandboxExecServerEnabled,
   readCodexPluginConfig,
+  resolveCodexAppServerNativeHookRelay,
   resolveCodexPluginsPolicy,
 } from "./config-parsing.js";
 export {

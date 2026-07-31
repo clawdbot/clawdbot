@@ -33,7 +33,10 @@ import {
   resolveOpenClawExecPolicyForCodexAppServer,
 } from "./config.js";
 import { createCodexDynamicToolBuildStageTracker } from "./dynamic-tool-build.js";
-import { resolveCodexNativeHookRelayEvents } from "./native-hook-relay.js";
+import {
+  resolveCodexNativeHookRelayEvents,
+  resolveCodexNativeHookRelayForApprovalPolicy,
+} from "./native-hook-relay.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { ensureCodexWorkspaceDirOnce } from "./run-attempt-lifecycle.js";
 import type { CodexRunAttemptInput } from "./run-attempt-types.js";
@@ -392,8 +395,15 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     approvalPolicyPromotedForOpenClawToolPolicy =
       configuredAppServer.approvalPolicy === "never" && appServer.approvalPolicy === "untrusted";
   }
+  // `appServer` is the effective runtime policy for this attempt, including any
+  // forced prompting override, so guard the operator's relay shape here — before
+  // any consumer reads it — rather than at plugin-config parse time.
+  const nativeHookRelay = resolveCodexNativeHookRelayForApprovalPolicy({
+    requested: options.nativeHookRelay,
+    approvalPolicy: appServer.approvalPolicy,
+  });
   const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
-    configuredEvents: options.nativeHookRelay?.events,
+    configuredEvents: nativeHookRelay?.events,
     appServer,
   });
   const mutable = { startupBinding, pluginAppServer: appServer };
@@ -449,6 +459,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     effectiveCwd,
     appServer,
     approvalPolicyPromotedForOpenClawToolPolicy,
+    nativeHookRelay,
     nativeHookRelayEvents,
     runAbortController,
     terminalState,
