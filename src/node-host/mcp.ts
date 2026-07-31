@@ -275,10 +275,10 @@ async function listAllTools(
     maxItems: NODE_MCP_MAX_LISTED_TOOLS,
     maxBytes: NODE_MCP_MAX_CATALOG_BYTES,
     signal,
-    loadPage: async ({ cursor, timeoutMs: remainingTimeoutMs, signal: requestSignal }) => {
+    loadPage: async ({ cursor, requestTimeoutMs, signal: requestSignal }) => {
       const page = await client.listTools(cursor === undefined ? undefined : { cursor }, {
-        timeout: remainingTimeoutMs,
-        maxTotalTimeout: remainingTimeoutMs,
+        timeout: requestTimeoutMs,
+        maxTotalTimeout: requestTimeoutMs,
         signal: requestSignal,
       });
       return { items: page.tools, nextCursor: page.nextCursor, serializedValue: page };

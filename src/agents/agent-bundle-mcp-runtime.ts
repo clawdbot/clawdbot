@@ -183,10 +183,10 @@ async function listAllTools(client: Client, timeoutMs: number, signal: AbortSign
     maxItems: BUNDLE_MCP_MAX_LIST_ITEMS,
     maxBytes: BUNDLE_MCP_MAX_LIST_BYTES,
     signal,
-    loadPage: async ({ cursor, timeoutMs: remainingTimeoutMs, signal: requestSignal }) => {
+    loadPage: async ({ cursor, requestTimeoutMs, signal: requestSignal }) => {
       const page = await client.listTools(cursor === undefined ? undefined : { cursor }, {
-        timeout: remainingTimeoutMs,
-        maxTotalTimeout: remainingTimeoutMs,
+        timeout: requestTimeoutMs,
+        maxTotalTimeout: requestTimeoutMs,
         signal: requestSignal,
       });
       return { items: page.tools, nextCursor: page.nextCursor, serializedValue: page };
@@ -1113,19 +1113,15 @@ export function createSessionMcpRuntime(params: {
             maxItems: BUNDLE_MCP_MAX_LIST_ITEMS,
             maxBytes: BUNDLE_MCP_MAX_LIST_BYTES,
             signal: lifecycleAbortController.signal,
-            loadPage: async ({
-              cursor,
-              timeoutMs: remainingTimeoutMs,
-              signal: paginationSignal,
-            }) => {
+            loadPage: async ({ cursor, requestTimeoutMs, signal: paginationSignal }) => {
               const page = await runMcpRequest(
                 session,
                 async (signal) =>
                   await session.client.listResources(
                     cursor === undefined ? undefined : { cursor },
                     {
-                      timeout: remainingTimeoutMs,
-                      maxTotalTimeout: remainingTimeoutMs,
+                      timeout: requestTimeoutMs,
+                      maxTotalTimeout: requestTimeoutMs,
                       signal,
                     },
                   ),
@@ -1181,13 +1177,13 @@ export function createSessionMcpRuntime(params: {
           maxItems: BUNDLE_MCP_MAX_LIST_ITEMS,
           maxBytes: BUNDLE_MCP_MAX_LIST_BYTES,
           signal: lifecycleAbortController.signal,
-          loadPage: async ({ cursor, timeoutMs: remainingTimeoutMs, signal: paginationSignal }) => {
+          loadPage: async ({ cursor, requestTimeoutMs, signal: paginationSignal }) => {
             const page = await runMcpRequest(
               session,
               async (signal) =>
                 await session.client.listPrompts(cursor === undefined ? undefined : { cursor }, {
-                  timeout: remainingTimeoutMs,
-                  maxTotalTimeout: remainingTimeoutMs,
+                  timeout: requestTimeoutMs,
+                  maxTotalTimeout: requestTimeoutMs,
                   signal,
                 }),
               paginationSignal,

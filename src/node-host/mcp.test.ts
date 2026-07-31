@@ -348,7 +348,7 @@ describe("node host MCP manager", () => {
       const manager = await starting;
 
       expect(slow.listTools).toHaveBeenCalledTimes(2);
-      expect(slow.listTools.mock.calls.map((call) => call[1]?.timeout)).toEqual([50, 20]);
+      expect(slow.listTools.mock.calls.map((call) => call[1]?.timeout)).toEqual([50, 50]);
       expect(slow.close).toHaveBeenCalledOnce();
       expect(warn).toHaveBeenCalledOnce();
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("timed out after 50ms"));

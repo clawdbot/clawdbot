@@ -11,7 +11,11 @@ type McpPaginationPage<T> = {
 
 type McpPaginationRequest = {
   cursor: string | undefined;
-  timeoutMs: number;
+  /**
+   * Full per-request safety budget. The collector signal owns the absolute list deadline,
+   * so nested transport timers cannot replace its canonical timeout error.
+   */
+  requestTimeoutMs: number;
   signal: AbortSignal;
 };
 
@@ -85,12 +89,8 @@ export async function collectMcpPaginatedItems<TInput, TOutput = TInput>(
   try {
     for (let pageNumber = 0; pageNumber < maxPages; pageNumber += 1) {
       assertActive();
-      const remainingTimeoutMs = clampPositiveTimerTimeoutMs(deadlineAtMs - Date.now());
-      if (remainingTimeoutMs === undefined) {
-        throw timeoutError;
-      }
       const page = await Promise.race([
-        params.loadPage({ cursor, timeoutMs: remainingTimeoutMs, signal }),
+        params.loadPage({ cursor, requestTimeoutMs: timeoutMs, signal }),
         aborted,
       ]);
       assertActive();

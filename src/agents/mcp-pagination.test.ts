@@ -86,7 +86,7 @@ describe("collectMcpPaginatedItems", () => {
     ).rejects.toThrow("exceeded 64 bytes");
   });
 
-  it("gives every page only the remaining absolute deadline", async () => {
+  it("keeps the per-request safety budget behind one absolute deadline", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const requestTimeouts: number[] = [];
@@ -96,8 +96,8 @@ describe("collectMcpPaginatedItems", () => {
       itemLabel: "tools",
       ...limits,
       timeoutMs: 50,
-      loadPage: async ({ timeoutMs }) => {
-        requestTimeouts.push(timeoutMs);
+      loadPage: async ({ requestTimeoutMs }) => {
+        requestTimeouts.push(requestTimeoutMs);
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 30);
         });
@@ -109,7 +109,25 @@ describe("collectMcpPaginatedItems", () => {
 
     await vi.advanceTimersByTimeAsync(50);
     await rejected;
-    expect(requestTimeouts).toEqual([50, 20]);
+    expect(requestTimeouts).toEqual([50, 50]);
+  });
+
+  it("reports the collector deadline before a nested request timeout", async () => {
+    vi.useFakeTimers();
+    const listing = collectMcpPaginatedItems({
+      label: "MCP resource listing",
+      itemLabel: "resources",
+      ...limits,
+      timeoutMs: 50,
+      loadPage: async ({ requestTimeoutMs }) =>
+        await new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("nested request timed out")), requestTimeoutMs);
+        }),
+    });
+    const rejected = expect(listing).rejects.toThrow("MCP resource listing timed out after 50ms");
+
+    await vi.advanceTimersByTimeAsync(50);
+    await rejected;
   });
 
   it("rejects a final page when synchronous processing crosses the deadline", async () => {
