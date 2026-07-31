@@ -96,6 +96,10 @@ class SkillsPage extends OpenClawLightDomElement {
   @state() skillCardLoadingKey: string | null = null;
   @state() skillCardErrors: Record<string, string> = {};
 
+  get runtimeConfig(): ApplicationContext["runtimeConfig"] {
+    return this.context.runtimeConfig;
+  }
+
   private clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
   private routeDataInitialized = false;
   private routeDataEnabled = true;
