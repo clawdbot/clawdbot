@@ -13,6 +13,7 @@ function formatModeChoices(modes: readonly string[]): string {
 
 type GatewayRunCommandHooks = {
   beforeRun?: (opts: Pick<GatewayRunOpts, "force" | "reset">) => Promise<void> | void;
+  loadRuntime?: () => Promise<Pick<typeof import("./run.js"), "runGatewayCommand">>;
 };
 
 export function addGatewayRunCommand(cmd: Command, hooks: GatewayRunCommandHooks = {}): Command {
@@ -69,7 +70,7 @@ export function addGatewayRunCommand(cmd: Command, hooks: GatewayRunCommandHooks
     .action(async (opts, command) => {
       const resolved = resolveGatewayRunOptions(opts, command);
       await hooks.beforeRun?.(resolved);
-      const { runGatewayCommand } = await import("./run.js");
+      const { runGatewayCommand } = await (hooks.loadRuntime?.() ?? import("./run.js"));
       await runGatewayCommand(resolved, getGatewayRunRuntimeHooks());
     });
 }

@@ -127,6 +127,7 @@ const resolveControlUiLinksMock = vi.hoisted(() =>
 const commanderParseAsyncMock = vi.hoisted(() => vi.fn(async () => {}));
 type GatewayRunCommandHooks = {
   beforeRun?: (opts: { reset?: boolean }) => Promise<void>;
+  loadRuntime?: () => Promise<Pick<typeof import("./gateway-cli/run.js"), "runGatewayCommand">>;
 };
 type CliExecutionBootstrapOptions = {
   beforeStateMigrations?: (snapshot?: ConfigSnapshotStub) => Promise<boolean>;
@@ -647,6 +648,16 @@ describe("runCli exit behavior", () => {
       "gateway",
       "--force",
     ]);
+  });
+
+  it("shares one prepared gateway runtime across both foreground command forms", async () => {
+    await runCli(["node", "openclaw", "gateway", "--force"]);
+
+    const rootHooks = addGatewayRunCommandMock.mock.calls[0]?.[1];
+    const runHooks = addGatewayRunCommandMock.mock.calls[1]?.[1];
+    expect(rootHooks?.loadRuntime).toEqual(expect.any(Function));
+    expect(runHooks?.loadRuntime).toEqual(expect.any(Function));
+    expect(await rootHooks?.loadRuntime?.()).toBe(await runHooks?.loadRuntime?.());
   });
 
   it("installs console capture before parsing the gateway foreground fast path", async () => {

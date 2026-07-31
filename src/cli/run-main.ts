@@ -158,6 +158,7 @@ function isGatewayRunInvocationArgv(argv: string[]): boolean {
 async function tryRunGatewayRunFastPath(
   argv: string[],
   startupTrace: ReturnType<typeof createGatewayStartupTrace>,
+  preparedRuntime?: Promise<Pick<typeof import("./gateway-cli/run.js"), "runGatewayCommand">>,
 ): Promise<boolean> {
   if (!isGatewayRunFastPathArgv(argv)) {
     return false;
@@ -242,11 +243,17 @@ async function tryRunGatewayRunFastPath(
   };
   const gateway = addGatewayRunCommand(
     program.command("gateway").description("Run, inspect, and query the WebSocket Gateway"),
-    { beforeRun },
+    {
+      beforeRun,
+      ...(preparedRuntime ? { loadRuntime: () => preparedRuntime } : {}),
+    },
   );
   addGatewayRunCommand(
     gateway.command("run").description("Run the WebSocket Gateway (foreground)"),
-    { beforeRun },
+    {
+      beforeRun,
+      ...(preparedRuntime ? { loadRuntime: () => preparedRuntime } : {}),
+    },
   );
   try {
     await startupTrace.measure("gateway-run-parse", () => program.parseAsync(argv));
@@ -1275,6 +1282,12 @@ async function runCliWithPreparedOutputMode(
       refreshManagedProxy: replaceStartedProxy,
     });
   }
+  const preparedGatewayRunRuntime = isGatewayRunFastPathArgv(normalizedArgv)
+    ? startupTrace.measure("gateway-run-runtime-import", () => import("./gateway-cli/run.js"))
+    : undefined;
+  // Gateway runtime modules can observe selected paths and env at import time. Prepare exactly one
+  // import after selection so mandatory preflight can overlap the same cold graph it will consume.
+  void preparedGatewayRunRuntime?.catch(() => {});
 
   try {
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
@@ -1399,7 +1412,7 @@ async function runCliWithPreparedOutputMode(
       shouldUseCliEnvProxy && shouldBootstrapCliProxyBeforeFastPath();
     if (
       !bootstrapProxyBeforeFastPath &&
-      (await tryRunGatewayRunFastPath(normalizedArgv, startupTrace))
+      (await tryRunGatewayRunFastPath(normalizedArgv, startupTrace, preparedGatewayRunRuntime))
     ) {
       return;
     }
@@ -1412,7 +1425,7 @@ async function runCliWithPreparedOutputMode(
 
     if (
       bootstrapProxyBeforeFastPath &&
-      (await tryRunGatewayRunFastPath(normalizedArgv, startupTrace))
+      (await tryRunGatewayRunFastPath(normalizedArgv, startupTrace, preparedGatewayRunRuntime))
     ) {
       return;
     }
