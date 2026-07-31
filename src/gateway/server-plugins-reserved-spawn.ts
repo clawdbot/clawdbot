@@ -37,12 +37,58 @@ type ReservedSubagentCleanupHolder = {
   release: () => void;
 };
 
+type ReservedSubagentRequesterAdmissionSlot = {
+  runId: string;
+};
+
+type ReservedSubagentRequesterAdmissionSlots = Map<
+  string,
+  Set<ReservedSubagentRequesterAdmissionSlot>
+>;
+
 const RESERVED_SUBAGENT_IDENTITY_CLAIMS_KEY: unique symbol = Symbol.for(
   "openclaw.pluginRuntime.reservedSubagentIdentityClaims",
 );
 const RESERVED_SUBAGENT_CLEANUP_HOLDERS_KEY: unique symbol = Symbol.for(
   "openclaw.pluginRuntime.reservedSubagentCleanupHolders",
 );
+const RESERVED_SUBAGENT_REQUESTER_ADMISSION_SLOTS_KEY: unique symbol = Symbol.for(
+  "openclaw.pluginRuntime.reservedSubagentRequesterAdmissionSlots",
+);
+
+function claimReservedSubagentRequesterAdmissionSlot(params: {
+  requesterSessionKey: string;
+  runId: string;
+}): {
+  additionalActiveChildren: number;
+  release: () => void;
+} {
+  const slots = resolveGlobalSingleton<ReservedSubagentRequesterAdmissionSlots>(
+    RESERVED_SUBAGENT_REQUESTER_ADMISSION_SLOTS_KEY,
+    () => new Map(),
+  );
+  const requesterSlots = slots.get(params.requesterSessionKey) ?? new Set();
+  slots.set(params.requesterSessionKey, requesterSlots);
+  const additionalActiveChildren = Array.from(requesterSlots).filter(
+    (slot) => !hasSubagentRunIdentity(slot.runId),
+  ).length;
+  const slot: ReservedSubagentRequesterAdmissionSlot = { runId: params.runId };
+  requesterSlots.add(slot);
+  let released = false;
+  return {
+    additionalActiveChildren,
+    release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      requesterSlots.delete(slot);
+      if (requesterSlots.size === 0) {
+        slots.delete(params.requesterSessionKey);
+      }
+    },
+  };
+}
 
 function reservedSubagentCleanupHolderKey(params: {
   runId: string;
@@ -56,6 +102,7 @@ function retainReservedSubagentCleanupHolder(params: {
   childSessionKey: string;
   releaseGatewayDedupeReservation: () => void;
   releaseIdentityClaim: () => void;
+  releaseRequesterAdmissionSlot: () => void;
 }): void {
   const holders = resolveGlobalSingleton<Map<string, ReservedSubagentCleanupHolder>>(
     RESERVED_SUBAGENT_CLEANUP_HOLDERS_KEY,
@@ -79,6 +126,7 @@ function retainReservedSubagentCleanupHolder(params: {
         clearTimeout(holder.timer);
       }
       holders.delete(key);
+      params.releaseRequesterAdmissionSlot();
       params.releaseGatewayDedupeReservation();
       params.releaseIdentityClaim();
     },
@@ -394,6 +442,7 @@ async function spawnReservedSubagentWithRequesterAdmission(params: {
       : {}),
   });
   let releaseGatewayDedupeReservation = () => {};
+  let releaseRequesterAdmissionSlot = () => {};
   let releaseClaimsOnReturn = true;
   try {
     assertReservedSubagentIdentitiesAvailable({
@@ -408,6 +457,13 @@ async function spawnReservedSubagentWithRequesterAdmission(params: {
       claimToken: identityClaim.claimToken,
     });
     const { spawnSubagentDirect } = await import("../agents/subagent-spawn.js");
+    // Count earlier in-flight reservations before the synchronous core admission check.
+    // Registration replaces this slot in the canonical active-child count on success.
+    const requesterAdmissionSlot = claimReservedSubagentRequesterAdmissionSlot({
+      requesterSessionKey: params.requesterSessionKey,
+      runId: params.runId,
+    });
+    releaseRequesterAdmissionSlot = requesterAdmissionSlot.release;
     const result = await spawnSubagentDirect(
       {
         task: params.task,
@@ -432,6 +488,7 @@ async function spawnReservedSubagentWithRequesterAdmission(params: {
         pluginOwnerId: params.pluginId,
         requesterSessionId: params.requesterSessionId,
         reservedSubagentClaimToken: identityClaim.claimToken,
+        reservedSubagentAdditionalActiveChildren: requesterAdmissionSlot.additionalActiveChildren,
       },
     );
     if (result.status !== "accepted") {
@@ -441,6 +498,7 @@ async function spawnReservedSubagentWithRequesterAdmission(params: {
           childSessionKey: params.childSessionKey,
           releaseGatewayDedupeReservation,
           releaseIdentityClaim: identityClaim.release,
+          releaseRequesterAdmissionSlot,
         });
         releaseClaimsOnReturn = false;
       }
@@ -456,6 +514,7 @@ async function spawnReservedSubagentWithRequesterAdmission(params: {
     };
   } finally {
     if (releaseClaimsOnReturn) {
+      releaseRequesterAdmissionSlot();
       releaseGatewayDedupeReservation();
       identityClaim.release();
     }

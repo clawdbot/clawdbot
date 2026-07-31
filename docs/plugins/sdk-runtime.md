@@ -368,8 +368,8 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     const accepted = await api.runtime.subagent.spawnReserved({
       requesterSessionKey,
-      targetAgentId: "researcher",
-      childSessionKey: "agent:researcher:subagent:lease-01j...",
+      targetAgentId: "main",
+      childSessionKey: "agent:main:subagent:lease-01j...",
       runId: "run-01j...",
       task: "Collect the evidence attached to this lease.",
       cleanup: "keep",

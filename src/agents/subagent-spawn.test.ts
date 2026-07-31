@@ -344,6 +344,43 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
 
+  it("counts earlier in-flight reserved spawns against maxChildrenPerAgent", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { allowAgents: ["worker"], maxChildrenPerAgent: 1 },
+        },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "respect the pending reserved child",
+        agentId: "worker",
+        expectsCompletionMessage: false,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        authorizedTargetAgentId: "worker",
+        preallocatedChildSessionKey: "agent:worker:subagent:reserved-cap-child",
+        preallocatedRunId: "reserved-cap-run",
+        pluginOwnerId: "agentic-os",
+        reservedSubagentClaimToken: "reserved-cap-claim",
+        reservedSubagentAdditionalActiveChildren: 1,
+      },
+    );
+
+    expect(result.status).toBe("forbidden");
+    expect(result.error).toContain("max active children");
+    expect(gatewayRequestRecords()).toEqual([]);
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
   it("allows omitted agentId to default to requester even when allowAgents excludes requester", async () => {
     hoisted.configOverride = createConfigOverride({
       agents: {

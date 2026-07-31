@@ -204,6 +204,7 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
         pluginOwnerId: "agentic-os",
         requesterSessionId: "requester-session",
         reservedSubagentClaimToken: expect.any(String),
+        reservedSubagentAdditionalActiveChildren: 0,
       },
     );
     expect(dedupe.has(`agent:${reservation.runId}`)).toBe(false);
@@ -288,6 +289,66 @@ describe("createGatewaySubagentRuntime.spawnReserved", () => {
       "already claimed",
     );
     expect(spawnSubagentDirect).toHaveBeenCalledTimes(1);
+
+    resolveFirst?.({
+      status: "accepted",
+      childSessionKey: reservation.childSessionKey,
+      runId: reservation.runId,
+      mode: "run",
+    });
+    await expect(first).resolves.toMatchObject({
+      childSessionKey: reservation.childSessionKey,
+      runId: reservation.runId,
+    });
+  });
+
+  it("counts earlier concurrent reserved spawns against the requester child cap", async () => {
+    let resolveFirst:
+      | ((value: {
+          status: "accepted";
+          childSessionKey: string;
+          runId: string;
+          mode: "run";
+        }) => void)
+      | undefined;
+    const secondReservation = {
+      ...reservation,
+      childSessionKey: "agent:worker:subagent:plugin-reserved-concurrent-child-2",
+      runId: "plugin-reserved-concurrent-run-2",
+    };
+    spawnSubagentDirect
+      .mockImplementationOnce(
+        async (
+          _params: unknown,
+          context: { reservedSubagentAdditionalActiveChildren?: number },
+        ) => {
+          expect(context.reservedSubagentAdditionalActiveChildren).toBe(0);
+          return await new Promise((resolve) => {
+            resolveFirst = resolve;
+          });
+        },
+      )
+      .mockImplementationOnce(
+        async (
+          _params: unknown,
+          context: { reservedSubagentAdditionalActiveChildren?: number },
+        ) => {
+          expect(context.reservedSubagentAdditionalActiveChildren).toBe(1);
+          return {
+            status: "forbidden",
+            error:
+              "sessions_spawn has reached max active children for this session (1/1; agents.defaults.subagents.maxChildrenPerAgent).",
+          };
+        },
+      );
+    const runtime = createGatewaySubagentRuntime();
+    const first = withReservedPluginScope(() => runtime.spawnReserved(reservation));
+    await vi.waitFor(() => expect(spawnSubagentDirect).toHaveBeenCalledTimes(1));
+
+    await expect(
+      withReservedPluginScope(() => runtime.spawnReserved(secondReservation)),
+    ).rejects.toThrow("max active children");
+    expect(spawnSubagentDirect).toHaveBeenCalledTimes(2);
 
     resolveFirst?.({
       status: "accepted",

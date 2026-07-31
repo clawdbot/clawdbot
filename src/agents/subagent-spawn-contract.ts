@@ -67,6 +67,8 @@ export type SpawnSubagentContext = {
   requesterSessionId?: string;
   /** Process-local token binding a reserved run to its Gateway dedupe reservation. */
   reservedSubagentClaimToken?: string;
+  /** Earlier in-flight reserved children already consuming this requester's child cap. */
+  reservedSubagentAdditionalActiveChildren?: number;
   /** Explicit workspace directory for subagent to inherit (optional). */
   workspaceDir?: string;
   inheritedToolAllowlist?: string[];

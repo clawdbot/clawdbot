@@ -210,12 +210,14 @@ export function resolveSubagentSpawnRequest(
   const preallocatedRunId = normalizeOptionalString(ctx.preallocatedRunId);
   const pluginOwnerId = normalizeOptionalString(ctx.pluginOwnerId);
   const reservedSubagentClaimToken = normalizeOptionalString(ctx.reservedSubagentClaimToken);
+  const reservedSubagentAdditionalActiveChildren = ctx.reservedSubagentAdditionalActiveChildren;
   const hasReservedSpawnField = Boolean(
     authorizedTargetAgentId ||
     preallocatedChildSessionKey ||
     preallocatedRunId ||
     pluginOwnerId ||
-    reservedSubagentClaimToken,
+    reservedSubagentClaimToken ||
+    reservedSubagentAdditionalActiveChildren !== undefined,
   );
   if (
     hasReservedSpawnField &&
@@ -228,6 +230,16 @@ export function resolveSubagentSpawnRequest(
     return rejectSubagentSpawnRequest(
       "error",
       "reserved subagent spawn requires target, child, run, plugin owner, and Gateway claim identities",
+    );
+  }
+  if (
+    reservedSubagentAdditionalActiveChildren !== undefined &&
+    (!Number.isSafeInteger(reservedSubagentAdditionalActiveChildren) ||
+      reservedSubagentAdditionalActiveChildren < 0)
+  ) {
+    return rejectSubagentSpawnRequest(
+      "error",
+      "reserved subagent additional active children must be a non-negative safe integer",
     );
   }
   if (authorizedTargetAgentId) {
@@ -295,6 +307,9 @@ export function resolveSubagentSpawnRequest(
       requestedAgentId: effectiveRequestedAgentId,
       configuredAgentIds,
       authorizedTargetAgentId,
+      ...(reservedSubagentAdditionalActiveChildren !== undefined
+        ? { additionalActiveChildren: reservedSubagentAdditionalActiveChildren }
+        : {}),
     });
   };
   const admission = resolveAdmission();
