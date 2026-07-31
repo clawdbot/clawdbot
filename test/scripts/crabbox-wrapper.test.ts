@@ -1165,6 +1165,35 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("provider=azure requires a configured managed Crabbox broker");
   });
 
+  it.each(["aws", "azure", "daytona"])(
+    "does not let direct overrides weaken implicit managed %s config",
+    (provider) => {
+      const result = runWrapper(
+        "provider: aws, azure, blacksmith-testbox, or daytona\n",
+        ["run", "--", "echo ok"],
+        {
+          configJson: {
+            provider,
+            coordinator: "configured-broker",
+            brokerMode: "managed",
+            brokerAuth: "missing",
+          },
+          env: {
+            OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0",
+            OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
+            OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS: "1",
+          },
+        },
+      );
+
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(
+        `provider=${provider} requires a configured managed Crabbox broker`,
+      );
+    },
+  );
+
   it("still validates workloads when a provider is explicit", () => {
     const result = runWrapper("provider: aws, azure, blacksmith-testbox, or daytona\n", [
       "run",

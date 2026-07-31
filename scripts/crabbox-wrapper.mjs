@@ -922,10 +922,10 @@ function shouldRequireBrokeredCloud(commandArgs, providerName) {
   if (requestedWorkload(commandArgs)) {
     return true;
   }
-  if (directCloudOverrideEnabled(providerName)) {
+  const explicitProvider = Boolean(commandProvider(commandArgs) || envProvider());
+  if (explicitProvider && directCloudOverrideEnabled(providerName)) {
     return false;
   }
-  const explicitProvider = Boolean(commandProvider(commandArgs) || envProvider());
   if (commandArgs[0] === "run" || commandArgs[0] === "warmup") {
     // Workload routing never consumes local cloud credentials. Keep the
     // shipped direct Azure/Daytona path only for commands outside that policy.
