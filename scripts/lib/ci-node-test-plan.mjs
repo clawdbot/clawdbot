@@ -39,38 +39,17 @@ const GATEWAY_STARTUP_HEALTH_RUNTIME_ENV = {
 const AGENTS_EMBEDDED_AGENT_ENV = {
   OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000",
 };
-const COMPACT_GROUP_SPLITS = new Map([
-  [
-    "agentic-agents-embedded",
-    [
-      {
-        config: agentVitestProjectOwners.embedded.config,
-        shardName: "agentic-agents-embedded-base",
-      },
-      {
-        config: agentVitestProjectOwners.embeddedIncompleteTurn.config,
-        shardName: "agentic-agents-embedded-incomplete-turn",
-      },
-      {
-        config: agentVitestProjectOwners.embeddedOverflowCompaction.config,
-        shardName: "agentic-agents-embedded-overflow-compaction",
-      },
-      {
-        config: agentVitestProjectOwners.embeddedRun.config,
-        shardName: "agentic-agents-embedded-run",
-      },
-    ],
-  ],
-]);
+const COMPACT_EMBEDDED_GROUP_NAMES = [
+  "agentic-agents-embedded-base",
+  "agentic-agents-embedded-incomplete-turn",
+  "agentic-agents-embedded-overflow-compaction",
+  "agentic-agents-embedded-run",
+];
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // PR-only bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
-// The group hints below are loaded-fleet CI walls, so the cap is the real per-bin
-// test budget: 235s packs both runner classes into the same job count as before
-// (6 large + 15 small) while the measured ~60s median job setup keeps the slowest
-// bin near the 5-minute PR wall-clock budget. 220 with honest hints adds a job to
-// each pool for no ceiling win.
-// 190s cap: forbids pairings like core-runtime-media-ui (124) +
+// The group hints below are loaded-fleet CI walls. The 190s cap forbids
+// pairings like core-runtime-media-ui (124) +
 // core-unit-src-security (95) that produced a 195s real-wall straggler bin
 // while the pack sat at ~160s; ~3 extra bins buy ~30-40s of run wall.
 const COMPACT_NODE_TEST_JOB_SECONDS = 190;
@@ -105,9 +84,9 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map([
   ["agentic-agents-core-runtime", 79],
   ["agentic-agents-core-subagents", 32],
   ["agentic-agents-core-tools", 52],
-  // Keep the composite hint for the baseline registration count. Compact
-  // packing then splits its independent configs and redistributes them across
-  // those existing jobs. Split hints are medians from four recent 2-core runs
+  // The composite hint sets the existing job count before its independent
+  // configs are striped across those jobs. Split hints are medians from four
+  // recent 2-core runs
   // (30532132189, 30532967046, 30534273298, 30536274496).
   ["agentic-agents-embedded", 430],
   ["agentic-agents-embedded-base", 363],
@@ -265,26 +244,19 @@ function estimateCompactGroupSeconds(group) {
 }
 
 function expandCompactGroup(group) {
-  const splits = COMPACT_GROUP_SPLITS.get(group.shard_name);
-  if (!splits) {
+  if (group.shard_name !== "agentic-agents-embedded") {
     return [group];
   }
-
-  const actualConfigs = group.configs.toSorted((a, b) => a.localeCompare(b));
-  const splitConfigs = splits.map((split) => split.config).toSorted((a, b) => a.localeCompare(b));
-  if (
-    actualConfigs.length !== splitConfigs.length ||
-    actualConfigs.some((config, index) => config !== splitConfigs[index])
-  ) {
-    throw new Error(`compact split for ${group.shard_name} does not cover its configs exactly`);
+  if (group.configs.length !== COMPACT_EMBEDDED_GROUP_NAMES.length) {
+    throw new Error("embedded compact group names must cover every config");
   }
 
   const expandedGroups = [];
-  for (const split of splits) {
+  for (const [index, config] of group.configs.entries()) {
     expandedGroups.push({
       ...group,
-      configs: [split.config],
-      shard_name: split.shardName,
+      configs: [config],
+      shard_name: COMPACT_EMBEDDED_GROUP_NAMES[index],
     });
   }
   return expandedGroups;
@@ -1389,14 +1361,14 @@ function stripeFileWeight(file) {
   return STRIPE_FILE_SECONDS_HINTS.get(file) ?? DEFAULT_STRIPE_FILE_SECONDS;
 }
 
-// Deterministic cost-aware striping (greedy LPT): heaviest files first, each
-// into the currently lightest batch. Round-robin by discovery order packed one
-// whale next to another and left sibling stripes ~10x lighter.
-function createStripedBatches(values, batchCount) {
+// Deterministic cost-aware batching (greedy LPT): heaviest values first, each
+// into the currently lightest batch. Round-robin by discovery order can pack
+// one whale next to another and leave sibling batches much lighter.
+function createStripedBatches(values, batchCount, weightForValue = stripeFileWeight) {
   const entries = values.map((value, index) => ({
     index,
     value,
-    weight: stripeFileWeight(value),
+    weight: weightForValue(value),
   }));
   entries.sort((a, b) => b.weight - a.weight || a.index - b.index);
   const batches = Array.from({ length: batchCount }, () => ({ totalWeight: 0, entries: [] }));
@@ -1410,7 +1382,7 @@ function createStripedBatches(values, batchCount) {
     target.totalWeight += entry.weight;
     target.entries.push(entry);
   }
-  // Keep discovery order inside each stripe so include lists stay stable.
+  // Keep discovery order inside each batch so include lists stay stable.
   return batches.map((batch) =>
     batch.entries.toSorted((a, b) => a.index - b.index).map((entry) => entry.value),
   );
@@ -1533,86 +1505,6 @@ export function assignVitestFsCacheWriter(shards) {
   }));
 }
 
-function packCompactGroupsWithinSecondsCap(groups) {
-  const bins = [];
-  const sortedGroups = groups.toSorted(
-    (a, b) =>
-      estimateCompactGroupSeconds(b) - estimateCompactGroupSeconds(a) ||
-      a.shard_name.localeCompare(b.shard_name),
-  );
-  for (const group of sortedGroups) {
-    const weight = estimateCompactGroupSeconds(group);
-    const exclusive = isExclusiveCompactGroup(group);
-    const secondsCap = exclusive ? COMPACT_EXCLUSIVE_JOB_SECONDS : COMPACT_NODE_TEST_JOB_SECONDS;
-    const bin = bins.find(
-      (candidate) =>
-        candidate.exclusive === exclusive &&
-        candidate.groups.length < COMPACT_NODE_TEST_JOB_GROUPS &&
-        candidate.weight + weight <= secondsCap,
-    );
-    if (bin) {
-      bin.groups.push(group);
-      bin.weight += weight;
-      bin.hasWholeConfigGroup ||= !group.includePatterns;
-    } else {
-      bins.push({
-        exclusive,
-        groups: [group],
-        hasWholeConfigGroup: !group.includePatterns,
-        weight,
-      });
-    }
-  }
-  return bins;
-}
-
-function repackCompactGroupsIntoExistingBins(groups, baselineBins) {
-  const bins = [];
-  for (const exclusive of [false, true]) {
-    const classGroups = groups.filter((group) => isExclusiveCompactGroup(group) === exclusive);
-    if (classGroups.length === 0) {
-      continue;
-    }
-
-    const binCount = baselineBins.filter((bin) => bin.exclusive === exclusive).length;
-    if (binCount === 0 || classGroups.length > binCount * COMPACT_NODE_TEST_JOB_GROUPS) {
-      throw new Error(
-        `compact split cannot fit into existing ${exclusive ? "exclusive" : "regular"} bins`,
-      );
-    }
-
-    const classBins = Array.from({ length: binCount }, (_, index) => ({
-      exclusive,
-      groups: [],
-      hasWholeConfigGroup: false,
-      index,
-      weight: 0,
-    }));
-    const sortedGroups = classGroups.toSorted(
-      (a, b) =>
-        estimateCompactGroupSeconds(b) - estimateCompactGroupSeconds(a) ||
-        a.shard_name.localeCompare(b.shard_name),
-    );
-    for (const group of sortedGroups) {
-      const weight = estimateCompactGroupSeconds(group);
-      const bin = classBins
-        .filter((candidate) => candidate.groups.length < COMPACT_NODE_TEST_JOB_GROUPS)
-        .toSorted((a, b) => a.weight - b.weight || a.index - b.index)[0];
-      if (!bin) {
-        throw new Error("compact split exhausted existing bin capacity");
-      }
-      bin.groups.push(group);
-      bin.weight += weight;
-      bin.hasWholeConfigGroup ||= !group.includePatterns;
-    }
-    if (classBins.some((bin) => bin.groups.length === 0)) {
-      throw new Error("compact split left an existing bin empty");
-    }
-    bins.push(...classBins);
-  }
-  return bins;
-}
-
 function createCompactNodeTestShardBundles(options = {}) {
   const shards = createNodeTestShards(options);
   const groupsByRunner = new Map();
@@ -1635,15 +1527,60 @@ function createCompactNodeTestShardBundles(options = {}) {
 
   const compactJobs = [];
   for (const groups of groupsByRunner.values()) {
-    // The seconds cap chooses the existing registration count. Independent
-    // configs inside a composite whale are then balanced across that fixed
-    // number of jobs, avoiding both a serial straggler and extra fanout.
-    const baselineBins = packCompactGroupsWithinSecondsCap(groups);
+    // First-fit decreasing sets the existing registration count from the
+    // composite groups and their runtime cap.
+    const bins = [];
+    const sortedGroups = groups.toSorted(
+      (a, b) =>
+        estimateCompactGroupSeconds(b) - estimateCompactGroupSeconds(a) ||
+        a.shard_name.localeCompare(b.shard_name),
+    );
+    for (const group of sortedGroups) {
+      const weight = estimateCompactGroupSeconds(group);
+      const exclusive = isExclusiveCompactGroup(group);
+      const secondsCap = exclusive ? COMPACT_EXCLUSIVE_JOB_SECONDS : COMPACT_NODE_TEST_JOB_SECONDS;
+      const bin = bins.find(
+        (candidate) =>
+          candidate.exclusive === exclusive &&
+          candidate.groups.length < COMPACT_NODE_TEST_JOB_GROUPS &&
+          candidate.weight + weight <= secondsCap,
+      );
+      if (bin) {
+        bin.groups.push(group);
+        bin.weight += weight;
+        bin.hasWholeConfigGroup ||= !group.includePatterns;
+      } else {
+        bins.push({
+          exclusive,
+          groups: [group],
+          hasWholeConfigGroup: !group.includePatterns,
+          weight,
+        });
+      }
+    }
+
     const expandedGroups = groups.flatMap(expandCompactGroup);
-    const bins =
-      expandedGroups.length === groups.length
-        ? baselineBins
-        : repackCompactGroupsIntoExistingBins(expandedGroups, baselineBins);
+    if (expandedGroups.length !== groups.length) {
+      const regularGroups = expandedGroups
+        .filter((group) => !isExclusiveCompactGroup(group))
+        .toSorted((a, b) => a.shard_name.localeCompare(b.shard_name));
+      const regularBinCount = bins.filter((bin) => !bin.exclusive).length;
+      const regularBatches = createStripedBatches(
+        regularGroups,
+        regularBinCount,
+        estimateCompactGroupSeconds,
+      );
+      if (regularBatches.some((batch) => batch.length > COMPACT_NODE_TEST_JOB_GROUPS)) {
+        throw new Error("striped compact job exceeds its group capacity");
+      }
+      const regularBins = regularBatches.map((batch) => ({
+        exclusive: false,
+        groups: batch,
+        hasWholeConfigGroup: batch.some((group) => !group.includePatterns),
+      }));
+      const exclusiveBins = bins.filter((bin) => bin.exclusive);
+      bins.splice(0, bins.length, ...regularBins, ...exclusiveBins);
+    }
 
     for (const [index, bin] of bins.entries()) {
       const runnerClass = bin.groups[0].runner.includes("-8vcpu-") ? "large" : "small";
