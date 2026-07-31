@@ -304,6 +304,7 @@
     "!dist/extensions/slack/**",
     "!dist/extensions/sms/**",
     "!dist/extensions/stepfun/**",
+    "!dist/extensions/synthetic/**",
     "!dist/extensions/synology-chat/**",
     "!dist/extensions/tavily/**",
     "!dist/extensions/teams-meetings/**",

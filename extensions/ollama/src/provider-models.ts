@@ -37,6 +37,7 @@ export type OllamaTagsResponse = {
 export type OllamaModelWithContext = OllamaTagModel & {
   contextWindow?: number;
   capabilities?: string[];
+  showInspectionFailed?: boolean;
 };
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
@@ -81,7 +82,13 @@ export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
 export type OllamaModelShowInfo = {
   contextWindow?: number;
   capabilities?: string[];
+  /** Distinguishes a failed request from a successful response that omitted capabilities. */
+  showInspectionFailed?: boolean;
 };
+
+const OLLAMA_FAILED_SHOW_INFO: OllamaModelShowInfo = Object.freeze({
+  showInspectionFailed: true,
+});
 
 type OllamaModelRequestOptions = {
   apiKey?: string;
@@ -227,7 +234,7 @@ export async function queryOllamaModelShowInfo(
     return await readOllamaModelShowInfo(apiBase, modelName, opts);
   } catch {
     throwIfOllamaRequestAborted(opts?.signal);
-    return {};
+    return OLLAMA_FAILED_SHOW_INFO;
   }
 }
 
@@ -279,10 +286,7 @@ export async function enrichOllamaModelsWithContext(
     const batchResults = await Promise.all(
       batch.map(async (model) => {
         const showInfo = await queryOllamaModelShowInfoCached(apiBase, model, opts);
-        return Object.assign({}, model, {
-          contextWindow: showInfo.contextWindow,
-          capabilities: showInfo.capabilities,
-        });
+        return Object.assign({}, model, showInfo);
       }),
     );
     enriched.push(...batchResults);
@@ -343,6 +347,7 @@ export function buildOllamaModelDefinition(
   modelId: string,
   contextWindow?: number,
   capabilities?: string[],
+  opts?: { showInspectionFailed?: boolean },
 ): ModelDefinitionConfig {
   const hasVision = capabilities?.includes("vision") ?? false;
   const input: ("text" | "image")[] = hasVision ? ["text", "image"] : ["text"];
@@ -352,7 +357,8 @@ export function buildOllamaModelDefinition(
       ? isReasoningModelHeuristic(modelId)
       : capabilities.includes("thinking"));
   const compat = {
-    supportsTools: capabilities?.includes("tools") ?? true,
+    supportsTools:
+      opts?.showInspectionFailed === true ? false : (capabilities?.includes("tools") ?? true),
     supportsUsageInStreaming: true,
     supportsJsonSchemaResponseFormat: !isOllamaCloudModel(modelId),
   };
@@ -467,7 +473,9 @@ export async function buildOllamaProvider(
     baseUrl: apiBase,
     api: "ollama",
     models: discovered.map((model) =>
-      buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities),
+      buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities, {
+        showInspectionFailed: model.showInspectionFailed,
+      }),
     ),
   };
 }

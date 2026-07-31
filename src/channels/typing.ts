@@ -97,13 +97,15 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     }
     stopSent = false;
     startGuard.reset();
-    keepaliveLoop.stop();
     clearTtlTimer();
     const startPromise = fireStart();
     void startPromise.then(() => {
       if (closed || startGuard.isTripped()) {
         return;
       }
+      // Core can refresh an active reply independently of this channel loop.
+      // Restarting the interval here shifts its deadline and can outlive a
+      // provider's visible typing window between consecutive renewals.
       keepaliveLoop.start();
       startTtlTimer();
     });

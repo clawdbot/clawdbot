@@ -9,7 +9,7 @@ const PROVIDER_ID = "synthetic";
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Synthetic Provider",
-  description: "Bundled Synthetic provider plugin",
+  description: "Synthetic provider plugin",
   manifest,
   provider: {
     label: "Synthetic",

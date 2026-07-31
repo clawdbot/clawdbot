@@ -79,6 +79,7 @@ async function pullOllamaModelCore(params: {
     clearTimeout(responseTimeout);
     try {
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         return { ok: false, message: `Failed to download ${modelName} (HTTP ${response.status})` };
       }
       if (!response.body) {
@@ -146,7 +147,7 @@ async function pullOllamaModelCore(params: {
       } finally {
         // Overflow and parsed-error returns can leave unread response bytes.
         // Cancel before unlocking so setup never abandons a live pull body.
-        void reader.cancel().catch(() => undefined);
+        await reader.cancel().catch(() => undefined);
         reader.releaseLock();
       }
     } finally {
