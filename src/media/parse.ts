@@ -567,7 +567,7 @@ export function splitMediaFromOutput(
   const keptLines: string[] = [];
 
   let lineOffset = 0; // Track character offset for fence checking
-  for (const line of lines) {
+  for (const [lineIndex, line] of lines.entries()) {
     // Fenced examples must remain text; extracting their MEDIA tokens would mutate transcripts.
     if (fenceSpans.some((span) => lineOffset >= span.start && lineOffset < span.end)) {
       keptLines.push(line);
@@ -588,7 +588,7 @@ export function splitMediaFromOutput(
         foundMediaToken = true;
         if (markdownImageResult.cleanedLine) {
           keptLines.push(markdownImageResult.cleanedLine);
-        } else if (keptLines.at(-1) === "") {
+        } else if (keptLines.at(-1) === "" && lines[lineIndex + 1]?.trim() === "") {
           // The standalone image line is removed below. When it is surrounded
           // by blank lines, discard one preceding separator so the two
           // paragraphs keep a single blank line between them.

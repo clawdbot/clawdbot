@@ -590,4 +590,15 @@ describe("splitMediaFromOutput", () => {
       extractMarkdownImages,
     );
   });
+
+  it("preserves a paragraph separator before a standalone image without a trailing blank line", () => {
+    expectParsedMediaOutputCase(
+      "First paragraph.\n\n![chart](https://example.com/chart.png)\nSecond paragraph.",
+      {
+        text: "First paragraph.\n\nSecond paragraph.",
+        mediaUrls: ["https://example.com/chart.png"],
+      },
+      extractMarkdownImages,
+    );
+  });
 });
