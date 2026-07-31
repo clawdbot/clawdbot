@@ -1836,6 +1836,34 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(reactSlackMessageMock).toHaveBeenCalledOnce();
   });
 
+  it("waits for an in-flight status refresh before clearing the native status", async () => {
+    let resolveRefresh: (() => void) | undefined;
+    const refreshPending = new Promise<void>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const setSlackThreadStatus = vi.fn(
+      async ({ status }: { status: string }) => await (status ? refreshPending : Promise.resolve()),
+    );
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ setSlackThreadStatus }));
+
+    const typing = requireCapturedTyping();
+    const startPromise = typing.start();
+    await vi.waitFor(() => expect(setSlackThreadStatus).toHaveBeenCalledOnce());
+    const stopPromise = typing.stop?.() ?? Promise.resolve();
+    try {
+      expect(setSlackThreadStatus).toHaveBeenCalledOnce();
+    } finally {
+      resolveRefresh?.();
+      await Promise.all([startPromise, stopPromise]);
+    }
+
+    expect(setSlackThreadStatus.mock.calls.map(([call]) => call.status)).toEqual([
+      "is typing...",
+      "",
+    ]);
+  });
+
   it("keeps the typing reaction fallback when native Slack status fails", async () => {
     const statusError = new Error("assistant.threads.setStatus failed: rate_limited");
     const setSlackThreadStatus = vi.fn().mockRejectedValue(statusError);

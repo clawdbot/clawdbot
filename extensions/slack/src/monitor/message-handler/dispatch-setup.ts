@@ -194,6 +194,19 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
   const typingReaction = ctx.typingReaction;
   const typingMaxDurationMs = getSlackRuntime().agent.resolveAgentTimeoutMs({ cfg });
+  let statusUpdateChain = Promise.resolve();
+  const setTypingStatus = (status: string) => {
+    const statusPromise = statusUpdateChain.then(() =>
+      ctx.setSlackThreadStatus({
+        channelId: message.channel,
+        threadTs: statusThreadTs,
+        status,
+        eventScope: prepared.eventScope,
+      }),
+    );
+    statusUpdateChain = statusPromise.catch(() => {});
+    return statusPromise;
+  };
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg,
     agentId: route.agentId,
@@ -208,12 +221,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     typing: {
       start: async () => {
         didSetStatus = true;
-        const statusPromise = ctx.setSlackThreadStatus({
-          channelId: message.channel,
-          threadTs: statusThreadTs,
-          status: "is typing...",
-          eventScope: prepared.eventScope,
-        });
+        const statusPromise = setTypingStatus("is typing...");
         const typingReactionTarget =
           !didAttemptTypingReaction && typingReaction && message.ts
             ? { messageTs: message.ts, emoji: typingReaction }
@@ -244,12 +252,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
           return;
         }
         didSetStatus = false;
-        const statusPromise = ctx.setSlackThreadStatus({
-          channelId: message.channel,
-          threadTs: statusThreadTs,
-          status: "",
-          eventScope: prepared.eventScope,
-        });
+        const statusPromise = setTypingStatus("");
         const reactionPromise =
           typingReaction && message.ts
             ? removeSlackReaction(message.channel, message.ts, typingReaction, {
