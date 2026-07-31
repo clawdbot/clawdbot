@@ -94,6 +94,7 @@ export const MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS = 900;
 export const MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS = 3_000;
 export const MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS = 45_000;
 const MEETING_REALTIME_OUTPUT_MAX_PENDING_MS = 2_000;
+const MEETING_REALTIME_OUTPUT_MAX_WRITE_MS = 500;
 const MEETING_REALTIME_OUTPUT_MAX_PENDING_FRAMES = 256;
 const MEETING_REALTIME_CANCELLATION_RACE_DETAIL = "Cancellation failed: no active response found";
 
@@ -138,6 +139,9 @@ export async function startMeetingRealtimeEngine(params: {
   const outputMaxPendingBytes =
     meetingOutputBytesPerMs(params.config.chrome.audioFormat) *
     MEETING_REALTIME_OUTPUT_MAX_PENDING_MS;
+  const outputMaxWriteBytes =
+    meetingOutputBytesPerMs(params.config.chrome.audioFormat) *
+    MEETING_REALTIME_OUTPUT_MAX_WRITE_MS;
   const realtimeLogScope = params.logPrefix ? `${params.logPrefix} realtime` : "realtime";
 
   const invalidateOutputQueue = () => {
@@ -249,13 +253,31 @@ export async function startMeetingRealtimeEngine(params: {
       pumpOutputQueue();
       return;
     }
+    const batch = [next.audio];
+    let batchBytes = next.audio.byteLength;
+    let batchFrames = 1;
+    while (batchBytes < outputMaxWriteBytes) {
+      const queued = outputQueue[0];
+      if (
+        !queued ||
+        queued.generation !== next.generation ||
+        queued.audio.byteLength > outputMaxWriteBytes - batchBytes
+      ) {
+        break;
+      }
+      outputQueue.shift();
+      batch.push(queued.audio);
+      batchBytes += queued.audio.byteLength;
+      batchFrames += 1;
+    }
+    const audio = batch.length === 1 ? next.audio : Buffer.concat(batch, batchBytes);
     outputWriteActive = true;
     void Promise.resolve()
       .then(async () => {
         if (stopped || next.generation !== outputGeneration) {
           return;
         }
-        await params.transport.writeOutput(next.audio);
+        await params.transport.writeOutput(audio);
       })
       .catch((error: unknown) => {
         if (stopped || next.generation !== outputGeneration) {
@@ -269,8 +291,8 @@ export async function startMeetingRealtimeEngine(params: {
       .finally(() => {
         outputWriteActive = false;
         if (next.generation === outputGeneration) {
-          outputPendingBytes -= next.audio.byteLength;
-          outputPendingFrames -= 1;
+          outputPendingBytes -= batchBytes;
+          outputPendingFrames -= batchFrames;
         }
         if (outputClearAfterActive && !stopped) {
           outputClearAfterActive = false;
