@@ -117,6 +117,25 @@ describe("plugin state keyed store", () => {
     });
   });
 
+  it("shares sync and async state while preserving their error contracts", async () => {
+    await withPluginStateTestState(async () => {
+      const options = { namespace: "shared-sync-async", maxEntries: 10 };
+      const asyncStore = createPluginStateKeyedStore<{ count: number }>("discord", options);
+      const syncStore = createPluginStateSyncKeyedStore<{ count: number }>("discord", options);
+
+      syncStore.register("counter", { count: 1 });
+      await expect(asyncStore.lookup("counter")).resolves.toEqual({ count: 1 });
+
+      await expect(
+        asyncStore.update?.("counter", (current) => ({ count: (current?.count ?? 0) + 1 })),
+      ).resolves.toBe(true);
+      expect(syncStore.lookup("counter")).toEqual({ count: 2 });
+
+      expect(() => syncStore.lookup(" ")).toThrow(PluginStateStoreError);
+      await expect(asyncStore.lookup(" ")).rejects.toThrow(PluginStateStoreError);
+    });
+  });
+
   it("reads a bounded sortable key range without scanning sibling keys", async () => {
     await withPluginStateTestState(async () => {
       const store = createPluginStateSyncKeyedStore<{ count: number }>("memory-core", {
