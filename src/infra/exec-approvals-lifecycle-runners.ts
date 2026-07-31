@@ -120,15 +120,20 @@ function scanPackageSubcommand(
 }
 
 function resolveInlineCommand(argv: readonly string[], start: number): string[] | null {
-  const commandFlag = argv.findIndex(
-    (token, index) => index >= start && ["-c", "--call"].includes(optionName(token)),
-  );
-  if (commandFlag === -1) {
-    return null;
+  for (let commandFlag = start; commandFlag < argv.length; commandFlag += 1) {
+    const token = argv[commandFlag] ?? "";
+    if (token === "--") {
+      break;
+    }
+    if (!["-c", "--call"].includes(optionName(token))) {
+      continue;
+    }
+    const command = token.includes("=")
+      ? token.slice(token.indexOf("=") + 1)
+      : argv[commandFlag + 1];
+    return command ? ["sh", "-c", command] : [];
   }
-  const flag = argv[commandFlag] ?? "";
-  const command = flag.includes("=") ? flag.slice(flag.indexOf("=") + 1) : argv[commandFlag + 1];
-  return command ? ["sh", "-c", command] : [];
+  return null;
 }
 
 function packageTarget(argv: readonly string[], start: number): string[] | null {

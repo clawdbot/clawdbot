@@ -31,6 +31,24 @@ const START_PROCESS_OPTIONS_WITH_VALUE = new Set([
   "-windowstyle",
   "-workingdirectory",
 ]);
+const POWERSHELL_COMMON_OPTIONS_WITH_VALUE = new Set([
+  "-erroraction",
+  "-errorvariable",
+  "-informationaction",
+  "-informationvariable",
+  "-outbuffer",
+  "-outvariable",
+  "-pipelinevariable",
+  "-progressaction",
+  "-warningaction",
+  "-warningvariable",
+]);
+const POWERSHELL_SOURCE_SELECTOR_OPTIONS = new Set([
+  "-displayname",
+  "-id",
+  "-inputobject",
+  "-name",
+]);
 
 function optionName(token: string): string {
   return token.trim().toLowerCase().split(/[=:]/u, 1)[0] ?? "";
@@ -97,16 +115,45 @@ function looksLikeOpenClawSelector(token: string, allowUnresolved: boolean): boo
     .replaceAll("^", "")
     .replace(/\[([a-z0-9])\]/giu, "$1")
     .replace(/["']/gu, "");
-  return (
-    matchesOpenClawProcessNamePattern(normalized) ||
-    (allowUnresolved && /\$env:[A-Za-z_][A-Za-z0-9_]*/iu.test(token))
-  );
+  if (allowUnresolved && /\$env:[A-Za-z_][A-Za-z0-9_]*/iu.test(token)) {
+    return true;
+  }
+  if (
+    /^[(){}]$/u.test(normalized) ||
+    /^\$_?\./u.test(normalized) ||
+    /^-[a-z]+$/u.test(normalized) ||
+    ["displayname", "name", "processname"].includes(normalized)
+  ) {
+    return false;
+  }
+  return matchesOpenClawProcessNamePattern(normalized);
 }
 
 function isPowerShellProcessOrServiceSource(argv: readonly string[]): boolean {
   return ["get-process", "get-service", "gps", "gsv", "ps"].includes(
     normalizeExecutableToken(argv[0] ?? ""),
   );
+}
+
+function isUnfilteredPowerShellProcessOrServiceSource(argv: readonly string[]): boolean {
+  if (!isPowerShellProcessOrServiceSource(argv)) {
+    return false;
+  }
+  for (let index = 1; index < argv.length; index += 1) {
+    const token = argv[index]?.trim() ?? "";
+    const name = optionName(token);
+    if (POWERSHELL_SOURCE_SELECTOR_OPTIONS.has(name)) {
+      return false;
+    }
+    if (POWERSHELL_COMMON_OPTIONS_WITH_VALUE.has(name) && !token.includes(":")) {
+      index += 1;
+      continue;
+    }
+    if (!token.startsWith("-")) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function isPowerShellSelection(argv: readonly string[], allowUnresolved: boolean): boolean {
@@ -120,6 +167,20 @@ function isPowerShellOpenClawFilter(argv: readonly string[], allowUnresolved: bo
   return (
     ["?", "where", "where-object"].includes(normalizeExecutableToken(argv[0] ?? "")) &&
     argv.slice(1).some((token) => looksLikeOpenClawSelector(token, allowUnresolved))
+  );
+}
+
+function isPowerShellIdentityFilter(argv: readonly string[]): boolean {
+  return (
+    ["?", "where", "where-object"].includes(normalizeExecutableToken(argv[0] ?? "")) &&
+    argv.slice(1).some((token) =>
+      ["displayname", "name", "processname"].includes(
+        token
+          .trim()
+          .toLowerCase()
+          .replace(/^\$_?\./u, ""),
+      ),
+    )
   );
 }
 
@@ -166,10 +227,11 @@ export function commandHasPowerShellLifecyclePipeline(
     }
     if (isPowerShellProcessOrServiceSource(argv)) {
       processOrServiceSource = true;
+      selectedOpenClaw ||= isUnfilteredPowerShellProcessOrServiceSource(argv);
       continue;
     }
-    if (processOrServiceSource && isPowerShellOpenClawFilter(argv, allowUnresolved)) {
-      selectedOpenClaw = true;
+    if (processOrServiceSource && isPowerShellIdentityFilter(argv)) {
+      selectedOpenClaw = isPowerShellOpenClawFilter(argv, allowUnresolved);
       continue;
     }
     if (selectedOpenClaw && isPowerShellPipelineMutation(argv)) {

@@ -25,6 +25,7 @@ const GATEWAY_READ_ONLY = new Set([
   "diagnostics",
   "discover",
   "health",
+  "logs",
   "probe",
   "stability",
   "status",

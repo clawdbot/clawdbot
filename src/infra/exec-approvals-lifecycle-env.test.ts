@@ -339,6 +339,22 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
       segments: [{ raw: command, argv }],
     });
 
+  it.each([
+    [
+      `cmd /c "for %X in (openclaw) do %X gateway restart"`,
+      ["cmd", "/c", "for %X in (openclaw) do %X gateway restart"],
+    ],
+    [
+      `powershell -Command '& ("open" + "claw") gateway restart'`,
+      ["powershell", "-Command", `& ("open" + "claw") gateway restart`],
+    ],
+  ] as Array<[string, string[]]>)(
+    "fails closed for calculated shell target: %s",
+    (command, argv) => {
+      expect(requiresApproval(command, argv)).toBe(true);
+    },
+  );
+
   it("fails closed for function-local argv and dynamic Corepack managers", () => {
     expect(
       requiresApproval(`sh -c 'f(){ "$@"; }; f openclaw gateway restart' sh`, [

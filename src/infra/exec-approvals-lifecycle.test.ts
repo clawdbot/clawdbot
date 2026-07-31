@@ -238,14 +238,6 @@ const mutationCases: Array<[string, string[]]> = [
   ],
   ["env -S 'openclaw gateway restart'", ["env", "-S", "openclaw gateway restart"]],
   ['sh -c "openclaw gateway restart"', ["sh", "-c", "openclaw gateway restart"]],
-  [
-    `cmd /c "for %X in (openclaw) do %X gateway restart"`,
-    ["cmd", "/c", "for %X in (openclaw) do %X gateway restart"],
-  ],
-  [
-    `powershell -Command '& ("open" + "claw") gateway restart'`,
-    ["powershell", "-Command", `& ("open" + "claw") gateway restart`],
-  ],
   ["sh -c 'X=1 openclaw gateway restart'", ["sh", "-c", "X=1 openclaw gateway restart"]],
   [
     "sh -c '(echo ok; openclaw gateway restart)'",
@@ -297,6 +289,10 @@ const mutationCases: Array<[string, string[]]> = [
   ],
   [`npx -c "openclaw gateway restart"`, ["npx", "-c", "openclaw gateway restart"]],
   ["npm exec -- openclaw gateway restart", ["npm", "exec", "--", "openclaw", "gateway", "restart"]],
+  [
+    "npm exec -- openclaw config set gateway.auth.token -- -c",
+    ["npm", "exec", "--", "openclaw", "config", "set", "gateway.auth.token", "--", "-c"],
+  ],
   ["npm install -g openclaw@latest", ["npm", "install", "-g", "openclaw@latest"]],
   ["npm rebuild openclaw", ["npm", "rebuild", "openclaw"]],
   ["npm it openclaw", ["npm", "it", "openclaw"]],
@@ -384,6 +380,8 @@ const mutationCases: Array<[string, string[]]> = [
     ["powershell", "-NoProfile", "-Command", "kill openclaw"],
   ],
   ["Get-Process OpenClaw | Stop-Process", ["Get-Process", "OpenClaw", "|", "Stop-Process"]],
+  ["Get-Process | Stop-Process", ["Get-Process", "|", "Stop-Process"]],
+  ["Get-Service | Stop-Service", ["Get-Service", "|", "Stop-Service"]],
   ["(Get-Process OpenClaw) | Stop-Process", ["(Get-Process", "OpenClaw)", "|", "Stop-Process"]],
   ["Get-Service OpenClaw | Start-Service", ["Get-Service", "OpenClaw", "|", "Start-Service"]],
   ["Suspend-Service OpenClaw", ["Suspend-Service", "OpenClaw"]],
@@ -429,6 +427,7 @@ const mutationCases: Array<[string, string[]]> = [
 
 const nonMutationCases: Array<[string, string[]]> = [
   ["openclaw gateway status", ["openclaw", "gateway", "status"]],
+  ["openclaw daemon logs", ["openclaw", "daemon", "logs"]],
   ["openclaw --help gateway restart", ["openclaw", "--help", "gateway", "restart"]],
   ["openclaw --version gateway restart", ["openclaw", "--version", "gateway", "restart"]],
   ["openclaw gateway --help", ["openclaw", "gateway", "--help"]],
