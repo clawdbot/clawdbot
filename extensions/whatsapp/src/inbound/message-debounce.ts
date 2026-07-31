@@ -112,6 +112,9 @@ export function createWhatsAppInboundMessageDebouncer(options: {
               .map((entry) => entry.payload.commandBody ?? entry.payload.body)
               .filter(Boolean)
               .join("\n");
+            const combinedStructuredContext = orderedEntries.flatMap(
+              (entry) => entry.payload.untrustedStructuredContext ?? [],
+            );
             const combinedMentions =
               mentioned.size > 0
                 ? { ...last.group?.mentions, jids: Array.from(mentioned) }
@@ -128,6 +131,9 @@ export function createWhatsAppInboundMessageDebouncer(options: {
                   ...last.payload,
                   body: combinedBody,
                   commandBody: combinedCommandBody,
+                  ...(combinedStructuredContext.length > 0
+                    ? { untrustedStructuredContext: combinedStructuredContext }
+                    : {}),
                 },
                 group: combinedGroup,
                 event: { ...last.event, isBatched: true },
