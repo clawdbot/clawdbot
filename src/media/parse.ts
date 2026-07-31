@@ -586,14 +586,13 @@ export function splitMediaFromOutput(
         pushTextSegment(line);
       } else {
         foundMediaToken = true;
-        // The image line is removed below. When it is surrounded by blank
-        // lines, discard one preceding separator so the two paragraphs keep
-        // a single blank line between them.
-        if (keptLines.at(-1) === "") {
-          keptLines.pop();
-        }
         if (markdownImageResult.cleanedLine) {
           keptLines.push(markdownImageResult.cleanedLine);
+        } else if (keptLines.at(-1) === "") {
+          // The standalone image line is removed below. When it is surrounded
+          // by blank lines, discard one preceding separator so the two
+          // paragraphs keep a single blank line between them.
+          keptLines.pop();
         }
         for (const segment of markdownImageResult.lineSegments) {
           if (segment.type === "text") {
