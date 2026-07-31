@@ -5,7 +5,7 @@ import { Readable } from "node:stream";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import { detectMime, mediaKindFromMime, normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
+import { detectMime, mediaKindFromMime } from "openclaw/plugin-sdk/media-mime";
 import {
   MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
   runFfmpeg,
@@ -714,14 +714,10 @@ async function resolveFeishuOutboundMediaKind(params: {
 }> {
   const { buffer, fileName, contentType } = params;
   const ext = normalizeLowercaseStringOrEmpty(path.extname(fileName));
-  const normalizedContentType = normalizeMimeType(contentType) ?? "";
   // Never pass a filename to signature detection: an image-looking name must not
   // disguise SVG, AVIF, documents, or unrecognized bytes as native Feishu images.
-  const detectedContentType = normalizeMimeType(await detectMime({ buffer })) ?? "";
-  if (
-    FEISHU_SUPPORTED_IMAGE_CONTENT_TYPES.has(detectedContentType) ||
-    (!detectedContentType && normalizedContentType === "image/heic")
-  ) {
+  const detectedContentType = (await detectMime({ buffer })) ?? "";
+  if (FEISHU_SUPPORTED_IMAGE_CONTENT_TYPES.has(detectedContentType)) {
     return { msgType: "image" };
   }
 

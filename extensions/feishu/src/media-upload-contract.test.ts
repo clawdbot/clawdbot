@@ -91,6 +91,8 @@ describe("Feishu upload contracts", () => {
     { fileName: "diagram.png", contentType: undefined, buffer: svgImage },
     { fileName: "diagram.png", contentType: "application/octet-stream", buffer: svgImage },
     { fileName: "diagram.png", contentType: "image/png", buffer: svgImage },
+    { fileName: "diagram.heic", contentType: "image/heic", buffer: svgImage },
+    { fileName: "photo.heic", contentType: "image/heic", buffer: Buffer.from("heic image") },
     { fileName: "photo.png", contentType: "image/avif", buffer: avifImage },
     { fileName: "photo.png", contentType: undefined, buffer: avifImage },
     { fileName: "photo.png", contentType: "application/octet-stream", buffer: avifImage },
@@ -138,7 +140,6 @@ describe("Feishu upload contracts", () => {
     { fileName: "photo.heic", contentType: "image/heic", buffer: heicImage },
     { fileName: "download", contentType: "image/heic", buffer: heicImage },
     { fileName: "photo.jpg", contentType: "image/heic", buffer: heicImage },
-    { fileName: "download", contentType: "image/heic", buffer: Buffer.from("heic image") },
   ])("uploads supported HEIC image $fileName as a native image", async (media) => {
     mocks.loadWebMedia.mockResolvedValueOnce({
       buffer: media.buffer,
