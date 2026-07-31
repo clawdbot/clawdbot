@@ -2386,6 +2386,8 @@ describe("package artifact reuse", () => {
     const setupNodeStep = workflowStep(checkTestboxJob, "Setup Node environment");
     const runTestboxStep = workflowStep(checkTestboxJob, "Run Testbox");
     const closeTestboxSshStep = workflowStep(checkTestboxJob, "Close Testbox SSH sessions");
+    const setupNodeWith = setupNodeStep.with ?? {};
+    const checkTestboxSteps = checkTestboxJob.steps ?? [];
     const runArmTestboxStep = workflowStep(
       workflowJob(CI_CHECK_ARM_TESTBOX_WORKFLOW, "check-arm"),
       "Run Testbox",
@@ -2402,10 +2404,10 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain('PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"');
     expect(workflow).not.toContain("PNPM_CONFIG_MODULES_DIR");
     expect(workflow).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
-    expect(setupNodeStep.with["sticky-disk"]).toBe(
+    expect(setupNodeWith["sticky-disk"]).toBe(
       "${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}",
     );
-    expect(setupNodeStep.with["use-actions-cache"]).toBe(
+    expect(setupNodeWith["use-actions-cache"]).toBe(
       "${{ github.event_name == 'workflow_dispatch' && 'false' || 'true' }}",
     );
     expect(checkTestboxJob["timeout-minutes"]).toBe(
@@ -2417,8 +2419,8 @@ describe("package artifact reuse", () => {
     expect(closeTestboxSshStep.run).toContain(
       'ss -K state established \\\n  "( dport = :${runner_ssh_port} )"',
     );
-    expect(checkTestboxJob.steps.indexOf(closeTestboxSshStep)).toBe(
-      checkTestboxJob.steps.indexOf(runTestboxStep) + 1,
+    expect(checkTestboxSteps.indexOf(closeTestboxSshStep)).toBe(
+      checkTestboxSteps.indexOf(runTestboxStep) + 1,
     );
     expect(runArmTestboxStep.if).toBe("always()");
     expect(runBuildArtifactsTestboxStep.if).toBe("always()");
