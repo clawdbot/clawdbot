@@ -9,7 +9,12 @@ import type {
   SkillStatusEntry,
   SkillStatusReport,
 } from "../../api/types.ts";
-import type { RuntimeConfigCapability } from "../config/index.ts";
+import {
+  normalizeSkillApiKeyReplacement,
+  runSkillConfigMutation,
+  skillConfigMutationSuccess,
+  type SkillConfigMutationOwner,
+} from "./config-mutations.ts";
 
 export type ClawHubSearchResult = {
   score: number;
@@ -79,7 +84,7 @@ export type ClawHubSkillSecurityVerdict = {
 type SkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
-  runtimeConfig: Pick<RuntimeConfigCapability, "runExternalMutation">;
+  runtimeConfig: SkillConfigMutationOwner;
   skillsAgentId: string | null;
   skillsAgentRevision: number;
   skillsLoading: boolean;
@@ -563,56 +568,29 @@ async function runSkillMutation(
 
 export async function updateSkillEnabled(state: SkillsState, skillKey: string, enabled: boolean) {
   await runSkillMutation(state, skillKey, async (client) => {
-    const refreshError = await updateSkillConfig(state, client, { skillKey, enabled });
+    const refreshError = await runSkillConfigMutation(state.runtimeConfig, client, {
+      skillKey,
+      enabled,
+    });
     return skillConfigMutationSuccess(enabled ? "Skill enabled" : "Skill disabled", refreshError);
   });
 }
 
 export async function saveSkillApiKey(state: SkillsState, skillKey: string) {
-  const apiKey = state.skillEdits[skillKey]?.trim();
-  // Blank skills.update API keys explicitly clear stored credentials; this UI only replaces them.
+  const apiKey = normalizeSkillApiKeyReplacement(state.skillEdits[skillKey]);
   if (!apiKey) {
     return;
   }
   await runSkillMutation(state, skillKey, async (client) => {
-    const refreshError = await updateSkillConfig(state, client, { skillKey, apiKey });
+    const refreshError = await runSkillConfigMutation(state.runtimeConfig, client, {
+      skillKey,
+      apiKey,
+    });
     return skillConfigMutationSuccess(
       `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
       refreshError,
     );
   });
-}
-
-async function updateSkillConfig(
-  state: SkillsState,
-  expectedClient: GatewayBrowserClient,
-  patch: { skillKey: string; enabled?: boolean; apiKey?: string },
-): Promise<string | null> {
-  let requestError: Error | undefined;
-  // Settings autosave and skills.update persist the same config; one owner
-  // prevents a pending draft from restoring an older skill credential/toggle.
-  const mutation = await state.runtimeConfig.runExternalMutation(async (client) => {
-    if (client !== expectedClient) {
-      throw new Error("Connection changed before the skill update started.");
-    }
-    try {
-      return await client.request("skills.update", patch);
-    } catch (error) {
-      requestError = error instanceof Error ? error : new Error(String(error));
-      throw requestError;
-    }
-  });
-  if (!mutation.ok) {
-    throw requestError ?? new Error(mutation.error);
-  }
-  return mutation.refresh.ok ? null : mutation.refresh.error;
-}
-
-function skillConfigMutationSuccess(message: string, refreshError: string | null): SkillMessage {
-  return {
-    kind: "success",
-    message: refreshError ? `${message}\n${refreshError}` : message,
-  };
 }
 
 export async function installSkill(
