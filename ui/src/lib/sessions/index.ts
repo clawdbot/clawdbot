@@ -50,6 +50,7 @@ import {
   type SessionChangedResult,
   type SessionReconcileOptions,
 } from "./reconcile.ts";
+import { createSessionEventSubscriptionOwner } from "./session-event-subscription.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -740,7 +741,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const swarmActivity = new SwarmActivityTracker();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
   const pullRequestEpochs = new Map<string, symbol>();
-  let subscribedClient: GatewayBrowserClient | null = null;
+  let hydratedClient: GatewayBrowserClient | null = null;
+  let sessionEventSubscriptionError: string | null = null;
+  let publishedErrorSource: "session-observer" | "operation" | null = null;
   let lastListOptions: SessionListOptions = {};
   let hasForegroundListOptions = false;
   let hasSeededListOptions = false;
@@ -776,12 +779,40 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return isCurrentConnection(scope) ? swarmActivity.decorate(result ?? null) : null;
   };
 
-  const publish = (next: SessionState) => {
+  const publish = (next: SessionState, errorSource?: "session-observer" | "operation") => {
+    if (next.error === null) {
+      publishedErrorSource = null;
+    } else if (errorSource || next.error !== state.error) {
+      publishedErrorSource = errorSource ?? "operation";
+    }
     state = next;
     for (const listener of listeners) {
       listener(state);
     }
   };
+
+  const sessionEventSubscription = createSessionEventSubscriptionOwner({
+    isCurrent: isCurrentConnection,
+    retryDelayMs: (error) => sessionRetryDelayMs(error),
+    onError: (scope, error) => {
+      if (!isCurrentConnection(scope)) {
+        return;
+      }
+      const previousError = sessionEventSubscriptionError;
+      sessionEventSubscriptionError = error;
+      const observerOwnsVisibleError = publishedErrorSource === "session-observer";
+      if (error !== null && (state.error === null || observerOwnsVisibleError)) {
+        publish({ ...state, error }, "session-observer");
+      } else if (error === null && observerOwnsVisibleError) {
+        publish({ ...state, error: null });
+      }
+      if (previousError !== null && error === null) {
+        // Events lost while the observer was unavailable are not replayed;
+        // one canonical catch-up list closes that reconnect visibility gap.
+        void refresh({ ...lastListOptions, backgroundHydrate: true, force: true });
+      }
+    },
+  });
 
   const pullRequestSummary = (key: string): SessionCatalogPullRequestSummary | undefined =>
     pullRequestSummaries.get(key.trim());
@@ -907,7 +938,15 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       hasSeededListOptions = true;
     }
     if (!backgroundHydrate) {
-      publish({ ...state, loading: true, error: null, deletedSessions: [] });
+      publish(
+        {
+          ...state,
+          loading: true,
+          error: sessionEventSubscriptionError,
+          deletedSessions: [],
+        },
+        sessionEventSubscriptionError ? "session-observer" : undefined,
+      );
     }
     try {
       const result = await requestSessionList(scope.client, requestOptions);
@@ -961,24 +1000,30 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         }
       }
       canonicalListRevision += 1;
-      publish({
-        result: nextResult,
-        agentId: requestOptions.agentId?.trim() ? normalizeAgentId(requestOptions.agentId) : null,
-        modelOverrides: state.modelOverrides,
-        loading: backgroundHydrate ? state.loading : false,
-        error: null,
-        deletedSessions: [],
-        groups: state.groups,
-        sectionOrder: state.sectionOrder,
-      });
+      publish(
+        {
+          result: nextResult,
+          agentId: requestOptions.agentId?.trim() ? normalizeAgentId(requestOptions.agentId) : null,
+          modelOverrides: state.modelOverrides,
+          loading: backgroundHydrate ? state.loading : false,
+          error: sessionEventSubscriptionError,
+          deletedSessions: [],
+          groups: state.groups,
+          sectionOrder: state.sectionOrder,
+        },
+        sessionEventSubscriptionError ? "session-observer" : undefined,
+      );
     } catch (error) {
       if (isCurrentConnection(scope)) {
-        publish({
-          ...state,
-          loading: backgroundHydrate ? state.loading : false,
-          error: String(error),
-          deletedSessions: [],
-        });
+        publish(
+          {
+            ...state,
+            loading: backgroundHydrate ? state.loading : false,
+            error: String(error),
+            deletedSessions: [],
+          },
+          "operation",
+        );
       }
     }
   };
@@ -1141,7 +1186,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (options.reconciliation === "background") {
         void reconcileCreatedSession().catch((error: unknown) => {
           if (isCurrentConnection(scope)) {
-            publish({ ...state, error: String(error) });
+            publish({ ...state, error: String(error) }, "operation");
           }
         });
       } else {
@@ -1153,7 +1198,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return result;
     } catch (error) {
       if (isCurrentConnection(scope)) {
-        publish({ ...state, error: String(error) });
+        publish({ ...state, error: String(error) }, "operation");
       }
       return null;
     }
@@ -1164,9 +1209,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
 
   const LEGACY_GROUPS_STORAGE_KEY = "openclaw:sessions:custom-groups";
   const GROUPS_LIST_METHOD = "sessions.groups.list";
-  const GROUPS_RETRY_DEFAULT_MS = 500;
-  const GROUPS_RETRY_MIN_MS = 100;
-  const GROUPS_RETRY_MAX_MS = 30_000;
+  const SESSION_RETRY_DEFAULT_MS = 500;
+  const SESSION_RETRY_MIN_MS = 100;
+  const SESSION_RETRY_MAX_MS = 30_000;
   let groupsLoadedEpoch = -1;
   let groupsLoadGeneration = 0;
   let groupsRetryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -1184,15 +1229,15 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     clearGroupsRetry();
   };
 
-  const groupsRetryDelayMs = (error: unknown): number | null => {
+  const sessionRetryDelayMs = (error: unknown): number | null => {
     if (!(error instanceof GatewayRequestError) || !error.retryable) {
       return null;
     }
     const requested =
       typeof error.retryAfterMs === "number" && Number.isFinite(error.retryAfterMs)
         ? error.retryAfterMs
-        : GROUPS_RETRY_DEFAULT_MS;
-    return Math.min(Math.max(requested, GROUPS_RETRY_MIN_MS), GROUPS_RETRY_MAX_MS);
+        : SESSION_RETRY_DEFAULT_MS;
+    return Math.min(Math.max(requested, SESSION_RETRY_MIN_MS), SESSION_RETRY_MAX_MS);
   };
 
   const publishGroupCatalog = (groups: readonly string[], sectionOrder: readonly string[]) => {
@@ -1215,7 +1260,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!current) {
       return "stale";
     }
-    publish({ ...state, error: String(error) });
+    publish({ ...state, error: String(error) }, "operation");
     throw error;
   };
 
@@ -1278,7 +1323,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         return;
       }
       groupsLoadedEpoch = -1;
-      const retryDelayMs = groupsRetryDelayMs(error);
+      const retryDelayMs = sessionRetryDelayMs(error);
       if (retryDelayMs === null) {
         return;
       }
@@ -1433,7 +1478,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!isCurrentConnection(scope)) {
         return null;
       }
-      publish({ ...state, error: String(error) });
+      publish({ ...state, error: String(error) }, "operation");
       throw error;
     }
   };
@@ -1459,6 +1504,17 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return true;
   };
 
+  const publishReconciledSessionState = (next: SessionState) => {
+    // Targeted events can outlive a failed broad observer; preserve its outage
+    // unless a newer operation already owns the visible failure.
+    const operationOwnsError = publishedErrorSource === "operation";
+    const error = operationOwnsError ? state.error : sessionEventSubscriptionError;
+    publish(
+      { ...next, error },
+      error === null ? undefined : operationOwnsError ? "operation" : "session-observer",
+    );
+  };
+
   const reconcileChanged = (
     payload: unknown,
     options?: SessionReconcileOptions,
@@ -1477,13 +1533,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       retirePullRequestSummary(reconciled.deletedKey);
     }
     if (reconciled.applied && (reconciled.result !== state.result || reconciled.deletedKey)) {
-      publish({
+      publishReconciledSessionState({
         ...state,
         result: reconciled.result,
         agentId: options?.resultAgentId?.trim()
           ? normalizeAgentId(options.resultAgentId)
           : state.agentId,
-        error: null,
         deletedSessions: reconciled.deletedKey
           ? [{ key: reconciled.deletedKey, agentId: reconciled.agentId ?? undefined }]
           : [],
@@ -1497,7 +1552,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (result === state.result) {
       return false;
     }
-    publish({ ...state, result, error: null });
+    publishReconciledSessionState({ ...state, result });
     return true;
   };
 
@@ -1530,7 +1585,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!isCurrentConnection(scope)) {
         return { deleted: false };
       }
-      publish({ ...state, error: String(error) });
+      publish({ ...state, error: String(error) }, "operation");
       throw error;
     }
   };
@@ -1597,7 +1652,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return isCurrentConnection(scope) ? "completed" : "uncertain";
     } catch (error) {
       if (isCurrentConnection(scope)) {
-        publish({ ...state, error: String(error) });
+        publish({ ...state, error: String(error) }, "operation");
       }
       // The gateway commits the new session identity before every awaited
       // post-reset lifecycle step finishes. Once requested, even a rejection
@@ -1831,6 +1886,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       const hadPullRequestSummaries = pullRequestSummaries.size > 0;
       eventRefreshCoordinator.reset();
       connectionEpoch += 1;
+      sessionEventSubscription.reset();
+      sessionEventSubscriptionError = null;
       if (previousClient) {
         resetGatewaySessionMessageSubscriptionCoordinator(previousClient);
       }
@@ -1851,7 +1908,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       }
     }
     if (!connected || !next.client) {
-      subscribedClient = null;
+      hydratedClient = null;
       publish({
         result: null,
         agentId: null,
@@ -1864,32 +1921,25 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       });
       return;
     }
-    if (subscribedClient !== next.client) {
+    if (hydratedClient !== next.client) {
       const scope = captureConnection();
       if (!scope) {
         return;
       }
-      subscribedClient = scope.client;
+      hydratedClient = scope.client;
       void (async () => {
-        try {
-          await scope.client.request("sessions.subscribe", {});
-        } catch (error) {
-          if (isCurrentConnection(scope)) {
-            publish({ ...state, error: String(error) });
-          }
-        } finally {
-          if (isCurrentConnection(scope)) {
-            const sessionKey = gateway.snapshot.sessionKey?.trim();
-            const agentScope = sessionKey
-              ? scopedAgentListParamsForSession(gateway.snapshot, sessionKey)
-              : { agentId: resolveUiSelectedGlobalAgentId(gateway.snapshot) };
-            await refresh({
-              ...agentScope,
-              includeDerivedTitles: true,
-              backgroundHydrate: true,
-              force: true,
-            });
-          }
+        await sessionEventSubscription.ensure(scope);
+        if (isCurrentConnection(scope)) {
+          const sessionKey = gateway.snapshot.sessionKey?.trim();
+          const agentScope = sessionKey
+            ? scopedAgentListParamsForSession(gateway.snapshot, sessionKey)
+            : { agentId: resolveUiSelectedGlobalAgentId(gateway.snapshot) };
+          await refresh({
+            ...agentScope,
+            includeDerivedTitles: true,
+            backgroundHydrate: true,
+            force: true,
+          });
         }
       })();
     }
@@ -2034,12 +2084,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       inFlight = null;
       queuedExplicitRefresh = null;
       eventRefreshQueued = false;
-      subscribedClient = null;
+      hydratedClient = null;
       pendingModelPatches.clear();
       preparedWorkSessionKeys.clear();
       swarmActivity.clear();
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();
+      sessionEventSubscription.dispose();
       stopGateway();
       stopEvents();
       createdListeners.clear();

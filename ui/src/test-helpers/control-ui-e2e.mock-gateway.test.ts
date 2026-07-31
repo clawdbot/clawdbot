@@ -184,6 +184,30 @@ describe("mock gateway stateful config", () => {
 });
 
 describe("mock gateway stateful sessions", () => {
+  it("acknowledges broad session observation with the real Gateway response", async () => {
+    const script = createControlUiMockGatewayInitScript({});
+    window.sessionStorage.clear();
+    // oxlint-disable-next-line typescript/no-implied-eval -- Executes the generated init script standalone, proving it captures no module closures.
+    new Function(script)();
+
+    const socket = new WebSocket("ws://mock-gateway");
+    const frames: ResponseFrame[] = [];
+    socket.addEventListener("message", (event) => {
+      frames.push(JSON.parse(String((event as MessageEvent).data)) as ResponseFrame);
+    });
+    await flushMockTimers();
+
+    socket.send(
+      JSON.stringify({ type: "req", id: "subscribe-events", method: "sessions.subscribe" }),
+    );
+    await flushMockTimers();
+
+    expect(frames.find((frame) => frame.id === "subscribe-events")?.payload).toEqual({
+      subscribed: true,
+    });
+    socket.close();
+  });
+
   it("makes a successfully adopted catalog session visible to the next sessions.list", async () => {
     const sessionKey = "agent:main:adopted-codex";
     const script = createControlUiMockGatewayInitScript({
