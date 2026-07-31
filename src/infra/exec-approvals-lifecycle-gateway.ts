@@ -39,6 +39,8 @@ const LIFECYCLE_RPC_METHODS = new Set([
   "exec.approvals.node.set",
   "exec.approvals.set",
   "gateway.restart.request",
+  "gateway.suspend.prepare",
+  "gateway.suspend.resume",
   "plugins.install",
   "plugins.refresh",
   "plugins.setenabled",

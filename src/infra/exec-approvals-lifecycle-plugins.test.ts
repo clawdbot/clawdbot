@@ -154,6 +154,12 @@ describe("OpenClaw lifecycle runner parsing edges", () => {
     ).toBe(false);
   });
 
+  it("recognizes the Windows Node image as an OpenClaw process candidate", () => {
+    expect(
+      requiresApproval("taskkill /IM node.exe /F", ["taskkill", "/IM", "node.exe", "/F"]),
+    ).toBe(true);
+  });
+
   it("does not execute unsafe process-selector regexes", () => {
     expect(
       requiresApproval(String.raw`pkill -f '^([A-Za-z0-9 /._:]+)+Z$'`, [
@@ -201,21 +207,25 @@ describe("OpenClaw lifecycle runner parsing edges", () => {
     ).toBe(true);
   });
 
-  it.each(["plugins.install", "plugins.setEnabled", "plugins.uninstall", "plugins.refresh"])(
-    "classifies plugin-management gateway RPC: %s",
-    (method) => {
-      expect(
-        requiresApproval(`openclaw gateway call ${method} --params '{}'`, [
-          "openclaw",
-          "gateway",
-          "call",
-          method,
-          "--params",
-          "{}",
-        ]),
-      ).toBe(true);
-    },
-  );
+  it.each([
+    "plugins.install",
+    "plugins.setEnabled",
+    "plugins.uninstall",
+    "plugins.refresh",
+    "gateway.suspend.prepare",
+    "gateway.suspend.resume",
+  ])("classifies lifecycle gateway RPC: %s", (method) => {
+    expect(
+      requiresApproval(`openclaw gateway call ${method} --params '{}'`, [
+        "openclaw",
+        "gateway",
+        "call",
+        method,
+        "--params",
+        "{}",
+      ]),
+    ).toBe(true);
+  });
 
   it("keeps read-only plugin gateway RPCs non-blocking", () => {
     expect(

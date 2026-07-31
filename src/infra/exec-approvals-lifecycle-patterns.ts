@@ -91,6 +91,7 @@ export function isOpenClawExecutablePattern(value: string | undefined): boolean 
 export function matchesOpenClawProcessPattern(value: string | undefined): boolean {
   return matchesOpenClawProcessCandidates(value, [
     ...OPENCLAW_PROCESS_NAME_CANDIDATES,
+    "node.exe",
     "openclaw gateway",
     "/opt/openclaw",
     "node /opt/openclaw/openclaw.mjs gateway",
