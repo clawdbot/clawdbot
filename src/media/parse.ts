@@ -20,7 +20,7 @@ function normalizeMediaVisibleWhitespace(text: string): string {
     return "";
   }
   const normalized = normalizeDirectiveWhitespace(text);
-  const withoutLeadingBlankLines = normalized.replace(/^\n+/, "");
+  const withoutLeadingBlankLines = normalized.replace(/^(?:[ \t]*\n)+/, "");
   return /^(?: {4}|\t)/.test(withoutLeadingBlankLines)
     ? withoutLeadingBlankLines
     : normalized.trimStart();

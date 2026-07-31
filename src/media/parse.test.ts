@@ -488,6 +488,17 @@ describe("splitMediaFromOutput", () => {
     });
   });
 
+  it("preserves an indented code block after a media directive and whitespace-only blank line", () => {
+    expectParsedMediaOutputCase("MEDIA:https://example.com/chart.png\n  \n    const answer = 42;", {
+      text: "    const answer = 42;",
+      mediaUrls: ["https://example.com/chart.png"],
+      segments: [
+        { type: "media", url: "https://example.com/chart.png" },
+        { type: "text", text: "    const answer = 42;" },
+      ],
+    });
+  });
+
   it("preserves code indentation and paragraph breaks around extracted markdown images", () => {
     const input = [
       "Rendered the chart, and here is the code behind it.",
