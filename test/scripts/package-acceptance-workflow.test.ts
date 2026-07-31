@@ -2417,7 +2417,10 @@ describe("package artifact reuse", () => {
     expect(runTestboxStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
     expect(closeTestboxSshStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
     expect(closeTestboxSshStep.run).toContain(
-      'ss -K state established \\\n  "( sport = :${runner_ssh_port} )"',
+      `sudo sshd -T 2>/dev/null | awk '$1 == "port" { print $2; exit }'`,
+    );
+    expect(closeTestboxSshStep.run).toContain(
+      'ss -K state established \\\n  "( sport = :${runner_ssh_local_port} )"',
     );
     expect(checkTestboxSteps.indexOf(closeTestboxSshStep)).toBe(
       checkTestboxSteps.indexOf(runTestboxStep) + 1,
