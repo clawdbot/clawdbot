@@ -33,5 +33,5 @@ localization into configuration, protocol, or provider logic.
 - Run `pnpm localization:catalogs:check` for generated or release validation.
 - Run focused wizard localization tests through `scripts/run-vitest.mjs`.
 - Use `.agents/skills/localize-openclaw/SKILL.md` and update both localization
-  registries when the wizard adopts a new catalog source or workflow obligation. Routine keys
-  within the existing source do not add duplicate registry rows.
+  registries when the wizard adopts a new catalog source or workflow obligation.
+- Routine keys within the existing source do not add duplicate registry rows.

@@ -9,7 +9,7 @@ import {
 import type { MigrationProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { t } from "./i18n/index.js";
+import { createSetupTranslator, type SetupTranslator } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 
 type PostInstallMigrationOptions = {
@@ -103,22 +103,27 @@ async function resolveCandidates(params: {
   return candidates;
 }
 
-function describeCandidate(candidate: ResolvedProviderCandidate): string {
-  const parts = [candidate.provider.label];
-  if (candidate.source) {
-    parts.push(`at ${candidate.source}`);
-  }
-  return parts.join(" ");
+function translateCandidateMessage(
+  translate: SetupTranslator,
+  key: "confirm" | "hint",
+  candidate: ResolvedProviderCandidate,
+  params: { command?: string } = {},
+): string {
+  const values = {
+    label: candidate.provider.label,
+    ...(candidate.source ? { source: candidate.source } : {}),
+    ...params,
+  };
+  return translate(candidate.source ? `${key}WithSource` : key, values);
 }
 
-function logMigrationHint(runtime: RuntimeEnv, candidate: ResolvedProviderCandidate): void {
+function logMigrationHint(
+  runtime: RuntimeEnv,
+  candidate: ResolvedProviderCandidate,
+  translate: SetupTranslator,
+): void {
   const command = formatCliCommand(`openclaw migrate ${candidate.provider.id} --dry-run`);
-  runtime.log(
-    t("wizard.postInstallMigration.hint", {
-      description: describeCandidate(candidate),
-      command,
-    }),
-  );
+  runtime.log(translateCandidateMessage(translate, "hint", candidate, { command }));
 }
 
 function applyMigrationConfigPatches(
@@ -165,6 +170,7 @@ function applyMigrationConfigPatches(
 export async function offerPostInstallMigrations(
   params: PostInstallMigrationOptions,
 ): Promise<PostInstallMigrationResult> {
+  const translate = createSetupTranslator({ keyPrefix: "wizard.postInstallMigration" });
   const candidates = await resolveCandidates({
     config: params.config,
     runtime: params.runtime,
@@ -179,30 +185,29 @@ export async function offerPostInstallMigrations(
     params.nonInteractive !== true && process.stdin.isTTY && prompter !== undefined;
   for (const candidate of candidates) {
     if (!interactive || !prompter) {
-      logMigrationHint(params.runtime, candidate);
+      logMigrationHint(params.runtime, candidate, translate);
       continue;
     }
-    const description = describeCandidate(candidate);
     let accepted;
     try {
       accepted = await prompter.confirm({
-        message: t("wizard.postInstallMigration.confirm", { description }),
+        message: translateCandidateMessage(translate, "confirm", candidate),
         initialValue: false,
       });
     } catch (error) {
       // Prompt cancellations / non-TTY refusals fall back to the hint path so
       // onboarding never aborts on an optional offer.
       params.runtime.log(
-        t("wizard.postInstallMigration.promptSkipped", {
+        translate("promptSkipped", {
           label: candidate.provider.label,
           reason: formatErrorMessage(error),
         }),
       );
-      logMigrationHint(params.runtime, candidate);
+      logMigrationHint(params.runtime, candidate, translate);
       continue;
     }
     if (!accepted) {
-      logMigrationHint(params.runtime, candidate);
+      logMigrationHint(params.runtime, candidate, translate);
       continue;
     }
     let preparation: Awaited<ReturnType<NonNullable<MigrationProviderPlugin["prepareApply"]>>> =
@@ -231,7 +236,7 @@ export async function offerPostInstallMigrations(
     } catch (error) {
       const command = formatCliCommand(`openclaw migrate ${candidate.provider.id} --dry-run`);
       params.runtime.log(
-        t("wizard.postInstallMigration.failed", {
+        translate("failed", {
           label: candidate.provider.label,
           reason: formatErrorMessage(error),
           command,

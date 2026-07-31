@@ -1,4 +1,5 @@
 import { catalogFamily, optionalCatalogFamily } from "../catalog-family.js";
+import sourceCatalog from "../catalogs/en.json" with { type: "json" };
 import authoringCatalog from "../catalogs/generated/zh-CN.json" with { type: "json" };
 // Simplified Chinese wizard translations provide localized onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
@@ -115,6 +116,10 @@ export const zh_CN = {
     postInstallMigration: optionalCatalogFamily(
       authoringCatalog.messages,
       "wizard.postInstallMigration",
+      {
+        sourceMessages: sourceCatalog.messages,
+        translatedSourceMessages: authoringCatalog.sourceMessages,
+      },
     ),
     migration: {
       apply: "现在应用这次迁移？",

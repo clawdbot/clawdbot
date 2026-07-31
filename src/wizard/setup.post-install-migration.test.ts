@@ -208,6 +208,29 @@ describe("offerPostInstallMigrations", () => {
     expect(result.config).toEqual({});
   });
 
+  it("lets the catalog own grammar when a detected provider has no source path", async () => {
+    const provider = buildProvider({
+      detect: vi.fn(async () => ({ found: true })),
+    });
+    setProviders([provider]);
+    setOwnership("codex", ["codex"]);
+    const confirm = vi.fn(async () => false);
+    const runtime = { ...createNonExitingRuntime(), log: vi.fn() };
+    const prompter = createWizardPrompter({
+      confirm: confirm as WizardPrompter["confirm"],
+    });
+
+    await offerPostInstallMigrations(buildBaseArgs({ prompter, runtime }));
+
+    expect(confirm).toHaveBeenCalledWith({
+      message: "Migrate Codex into this agent now?",
+      initialValue: false,
+    });
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Detected Codex. Preview migration with openclaw migrate codex --dry-run.",
+    );
+  });
+
   it("returns config patched from migrated config items without mutating the input config", async () => {
     const provider = buildProvider();
     setProviders([provider]);
@@ -359,6 +382,30 @@ describe("offerPostInstallMigrations", () => {
       "Codex migration failed: boom. Re-run with openclaw migrate codex --dry-run to inspect.",
     );
   });
+
+  it.each(["zh-CN", "zh-TW"])(
+    "uses the real generated %s adapter and falls back to reviewed English for an in-flight source family",
+    async (locale) => {
+      vi.stubEnv("OPENCLAW_LOCALE", locale);
+      const provider = buildProvider();
+      setProviders([provider]);
+      setOwnership("codex", ["codex"]);
+      const runtime = { ...createNonExitingRuntime(), log: vi.fn() };
+      const prompter = createWizardPrompter({
+        confirm: vi.fn(async () => false) as WizardPrompter["confirm"],
+      });
+
+      await offerPostInstallMigrations(buildBaseArgs({ prompter, runtime }));
+
+      expect(prompter.confirm).toHaveBeenCalledWith({
+        message: "Migrate Codex at /home/user/.codex into this agent now?",
+        initialValue: false,
+      });
+      expect(runtime.log).toHaveBeenCalledWith(
+        "Detected Codex at /home/user/.codex. Preview migration with openclaw migrate codex --dry-run.",
+      );
+    },
+  );
 
   it("falls back to reviewed English for an unsupported locale", async () => {
     vi.stubEnv("OPENCLAW_LOCALE", "fr");

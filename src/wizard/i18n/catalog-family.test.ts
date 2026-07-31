@@ -13,11 +13,27 @@ describe("catalogFamily", () => {
     expect(
       optionalCatalogFamily(
         {
+          "wizard.pending.stale": "Stale translation",
           "wizard.pending.title": "Translated title",
           "wizard.other.title": "Other title",
         },
         "wizard.pending",
+        {
+          sourceMessages: {
+            "wizard.pending.new": "New source",
+            "wizard.pending.stale": "Current source",
+            "wizard.pending.title": "Source title",
+          },
+          translatedSourceMessages: {
+            "wizard.pending.stale": "Old source",
+            "wizard.pending.title": "Source title",
+          },
+        },
       ),
-    ).toEqual({ title: "Translated title" });
+    ).toEqual({
+      new: "New source",
+      stale: "Current source",
+      title: "Translated title",
+    });
   });
 });
