@@ -1079,6 +1079,7 @@ export function loadPluginManifestRegistry(
     if (!manifestRes.ok) {
       diagnostics.push({
         level: "error",
+        pluginId: candidate.idHint,
         message: manifestRes.error,
         source: manifestRes.manifestPath,
       });

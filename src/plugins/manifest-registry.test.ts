@@ -675,6 +675,21 @@ describe("loadPluginManifestRegistry", () => {
     ).toHaveLength(2);
   });
 
+  it("preserves the identity of every independently malformed plugin manifest", () => {
+    const candidates = ["first-invalid", "second-invalid"].map((pluginId) => {
+      const rootDir = makeTempDir();
+      fs.writeFileSync(path.join(rootDir, "openclaw.plugin.json"), '{"id":', "utf-8");
+      return createPluginCandidate({ idHint: pluginId, rootDir, origin: "global" });
+    });
+
+    const registry = loadRegistry(candidates);
+
+    expect(registry.diagnostics).toEqual([
+      expect.objectContaining({ level: "error", pluginId: "first-invalid" }),
+      expect.objectContaining({ level: "error", pluginId: "second-invalid" }),
+    ]);
+  });
+
   it("lets config-loaded plugins replace bundled duplicates", () => {
     const bundledDir = makeTempDir();
     const configDir = makeTempDir();

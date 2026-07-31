@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import * as pluginHardlinkPolicy from "./hardlink-policy.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { listBuiltRuntimeEntryCandidates } from "./package-entrypoints.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
@@ -1339,6 +1340,7 @@ describe("discoverOpenClawPlugins", () => {
       result.diagnostics.some(
         (entry) =>
           entry.level === "error" &&
+          entry.pluginId === "missing-runtime-setup-pack" &&
           entry.message.includes("runtime setup entry not found") &&
           entry.message.includes("./dist/setup-entry.js"),
       ),
@@ -1356,6 +1358,10 @@ describe("discoverOpenClawPlugins", () => {
       extensions: ["./dist/index.js"],
       setupEntry: "./src/setup-entry.ts",
     });
+    const packagePath = path.join(pluginDir, "package.json");
+    const packageManifest = JSON.parse(fs.readFileSync(packagePath, "utf-8"));
+    packageManifest.openclaw.channel = { id: "explicit-setup-channel" };
+    fs.writeFileSync(packagePath, JSON.stringify(packageManifest), "utf-8");
     writePluginEntry(path.join(pluginDir, "dist", "index.js"));
 
     const result = await discoverWithStateDir(stateDir, {});
@@ -1365,6 +1371,7 @@ describe("discoverOpenClawPlugins", () => {
     expectDiagnostic({
       diagnostics: result.diagnostics,
       level: "error",
+      pluginId: "explicit-setup-channel",
       source: pluginDir,
       messageIncludes: "setup entry not found: src/setup-entry.ts",
     });
@@ -1450,6 +1457,52 @@ describe("discoverOpenClawPlugins", () => {
           entry.message.includes("non-empty string"),
       ),
     ).toBe(true);
+  });
+
+  it("retains every owner when invalid package extension diagnostics are deduplicated", async () => {
+    const stateDir = makeTempDir();
+    for (const [packageName, pluginId, explicitOwner] of [
+      ["@openclaw/first-blank-pack", "first-blank-pack", undefined],
+      ["@openclaw/second-blank-pack", "second-blank-pack", undefined],
+      ["@openclaw/example-plugin", "example", undefined],
+      ["@openclaw/manifest-derived-package", "manifest-owner", "manifest"],
+      ["@openclaw/channel-derived-package", "channel-owner", "channel"],
+    ] as const) {
+      const pluginDir = path.join(stateDir, "extensions", pluginId);
+      mkdirSafe(path.join(pluginDir, "dist"));
+      writePluginPackageManifest({
+        packageDir: pluginDir,
+        packageName,
+        extensions: ["./dist/index.js", " "],
+      });
+      writePluginEntry(path.join(pluginDir, "dist", "index.js"));
+      if (explicitOwner === "manifest") {
+        writePluginManifest({ pluginDir, id: pluginId });
+      }
+      if (explicitOwner === "channel") {
+        const packagePath = path.join(pluginDir, "package.json");
+        const packageManifest = JSON.parse(fs.readFileSync(packagePath, "utf-8"));
+        packageManifest.openclaw.channel = { id: pluginId };
+        fs.writeFileSync(packagePath, JSON.stringify(packageManifest), "utf-8");
+      }
+    }
+
+    const discovery = await discoverWithStateDir(stateDir, {});
+    const registry = loadPluginManifestRegistry({ discovery, installRecords: {} });
+    const errors = registry.diagnostics.filter((diagnostic) =>
+      diagnostic.message.includes("openclaw.extensions[1]"),
+    );
+
+    expect(errors).toHaveLength(5);
+    expect(errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ level: "error", pluginId: "first-blank-pack" }),
+        expect.objectContaining({ level: "error", pluginId: "second-blank-pack" }),
+        expect.objectContaining({ level: "error", pluginId: "example" }),
+        expect.objectContaining({ level: "error", pluginId: "manifest-owner" }),
+        expect.objectContaining({ level: "error", pluginId: "channel-owner" }),
+      ]),
+    );
   });
 
   it("infers built dist entries for installed TypeScript package plugins", async () => {
@@ -1876,6 +1929,20 @@ describe("discoverOpenClawPlugins", () => {
       },
       includes: ["local"],
       excludes: ["local-provider"],
+    },
+    {
+      name: "strips plugin suffixes consistently from package-derived ids",
+      setup: (stateDir: string) => {
+        const packageDir = path.join(stateDir, "extensions", "example-plugin-pack");
+        createPackagePluginWithEntry({
+          packageDir,
+          packageName: "@example/example-plugin",
+          entryPath: "src/index.ts",
+        });
+        return {};
+      },
+      includes: ["example"],
+      excludes: ["example-plugin"],
     },
     {
       name: "normalizes bundled speech package ids to canonical plugin ids",

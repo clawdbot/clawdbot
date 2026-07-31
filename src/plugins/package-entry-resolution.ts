@@ -605,6 +605,7 @@ export function resolvePackageSetupSource(params: {
   packageDir: string;
   packageRootRealPath?: string;
   manifest: PackageManifest | null;
+  pluginIdHint?: string;
   origin: PluginOrigin;
   requireBuiltRuntimeEntry?: boolean;
   sourceLabel: string;
@@ -625,7 +626,8 @@ export function resolvePackageSetupSource(params: {
     sourceEntryLabel: "setup entry",
     runtimeEntryPath: normalizeOptionalString(packageManifest?.runtimeSetupEntry),
     runtimeEntryLabel: "runtime setup entry",
-    pluginIdHint: packageManifest?.plugin?.id ?? packageManifest?.channel?.id,
+    pluginIdHint:
+      params.pluginIdHint ?? packageManifest?.plugin?.id ?? packageManifest?.channel?.id,
     origin: params.origin,
     ...(params.requireBuiltRuntimeEntry !== undefined
       ? { requireBuiltRuntimeEntry: params.requireBuiltRuntimeEntry }

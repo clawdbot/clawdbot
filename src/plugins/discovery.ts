@@ -658,22 +658,10 @@ function deriveIdHint(params: {
   if (rawManifestId) {
     return params.hasMultipleExtensions ? `${rawManifestId}/${base}` : rawManifestId;
   }
-  const rawPackageName = params.packageName?.trim();
-  if (!rawPackageName) {
+  const normalizedPackageId = derivePackagePluginIdHint({ packageName: params.packageName });
+  if (!normalizedPackageId) {
     return base;
   }
-
-  // Prefer the unscoped name so config keys stay stable even when the npm
-  // package is scoped (example: @openclaw/voice-call -> voice-call).
-  const unscoped = rawPackageName.includes("/")
-    ? (rawPackageName.split("/").pop() ?? rawPackageName)
-    : rawPackageName;
-  const normalizedPackageId =
-    unscoped.endsWith("-provider") && unscoped.length > "-provider".length
-      ? unscoped.slice(0, -"-provider".length)
-      : unscoped.endsWith("-plugin") && unscoped.length > "-plugin".length
-        ? unscoped.slice(0, -"-plugin".length)
-        : unscoped;
 
   if (!params.hasMultipleExtensions) {
     return normalizedPackageId;
@@ -693,17 +681,23 @@ function derivePackagePluginIdHint(params: {
   if (!rawPackageName) {
     return undefined;
   }
+  // Scoped package names must normalize to their unscoped runtime owner so
+  // diagnostics, config keys, and discovered plugin identities cannot diverge.
   const unscoped = rawPackageName.includes("/")
     ? (rawPackageName.split("/").pop() ?? rawPackageName)
     : rawPackageName;
-  return unscoped.endsWith("-provider") && unscoped.length > "-provider".length
-    ? unscoped.slice(0, -"-provider".length)
-    : unscoped;
+  for (const suffix of ["-provider", "-plugin"]) {
+    if (unscoped.endsWith(suffix) && unscoped.length > suffix.length) {
+      return unscoped.slice(0, -suffix.length);
+    }
+  }
+  return unscoped;
 }
 
 function pushInvalidPackageExtensionDiagnostic(params: {
   resolution: PackageExtensionResolution;
   source: string;
+  pluginId?: string;
   diagnostics: PluginDiagnostic[];
 }): boolean {
   if (params.resolution.status === "invalid") {
@@ -711,6 +705,7 @@ function pushInvalidPackageExtensionDiagnostic(params: {
       level: "error",
       source: params.source,
       message: params.resolution.error,
+      ...(params.pluginId ? { pluginId: params.pluginId } : {}),
     });
     return true;
   }
@@ -719,6 +714,7 @@ function pushInvalidPackageExtensionDiagnostic(params: {
       level: "error",
       source: params.source,
       message: "package.json openclaw.extensions is empty",
+      ...(params.pluginId ? { pluginId: params.pluginId } : {}),
     });
     return true;
   }
@@ -977,6 +973,7 @@ function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolea
     ...(rootRealPath !== undefined ? { rootRealPath } : {}),
     packageManifestCache: params.packageManifestCache,
   });
+  const packageMetadata = getPackageManifestMetadata(manifest ?? undefined);
   if (
     shouldSkipIncompatiblePackagePluginApi({
       origin: params.origin,
@@ -988,23 +985,33 @@ function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolea
   ) {
     return true;
   }
+  const candidateManifest = resolveCandidateManifest(dir, rejectHardlinks, rootRealPath);
+  const manifestId = candidateManifest?.manifest.id;
+  const explicitPluginId =
+    normalizeOptionalString(manifestId) ??
+    normalizeOptionalString(packageMetadata?.plugin?.id) ??
+    normalizeOptionalString(packageMetadata?.channel?.id);
+  const pluginIdHint = derivePackagePluginIdHint({
+    manifestId: explicitPluginId,
+    packageName: manifest?.name,
+  });
   const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
   if (
     pushInvalidPackageExtensionDiagnostic({
       resolution: extensionResolution,
       source: dir,
+      pluginId: pluginIdHint,
       diagnostics: params.diagnostics,
     })
   ) {
     return true;
   }
   const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
-  const candidateManifest = resolveCandidateManifest(dir, rejectHardlinks, rootRealPath);
-  const manifestId = candidateManifest?.manifest.id;
   const setupSource = resolvePackageSetupSource({
     packageDir: dir,
     ...(rootRealPath !== undefined ? { packageRootRealPath: rootRealPath } : {}),
     manifest,
+    pluginIdHint,
     origin: params.origin,
     requireBuiltRuntimeEntry,
     sourceLabel: dir,
@@ -1038,7 +1045,7 @@ function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolea
       manifest,
       extensions,
       origin: params.origin,
-      pluginIdHint: derivePackagePluginIdHint({ manifestId, packageName: manifest?.name }),
+      pluginIdHint,
       requireBuiltRuntimeEntry,
       sourceLabel: dir,
       diagnostics: params.diagnostics,
