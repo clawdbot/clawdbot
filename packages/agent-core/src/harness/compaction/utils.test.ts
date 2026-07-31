@@ -119,4 +119,21 @@ describe("serializeConversation", () => {
 
     expect(serializeConversation(messages)).toContain("ERROR: terminal failure");
   });
+
+  it("retains terminal errors followed by more than 600 characters of stack frames", () => {
+    const output = `${"progress ".repeat(300)}\nERROR: terminal failure\n${"  at applicationFrame()\n".repeat(45)}`;
+    const messages = [
+      {
+        role: "toolResult",
+        content: [{ type: "text", text: output }],
+      },
+    ] as unknown as Message[];
+
+    const serialized = serializeConversation(messages);
+
+    expect(serialized).toContain("ERROR: terminal failure");
+    expect(serialized).toContain("applicationFrame()");
+    expect(serialized).toContain("middle/trailing characters truncated");
+    expect(serialized.length).toBeLessThan(2100);
+  });
 });

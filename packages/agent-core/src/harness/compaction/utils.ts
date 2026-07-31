@@ -102,17 +102,29 @@ function truncateForSummary(text: string, maxChars: number): string {
     return text;
   }
   const tailChars = Math.min(Math.floor(maxChars * 0.3), 600);
-  const tail = sliceUtf16Safe(text, -tailChars);
-  if (IMPORTANT_TOOL_RESULT_TAIL.test(tail)) {
+  const diagnosticSearch = sliceUtf16Safe(text, -maxChars);
+  const diagnosticMatches = Array.from(
+    diagnosticSearch.matchAll(new RegExp(IMPORTANT_TOOL_RESULT_TAIL.source, "gi")),
+  );
+  const diagnosticMatch =
+    diagnosticMatches
+      .toReversed()
+      .find((match) => /^(error|exception|fatal|panic|errno)$/i.test(match[0])) ??
+    diagnosticMatches.at(-1);
+  if (diagnosticMatch) {
     const head = truncateUtf16Safe(text, maxChars - tailChars);
     const displacedHead = sliceUtf16Safe(text, Math.max(0, head.length - 32), maxChars);
     // A routine footer can match failure words. Never shorten the original
     // retained head when doing so would discard an existing diagnostic.
     if (!IMPORTANT_TOOL_RESULT_TAIL.test(displacedHead)) {
+      const diagnosticOffset = text.length - diagnosticSearch.length + (diagnosticMatch.index ?? 0);
+      const tailStart = Math.min(diagnosticOffset, text.length - tailChars);
+      const tail = sliceUtf16Safe(text, tailStart, tailStart + tailChars);
       const truncatedChars = text.length - head.length - tail.length;
+      const omissionPosition = tailStart + tail.length < text.length ? "middle/trailing" : "more";
       // Commands usually report their actual failure last; preserve that tail
       // so branch and ordinary compaction summaries can explain what failed.
-      return `${head}\n\n[... ${truncatedChars} more characters truncated]\n\n${tail}`;
+      return `${head}\n\n[... ${truncatedChars} ${omissionPosition} characters truncated]\n\n${tail}`;
     }
   }
   const sliced = truncateUtf16Safe(text, maxChars);
