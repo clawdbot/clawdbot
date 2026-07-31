@@ -140,7 +140,7 @@ describe("ClickClack native agent progress", () => {
 
   it("does not let a stalled transport hold turn finalization", async () => {
     vi.useFakeTimers();
-    let releaseFirstRequest: (() => void) | undefined;
+    let releaseFirstRequest!: () => void;
     try {
       const firstRequest = new Promise<void>((resolve) => {
         releaseFirstRequest = resolve;
@@ -174,7 +174,7 @@ describe("ClickClack native agent progress", () => {
       expect(publishEphemeral).toHaveBeenCalledTimes(2);
       expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({ op: "clear" });
     } finally {
-      releaseFirstRequest?.();
+      releaseFirstRequest();
       await vi.runAllTimersAsync();
       vi.useRealTimers();
     }
