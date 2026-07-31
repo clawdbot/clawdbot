@@ -1,5 +1,6 @@
 import type { SessionsListResult } from "../../api/types.ts";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
+import { appendSessionResults } from "./reconcile.ts";
 import type {
   SessionConnectionOwner,
   SessionGateway,
@@ -25,34 +26,6 @@ type SessionRosterRefreshHost = {
   decorate: (result: SessionsListResult | null) => SessionsListResult | null;
   onCanonicalList: (result: SessionsListResult | null) => void;
 };
-
-function appendSessionResults(
-  previous: SessionsListResult,
-  page: SessionsListResult,
-): SessionsListResult {
-  const seen = new Set<string>();
-  const sessions = [...previous.sessions, ...page.sessions].filter((row) => {
-    if (!row.key || seen.has(row.key)) {
-      return false;
-    }
-    seen.add(row.key);
-    return true;
-  });
-  const totalCount = page.totalCount ?? previous.totalCount;
-  const hasMore =
-    page.hasMore ??
-    (typeof totalCount === "number" && Number.isFinite(totalCount)
-      ? sessions.length < totalCount
-      : false);
-  return {
-    ...page,
-    count: sessions.length,
-    totalCount,
-    hasMore,
-    nextOffset: page.nextOffset ?? (hasMore ? sessions.length : null),
-    sessions,
-  };
-}
 
 export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   let inFlight: Promise<void> | null = null;
