@@ -181,6 +181,33 @@ describe("OpenClaw lifecycle runner parsing edges", () => {
     ).toBe(true);
   });
 
+  it.each(["plugins.install", "plugins.setEnabled", "plugins.uninstall", "plugins.refresh"])(
+    "classifies plugin-management gateway RPC: %s",
+    (method) => {
+      expect(
+        requiresApproval(`openclaw gateway call ${method} --params '{}'`, [
+          "openclaw",
+          "gateway",
+          "call",
+          method,
+          "--params",
+          "{}",
+        ]),
+      ).toBe(true);
+    },
+  );
+
+  it("keeps read-only plugin gateway RPCs non-blocking", () => {
+    expect(
+      requiresApproval("openclaw gateway call plugins.list", [
+        "openclaw",
+        "gateway",
+        "call",
+        "plugins.list",
+      ]),
+    ).toBe(false);
+  });
+
   it.each([
     ["& { openclaw gateway restart }", ["&", "{", "openclaw", "gateway", "restart", "}"]],
     [
