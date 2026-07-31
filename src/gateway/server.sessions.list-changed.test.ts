@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, expect, test, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { subscribePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   pinActivePluginSessionExtensionRegistry,
@@ -20,6 +21,7 @@ import {
   normalizeSessionDeliveryState,
   projectSessionDeliveryFields,
 } from "../utils/delivery-context.shared.js";
+import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { buildGatewaySessionRow } from "./session-utils.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -694,6 +696,34 @@ test("sessions.changed mutation events refresh effective fast metadata", async (
     effectiveFastModeSource: "session",
     fastAutoOnSeconds: 30,
   });
+});
+
+test("sessions.changed mutations reach plugin subscribers without websocket clients", async () => {
+  await writeMainSessionStore({ label: "Original title" });
+  const received = vi.fn();
+  const unsubscribe = subscribePluginSessionsChanged(received);
+  const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new Set() });
+
+  try {
+    await invokeSessionMutation({
+      method: "sessions.patch",
+      params: { key: "main", label: "Renamed title" },
+      subscribedConnIds: new Set(),
+      context: { broadcastToConnIds },
+    });
+
+    await vi.waitFor(() => {
+      expect(received).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:main",
+          label: "Renamed title",
+          reason: "patch",
+        }),
+      );
+    });
+  } finally {
+    unsubscribe();
+  }
 });
 
 test("sessions.list marks sessions with active abortable runs", async () => {
