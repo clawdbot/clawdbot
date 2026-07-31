@@ -1,6 +1,5 @@
 // Gateway cron notification delivery.
 // Sends announce and webhook notifications for cron completion/failure events.
-import { withTimeout } from "@openclaw/fs-safe/advanced";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -22,6 +21,7 @@ import type { CronJob, CronMessageChannel } from "../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
