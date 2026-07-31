@@ -264,10 +264,7 @@ export function createChannelProgressDraftCompositor(params: {
     planExplanation = "";
   };
 
-  const render = async (options?: { flush?: boolean }): Promise<boolean> => {
-    if (!params.active || params.mode !== "progress" || finalReplyStarted || finalReplyDelivered) {
-      return false;
-    }
+  const publish = async (options?: { flush?: boolean }): Promise<boolean> => {
     const text = formatDraftText();
     const linesChanged = params.updateOnLineChange === true && lines !== lastRenderedLines;
     if (!text || (text === lastRenderedText && !linesChanged)) {
@@ -277,6 +274,13 @@ export function createChannelProgressDraftCompositor(params: {
     lastRenderedLines = lines;
     await params.update(text, { ...options, lines: [...lines] });
     return true;
+  };
+
+  const render = async (options?: { flush?: boolean }): Promise<boolean> => {
+    if (!params.active || params.mode !== "progress" || finalReplyStarted || finalReplyDelivered) {
+      return false;
+    }
+    return await publish(options);
   };
 
   const schedulePreambleExpiryRefresh = () => {
@@ -409,17 +413,7 @@ export function createChannelProgressDraftCompositor(params: {
     }
     lines = nextLines;
     if (params.mode !== "progress") {
-      if (!shouldStoreLine) {
-        return false;
-      }
-      const text = formatDraftText();
-      if (!text || text === lastRenderedText) {
-        return false;
-      }
-      lastRenderedText = text;
-      lastRenderedLines = lines;
-      await params.update(text, { lines: [...lines] });
-      return true;
+      return shouldStoreLine ? await publish() : false;
     }
     if (options?.startImmediately || params.shouldStartNow?.(line)) {
       const alreadyStarted = gate.hasStarted;

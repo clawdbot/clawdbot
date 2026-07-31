@@ -59,6 +59,24 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).toHaveBeenLastCalledWith("🛠️ Next", expect.anything());
   });
 
+  it("publishes partial-preview tool lines without enabling progress-only plans", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "partial", progress: { label: false } } },
+      mode: "partial",
+      active: true,
+      seed: "preview",
+      update,
+    });
+
+    await progress.pushToolProgress("Inspecting files");
+    expect(update).toHaveBeenLastCalledWith("• Inspecting files", {
+      lines: ["Inspecting files"],
+    });
+    expect(await progress.pushPlanProgress([{ step: "Patch", status: "in_progress" }])).toBe(false);
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
   it("returns detached structured state for channel-native renderers", async () => {
     const progress = createChannelProgressDraftCompositor({
       entry: { streaming: { mode: "progress", progress: { label: false } } },
