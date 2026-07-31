@@ -293,11 +293,6 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         },
       },
       maxLinesPerMessage: 17,
-      ui: {
-        components: {
-          accentColor: "#5865F2",
-        },
-      },
       threadBindings: {
         enabled: true,
         idleHours: 24,
@@ -319,7 +314,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         reconnectGraceMs: 15000,
         tts: {
           provider: "openai",
-          openai: { voice: "alloy" },
+          providers: { openai: { speakerVoice: "alloy" } },
         },
       },
       execApprovals: {
@@ -330,19 +325,13 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         target: "dm", // dm | channel | both
         cleanupAfterResolve: false,
       },
-      retry: {
-        attempts: 3,
-        minDelayMs: 500,
-        maxDelayMs: 30000,
-        jitter: 0.1,
-      },
     },
   },
 }
 ```
 
 - Token: `channels.discord.token`, with `DISCORD_BOT_TOKEN` as fallback for the default account.
-- Direct outbound calls that provide an explicit Discord `token` use that token for the call; account retry/policy settings still come from the selected account in the active runtime snapshot.
+- Direct outbound calls that provide an explicit Discord `token` use that token for the call; account policy settings still come from the selected account in the active runtime snapshot.
 - Optional `channels.discord.defaultAccount` overrides default account selection when it matches a configured account id.
 - Use `user:<id>` (DM) or `channel:<id>` (guild channel) for delivery targets; bare numeric IDs are rejected.
 - Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged name (no `#`). Prefer guild IDs.
@@ -359,7 +348,6 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
   - `spawnSessions`: switch for `sessions_spawn({ thread: true })` and ACP thread-spawn auto thread creation/binding (default: `true`)
   - `defaultSpawnContext`: native subagent context for thread-bound spawns (`"fork"` by default)
 - Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for channels and threads (use channel/thread id in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
-- `channels.discord.ui.components.accentColor` sets the accent color for Discord components v2 containers.
 - `channels.discord.agentComponents.ttlMs` controls how long sent Discord component callbacks remain registered. Default `1800000` (30 minutes), maximum `86400000` (24 hours). Per-account overrides live under `channels.discord.accounts.<accountId>.agentComponents.ttlMs`. Prefer the shortest TTL that fits the workflow.
 - `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + LLM + TTS overrides. Text-only Discord configs leave voice off by default; set `channels.discord.voice.enabled=true` to opt in.
 - `channels.discord.voice.model` optionally overrides the LLM model used for Discord voice channel responses.
@@ -401,7 +389,6 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       groups: {
         "spaces/AAAA": { enabled: true, requireMention: true },
       },
-      actions: { reactions: true },
       typingIndicator: "message",
       mediaMaxMb: 20,
     },
@@ -424,17 +411,12 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       enabled: true,
       botToken: "xoxb-...",
       appToken: "xapp-...",
-      socketMode: {
-        clientPingTimeout: 15000,
-        serverPingTimeout: 30000,
-        pingPongLoggingEnabled: false,
-      },
       dmPolicy: "pairing",
       allowFrom: ["U123", "U456", "*"],
       dm: { enabled: true, groupEnabled: false, groupChannels: ["G123"] },
       channels: {
         C123: { enabled: true, requireMention: true, allowBots: false },
-        "#general": {
+        C456: {
           enabled: true,
           requireMention: true,
           allowBots: false,
@@ -505,7 +487,6 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
   notifications and reaction action tools are unavailable. See
   [Enterprise Grid org-wide installs](/channels/slack#enterprise-grid-org-wide-installs)
   for the least-privilege manifest, setup workflow, and complete restrictions.
-- `socketMode` passes Slack SDK Socket Mode transport tuning through to the public Bolt receiver API. Use it only when investigating ping/pong timeout or stale websocket behavior. `clientPingTimeout` defaults to `15000`; `serverPingTimeout` and `pingPongLoggingEnabled` are passed only when configured.
 - `botToken`, `appToken`, `signingSecret`, and `userToken` accept plaintext
   strings or SecretRef objects.
 - Slack account snapshots expose per-credential source/status fields such as
