@@ -17,6 +17,10 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import {
+  normalizeImportedHistoryText,
+  projectImportedHistoryTextParts,
+} from "./imported-history-text.js";
 import type { CodexThread, JsonValue } from "./protocol.js";
 import {
   attachCodexMirrorAttestation,
@@ -50,8 +54,6 @@ function isMirroredAgentMessage(message: AgentMessage): message is MirroredAgent
 
 const CODEX_HISTORY_IMPORT_MAX_MESSAGES = 200;
 const CODEX_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
-const CODEX_HISTORY_IMPORT_MAX_MESSAGE_BYTES = 64 * 1024;
-const CODEX_HISTORY_TRUNCATION_SUFFIX = "\n\n[Message truncated during Codex history import.]";
 const CODEX_HISTORY_ASSISTANT_API = "openai-chatgpt-responses" as const;
 const CODEX_HISTORY_ASSISTANT_PROVIDER = "openai";
 const CODEX_HISTORY_ASSISTANT_MODEL = "native-history";
@@ -80,38 +82,6 @@ type ProjectedCodexHistoryMessage = {
   textBytes: number;
 };
 
-function isUtf8ContinuationByte(byte: number | undefined): boolean {
-  return byte !== undefined && (byte & 0xc0) === 0x80;
-}
-
-function truncateUtf8Prefix(value: string, maxBytes: number): string {
-  const bytes = Buffer.from(value);
-  if (bytes.byteLength <= maxBytes) {
-    return value;
-  }
-  let end = Math.max(0, maxBytes);
-  while (end > 0 && isUtf8ContinuationByte(bytes[end])) {
-    end -= 1;
-  }
-  return bytes.subarray(0, end).toString("utf8");
-}
-
-function normalizeImportedHistoryText(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const text = value.trim();
-  if (!text) {
-    return undefined;
-  }
-  if (Buffer.byteLength(text, "utf8") <= CODEX_HISTORY_IMPORT_MAX_MESSAGE_BYTES) {
-    return text;
-  }
-  const suffixBytes = Buffer.byteLength(CODEX_HISTORY_TRUNCATION_SUFFIX, "utf8");
-  const contentLimitBytes = Math.max(0, CODEX_HISTORY_IMPORT_MAX_MESSAGE_BYTES - suffixBytes);
-  return `${truncateUtf8Prefix(text, contentLimitBytes)}${CODEX_HISTORY_TRUNCATION_SUFFIX}`;
-}
-
 function projectCodexUserItemText(item: Record<string, unknown>): string | undefined {
   if (!Array.isArray(item.content)) {
     return undefined;
@@ -123,9 +93,8 @@ function projectCodexUserItemText(item: Record<string, unknown>): string | undef
     }
     const input = value as Record<string, unknown>;
     if (input.type === "text") {
-      const text = normalizeImportedHistoryText(input.text);
-      if (text) {
-        parts.push(text);
+      if (typeof input.text === "string") {
+        parts.push(input.text);
       }
       continue;
     }
@@ -143,7 +112,7 @@ function projectCodexUserItemText(item: Record<string, unknown>): string | undef
       }
     }
   }
-  return normalizeImportedHistoryText(parts.join("\n"));
+  return projectImportedHistoryTextParts(parts);
 }
 
 function selectTurnsThroughBoundary(

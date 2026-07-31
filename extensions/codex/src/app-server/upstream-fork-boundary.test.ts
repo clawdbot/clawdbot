@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import type { SessionTranscriptMessageEntry } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { CodexThreadItem, CodexTurn } from "./protocol.js";
@@ -138,6 +139,71 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
       turns: [turn("turn-1", [user("persisted")])],
       userMessageOrdinal: 0,
       localPrefixTexts: ["local mirror"],
+    });
+
+    expect(result).toMatchObject({ ok: false, code: "drift-mismatch" });
+  });
+
+  it("forks when history import trimmed the stored copy of the upstream prompt", async () => {
+    const result = await resolveFromTurns({
+      turns: [turn("turn-1", [user(" \n  prompt  \n ")])],
+      userMessageOrdinal: 0,
+      localPrefixTexts: ["prompt"],
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      boundary: {
+        beforeTurnId: "turn-1",
+        targetTurnId: "turn-1",
+        retainedMarker: { turnId: null, userMessageCount: 0 },
+      },
+    });
+  });
+
+  it("keeps forking past a trimmed prefix message", async () => {
+    const result = await resolveFromTurns({
+      turns: [turn("turn-1", [user("  one  ")]), turn("turn-2", [user("two")])],
+      userMessageOrdinal: 1,
+      localPrefixTexts: ["one", "two"],
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      boundary: {
+        beforeTurnId: "turn-2",
+        targetTurnId: "turn-2",
+        retainedMarker: { turnId: "turn-1", userMessageCount: 1 },
+      },
+    });
+  });
+
+  it("forks when history import truncated an oversized upstream prompt", async () => {
+    const oversized = "x".repeat(64 * 1024 + 10);
+    const suffix = "\n\n[Message truncated during Codex history import.]";
+    const stored = `${oversized.slice(0, 64 * 1024 - Buffer.byteLength(suffix, "utf8"))}${suffix}`;
+
+    const result = await resolveFromTurns({
+      turns: [turn("turn-1", [user(oversized)])],
+      userMessageOrdinal: 0,
+      localPrefixTexts: [stored],
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      boundary: {
+        beforeTurnId: "turn-1",
+        targetTurnId: "turn-1",
+        retainedMarker: { turnId: null, userMessageCount: 0 },
+      },
+    });
+  });
+
+  it("still rejects drift that trimming cannot explain", async () => {
+    const result = await resolveFromTurns({
+      turns: [turn("turn-1", [user("  upstream  ")])],
+      userMessageOrdinal: 0,
+      localPrefixTexts: ["local"],
     });
 
     expect(result).toMatchObject({ ok: false, code: "drift-mismatch" });

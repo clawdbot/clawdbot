@@ -1,5 +1,6 @@
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
+import { projectImportedHistoryTextParts } from "./imported-history-text.js";
 import type { CodexThreadItem, CodexTurn } from "./protocol.js";
 
 type CodexUpstreamForkBoundaryFailureCode =
@@ -44,12 +45,14 @@ function asInputs(item: CodexThreadItem): UserInput[] {
 
 function userMessageDisplay(item: CodexThreadItem): {
   text: string;
+  importProjectedText: string | undefined;
   visible: boolean;
   hasUnverifiableInput: boolean;
 } {
   let text = "";
   let hasTextElement = false;
   let hasImage = false;
+  const textParts: string[] = [];
   // Any non-text input (images, skills, mentions, future variants) has no canonical
   // cross-system identity; its presence makes the message unverifiable for drift checks.
   let hasUnverifiableInput = false;
@@ -57,6 +60,7 @@ function userMessageDisplay(item: CodexThreadItem): {
     if (input.type === "text") {
       if (typeof input.text === "string") {
         text += input.text;
+        textParts.push(input.text);
       }
       hasTextElement ||= Array.isArray(input.textElements) && input.textElements.length > 0;
     } else {
@@ -66,6 +70,7 @@ function userMessageDisplay(item: CodexThreadItem): {
   }
   return {
     text,
+    importProjectedText: projectImportedHistoryTextParts(textParts),
     visible: Boolean(text.trim()) || hasTextElement || hasImage,
     hasUnverifiableInput,
   };
@@ -166,7 +171,11 @@ function resolveCodexUpstreamForkBoundaryFromTurns(params: {
           "A message before the fork point contains images or attachments that cannot be verified across OpenClaw and Codex. Fork from a text-only span instead.",
         );
       }
-      if (display.text !== localText) {
+      // The transcript stores the same upstream text two ways: history import normalizes
+      // it (trim + per-message cap), while a message authored in this session is stored
+      // verbatim. Accept either form, or an imported prefix reads as divergence and
+      // fails this fork point and every later one.
+      if (localText !== display.text && localText !== display.importProjectedText) {
         return failure(
           "drift-mismatch",
           "The local conversation no longer matches the Codex thread. Refresh the session and try again.",
