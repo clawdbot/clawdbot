@@ -253,6 +253,26 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("rejects an unimported agent-scoped Codex auth file with migration guidance", async () => {
+    await withTempDir("openclaw-codex-unimported-auth-", async (agentDir) => {
+      const codexHome = resolveCodexAppServerHomeDir(agentDir);
+      await writeCodexCliAuthFile(codexHome);
+
+      await expect(
+        bridgeCodexAppServerStartOptions({
+          startOptions: createStartOptions(),
+          agentDir,
+          agentId: "research",
+        }),
+      ).rejects.toMatchObject({
+        name: "AgentHarnessPreflightError",
+        message: expect.stringContaining(
+          "openclaw migrate apply codex --from <codex-home> --agent research --include-secrets --yes",
+        ),
+      });
+    });
+  });
+
   it("provisions the native Computer Use client before auto-install startup", async () => {
     await withTempDir("openclaw-codex-computer-use-service-", async (agentDir) => {
       const startOptions = createStartOptions();
@@ -357,6 +377,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         commandSource: "config",
         args: [],
       });
+      await writeCodexCliAuthFile(resolveCodexAppServerHomeDir(agentDir));
 
       const bridged = await bridgeCodexAppServerStartOptions({ startOptions, agentDir });
 
@@ -478,6 +499,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
           accountId: "account-123",
         },
       });
+      await writeCodexCliAuthFile(resolveCodexAppServerHomeDir(agentDir));
 
       await expect(
         bridgeCodexAppServerStartOptions({

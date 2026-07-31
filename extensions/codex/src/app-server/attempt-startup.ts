@@ -242,6 +242,7 @@ export async function startCodexAttemptThread(params: {
                       : {}),
                   }
                 : {}),
+              agentId: params.sessionAgentId,
               agentDir: params.agentDir,
               config: params.config,
               onStartedClient: (client) => {

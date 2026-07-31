@@ -485,6 +485,15 @@ openclaw migrate codex --dry-run
 openclaw migrate apply codex --yes
 ```
 
+Credentials need the sensitive migration path because the default agent scope
+does not consume a copied or mounted `codex-home/auth.json` directly. Replace
+`<agent-id>` with the configured agent that owns this Codex home:
+
+```bash
+openclaw migrate plan codex --from <codex-home> --agent <agent-id> --include-secrets
+openclaw migrate apply codex --from <codex-home> --agent <agent-id> --include-secrets --yes
+```
+
 If a deployment needs additional environment isolation, add those variables
 to `appServer.clearEnv`:
 

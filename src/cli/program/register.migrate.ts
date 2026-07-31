@@ -71,6 +71,7 @@ function addMigrationOptions(command: Command): Command {
       addMigrationSkillOption(
         command
           .option("--from <path>", "Source directory to migrate from")
+          .option("--agent <id>", "Target agent (default: configured default agent)")
           .option("--include-secrets", "Import supported credentials and secrets")
           .option("--no-auth-credentials", "Skip auth credential migration")
           .option(
@@ -88,6 +89,14 @@ function readVerifyPluginApps(value: unknown): boolean {
   return value === true;
 }
 
+function readMigrationTargetAgentId(value: unknown, command: Command): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  const parentValue = command.parent?.opts().agent;
+  return typeof parentValue === "string" ? parentValue : undefined;
+}
+
 /** Register migration commands and shared provider/item selection flags. */
 export function registerMigrateCommand(program: Command) {
   const migrate = addVerifyPluginAppsOption(
@@ -96,6 +105,7 @@ export function registerMigrateCommand(program: Command) {
       .description("Import state from another agent system")
       .argument("[provider]", "Migration provider id, for example hermes")
       .option("--from <path>", "Source directory to migrate from")
+      .option("--agent <id>", "Target agent (default: configured default agent)")
       .option("--include-secrets", "Import supported credentials and secrets")
       .option("--no-auth-credentials", "Skip auth credential migration")
       .option("--overwrite", "Overwrite conflicting target files after item-level backups", false)
@@ -138,6 +148,7 @@ export function registerMigrateCommand(program: Command) {
         await migrateDefaultCommand(defaultRuntime, {
           provider: provider as string | undefined,
           source: opts.from as string | undefined,
+          targetAgentId: opts.agent as string | undefined,
           includeSecrets: opts.includeSecrets === true ? true : undefined,
           authCredentials: opts.authCredentials as boolean | undefined,
           overwrite: Boolean(opts.overwrite),
@@ -168,11 +179,12 @@ export function registerMigrateCommand(program: Command) {
     migrate
       .command("plan <provider>")
       .description("Preview a migration without changing OpenClaw state"),
-  ).action(async (provider, opts) => {
+  ).action(async (provider, opts, command) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
       await migratePlanCommand(defaultRuntime, {
         provider: provider as string,
         source: opts.from as string | undefined,
+        targetAgentId: readMigrationTargetAgentId(opts.agent, command),
         includeSecrets: opts.includeSecrets === true ? true : undefined,
         authCredentials: opts.authCredentials as boolean | undefined,
         overwrite: Boolean(opts.overwrite),
@@ -191,11 +203,12 @@ export function registerMigrateCommand(program: Command) {
     .option("--backup-output <path>", "Pre-migration backup archive path or directory")
     .option("--no-backup", "Skip the pre-migration OpenClaw backup")
     .option("--force", "Allow dangerous options such as --no-backup", false)
-    .action(async (provider, opts) => {
+    .action(async (provider, opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         await migrateApplyCommand(defaultRuntime, {
           provider: provider as string,
           source: opts.from as string | undefined,
+          targetAgentId: readMigrationTargetAgentId(opts.agent, command),
           includeSecrets: opts.includeSecrets === true ? true : undefined,
           authCredentials: opts.authCredentials as boolean | undefined,
           overwrite: Boolean(opts.overwrite),
