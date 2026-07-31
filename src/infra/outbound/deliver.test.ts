@@ -441,26 +441,38 @@ describe("deliverOutboundPayloads", () => {
       async (params: {
         id: string;
         run: (owner: {
-          fence: Record<string, unknown>;
+          fence?: Record<string, unknown>;
+          enterModifierBoundary: () => void;
           markPublished: () => void;
         }) => Promise<unknown>;
       }) => {
-        if (queueMocks.findDeliveryIntentOwner()) {
-          return { status: "existing" };
+        const existing = new Error("existing stable intent");
+        const owner: {
+          fence?: Record<string, unknown>;
+          enterModifierBoundary: () => void;
+          markPublished: () => void;
+        } = {
+          enterModifierBoundary: () => {
+            if (queueMocks.findDeliveryIntentOwner()) {
+              throw existing;
+            }
+            owner.fence = {
+              id: params.id,
+              enqueuedAt: 0,
+              retryCount: 0,
+              attemptCount: 0,
+            };
+          },
+          markPublished: () => {},
+        };
+        try {
+          return { status: "claimed", value: await params.run(owner) };
+        } catch (error) {
+          if (error === existing) {
+            return { status: "existing" };
+          }
+          throw error;
         }
-        const entry = {
-          id: params.id,
-          enqueuedAt: 0,
-          retryCount: 0,
-          attemptCount: 0,
-        };
-        return {
-          status: "claimed",
-          value: await params.run({
-            fence: entry,
-            markPublished: () => {},
-          }),
-        };
       },
     );
     completionMocks.completeDurableDelivery.mockClear();

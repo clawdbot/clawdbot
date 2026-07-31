@@ -127,7 +127,12 @@ async function runOutboundDeliveryWithQueue(
     preparedBatch =
       existingStableDelivery?.preparedBatch ??
       params.preparedBatch ??
-      (await prepareOutboundPayloadBatch(params));
+      (await prepareOutboundPayloadBatch(
+        params,
+        stableIntentFenceOwner
+          ? { onBeforeFirstModifier: stableIntentFenceOwner.enterModifierBoundary }
+          : undefined,
+      ));
   } catch (error) {
     emitPreQueueFailure();
     const failedPayload =
@@ -201,7 +206,7 @@ async function runOutboundDeliveryWithQueue(
       : await stageAndEnqueueOutboundDelivery(
           deliveryParams,
           preparedBatch,
-          stableIntentFenceOwner ? { intentFence: stableIntentFenceOwner.fence } : undefined,
+          stableIntentFenceOwner?.fence ? { intentFence: stableIntentFenceOwner.fence } : undefined,
         ).catch((err: unknown) => {
           if (queuePolicy === "required" || err instanceof StableDeliveryIntentFenceLostError) {
             emitPreQueueFailure();
@@ -211,7 +216,7 @@ async function runOutboundDeliveryWithQueue(
         }); // Best-effort delivery falls back to direct send if staging or the queue write fails.
 
   const queueId = queued?.id ?? null;
-  if (queued?.created && stableIntentFenceOwner) {
+  if (queued?.created && stableIntentFenceOwner?.fence) {
     stableIntentFenceOwner.markPublished();
   }
   if (queueId) {

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -19,7 +20,7 @@ describe("stable delivery intent fence", () => {
     stateDir = tempDirs.make("openclaw-stable-intent-fence-");
   });
 
-  it("admits policy once and retains a payload-free terminal owner", async () => {
+  it("admits policy once from the modifier boundary and retains a terminal owner", async () => {
     let releaseFirst!: () => void;
     const firstBlocked = new Promise<void>((resolve) => {
       releaseFirst = resolve;
@@ -33,7 +34,8 @@ describe("stable delivery intent fence", () => {
     const first = withStableDeliveryIntentFence({
       id: "stable-policy-owner",
       stateDir,
-      run: async () => {
+      run: async (owner) => {
+        owner.enterModifierBoundary();
         notifyFirstStarted();
         await firstBlocked;
         return "prepared";
@@ -41,7 +43,14 @@ describe("stable delivery intent fence", () => {
     });
     await firstStarted;
     await expect(
-      withStableDeliveryIntentFence({ id: "stable-policy-owner", stateDir, run: secondRun }),
+      withStableDeliveryIntentFence({
+        id: "stable-policy-owner",
+        stateDir,
+        run: async (owner) => {
+          owner.enterModifierBoundary();
+          return secondRun();
+        },
+      }),
     ).resolves.toEqual({ status: "existing" });
     expect(secondRun).not.toHaveBeenCalled();
 
@@ -55,7 +64,14 @@ describe("stable delivery intent fence", () => {
       ),
     ).toBe("completed");
     await expect(
-      withStableDeliveryIntentFence({ id: "stable-policy-owner", stateDir, run: secondRun }),
+      withStableDeliveryIntentFence({
+        id: "stable-policy-owner",
+        stateDir,
+        run: async (owner) => {
+          owner.enterModifierBoundary();
+          return secondRun();
+        },
+      }),
     ).resolves.toEqual({ status: "existing" });
     expect(secondRun).not.toHaveBeenCalled();
   });
@@ -65,7 +81,8 @@ describe("stable delivery intent fence", () => {
       withStableDeliveryIntentFence({
         id: "failed-policy-owner",
         stateDir,
-        run: async () => {
+        run: async (owner) => {
+          owner.enterModifierBoundary();
           throw new Error("hook interrupted with private input");
         },
       }),
@@ -81,8 +98,56 @@ describe("stable delivery intent fence", () => {
       withStableDeliveryIntentFence({
         id: "failed-policy-owner",
         stateDir,
-        run: vi.fn(),
+        run: async (owner) => {
+          owner.enterModifierBoundary();
+        },
       }),
     ).resolves.toEqual({ status: "existing" });
+  });
+
+  it("allows retry after a process exits before the modifier boundary", async () => {
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "--eval",
+        `
+          const { withStableDeliveryIntentFence } = await import(
+            "./src/infra/outbound/delivery-intent-fence.ts"
+          );
+          await withStableDeliveryIntentFence({
+            id: "pre-modifier-exit",
+            stateDir: process.env.OPENCLAW_STATE_DIR,
+            run: async () => process.exit(0),
+          });
+        `,
+      ],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        encoding: "utf8",
+      },
+    );
+    expect(child.status, child.stderr).toBe(0);
+    expect(
+      getDeliveryQueueEntryStatus(
+        OUTBOUND_DELIVERY_INTENT_FENCE_QUEUE_NAME,
+        "pre-modifier-exit",
+        stateDir,
+      ),
+    ).toBeUndefined();
+
+    await expect(
+      withStableDeliveryIntentFence({
+        id: "pre-modifier-exit",
+        stateDir,
+        run: async (owner) => {
+          owner.enterModifierBoundary();
+          return "prepared";
+        },
+      }),
+    ).resolves.toEqual({ status: "claimed", value: "prepared" });
   });
 });

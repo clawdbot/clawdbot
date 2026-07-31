@@ -142,14 +142,20 @@ async function enqueueRestartSentinelNoticeClaimed(
     maxRetries: RESTART_NOTICE_MAX_ATTEMPTS,
     deliveryIntentId,
   };
-  const preparedBatch = await prepareOutboundPayloadBatch(delivery);
-  const queued = await stageAndEnqueueOutboundDelivery(delivery, preparedBatch, {
-    intentFence: intentFenceOwner.fence,
+  const preparedBatch = await prepareOutboundPayloadBatch(delivery, {
+    onBeforeFirstModifier: intentFenceOwner.enterModifierBoundary,
   });
+  const queued = await stageAndEnqueueOutboundDelivery(
+    delivery,
+    preparedBatch,
+    intentFenceOwner.fence ? { intentFence: intentFenceOwner.fence } : undefined,
+  );
   if (!queued?.created) {
     throw new Error("Restart sentinel notice could not acquire durable queue custody");
   }
-  intentFenceOwner.markPublished();
+  if (intentFenceOwner.fence) {
+    intentFenceOwner.markPublished();
+  }
   return queued;
 }
 

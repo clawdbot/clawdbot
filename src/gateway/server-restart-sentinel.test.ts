@@ -666,16 +666,23 @@ describe("scheduleRestartSentinelWake", () => {
       async (params: {
         id: string;
         run: (owner: {
-          fence: Record<string, unknown>;
+          fence?: Record<string, unknown>;
+          enterModifierBoundary: () => void;
           markPublished: () => void;
         }) => Promise<unknown>;
-      }) => ({
-        status: "claimed",
-        value: await params.run({
-          fence: { id: params.id },
+      }) => {
+        const owner: {
+          fence?: Record<string, unknown>;
+          enterModifierBoundary: () => void;
+          markPublished: () => void;
+        } = {
+          enterModifierBoundary: () => {
+            owner.fence = { id: params.id };
+          },
           markPublished: () => {},
-        }),
-      }),
+        };
+        return { status: "claimed", value: await params.run(owner) };
+      },
     );
     mocks.ackDelivery.mockClear();
     mocks.failDelivery.mockClear();

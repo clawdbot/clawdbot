@@ -15,9 +15,12 @@ import {
 export type StableDeliveryIntentFence = DeliveryQueueEntryState;
 
 export type StableDeliveryIntentFenceOwner = {
-  fence: StableDeliveryIntentFence;
+  fence?: StableDeliveryIntentFence;
+  enterModifierBoundary: () => void;
   markPublished: () => void;
 };
+
+class StableDeliveryIntentFenceExistsError extends Error {}
 
 export class StableDeliveryIntentFenceLostError extends Error {
   constructor(id: string) {
@@ -48,47 +51,54 @@ function claimStableDeliveryIntentFence(params: {
     : null;
 }
 
-/**
- * Admits one stable producer before modifying policy starts. A crash can leave
- * this payload-free fence behind, intentionally suppressing regeneration
- * rather than rerunning stateful modifiers without their prepared output.
- */
+/** Owns the irreversible stable-id fence only from the first modifier onward. */
 export async function withStableDeliveryIntentFence<T>(params: {
   id: string;
   completionRetention?: DeliveryQueueCompletionRetention;
   stateDir?: string;
   run: (owner: StableDeliveryIntentFenceOwner) => Promise<T>;
 }): Promise<{ status: "claimed"; value: T } | { status: "existing" }> {
-  const fence = claimStableDeliveryIntentFence(params);
-  if (!fence) {
-    return { status: "existing" };
-  }
-
   let published = false;
+  const owner: StableDeliveryIntentFenceOwner = {
+    enterModifierBoundary: () => {
+      if (owner.fence) {
+        return;
+      }
+      const fence = claimStableDeliveryIntentFence(params);
+      if (!fence) {
+        throw new StableDeliveryIntentFenceExistsError();
+      }
+      // Persist immediately before invoking the first stateful modifier. A
+      // crash before this callback leaves no owner; afterward retry must not
+      // repeat a modifier whose side effect may already have started.
+      owner.fence = fence;
+    },
+    markPublished: () => {
+      published = true;
+    },
+  };
   try {
-    const value = await params.run({
-      fence,
-      markPublished: () => {
-        published = true;
-      },
-    });
-    if (!published) {
+    const value = await params.run(owner);
+    if (owner.fence && !published) {
       completeDeliveryQueueEntry(
         OUTBOUND_DELIVERY_INTENT_FENCE_QUEUE_NAME,
-        fence.id,
+        owner.fence.id,
         params.stateDir,
       );
     }
     return { status: "claimed", value };
   } catch (error) {
-    if (!published) {
+    if (error instanceof StableDeliveryIntentFenceExistsError) {
+      return { status: "existing" };
+    }
+    if (owner.fence && !published) {
       failPendingDeliveryQueueEntry({
         queueName: OUTBOUND_DELIVERY_INTENT_FENCE_QUEUE_NAME,
-        id: fence.id,
+        id: owner.fence.id,
         expectedStatus: "pending",
         lastError: "stable outbound intent failed before prepared custody",
-        entry: fence,
-        failedEntry: fence,
+        entry: owner.fence,
+        failedEntry: owner.fence,
         stateDir: params.stateDir,
       });
     }

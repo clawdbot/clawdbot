@@ -110,13 +110,17 @@ The prepared outbound queue stores only the final post-policy batch. Modifying
 hooks run before queue admission, and restart recovery delivers that prepared
 batch without running those hooks again.
 
-Pending outbound messages from before this upgrade may be discarded. This can
-include older retry or backoff entries, not only messages active when the
-Gateway upgrades. OpenClaw does not replay an ambiguous or partially sent
-legacy entry: any provider-visible portion stays as-is, and the unsent remainder
-is discarded. Completed receipts, failed terminal records, acknowledged
-provider messages, sessions, transcripts, schedules, and configuration are not
-part of this retirement.
+During the one-time transition from the legacy `outbound` queue used by
+v2026.7.1 and earlier to the prepared-batch queue format, the upgrade contract
+is: **Pending outbound messages from before this upgrade may be discarded.**
+This can include older retry or backoff entries, not only messages active when
+the Gateway upgrades. OpenClaw does not replay an ambiguous or partially sent
+legacy entry: any provider-visible portion stays as-is, and the unsent
+remainder is discarded. Completed receipts, failed terminal records,
+acknowledged provider messages, sessions, transcripts, schedules, and
+configuration are not part of this retirement. This warning applies only to
+that queue-format transition, not to ordinary upgrades after prepared custody
+is in use.
 
 ### Receive context
 
