@@ -86,7 +86,7 @@ describe("Nostr profile HTTP operations", () => {
       "/api/channels/nostr/default/profile/import",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ autoMerge: true }),
+        body: JSON.stringify({ autoMerge: false }),
         signal: expect.any(AbortSignal),
       }),
     );

@@ -519,8 +519,9 @@ class ChannelsPage extends OpenClawLightDomElement {
         return;
       }
 
-      const values = data.merged
-        ? mergeNostrProfileDraft(data.merged, currentForm.values, currentForm.original)
+      const imported = data.merged ?? data.imported;
+      const values = imported
+        ? mergeNostrProfileDraft(imported, currentForm.values, currentForm.original)
         : currentForm.values;
       this.nostrProfileFormState = {
         ...currentForm,
