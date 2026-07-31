@@ -126,21 +126,32 @@ function assertNoUnimportedAgentCodexAuthFile(params: {
   agentId?: string;
   agentDir: string;
 }): void {
+  const error = resolveUnimportedAgentCodexAuthError(params);
+  if (error) {
+    throw error;
+  }
+}
+
+export function resolveUnimportedAgentCodexAuthError(params: {
+  startOptions: CodexAppServerStartOptions;
+  agentId?: string;
+  agentDir: string;
+}): AgentHarnessPreflightError | undefined {
   const managedCodexCli =
     params.startOptions.commandSource === "managed" ||
     params.startOptions.commandSource === "resolved-managed";
   if (!managedCodexCli || params.startOptions.homeScope === "user") {
-    return;
+    return undefined;
   }
   const codexHome = resolveCodexAppServerHomeDir(params.agentDir);
   const authPath = path.join(codexHome, CODEX_AUTH_JSON_FILENAME);
   // Managed starts force ephemeral Codex auth, so this file would otherwise be
   // ignored and the operator would receive only the downstream authentication error.
   if (!fsSync.existsSync(authPath)) {
-    return;
+    return undefined;
   }
   const targetAgentId = params.agentId?.trim() || "<agent-id>";
-  throw new AgentHarnessPreflightError(
+  return new AgentHarnessPreflightError(
     `A Codex auth file exists at ${authPath}, but agent-scoped Codex runs use OpenClaw's auth store and do not read that file. Preview the import with \`openclaw migrate plan codex --from <codex-home> --agent ${targetAgentId} --include-secrets\`, then run \`openclaw migrate apply codex --from <codex-home> --agent ${targetAgentId} --include-secrets --yes\`. If the plan finds no credentials, remove the stale auth file.`,
   );
 }

@@ -93,6 +93,10 @@ export type PreparedAgentRuntimeAuth = {
   attempts: readonly PreparedAgentRuntimeAuthAttempt[];
 };
 
+export class MissingRouteCompatibleAuthError extends Error {
+  override readonly name = "MissingRouteCompatibleAuthError";
+}
+
 /** Prevents a direct fallback from bypassing a prepared profile tier. */
 export function canRunPreparedAgentRuntimeAuthAttempt(params: {
   attempt: PreparedAgentRuntimeAuthAttempt;
@@ -518,6 +522,9 @@ export function prepareAgentRuntimeAuth(
       throw new Error(
         `Auth profile "${routeAuthDecision.source.profileId}" is temporarily unavailable for ${params.provider}/${params.modelId}.`,
       );
+    }
+    if (routeAuthDecision.reason === "missing-auth") {
+      throw new MissingRouteCompatibleAuthError(routeAuthDecision.message);
     }
     throw new Error(routeAuthDecision.message);
   }

@@ -7,6 +7,7 @@ import { getApiKeyForModel } from "../model-auth.js";
 import {
   agentRuntimeAuthPlanMatchesTarget,
   canRunPreparedAgentRuntimeAuthAttempt,
+  MissingRouteCompatibleAuthError,
   prepareAgentRuntimeAuth,
   preparedAgentRuntimeProfileAttemptHasCandidate,
 } from "./prepare-auth.js";
@@ -480,7 +481,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
         harnessRuntime: "codex",
         authProfileStore: authStore({}),
       }),
-    ).toThrow(/No route-compatible authentication source/u);
+    ).toThrow(MissingRouteCompatibleAuthError);
   });
 
   it("skips cooldowned automatic profiles before selecting a healthy backup", () => {

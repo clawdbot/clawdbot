@@ -347,6 +347,16 @@ type AgentHarnessAuthBindingCapability = {
   };
 };
 
+type AgentHarnessMissingAuthCapability = {
+  /** Replaces a generic missing-auth failure with owner-specific recovery guidance. */
+  resolveMissingAuthError?(params: {
+    agentId?: string;
+    agentDir: string;
+    provider: string;
+    modelId: string;
+  }): Promise<Error | undefined> | Error | undefined;
+};
+
 type AgentHarnessProviderUsageCapability = {
   /**
    * Contributes runtime-owned quota data without registering a text provider.
@@ -385,6 +395,7 @@ export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessCompactionCapability &
   AgentHarnessRuntimeArtifactCapability &
   AgentHarnessAuthBindingCapability &
+  AgentHarnessMissingAuthCapability &
   AgentHarnessProviderUsageCapability &
   AgentHarnessMcpCatalogCapability &
   AgentHarnessSessionForkCapability &
