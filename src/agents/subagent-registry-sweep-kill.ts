@@ -21,11 +21,11 @@ import {
 } from "./subagent-session-reconciliation.js";
 
 function findNextSubagentRunCreatedAt(
-  runs: Map<string, SubagentRunRecord>,
+  candidates: Iterable<SubagentRunRecord>,
   entry: SubagentRunRecord,
 ): number | undefined {
   let nextCreatedAt = entry.killReconciliation?.supersededAt;
-  for (const candidate of runs.values()) {
+  for (const candidate of candidates) {
     if (
       candidate.runId === entry.runId ||
       candidate.childSessionKey !== entry.childSessionKey ||
@@ -38,22 +38,10 @@ function findNextSubagentRunCreatedAt(
   return nextCreatedAt;
 }
 
-function isStableCancellation(task: TaskRecord | undefined) {
-  return task?.status === "cancelled" && !isProvisionalSubagentKillTask(task);
-}
-
-function isUnstableTask(task: TaskRecord | undefined) {
-  return (
-    task !== undefined &&
-    (task.status === "queued" || task.status === "running" || isProvisionalSubagentKillTask(task))
-  );
-}
-
-export function resolveSubagentTaskForRun(
-  runs: Map<string, SubagentRunRecord>,
+function resolveSubagentTaskForRunGeneration(
   entry: SubagentRunRecord,
+  nextRunCreatedAt: number | undefined,
 ) {
-  const nextRunCreatedAt = findNextSubagentRunCreatedAt(runs, entry);
   const generationStartedAt = entry.sessionStartedAt ?? entry.createdAt;
   return findDetachedTaskRun({
     runId: entry.taskRunId ?? entry.runId,
@@ -68,6 +56,27 @@ export function resolveSubagentTaskForRun(
       typeof entry.sessionStartedAt === "number" &&
       entry.sessionStartedAt < entry.createdAt,
   });
+}
+
+function isStableCancellation(task: TaskRecord | undefined) {
+  return task?.status === "cancelled" && !isProvisionalSubagentKillTask(task);
+}
+
+function isUnstableTask(task: TaskRecord | undefined) {
+  return (
+    task !== undefined &&
+    (task.status === "queued" || task.status === "running" || isProvisionalSubagentKillTask(task))
+  );
+}
+
+export function resolveSubagentTaskForRun(
+  candidates: Iterable<SubagentRunRecord>,
+  entry: SubagentRunRecord,
+) {
+  return resolveSubagentTaskForRunGeneration(
+    entry,
+    findNextSubagentRunCreatedAt(candidates, entry),
+  );
 }
 
 function resolveCompletionFromTerminalTask(task: TaskRecord | undefined, entry: SubagentRunRecord) {
@@ -108,6 +117,7 @@ export async function reconcileProvisionalSubagentKill(params: {
   ) => Promise<void>;
   retireSupersededRun: (runId: string, entry: SubagentRunRecord) => Promise<void>;
   startSubagentAnnounceCleanupFlow: (runId: string, entry: SubagentRunRecord) => boolean;
+  getRunsForChildSession: (childSessionKey: string) => Iterable<SubagentRunRecord>;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }): Promise<boolean> {
   const { entry, now, runId, runs } = params;
@@ -115,9 +125,22 @@ export async function reconcileProvisionalSubagentKill(params: {
   if (!killReconciliation) {
     return false;
   }
-  const taskResolution = resolveSubagentTaskForRun(runs, entry);
+  // The child-session index stays current across awaits. Re-read it at each
+  // decision boundary so a newly registered generation can supersede this run.
+  const resolveGeneration = () => {
+    const nextRunCreatedAt = findNextSubagentRunCreatedAt(
+      params.getRunsForChildSession(entry.childSessionKey),
+      entry,
+    );
+    return {
+      nextRunCreatedAt,
+      taskResolution: resolveSubagentTaskForRunGeneration(entry, nextRunCreatedAt),
+    };
+  };
+  const initialGeneration = resolveGeneration();
+  const taskResolution = initialGeneration.taskResolution;
   const task = taskResolution.task;
-  const nextRunCreatedAt = findNextSubagentRunCreatedAt(runs, entry);
+  const nextRunCreatedAt = initialGeneration.nextRunCreatedAt;
   const hasStableTaskCancellation = isStableCancellation(task);
   const killedAt = killReconciliation.killedAt;
   const isCurrentKill = () =>
@@ -205,7 +228,7 @@ export async function reconcileProvisionalSubagentKill(params: {
     if (!isCurrentKill()) {
       return false;
     }
-    const taskAfterResolution = resolveSubagentTaskForRun(runs, entry);
+    const taskAfterResolution = resolveGeneration().taskResolution;
     const taskAfter = taskAfterResolution.task;
     const stableCancellationWonDuringCompletion =
       isStableCancellation(taskAfter) && completionEndedAt >= killedAt;
@@ -216,7 +239,7 @@ export async function reconcileProvisionalSubagentKill(params: {
   if (!isCurrentKill()) {
     return false;
   }
-  const taskBeforeResolution = resolveSubagentTaskForRun(runs, entry);
+  const taskBeforeResolution = resolveGeneration().taskResolution;
   const taskBefore = taskBeforeResolution.task;
   const stableTaskCancellationAfterReconciliation = isStableCancellation(taskBefore);
   const taskNeedsStabilization =
@@ -239,7 +262,7 @@ export async function reconcileProvisionalSubagentKill(params: {
         suppressDelivery: true,
       });
       if (finalizedTasks.length === 0) {
-        const taskAfterResolution = resolveSubagentTaskForRun(runs, entry);
+        const taskAfterResolution = resolveGeneration().taskResolution;
         const taskAfter = taskAfterResolution.task;
         if (taskAfterResolution.lookup === "available" && isUnstableTask(taskAfter)) {
           params.warn("killed task was not stabilized during sweep", {
@@ -264,7 +287,7 @@ export async function reconcileProvisionalSubagentKill(params: {
       return false;
     }
   }
-  if (findNextSubagentRunCreatedAt(runs, entry) !== undefined) {
+  if (resolveGeneration().nextRunCreatedAt !== undefined) {
     await params.retireSupersededRun(runId, entry);
     return true;
   }
