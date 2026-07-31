@@ -906,10 +906,6 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
     (capturedHandle !== undefined &&
       ACTIVE_EMBEDDED_RUNS.get(params.sessionId) === capturedHandle &&
       abortEmbeddedAgentRun(params.sessionId)) ||
-    (capturedHandle === undefined &&
-      capturedReplyOperation !== undefined &&
-      isReplyOperationActive(capturedReplyOperation) &&
-      capturedReplyOperation.abortByUser()) ||
     expiredReplyRun;
   const drained = aborted
     ? await waitForEmbeddedAgentRunHandleEnd(capturedHandle, capturedReplyOperation, settleMs)

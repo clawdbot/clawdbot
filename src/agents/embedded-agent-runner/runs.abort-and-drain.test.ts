@@ -117,6 +117,29 @@ describe("abortAndDrainEmbeddedAgentRun", () => {
     expect(operation.result).toMatchObject({ kind: "failed", code: "run_failed" });
   });
 
+  it("force-clears a reply-only cron timeout without recording a user abort", async () => {
+    const sessionId = "session-reply-only-cron-timeout";
+    const sessionKey = "agent:reply-only-cron-timeout";
+    const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
+    operation.setPhase("running");
+
+    await expect(
+      abortAndDrainEmbeddedAgentRun({
+        sessionId,
+        sessionKey,
+        forceClear: true,
+        reason: "cron_timeout",
+      }),
+    ).resolves.toEqual({
+      aborted: false,
+      drained: false,
+      forceCleared: true,
+    });
+
+    expect(operation.result).toMatchObject({ kind: "failed", code: "run_failed" });
+    expect(isReplyRunActiveForSessionId(sessionId)).toBe(false);
+  });
+
   it("does not force-clear a replacement reply operation", async () => {
     vi.useFakeTimers();
     const sessionId = "session-replacement-reply-operation";
