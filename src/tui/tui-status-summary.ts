@@ -1,30 +1,26 @@
 // Formats status summaries shown in the TUI header and overlays.
-import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
+import { classifyTimeAgo } from "../infra/format-time/format-relative.ts";
 import { formatTokenCount } from "../utils/usage-format.js";
 import type { TuiLocalization } from "./i18n/runtime.js";
 import { formatContextUsageLine } from "./tui-formatters.js";
 import type { GatewayStatusSummary } from "./tui-types.js";
 
 function formatLocalizedTimeAgo(durationMs: number, localization: TuiLocalization): string {
-  if (localization.context.locale === "en") {
-    return formatTimeAgo(durationMs);
+  const bucket = classifyTimeAgo(durationMs);
+  switch (bucket.kind) {
+    case "invalid":
+      return localization.t("tui.status.unknown");
+    case "seconds":
+      return localization.t("tui.status.relative.justNow");
+    case "minutes":
+      return localization.t("tui.status.relative.minutesAgo", { count: bucket.count });
+    case "hours":
+      return localization.t("tui.status.relative.hoursAgo", { count: bucket.count });
+    case "days":
+      return localization.t("tui.status.relative.daysAgo", { count: bucket.count });
+    default:
+      throw new Error("unreachable relative-time bucket");
   }
-  if (!Number.isFinite(durationMs) || durationMs < 0) {
-    return localization.t("tui.status.unknown");
-  }
-  const totalSeconds = Math.round(durationMs / 1000);
-  const minutes = Math.round(totalSeconds / 60);
-  if (minutes < 1) {
-    return localization.t("tui.status.relative.justNow");
-  }
-  if (minutes < 60) {
-    return localization.t("tui.status.relative.minutesAgo", { count: minutes });
-  }
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) {
-    return localization.t("tui.status.relative.hoursAgo", { count: hours });
-  }
-  return localization.t("tui.status.relative.daysAgo", { count: Math.round(hours / 24) });
 }
 
 /** Formats Gateway/session health into compact status lines for the TUI. */

@@ -640,6 +640,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
 async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
+  // Locale is a session-lifetime invariant: capture it once and never recreate it on reconnect or refresh.
   const localization = createTuiLocalization();
   const config = opts.config ?? getRuntimeConfig({ skipPluginValidation: !isLocalMode });
   const cliInvocation = resolveCurrentOpenClawCliInvocation([]);

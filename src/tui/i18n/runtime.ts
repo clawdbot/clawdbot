@@ -22,13 +22,20 @@ if (validationIssues.length > 0) {
   throw new Error(`Invalid TUI zh-CN catalog: ${JSON.stringify(validationIssues)}`);
 }
 
-const TUI_CATALOG_SNAPSHOT = createCatalogSnapshot({
+const tuiCatalogSnapshotResult = createCatalogSnapshot({
+  namespace: "tui",
   catalogRevision: "tui-status:1",
   catalogs: {
     en: TUI_ENGLISH_CATALOG,
     "zh-CN": TUI_ZH_CN_CATALOG,
   },
 });
+if (!tuiCatalogSnapshotResult.ok) {
+  throw new Error(
+    `Invalid TUI catalog snapshot: ${JSON.stringify(tuiCatalogSnapshotResult.error)}`,
+  );
+}
+const TUI_CATALOG_SNAPSHOT = tuiCatalogSnapshotResult.value;
 
 export type TuiLocalization = {
   context: LocalizationContext;
@@ -58,6 +65,6 @@ export function createTuiLocalization(options?: {
         key,
         params,
         fallback: TUI_ENGLISH_CATALOG[key],
-      }),
+      }).value,
   });
 }

@@ -740,18 +740,11 @@ export function formatContextUsageLine(
     remaining?: number | null;
     percent?: number | null;
   },
-  localization?: TuiLocalization,
+  localization: TuiLocalization,
 ) {
   const totalLabel = typeof params.total === "number" ? formatTokenCount(params.total) : "?";
   const ctxLabel = typeof params.context === "number" ? formatTokenCount(params.context) : "?";
   const pct = typeof params.percent === "number" ? Math.min(999, Math.round(params.percent)) : null;
-  if (!localization) {
-    const remainingLabel =
-      typeof params.remaining === "number" ? `${formatTokenCount(params.remaining)} left` : null;
-    const pctLabel = pct !== null ? `${pct}%` : null;
-    const extra = [remainingLabel, pctLabel].filter(Boolean).join(", ");
-    return `tokens ${totalLabel}/${ctxLabel}${extra ? ` (${extra})` : ""}`;
-  }
   const remainingLabel =
     typeof params.remaining === "number"
       ? localization.t("tui.status.contextRemaining", {

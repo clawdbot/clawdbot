@@ -9,3 +9,4 @@
 - Resolve one immutable localization context at the TUI presentation edge and pass it through status formatting. Do not read process locale separately in leaf helpers.
 - TUI status catalogs own labels and surrounding prose only. Preserve Gateway-supplied labels, provider/model/session identifiers, paths, flags, event previews, and other operational values as parameters.
 - Keep reviewed English output byte-compatible, validate every translated catalog against it, and test both localized human output and unsupported-locale fallback. The current status catalogs are hand-owned until a later owner slice adopts them into the shared generated-catalog workflow.
+- Follow `.agents/skills/localize-openclaw/SKILL.md` when changing owned TUI product strings or catalog registration.

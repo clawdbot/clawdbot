@@ -35,7 +35,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
       import { runTui } from ${JSON.stringify(tuiModuleUrl)};
 
       const actionLogPath = process.env.OPENCLAW_TUI_PTY_LOG_PATH;
-      const gatewayStatus = process.env.OPENCLAW_TUI_PTY_GATEWAY_STATUS ?? "fixture gateway ok";
+      const gatewayStatus = process.env.OPENCLAW_TUI_PTY_GATEWAY_STATUS ? JSON.parse(process.env.OPENCLAW_TUI_PTY_GATEWAY_STATUS) : { runtimeVersion: "2026.7.31-fixture", linkChannel: { label: "Fixture channel", linked: true, authAgeMs: 60000 }, providerSummary: ["provider=fixture-provider"], sessions: { paths: ["/literal/sessions.json"], count: 1, defaults: { model: "fixture-provider/default-model", contextTokens: 64000 }, recent: [{ key: "agent:main:fixture-session", kind: "direct", age: 3600000, model: "fixture-provider/model-id", totalTokens: 12000, contextTokens: 30000, remainingTokens: 18000, percentUsed: 40, flags: ["flag-literal"] }] }, queuedSystemEvents: ["fixture-event-literal"] };
       const startupDelayMs = Number(process.env.OPENCLAW_TUI_PTY_STARTUP_DELAY_MS ?? 0);
       const footerModel = process.env.OPENCLAW_TUI_PTY_MODEL;
       const footerThinkingLevel = process.env.OPENCLAW_TUI_PTY_THINKING_LEVEL;
