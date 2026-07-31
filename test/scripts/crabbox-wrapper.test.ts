@@ -1259,7 +1259,7 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it.each(["azure", "daytona"])(
-    "preserves explicit direct %s commands outside workload routing",
+    "allows opted-in explicit direct %s commands outside workload routing",
     (provider) => {
       const result = runWrapper(
         "provider: aws, azure, blacksmith-testbox, or daytona\n",
@@ -1271,12 +1271,69 @@ describe("scripts/crabbox-wrapper", () => {
             brokerMode: "managed",
             brokerAuth: "missing",
           },
-          env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0" },
+          env: {
+            OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0",
+            OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
+          },
         },
       );
 
       expect(result.status).toBe(0);
       expect(parseFakeCrabboxOutput(result).args).toContain(provider);
+    },
+  );
+
+  it.each(["azure", "daytona"])(
+    "requires direct-cloud opt-in for explicit %s commands",
+    (provider) => {
+      const result = runWrapper(
+        "provider: aws, azure, blacksmith-testbox, or daytona\n",
+        ["run", "--provider", provider, "--", "echo ok"],
+        {
+          configJson: {
+            provider,
+            coordinator: "",
+            brokerMode: "",
+            brokerAuth: "missing",
+          },
+          env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0" },
+        },
+      );
+
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(
+        `provider=${provider} requires a configured managed Crabbox broker`,
+      );
+    },
+  );
+
+  it.each(["azure", "daytona"])(
+    "does not treat CRABBOX_PROVIDER=%s as explicit direct intent",
+    (provider) => {
+      const result = runWrapper(
+        "provider: aws, azure, blacksmith-testbox, or daytona\n",
+        ["run", "--", "echo ok"],
+        {
+          configJson: {
+            provider,
+            coordinator: "",
+            brokerMode: "",
+            brokerAuth: "missing",
+          },
+          env: {
+            CRABBOX_PROVIDER: provider,
+            OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
+            OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0",
+          },
+        },
+      );
+
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(
+        `provider=${provider} requires a configured managed Crabbox broker`,
+      );
     },
   );
 
@@ -1884,10 +1941,7 @@ describe("scripts/crabbox-wrapper", () => {
 
   it("keeps the AWS provider env for Windows runs when Azure is unavailable", () => {
     const result = runDefaultWrapper(["run", "--target", "windows", "--", "echo ok"], {
-      env: {
-        CRABBOX_PROVIDER: "aws",
-        OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS: "1",
-      },
+      env: { CRABBOX_PROVIDER: "aws" },
     });
 
     expect(result.status).toBe(0);
@@ -1906,10 +1960,7 @@ describe("scripts/crabbox-wrapper", () => {
       azureProviderHelp,
       ["run", "--id", "cbx_existing", "--target", "windows", "--", "echo ok"],
       {
-        env: {
-          CRABBOX_PROVIDER: "aws",
-          OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS: "1",
-        },
+        env: { CRABBOX_PROVIDER: "aws" },
       },
     );
 
@@ -2156,20 +2207,15 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("provider=aws requires a configured managed Crabbox broker");
   });
 
-  it("allows explicit direct AWS debugging without broker auth", () => {
+  it("ignores the legacy direct AWS override", () => {
     const result = runDefaultWrapper(["run", "--provider", "aws", "--", "echo ok"], {
       configJson: { coordinator: "", brokerAuth: "missing" },
       env: { OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS: "1" },
     });
 
-    expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toEqual([
-      "run",
-      "--provider",
-      "aws",
-      "--",
-      "echo ok",
-    ]);
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("provider=aws requires a configured managed Crabbox broker");
   });
 
   it("defaults AWS macOS warmups to on-demand capacity", () => {

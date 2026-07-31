@@ -944,27 +944,21 @@ function shouldRequireBrokeredCloud(commandArgs, providerName) {
   if (requestedWorkload(commandArgs)) {
     return true;
   }
-  const explicitProvider = Boolean(commandProvider(commandArgs) || envProvider());
+  const explicitProvider = Boolean(commandProvider(commandArgs));
   if (explicitProvider && directCloudOverrideEnabled(providerName)) {
     return false;
   }
-  if (commandArgs[0] === "run" || commandArgs[0] === "warmup") {
-    // Workload routing never consumes local cloud credentials. Keep the
-    // shipped direct Azure/Daytona path only for commands outside that policy.
-    return canonicalProvider === "aws" || (!explicitProvider && managedBrokerRequested());
-  }
   return (
-    commandArgs[0] === "actions" &&
-    commandArgs[1] === "hydrate" &&
-    (canonicalProvider === "aws" || (!explicitProvider && managedBrokerRequested()))
+    commandArgs[0] === "run" ||
+    commandArgs[0] === "warmup" ||
+    (commandArgs[0] === "actions" && commandArgs[1] === "hydrate")
   );
 }
 
 function directCloudOverrideEnabled(providerName) {
   return (
-    process.env.OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD === "1" ||
-    (canonicalProviderName(providerName) === "aws" &&
-      process.env.OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS === "1")
+    canonicalProviderName(providerName) !== "aws" &&
+    process.env.OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD === "1"
   );
 }
 
@@ -983,11 +977,6 @@ function managedBrokerAuthConfigured() {
   }
   managedBrokerAuthConfiguredCache = checkedOutput(binary, ["whoami"]).status === 0;
   return managedBrokerAuthConfiguredCache;
-}
-
-function managedBrokerRequested() {
-  const parsed = resolvedCrabboxConfig();
-  return Boolean(parsed?.coordinator && parsed?.brokerMode === "managed");
 }
 
 function enforceBrokeredDaytonaVersion(commandArgs, providerName, versionText) {
