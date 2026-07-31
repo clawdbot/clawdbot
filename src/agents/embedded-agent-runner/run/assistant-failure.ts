@@ -4,7 +4,6 @@ import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import {
   classifyAssistantFailoverReason,
-  classifyProviderRuntimeFailureKind,
   type FailoverReason,
   isAuthAssistantError,
   isBillingAssistantError,
@@ -142,23 +141,13 @@ export async function handleEmbeddedAssistantFailure(input: {
     assistantFailoverReason === "timeout" &&
     isGenericUnknownStreamErrorMessage(input.attemptAssistant?.errorMessage ?? "") &&
     Boolean(input.attemptAssistant && hasOnlyAssistantReasoningContent(input.attemptAssistant));
-  // Replay-invalid and schema rejections are payload-shape failures: the same
-  // bytes fail identically on every resubmit, so they are never transient and
-  // must not be amplified by the empty-error retry path (#116967).
-  const nonTransientRuntimeFailureKind = input.attemptAssistant?.errorMessage
-    ? classifyProviderRuntimeFailureKind(input.attemptAssistant.errorMessage)
-    : null;
-  const isNonTransientPayloadFailure =
-    nonTransientRuntimeFailureKind === "replay_invalid" ||
-    nonTransientRuntimeFailureKind === "schema";
   const silentErrorRetryReason =
-    (assistantFailoverReason === null ||
-      genericUnknownReasoningError ||
-      assistantFailoverReason === "no_error_details" ||
-      assistantFailoverReason === "unclassified" ||
-      assistantFailoverReason === "unknown" ||
-      assistantFailoverReason === "server_error") &&
-    !isNonTransientPayloadFailure;
+    assistantFailoverReason === null ||
+    genericUnknownReasoningError ||
+    assistantFailoverReason === "no_error_details" ||
+    assistantFailoverReason === "unclassified" ||
+    assistantFailoverReason === "unknown" ||
+    assistantFailoverReason === "server_error";
   if (
     !authFailure &&
     !rateLimitFailure &&

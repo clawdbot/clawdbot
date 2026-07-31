@@ -1,8 +1,11 @@
 // Coverage for retrying empty errored assistant turns in runEmbeddedAgent.
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { classifyAssistantFailoverReason as realClassifyAssistantFailoverReason } from "../embedded-agent-helpers/errors.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  mockedBuildEmbeddedRunPayloads,
   mockedClassifyAssistantFailoverReason,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
@@ -11,6 +14,7 @@ import {
   resetRunOverflowCompactionHarnessMocks,
   warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
+import { buildEmbeddedRunPayloads as realBuildEmbeddedRunPayloads } from "./run/payloads.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
@@ -138,29 +142,43 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(result.payloads).toBeUndefined();
   });
 
-  it("does not empty-error retry thinking-signature replay-invalid rejections (#116967)", async () => {
-    // A replay-invalid thinking-signature rejection is an invalid_request_error
-    // on payload shape: byte-identical resubmits fail identically, so it must
-    // be terminal instead of amplified by the silent-error retry path.
-    mockedClassifyFailoverReason.mockReturnValue(null);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      emptyErrorAttempt(
-        "anthropic",
-        "claude-sonnet-4-6",
-        0,
-        [],
-        '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
-      ),
-    );
-
-    await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+  it.each([
+    {
+      label: "raw Anthropic",
       provider: "anthropic",
       model: "claude-sonnet-4-6",
+      errorMessage:
+        '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
+    },
+    {
+      label: "flattened Bedrock",
+      provider: "amazon-bedrock",
+      model: "anthropic.claude-sonnet-4-6",
+      errorMessage: "ValidationException: invalid signature on thinking block in message history",
+    },
+  ])("surfaces /new without retrying a $label thinking-signature rejection", async (testCase) => {
+    mockedClassifyAssistantFailoverReason.mockImplementation((assistant) =>
+      realClassifyAssistantFailoverReason(assistant as AssistantMessage | undefined),
+    );
+    mockedBuildEmbeddedRunPayloads.mockImplementation(realBuildEmbeddedRunPayloads);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      emptyErrorAttempt(testCase.provider, testCase.model, 0, [], testCase.errorMessage),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: testCase.provider,
+      model: testCase.model,
       runId: "run-empty-error-retry-replay-invalid",
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toEqual([
+      {
+        text: "Session history or replay state is invalid. Use /new to start a fresh session and try again.",
+        isError: true,
+      },
+    ]);
   });
 
   it("does not intercept recognized timeout failover errors", async () => {

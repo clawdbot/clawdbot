@@ -113,7 +113,7 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("Session history or replay state is invalid");
     expect(result).toContain("/new");
   });
-  it("prioritizes thinking-signature replay recovery over invalid-request formatting (#116967)", () => {
+  it("prioritizes thinking-signature replay recovery over invalid-request formatting", () => {
     // Thinking-signature failures are also invalid_request_error, so the
     // replay-invalid copy must win before the generic invalid-request path.
     const msg = makeAssistantError(

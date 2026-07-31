@@ -927,6 +927,9 @@ function classifyFailoverClassificationFromMessage(
   if (isContextOverflowError(raw)) {
     return { kind: "context_overflow" };
   }
+  if (isReplayInvalidErrorMessage(raw)) {
+    return toReasonClassification("format");
+  }
   const reasonFrom402Text = classifyFailoverReasonFrom402Text(raw);
   if (reasonFrom402Text) {
     return toReasonClassification(reasonFrom402Text);
