@@ -1,6 +1,10 @@
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
-import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
+import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
+import {
+  hasResolvedThinkingCatalogEntry,
+  normalizeThinkingCatalogProviders,
+} from "../../agents/thinking-runtime.js";
 import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
 /** Resolves provider/model precedence for isolated cron runs. */
 import type { AgentConfig } from "../../config/types.agents.js";
@@ -106,12 +110,12 @@ export async function resolveCronModelSelectionOwner(params: {
   return owner;
 }
 
-export async function resolveCronThinkingCatalog(params: {
+async function resolveCronThinkingCatalog(params: {
   owner: ResolvedPublishedModelCatalogOwner;
   provider: string;
   model: string;
 }): Promise<ModelCatalogEntry[]> {
-  const catalog = params.owner.modelCatalog.entries;
+  const catalog = normalizeThinkingCatalogProviders(params.owner.modelCatalog.entries);
   if (
     hasResolvedThinkingCatalogEntry({
       catalog,
@@ -121,17 +125,20 @@ export async function resolveCronThinkingCatalog(params: {
   ) {
     return catalog;
   }
-  return (
-    await loadPreparedModelCatalogSnapshot({
-      config: params.owner.config,
-      agentId: params.owner.agentId,
-      agentDir: params.owner.agentDir,
-      workspaceDir: params.owner.workspaceDir,
-    })
-  ).entries;
+  return normalizeThinkingCatalogProviders(
+    (
+      await loadPreparedModelCatalogSnapshot({
+        config: params.owner.config,
+        agentId: params.owner.agentId,
+        agentDir: params.owner.agentDir,
+        workspaceDir: params.owner.workspaceDir,
+      })
+    ).entries,
+  );
 }
 
 export async function resolveCronThinkingSelection(params: {
+  cfg: OpenClawConfig;
   owner: ResolvedPublishedModelCatalogOwner;
   provider: string;
   model: string;
@@ -142,7 +149,12 @@ export async function resolveCronThinkingSelection(params: {
   const requestedThinkLevel =
     normalizeThinkLevel(params.jobThinking) ??
     normalizeThinkLevel(params.hookThinking) ??
-    normalizeThinkLevel(params.sessionThinking);
+    normalizeThinkLevel(params.sessionThinking) ??
+    resolveConfiguredThinkingDefault({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+    });
   const catalog =
     requestedThinkLevel === "off"
       ? params.owner.modelCatalog.entries

@@ -2245,15 +2245,42 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         defaults: {
           model: { primary: "openai/gpt-5.6-sol" },
           models: {
-            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+            "openai/gpt-5.6-sol": {
+              agentRuntime: { id: "codex" },
+              params: { thinking: "off" },
+            },
             "openai/gpt-5.6-terra": { agentRuntime: { id: "codex" } },
           },
         },
       },
     };
     state.resolveThinkingDefaultMock.mockImplementation((args: unknown) => {
-      const { model } = args as { model?: string };
-      return model === "gpt-5.6-terra" ? "medium" : "low";
+      const { model, catalog } = args as {
+        model?: string;
+        catalog?: Array<{ provider: string; id: string; reasoning?: boolean }>;
+      };
+      if (model === "gpt-5.6-terra") {
+        expect(catalog).toEqual([
+          expect.objectContaining({
+            provider: "openai",
+            id: "gpt-5.6-terra",
+            reasoning: true,
+          }),
+        ]);
+        return "medium";
+      }
+      return "low";
+    });
+    state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
+      entries: [
+        {
+          provider: "OpenAI",
+          id: "gpt-5.6-terra",
+          name: "GPT 5.6 Terra",
+          reasoning: true,
+        },
+      ],
+      routeVariants: [],
     });
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       await params.run(params.provider, params.model);
@@ -2274,12 +2301,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     expectRecordFields(mockCallArg(state.runAgentAttemptMock, 0), {
       modelOverride: "gpt-5.6-sol",
-      resolvedThinkLevel: "low",
+      resolvedThinkLevel: "off",
     });
     expectRecordFields(mockCallArg(state.runAgentAttemptMock, 1), {
       modelOverride: "gpt-5.6-terra",
       resolvedThinkLevel: "medium",
     });
+    expect(state.loadPreparedModelCatalogSnapshotMock).toHaveBeenCalledTimes(1);
   });
 
   it("persists and clears current run delivery context for restart recovery", async () => {
@@ -3340,6 +3368,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runtimeConfigMock = {
       agents: {
         defaults: {
+          thinkingDefault: "low",
           model: { primary: "openai/gpt-5.4" },
           models: {
             "openai/*": {},
@@ -3352,7 +3381,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
       entries: [
         {
-          provider: "ollama",
+          provider: "OLLAMA",
           id: "minimax-m3:cloud",
           name: "minimax-m3:cloud",
           reasoning: true,
@@ -3394,6 +3423,37 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         reasoning: true,
       }),
     ]);
+  });
+
+  it("does not hydrate live catalog metadata when the selected model config disables thinking", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {
+            "openai/*": {},
+            "ollama/minimax-m3:cloud": {
+              params: { thinking: "off" },
+            },
+          },
+        },
+      },
+    };
+    state.loadManifestModelCatalogMock.mockReturnValue([]);
+    setupSuccessfulAttempt("ollama", "minimax-m3:cloud");
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      model: "ollama/minimax-m3:cloud",
+      allowModelOverride: true,
+    });
+
+    expect(state.loadPreparedModelCatalogSnapshotMock).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      modelOverride: "minimax-m3:cloud",
+      resolvedThinkLevel: "off",
+    });
   });
 
   it("resolves explicit model aliases before thinking validation", async () => {

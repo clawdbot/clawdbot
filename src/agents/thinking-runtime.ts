@@ -30,6 +30,15 @@ export function hasResolvedThinkingCatalogEntry(params: {
   return entry?.reasoning !== undefined;
 }
 
+export function normalizeThinkingCatalogProviders<T extends ThinkingCatalogEntry>(
+  catalog: readonly T[],
+): T[] {
+  return catalog.map((entry) => {
+    const provider = normalizeProviderId(entry.provider);
+    return provider === entry.provider ? entry : Object.assign({}, entry, { provider });
+  });
+}
+
 /** Convert residual auto policy into the built-in fallback when no registry selection is needed. */
 export function concretizeAgentRuntime(runtime: string): string {
   return runtime === "auto" ? "openclaw" : runtime;

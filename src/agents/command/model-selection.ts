@@ -45,6 +45,7 @@ import {
   resolveModelAliasFromPair,
   resolveThinkingDefault,
 } from "../model-selection.js";
+import { resolveConfiguredThinkingDefault } from "../model-thinking-default.js";
 import {
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
@@ -54,6 +55,7 @@ import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
 import {
   hasResolvedThinkingCatalogEntry,
+  normalizeThinkingCatalogProviders,
   resolveEffectiveAgentRuntime,
 } from "../thinking-runtime.js";
 import {
@@ -480,6 +482,13 @@ export async function resolveEmbeddedModelSelection(params: {
     resolveAgentConfig(params.cfg, params.sessionAgentId)?.thinkingDefault,
   );
   const immutableThinkLevel = params.requestedThinkLevel ?? configuredThinkLevel;
+  const primaryConfiguredThinkLevel =
+    immutableThinkLevel ??
+    resolveConfiguredThinkingDefault({
+      cfg: params.cfg,
+      provider,
+      model,
+    });
   let catalogForThinking =
     allowedModelCatalog.length > 0
       ? allowedModelCatalog
@@ -488,17 +497,19 @@ export async function resolveEmbeddedModelSelection(params: {
         : params.configuredThinkingCatalog;
   if (
     params.pluginsEnabled &&
-    immutableThinkLevel !== "off" &&
+    primaryConfiguredThinkLevel !== "off" &&
     !hasResolvedThinkingCatalogEntry({ catalog: catalogForThinking, provider, model })
   ) {
     const { loadPreparedModelCatalogSnapshot } = await import("../model-catalog.runtime.js");
-    const runtimeCatalog = (
-      await loadPreparedModelCatalogSnapshot({
-        config: params.cfg,
-        agentId: params.sessionAgentId,
-        workspaceDir: params.workspaceDir,
-      })
-    ).entries;
+    const runtimeCatalog = normalizeThinkingCatalogProviders(
+      (
+        await loadPreparedModelCatalogSnapshot({
+          config: params.cfg,
+          agentId: params.sessionAgentId,
+          workspaceDir: params.workspaceDir,
+        })
+      ).entries,
+    );
     const allowedRuntimeCatalog = createModelVisibilityPolicy({
       cfg: params.cfg,
       catalog: runtimeCatalog,
@@ -510,9 +521,11 @@ export async function resolveEmbeddedModelSelection(params: {
       ...params.modelManifestContext,
     }).allowedCatalog;
     if (
-      allowedRuntimeCatalog.some(
-        (entry) => modelKey(entry.provider, entry.id) === modelKey(provider, model),
-      )
+      hasResolvedThinkingCatalogEntry({
+        catalog: allowedRuntimeCatalog,
+        provider,
+        model,
+      })
     ) {
       catalogForThinking = allowedRuntimeCatalog;
     }
@@ -527,7 +540,7 @@ export async function resolveEmbeddedModelSelection(params: {
     sessionEntry: sessionEntryForAttempt,
   });
   const primaryThinkLevel =
-    immutableThinkLevel ??
+    primaryConfiguredThinkLevel ??
     resolveThinkingDefault({
       cfg: params.cfg,
       provider,

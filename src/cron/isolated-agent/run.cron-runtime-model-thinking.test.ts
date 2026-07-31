@@ -11,6 +11,7 @@ import {
   resolveAllowedModelRefMock,
   resolveConfiguredModelRefMock,
   resolveCronSessionMock,
+  resolveThinkingDefaultMock,
   resolveSupportedThinkingLevelMock,
   resetRunCronIsolatedAgentTurnHarness,
   restoreFastTestEnv,
@@ -60,7 +61,7 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
     });
     loadModelCatalogMock.mockResolvedValueOnce([]).mockResolvedValueOnce([
       {
-        provider: "ollama",
+        provider: "OLLAMA",
         id: "minimax-m3:cloud",
         name: "minimax-m3:cloud",
         reasoning: true,
@@ -118,5 +119,111 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
         reasoning: true,
       }),
     ]);
+  });
+
+  it("does not hydrate live catalog metadata when thinking is explicitly off", async () => {
+    resolveAllowedModelRefMock.mockReturnValue({
+      ref: { provider: "ollama", model: "minimax-m3:cloud" },
+    });
+    loadModelCatalogMock.mockResolvedValue([]);
+    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => ({
+      result: await run(provider, model),
+      provider,
+      model,
+      attempts: [],
+    }));
+
+    await runCronIsolatedAgentTurn({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "ollama/*": {},
+            },
+          },
+        },
+      },
+      deps: {} as never,
+      job: {
+        id: "runtime-thinking-off-job",
+        name: "Runtime Thinking Off Test",
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message: "summarize",
+          model: "ollama/minimax-m3:cloud",
+          thinking: "off",
+        },
+      } as never,
+      message: "summarize",
+      sessionKey: "cron:runtime-thinking-off",
+    });
+
+    expect(loadModelCatalogMock).toHaveBeenCalledTimes(1);
+    const embeddedCall = firstMockArg(runEmbeddedAgentMock);
+    expect(embeddedCall.provider).toBe("ollama");
+    expect(embeddedCall.model).toBe("minimax-m3:cloud");
+    expect(embeddedCall.thinkLevel).toBe("off");
+  });
+
+  it.each([
+    {
+      name: "agent default",
+      defaults: {
+        thinkingDefault: "off" as const,
+        models: { "ollama/*": {} },
+      },
+    },
+    {
+      name: "model default",
+      defaults: {
+        models: {
+          "ollama/minimax-m3:cloud": {
+            params: { thinking: "off" as const },
+          },
+        },
+      },
+    },
+  ])("does not hydrate live catalog metadata when the $name is off", async ({ defaults }) => {
+    resolveAllowedModelRefMock.mockReturnValue({
+      ref: { provider: "ollama", model: "minimax-m3:cloud" },
+    });
+    loadModelCatalogMock.mockResolvedValue([]);
+    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => ({
+      result: await run(provider, model),
+      provider,
+      model,
+      attempts: [],
+    }));
+
+    await runCronIsolatedAgentTurn({
+      cfg: {
+        agents: {
+          defaults,
+        },
+      },
+      deps: {} as never,
+      job: {
+        id: "configured-thinking-off-job",
+        name: "Configured Thinking Off Test",
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message: "summarize",
+          model: "ollama/minimax-m3:cloud",
+        },
+      } as never,
+      message: "summarize",
+      sessionKey: "cron:configured-thinking-off",
+    });
+
+    expect(loadModelCatalogMock).toHaveBeenCalledTimes(1);
+    expect(resolveThinkingDefaultMock).not.toHaveBeenCalled();
+    const embeddedCall = firstMockArg(runEmbeddedAgentMock);
+    expect(embeddedCall.provider).toBe("ollama");
+    expect(embeddedCall.model).toBe("minimax-m3:cloud");
+    expect(embeddedCall.thinkLevel).toBe("off");
   });
 });

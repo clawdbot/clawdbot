@@ -450,16 +450,15 @@ export async function prepareCronRunContext(params: {
       provider = selectedPreflightCandidate.provider;
       model = selectedPreflightCandidate.model;
     }
-    const { catalog: thinkingCatalog, requestedThinkLevel: requestedThinkLevelOverride } =
-      await resolveCronThinkingSelection({
-        owner: modelOwner,
-        provider,
-        model,
-        jobThinking:
-          input.job.payload.kind === "agentTurn" ? input.job.payload.thinking : undefined,
-        hookThinking: isGmailHook ? runtimeCfg.hooks?.gmail?.thinking : undefined,
-        sessionThinking: cronSession.sessionEntry.thinkingLevel,
-      });
+    const thinkingSelection = await resolveCronThinkingSelection({
+      cfg: cfgWithAgentDefaults,
+      owner: modelOwner,
+      provider,
+      model,
+      jobThinking: input.job.payload.kind === "agentTurn" ? input.job.payload.thinking : undefined,
+      hookThinking: isGmailHook ? runtimeCfg.hooks?.gmail?.thinking : undefined,
+      sessionThinking: cronSession.sessionEntry.thinkingLevel,
+    });
     const effectiveAgentRuntime = resolveEffectiveAgentRuntime({
       cfg: cfgWithAgentDefaults,
       provider,
@@ -468,13 +467,13 @@ export async function prepareCronRunContext(params: {
       sessionKey: agentSessionKey,
       sessionEntry: cronSession.sessionEntry,
     });
-    let requestedThinkLevel = requestedThinkLevelOverride;
+    let requestedThinkLevel = thinkingSelection.requestedThinkLevel;
     if (!requestedThinkLevel) {
       requestedThinkLevel = resolveThinkingDefault({
         cfg: cfgWithAgentDefaults,
         provider,
         model,
-        catalog: thinkingCatalog,
+        catalog: thinkingSelection.catalog,
         agentRuntime: effectiveAgentRuntime,
       });
     }
@@ -483,7 +482,7 @@ export async function prepareCronRunContext(params: {
         provider,
         model,
         level: requestedThinkLevel,
-        catalog: thinkingCatalog,
+        catalog: thinkingSelection.catalog,
         agentRuntime: effectiveAgentRuntime,
       })
     ) {
@@ -491,7 +490,7 @@ export async function prepareCronRunContext(params: {
         provider,
         model,
         level: requestedThinkLevel,
-        catalog: thinkingCatalog,
+        catalog: thinkingSelection.catalog,
         agentRuntime: effectiveAgentRuntime,
       });
       if (fallbackThinkLevel !== requestedThinkLevel) {
@@ -517,7 +516,7 @@ export async function prepareCronRunContext(params: {
     const agentPayload = input.job.payload.kind === "agentTurn" ? input.job.payload : null;
     const configuredProvider = cfgWithAgentDefaults.models?.providers?.[provider];
     const modelApi =
-      findModelInCatalog(thinkingCatalog, provider, model)?.api ??
+      findModelInCatalog(thinkingSelection.catalog, provider, model)?.api ??
       configuredProvider?.models?.find((candidate) => candidate.id === model)?.api ??
       configuredProvider?.api;
     const preflightDiagnostics = await createCronToolsAllowPreflightDiagnostics({
@@ -727,7 +726,7 @@ export async function prepareCronRunContext(params: {
         inheritDefaultFallbacksForAgentStringModel,
         modelFallbacksOverride,
         thinkLevel: requestedThinkLevel,
-        thinkingCatalog,
+        thinkingCatalog: thinkingSelection.catalog,
         timeoutMs,
         preflightDiagnostics,
         runTimeoutOverrideMs,
