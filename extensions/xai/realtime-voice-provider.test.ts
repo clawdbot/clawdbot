@@ -260,6 +260,59 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(requireSession(socket).resumption).toBeUndefined();
   });
 
+  it("bounds pending realtime audio by aggregate bytes before session setup", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const provider = buildXaiRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    bridge.sendAudio(Buffer.alloc(512 * 1024, 0x7f));
+    bridge.sendAudio(Buffer.alloc(512 * 1024, 0x7f));
+    bridge.sendAudio(Buffer.alloc(1, 0x7f));
+
+    const { connecting, socket } = await openRealtimeBridge(bridge);
+    await connecting;
+
+    expect(
+      parseSent(socket).filter((event) => event.type === "input_audio_buffer.append"),
+    ).toHaveLength(2);
+    bridge.close();
+  });
+
+  it("drops queued realtime input on close and ignores late input until reconnect", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const provider = buildXaiRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    bridge.sendAudio(Buffer.from([0x01]));
+    bridge.sendUserMessage?.("queued before close");
+    bridge.submitToolResult("call-before-close", { ok: true });
+    bridge.close();
+    bridge.sendAudio(Buffer.from([0x02]));
+    bridge.sendUserMessage?.("late after close");
+    bridge.submitToolResult("call-after-close", { ok: true });
+
+    const { connecting, socket } = await openRealtimeBridge(bridge);
+    await connecting;
+
+    expect(
+      parseSent(socket).filter(
+        (event) =>
+          event.type === "input_audio_buffer.append" ||
+          event.type === "conversation.item.create" ||
+          event.type === "response.create",
+      ),
+    ).toEqual([]);
+    bridge.close();
+  });
+
   it("rejects generic response modes that xAI server VAD cannot disable", () => {
     const provider = buildXaiRealtimeVoiceProvider();
     const callbacks = { onAudio: vi.fn(), onClearAudio: vi.fn() };
