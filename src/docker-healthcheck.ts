@@ -1,6 +1,6 @@
 // Resolves and probes the Gateway port for the official Docker image healthcheck.
 import { fileURLToPath } from "node:url";
-import { loadConfig } from "./config/config.js";
+import { getRuntimeConfig } from "./config/config.js";
 import { resolveGatewayPort } from "./config/paths.js";
 import type { OpenClawConfig } from "./config/types.js";
 import { readActiveGatewayLockPort } from "./infra/gateway-lock.js";
@@ -8,7 +8,7 @@ import { isMainModule } from "./infra/is-main.js";
 
 type DockerHealthcheckPortDeps = {
   env: NodeJS.ProcessEnv;
-  loadConfig: () => OpenClawConfig;
+  getRuntimeConfig: () => OpenClawConfig;
   readActiveGatewayLockPort: (opts: { env: NodeJS.ProcessEnv }) => Promise<number | undefined>;
   resolveGatewayPort: (config: OpenClawConfig, env: NodeJS.ProcessEnv) => number;
 };
@@ -35,9 +35,9 @@ export async function resolveDockerHealthcheckPort(
   }
 
   const config = (
-    deps.loadConfig ??
+    deps.getRuntimeConfig ??
     (() =>
-      loadConfig({
+      getRuntimeConfig({
         pin: false,
         skipPluginValidation: true,
         skipShellEnvFallback: true,

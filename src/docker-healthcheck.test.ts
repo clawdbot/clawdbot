@@ -3,18 +3,18 @@ import { probeDockerGatewayHealth, resolveDockerHealthcheckPort } from "./docker
 
 describe("Docker healthcheck", () => {
   it("prefers the active Gateway lock port used by --port", async () => {
-    const loadConfig = vi.fn(() => ({ gateway: { port: 19002 } }));
+    const getRuntimeConfig = vi.fn(() => ({ gateway: { port: 19002 } }));
     const resolveGatewayPort = vi.fn(() => 19003);
 
     await expect(
       resolveDockerHealthcheckPort({
         env: { OPENCLAW_GATEWAY_PORT: "19001" },
-        loadConfig,
+        getRuntimeConfig,
         readActiveGatewayLockPort: vi.fn(async () => 19000),
         resolveGatewayPort,
       }),
     ).resolves.toBe(19000);
-    expect(loadConfig).not.toHaveBeenCalled();
+    expect(getRuntimeConfig).not.toHaveBeenCalled();
     expect(resolveGatewayPort).not.toHaveBeenCalled();
   });
 
@@ -35,7 +35,7 @@ describe("Docker healthcheck", () => {
     await expect(
       resolveDockerHealthcheckPort({
         env,
-        loadConfig: () => config,
+        getRuntimeConfig: () => config,
         readActiveGatewayLockPort: vi.fn(async () => undefined),
       }),
     ).resolves.toBe(expected);
@@ -45,7 +45,7 @@ describe("Docker healthcheck", () => {
     await expect(
       resolveDockerHealthcheckPort({
         env: {},
-        loadConfig: () => ({ gateway: { port: 19002 } }),
+        getRuntimeConfig: () => ({ gateway: { port: 19002 } }),
         readActiveGatewayLockPort: vi.fn(async () => {
           throw new Error("lock unavailable");
         }),
@@ -61,7 +61,7 @@ describe("Docker healthcheck", () => {
       probeDockerGatewayHealth({
         env: {},
         fetch,
-        loadConfig: () => ({ gateway: { port: 19002 } }),
+        getRuntimeConfig: () => ({ gateway: { port: 19002 } }),
         readActiveGatewayLockPort: vi.fn(async () => 19000),
         resolveGatewayPort: vi.fn(() => 19002),
       }),
@@ -72,7 +72,7 @@ describe("Docker healthcheck", () => {
   it("reports an unsuccessful or unreachable liveness endpoint as unhealthy", async () => {
     const baseDeps = {
       env: {},
-      loadConfig: () => ({ gateway: { port: 19002 } }),
+      getRuntimeConfig: () => ({ gateway: { port: 19002 } }),
       readActiveGatewayLockPort: vi.fn(async () => 19000),
       resolveGatewayPort: vi.fn(() => 19002),
     };
