@@ -14,8 +14,9 @@ describe("VoiceCallWebhookServer shutdown lifecycle", () => {
           releaseHandlerClose = resolve;
         }),
     );
+    const config = createVoiceCallBaseConfig({ tunnelProvider: "none" });
     const server = new VoiceCallWebhookServer(
-      createVoiceCallBaseConfig({ tunnelProvider: "none" }),
+      { ...config, serve: { ...config.serve, port: 0 } },
       {} as CallManager,
       {} as VoiceCallProvider,
     );
