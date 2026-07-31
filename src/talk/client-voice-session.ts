@@ -6,7 +6,7 @@ import {
   patchSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
-import { mergeSessionEntry } from "../config/sessions/types.js";
+import { mergeSessionEntry } from "../config/sessions/session-entry-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   onTrustedInternalDiagnosticEvent,

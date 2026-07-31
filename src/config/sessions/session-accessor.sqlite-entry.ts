@@ -66,11 +66,11 @@ import { readSqliteSessionEntriesByStatus } from "./session-accessor.sqlite-stat
 import type { SessionEntryListScope } from "./session-accessor.types.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
+import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./session-entry-runtime.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import { resolveSessionEntryCandidates } from "./store-entry.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
-import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
 
 // Public entry API. Async preparation precedes BEGIN; commit revalidates repository snapshots.
 

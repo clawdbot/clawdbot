@@ -1,7 +1,7 @@
 // Session cache field tests cover cached metadata stored with sessions.
 import { describe, expect, it } from "vitest";
+import { mergeSessionEntry } from "./session-entry-runtime.js";
 import type { SessionEntry } from "./types.js";
-import { mergeSessionEntry } from "./types.js";
 
 describe("SessionEntry cache fields", () => {
   it("supports cacheRead and cacheWrite fields", () => {

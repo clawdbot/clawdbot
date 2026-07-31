@@ -6,8 +6,8 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { Insertable, Selectable } from "kysely";
 import { getRuntimeConfig } from "../../config/config.js";
 import { patchSessionEntryWithKey } from "../../config/sessions/session-accessor.js";
+import { mergeSessionEntry } from "../../config/sessions/session-entry-runtime.js";
 import {
-  mergeSessionEntry,
   type AcpSessionRuntimeOptions,
   type SessionAcpIdentity,
   type SessionAcpMeta,
