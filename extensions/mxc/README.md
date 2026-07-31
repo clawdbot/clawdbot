@@ -86,10 +86,11 @@ help stay in sync with plugin runtime validation.
 - OpenClaw passes per-run command, environment, and filesystem config to the
   plugin's Node launcher through a short-lived local payload file, and deletes
   that file and its temp directory when the launcher or run finishes.
-- `@microsoft/mxc-sdk@0.7.0` then carries the full base64 request envelope on
-  the native `wxc-exec` process argv. A host user with process-inspection rights
-  can observe that command, environment, and policy data while the process is
-  running. Do not put secrets in MXC command arguments or environment values
+- `@microsoft/mxc-sdk@0.7.0` passes the full base64 request envelope to native
+  `wxc-exec` as the `--config-base64` process argument. A host user with
+  process-inspection rights can observe the command, environment, and policy
+  data while the process is running. Do not put secrets in MXC command arguments
+  or environment values
   until the SDK provides a non-argv transport
   ([microsoft/mxc#626](https://github.com/microsoft/mxc/issues/626)).
 
@@ -101,16 +102,13 @@ help stay in sync with plugin runtime validation.
 - Windows filesystem-deny and host-list network policy knobs are not exposed by
   this plugin until MXC can enforce them on ProcessContainer.
 
-## Test setup with `openclaw config`
+## Test setup
 
-This patch creates a default `main` agent, then adds a dedicated `mxc-test`
-agent so MXC testing does not change the default agent. It uses
+Create a dedicated `mxc-test` agent so MXC testing does not change the default
+agent. `openclaw agents add` preserves existing agents. Then use
 [`openclaw config patch --stdin`](https://docs.openclaw.ai/cli/config#config-patch)
-so setup is one validated config write instead of several path-based
-`config set` commands.
-
-If you already have `agents.list` entries, copy them into the patch before
-`mxc-test` instead of replacing the list.
+to add the MXC sandbox settings and plugin configuration with one validated
+config write.
 
 ```powershell
 $mxcPolicyPath = Join-Path $env:TEMP "openclaw-mxc-policy.json"
@@ -127,18 +125,16 @@ $mxcPolicyPath = Join-Path $env:TEMP "openclaw-mxc-policy.json"
 }
 '@ | Set-Content -Path $mxcPolicyPath -Encoding utf8
 
+openclaw agents add mxc-test `
+  --workspace ~/.openclaw/workspace-mxc-test `
+  --non-interactive
+
 $mxcPolicyPathLiteral = ConvertTo-Json $mxcPolicyPath -Compress
 $mxcConfigPatch = @"
 {
   agents: {
-    list: [
-      {
-        id: "main",
-        workspace: "~/.openclaw/workspace",
-      },
-      {
-        id: "mxc-test",
-        workspace: "~/.openclaw/workspace-mxc-test",
+    entries: {
+      "mxc-test": {
         sandbox: {
           mode: "all",
           backend: "mxc",
@@ -146,7 +142,7 @@ $mxcConfigPatch = @"
           workspaceAccess: "none",
         },
       },
-    ],
+    },
   },
   plugins: {
     entries: {
@@ -165,43 +161,6 @@ $mxcConfigPatch = @"
 
 $mxcConfigPatch | openclaw config patch --stdin --dry-run
 $mxcConfigPatch | openclaw config patch --stdin
-```
-
-Resulting config shape:
-
-```jsonc
-{
-  "agents": {
-    "list": [
-      {
-        "id": "main",
-        "workspace": "~/.openclaw/workspace",
-      },
-      {
-        "id": "mxc-test",
-        "workspace": "~/.openclaw/workspace-mxc-test",
-        "sandbox": {
-          "mode": "all",
-          "backend": "mxc",
-          "scope": "agent",
-          "workspaceAccess": "none",
-        },
-      },
-    ],
-  },
-  "plugins": {
-    "entries": {
-      "mxc": {
-        "enabled": true,
-        "config": {
-          "containment": "process",
-          "network": "none",
-          "mxcPolicyPaths": ["C:\\Users\\you\\AppData\\Local\\Temp\\openclaw-mxc-policy.json"],
-        },
-      },
-    },
-  },
-}
 ```
 
 ## Sandbox policy files
@@ -342,7 +301,7 @@ wxc-host-prep prepare-system-drive
 pnpm test:extension mxc
 ```
 
-`pnpm test extensions/mxc` is equivalent and also works.
+`pnpm test extensions/mxc` is also supported for the bundled extension test lane.
 
 For policy-only edits, the focused coverage is in:
 
