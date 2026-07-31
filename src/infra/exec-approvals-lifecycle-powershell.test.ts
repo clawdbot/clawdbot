@@ -33,6 +33,18 @@ describe("OpenClaw PowerShell lifecycle edges", () => {
     expect(requiresApproval(command, ["powershell", "-Command", inline])).toBe(true);
   });
 
+  it("fails closed when PowerShell composes the target and lifecycle arguments", () => {
+    const inline = `& ("open" + "claw") ("gate" + "way") ("re" + "start")`;
+    const command = `powershell -Command '${inline}'`;
+    expect(requiresApproval(command, ["powershell", "-Command", inline])).toBe(true);
+  });
+
+  it("keeps a calculated target with static non-lifecycle arguments non-blocking", () => {
+    const inline = `& ("git") status`;
+    const command = `powershell -Command '${inline}'`;
+    expect(requiresApproval(command, ["powershell", "-Command", inline])).toBe(false);
+  });
+
   it("scans lifecycle substitutions inside double quotes", () => {
     const command = `Write-Output "$(openclaw gateway restart)"`;
     expect(extractShellSubstitutionCommands(command, "powershell").commands).toContain(
