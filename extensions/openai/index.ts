@@ -42,7 +42,16 @@ export default definePluginEntry({
       api.lifecycle.registerRuntimeLifecycle({
         id: "openai-quicksilver-realtime-browser-session",
         description: "Close GPT-Live browser sidebands when the OpenAI plugin stops",
-        cleanup: () => quicksilverSession.cleanup(),
+        cleanup: (ctx) => {
+          // The broker is process-wide shared state; only tear it down when the
+          // OpenAI plugin itself is disabled. host-hook-cleanup.ts invokes this
+          // callback for every reason (including unrelated session reset/delete/
+          // restart), and cleanup() permanently stops the broker for the whole
+          // process, so session cleanup must not trigger it (#116525).
+          if (ctx.reason === "disable") {
+            return quicksilverSession.cleanup();
+          }
+        },
       });
     }
     const openAIToolCompatHooks = buildProviderToolCompatFamilyHooks("openai");

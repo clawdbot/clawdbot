@@ -24,6 +24,15 @@ const runtimeMocks = vi.hoisted(() => ({
   refreshOpenAICodexToken: vi.fn(),
 }));
 
+const quicksilverBrokerMocks = vi.hoisted(() => ({
+  cleanup: vi.fn(),
+  create: vi.fn(() => ({
+    handler: vi.fn(),
+    cleanup: quicksilverBrokerMocks.cleanup,
+    broker: {},
+  })),
+}));
+
 vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
     "openclaw/plugin-sdk/runtime-env",
@@ -37,6 +46,16 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
 vi.mock("./openai-chatgpt-oauth-flow.runtime.js", () => ({
   refreshOpenAICodexToken: runtimeMocks.refreshOpenAICodexToken,
 }));
+
+vi.mock("./realtime-quicksilver-session.js", async () => {
+  const actual = await vi.importActual<typeof import("./realtime-quicksilver-session.js")>(
+    "./realtime-quicksilver-session.js",
+  );
+  return {
+    ...actual,
+    createOpenAIQuicksilverBrowserSessionBroker: quicksilverBrokerMocks.create,
+  };
+});
 
 import { createOpenAICodexProviderRuntime } from "./openai-chatgpt-provider-runtime.factory.js";
 async function registerOpenAIPluginWithHook(params?: { pluginConfig?: Record<string, unknown> }) {
@@ -183,6 +202,40 @@ describe("openai plugin", () => {
         cleanup: expect.any(Function),
       }),
     );
+  });
+
+  it("only tears down the GPT-Live broker on plugin disable, not session reset/delete/restart", () => {
+    quicksilverBrokerMocks.cleanup.mockClear();
+    quicksilverBrokerMocks.create.mockClear();
+    const registerRuntimeLifecycle = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "openai",
+        name: "OpenAI Provider",
+        source: "test",
+        config: {},
+        runtime: { config: { current: vi.fn(() => ({})) } } as never,
+        registerRuntimeLifecycle,
+      }),
+    );
+
+    const registration = registerRuntimeLifecycle.mock.calls.find(
+      (call) => call[0]?.id === "openai-quicksilver-realtime-browser-session",
+    );
+    expectDefined(registration, "quicksilver runtime lifecycle registration");
+    const cleanup = registration[0].cleanup as (ctx: {
+      reason: "disable" | "reset" | "delete" | "restart";
+    }) => void;
+
+    // Unrelated session cleanup must not stop the shared process-wide broker.
+    for (const reason of ["reset", "delete", "restart"] as const) {
+      cleanup({ reason });
+    }
+    expect(quicksilverBrokerMocks.cleanup).not.toHaveBeenCalled();
+
+    // Plugin disable tears the broker down.
+    cleanup({ reason: "disable" });
+    expect(quicksilverBrokerMocks.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it("generates PNG buffers from the OpenAI Images API", async () => {
