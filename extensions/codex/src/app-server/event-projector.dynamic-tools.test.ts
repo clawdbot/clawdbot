@@ -113,34 +113,6 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     });
   });
 
-  it("prefers per-invocation provenance for remote-only dynamic tools", async () => {
-    const projector = await createProjector();
-
-    projector.recordDynamicToolCall({
-      callId: "call-pdf-1",
-      tool: "pdf",
-      arguments: { pdf: "https://example.test/report.pdf" },
-    });
-    projector.recordDynamicToolResult(
-      {
-        callId: "call-pdf-1",
-        tool: "pdf",
-        success: true,
-        contentItems: [{ type: "inputText", text: "remote PDF text" }],
-      },
-      "network",
-    );
-    await projector.handleNotification(agentMessageDelta("stored result"));
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(requireRecord(result.messagesSnapshot[2], "tool result")["__openclaw"]).toMatchObject({
-      resultContentSource: "network",
-    });
-    expect(requireRecord(result.messagesSnapshot[3], "assistant")["__openclaw"]).toMatchObject({
-      turnTainted: true,
-    });
-  });
-
   it("retains MCP App preview details in mirrored dynamic tool results", async () => {
     const projector = await createProjector();
     const details = {

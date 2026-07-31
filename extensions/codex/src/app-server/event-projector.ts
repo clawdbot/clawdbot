@@ -376,8 +376,7 @@ export class CodexAppServerEventProjector {
     resultContentSource?: "network",
   ): void {
     this.toolProgressProjection.recordDynamicToolResult(params);
-    const source =
-      resultContentSource ?? this.options.resolveDynamicToolResultContentSource?.(params.tool);
+    const source = this.options.resolveDynamicToolResultContentSource?.(params.tool);
     this.toolTranscriptProjection.recordDynamicToolResult(params, source);
   }
 
