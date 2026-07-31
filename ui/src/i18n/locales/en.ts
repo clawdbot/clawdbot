@@ -663,6 +663,8 @@ export const en: TranslationMap = {
     loadError: "Could not load dashboards: {error}",
   },
   sessionsView: {
+    subagentPrefix: "Subagent:",
+    automationPrefix: "Automation:",
     deletePreservedWorktrees:
       "{count} thread worktree(s) with uncommitted or unpushed work were kept ({branches}). Manage them under Settings -> Worktrees.",
     deletePreservedWorktreeConfirm:
@@ -840,7 +842,7 @@ export const en: TranslationMap = {
     groupBy: "Group by",
     groupByNone: "None",
     groupByCategory: "Custom groups",
-    showCronSessions: "Show cron sessions",
+    showCronSessions: "Show automation sessions",
     groupByChannel: "Channel",
     groupByKind: "Kind",
     groupByAgent: "Agent",
@@ -1000,10 +1002,10 @@ export const en: TranslationMap = {
     },
     cronPanel: {
       schedulerTitle: "Scheduler",
-      schedulerSubtitle: "Gateway cron status.",
+      schedulerSubtitle: "Gateway automations status.",
       jobs: "Jobs",
       nextWake: "Next wake",
-      agentJobsTitle: "Agent Cron Jobs",
+      agentJobsTitle: "Agent Automations",
       agentJobsSubtitle: "Scheduled jobs targeting this agent.",
       noJobs: "No jobs assigned.",
       runNow: "Run Now",
@@ -1084,7 +1086,12 @@ export const en: TranslationMap = {
     defaultValue: "Default: {value}",
     resetToDefault: "Reset to default",
     select: "Select...",
+    nullValue: "null",
     jsonValue: "JSON value",
+    invalidJson: "Enter valid JSON before leaving this field.",
+    invalidString: "Enter a value that matches this setting's constraints.",
+    invalidNumber: "Enter a value within the allowed range and step.",
+    draftRejected: "This setting could not be saved. Your draft is still here.",
     unsupportedArray: "Unsupported array schema. Use Raw mode.",
     itemCountOne: "{count} item",
     itemCount: "{count} items",
@@ -1187,7 +1194,7 @@ export const en: TranslationMap = {
         description: "Session management and persistence",
       },
       cron: {
-        label: "Cron",
+        label: "Automations",
         description: "Scheduled tasks and automation",
       },
       discovery: {
@@ -1366,7 +1373,7 @@ export const en: TranslationMap = {
       commands: "Commands",
       hooks: "Hooks",
       bindings: "Bindings",
-      cron: "Cron",
+      cron: "Automations",
       approvals: "Approvals",
       security: "Security Policy",
       plugins: "Plugins",
@@ -1929,7 +1936,7 @@ export const en: TranslationMap = {
     sessions: "Active threads and defaults.",
     usage: "API usage and costs.",
     cron: "Scheduled tasks and recurring agent runs.",
-    tasks: "Background tasks: subagents, cron runs, CLI.",
+    tasks: "Background tasks: subagents, automation runs, CLI.",
     skills: "Skills and API keys.",
     plugins: "Install and manage optional capabilities.",
     skillWorkshop: "Review, refine, and apply proposals before they become live skills.",
@@ -1942,7 +1949,7 @@ export const en: TranslationMap = {
     communications: "Messages and text-to-speech settings.",
     appearance: "Theme, UI, and setup wizard settings.",
     lobsterdex: "Every lobster palette that has visited this browser.",
-    automation: "Commands, hooks, cron, and plugins.",
+    automation: "Commands, hooks, automations, and plugins.",
     mcp: "MCP servers, auth, tools, and diagnostics.",
     memory: "Memory engine, backend, search, and dreaming.",
     talk: "Realtime voice: provider, model, and speaker voice.",
@@ -1961,18 +1968,18 @@ export const en: TranslationMap = {
     plugin: "Plugin-provided panel.",
   },
   modelSetup: {
-    heading: "Connect your AI",
+    heading: "Connect a verified AI model",
     intro:
-      "OpenClaw reuses AI access you already have — a CLI login, an API key, or a provider sign-in.",
+      "OpenClaw checks the AI access available on this Gateway and verifies the exact model before it enables conversations.",
     required: {
       title: "No AI provider configured",
-      body: "OpenClaw couldn't find a provider and model configured for this agent. Add one before starting a conversation.",
-      action: "Configure a provider",
+      body: "We couldn't find a provider and model configured for this agent. Choose a supported connection; OpenClaw will test it before enabling chat.",
+      action: "Connect an AI provider",
     },
     connectionFailure: {
-      title: "OpenClaw couldn't use your configured AI",
-      body: "This agent has a provider and model selected, but the connection failed. Check the provider login or API key, model access, and service status, then try again.",
-      action: "Check provider settings",
+      title: "Configured AI needs attention",
+      body: "OpenClaw found the provider and model selected for this agent, but the live check failed. Your configuration is still intact. Review the credential, model access, or provider status, then verify again.",
+      action: "Review connection",
     },
     loading: "Checking this Gateway for available AI access…",
     retry: "Retry",
@@ -2014,15 +2021,14 @@ export const en: TranslationMap = {
       more: "More sign-in options",
     },
     prepare: {
-      title: "Set up a local model",
-      intro:
-        "OpenClaw checks the local service, confirms tool support, and helps prepare a compatible model.",
-      button: "Set up / Download model",
+      title: "Run a model locally",
+      intro: "Use a local model service, or run a private GGUF model directly inside this Gateway.",
       ollamaButton: "Check & set up",
       ollamaLabel: "Ollama",
       ollamaHint: "Connect to the Ollama service on this Gateway and prepare a tools-capable model",
-      llamaCppLabel: "Local model (llama.cpp)",
-      llamaCppHint: "Download an approximately 5.0 GB local model; requires 16 GB RAM",
+      llamaCppLabel: "llama.cpp",
+      providerNotReady:
+        "{provider} did not expose a usable local model. Review the setup result, then retry.",
     },
     manual: {
       title: "Connect with an API key or token",
@@ -2467,7 +2473,7 @@ export const en: TranslationMap = {
     },
     dreaming: {
       intro:
-        "Dreaming runs as one managed cron job across every agent workspace, so these settings are global. They are owned by the {plugin} plugin.",
+        "Dreaming runs as one managed automation across every agent workspace, so these settings are global. They are owned by the {plugin} plugin.",
       schedule: {
         title: "Schedule",
         description: "When the full sweep runs and which model narrates it.",
@@ -2886,7 +2892,7 @@ export const en: TranslationMap = {
     },
     runtime: {
       subagent: "Subagent",
-      cron: "Cron",
+      cron: "Automation",
       acp: "ACP",
       cli: "CLI",
       unknown: "Task",
@@ -3532,8 +3538,8 @@ export const en: TranslationMap = {
   },
   attention: {
     cronErrorUnknown: "Unknown error",
-    cronFailed: "{count} cron job(s) failed",
-    cronOverdue: "{count} cron job(s) overdue",
+    cronFailed: "{count} automation(s) failed",
+    cronOverdue: "{count} automation(s) overdue",
     modelAuthExpired: "Model auth expired: {providers}",
     pendingApproval: "{count} pending approval",
     pendingApprovals: "{count} pending approvals",
@@ -3596,7 +3602,7 @@ export const en: TranslationMap = {
     items: {
       apps: "Apps",
       sessions: "Threads",
-      scheduled: "Scheduled",
+      scheduled: "Automations",
       skills: "Skills",
       plugins: "Plugins",
       settings: "Settings",
@@ -3924,7 +3930,7 @@ export const en: TranslationMap = {
     },
     readiness: {
       title: "AI setup",
-      heading: "Connect your AI",
+      heading: "Connect a verified AI model",
       signedInNoModels:
         "You're signed in, but this account exposes no usable models. Choose another provider or account to continue.",
       notConfigured: "Choose a provider and verify the model OpenClaw will use.",
@@ -4896,6 +4902,9 @@ export const en: TranslationMap = {
       fastHelp: "Fast responses finish sooner and can use more of your usage limits.",
       speedUnsupported: "Speed control is not supported for this model.",
       contextWindow: "{count} context",
+      chatOnly: "Chat only",
+      chatOnlyHelp:
+        "This model can chat, but it cannot use tools. Choose another model for files, commands, web, or media tasks.",
       providerModels: "{provider} models",
       resetReasoning: "Reset to default ({level})",
       useDefaultReasoning: "Use default reasoning ({level})",

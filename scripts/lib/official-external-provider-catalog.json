@@ -1660,6 +1660,55 @@
       }
     },
     {
+      "name": "@openclaw/synthetic-provider",
+      "description": "OpenClaw Synthetic provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "synthetic",
+          "label": "Synthetic"
+        },
+        "providers": [
+          {
+            "id": "synthetic",
+            "name": "Synthetic",
+            "docs": "/providers/synthetic",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "SYNTHETIC_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "synthetic-api-key",
+                "choiceLabel": "Synthetic API key",
+                "groupId": "synthetic",
+                "groupLabel": "Synthetic",
+                "groupHint": "Anthropic-compatible (multi-model)",
+                "optionKey": "syntheticApiKey",
+                "cliFlag": "--synthetic-api-key",
+                "cliOption": "--synthetic-api-key <key>",
+                "cliDescription": "Synthetic API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/synthetic-provider",
+          "npmSpec": "@openclaw/synthetic-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/stepfun-provider",
       "description": "OpenClaw StepFun provider plugin.",
       "source": "official",

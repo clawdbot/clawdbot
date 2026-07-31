@@ -7,7 +7,35 @@ import {
   restoreRegisteredAgentHarnesses,
 } from "./harness/registry.js";
 import type { AgentHarness } from "./harness/types.js";
-import { resolveCandidateThinkingLevel, resolveEffectiveAgentRuntime } from "./thinking-runtime.js";
+import {
+  hasResolvedThinkingCatalogEntry,
+  resolveCandidateThinkingLevel,
+  resolveEffectiveAgentRuntime,
+} from "./thinking-runtime.js";
+
+describe("hasResolvedThinkingCatalogEntry", () => {
+  it("requires authoritative reasoning metadata for the selected model", () => {
+    const catalog = [
+      { provider: "ollama", id: "unknown", reasoning: true },
+      { provider: "OLLAMA", id: "minimax-m3:cloud" },
+    ];
+
+    expect(
+      hasResolvedThinkingCatalogEntry({
+        catalog,
+        provider: "ollama",
+        model: "minimax-m3:cloud",
+      }),
+    ).toBe(false);
+    expect(
+      hasResolvedThinkingCatalogEntry({
+        catalog: [{ provider: "OLLAMA", id: "minimax-m3:cloud", reasoning: false }],
+        provider: "ollama",
+        model: "minimax-m3:cloud",
+      }),
+    ).toBe(true);
+  });
+});
 
 function openAIConfig(runtime: string): OpenClawConfig {
   return {

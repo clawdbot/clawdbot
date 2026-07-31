@@ -60,6 +60,7 @@ type ChatModelProviderOption = ChatModelSelectOption & {
   contextWindow?: number;
   isDefault: boolean;
   provider: string;
+  supportsTools?: boolean;
 };
 
 const CHAT_MODEL_PROVIDER_GROUP_ALIASES: Readonly<Record<string, string>> = {
@@ -210,6 +211,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     return {
       commitValue: isDefault ? "" : option.value,
       ...(catalogEntry?.contextWindow ? { contextWindow: catalogEntry.contextWindow } : {}),
+      ...(typeof catalogEntry?.supportsTools === "boolean"
+        ? { supportsTools: catalogEntry.supportsTools }
+        : {}),
       isDefault,
       value: option.value,
       label: resolveChatModelPickerLabel(option.value, option.label, props.modelCatalog),
@@ -403,8 +407,21 @@ function renderChatModelReasoningSelect(params: {
   } = params;
   const triggerModel = formatCombinedPickerModelLabel(triggerModelLabel);
   const triggerThinking = formatCombinedPickerThinkingLabel(triggerThinkingLabel);
-  const triggerTitle = `${triggerModel} · ${triggerThinking}`;
-  const triggerLabel = triggerTitle;
+  const defaultModelOption = modelOptions.find((option) => option.isDefault);
+  const activeModelOption =
+    selectedModelValue === ""
+      ? defaultModelOption
+      : modelOptions.find((option) => option.value === selectedModelValue);
+  const selectedModelOption = activeModelOption ?? modelOptions[0];
+  const modelToolsUnavailable = activeModelOption?.supportsTools === false;
+  const triggerTitle = [
+    triggerModel,
+    triggerThinking,
+    modelToolsUnavailable ? t("chat.modelControls.chatOnly") : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const triggerLabel = `${triggerModel} · ${triggerThinking}`;
   const sliderStops = thinkingOptions.filter((option) => option.value !== "");
   const defaultStopIndex = sliderStops.findIndex((option) => option.value === thinkingDefaultValue);
   const hasThinkingOverride = selectedThinkingValue !== "";
@@ -530,7 +547,6 @@ function renderChatModelReasoningSelect(params: {
       providerGroups.set(option.provider, [option]);
     }
   }
-  const defaultModelOption = modelOptions.find((option) => option.isDefault);
   const orderedProviderGroups = [...providerGroups];
   const defaultProviderIndex = orderedProviderGroups.findIndex(
     ([provider]) => provider === defaultModelOption?.provider,
@@ -541,21 +557,22 @@ function renderChatModelReasoningSelect(params: {
       orderedProviderGroups.unshift(defaultProviderGroup);
     }
   }
-  const selectedModelOption =
-    (selectedModelValue === ""
-      ? defaultModelOption
-      : modelOptions.find((option) => option.value === selectedModelValue)) ?? modelOptions[0];
   const selectedProvider =
     selectedModelOption?.provider ?? orderedProviderGroups[0]?.[0] ?? "other";
   const renderModelOption = (entry: ChatModelProviderOption) => {
     const selected =
       entry.value === selectedModelValue || (entry.isDefault && selectedModelValue === "");
     const modelLabel = formatCombinedPickerModelOptionLabel(entry);
-    const contextLabel = entry.contextWindow
-      ? t("chat.modelControls.contextWindow", {
-          count: formatCompactTokenCount(entry.contextWindow),
-        })
-      : "";
+    const modelMeta = [
+      entry.contextWindow
+        ? t("chat.modelControls.contextWindow", {
+            count: formatCompactTokenCount(entry.contextWindow),
+          })
+        : "",
+      entry.supportsTools === false ? t("chat.modelControls.chatOnly") : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
     return html`
       <div class="chat-controls__combined-model">
         <button
@@ -592,8 +609,8 @@ function renderChatModelReasoningSelect(params: {
                     >`
                   : ""}
             </span>
-            ${contextLabel
-              ? html`<span class="chat-controls__model-option-meta">${contextLabel}</span>`
+            ${modelMeta
+              ? html`<span class="chat-controls__model-option-meta">${modelMeta}</span>`
               : ""}
           </span>
           ${selected
@@ -619,6 +636,7 @@ function renderChatModelReasoningSelect(params: {
         data-chat-select-value=${selectedModelValue}
         data-chat-thinking-value=${selectedThinkingValue}
         data-chat-thinking-disabled=${thinkingDisabled ? "true" : "false"}
+        data-chat-model-tools=${modelToolsUnavailable ? "unavailable" : "available"}
         aria-label="${t("chat.selectors.model")}, ${t(
           "chat.selectors.thinkingLevel",
         )}: ${triggerTitle}"
@@ -629,6 +647,16 @@ function renderChatModelReasoningSelect(params: {
           }
         }}
       >
+        ${modelToolsUnavailable
+          ? html`
+              <openclaw-tooltip .content=${t("chat.modelControls.chatOnlyHelp")}>
+                <span class="chat-controls__model-capability-badge" aria-hidden="true">
+                  ${icons.alertTriangle}
+                  <span>${t("chat.modelControls.chatOnly")}</span>
+                </span>
+              </openclaw-tooltip>
+            `
+          : nothing}
         <span class="chat-controls__inline-select-label">${triggerLabel}</span>
         <span class="chat-controls__inline-select-icon" aria-hidden="true">
           ${icons.chevronDown}

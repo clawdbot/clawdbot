@@ -46,6 +46,7 @@ import { apiThrottler, Bot, sequentialize, type ApiClientOptions } from "./bot.r
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import { setTelegramCallbackQueryAnswerPromise } from "./callback-query-answer-state.js";
+import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
 import {
   asTelegramClientFetch,
   createTelegramClientFetch,
@@ -77,8 +78,6 @@ const DEFAULT_TELEGRAM_BOT_RUNTIME: TelegramBotRuntime = {
   sequentialize,
   apiThrottler,
 };
-const TELEGRAM_TYPING_COALESCE_MS = 4_000;
-
 export function createTelegramBotCore(
   opts: TelegramBotOptions & { telegramDeps: TelegramBotDeps },
 ): TelegramBotInstance {
@@ -354,7 +353,7 @@ export function createTelegramBotCore(
     sendChatActionFn: (chatId, action, threadParams) =>
       bot.api.sendChatAction(chatId, action, threadParams),
     logger: (message) => logVerbose(`telegram: ${message}`),
-    minIntervalMs: TELEGRAM_TYPING_COALESCE_MS,
+    minIntervalMs: TELEGRAM_CHAT_ACTION_INTERVAL_MS,
   });
 
   const processMessage = createTelegramMessageProcessor({

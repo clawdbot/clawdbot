@@ -130,6 +130,10 @@ const GOOGLE_VERTEX_DEFAULT_API_VERSION = "v1";
 
 type GoogleSseChunk = {
   responseId?: string;
+  promptFeedback?: {
+    blockReason?: string;
+    blockReasonMessage?: string;
+  };
   candidates?: Array<{
     content?: {
       parts?: Array<{
@@ -1343,6 +1347,17 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           output.responseId ||= chunk.responseId;
           updateUsage(output, model, chunk);
           const candidate = chunk.candidates?.[0];
+          const promptFeedback = chunk.promptFeedback;
+          if (!candidate && promptFeedback) {
+            const blockReason =
+              normalizeOptionalString(promptFeedback.blockReason) ?? "PROMPT_BLOCKED";
+            const blockMessage = normalizeOptionalString(promptFeedback.blockReasonMessage);
+            const message = `Google prompt blocked (${blockReason})${blockMessage ? `: ${blockMessage}` : ""}`;
+            throw Object.assign(new Error(message), {
+              code: blockReason,
+              type: "google_prompt_blocked",
+            });
+          }
           if (candidate?.content?.parts) {
             for (const part of candidate.content.parts) {
               const hasThoughtSignature =

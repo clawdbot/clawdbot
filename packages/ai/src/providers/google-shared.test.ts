@@ -264,6 +264,66 @@ describe("consumeGoogleGenerateContentStream", () => {
 });
 
 describe("runGoogleGenerateContentLifecycle", () => {
+  it.each([
+    { api: "google-generative-ai", blockReason: "SAFETY" },
+    { api: "google-generative-ai", blockReason: undefined },
+    { api: "google-vertex", blockReason: "SAFETY" },
+    { api: "google-vertex", blockReason: undefined },
+  ] as const)(
+    "surfaces blocked $api prompts as typed stream errors when blockReason is $blockReason",
+    async ({ api, blockReason }) => {
+      const targetModel = {
+        ...model,
+        api,
+        provider: api === "google-vertex" ? "google-vertex" : "google",
+      } satisfies Model<"google-generative-ai" | "google-vertex">;
+      const output: AssistantMessage = {
+        ...createOutput(),
+        api: targetModel.api,
+        provider: targetModel.provider,
+      };
+      const stream = new AssistantMessageEventStream();
+
+      await runGoogleGenerateContentLifecycle({
+        stream,
+        model: targetModel,
+        output,
+        createClient: () => ({
+          models: {
+            generateContentStream: async () =>
+              chunks([
+                {
+                  promptFeedback: {
+                    ...(blockReason ? { blockReason } : {}),
+                    blockReasonMessage: "Prompt violates provider safety policy",
+                  },
+                  usageMetadata: {
+                    promptTokenCount: 12,
+                    cachedContentTokenCount: 2,
+                    totalTokenCount: 12,
+                  },
+                } as GenerateContentResponse,
+              ]),
+          },
+        }),
+        buildParams: () => ({ model: targetModel.id, contents: [] }),
+        nextToolCallId: () => "call_1",
+      });
+
+      const result = await stream.result();
+      const expectedBlockReason = blockReason ?? "PROMPT_BLOCKED";
+      expect(result).toMatchObject({
+        stopReason: "error",
+        errorCode: expectedBlockReason,
+        errorType: "google_prompt_blocked",
+        errorMessage: `Google prompt blocked (${expectedBlockReason}): Prompt violates provider safety policy`,
+        content: [],
+        usage: { input: 10, cacheRead: 2, totalTokens: 12 },
+      });
+      expect(result.usage.cost.total).toBeGreaterThan(0);
+    },
+  );
+
   it("surfaces HTTP response body text from Google-compatible errors", async () => {
     const output = createOutput();
     const stream = new AssistantMessageEventStream();

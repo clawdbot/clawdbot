@@ -305,6 +305,7 @@ function sourcePackageAlias(packageId: string, subpath?: string): ControlUiViteA
 
 export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   return [
+    sourcePackageAlias("normalization-core", "json-schema"),
     sourcePackageAlias("normalization-core", "number-coercion"),
     sourcePackageAlias("normalization-core", "phone-presentation"),
     sourcePackageAlias("normalization-core", "record-coerce"),

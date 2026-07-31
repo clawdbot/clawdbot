@@ -17,6 +17,10 @@ vi.mock("../agents/prepared-model-catalog.js", async () => {
     await vi.importActual<typeof import("../agents/agent-scope.js")>("../agents/agent-scope.js");
   return {
     loadPreparedModelCatalog,
+    loadPreparedModelCatalogSnapshot: vi.fn(async (params) => ({
+      entries: (await loadPreparedModelCatalog(params)) ?? [],
+      routeVariants: [],
+    })),
     loadPublishedPreparedModelCatalog: loadPreparedModelCatalog,
     publishedModelCatalogOwnerMatchesAgent: (owner: { agentId: string }, agentId: string) =>
       owner.agentId === agentId.trim().toLowerCase(),

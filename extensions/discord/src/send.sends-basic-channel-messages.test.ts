@@ -542,6 +542,24 @@ describe("sendMessageDiscord", () => {
     });
   });
 
+  it("explains how to create a forum thread when the parent requires an applied tag", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildForum,
+      flags: 1 << 4,
+      available_tags: [{ id: "tag1", name: "Question", moderated: false }],
+    });
+
+    await expect(
+      sendMessageDiscord("channel:forum1", "Discussion topic", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+      }),
+    ).rejects.toThrow(/thread-create with appliedTags/);
+    expect(postMock).not.toHaveBeenCalled();
+  });
+
   it("posts media as a follow-up message in forum channels", async () => {
     const { rest, postMock } = setupForumSend({ id: "media1", channel_id: "thread1" });
     const res = await sendMessageDiscord("channel:forum1", "Topic", {
@@ -554,9 +572,18 @@ describe("sendMessageDiscord", () => {
     expect(res.channelId).toBe("thread1");
     expectRecordFields(res.receipt, "send receipt", {
       threadId: "thread1",
-      platformMessageIds: ["starter1"],
+      platformMessageIds: ["starter1", "media1"],
     });
-    expectSingleReceiptPart(res.receipt, { platformMessageId: "starter1", kind: "media" });
+    expect(
+      res.receipt.parts.map(({ platformMessageId, kind, index }) => ({
+        platformMessageId,
+        kind,
+        index,
+      })),
+    ).toEqual([
+      { platformMessageId: "starter1", kind: "text", index: 0 },
+      { platformMessageId: "media1", kind: "media", index: 1 },
+    ]);
     expectRestRoute(postMock, 0, Routes.threads("forum1"));
     expect(requireRestBody(postMock, 0)).toEqual({
       name: "Topic",
@@ -569,7 +596,7 @@ describe("sendMessageDiscord", () => {
   it("chunks long forum posts into follow-up messages", async () => {
     const { rest, postMock } = setupForumSend({ id: "msg2", channel_id: "thread1" });
     const longText = "a".repeat(2001);
-    await sendMessageDiscord("channel:forum1", longText, {
+    const result = await sendMessageDiscord("channel:forum1", longText, {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
@@ -580,6 +607,11 @@ describe("sendMessageDiscord", () => {
     const secondBody = requireRestBody(postMock, 1) as { content?: string };
     expect(firstBody?.message?.content).toHaveLength(2000);
     expect(secondBody?.content).toBe("a");
+    expect(result.receipt.platformMessageIds).toEqual(["starter1", "msg2"]);
+    expect(result.receipt.parts.map(({ kind, index }) => ({ kind, index }))).toEqual([
+      { kind: "text", index: 0 },
+      { kind: "text", index: 1 },
+    ]);
   });
 
   it("starts DM when recipient is a user", async () => {

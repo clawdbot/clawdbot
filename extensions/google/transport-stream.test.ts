@@ -541,6 +541,61 @@ describe("google transport stream", () => {
     expect(result.content[2]).toHaveProperty("thoughtSignature", "Y2FsbF9zaWdfMQ==");
   });
 
+  it.each([
+    {
+      provider: "google",
+      feedback: { blockReason: "SAFETY" },
+      expectedCode: "SAFETY",
+      expectedMessage: "Google prompt blocked (SAFETY)",
+    },
+    {
+      provider: "google",
+      feedback: {},
+      expectedCode: "PROMPT_BLOCKED",
+      expectedMessage: "Google prompt blocked (PROMPT_BLOCKED)",
+    },
+    {
+      provider: "google-vertex",
+      feedback: {
+        blockReason: "PROHIBITED_CONTENT",
+        blockReasonMessage: "Prompt violates provider safety policy",
+      },
+      expectedCode: "PROHIBITED_CONTENT",
+      expectedMessage:
+        "Google prompt blocked (PROHIBITED_CONTENT): Prompt violates provider safety policy",
+    },
+    {
+      provider: "google-vertex",
+      feedback: { blockReasonMessage: "Prompt violates provider safety policy" },
+      expectedCode: "PROMPT_BLOCKED",
+      expectedMessage:
+        "Google prompt blocked (PROMPT_BLOCKED): Prompt violates provider safety policy",
+    },
+  ])(
+    "surfaces blocked $provider prompts as typed stream errors",
+    async ({ provider, feedback, expectedCode, expectedMessage }) => {
+      guardedFetchMock.mockResolvedValueOnce(buildSseResponse([{ promptFeedback: feedback }]));
+      if (provider === "google-vertex") {
+        vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+        vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+        googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+      }
+
+      const result =
+        provider === "google-vertex"
+          ? await runGoogleVertexStreamResult({ fetch: guardedFetchMock })
+          : await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+      expect(result).toMatchObject({
+        stopReason: "error",
+        errorCode: expectedCode,
+        errorType: "google_prompt_blocked",
+        errorMessage: expectedMessage,
+        content: [],
+      });
+    },
+  );
+
   it("rotates Gemini LLM API keys when a pre-stream request is rate limited", async () => {
     vi.stubEnv("OPENCLAW_LIVE_GEMINI_KEY", "");
     vi.stubEnv("GEMINI_API_KEYS", "gemini-key-2");

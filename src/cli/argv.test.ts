@@ -12,6 +12,7 @@ import {
   isHelpOrVersionInvocation,
   isRootHelpInvocation,
   isRootVersionInvocation,
+  isSimpleCommandHelpInvocation,
   normalizeGeneratedHelpCommandArgv,
   normalizeRootHelpTargetArgv,
   normalizeRootLogLevelArgv,
@@ -478,6 +479,31 @@ describe("argv helpers", () => {
         2,
       ),
     ).toEqual(["config", "validate"]);
+  });
+
+  it("limits simple help fast paths to root options, a command, and help", () => {
+    const commands = new Set(["setup"]);
+    expect(
+      isSimpleCommandHelpInvocation(
+        ["node", "openclaw", "--profile", "work", "setup", "--help"],
+        commands,
+      ),
+    ).toBe(true);
+    expect(
+      isSimpleCommandHelpInvocation(
+        ["node", "openclaw", "setup", "--workspace", "--help"],
+        commands,
+      ),
+    ).toBe(false);
+    expect(
+      isSimpleCommandHelpInvocation(
+        ["node", "openclaw", "setup", "--profile", "work", "--help"],
+        commands,
+      ),
+    ).toBe(false);
+    expect(isSimpleCommandHelpInvocation(["node", "openclaw", "--help", "setup"], commands)).toBe(
+      false,
+    );
   });
 
   it("extracts routed config get positionals with interleaved root options", () => {

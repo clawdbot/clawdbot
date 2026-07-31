@@ -40,6 +40,18 @@ export function parseTcpEndpoint(raw: string): { host: string; port: number } | 
   return { host: normalizeTcpHost(endpoint.slice(0, lastColon)), port };
 }
 
+/** Parses the address field emitted for a TCP listener by lsof or netstat. */
+export function parseTcpListenerEndpoint(raw: string | undefined): {
+  host: string;
+  port: number;
+} | null {
+  const normalized = raw
+    ?.trim()
+    .replace(/^tcp6?\s+/i, "")
+    .replace(/\s*\(listen\)\s*$/i, "");
+  return normalized ? parseTcpEndpoint(normalized) : null;
+}
+
 function isWildcardEndpoint(raw: string | undefined): boolean {
   const endpoint = raw?.trim();
   if (!endpoint || endpoint === "*:*") {

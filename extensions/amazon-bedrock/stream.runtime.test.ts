@@ -123,6 +123,74 @@ describe("Bedrock inbound image base64", () => {
 });
 
 describe("Bedrock tool-result replay", () => {
+  it("replays unsupported audio attachments as their canonical text placeholder", () => {
+    const messages = testing.convertMessages(
+      {
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "call_audio",
+            toolName: "listen",
+            content: [{ type: "audio", mimeType: "audio/wav", data: "YXVkaW8=" }],
+            isError: false,
+          },
+        ],
+      } as never,
+      bedrockModel({ input: ["text", "image"] }),
+      "none",
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      role: ConversationRole.USER,
+      content: [
+        {
+          toolResult: {
+            toolUseId: "call_audio",
+            content: [{ text: "(see attached audio)" }],
+          },
+        },
+      ],
+    });
+  });
+
+  it("preserves valid text and image attachments alongside unsupported audio", () => {
+    const messages = testing.convertMessages(
+      {
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "call_media",
+            toolName: "inspect",
+            content: [
+              { type: "audio", mimeType: "audio/wav", data: "YXVkaW8=" },
+              { type: "text", text: "actual tool output" },
+              { type: "image", mimeType: "image/png", data: "aW1hZ2U=" },
+            ],
+            isError: false,
+          },
+        ],
+      } as never,
+      bedrockModel({ input: ["text", "image"] }),
+      "none",
+    );
+
+    expect(messages[0]).toMatchObject({
+      role: ConversationRole.USER,
+      content: [
+        {
+          toolResult: {
+            toolUseId: "call_media",
+            content: [
+              { text: "actual tool output" },
+              { image: { format: "png", source: { bytes: expect.any(Uint8Array) } } },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
   it("drops payload-less image husks from consecutive tool results", () => {
     const messages = testing.convertMessages(
       {
@@ -335,6 +403,61 @@ describe("Bedrock profile endpoint resolution", () => {
 });
 
 describe("Bedrock stop reasons", () => {
+  it.each([
+    {
+      name: "text",
+      events: [
+        { contentBlockDelta: { contentBlockIndex: 0, delta: { text: "truncated response" } } },
+        { contentBlockStop: { contentBlockIndex: 0 } },
+      ],
+      contentType: "text",
+    },
+    {
+      name: "tool call",
+      events: [
+        {
+          contentBlockStart: {
+            contentBlockIndex: 0,
+            start: { toolUse: { toolUseId: "call_lookup", name: "lookup" } },
+          },
+        },
+        {
+          contentBlockDelta: {
+            contentBlockIndex: 0,
+            delta: { toolUse: { input: '{"query":"partial"}' } },
+          },
+        },
+        { contentBlockStop: { contentBlockIndex: 0 } },
+      ],
+      contentType: "toolCall",
+    },
+  ])(
+    "reports truncated $name streams without a terminal messageStop",
+    async ({ events, contentType }) => {
+      vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+        $metadata: { httpStatusCode: 200 },
+        stream: streamEvents([{ messageStart: { role: ConversationRole.ASSISTANT } }, ...events]),
+      } as never);
+
+      const stream = streamBedrockForTest(bedrockModel({}), {
+        messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+      } as never);
+      const eventTypes: string[] = [];
+      for await (const event of stream) {
+        eventTypes.push(event.type);
+      }
+      const result = await stream.result();
+
+      expect(eventTypes.at(-1)).toBe("error");
+      expect(eventTypes).not.toContain("done");
+      expect(result.stopReason).toBe("error");
+      expect(result.errorMessage).toBe("Bedrock stream ended before messageStop");
+      expect(result.content).toEqual([expect.objectContaining({ type: contentType })]);
+      expect(result.content[0]).not.toHaveProperty("index");
+      expect(result.content[0]).not.toHaveProperty("partialJson");
+    },
+  );
+
   it.each([
     BedrockStopReason.CONTENT_FILTERED,
     BedrockStopReason.GUARDRAIL_INTERVENED,

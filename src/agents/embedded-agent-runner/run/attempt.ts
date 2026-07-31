@@ -292,6 +292,7 @@ export async function runEmbeddedAttempt(
       getProviderRuntimeHandle,
       isRawModelRun,
       markStage: (name) => prepStages.mark(name),
+      modelToolsEnabled: toolsEnabled,
       proactiveSubagentOrchestration,
       sandbox: sandbox ?? undefined,
       sandboxSessionKey,

@@ -99,6 +99,7 @@ function releaseCodexLoginFlow(params: {
 
 function buildCodexDeviceLoginPrompter(params: {
   sendMessage: (message: string) => Promise<void>;
+  sendDeviceCode?: NonNullable<ModelsAuthLoginFlowOptions["prompter"]["deviceCode"]>;
   unsupportedPromptMessage: string;
 }): ModelsAuthLoginFlowOptions["prompter"] {
   const sendCleanMessage = async (message: string) => {
@@ -116,6 +117,7 @@ function buildCodexDeviceLoginPrompter(params: {
     note: async (message, title) => {
       await sendCleanMessage([title?.trim(), message.trim()].filter(Boolean).join("\n\n"));
     },
+    ...(params.sendDeviceCode ? { deviceCode: params.sendDeviceCode } : {}),
     plain: sendCleanMessage,
     select: unsupportedPrompt as ModelsAuthLoginFlowOptions["prompter"]["select"],
     multiselect: unsupportedPrompt as ModelsAuthLoginFlowOptions["prompter"]["multiselect"],
@@ -180,6 +182,7 @@ async function runCodexDeviceLoginFlow(params: {
   config: OpenClawConfig;
   runtime: RuntimeEnv;
   sendMessage: (message: string) => Promise<void>;
+  sendDeviceCode?: NonNullable<ModelsAuthLoginFlowOptions["prompter"]["deviceCode"]>;
   unsupportedPromptMessage: string;
   runLoginFlow?: RunModelsAuthLoginFlow;
 }): Promise<ModelsAuthLoginFlowResult> {
@@ -192,6 +195,7 @@ async function runCodexDeviceLoginFlow(params: {
     runtime: params.runtime,
     prompter: buildCodexDeviceLoginPrompter({
       sendMessage: params.sendMessage,
+      sendDeviceCode: params.sendDeviceCode,
       unsupportedPromptMessage: params.unsupportedPromptMessage,
     }),
     isRemote: true,

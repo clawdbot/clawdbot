@@ -26,8 +26,17 @@ const inputSinks: Array<{
   disconnect: ReturnType<typeof vi.fn>;
   gain: { value: number };
 }> = [];
+const createdSources: MockAudioBufferSource[] = [];
 let getUserMedia: ReturnType<typeof vi.fn>;
 let audioCurrentTime = 0;
+
+class MockAudioBufferSource {
+  buffer: unknown = null;
+  readonly addEventListener = vi.fn();
+  readonly connect = vi.fn();
+  readonly start = vi.fn();
+  readonly stop = vi.fn();
+}
 
 class MockAudioContext {
   get currentTime(): number {
@@ -81,13 +90,9 @@ class MockAudioContext {
   }
 
   createBufferSource() {
-    return {
-      addEventListener: vi.fn(),
-      buffer: null,
-      connect: vi.fn(),
-      start: vi.fn(),
-      stop: vi.fn(),
-    };
+    const source = new MockAudioBufferSource();
+    createdSources.push(source);
+    return source;
   }
 }
 
@@ -162,6 +167,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     listeners.clear();
     processors.length = 0;
     inputSinks.length = 0;
+    createdSources.length = 0;
     audioCurrentTime = 0;
     vi.stubGlobal("AudioContext", MockAudioContext);
     getUserMedia = vi.fn(async () => ({
@@ -181,6 +187,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     listeners.clear();
     processors.length = 0;
     inputSinks.length = 0;
+    createdSources.length = 0;
   });
 
   it("preserves audio processing while selecting the exact microphone", async () => {
@@ -325,6 +332,79 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     transport.stop();
   });
 
+  it("cancels overflowing playback and ignores late audio until provider clear", async () => {
+    const client = createClient();
+    const transport = createTransport({ client });
+
+    await transport.start();
+    for (let index = 0; index < 321; index += 1) {
+      emitTalkEvent({
+        relaySessionId: "relay-1",
+        type: "audio",
+        audioBase64: "AAAA",
+      });
+    }
+
+    await waitForFast(() =>
+      expect(requestCallsFor(client, "talk.session.cancelOutput")).toEqual([
+        [
+          "talk.session.cancelOutput",
+          {
+            sessionId: "relay-1",
+            reason: "playback-overflow",
+          },
+        ],
+      ]),
+    );
+    expect(createdSources).toHaveLength(320);
+    expect(createdSources.every((source) => source.stop.mock.calls.length === 1)).toBe(true);
+
+    emitTalkEvent({
+      relaySessionId: "relay-1",
+      type: "audio",
+      audioBase64: "AAAA",
+    });
+    expect(createdSources).toHaveLength(320);
+
+    emitTalkEvent({ relaySessionId: "relay-1", type: "clear" });
+    emitTalkEvent({
+      relaySessionId: "relay-1",
+      type: "audio",
+      audioBase64: "AAAA",
+    });
+    expect(createdSources).toHaveLength(321);
+    expect(createdSources.at(-1)?.start).toHaveBeenCalledOnce();
+
+    transport.stop();
+  });
+
+  it("cancels provider output when the first audio chunk exceeds the time budget", async () => {
+    const client = createClient();
+    const transport = createTransport({ client });
+
+    await transport.start();
+    emitTalkEvent({
+      relaySessionId: "relay-1",
+      type: "audio",
+      audioBase64: zeroPcmBase64(24000 * 11),
+    });
+
+    await waitForFast(() =>
+      expect(requestCallsFor(client, "talk.session.cancelOutput")).toEqual([
+        [
+          "talk.session.cancelOutput",
+          {
+            sessionId: "relay-1",
+            reason: "playback-overflow",
+          },
+        ],
+      ]),
+    );
+    expect(createdSources).toHaveLength(0);
+
+    transport.stop();
+  });
+
   it("acknowledges provider marks only after the local playback queue drains", async () => {
     vi.useFakeTimers();
     const client = createClient();
@@ -378,6 +458,116 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
     expect(onInputLevel.mock.calls.some(([level]) => level > 0)).toBe(true);
     expect(onInputLevel).toHaveBeenLastCalledWith(0);
+  });
+
+  it("bounds stalled microphone appends and aborts every owner on stop", async () => {
+    const onStatus = vi.fn();
+    const client = createClient();
+    let activeAppends = 0;
+    let peakActiveAppends = 0;
+    const appendSignals: AbortSignal[] = [];
+    vi.mocked(client["request"]).mockImplementation((method, _params, options) => {
+      if (method !== "talk.session.appendAudio") {
+        return Promise.resolve({});
+      }
+      const signal = options?.signal;
+      if (!signal) {
+        return Promise.reject(new Error("missing append abort signal"));
+      }
+      appendSignals.push(signal);
+      activeAppends += 1;
+      peakActiveAppends = Math.max(peakActiveAppends, activeAppends);
+      return new Promise((_, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => {
+            activeAppends -= 1;
+            reject(new Error("append aborted"));
+          },
+          { once: true },
+        );
+      });
+    });
+    const transport = createTransport({ callbacks: { onStatus }, client });
+
+    await transport.start();
+    const samples = new Float32Array(4096);
+    for (let index = 0; index < 10_000; index += 1) {
+      pumpMicrophone(samples);
+    }
+
+    const appendCalls = requestCallsFor(client, "talk.session.appendAudio");
+    expect(appendCalls).toHaveLength(4);
+    expect(peakActiveAppends).toBe(4);
+    expect(activeAppends).toBe(4);
+    expect(new Set(appendSignals).size).toBe(1);
+    expect(
+      appendCalls.every(
+        (call) => call[2]?.signal === appendSignals[0] && call[2]?.timeoutMs === 8_000,
+      ),
+    ).toBe(true);
+
+    transport.stop();
+    transport.stop();
+    await Promise.resolve();
+
+    expect(activeAppends).toBe(0);
+    expect(appendSignals.every((signal) => signal.aborted)).toBe(true);
+    expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
+    expect(onStatus).not.toHaveBeenCalled();
+  });
+
+  it("preserves accepted microphone frame order", async () => {
+    const client = createClient();
+    const transport = createTransport({ client });
+
+    await transport.start();
+    for (const timestamp of [10, 20, 30, 40]) {
+      audioCurrentTime = timestamp / 1_000;
+      pumpMicrophone(new Float32Array(4096));
+    }
+
+    expect(
+      requestCallsFor(client, "talk.session.appendAudio").map(
+        (call) => (call[1] as { timestamp: number }).timestamp,
+      ),
+    ).toEqual([10, 20, 30, 40]);
+    transport.stop();
+  });
+
+  it("ignores a stale append rejection after a replacement starts", async () => {
+    const oldStatus = vi.fn();
+    const oldClient = createClient();
+    let rejectOldAppend: (error: Error) => void = () => undefined;
+    vi.mocked(oldClient["request"]).mockImplementation((method) => {
+      if (method !== "talk.session.appendAudio") {
+        return Promise.resolve({});
+      }
+      return new Promise((_, reject) => {
+        rejectOldAppend = reject;
+      });
+    });
+    const oldTransport = createTransport({ callbacks: { onStatus: oldStatus }, client: oldClient });
+
+    await oldTransport.start();
+    pumpMicrophone(new Float32Array(4096));
+    oldTransport.stop();
+
+    const replacementStatus = vi.fn();
+    const replacementClient = createClient();
+    const replacement = createTransport({
+      callbacks: { onStatus: replacementStatus },
+      client: replacementClient,
+    });
+    await replacement.start();
+    pumpMicrophone(new Float32Array(4096));
+    rejectOldAppend(new Error("late stale append failure"));
+    await Promise.resolve();
+
+    expect(requestCallsFor(replacementClient, "talk.session.appendAudio")).toHaveLength(1);
+    expect(oldStatus).not.toHaveBeenCalled();
+    expect(replacementStatus).not.toHaveBeenCalled();
+    replacement.stop();
   });
 
   it("stops microphone pumping when the relay rejects appended audio", async () => {

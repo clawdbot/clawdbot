@@ -1960,6 +1960,66 @@ describe("official external plugin catalog", () => {
     });
   });
 
+  it("lists Synthetic as an official external provider", () => {
+    const synthetic = expectCatalogEntry("synthetic");
+
+    expect(resolveOfficialExternalPluginId(synthetic)).toBe("synthetic");
+    expect(resolveOfficialExternalPluginInstall(synthetic)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/synthetic-provider",
+      npmSpec: "@openclaw/synthetic-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+  });
+
+  it("preserves DuckDuckGo's keyless web search setup contract", () => {
+    const duckduckgo = expectCatalogEntry("duckduckgo");
+    const manifest = getOfficialExternalPluginCatalogManifest(duckduckgo);
+
+    expect(resolveOfficialExternalPluginInstall(duckduckgo)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/duckduckgo-plugin",
+      npmSpec: "@openclaw/duckduckgo-plugin",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(manifest?.contracts?.webSearchProviders).toEqual(["duckduckgo"]);
+    expect(manifest?.webSearchProviders).toEqual([
+      {
+        id: "duckduckgo",
+        label: "DuckDuckGo Search (experimental)",
+        hint: "Free web search fallback with no API key required",
+        onboardingScopes: ["text-inference"],
+        requiresCredential: false,
+        envVars: [],
+        placeholder: "(no key needed)",
+        signupUrl: "https://duckduckgo.com/",
+        docsUrl: "https://docs.openclaw.ai/tools/duckduckgo-search",
+        credentialPath: "",
+        autoDetectOrder: 100,
+      },
+    ]);
+  });
+
+  it.each([
+    ["teams-meetings", "@openclaw/teams-meetings", "teams_meetings", "teams"],
+    ["zoom-meetings", "@openclaw/zoom-meetings", "zoom_meetings", "zoom"],
+  ] as const)(
+    "lists %s as an official external meeting plugin",
+    (id, npmSpec, toolId, transcriptSourceProviderId) => {
+      const entry = expectCatalogEntry(id);
+      const contracts = getOfficialExternalPluginCatalogManifest(entry)?.contracts;
+
+      expect(resolveOfficialExternalPluginInstall(entry)).toEqual({
+        clawhubSpec: `clawhub:${npmSpec}`,
+        npmSpec,
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.7.2",
+      });
+      expect(contracts?.tools).toEqual([toolId]);
+      expect(contracts?.transcriptSourceProviders).toEqual([transcriptSourceProviderId]);
+    },
+  );
+
   it("lists LongCat as an official external provider", () => {
     const longcat = expectCatalogEntry("longcat");
 

@@ -218,6 +218,18 @@ describe("exec inline eval detection", () => {
       argv: ["gawk", "-f", "library.awk", '--source=BEGIN{system("id")}', "/dev/null"],
       expected: "gawk --source",
     },
+    {
+      argv: ["gawk", "-f", "library.awk", '--s=BEGIN{system("id")}', "/dev/null"],
+      expected: "gawk --source",
+    },
+    {
+      argv: ["gawk", "-f", "library.awk", '--so=BEGIN{system("id")}', "/dev/null"],
+      expected: "gawk --source",
+    },
+    {
+      argv: ["gawk", "-f", "library.awk", "--sou", 'BEGIN{system("id")}', "/dev/null"],
+      expected: "gawk --source",
+    },
     { argv: ["find", ".", "-exec", "id", "{}", ";"], expected: "find -exec" },
     { argv: ["find", "--", ".", "-exec", "id", "{}", ";"], expected: "find -exec" },
     { argv: ["find", ".", "-ok", "id", "{}", ";"], expected: "find -ok" },
@@ -229,6 +241,8 @@ describe("exec inline eval detection", () => {
     { argv: ["make", "-E", "$(shell id)"], expected: "make -E" },
     { argv: ["make", "-E$(shell id)"], expected: "make -E" },
     { argv: ["make", "--eval=$(shell id)"], expected: "make --eval" },
+    { argv: ["make", "--ev=$(shell id)"], expected: "make --eval" },
+    { argv: ["make", "--eva", "$(shell id)"], expected: "make --eval" },
     { argv: ["sed", "s/.*/id/e", "/dev/null"], expected: "sed inline program" },
     { argv: ["gsed", "-e", "s/.*/id/e", "/dev/null"], expected: "gsed -e" },
     { argv: ["sed", "-es/.*/id/e", "/dev/null"], expected: "sed -e" },
@@ -294,6 +308,7 @@ describe("exec inline eval detection", () => {
     expect(detectInterpreterInlineEvalArgv(["find", ".", "-name", "*.ts"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["xargs", "-0"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["make", "test"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["make", "--e=$(info ok)"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["sed", "-f", "script.sed", "input.txt"])).toBeNull();
     expect(
       detectInterpreterInlineEvalArgv(["sed", "-i", "-f", "script.sed", "input.txt"]),

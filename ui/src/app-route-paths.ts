@@ -61,7 +61,9 @@ const APP_ROUTE_DEFINITIONS = {
   "skill-workshop": { path: "/skills/workshop" },
   skills: { path: "/skills" },
   plugins: { path: "/settings/plugins" },
-  cron: { path: "/cron" },
+  // Automations is the product name; /cron stays as a legacy alias for
+  // pre-rename bookmarks and deep links.
+  cron: { path: "/automations", aliases: ["/cron"] },
   tasks: { path: "/tasks" },
   nodes: { path: "/settings/devices", aliases: ["/nodes"] },
   plugin: { path: "/plugin" },

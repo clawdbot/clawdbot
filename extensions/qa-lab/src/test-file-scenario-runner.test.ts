@@ -258,7 +258,7 @@ describe("qa test file scenario runner", () => {
         "sends a chat turn through the GUI",
       ],
     ]);
-    expect(commands.map((command) => command.timeoutMs)).toEqual([undefined, undefined]);
+    expect(commands.map((command) => command.timeoutMs)).toEqual([1_800_000, 1_800_000]);
     const evidence = validateQaEvidenceSummaryJson(
       JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
     );
@@ -366,7 +366,7 @@ describe("qa test file scenario runner", () => {
         )}`,
       ],
     ]);
-    expect(commands.map((command) => command.timeoutMs)).toEqual([undefined]);
+    expect(commands.map((command) => command.timeoutMs)).toEqual([1_800_000]);
     const evidence = validateQaEvidenceSummaryJson(
       JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
     );
@@ -884,6 +884,78 @@ describe("qa test file scenario runner", () => {
 
     expect(commands.map((command) => command.timeoutMs)).toEqual([3 * 60 * 60_000]);
   });
+
+  it.each([
+    { executionKind: "vitest" as const, commandCount: 1 },
+    { executionKind: "playwright" as const, commandCount: 2 },
+  ])(
+    "applies the resolved command timeout to every $executionKind subprocess",
+    async ({ commandCount, executionKind }) => {
+      const repoRoot = await makeTempRepo(`qa-${executionKind}-command-timeout-`);
+      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`);
+      const commands: QaScenarioCommandExecution[] = [];
+
+      await runQaTestFileScenarios({
+        repoRoot,
+        outputDir,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        scenarios: [
+          makeTestFileScenario(
+            executionKind,
+            executionKind === "playwright"
+              ? "ui/src/e2e/chat-flow.e2e.test.ts"
+              : "extensions/qa-lab/src/coverage-report.test.ts",
+          ),
+        ],
+        commandTimeoutMs: 321,
+        runCommand: async (command) => {
+          commands.push(command);
+          await writeNativeVitestReport(command, { passed: 1 });
+          return { exitCode: 0, stdout: "native pass\n", stderr: "" };
+        },
+      });
+
+      expect(commands).toHaveLength(commandCount);
+      expect(commands.map((command) => command.timeoutMs)).toEqual(
+        Array.from({ length: commandCount }, () => 321),
+      );
+    },
+  );
+
+  it.each(["vitest", "playwright"] as const)(
+    "terminates a hanging $executionKind subprocess with failure evidence",
+    async (executionKind) => {
+      const repoRoot = await makeTempRepo(`qa-${executionKind}-hung-command-`);
+      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`);
+      const result = await runQaTestFileScenarios({
+        repoRoot,
+        outputDir,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        scenarios: [
+          makeTestFileScenario(
+            executionKind,
+            executionKind === "playwright"
+              ? "ui/src/e2e/chat-flow.e2e.test.ts"
+              : "extensions/qa-lab/src/coverage-report.test.ts",
+          ),
+        ],
+        commandTimeoutMs: 100,
+        runCommand: (execution) =>
+          runQaScenarioCommandLifecycle({
+            ...execution,
+            args: ["-e", "setInterval(() => {}, 1_000)"],
+          }),
+      });
+
+      expect(result.results[0]).toMatchObject({
+        failureMessage: expect.stringContaining("timed out after 100ms"),
+        status: "fail",
+      });
+      expect(result.evidence.entries[0]?.result.status).toBe("fail");
+    },
+  );
 
   describe.skipIf(process.platform === "win32")("script timeout process groups", () => {
     const commandTimeoutMs = 1_500;

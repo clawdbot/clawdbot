@@ -2619,6 +2619,7 @@ public struct AgentParams: Codable, Sendable {
     public let swarmcollector: Bool?
     public let swarmoutputschema: [String: AnyCodable]?
     public let forcerestartsafetools: Bool?
+    public let forcecodemodetools: Bool?
     public let voicewaketrigger: String?
     public let idempotencykey: String
     public let label: String?
@@ -2666,6 +2667,7 @@ public struct AgentParams: Codable, Sendable {
         swarmcollector: Bool? = nil,
         swarmoutputschema: [String: AnyCodable]? = nil,
         forcerestartsafetools: Bool? = nil,
+        forcecodemodetools: Bool? = nil,
         voicewaketrigger: String? = nil,
         idempotencykey: String,
         label: String? = nil)
@@ -2712,6 +2714,7 @@ public struct AgentParams: Codable, Sendable {
         self.swarmcollector = swarmcollector
         self.swarmoutputschema = swarmoutputschema
         self.forcerestartsafetools = forcerestartsafetools
+        self.forcecodemodetools = forcecodemodetools
         self.voicewaketrigger = voicewaketrigger
         self.idempotencykey = idempotencykey
         self.label = label
@@ -2760,6 +2763,7 @@ public struct AgentParams: Codable, Sendable {
         case swarmcollector = "swarmCollector"
         case swarmoutputschema = "swarmOutputSchema"
         case forcerestartsafetools = "forceRestartSafeTools"
+        case forcecodemodetools = "forceCodeModeTools"
         case voicewaketrigger = "voiceWakeTrigger"
         case idempotencykey = "idempotencyKey"
         case label
@@ -9413,6 +9417,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
     public let unavailablecandidates: [[String: AnyCodable]]?
     public let manualproviders: [[String: AnyCodable]]
     public let authoptions: [[String: AnyCodable]]?
+    public let prepareoptions: [[String: AnyCodable]]?
     public let recommendedinstalls: [[String: AnyCodable]]?
     public let workspace: String
     public let codexappserverdetected: Bool?
@@ -9424,6 +9429,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
         unavailablecandidates: [[String: AnyCodable]]? = nil,
         manualproviders: [[String: AnyCodable]],
         authoptions: [[String: AnyCodable]]? = nil,
+        prepareoptions: [[String: AnyCodable]]? = nil,
         recommendedinstalls: [[String: AnyCodable]]? = nil,
         workspace: String,
         codexappserverdetected: Bool? = nil,
@@ -9434,6 +9440,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
         self.unavailablecandidates = unavailablecandidates
         self.manualproviders = manualproviders
         self.authoptions = authoptions
+        self.prepareoptions = prepareoptions
         self.recommendedinstalls = recommendedinstalls
         self.workspace = workspace
         self.codexappserverdetected = codexappserverdetected
@@ -9446,6 +9453,7 @@ public struct SystemAgentSetupDetectResult: Codable, Sendable {
         case unavailablecandidates = "unavailableCandidates"
         case manualproviders = "manualProviders"
         case authoptions = "authOptions"
+        case prepareoptions = "prepareOptions"
         case recommendedinstalls = "recommendedInstalls"
         case workspace
         case codexappserverdetected = "codexAppServerDetected"
@@ -11948,6 +11956,7 @@ public struct ModelChoice: Codable, Sendable {
     public let available: Bool?
     public let contextwindow: Int?
     public let reasoning: Bool?
+    public let supportstools: Bool?
     public let agentruntime: [String: AnyCodable]?
     public let apikeysupported: Bool?
     public let input: [AnyCodable]?
@@ -11960,6 +11969,7 @@ public struct ModelChoice: Codable, Sendable {
         available: Bool? = nil,
         contextwindow: Int? = nil,
         reasoning: Bool? = nil,
+        supportstools: Bool? = nil,
         agentruntime: [String: AnyCodable]? = nil,
         apikeysupported: Bool? = nil,
         input: [AnyCodable]? = nil)
@@ -11971,6 +11981,7 @@ public struct ModelChoice: Codable, Sendable {
         self.available = available
         self.contextwindow = contextwindow
         self.reasoning = reasoning
+        self.supportstools = supportstools
         self.agentruntime = agentruntime
         self.apikeysupported = apikeysupported
         self.input = input
@@ -11984,6 +11995,7 @@ public struct ModelChoice: Codable, Sendable {
         case available
         case contextwindow = "contextWindow"
         case reasoning
+        case supportstools = "supportsTools"
         case agentruntime = "agentRuntime"
         case apikeysupported = "apiKeySupported"
         case input

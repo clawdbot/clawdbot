@@ -779,7 +779,38 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
 
   for await (const chunk of params.chunks) {
     params.output.responseId ||= chunk.responseId;
+    if (chunk.usageMetadata) {
+      params.output.usage = {
+        input:
+          (chunk.usageMetadata.promptTokenCount || 0) -
+          (chunk.usageMetadata.cachedContentTokenCount || 0),
+        output:
+          (chunk.usageMetadata.candidatesTokenCount || 0) +
+          (chunk.usageMetadata.thoughtsTokenCount || 0),
+        cacheRead: chunk.usageMetadata.cachedContentTokenCount || 0,
+        cacheWrite: 0,
+        totalTokens: chunk.usageMetadata.totalTokenCount || 0,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      };
+      calculateCost(params.model, params.output.usage);
+    }
     const candidate = chunk.candidates?.[0];
+    const promptFeedback = chunk.promptFeedback;
+    if (!candidate && promptFeedback) {
+      const blockReason = promptFeedback.blockReason ?? "PROMPT_BLOCKED";
+      const blockMessage = promptFeedback.blockReasonMessage?.trim();
+      params.output.errorCode = blockReason;
+      params.output.errorType = "google_prompt_blocked";
+      throw new Error(
+        `Google prompt blocked (${blockReason})${blockMessage ? `: ${blockMessage}` : ""}`,
+      );
+    }
     if (candidate?.content?.parts) {
       for (const part of candidate.content.parts) {
         if (part.text !== undefined) {
@@ -880,28 +911,6 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
       ) {
         params.output.stopReason = "toolUse";
       }
-    }
-
-    if (chunk.usageMetadata) {
-      params.output.usage = {
-        input:
-          (chunk.usageMetadata.promptTokenCount || 0) -
-          (chunk.usageMetadata.cachedContentTokenCount || 0),
-        output:
-          (chunk.usageMetadata.candidatesTokenCount || 0) +
-          (chunk.usageMetadata.thoughtsTokenCount || 0),
-        cacheRead: chunk.usageMetadata.cachedContentTokenCount || 0,
-        cacheWrite: 0,
-        totalTokens: chunk.usageMetadata.totalTokenCount || 0,
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
-      };
-      calculateCost(params.model, params.output.usage);
     }
   }
 

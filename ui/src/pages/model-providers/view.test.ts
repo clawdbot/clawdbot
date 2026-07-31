@@ -230,7 +230,7 @@ describe("renderModelProviders", () => {
     );
 
     const readiness = container.querySelector('[data-model-readiness="model-required"]');
-    expect(text(readiness)).toContain("Connect your AI");
+    expect(text(readiness)).toContain("Connect a verified AI model");
     expect(text(readiness)).toContain("No models available");
     expect(text(readiness)).toContain("Choose another provider");
     expect(container.querySelector(".model-providers__defaults")).toBeNull();
@@ -269,7 +269,7 @@ describe("renderModelProviders", () => {
 
     const readiness = container.querySelector('[data-model-readiness="model-required"]');
     expect(text(readiness)).toContain("Model required");
-    expect(button(readiness!, "Connect your AI")).toBeDefined();
+    expect(button(readiness!, "Connect a verified AI model")).toBeDefined();
     expect(container.querySelector(".model-providers__defaults")).toBeNull();
   });
 

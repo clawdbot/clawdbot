@@ -1054,7 +1054,7 @@ describe("loadGatewayPlugins", () => {
       expect(opts.req.method).toBe("node.list");
       opts.respond(true, {
         nodes: [
-          { nodeId: "connected", connected: true },
+          { nodeId: "connected", connected: true, gatewayLocal: true },
           { nodeId: "offline", connected: false },
         ],
       });
@@ -1066,7 +1066,7 @@ describe("loadGatewayPlugins", () => {
     const result = await runtime.nodes.list({ connected: true });
 
     expect(getLastDispatchedParams()).toStrictEqual({});
-    expect(result.nodes).toEqual([{ nodeId: "connected", connected: true }]);
+    expect(result.nodes).toEqual([{ nodeId: "connected", connected: true, gatewayLocal: true }]);
   });
 
   test("projects effective node-command policy into the plugin node runtime", async () => {

@@ -39,6 +39,7 @@ final class OnboardingAISetupModel {
     private(set) var manualProviders: [ManualProvider] = []
     private(set) var authOptions: [AuthOption] = []
     private(set) var recommendedInstalls: [RecommendedInstall] = []
+    private(set) var detectedPrepareOptions: [PrepareOption]?
     private(set) var prepareAvailable = false
     private(set) var candidatePresentation: [String: CandidatePresentation] = [:]
     private(set) var activeAuthOption: AuthOption?
@@ -88,9 +89,7 @@ final class OnboardingAISetupModel {
         guard self.prepareAvailable else { return [] }
         return Self.prepareOptions(
             candidates: self.candidates,
-            manualProviders: self.manualProviders,
-            authOptions: self.authOptions,
-            recommendedInstalls: self.recommendedInstalls)
+            advertisedOptions: self.detectedPrepareOptions)
     }
 
     var isPreparingModel: Bool {
@@ -183,6 +182,7 @@ final class OnboardingAISetupModel {
         let unavailableCandidates: [UnavailableCandidate]?
         let manualProviders: [ManualProvider]?
         let authOptions: [AuthOption]?
+        let prepareOptions: [PrepareOption]?
         let recommendedInstalls: [RecommendedInstall]?
         let configuredModel: String?
         let setupComplete: Bool?
@@ -628,6 +628,7 @@ final class OnboardingAISetupModel {
         self.manualProviders = []
         self.authOptions = []
         self.recommendedInstalls = []
+        self.detectedPrepareOptions = nil
         self.prepareAvailable = false
         self.candidatePresentation = [:]
         self.activeAuthOption = nil
@@ -674,15 +675,27 @@ extension OnboardingAISetupModel {
         await self.detectAndAutoConnect(context: context)
     }
 
-    private func scheduleDetection() {
+    private func scheduleDetection(
+        preparedChoiceID: String? = nil,
+        preparedProviderLabel: String? = nil)
+    {
         guard let context = captureAttemptContext() else {
             self.failDetectionForMissingRoute()
             return
         }
-        Task { await self.detectAndAutoConnect(context: context) }
+        Task {
+            await self.detectAndAutoConnect(
+                context: context,
+                preparedChoiceID: preparedChoiceID,
+                preparedProviderLabel: preparedProviderLabel)
+        }
     }
 
-    private func detectAndAutoConnect(context: AttemptContext) async {
+    private func detectAndAutoConnect(
+        context: AttemptContext,
+        preparedChoiceID: String? = nil,
+        preparedProviderLabel: String? = nil) async
+    {
         // Gateway awaits can yield to a route reset or cancellation. Revalidate
         // before every activation side effect so stale attempts cannot hand off.
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
@@ -716,6 +729,7 @@ extension OnboardingAISetupModel {
             let authOptions = result.authOptions ?? []
             self.authOptions = authOptions
             self.recommendedInstalls = result.recommendedInstalls ?? []
+            self.detectedPrepareOptions = result.prepareOptions
             self.candidatePresentation = Dictionary(
                 result.candidates.map { candidate in
                     (candidate.kind, CandidatePresentation(icon: candidate.icon, website: candidate.website))
@@ -761,6 +775,24 @@ extension OnboardingAISetupModel {
                 self.statuses[candidate.kind] = .untried
             }
             self.phase = .ready
+            if let preparedChoiceID {
+                // Detection kinds encode the provider-auth choice ID, while
+                // PrepareOption.brandId owns the model-ref namespace.
+                let preparedKind = "provider-auto:\(preparedChoiceID)"
+                if let prepared = candidates.first(where: {
+                    $0.kind == preparedKind && $0.credentials != false
+                }) {
+                    await self.activate(kind: prepared.kind, context: context)
+                } else {
+                    let label = preparedProviderLabel ?? preparedChoiceID
+                    self.detectError = Self.failure(
+                        label: label,
+                        status: "unavailable",
+                        error: "\(label) did not expose a usable local model. Review setup, then retry.")
+                    self.showManualEntry = !self.manualProviders.isEmpty
+                }
+                return
+            }
             if let first = autoCandidateAfter(kind: nil) {
                 // Candidate found: connect without asking. Switching later
                 // stays one click away while the test runs server-side.
@@ -1324,9 +1356,14 @@ extension OnboardingAISetupModel {
             return
         }
         if done || status == "done" {
+            let preparedProvider = self.providerWizardKind == .prepare
+                ? self.activeAuthOption.map { (id: $0.id, label: $0.label) }
+                : nil
             self.providerAuthReconciliationPending = self.providerWizardKind == .auth
             self.clearProviderAuth()
-            self.scheduleDetection()
+            self.scheduleDetection(
+                preparedChoiceID: preparedProvider?.id,
+                preparedProviderLabel: preparedProvider?.label)
             return
         }
         self.authStep = step

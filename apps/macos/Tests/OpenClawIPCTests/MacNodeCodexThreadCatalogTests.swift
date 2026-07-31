@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -24,7 +25,11 @@ struct MacNodeCodexThreadCatalogTests {
             capture: URL(fileURLWithPath: executable.path + ".requests"))
     }
 
-    private func listResponseJSON(names: [String], nextCursor: String?) throws -> String {
+    private func listResponseJSON(
+        id: Int = 2,
+        names: [String],
+        nextCursor: String?) throws -> String
+    {
         let encodedNextCursor: Any = if let nextCursor {
             nextCursor
         } else {
@@ -38,7 +43,7 @@ struct MacNodeCodexThreadCatalogTests {
             ]
         }
         let data = try JSONSerialization.data(withJSONObject: [
-            "id": 2,
+            "id": id,
             "result": [
                 "data": threads,
                 "nextCursor": encodedNextCursor,
@@ -46,6 +51,37 @@ struct MacNodeCodexThreadCatalogTests {
             ],
         ])
         return try #require(String(data: data, encoding: .utf8))
+    }
+
+    private func waitForFile(_ url: URL, timeout: Duration = .seconds(2)) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !FileManager.default.fileExists(atPath: url.path), clock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return FileManager.default.fileExists(atPath: url.path)
+    }
+
+    private func readTrimmed(_ url: URL) throws -> String {
+        try String(contentsOf: url, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func requestEmptyList(
+        client: CodexAppServerThreadClient,
+        executable: URL,
+        timeoutSeconds: Double = 2,
+        maxLineBytes: Int = 1024 * 1024) async throws -> Data
+    {
+        try await client.request(
+            invocation: MacNodeCodexThreadCatalog.ResolvedInvocation(
+                executable: executable.path,
+                arguments: [],
+                cwd: nil),
+            method: "thread/list",
+            requestParams: ["limit": 1],
+            timeoutSeconds: timeoutSeconds,
+            maxLineBytes: maxLineBytes)
     }
 
     @Test func `normalizes App Server metadata and drops sensitive thread fields`() throws {
@@ -764,6 +800,74 @@ struct MacNodeCodexThreadCatalogTests {
         #expect(listParams["useStateDbOnly"] as? Bool == false)
     }
 
+    @Test func `Mac node runtime reuses its owned App Server across invokes`() async throws {
+        let fake = try makeFakeCodex(#"""
+        #!/bin/sh
+        count=0
+        [ ! -f "${0}.processes" ] || count=$(cat "${0}.processes")
+        printf '%s\n' "$((count + 1))" > "${0}.processes"
+        IFS= read -r initialize || exit 2
+        printf '%s\n' "$initialize" >> "${0}.requests"
+        id=$(printf '%s\n' "$initialize" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+        printf '{"id":%s,"result":{}}\n' "$id"
+        IFS= read -r initialized || exit 3
+        printf '%s\n' "$initialized" >> "${0}.requests"
+        while IFS= read -r request; do
+          printf '%s\n' "$request" >> "${0}.requests"
+          id=$(printf '%s\n' "$request" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+          printf '{"id":%s,"result":{"data":[],"nextCursor":null,"backwardsCursor":null}}\n' "$id"
+        done
+        """#)
+        defer { try? FileManager.default.removeItem(at: fake.directory) }
+        let root: [String: Any] = [
+            "plugins": [
+                "entries": [
+                    "codex": [
+                        "enabled": true,
+                        "config": [
+                            "supervision": ["enabled": true],
+                            "appServer": [
+                                "transport": "stdio",
+                                "homeScope": "user",
+                                "command": fake.executable.path,
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ]
+        let client = MacNodeCodexThreadCatalogClient(
+            idleTimeoutSeconds: 10,
+            loadRoot: { root })
+        let runtime = MacNodeRuntime(
+            codexThreadCatalogEnabled: { true },
+            codexThreadCatalogClient: client)
+
+        let first = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "first",
+            command: MacNodeCodexThreadCatalogContract.listCommand))
+        let second = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "second",
+            command: MacNodeCodexThreadCatalogContract.listCommand))
+
+        #expect(first.ok)
+        #expect(second.ok)
+        #expect(try self.readTrimmed(
+            URL(fileURLWithPath: fake.executable.path + ".processes")) == "1")
+        let captured = try String(contentsOf: fake.capture, encoding: .utf8)
+            .split(whereSeparator: \.isNewline)
+            .map { try #require(
+                JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+        #expect(captured.map { $0["method"] as? String } == [
+            "initialize",
+            "initialized",
+            "thread/list",
+            "thread/list",
+        ])
+        #expect(captured.compactMap { ($0["id"] as? NSNumber)?.intValue } == [1, 2, 3])
+        await client.shutdown()
+    }
+
     @Test func `reads one paginated transcript turn page from App Server`() async throws {
         let fake = try makeFakeCodex(#"""
         #!/bin/sh
@@ -778,17 +882,12 @@ struct MacNodeCodexThreadCatalogTests {
         printf '%s\n' '{"id":1,"result":{}}'
         IFS= read -r initialized || exit 3
         printf '%s\n' "$initialized" >> "$capture"
-        IFS= read -r request || exit 4
-        printf '%s\n' "$request" >> "$capture"
-        case "$count" in
-          1)
-            printf '%s\n' '{"id":2,"result":{"data":[{"id":"thread-1","name":"Task","status":{"type":"notLoaded"}}],"nextCursor":null,"backwardsCursor":null}}'
-            ;;
-          2)
-            printf '%s\n' '{"id":2,"result":{"data":[{"id":"turn-1","items":[{"id":"item-1","type":"agentMessage","text":"full answer"}]}],"nextCursor":"turns-2","backwardsCursor":null}}'
-            ;;
-          *) exit 5 ;;
-        esac
+        IFS= read -r list || exit 4
+        printf '%s\n' "$list" >> "$capture"
+        printf '%s\n' '{"id":2,"result":{"data":[{"id":"thread-1","name":"Task","status":{"type":"notLoaded"}}],"nextCursor":null,"backwardsCursor":null}}'
+        IFS= read -r turns || exit 5
+        printf '%s\n' "$turns" >> "$capture"
+        printf '%s\n' '{"id":3,"result":{"data":[{"id":"turn-1","items":[{"id":"item-1","type":"agentMessage","text":"full answer"}]}],"nextCursor":"turns-2","backwardsCursor":null}}'
         sleep 1
         """#)
         defer { try? FileManager.default.removeItem(at: fake.directory) }
@@ -805,13 +904,14 @@ struct MacNodeCodexThreadCatalogTests {
         let captured = try String(contentsOf: fake.capture, encoding: .utf8)
             .split(whereSeparator: \.isNewline)
             .map { try JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
-        #expect(captured.count == 6)
+        #expect(captured.count == 4)
         let initializeParams = try #require(captured[0]?["params"] as? [String: Any])
         let capabilities = try #require(initializeParams["capabilities"] as? [String: Any])
         #expect(capabilities["experimentalApi"] as? Bool == true)
         #expect(captured[2]?["method"] as? String == "thread/list")
-        #expect(captured[5]?["method"] as? String == "thread/turns/list")
-        let params = try #require(captured[5]?["params"] as? [String: Any])
+        #expect(captured[3]?["method"] as? String == "thread/turns/list")
+        #expect(captured.compactMap { ($0?["id"] as? NSNumber)?.intValue } == [1, 2, 3])
+        let params = try #require(captured[3]?["params"] as? [String: Any])
         #expect(params["threadId"] as? String == "thread-1")
         #expect(params["cursor"] as? String == "turns-1")
         #expect(params["limit"] as? Int == 25)
@@ -821,32 +921,33 @@ struct MacNodeCodexThreadCatalogTests {
 
     @Test func `title search fills one result page across bounded native pages`() async throws {
         let first = try listResponseJSON(
+            id: 2,
             names: ["Target one", "Other one", "Other two"],
             nextCursor: "cursor-1")
         let second = try listResponseJSON(
+            id: 3,
             names: ["Other three", "Other four"],
             nextCursor: "cursor-2")
         let third = try listResponseJSON(
+            id: 4,
             names: ["Target two", "Target three"],
             nextCursor: "cursor-3")
         let fake = try makeFakeCodex(#"""
         #!/bin/sh
-        counter="${0}.counter"
-        count=0
-        [ ! -f "$counter" ] || count=$(cat "$counter")
-        count=$((count + 1))
-        printf '%s\n' "$count" > "$counter"
         IFS= read -r initialize || exit 2
         printf '%s\n' '{"id":1,"result":{}}'
         IFS= read -r initialized || exit 3
-        IFS= read -r list || exit 4
-        printf '%s\n' "$list" >> "${0}.requests"
-        case "$count" in
+        count=0
+        while IFS= read -r list; do
+          count=$((count + 1))
+          printf '%s\n' "$list" >> "${0}.requests"
+          case "$count" in
           1) printf '%s\n' '\#(first)' ;;
           2) printf '%s\n' '\#(second)' ;;
-          3) printf '%s\n' '\#(third)' ;;
+          3) printf '%s\n' '\#(third)'; exit 0 ;;
           *) exit 9 ;;
-        esac
+          esac
+        done
         """#)
         defer { try? FileManager.default.removeItem(at: fake.directory) }
 
@@ -881,27 +982,28 @@ struct MacNodeCodexThreadCatalogTests {
     @Test func `title search scans at most four pages and returns the continuation cursor`() async throws {
         let names = (0..<40).map { "Other \($0)" }
         let responses = try (1...4).map { page in
-            try self.listResponseJSON(names: names, nextCursor: "cursor-\(page)")
+            try self.listResponseJSON(
+                id: page + 1,
+                names: names,
+                nextCursor: "cursor-\(page)")
         }
         let fake = try makeFakeCodex(#"""
         #!/bin/sh
-        counter="${0}.counter"
-        count=0
-        [ ! -f "$counter" ] || count=$(cat "$counter")
-        count=$((count + 1))
-        printf '%s\n' "$count" > "$counter"
         IFS= read -r initialize || exit 2
         printf '%s\n' '{"id":1,"result":{}}'
         IFS= read -r initialized || exit 3
-        IFS= read -r list || exit 4
-        printf '%s\n' "$list" >> "${0}.requests"
-        case "$count" in
+        count=0
+        while IFS= read -r list; do
+          count=$((count + 1))
+          printf '%s\n' "$list" >> "${0}.requests"
+          case "$count" in
           1) printf '%s\n' '\#(responses[0])' ;;
           2) printf '%s\n' '\#(responses[1])' ;;
           3) printf '%s\n' '\#(responses[2])' ;;
-          4) printf '%s\n' '\#(responses[3])' ;;
+          4) printf '%s\n' '\#(responses[3])'; exit 0 ;;
           *) exit 9 ;;
-        esac
+          esac
+        done
         """#)
         defer { try? FileManager.default.removeItem(at: fake.directory) }
 
@@ -925,25 +1027,23 @@ struct MacNodeCodexThreadCatalogTests {
     }
 
     @Test func `title search stops a native cursor cycle`() async throws {
-        let first = try listResponseJSON(names: ["Other one"], nextCursor: "same")
-        let second = try listResponseJSON(names: ["Other two"], nextCursor: "same")
+        let first = try listResponseJSON(id: 2, names: ["Other one"], nextCursor: "same")
+        let second = try listResponseJSON(id: 3, names: ["Other two"], nextCursor: "same")
         let fake = try makeFakeCodex(#"""
         #!/bin/sh
-        counter="${0}.counter"
-        count=0
-        [ ! -f "$counter" ] || count=$(cat "$counter")
-        count=$((count + 1))
-        printf '%s\n' "$count" > "$counter"
         IFS= read -r initialize || exit 2
         printf '%s\n' '{"id":1,"result":{}}'
         IFS= read -r initialized || exit 3
-        IFS= read -r list || exit 4
-        printf '%s\n' "$list" >> "${0}.requests"
-        case "$count" in
+        count=0
+        while IFS= read -r list; do
+          count=$((count + 1))
+          printf '%s\n' "$list" >> "${0}.requests"
+          case "$count" in
           1) printf '%s\n' '\#(first)' ;;
-          2) printf '%s\n' '\#(second)' ;;
+          2) printf '%s\n' '\#(second)'; exit 0 ;;
           *) exit 9 ;;
-        esac
+          esac
+        done
         """#)
         defer { try? FileManager.default.removeItem(at: fake.directory) }
 
@@ -956,6 +1056,299 @@ struct MacNodeCodexThreadCatalogTests {
         let requests = try String(contentsOf: fake.capture, encoding: .utf8)
             .split(whereSeparator: \.isNewline)
         #expect(requests.count == 2)
+    }
+}
+
+extension MacNodeCodexThreadCatalogTests {
+    @Test func `restarts the lifecycle client when the resolved invocation changes`() async throws {
+        let first = try makeFakeCodex(#"""
+        #!/bin/sh
+        count=0
+        [ ! -f "${0}.processes" ] || count=$(cat "${0}.processes")
+        printf '%s\n' "$((count + 1))" > "${0}.processes"
+        trap 'touch "${0}.terminated"; exit 0' TERM
+        IFS= read -r initialize || exit 2
+        id=$(printf '%s\n' "$initialize" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+        printf '{"id":%s,"result":{}}\n' "$id"
+        IFS= read -r initialized || exit 3
+        while IFS= read -r request; do
+          id=$(printf '%s\n' "$request" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+          printf '{"id":%s,"result":{"data":[]}}\n' "$id"
+        done
+        """#)
+        let second = try makeFakeCodex(#"""
+        #!/bin/sh
+        count=0
+        [ ! -f "${0}.processes" ] || count=$(cat "${0}.processes")
+        printf '%s\n' "$((count + 1))" > "${0}.processes"
+        IFS= read -r initialize || exit 2
+        id=$(printf '%s\n' "$initialize" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+        printf '{"id":%s,"result":{}}\n' "$id"
+        IFS= read -r initialized || exit 3
+        while IFS= read -r request; do
+          id=$(printf '%s\n' "$request" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+          printf '{"id":%s,"result":{"data":[]}}\n' "$id"
+        done
+        """#)
+        defer {
+            try? FileManager.default.removeItem(at: first.directory)
+            try? FileManager.default.removeItem(at: second.directory)
+        }
+        let client = CodexAppServerThreadClient(idleTimeoutSeconds: 10)
+
+        _ = try await self.requestEmptyList(client: client, executable: first.executable)
+        _ = try await self.requestEmptyList(client: client, executable: second.executable)
+
+        #expect(try self.readTrimmed(
+            URL(fileURLWithPath: first.executable.path + ".processes")) == "1")
+        #expect(try self.readTrimmed(
+            URL(fileURLWithPath: second.executable.path + ".processes")) == "1")
+        #expect(await self.waitForFile(
+            URL(fileURLWithPath: first.executable.path + ".terminated")))
+        await client.shutdown()
+    }
+
+    @Test func `restarts the lifecycle client after the child exits`() async throws {
+        let fake = try makeFakeCodex(#"""
+        #!/bin/sh
+        count=0
+        [ ! -f "${0}.processes" ] || count=$(cat "${0}.processes")
+        printf '%s\n' "$((count + 1))" > "${0}.processes"
+        IFS= read -r initialize || exit 2
+        id=$(printf '%s\n' "$initialize" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+        printf '{"id":%s,"result":{}}\n' "$id"
+        IFS= read -r initialized || exit 3
+        IFS= read -r request || exit 4
+        id=$(printf '%s\n' "$request" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+        printf '{"id":%s,"result":{"data":[]}}\n' "$id"
+        """#)
+        defer { try? FileManager.default.removeItem(at: fake.directory) }
+        let client = CodexAppServerThreadClient(idleTimeoutSeconds: 10)
+
+        _ = try await self.requestEmptyList(client: client, executable: fake.executable)
+        try await Task.sleep(for: .milliseconds(50))
+        _ = try await self.requestEmptyList(client: client, executable: fake.executable)
+
+        #expect(try self.readTrimmed(
+            URL(fileURLWithPath: fake.executable.path + ".processes")) == "2")
+        await client.shutdown()
+    }
+
+    @Test func `shuts down an idle lifecycle client`() async throws {
+        let fake = try makeFakeCodex(#"""
+        #!/bin/sh
+        trap 'touch "${0}.terminated"; exit 0' TERM
+        IFS= read -r initialize || exit 2
+        id=$(printf '%s\n' "$initialize" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+        printf '{"id":%s,"result":{}}\n' "$id"
+        IFS= read -r initialized || exit 3
+        while IFS= read -r request; do
+          id=$(printf '%s\n' "$request" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+          printf '{"id":%s,"result":{"data":[]}}\n' "$id"
+        done
+        """#)
+        defer { try? FileManager.default.removeItem(at: fake.directory) }
+        let client = CodexAppServerThreadClient(idleTimeoutSeconds: 0.05)
+
+        _ = try await self.requestEmptyList(client: client, executable: fake.executable)
+
+        #expect(await self.waitForFile(
+            URL(fileURLWithPath: fake.executable.path + ".terminated")))
+        await client.shutdown()
+    }
+
+    @Test func `client deinit terminates its owned child`() async throws {
+        let fake = try makeFakeCodex(#"""
+        #!/bin/sh
+        trap 'touch "${0}.terminated"; exit 0' TERM
+        IFS= read -r initialize || exit 2
+        id=$(printf '%s\n' "$initialize" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+        printf '{"id":%s,"result":{}}\n' "$id"
+        IFS= read -r initialized || exit 3
+        while IFS= read -r request; do
+          id=$(printf '%s\n' "$request" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+          printf '{"id":%s,"result":{"data":[]}}\n' "$id"
+        done
+        """#)
+        defer { try? FileManager.default.removeItem(at: fake.directory) }
+        var client: CodexAppServerThreadClient? = CodexAppServerThreadClient(
+            idleTimeoutSeconds: 10)
+
+        _ = try await self.requestEmptyList(
+            client: #require(client),
+            executable: fake.executable)
+        client = nil
+
+        #expect(await self.waitForFile(
+            URL(fileURLWithPath: fake.executable.path + ".terminated")))
+    }
+
+    @Test func `oversized idle output resets the lifecycle client`() async throws {
+        let fake = try makeFakeCodex(#"""
+        #!/bin/sh
+        count=0
+        [ ! -f "${0}.processes" ] || count=$(cat "${0}.processes")
+        count=$((count + 1))
+        printf '%s\n' "$count" > "${0}.processes"
+        IFS= read -r initialize || exit 2
+        id=$(printf '%s\n' "$initialize" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+        printf '{"id":%s,"result":{}}\n' "$id"
+        IFS= read -r initialized || exit 3
+        while IFS= read -r request; do
+          id=$(printf '%s\n' "$request" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+          printf '{"id":%s,"result":{"data":[]}}\n' "$id"
+          if [ "$count" = 1 ]; then
+            sleep 0.1
+            printf '%512s\n' x
+          fi
+        done
+        """#)
+        defer { try? FileManager.default.removeItem(at: fake.directory) }
+        let client = CodexAppServerThreadClient(
+            idleTimeoutSeconds: 10,
+            idleReadLimit: 128)
+
+        _ = try await self.requestEmptyList(
+            client: client,
+            executable: fake.executable,
+            maxLineBytes: 128)
+        try await Task.sleep(for: .milliseconds(300))
+        _ = try await self.requestEmptyList(
+            client: client,
+            executable: fake.executable,
+            maxLineBytes: 128)
+
+        #expect(try self.readTrimmed(
+            URL(fileURLWithPath: fake.executable.path + ".processes")) == "2")
+        await client.shutdown()
+    }
+
+    @Test func `timeout restarts the client without dropping the next request`() async throws {
+        let fake = try makeFakeCodex(#"""
+        #!/bin/sh
+        count=0
+        [ ! -f "${0}.processes" ] || count=$(cat "${0}.processes")
+        count=$((count + 1))
+        printf '%s\n' "$count" > "${0}.processes"
+        IFS= read -r initialize || exit 2
+        id=$(printf '%s\n' "$initialize" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+        printf '{"id":%s,"result":{}}\n' "$id"
+        IFS= read -r initialized || exit 3
+        IFS= read -r request || exit 4
+        if [ "$count" = 1 ]; then
+          touch "${0}.request-started"
+          sleep 5
+          exit 0
+        fi
+        id=$(printf '%s\n' "$request" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+        printf '{"id":%s,"result":{"data":[]}}\n' "$id"
+        """#)
+        defer { try? FileManager.default.removeItem(at: fake.directory) }
+        let client = CodexAppServerThreadClient(idleTimeoutSeconds: 10)
+
+        let first = Task {
+            try await self.requestEmptyList(
+                client: client,
+                executable: fake.executable,
+                timeoutSeconds: 0.5)
+        }
+        #expect(await self.waitForFile(
+            URL(fileURLWithPath: fake.executable.path + ".request-started")))
+        let second = Task {
+            try await self.requestEmptyList(client: client, executable: fake.executable)
+        }
+
+        await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.timedOut) {
+            try await first.value
+        }
+        let result = try await second.value
+        #expect(try (JSONSerialization.jsonObject(with: result) as? [String: Any])?["data"] != nil)
+        #expect(try self.readTrimmed(
+            URL(fileURLWithPath: fake.executable.path + ".processes")) == "2")
+        await client.shutdown()
+    }
+
+    @Test func `queued request consumes its wall-clock deadline`() async throws {
+        let fake = try makeFakeCodex(#"""
+        #!/bin/sh
+        IFS= read -r initialize || exit 2
+        id=$(printf '%s\n' "$initialize" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+        printf '{"id":%s,"result":{}}\n' "$id"
+        IFS= read -r initialized || exit 3
+        IFS= read -r request || exit 4
+        touch "${0}.request-started"
+        sleep 5
+        """#)
+        defer { try? FileManager.default.removeItem(at: fake.directory) }
+        let client = CodexAppServerThreadClient(idleTimeoutSeconds: 10)
+
+        let first = Task {
+            try await self.requestEmptyList(
+                client: client,
+                executable: fake.executable,
+                timeoutSeconds: 0.5)
+        }
+        #expect(await self.waitForFile(
+            URL(fileURLWithPath: fake.executable.path + ".request-started")))
+        let second = Task {
+            try await self.requestEmptyList(
+                client: client,
+                executable: fake.executable,
+                timeoutSeconds: 0.05)
+        }
+
+        await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.timedOut) {
+            try await second.value
+        }
+        await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.timedOut) {
+            try await first.value
+        }
+        await client.shutdown()
+    }
+
+    @Test func `cancellation restarts the client without dropping the next request`() async throws {
+        let fake = try makeFakeCodex(#"""
+        #!/bin/sh
+        count=0
+        [ ! -f "${0}.processes" ] || count=$(cat "${0}.processes")
+        count=$((count + 1))
+        printf '%s\n' "$count" > "${0}.processes"
+        IFS= read -r initialize || exit 2
+        id=$(printf '%s\n' "$initialize" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+        printf '{"id":%s,"result":{}}\n' "$id"
+        IFS= read -r initialized || exit 3
+        IFS= read -r request || exit 4
+        if [ "$count" = 1 ]; then
+          touch "${0}.request-started"
+          sleep 5
+          exit 0
+        fi
+        id=$(printf '%s\n' "$request" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+        printf '{"id":%s,"result":{"data":[]}}\n' "$id"
+        """#)
+        defer { try? FileManager.default.removeItem(at: fake.directory) }
+        let client = CodexAppServerThreadClient(idleTimeoutSeconds: 10)
+        let first = Task {
+            try await self.requestEmptyList(
+                client: client,
+                executable: fake.executable,
+                timeoutSeconds: 5)
+        }
+        #expect(await self.waitForFile(
+            URL(fileURLWithPath: fake.executable.path + ".request-started")))
+        let second = Task {
+            try await self.requestEmptyList(client: client, executable: fake.executable)
+        }
+
+        first.cancel()
+        await #expect(throws: CancellationError.self) {
+            try await first.value
+        }
+        let result = try await second.value
+        #expect(try (JSONSerialization.jsonObject(with: result) as? [String: Any])?["data"] != nil)
+        #expect(try self.readTrimmed(
+            URL(fileURLWithPath: fake.executable.path + ".processes")) == "2")
+        await client.shutdown()
     }
 
     @Test func `drains App Server frames larger than one pipe read while server stays open`() async throws {
@@ -993,6 +1386,106 @@ struct MacNodeCodexThreadCatalogTests {
         let decoded = try #require(
             JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
         #expect((decoded["sessions"] as? [Any])?.count == 50)
+    }
+
+    @Test func `drains a large final frame before handling process exit`() async throws {
+        let threads: [[String: Any]] = (0..<100).map { index in
+            [
+                "id": "thread-\(index)",
+                "name": "Final catalog \(index)",
+                "cwd": "/workspace/\(String(repeating: "x", count: 3500))",
+                "status": ["type": "notLoaded"],
+            ]
+        }
+        let responseData = try JSONSerialization.data(withJSONObject: [
+            "id": 2,
+            "result": ["data": threads],
+        ])
+        let response = try #require(String(data: responseData, encoding: .utf8))
+        #expect(response.utf8.count > 256 * 1024)
+        let fake = try makeFakeCodex("""
+        #!/bin/sh
+        IFS= read -r initialize || exit 2
+        printf '%s\n' '{"id":1,"result":{}}'
+        IFS= read -r initialized || exit 3
+        IFS= read -r list || exit 4
+        printf '%s\n' '\(response)'
+        """)
+        defer { try? FileManager.default.removeItem(at: fake.directory) }
+
+        let payload = try await MacNodeCodexThreadCatalog.list(
+            paramsJSON: #"{"limit":100}"#,
+            executable: fake.executable.path,
+            timeoutSeconds: 10)
+        let decoded = try #require(
+            JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
+        #expect((decoded["sessions"] as? [Any])?.count == 100)
+    }
+
+    @Test func `accepts coalesced JSONL frames within the per-frame limit`() async throws {
+        let fake = try makeFakeCodex(#"""
+        #!/bin/sh
+        IFS= read -r initialize || exit 2
+        printf '%s\n' '{"id":1,"result":{}}'
+        IFS= read -r initialized || exit 3
+        IFS= read -r list || exit 4
+        printf '%s\n%s\n' \
+          '{"method":"thread/started","params":{"padding":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}' \
+          '{"id":2,"result":{"data":[]}}'
+        sleep 1
+        """#)
+        defer { try? FileManager.default.removeItem(at: fake.directory) }
+        let client = CodexAppServerThreadClient(idleTimeoutSeconds: 10)
+
+        let result = try await self.requestEmptyList(
+            client: client,
+            executable: fake.executable,
+            maxLineBytes: 128)
+
+        #expect(try (JSONSerialization.jsonObject(with: result) as? [String: Any])?["data"] != nil)
+        await client.shutdown()
+    }
+
+    @Test func `uses the active request frame limit after advancing the queue`() async throws {
+        let fake = try makeFakeCodex(#"""
+        #!/bin/sh
+        IFS= read -r initialize || exit 2
+        printf '%s\n' '{"id":1,"result":{}}'
+        IFS= read -r initialized || exit 3
+        IFS= read -r first || exit 4
+        first_id=$(printf '%s\n' "$first" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+        touch "${0}.first-started"
+        sleep 0.1
+        printf '{"id":%s,"result":{"data":[]}}\n' "$first_id"
+        IFS= read -r second || exit 5
+        second_id=$(printf '%s\n' "$second" | /usr/bin/sed -E 's/.*"id":([0-9]+).*/\1/')
+        padding=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        printf '{"id":%s,"result":{"data":[],"padding":"%s"}}\n' "$second_id" "$padding"
+        sleep 1
+        """#)
+        defer { try? FileManager.default.removeItem(at: fake.directory) }
+        let client = CodexAppServerThreadClient(idleTimeoutSeconds: 10)
+
+        let first = Task {
+            try await self.requestEmptyList(
+                client: client,
+                executable: fake.executable,
+                maxLineBytes: 1024)
+        }
+        #expect(await self.waitForFile(
+            URL(fileURLWithPath: fake.executable.path + ".first-started")))
+        let second = Task {
+            try await self.requestEmptyList(
+                client: client,
+                executable: fake.executable,
+                maxLineBytes: 64)
+        }
+
+        _ = try await first.value
+        await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.responseTooLarge) {
+            try await second.value
+        }
+        await client.shutdown()
     }
 
     @Test func `default deadline allows cold large catalog scans`() {

@@ -118,6 +118,7 @@ function assertQaSuiteSummaryHasExecutedScenarios(
   summaryPath: string,
   errorCode: "summary_failure_count_missing" | "summary_blocking_count_missing",
   optionalScenarioNames?: ReadonlySet<string>,
+  requireExecutedScenario = false,
 ): void {
   if (!summary || typeof summary !== "object") {
     return;
@@ -137,14 +138,15 @@ function assertQaSuiteSummaryHasExecutedScenarios(
   const entries = Array.isArray(payload.entries)
     ? (payload.entries as QaEvidenceEntryStatus[])
     : undefined;
-  const hasExecutedScenario =
+  const hasCompletedScenario =
     scenarios?.some((scenario) => scenario.status === "pass" || scenario.status === "fail") ===
       true ||
     entries?.some((entry) => entry.result?.status === "pass" || entry.result?.status === "fail") ===
       true ||
     (passed ?? 0) > 0 ||
-    (failed ?? 0) > 0 ||
-    (total !== null && total > 0 && (skipped === null || total > skipped));
+    (failed ?? 0) > 0;
+  const hasExecutedScenario =
+    hasCompletedScenario || (total !== null && total > 0 && (skipped === null || total > skipped));
   const hasBlockingNonOptionalSkip =
     errorCode === "summary_blocking_count_missing" &&
     scenarios?.some(
@@ -169,6 +171,8 @@ function assertQaSuiteSummaryHasExecutedScenarios(
   if (
     total === 0 ||
     scenarios?.length === 0 ||
+    // A tolerated blocking result cannot authenticate a campaign that never completed a scenario.
+    (requireExecutedScenario && !hasCompletedScenario) ||
     (!hasExecutedScenario &&
       !hasBlockingUnknownOrFailedScenario &&
       !hasBlockingNonOptionalSkip &&
@@ -309,7 +313,7 @@ export async function readQaSuiteFailedScenarioCountFromFile(summaryPath: string
 
 export async function readQaSuiteFailedOrSkippedScenarioCountFromFile(
   summaryPath: string,
-  options?: { optionalScenarioNames?: ReadonlySet<string> },
+  options?: { optionalScenarioNames?: ReadonlySet<string>; requireExecutedScenario?: boolean },
 ): Promise<number> {
   const payload = await readQaSuiteSummaryFile(summaryPath);
   assertQaSuiteSummaryHasExecutedScenarios(
@@ -317,6 +321,7 @@ export async function readQaSuiteFailedOrSkippedScenarioCountFromFile(
     summaryPath,
     "summary_blocking_count_missing",
     options?.optionalScenarioNames,
+    options?.requireExecutedScenario,
   );
   const blockingScenarioCount = readQaSuiteFailedOrSkippedScenarioCountFromSummary(payload);
   if (blockingScenarioCount !== null) {
