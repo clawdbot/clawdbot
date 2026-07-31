@@ -2,14 +2,14 @@
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
-export type McpPaginationPage<T> = {
+type McpPaginationPage<T> = {
   items: readonly T[];
   nextCursor?: string;
   /** Original SDK page used for the aggregate serialized-byte budget. */
   serializedValue?: unknown;
 };
 
-export type McpPaginationRequest = {
+type McpPaginationRequest = {
   cursor: string | undefined;
   timeoutMs: number;
   signal: AbortSignal;
