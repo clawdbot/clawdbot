@@ -8,8 +8,10 @@ import "./monitor.js";
 import type { GoogleChatEvent } from "./types.js";
 
 const apiMocks = vi.hoisted(() => ({
+  deleteGoogleChatMessage: vi.fn(),
   downloadGoogleChatMedia: vi.fn(),
   sendGoogleChatMessage: vi.fn(),
+  updateGoogleChatMessage: vi.fn(),
 }));
 
 const accessMocks = vi.hoisted(() => ({
@@ -40,8 +42,10 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
 });
 
 vi.mock("./api.js", () => ({
+  deleteGoogleChatMessage: apiMocks.deleteGoogleChatMessage,
   downloadGoogleChatMedia: apiMocks.downloadGoogleChatMedia,
   sendGoogleChatMessage: apiMocks.sendGoogleChatMessage,
+  updateGoogleChatMessage: apiMocks.updateGoogleChatMessage,
 }));
 
 vi.mock("./monitor-access.js", () => ({
@@ -64,8 +68,10 @@ vi.mock("./monitor-routing.js", () => ({
 }));
 
 beforeEach(() => {
+  apiMocks.deleteGoogleChatMessage.mockReset();
   apiMocks.downloadGoogleChatMedia.mockReset();
   apiMocks.sendGoogleChatMessage.mockReset();
+  apiMocks.updateGoogleChatMessage.mockReset();
   accessMocks.applyGoogleChatInboundAccessPolicy.mockReset();
   inboundMocks.buildEnvelope.mockReset().mockImplementation(({ body }: { body: string }) => body);
   inboundMocks.resolveChannelInboundRouteEnvelope
@@ -421,6 +427,101 @@ describe("googlechat monitor inbound space classification", () => {
       space: "spaces/CLASSIFY",
       text: "_OpenClaw is typing..._",
       thread: expectedThread,
+    });
+  });
+
+  it("continues delivery in the typing message's canonical fallback thread", async () => {
+    const requestedThread = "spaces/CLASSIFY/threads/requested";
+    const deliveredThread = "spaces/CLASSIFY/threads/fallback";
+    const runTurn = vi.fn(
+      async (params: {
+        adapter: {
+          resolveTurn: () => {
+            delivery: {
+              deliver: (payload: { text: string; replyToId: string }) => Promise<void>;
+            };
+          };
+        };
+      }) => {
+        const turn = params.adapter.resolveTurn();
+        await turn.delivery.deliver({
+          text: "two chunks",
+          replyToId: requestedThread,
+        });
+      },
+    );
+    const core = {
+      logging: { shouldLogVerbose: () => false },
+      channel: {
+        inbound: {
+          buildContext: vi.fn((payload: unknown) => payload),
+          run: runTurn,
+        },
+        text: {
+          resolveChunkMode: vi.fn(() => "markdown"),
+          chunkMarkdownTextWithMode: vi.fn(() => ["first chunk", "second chunk"]),
+        },
+      },
+    } as unknown as GoogleChatCoreRuntime;
+    const account = {
+      accountId: "work",
+      config: { replyToMode: "all" },
+      credentialSource: "inline",
+    } as ResolvedGoogleChatAccount;
+    const event = {
+      type: "MESSAGE",
+      space: { name: "spaces/CLASSIFY", spaceType: "SPACE" },
+      message: {
+        name: "spaces/CLASSIFY/messages/1",
+        text: "hello",
+        thread: { name: requestedThread },
+        sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
+      },
+    } satisfies GoogleChatEvent;
+
+    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
+      ok: true,
+      commandAuthorized: undefined,
+      effectiveWasMentioned: undefined,
+      groupBotLoopProtection: undefined,
+      groupSystemPrompt: undefined,
+    });
+    apiMocks.sendGoogleChatMessage
+      .mockResolvedValueOnce({
+        messageName: "spaces/CLASSIFY/messages/typing",
+        threadName: deliveredThread,
+      })
+      .mockResolvedValueOnce({
+        messageName: "spaces/CLASSIFY/messages/second",
+        threadName: deliveredThread,
+      });
+
+    await processGoogleChatTestEvent({
+      event,
+      account,
+      config: {},
+      runtime: { error: vi.fn(), log: vi.fn() },
+      core,
+      mediaMaxMb: 10,
+    });
+
+    expect(apiMocks.sendGoogleChatMessage).toHaveBeenNthCalledWith(1, {
+      account,
+      space: "spaces/CLASSIFY",
+      text: "_OpenClaw is typing..._",
+      thread: requestedThread,
+    });
+    expect(apiMocks.updateGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      messageName: "spaces/CLASSIFY/messages/typing",
+      text: "first chunk",
+    });
+    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledTimes(2);
+    expect(apiMocks.sendGoogleChatMessage).toHaveBeenNthCalledWith(2, {
+      account,
+      space: "spaces/CLASSIFY",
+      text: "second chunk",
+      thread: deliveredThread,
     });
   });
 });
