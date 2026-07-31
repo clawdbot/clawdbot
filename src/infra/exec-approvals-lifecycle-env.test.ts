@@ -276,6 +276,59 @@ describe("OpenClaw lifecycle environment data positions", () => {
       }),
     ).toBe(true);
   });
+
+  it.each([
+    {
+      name: "POSIX positional parameters",
+      command: `set -- update; openclaw "$1"`,
+      env: {},
+      platform: "linux" as const,
+      raw: `openclaw "$1"`,
+      argv: ["openclaw", "$1"],
+    },
+    {
+      name: "CMD variable modifiers",
+      command: `cmd /c "openclaw %ACTION:status=update%"`,
+      env: { ACTION: "status" },
+      platform: "win32" as const,
+      raw: `cmd /c "openclaw %ACTION:status=update%"`,
+      argv: ["cmd", "/c", "openclaw %ACTION:status=update%"],
+    },
+    {
+      name: "PowerShell argument splats",
+      command: `$verbs = @('update'); & openclaw @verbs`,
+      env: {},
+      platform: "win32" as const,
+      raw: `& openclaw @verbs`,
+      argv: ["&", "openclaw", "@verbs"],
+    },
+    {
+      name: "PowerShell Start-Process splats",
+      command: `$params = @{FilePath='openclaw';ArgumentList='update'}; Start-Process @params`,
+      env: {},
+      platform: "win32" as const,
+      raw: `Start-Process @params`,
+      argv: ["Start-Process", "@params"],
+    },
+    {
+      name: "opaque process-environment writes",
+      command: `[Environment]::SetEnvironmentVariable('ACTION','update'); & openclaw $env:ACTION`,
+      env: { ACTION: "--help" },
+      platform: "win32" as const,
+      raw: `& openclaw $env:ACTION`,
+      argv: ["&", "openclaw", "$env:ACTION"],
+    },
+  ])("fails closed for $name", ({ argv, command, env, platform, raw }) => {
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command,
+        env,
+        envComplete: true,
+        platform,
+        segments: [{ raw, argv }],
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("OpenClaw lifecycle dynamic carrier edges", () => {

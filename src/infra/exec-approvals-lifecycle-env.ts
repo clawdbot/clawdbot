@@ -27,12 +27,16 @@ import {
 import { lifecycleBooleanOptionValueMayBeDynamic } from "./exec-approvals-lifecycle-tokens.js";
 import { extractShellWrapperInlineCommand } from "./shell-wrapper-resolution.js";
 const POSIX_VARIABLE_RE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/gu;
+const POSIX_SPECIAL_PARAMETER_RE = /\$(?:[@*#?$!-]|[0-9]+|\{(?:[@*#?$!-]|[0-9]+)\})/u;
 const POWERSHELL_VARIABLE_RE = /\$env:([A-Za-z_][A-Za-z0-9_]*)/giu;
 const CMD_VARIABLE_RE = /%([A-Za-z_][A-Za-z0-9_]*)%/gu;
+const CMD_MODIFIED_VARIABLE_RE = /%([A-Za-z_][A-Za-z0-9_]*):[^%]*%/u;
 const CMD_DELAYED_VARIABLE_RE = /!([A-Za-z_][A-Za-z0-9_]*)!/gu;
+const CMD_DELAYED_MODIFIED_VARIABLE_RE = /!([A-Za-z_][A-Za-z0-9_]*):[^!]*!/u;
 const POWERSHELL_LOCAL_VARIABLE_REFERENCE_RE = /\$(?!env:)[A-Za-z_][A-Za-z0-9_]*/iu;
+const POWERSHELL_SPLATTED_VARIABLE_REFERENCE_RE = /@[A-Za-z_][A-Za-z0-9_]*/iu;
 const VARIABLE_REFERENCE_RE =
-  /\$\{[^}]+\}|\$(?:[A-Za-z_][A-Za-z0-9_]*|env:[A-Za-z_][A-Za-z0-9_]*)|%[A-Za-z_][A-Za-z0-9_]*%|![A-Za-z_][A-Za-z0-9_]*!/iu;
+  /\$\{[^}]+\}|\$(?:[@*#?$!-]|[0-9]+|[A-Za-z_][A-Za-z0-9_]*|env:[A-Za-z_][A-Za-z0-9_]*)|@[A-Za-z_][A-Za-z0-9_]*|%[A-Za-z_][A-Za-z0-9_]*(?::[^%]*)?%|![A-Za-z_][A-Za-z0-9_]*(?::[^!]*)?!/iu;
 const POSIX_PARAMETER_OPERATOR_RE = /\$\{(?![A-Za-z_][A-Za-z0-9_]*\})[^}]+\}/u;
 const ASSIGNMENT_TOKEN_RE = /^(?:\$env:)?([A-Za-z_][A-Za-z0-9_]*)=/iu;
 const POWERSHELL_ENV_NAME_RE = /^\$env:([A-Za-z_][A-Za-z0-9_]*)$/iu;
@@ -166,6 +170,25 @@ function collectShellBinderKeys(command: string, keys: Set<string>): void {
 function collectAssignedEnvironmentKeys(command: string, keys: Set<string>, depth: number): void {
   if (depth > 8) {
     return;
+  }
+  const opaqueProcessEnvironmentWrite =
+    /\[(?:System\.)?Environment\]\s*::\s*SetEnvironmentVariable\s*\(|\b(?:clear|new|remove|rename|set)-item\b[^;&|\n]*\benv:/iu.test(
+      command,
+    );
+  for (const match of command.matchAll(
+    /\[(?:System\.)?Environment\]\s*::\s*SetEnvironmentVariable\s*\(\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\1/giu,
+  )) {
+    keys.add((match[2] ?? "").toLowerCase());
+  }
+  for (const match of command.matchAll(
+    /\b(?:clear|new|remove|rename|set)-item\b[^;&|\n]*\benv:\s*["']?([A-Za-z_][A-Za-z0-9_]*)/giu,
+  )) {
+    keys.add((match[1] ?? "").toLowerCase());
+  }
+  if (opaqueProcessEnvironmentWrite) {
+    for (const match of command.matchAll(POWERSHELL_VARIABLE_RE)) {
+      keys.add((match[1] ?? "").toLowerCase());
+    }
   }
   collectShellBinderKeys(command, keys);
   for (const part of splitLifecycleInlineCommands(command)) {
@@ -476,7 +499,10 @@ export function expandLifecycleEnvironmentArgv(params: {
   let fieldSplitUncertain = false;
   const dialect = params.dialect ?? "posix";
   let unresolved =
-    dialect === "posix" && params.argv.some((token) => POSIX_PARAMETER_OPERATOR_RE.test(token));
+    dialect === "posix" &&
+    params.argv.some(
+      (token) => POSIX_PARAMETER_OPERATOR_RE.test(token) || POSIX_SPECIAL_PARAMETER_RE.test(token),
+    );
   const replaceVariable = (key: string): string => {
     if (params.shadowedKeys?.has(key.toLowerCase())) {
       unresolved = true;
@@ -494,10 +520,14 @@ export function expandLifecycleEnvironmentArgv(params: {
   };
   const argv = params.argv.map((token) => {
     if (dialect === "powershell") {
-      unresolved ||= POWERSHELL_LOCAL_VARIABLE_REFERENCE_RE.test(token);
+      unresolved ||=
+        POWERSHELL_LOCAL_VARIABLE_REFERENCE_RE.test(token) ||
+        POWERSHELL_SPLATTED_VARIABLE_REFERENCE_RE.test(token);
       return token.replace(POWERSHELL_VARIABLE_RE, (_match, key: string) => replaceVariable(key));
     }
     if (dialect === "cmd") {
+      unresolved ||=
+        CMD_MODIFIED_VARIABLE_RE.test(token) || CMD_DELAYED_MODIFIED_VARIABLE_RE.test(token);
       return token
         .replace(CMD_VARIABLE_RE, (_match, key: string) => replaceVariable(key))
         .replace(CMD_DELAYED_VARIABLE_RE, (_match, key: string) => replaceVariable(key));

@@ -245,6 +245,13 @@ export function unresolvedPowerShellStartProcessMayHideLifecycle(
   argv: readonly string[],
   isUnresolved: (value: string | undefined) => boolean,
 ): boolean {
+  if (
+    argv
+      .slice(1)
+      .some((token) => /^@[A-Za-z_][A-Za-z0-9_]*$/u.test(token.trim()) && isUnresolved(token))
+  ) {
+    return true;
+  }
   const parsed = parseStartProcessArgv(argv);
   if (!parsed) {
     return false;
