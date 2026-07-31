@@ -9,19 +9,21 @@ export function recordCodexDynamicToolResult(
   response: CodexDynamicToolRuntimeResponse,
   protocolResponse: CodexDynamicToolCallResponse,
 ): void {
-  projector?.recordDynamicToolResult({
-    callId: call.callId,
-    tool: call.tool,
-    asyncStarted: response.asyncStarted === true,
-    terminalResolution: response.terminalResolution,
-    success: protocolResponse.success,
-    terminalType:
-      response.diagnosticTerminalType ?? (protocolResponse.success ? "completed" : "error"),
-    sideEffectEvidence:
-      response.sideEffectEvidence === true ||
-      response.terminalResolution?.sideEffectEvidence === true,
-    contentItems: protocolResponse.contentItems,
-    details: response.transcriptDetails,
-    ...(response.resultContentSource ? { resultContentSource: response.resultContentSource } : {}),
-  });
+  projector?.recordDynamicToolResult(
+    {
+      callId: call.callId,
+      tool: call.tool,
+      asyncStarted: response.asyncStarted === true,
+      terminalResolution: response.terminalResolution,
+      success: protocolResponse.success,
+      terminalType:
+        response.diagnosticTerminalType ?? (protocolResponse.success ? "completed" : "error"),
+      sideEffectEvidence:
+        response.sideEffectEvidence === true ||
+        response.terminalResolution?.sideEffectEvidence === true,
+      contentItems: protocolResponse.contentItems,
+      details: response.transcriptDetails,
+    },
+    response.resultContentSource,
+  );
 }

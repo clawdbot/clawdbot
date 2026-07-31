@@ -440,8 +440,8 @@ describe("createOpenClawCodingTools", () => {
         workspaceDir,
         senderIsOwner: true,
         sessionId: "result-taint-session",
-        isTurnTainted: taintState.isTainted,
-        onToolOutcome: taintState.observe,
+        isTurnTainted: () => taintState.isTainted(),
+        onToolOutcome: (obs) => taintState.observe(obs),
       });
       await requireToolExecute(requireTool(tools, "pdf"))("remote-pdf", {});
       await requireToolExecute(requireTool(tools, "write"))("memory-write", {
@@ -493,8 +493,8 @@ describe("createOpenClawCodingTools", () => {
         workspaceDir,
         senderIsOwner: true,
         sessionId: "local-result-session",
-        isTurnTainted: taintState.isTainted,
-        onToolOutcome: taintState.observe,
+        isTurnTainted: () => taintState.isTainted(),
+        onToolOutcome: (obs) => taintState.observe(obs),
       });
       await requireToolExecute(requireTool(tools, "pdf"))("local-pdf", {});
       await requireToolExecute(requireTool(tools, "write"))("memory-write", {

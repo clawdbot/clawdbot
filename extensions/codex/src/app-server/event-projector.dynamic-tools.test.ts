@@ -121,13 +121,15 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
       tool: "pdf",
       arguments: { pdf: "https://example.test/report.pdf" },
     });
-    projector.recordDynamicToolResult({
-      callId: "call-pdf-1",
-      tool: "pdf",
-      success: true,
-      contentItems: [{ type: "inputText", text: "remote PDF text" }],
-      resultContentSource: "network",
-    });
+    projector.recordDynamicToolResult(
+      {
+        callId: "call-pdf-1",
+        tool: "pdf",
+        success: true,
+        contentItems: [{ type: "inputText", text: "remote PDF text" }],
+      },
+      "network",
+    );
     await projector.handleNotification(agentMessageDelta("stored result"));
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
