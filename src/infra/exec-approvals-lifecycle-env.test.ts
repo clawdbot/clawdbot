@@ -355,6 +355,19 @@ describe("OpenClaw lifecycle environment data positions", () => {
       }),
     ).toBe(true);
   });
+
+  it("classifies process selectors after known environment expansion", () => {
+    const command = `kill -TERM "$(pidof "$PROC")"`;
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command,
+        env: { PROC: "openclaw" },
+        envComplete: true,
+        platform: "linux",
+        segments: [{ raw: command, argv: ["kill", "-TERM", `$(pidof "$PROC")`] }],
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("OpenClaw lifecycle dynamic carrier edges", () => {

@@ -44,6 +44,7 @@ import {
   extractShellSubstitutionCommands,
   lifecycleFunctionLocalPositionalsRequireApproval,
   lifecyclePositionalBindingRequiresApproval,
+  lifecycleSubstitutionSelectsOpenClawProcess,
   lifecycleSubstitutionResultMayHideLifecycle,
   resolveLifecyclePosixShellPositionals,
 } from "./exec-approvals-lifecycle-substitutions.js";
@@ -250,16 +251,8 @@ function classifyProcessMutation(
       .replace(/\[([a-z0-9])\]/giu, "$1")
       .replace(/''|""/gu, "")
       .replace(/\\([a-z0-9])/giu, "$1");
-    const substitutionSelectsOpenClaw = extractShellSubstitutionCommands(raw).commands.some(
-      (nested) =>
-        splitLifecycleInlineCommands(nested).some((part) => {
-          const nestedArgv = splitShellArgs(part);
-          return (
-            nestedArgv !== null &&
-            ["pgrep", "pidof"].includes(normalizeExecutableToken(nestedArgv[0] ?? "")) &&
-            nestedArgv.slice(1).some(matchesOpenClawProcessPattern)
-          );
-        }),
+    const substitutionSelectsOpenClaw = [raw, ...argv.slice(1)].some(
+      lifecycleSubstitutionSelectsOpenClawProcess,
     );
     return (
       substitutionSelectsOpenClaw ||

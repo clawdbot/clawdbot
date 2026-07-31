@@ -1,3 +1,4 @@
+import { splitShellArgs } from "../utils/shell-argv.js";
 import { unresolvedOpenClawConfigActionMayMutate } from "./exec-approvals-lifecycle-config.js";
 import { unresolvedOpenClawDoctorArgvMayMutate } from "./exec-approvals-lifecycle-doctor.js";
 import { lifecycleDynamicArgvMayHideLifecycle } from "./exec-approvals-lifecycle-env.js";
@@ -6,6 +7,7 @@ import {
   unresolvedGatewayMethodMayHideLifecycle,
 } from "./exec-approvals-lifecycle-gateway.js";
 import { unresolvedOpenClawNodeServiceActionMayMutate } from "./exec-approvals-lifecycle-node-service.js";
+import { matchesOpenClawProcessPattern } from "./exec-approvals-lifecycle-patterns.js";
 import {
   unresolvedOpenClawHooksActionMayMutate,
   unresolvedOpenClawPluginsActionMayMutate,
@@ -14,6 +16,7 @@ import { unresolvedOpenClawApprovalPolicyActionMayMutate } from "./exec-approval
 import { unresolvedOpenClawResetArgvMayMutate } from "./exec-approvals-lifecycle-reset.js";
 import {
   lifecycleExecutableCommandText,
+  splitLifecycleInlineCommands,
   type LifecycleShellDialect,
 } from "./exec-approvals-lifecycle-shell.js";
 import { lifecycleBooleanOptionValueMayBeDynamic } from "./exec-approvals-lifecycle-tokens.js";
@@ -183,6 +186,20 @@ export function extractShellSubstitutionCommands(
   dialect: LifecycleShellDialect = "posix",
 ): ShellSubstitutionScan {
   return extractAtDepth(lifecycleExecutableCommandText(command, dialect), 0, dialect);
+}
+
+/** Return true when a substitution selects an OpenClaw process for a later mutation. */
+export function lifecycleSubstitutionSelectsOpenClawProcess(command: string): boolean {
+  return extractShellSubstitutionCommands(command).commands.some((nested) =>
+    splitLifecycleInlineCommands(nested).some((part) => {
+      const argv = splitShellArgs(part);
+      return (
+        argv !== null &&
+        ["pgrep", "pidof"].includes(normalizeExecutableToken(argv[0] ?? "")) &&
+        argv.slice(1).some(matchesOpenClawProcessPattern)
+      );
+    }),
+  );
 }
 
 function optionName(token: string): string {
