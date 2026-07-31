@@ -88,9 +88,15 @@ The Gemini request keeps ownership of `Content-Type`, `x-goog-api-key`, and
 `models.providers.google.headers` are not inherited because they belong to the
 model provider endpoint, which can differ from the web-search endpoint.
 
-Header names and values partition the in-memory search cache through a digest,
-so two routing targets do not share results. On a cross-origin redirect, the
-guarded fetch path retains only its standard safe redirect headers.
+Empty plain-string values are valid. Invalid fields and transport-owned or
+framing names such as `Content-Length`, `Host`, and `Transfer-Encoding` fail the
+current search before cache lookup or network I/O.
+
+Effective header names and values partition the in-memory search cache through a
+digest, so two routing targets do not share results. Configured values for the
+provider-owned names above are ignored and do not partition the cache. On a
+cross-origin redirect, the guarded fetch path retains only its standard safe
+redirect headers.
 
 ## How it works
 

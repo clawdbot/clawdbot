@@ -65,6 +65,28 @@ type GeminiGroundingResponse = {
   };
 };
 
+const GEMINI_PROVIDER_OWNED_HEADER_NAMES = new Set([
+  "content-type",
+  "x-goog-api-client",
+  "x-goog-api-key",
+]);
+
+// Headers validates field syntax, but Undici does not implement Fetch's
+// forbidden-request-header checks. These names can otherwise be consumed,
+// ignored, or rejected only after the request reaches the transport.
+const GEMINI_UNSAFE_REQUEST_HEADER_NAMES = new Set([
+  "connection",
+  "content-length",
+  "expect",
+  "host",
+  "keep-alive",
+  "proxy-connection",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
+
 function throwMalformedGeminiResponse(): never {
   throw new Error("Gemini API error: malformed JSON response");
 }
@@ -187,15 +209,32 @@ function resolveGeminiWebSearchHeaders(gemini?: GeminiConfig): Record<string, st
   const headers = new Headers();
   for (const [name, input] of Object.entries(gemini.headers)) {
     const path = `plugins.entries.google.config.webSearch.headers[${JSON.stringify(name)}]`;
-    const value = normalizeResolvedSecretInputString({ value: input, path });
-    if (!value) {
-      throw new Error(`${path} must be a non-empty string or resolved SecretRef.`);
+    const value =
+      typeof input === "string"
+        ? input
+        : normalizeResolvedSecretInputString({ value: input, path });
+    if (value === undefined) {
+      throw new Error(`${path} must be a string or resolved SecretRef.`);
     }
+    let normalizedName: string;
+    let normalizedValue: string;
     try {
-      headers.set(name, value);
+      const candidate = new Headers([[name, value]]);
+      const [entry] = candidate.entries();
+      if (!entry) {
+        throw new Error("missing normalized header entry");
+      }
+      [normalizedName, normalizedValue] = entry;
     } catch {
       throw new Error(`${path} is not a valid HTTP header.`);
     }
+    if (GEMINI_UNSAFE_REQUEST_HEADER_NAMES.has(normalizedName)) {
+      throw new Error(`${path} uses a reserved or framing HTTP header.`);
+    }
+    if (GEMINI_PROVIDER_OWNED_HEADER_NAMES.has(normalizedName)) {
+      continue;
+    }
+    headers.set(normalizedName, normalizedValue);
   }
   const entries = [...headers.entries()];
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
