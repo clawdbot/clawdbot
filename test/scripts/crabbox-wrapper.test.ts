@@ -1091,7 +1091,7 @@ describe("scripts/crabbox-wrapper", () => {
     );
   });
 
-  it("honors direct-cloud debugging during automatic readiness checks", () => {
+  it("ignores direct-cloud debugging during automatic readiness checks", () => {
     const result = runWrapper(
       "provider: aws, azure, blacksmith-testbox, or daytona\n",
       ["run", "--workload", "desktop", "--", "echo ok"],
@@ -1104,9 +1104,10 @@ describe("scripts/crabbox-wrapper", () => {
       },
     );
 
-    expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toContain("azure");
-    expect(result.stderr).toContain("selected=azure");
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("no ready provider for workload=desktop");
+    expect(result.stderr).toContain("managed Crabbox broker auth unavailable");
   });
 
   it("keeps workload configuration away from administrative commands", () => {
@@ -1234,22 +1235,23 @@ describe("scripts/crabbox-wrapper", () => {
     expect(parseFakeCrabboxOutput(result).args).toContain("daytona");
   });
 
-  it("allows automatic direct Daytona routing on older Crabbox versions", () => {
+  it("does not allow direct cloud overrides inside workload routing", () => {
     const result = runWrapper(
       "provider: aws, azure, blacksmith-testbox, or daytona\n",
       ["run", "--workload", "interactive", "--", "echo ok"],
       {
         configJson: { coordinator: "", brokerAuth: "missing" },
         env: {
-          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.39.9",
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0",
           OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
         },
       },
     );
 
-    expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toContain("daytona");
-    expect(result.stderr).toContain("selected=daytona");
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("no ready provider for workload=interactive");
+    expect(result.stderr).toContain("managed Crabbox broker auth unavailable");
   });
 
   it("fails closed when no policy provider is ready", () => {

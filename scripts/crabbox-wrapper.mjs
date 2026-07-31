@@ -880,7 +880,6 @@ function crabboxProviderReadiness(providerName, versionText, targetContext) {
   }
   if (
     canonicalProvider === "daytona" &&
-    !directCloudOverrideEnabled(canonicalProvider) &&
     !satisfiesMinimumCrabboxVersion(versionText, minimumBrokeredDaytonaCrabboxVersion)
   ) {
     return {
@@ -888,11 +887,7 @@ function crabboxProviderReadiness(providerName, versionText, targetContext) {
       reason: `requires Crabbox >= ${formatVersionTuple(minimumBrokeredDaytonaCrabboxVersion)} for brokered Daytona`,
     };
   }
-  if (
-    ["aws", "azure", "daytona"].includes(canonicalProvider) &&
-    !directCloudOverrideEnabled(canonicalProvider) &&
-    !managedBrokerAuthConfigured()
-  ) {
+  if (["aws", "azure", "daytona"].includes(canonicalProvider) && !managedBrokerAuthConfigured()) {
     return { ready: false, reason: "managed Crabbox broker auth unavailable" };
   }
   const doctorArgs = ["doctor", "--provider", canonicalProvider];
@@ -917,30 +912,27 @@ function formatProviderReadiness(readiness) {
 }
 
 function shouldRequireBrokeredCloud(commandArgs, providerName) {
-  if (directCloudOverrideEnabled(providerName)) {
-    return false;
-  }
   const canonicalProvider = canonicalProviderName(providerName);
   if (!["aws", "azure", "daytona"].includes(canonicalProvider)) {
     // Blacksmith Testbox is provider-owned and does not use the managed
     // coordinator auth required by brokered cloud capacity.
     return false;
   }
+  if (requestedWorkload(commandArgs)) {
+    return true;
+  }
+  if (directCloudOverrideEnabled(providerName)) {
+    return false;
+  }
   if (commandArgs[0] === "run" || commandArgs[0] === "warmup") {
     // Workload routing never consumes local cloud credentials. Keep the
     // shipped direct Azure/Daytona path only for commands outside that policy.
-    return (
-      canonicalProvider === "aws" ||
-      Boolean(requestedWorkload(commandArgs)) ||
-      managedBrokerRequested()
-    );
+    return canonicalProvider === "aws" || managedBrokerRequested();
   }
   return (
     commandArgs[0] === "actions" &&
     commandArgs[1] === "hydrate" &&
-    (canonicalProvider === "aws" ||
-      Boolean(requestedWorkload(commandArgs)) ||
-      managedBrokerRequested())
+    (canonicalProvider === "aws" || managedBrokerRequested())
   );
 }
 
