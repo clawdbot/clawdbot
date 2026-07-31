@@ -13,7 +13,6 @@ import {
   loadBundledEntryExportSync,
 } from "openclaw/plugin-sdk/channel-entry-contract";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import type { cronReportToolFactory } from "./examples/cron-report-tool.js";
 
 type HttpHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void> | void;
 type HttpHandlerFactory = (api: OpenClawPluginApi) => HttpHandler;
@@ -63,18 +62,9 @@ export default defineBundledChannelEntry({
       handler: createOperatorAguiHttpHandler(api),
     });
 
-    // Frontend/client tools are declared per request via forwardedProps; the
-    // factory returns null at discovery (no session) and real tools at runtime.
-    api.registerTool(
-      loadApi<typeof import("./src/client-tools.js").aguiToolFactory>("aguiToolFactory"),
-    );
-
-    // Example server-side tool demonstrating A2UI operations (declared in
-    // openclaw.plugin.json contracts.tools). Optional so it never blocks a turn.
-    api.registerTool(loadApi<typeof cronReportToolFactory>("cronReportToolFactory"), {
-      name: "cron_report",
-      optional: true,
-    });
+    // Client and frontend state-writer tools are not registered as plugin tools:
+    // the HTTP handler forwards them per request straight into runEmbeddedAgent's
+    // `clientTools`, so they never pass through the plugin tool registry.
 
     // Map the OpenClaw server-side tool lifecycle onto AG-UI TOOL_CALL_* events.
     api.on(

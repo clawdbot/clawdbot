@@ -1,24 +1,15 @@
-import type { EventType, Tool } from "@ag-ui/core";
+import type { EventType } from "@ag-ui/core";
 
 type EventWriter = (event: { type: EventType } & Record<string, unknown>) => void;
 
 /**
- * Per-session store for:
- * 1. AG-UI client-provided tools (read by the plugin tool factory)
- * 2. SSE event writer (read by before/after_tool_call hooks)
+ * Per-session store for the SSE event writer, read by the before/after_tool_call
+ * hooks. Fully reentrant — concurrent requests use different session keys.
  *
- * Fully reentrant — concurrent requests use different session keys.
+ * Client-provided tools are NOT stored here: the HTTP handler forwards them per
+ * request into runEmbeddedAgent's `clientTools`, bypassing the plugin registry.
  */
-const toolStore = new Map<string, Tool[]>();
 const writerStore = new Map<string, EventWriter>();
-
-// --- Client tools (for the plugin tool factory) ---
-
-export function popTools(sessionKey: string): Tool[] {
-  const tools = toolStore.get(sessionKey) ?? [];
-  toolStore.delete(sessionKey);
-  return tools;
-}
 
 // --- SSE event writer (for before/after_tool_call hooks) ---
 

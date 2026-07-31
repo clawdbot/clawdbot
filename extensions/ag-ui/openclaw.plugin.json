@@ -6,9 +6,6 @@
     "onStartup": false
   },
   "channels": ["ag-ui"],
-  "contracts": {
-    "tools": ["cron_report"]
-  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

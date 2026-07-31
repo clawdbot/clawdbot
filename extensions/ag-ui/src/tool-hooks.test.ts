@@ -117,7 +117,7 @@ describe("Tool event hooks", () => {
   describe("A2UI tool results", () => {
     it("emits ACTIVITY_SNAPSHOT for A2UI tool results", () => {
       handleBeforeToolCall(
-        { toolName: "cron_report", params: { runs: [] } },
+        { toolName: "demo_tool", params: { runs: [] } },
         { sessionKey: SESSION_KEY },
       );
 
@@ -125,8 +125,8 @@ describe("Tool event hooks", () => {
 
       const a2uiJson = JSON.stringify({
         a2ui_operations: [
-          { version: "v0.9", createSurface: { surfaceId: "cron-report" } },
-          { version: "v0.9", updateComponents: { surfaceId: "cron-report", components: [] } },
+          { version: "v0.9", createSurface: { surfaceId: "demo-surface" } },
+          { version: "v0.9", updateComponents: { surfaceId: "demo-surface", components: [] } },
         ],
       });
 
@@ -143,7 +143,7 @@ describe("Tool event hooks", () => {
       expect(mock.events[3]!.type).toBe(EventType.ACTIVITY_SNAPSHOT);
       expect(mock.events[3]!.activityType).toBe("a2ui-surface");
       expect(mock.events[3]!.replace).toBe(true);
-      expect(mock.events[3]!.messageId).toContain("a2ui-surface-cron-report-");
+      expect(mock.events[3]!.messageId).toContain("a2ui-surface-demo-surface-");
       expect(mock.events[3]!.messageId).toContain(toolCallId as string);
 
       expect(mock.events[4]!.type).toBe(EventType.TOOL_CALL_END);
