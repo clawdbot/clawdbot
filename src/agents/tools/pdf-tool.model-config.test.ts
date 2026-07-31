@@ -180,7 +180,7 @@ describe("resolvePdfModelConfigForTool", () => {
     } as OpenClawConfig;
 
     expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
-      primary: "openai/gpt-5.5",
+      primary: "openai/gpt-5.6-sol",
       fallbacks: ["minimax/MiniMax-M2.7", "minimax-portal/MiniMax-M2.7"],
     });
   });
