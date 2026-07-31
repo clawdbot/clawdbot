@@ -969,6 +969,31 @@ mod tests {
     }
 
     #[test]
+    fn shared_negotiation_fixture_preserves_features_above_32_bits() {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Fixture {
+            schema_version: u8,
+            local_offer: SidecarProtocolOffer,
+            remote_offer: SidecarProtocolOffer,
+            selected_feature_bits: u64,
+        }
+
+        let fixture: Fixture = serde_json::from_str(include_str!(
+            "../../../test/fixtures/node-sidecar-negotiation-v1.json"
+        ))
+        .unwrap();
+        assert_eq!(fixture.schema_version, 1);
+        assert!(fixture.selected_feature_bits > u64::from(u32::MAX));
+        assert_eq!(
+            negotiate_sidecar_protocol(&fixture.local_offer, &fixture.remote_offer)
+                .unwrap()
+                .feature_bits,
+            fixture.selected_feature_bits
+        );
+    }
+
+    #[test]
     fn negotiated_limit_can_only_lower_an_active_channel() {
         let mut channel = channel(SidecarPeerRole::Supervisor, 7);
         channel.lower_frame_limit(2048).unwrap();

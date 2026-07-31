@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "localOffer": {
+    "protocolMajor": 1,
+    "protocolMinor": 0,
+    "peer": {
+      "role": "supervisor",
+      "name": "fixture-supervisor",
+      "version": "1.0.0",
+      "artifactIdentity": "sha256:fixture-supervisor"
+    },
+    "featureBits": 4503599627370499,
+    "limits": {
+      "maxFrameBytes": 4096,
+      "maxInFlight": 8,
+      "bootstrapTimeoutMs": 1000
+    }
+  },
+  "remoteOffer": {
+    "protocolMajor": 1,
+    "protocolMinor": 0,
+    "peer": {
+      "role": "runtime",
+      "name": "fixture-runtime",
+      "version": "1.0.0",
+      "artifactIdentity": "sha256:fixture-runtime"
+    },
+    "featureBits": 4503599627370501,
+    "limits": {
+      "maxFrameBytes": 2048,
+      "maxInFlight": 4,
+      "bootstrapTimeoutMs": 500
+    }
+  },
+  "selectedFeatureBits": 4503599627370497
+}

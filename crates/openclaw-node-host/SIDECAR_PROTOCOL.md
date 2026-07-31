@@ -84,6 +84,10 @@ Features are intersected. The feature mask must be at most `2^53 - 1`, the
 largest integer that JSON implementations such as JavaScript can preserve
 exactly; larger local or remote offers are invalid. Frame, in-flight, and
 deadline values use the lower valid offer. Unknown features remain disabled.
+Adapters must perform the intersection with integer arithmetic that preserves
+all 53 bits. JavaScript and TypeScript implementations must convert both masks
+to `BigInt` before `&` and convert the bounded result back to `Number`; their
+native number `&` operator truncates operands to 32 bits and is not conformant.
 
 The offer and acceptance are application payloads carried in authenticated
 frames. Higher layers must complete negotiation before accepting credentials,
@@ -93,8 +97,11 @@ configuration, capability registration, or invocation traffic.
 
 [`node-sidecar-protocol-v1.json`](../../test/fixtures/node-sidecar-protocol-v1.json)
 contains a test-only session key, payload, and exact encoded frame. Rust tests
-both reproduce and decode it. Every non-Rust adapter must consume the same
-vector before it can be selected as a runtime.
+both reproduce and decode it.
+[`node-sidecar-negotiation-v1.json`](../../test/fixtures/node-sidecar-negotiation-v1.json)
+exercises a feature bit above the 32-bit JavaScript bitwise range. Every
+non-Rust adapter must consume both vectors before it can be selected as a
+runtime.
 
 ## Not yet implemented
 
