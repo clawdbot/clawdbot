@@ -21,7 +21,12 @@ export type CreateTypingCallbacksParams = {
   keepaliveIntervalMs?: number;
   /** Stop keepalive after this many consecutive start() failures. Default: 2 */
   maxConsecutiveFailures?: number;
-  /** Maximum duration for typing indicator before auto-cleanup (safety TTL). Default: 60s */
+  /**
+   * Idle-safety TTL: max quiet time without a successful `start()` / keepalive tick
+   * before auto-cleanup. Each successful start refreshes the window so long agent
+   * turns keep the channel indicator while keepalive is healthy. Default: 60s.
+   * Pass `0` to disable.
+   */
   maxDurationMs?: number;
 };
 
@@ -61,35 +66,44 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     },
   });
 
-  const fireStart = async (): Promise<void> => {
-    await startGuard.run(() => params.start());
-  };
-
-  const keepaliveLoop = createTypingKeepaliveLoop({
-    intervalMs: keepaliveIntervalMs,
-    onTick: fireStart,
-  });
-
-  const startTtlTimer = () => {
-    if (maxDurationMs <= 0) {
-      return;
-    }
-    clearTtlTimer();
-    ttlTimer = setTimeout(() => {
-      if (!closed) {
-        console.warn(`[typing] TTL exceeded (${maxDurationMs}ms), auto-stopping typing indicator`);
-        fireStop();
-      }
-    }, maxDurationMs);
-    ttlTimer.unref?.();
-  };
-
   const clearTtlTimer = () => {
     if (ttlTimer) {
       clearTimeout(ttlTimer);
       ttlTimer = undefined;
     }
   };
+
+  const startTtlTimer = () => {
+    if (maxDurationMs <= 0 || closed) {
+      return;
+    }
+    clearTtlTimer();
+    ttlTimer = setTimeout(() => {
+      if (!closed) {
+        console.warn(
+          `[typing] idle TTL exceeded (${maxDurationMs}ms without successful typing start), auto-stopping typing indicator`,
+        );
+        fireStop();
+      }
+    }, maxDurationMs);
+    ttlTimer.unref?.();
+  };
+
+  const fireStart = async (): Promise<void> => {
+    await startGuard.run(async () => {
+      await params.start();
+      // Successful channel action proves liveness: slide the idle safety TTL so
+      // multi-minute agent turns (tools, steers) do not hard-kill typing at 60s.
+      if (!closed && !startGuard.isTripped()) {
+        startTtlTimer();
+      }
+    });
+  };
+
+  const keepaliveLoop = createTypingKeepaliveLoop({
+    intervalMs: keepaliveIntervalMs,
+    onTick: fireStart,
+  });
 
   const onReplyStart = async () => {
     if (closed) {
@@ -107,6 +121,8 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
       // Restarting the interval here shifts its deadline and can outlive a
       // provider's visible typing window between consecutive renewals.
       keepaliveLoop.start();
+      // fireStart already arms TTL on success; arm again in case start resolved
+      // with a tripped-but-then-reset edge, keeping onReplyStart self-contained.
       startTtlTimer();
     });
     await Promise.resolve();

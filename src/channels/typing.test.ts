@@ -400,23 +400,53 @@ describe("createTypingCallbacks", () => {
 
   // ========== TTL Safety Tests ==========
   describe("TTL safety", () => {
-    it("auto-stops typing after maxDurationMs", async () => {
+    it("auto-stops typing after idle maxDurationMs without keepalive refresh", async () => {
       await withFakeTimers(async () => {
         const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
-        const { start, stop, callbacks } = createTypingHarness({ maxDurationMs: 10_000 });
+        // Disable keepalive so the idle TTL is a pure wall clock from last success.
+        const { start, stop, callbacks } = createTypingHarness({
+          maxDurationMs: 10_000,
+          keepaliveIntervalMs: 0,
+        });
 
         await callbacks.onReplyStart();
         expect(start).toHaveBeenCalledTimes(1);
         expect(stop).not.toHaveBeenCalled();
 
-        // Advance past TTL
+        // Advance past idle TTL
         await vi.advanceTimersByTimeAsync(10_000);
 
         // Should auto-stop
         expect(stop).toHaveBeenCalledTimes(1);
         expect(consoleWarn).toHaveBeenCalledWith(
-          "[typing] TTL exceeded (10000ms), auto-stopping typing indicator",
+          "[typing] idle TTL exceeded (10000ms without successful typing start), auto-stopping typing indicator",
         );
+
+        consoleWarn.mockRestore();
+      });
+    });
+
+    it("extends idle TTL on each successful keepalive tick", async () => {
+      await withFakeTimers(async () => {
+        const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const { start, stop, callbacks } = createTypingHarness({
+          maxDurationMs: 10_000,
+          keepaliveIntervalMs: 3_000,
+        });
+
+        await callbacks.onReplyStart();
+        expect(start).toHaveBeenCalledTimes(1);
+
+        // Slide past the original 10s wall clock via healthy keepalives (long agent turns).
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(stop).not.toHaveBeenCalled();
+        expect(start.mock.calls.length).toBeGreaterThan(5);
+        expect(consoleWarn).not.toHaveBeenCalled();
+
+        // Success stop path: idle cleanup
+        callbacks.onIdle?.();
+        await flushMicrotasks();
+        expect(stop).toHaveBeenCalledTimes(1);
 
         consoleWarn.mockRestore();
       });
@@ -425,7 +455,10 @@ describe("createTypingCallbacks", () => {
     it("does not auto-stop if idle is called before TTL", async () => {
       await withFakeTimers(async () => {
         const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
-        const { stop, callbacks } = createTypingHarness({ maxDurationMs: 10_000 });
+        const { stop, callbacks } = createTypingHarness({
+          maxDurationMs: 10_000,
+          keepaliveIntervalMs: 0,
+        });
 
         await callbacks.onReplyStart();
 
@@ -448,25 +481,31 @@ describe("createTypingCallbacks", () => {
       });
     });
 
-    it("uses default 60s TTL when not specified", async () => {
+    it("uses default 60s idle TTL when not specified", async () => {
       await withFakeTimers(async () => {
-        const { stop, callbacks } = createTypingHarness({ useDefaultMaxDuration: true });
+        const { stop, callbacks } = createTypingHarness({
+          useDefaultMaxDuration: true,
+          keepaliveIntervalMs: 0,
+        });
 
         await callbacks.onReplyStart();
 
-        // Should not stop at 59s
+        // Should not stop at 59s idle
         await vi.advanceTimersByTimeAsync(59_000);
         expect(stop).not.toHaveBeenCalled();
 
-        // Should stop at 60s
+        // Should stop at 60s idle without further success
         await vi.advanceTimersByTimeAsync(1_000);
         expect(stop).toHaveBeenCalledTimes(1);
       });
     });
 
-    it("uses default 60s TTL for non-finite maxDurationMs", async () => {
+    it("uses default 60s idle TTL for non-finite maxDurationMs", async () => {
       await withFakeTimers(async () => {
-        const { stop, callbacks } = createTypingHarness({ maxDurationMs: Number.NaN });
+        const { stop, callbacks } = createTypingHarness({
+          maxDurationMs: Number.NaN,
+          keepaliveIntervalMs: 0,
+        });
 
         await callbacks.onReplyStart();
 
@@ -507,7 +546,7 @@ describe("createTypingCallbacks", () => {
         await vi.advanceTimersByTimeAsync(1);
         expect(stop).toHaveBeenCalledTimes(1);
         expect(consoleWarn).toHaveBeenCalledWith(
-          `[typing] TTL exceeded (${MAX_TIMER_TIMEOUT_MS}ms), auto-stopping typing indicator`,
+          `[typing] idle TTL exceeded (${MAX_TIMER_TIMEOUT_MS}ms without successful typing start), auto-stopping typing indicator`,
         );
         callbacks.onCleanup?.();
       });
