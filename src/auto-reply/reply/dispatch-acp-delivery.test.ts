@@ -1158,7 +1158,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     const commandReply = markCommandReplyForDelivery({
       text: "compacted",
       isCompactionNotice: true,
-    });
+    }) as ReplyPayload;
 
     await expect(coordinator.deliver("final", commandReply, { skipTts: true })).resolves.toBe(true);
     expect(deliveryMocks.routeReply).toHaveBeenCalledWith(

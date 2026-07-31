@@ -12,7 +12,7 @@ import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import { createFollowupAccounting as createAccounting } from "./followup-delivery.test-support.js";
-import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 
 const deliveryState = vi.hoisted(() => ({
   followupRoute: undefined as { route: "dispatcher" | "origin" | "drop" } | undefined,
@@ -835,7 +835,9 @@ describe("resolveFollowupDeliveryDecision", () => {
 });
 
 describe("deliverFollowupDecision", () => {
-  const createDefaults = (onBlockReply: (payload: ReplyPayload) => Promise<void>) => ({
+  const createDefaults = (
+    onBlockReply: (payload: ReplyPayload) => Promise<void>,
+  ): FollowupRunnerParams => ({
     defaultModel: "claude",
     typingMode: "never" as const,
     typing: {

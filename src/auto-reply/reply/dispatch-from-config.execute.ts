@@ -13,7 +13,10 @@ import {
 } from "../reply-payload.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
-import { createReplyDispatchEvent } from "./dispatch-from-config.events.js";
+import {
+  createReplyDispatchEvent,
+  type InternalReplyResolverOptions,
+} from "./dispatch-from-config.events.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
 import {
