@@ -15,6 +15,12 @@ import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { getGlobalPluginRegistry } from "../plugins/hook-runner-global.js";
+import type {
+  PluginHookRegistration,
+  PluginHookSubagentContext,
+  PluginHookSubagentProgressEvent,
+} from "../plugins/hook-types.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import type { CallGatewayOptions } from "./call.js";
@@ -187,6 +193,11 @@ type CapturedAgentEvent = {
   stream: string;
   data?: Record<string, unknown>;
   sessionKey?: string;
+};
+
+type CapturedSubagentProgress = {
+  event: PluginHookSubagentProgressEvent;
+  ctx: PluginHookSubagentContext;
 };
 
 const observedCodexThreadIds = new Map<string, string>();
@@ -1606,40 +1617,52 @@ async function verifyCodexNativeSubagentBridgeProbe(params: {
   const childToken = `CODEX-NATIVE-CHILD-${runId.slice(0, 6).toUpperCase()}`;
   const parentToken = `CODEX-NATIVE-PARENT-${runId.slice(0, 6).toUpperCase()}`;
   const { listTaskRecords } = await import("../tasks/runtime-internal.js");
-  const { text, events } = await requestAgentTextWithEvents({
-    // Native Codex waiting pauses this parent turn; task delivery resumes it separately.
-    acceptYieldedTimeout: true,
-    client: params.client,
-    eventPrefix: "codex_app_server.",
-    includeAllSessions: true,
-    sessionKey: params.sessionKey,
-    message: [
-      "Bridge probe.",
-      "You must use the Codex native spawn_agent tool exactly once before replying.",
-      `Give the subagent this exact instruction: Reply exactly ${childToken} and nothing else.`,
-      "Wait for the subagent result. Do not answer from your own knowledge.",
-      `After the subagent result returns, reply exactly ${parentToken} ${childToken} and nothing else.`,
-    ].join("\n"),
+  const progressEvents: CapturedSubagentProgress[] = [];
+  const unregisterProgressListener = registerCodexNativeSubagentProgressListener((event, ctx) => {
+    progressEvents.push({ event, ctx });
   });
-  logCodexLiveStep("native-subagent-bridge-probe:initial-reply", { text });
-  expect(
-    events.some((event) => event.stream === "codex_app_server.lifecycle"),
-    `expected Codex lifecycle events; events=${JSON.stringify(events)}`,
-  ).toBe(true);
-  let codexNativeTasks = listCodexNativeTasks();
-  let deliveredTask = findDeliveredCodexNativeTask(codexNativeTasks);
-  const deadline = Date.now() + CODEX_HARNESS_REQUEST_TIMEOUT_MS;
-  while (!deliveredTask && Date.now() < deadline) {
-    await delay(1_000);
-    codexNativeTasks = listCodexNativeTasks();
-    deliveredTask = findDeliveredCodexNativeTask(codexNativeTasks);
+  try {
+    const { text, events } = await requestAgentTextWithEvents({
+      // Native Codex waiting pauses this parent turn; task delivery resumes it separately.
+      acceptYieldedTimeout: true,
+      client: params.client,
+      eventPrefix: "codex_app_server.",
+      includeAllSessions: true,
+      sessionKey: params.sessionKey,
+      message: [
+        "Bridge probe.",
+        "You must use the Codex native spawn_agent tool exactly once before replying.",
+        `Give the subagent this exact instruction: Reply exactly ${childToken} and nothing else.`,
+        "Wait for the subagent result. Do not answer from your own knowledge.",
+        `After the subagent result returns, reply exactly ${parentToken} ${childToken} and nothing else.`,
+      ].join("\n"),
+    });
+    logCodexLiveStep("native-subagent-bridge-probe:initial-reply", { text });
+    expect(
+      events.some((event) => event.stream === "codex_app_server.lifecycle"),
+      `expected Codex lifecycle events; events=${JSON.stringify(events)}`,
+    ).toBe(true);
+    let codexNativeTasks = listCodexNativeTasks();
+    let deliveredTask = findDeliveredCodexNativeTask(codexNativeTasks);
+    const deadline = Date.now() + CODEX_HARNESS_REQUEST_TIMEOUT_MS;
+    while (!deliveredTask && Date.now() < deadline) {
+      await delay(1_000);
+      codexNativeTasks = listCodexNativeTasks();
+      deliveredTask = findDeliveredCodexNativeTask(codexNativeTasks);
+    }
+    expect(
+      deliveredTask,
+      `expected delivered Codex-native subagent task with child result; initialText=${JSON.stringify(
+        text,
+      )}; events=${JSON.stringify(events)}; tasks=${JSON.stringify(codexNativeTasks)}`,
+    ).toBeDefined();
+    await assertCodexNativeSubagentProgress({
+      events: progressEvents,
+      requesterSessionKey: params.sessionKey,
+    });
+  } finally {
+    unregisterProgressListener();
   }
-  expect(
-    deliveredTask,
-    `expected delivered Codex-native subagent task with child result; initialText=${JSON.stringify(
-      text,
-    )}; events=${JSON.stringify(events)}; tasks=${JSON.stringify(codexNativeTasks)}`,
-  ).toBeDefined();
 
   function listCodexNativeTasks() {
     return listTaskRecords().filter(
@@ -1655,6 +1678,70 @@ async function verifyCodexNativeSubagentBridgeProbe(params: {
         entry.terminalSummary?.includes(childToken),
     );
   }
+}
+
+function registerCodexNativeSubagentProgressListener(
+  listener: (event: PluginHookSubagentProgressEvent, ctx: PluginHookSubagentContext) => void,
+): () => void {
+  const registry = getGlobalPluginRegistry();
+  if (!registry) {
+    throw new Error("global plugin registry is unavailable for the native subagent live probe");
+  }
+  const registration: PluginHookRegistration<"subagent_progress"> = {
+    pluginId: "codex-native-subagent-live-listener",
+    hookName: "subagent_progress",
+    handler(event, ctx) {
+      if (event.runId.startsWith("codex-thread:")) {
+        listener(event, ctx);
+      }
+    },
+    priority: 0,
+    source: "test",
+  };
+  registry.typedHooks.push(registration);
+  return () => {
+    const index = registry.typedHooks.indexOf(registration);
+    if (index >= 0) {
+      registry.typedHooks.splice(index, 1);
+    }
+  };
+}
+
+async function assertCodexNativeSubagentProgress(params: {
+  events: CapturedSubagentProgress[];
+  requesterSessionKey: string;
+}): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (
+    (!params.events.some(({ event }) => event.phase === "started") ||
+      !params.events.some(({ event }) => event.phase === "ended")) &&
+    Date.now() < deadline
+  ) {
+    await delay(25);
+  }
+  const started = params.events.filter(({ event }) => event.phase === "started");
+  const ended = params.events.filter(({ event }) => event.phase === "ended");
+  expect(
+    started,
+    `expected one started presentation; events=${JSON.stringify(params.events)}`,
+  ).toHaveLength(1);
+  expect(
+    ended,
+    `expected one ended presentation; events=${JSON.stringify(params.events)}`,
+  ).toHaveLength(1);
+  expect(ended[0]?.event).toMatchObject({
+    phase: "ended",
+    runId: started[0]?.event.runId,
+    childSessionKey: started[0]?.event.childSessionKey,
+    outcome: "ok",
+  });
+  expect(started[0]?.ctx).toMatchObject({
+    runId: started[0]?.event.runId,
+    childSessionKey: started[0]?.event.childSessionKey,
+    requesterSessionKey: params.requesterSessionKey,
+  });
+  expect(ended[0]?.ctx).toEqual(started[0]?.ctx);
+  logCodexLiveStep("native-subagent-progress", { events: params.events });
 }
 
 describeLive("gateway live (Codex harness)", () => {

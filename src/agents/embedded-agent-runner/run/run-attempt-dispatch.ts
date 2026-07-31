@@ -1,5 +1,4 @@
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
-import { createAgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { resolveDelegationCapability } from "../../delegation-capability.js";
@@ -9,6 +8,7 @@ import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../m
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
+import { createAttemptTaskRuntimeScope } from "./attempt-task-runtime-scope.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
 import {
   EMBEDDED_RUN_LANE_HEARTBEAT_MS,
@@ -178,6 +178,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     runtime,
     pluginHarnessOwnsTransport: control.pluginHarnessOwnsTransport,
   });
+  const agentHarnessTaskRuntimeScope = createAttemptTaskRuntimeScope(params);
   const attemptParams: EmbeddedRunAttemptParams = {
     operation: "attempt",
     sessionId: runtime.sessionId,
@@ -265,13 +266,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     ...(runtime.expectedRuntimeArtifact
       ? { expectedRuntimeArtifact: runtime.expectedRuntimeArtifact }
       : {}),
-    ...(params.sessionKey
-      ? {
-          agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
-            requesterSessionKey: params.sessionKey,
-          }),
-        }
-      : {}),
+    ...(agentHarnessTaskRuntimeScope ? { agentHarnessTaskRuntimeScope } : {}),
     runtimePlan: runtime.runtimePlan,
     observeToolTerminal,
     model: applyAuthHeaderOverride(

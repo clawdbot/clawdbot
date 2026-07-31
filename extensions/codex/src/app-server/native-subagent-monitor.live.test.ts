@@ -36,6 +36,7 @@ function createDeliveryRecorder(taskRecords: AgentHarnessTaskRecord[] = []) {
       ({ runId: params.runId }) as AgentHarnessTaskRecord,
     recordTaskRunProgressByRunId: () => [],
     finalizeTaskRunByRunId: () => [],
+    emitSubagentProgress: () => undefined,
     listTaskRecords: () => taskRecords,
     setDetachedTaskDeliveryStatusByRunId: () => [],
   };

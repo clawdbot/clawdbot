@@ -20,6 +20,9 @@ import {
   resolveAnnounceOrigin,
   resolveSubagentCompletionOrigin,
 } from "../agents/subagent-announce-origin.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { PluginHookSubagentProgressEvent } from "../plugins/hook-types.js";
 import {
   assertAgentHarnessTaskRuntimeScope,
   type AgentHarnessTaskRuntimeScope,
@@ -41,6 +44,20 @@ type CreateRunningTaskRunParams = Parameters<typeof createRunningTaskRun>[0];
 type RecordTaskRunProgressParams = Parameters<typeof recordTaskRunProgressByRunId>[0];
 type FinalizeTaskRunParams = Parameters<typeof finalizeTaskRunByRunId>[0];
 type SetDeliveryStatusParams = Parameters<typeof setDetachedTaskDeliveryStatusByRunId>[0];
+type WithoutRequester<T> = T extends unknown ? Omit<T, "requester"> : never;
+type AgentHarnessSubagentProgressOutcome = Extract<
+  PluginHookSubagentProgressEvent,
+  { phase: "ended" }
+>["outcome"];
+
+const log = createSubsystemLogger("agents/harness");
+const AGENT_HARNESS_SUBAGENT_PROGRESS_OUTCOMES = new Set<AgentHarnessSubagentProgressOutcome>([
+  "ok",
+  "error",
+  "timeout",
+  "killed",
+  "unknown",
+]);
 
 /** Scope and naming options used to bind task operations to one requester session. */
 export type AgentHarnessTaskRuntimeScopeParams = {
@@ -86,6 +103,9 @@ export type AgentHarnessScopedSetDeliveryStatusParams = Omit<
   "runtime" | "sessionKey"
 >;
 
+/** Portable presentation event emitted explicitly by a native harness owner. */
+export type AgentHarnessSubagentProgressParams = WithoutRequester<PluginHookSubagentProgressEvent>;
+
 /** Scoped task runtime that prevents callers from mutating tasks outside their harness scope. */
 export type AgentHarnessTaskRuntime = {
   createRunningTaskRun(params: AgentHarnessScopedCreateRunningTaskRunParams): TaskRecord;
@@ -96,6 +116,7 @@ export type AgentHarnessTaskRuntime = {
     params: AgentHarnessScopedSetDeliveryStatusParams,
   ): TaskRecord[];
   listTaskRecords(): TaskRecord[];
+  emitSubagentProgress(params: AgentHarnessSubagentProgressParams): void;
 };
 
 /** Completion states a harness task can report to its requester. */
@@ -117,6 +138,7 @@ export function createAgentHarnessTaskRuntime(
   const requesterSessionKey = scope.requesterSessionKey;
   const taskKind = normalizeOptionalString(params.taskKind);
   const runIdPrefix = normalizeOptionalString(params.runIdPrefix);
+  const progressDispatchByRunId = new Map<string, Promise<void>>();
   const assertRunId = (runId: string) => assertScopedRunId(runId, runIdPrefix);
   const tryCreateRunningTaskRun = (
     taskParams: AgentHarnessScopedCreateRunningTaskRunParams,
@@ -173,6 +195,43 @@ export function createAgentHarnessTaskRuntime(
           task.ownerKey === requesterSessionKey &&
           (!runIdPrefix || task.runId?.startsWith(runIdPrefix)),
       );
+    },
+    emitSubagentProgress(progressParams) {
+      assertRunId(progressParams.runId);
+      const event = normalizeHarnessSubagentProgress(progressParams);
+      const hookRunner = getGlobalHookRunner();
+      if (!hookRunner?.hasHooks("subagent_progress")) {
+        return;
+      }
+      const dispatch = async () => {
+        try {
+          await hookRunner.runSubagentProgress(
+            {
+              ...event,
+              ...(scope.requesterPresentation ? { requester: scope.requesterPresentation } : {}),
+            },
+            {
+              runId: event.runId,
+              childSessionKey: event.childSessionKey,
+              requesterSessionKey,
+            },
+          );
+        } catch (error: unknown) {
+          log.warn(
+            `failed to emit harness subagent progress for run ${event.runId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      };
+      const previous = progressDispatchByRunId.get(event.runId);
+      const current = previous ? previous.then(dispatch) : dispatch();
+      progressDispatchByRunId.set(event.runId, current);
+      void current.then(() => {
+        if (progressDispatchByRunId.get(event.runId) === current) {
+          progressDispatchByRunId.delete(event.runId);
+        }
+      });
     },
   };
 }
@@ -295,4 +354,29 @@ function assertScopedRunId(runId: string, runIdPrefix: string | undefined): void
   if (runIdPrefix && !normalized.startsWith(runIdPrefix)) {
     throw new Error("Agent harness task runId is outside the configured scope");
   }
+}
+
+function normalizeHarnessSubagentProgress(
+  params: AgentHarnessSubagentProgressParams,
+): AgentHarnessSubagentProgressParams {
+  const runId = params.runId.trim();
+  const childSessionKey = params.childSessionKey.trim();
+  if (!childSessionKey) {
+    throw new Error("Agent harness subagent progress requires childSessionKey");
+  }
+  if (params.phase === "started") {
+    return { phase: "started", runId, childSessionKey };
+  }
+  if (params.phase === "ended") {
+    if (!AGENT_HARNESS_SUBAGENT_PROGRESS_OUTCOMES.has(params.outcome)) {
+      throw new Error("Agent harness subagent progress requires a supported outcome");
+    }
+    return {
+      phase: "ended",
+      runId,
+      childSessionKey,
+      outcome: params.outcome,
+    };
+  }
+  throw new Error("Agent harness subagent progress requires a supported phase");
 }

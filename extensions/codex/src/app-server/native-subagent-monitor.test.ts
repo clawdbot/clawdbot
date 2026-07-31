@@ -128,6 +128,7 @@ function createRuntime() {
     tryCreateRunningTaskRun: vi.fn((params) => createRunningTaskRun(params)),
     recordTaskRunProgressByRunId: vi.fn(() => []),
     finalizeTaskRunByRunId: vi.fn(() => []),
+    emitSubagentProgress: vi.fn(),
     listTaskRecords: vi.fn((): AgentHarnessTaskRecord[] => []),
     setDetachedTaskDeliveryStatusByRunId: vi.fn(
       (_params: AgentHarnessScopedSetDeliveryStatusParams): AgentHarnessTaskRecord[] => [],
@@ -505,6 +506,17 @@ describe("CodexNativeSubagentMonitor", () => {
         result: "child final result",
       }),
     );
+    expect(runtime.emitSubagentProgress).toHaveBeenNthCalledWith(1, {
+      phase: "started",
+      runId: "codex-thread:child-thread",
+      childSessionKey: "codex-thread:child-thread",
+    });
+    expect(runtime.emitSubagentProgress).toHaveBeenNthCalledWith(2, {
+      phase: "ended",
+      runId: "codex-thread:child-thread",
+      childSessionKey: "codex-thread:child-thread",
+      outcome: "ok",
+    });
   });
 
   it("delivers a completed child turn from its streamed final message", async () => {
@@ -851,6 +863,7 @@ describe("CodexNativeSubagentMonitor", () => {
     await client.notify(childTurnCompletedNotification({ status: "interrupted" }));
 
     expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+    expect(runtime.emitSubagentProgress).toHaveBeenCalledTimes(1);
     expect(releaseClient).toHaveBeenCalledTimes(1);
 
     client.setThreadRead(
@@ -871,6 +884,12 @@ describe("CodexNativeSubagentMonitor", () => {
     expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
       expect.objectContaining({ result: "resumed child result" }),
     );
+    expect(runtime.emitSubagentProgress).toHaveBeenLastCalledWith({
+      phase: "ended",
+      runId: "codex-thread:child-thread",
+      childSessionKey: "codex-thread:child-thread",
+      outcome: "ok",
+    });
     client.close();
   });
 

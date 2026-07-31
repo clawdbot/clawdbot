@@ -179,6 +179,43 @@ describe("subagent hook runner methods", () => {
     expect(runner.hasHooks("subagent_ended")).toBe(false);
   });
 
+  it("bounds a never-settling subagent progress listener", async () => {
+    vi.useFakeTimers();
+    try {
+      const logger = { error: vi.fn(), warn: vi.fn() };
+      const { runner } = createHookRunnerWithRegistry(
+        [
+          {
+            hookName: "subagent_progress",
+            pluginId: "hanging-listener",
+            handler: () =>
+              new Promise<void>(() => {
+                // Intentionally never settles.
+              }),
+          },
+        ],
+        { logger },
+      );
+      const run = runner.runSubagentProgress(
+        {
+          phase: "started",
+          runId: "run-1",
+          childSessionKey: "native-child-1",
+        },
+        baseSubagentCtx,
+      );
+
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(run).resolves.toBeUndefined();
+      expect(logger.error).toHaveBeenCalledWith(
+        "[hooks] subagent_progress handler from hanging-listener failed: timed out after 5000ms",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("runSubagentSpawning preserves higher-priority delivery origins", async () => {
     const { registry, runner } = createHookRunnerWithRegistry([]);
     addStaticTestHooks(registry, {

@@ -859,7 +859,6 @@ class Monitor {
     }
     childState.terminal = true;
     this.clearRecoveryTimers(childState);
-    state.mirror?.markAuthoritativeCompletion(completion.childThreadId);
     state.taskRuntime?.finalizeTaskRunByRunId({
       runId: codexNativeSubagentRunId(completion.childThreadId),
       status: completion.status,
@@ -869,6 +868,14 @@ class Monitor {
       progressSummary: completion.result,
       terminalSummary: completion.result,
     });
+    state.mirror?.markAuthoritativeCompletion(
+      completion.childThreadId,
+      completion.status === "succeeded"
+        ? "ok"
+        : completion.status === "cancelled"
+          ? "killed"
+          : "error",
+    );
     if (!state.requesterSessionKey || !state.taskRuntimeScope) {
       this.unregisterChild(childState);
       return;
