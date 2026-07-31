@@ -8,6 +8,10 @@ import {
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
+import {
+  FEISHU_QUESTION_ACTION,
+  type FeishuQuestionInteractionContext,
+} from "./question-actions.js";
 
 type NormalizedMessagePresentation = NonNullable<ReturnType<typeof normalizeMessagePresentation>>;
 
@@ -117,6 +121,7 @@ function mapFeishuButtonType(style: MessagePresentationButton["style"]) {
 
 function buildFeishuPayloadButton(
   button: MessagePresentationButton,
+  questionContext?: FeishuQuestionInteractionContext,
 ): Record<string, unknown> | undefined {
   const behaviors: Record<string, unknown>[] = [];
   const rendered: Record<string, unknown> = {
@@ -145,6 +150,20 @@ function buildFeishuPayloadButton(
       }),
     });
   }
+  if (button.action?.type === "question" && questionContext) {
+    behaviors.push({
+      type: "callback",
+      value: createFeishuCardInteractionEnvelope({
+        k: "button",
+        a: FEISHU_QUESTION_ACTION,
+        m: {
+          questionId: button.action.questionId,
+          optionValue: button.action.optionValue,
+        },
+        c: questionContext,
+      }),
+    });
+  }
   if (behaviors.length === 0) {
     return undefined;
   }
@@ -154,6 +173,7 @@ function buildFeishuPayloadButton(
 
 function buildFeishuCardElementsForBlock(
   block: MessagePresentationBlock,
+  questionContext?: FeishuQuestionInteractionContext,
 ): Record<string, unknown>[] {
   if (block.type === "text") {
     return [{ tag: "markdown", content: escapeFeishuCardMarkdownText(block.text) }];
@@ -171,7 +191,7 @@ function buildFeishuCardElementsForBlock(
   }
   if (block.type === "buttons") {
     return block.buttons
-      .map((button) => buildFeishuPayloadButton(button))
+      .map((button) => buildFeishuPayloadButton(button, questionContext))
       .filter((button): button is Record<string, unknown> => Boolean(button));
   }
   if (block.type === "chart") {
@@ -217,6 +237,7 @@ function resolvePresentationHeaderTemplate(tone: NormalizedMessagePresentation["
 export function buildFeishuPresentationCardElements(params: {
   presentation: NormalizedMessagePresentation;
   fallbackText?: string;
+  questionContext?: FeishuQuestionInteractionContext;
 }): Record<string, unknown>[] {
   const elements: Record<string, unknown>[] = [];
   const fallbackText = params.fallbackText?.trim();
@@ -227,7 +248,7 @@ export function buildFeishuPresentationCardElements(params: {
     });
   }
   for (const block of params.presentation.blocks) {
-    for (const element of buildFeishuCardElementsForBlock(block)) {
+    for (const element of buildFeishuCardElementsForBlock(block, params.questionContext)) {
       elements.push(element);
     }
   }
@@ -253,6 +274,7 @@ export function buildFeishuPresentationCardElements(params: {
 export function buildFeishuPresentationCard(params: {
   presentation: NormalizedMessagePresentation;
   fallbackText?: string;
+  questionContext?: FeishuQuestionInteractionContext;
 }): Record<string, unknown> {
   return {
     schema: "2.0",
@@ -269,6 +291,54 @@ export function buildFeishuPresentationCard(params: {
       : {}),
     body: {
       elements: buildFeishuPresentationCardElements(params),
+    },
+  };
+}
+
+function isFeishuQuestionButtonElement(element: unknown): boolean {
+  if (!element || typeof element !== "object" || Array.isArray(element)) {
+    return false;
+  }
+  const behaviors = (element as { behaviors?: unknown }).behaviors;
+  if (!Array.isArray(behaviors)) {
+    return false;
+  }
+  return behaviors.some((behavior) => {
+    if (!behavior || typeof behavior !== "object" || Array.isArray(behavior)) {
+      return false;
+    }
+    const value = (behavior as { value?: unknown }).value;
+    return (
+      value !== null &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      (value as { a?: unknown }).a === FEISHU_QUESTION_ACTION
+    );
+  });
+}
+
+export function buildFinalizedFeishuQuestionCard(params: {
+  card: Record<string, unknown>;
+  statusLine: string;
+}): Record<string, unknown> {
+  const body =
+    params.card.body && typeof params.card.body === "object" && !Array.isArray(params.card.body)
+      ? (params.card.body as Record<string, unknown>)
+      : {};
+  const elements = Array.isArray(body.elements)
+    ? body.elements.filter((element) => !isFeishuQuestionButtonElement(element))
+    : [];
+  return {
+    ...params.card,
+    body: {
+      ...body,
+      elements: [
+        ...elements,
+        {
+          tag: "markdown",
+          content: `<font color='grey'>${escapeFeishuCardMarkdownText(params.statusLine)}</font>`,
+        },
+      ],
     },
   };
 }

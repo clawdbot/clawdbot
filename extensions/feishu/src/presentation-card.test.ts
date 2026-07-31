@@ -1,6 +1,8 @@
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { describe, expect, it } from "vitest";
 import {
+  buildFinalizedFeishuQuestionCard,
+  buildFeishuPresentationCard,
   buildFeishuPresentationCardElements,
   isFeishuCardWithinEnvelope,
 } from "./presentation-card.js";
@@ -31,6 +33,75 @@ describe("buildFeishuPresentationCardElements", () => {
           "Pipeline (table)\n- Account: Acme; Stage: Won; ARR: 125000\n- Account: Globex; Stage: Review; ARR: 82000",
       },
     ]);
+  });
+
+  it("renders guarded question callbacks and removes them after resolution", () => {
+    const presentation = normalizeMessagePresentation({
+      blocks: [
+        { type: "text", text: "Choose an environment" },
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Production",
+              action: {
+                type: "question",
+                questionId: "ask_0123456789abcdef0123456789abcdef",
+                optionValue: "Production",
+              },
+            },
+          ],
+        },
+      ],
+    });
+    if (!presentation) {
+      throw new Error("expected valid presentation");
+    }
+
+    const card = buildFeishuPresentationCard({
+      presentation,
+      questionContext: { u: "ou_user", h: "oc_chat", e: 3_601_000 },
+    });
+    expect(card.body).toEqual({
+      elements: [
+        { tag: "markdown", content: "Choose an environment" },
+        {
+          tag: "button",
+          text: { tag: "plain_text", content: "Production" },
+          type: "default",
+          behaviors: [
+            {
+              type: "callback",
+              value: {
+                oc: "ocf1",
+                k: "button",
+                a: "feishu.payload.question",
+                m: {
+                  questionId: "ask_0123456789abcdef0123456789abcdef",
+                  optionValue: "Production",
+                },
+                c: { u: "ou_user", h: "oc_chat", e: 3_601_000 },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(
+      buildFinalizedFeishuQuestionCard({
+        card,
+        statusLine: "Answered: <Production>",
+      }).body,
+    ).toEqual({
+      elements: [
+        { tag: "markdown", content: "Choose an environment" },
+        {
+          tag: "markdown",
+          content: "<font color='grey'>Answered: &lt;Production&gt;</font>",
+        },
+      ],
+    });
   });
 });
 

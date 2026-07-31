@@ -12,7 +12,9 @@ import {
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import {
   getReplyPayloadTtsSupplement,
   resolveSendableOutboundReplyParts,
@@ -28,6 +30,9 @@ import { chunkFeishuPostMarkdown, materializeFeishuPostMarkdownSoftBreaks } from
 import { buildFeishuMediaFallbackText } from "./media-fallback.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
+import { buildFeishuPresentationCard, isFeishuCardWithinEnvelope } from "./presentation-card.js";
+import { buildFeishuQuestionInteractionContext } from "./question-actions.js";
+import { registerFeishuQuestionDelivery } from "./question-delivery.js";
 import {
   createFeishuPartialReplyDeliveryError,
   createFeishuReplyDeliveryResult,
@@ -46,7 +51,12 @@ import {
 } from "./reply-dispatcher-runtime-api.js";
 import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";
+import {
+  sendCardFeishu,
+  sendMessageFeishu,
+  sendStructuredCardFeishu,
+  type CardHeaderConfig,
+} from "./send.js";
 import {
   FeishuStreamingFinalizationError,
   FeishuStreamingSession,
@@ -155,6 +165,7 @@ type CreateFeishuReplyDispatcherParams = {
   agentId: string;
   runtime: RuntimeEnv;
   chatId: string;
+  senderOpenId?: string;
   sendTarget: string;
   allowReasoningPreview?: boolean;
   replyToMessageId?: string;
@@ -182,6 +193,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     cfg,
     agentId,
     chatId,
+    senderOpenId,
     sendTarget,
     replyToMessageId,
     typingTargetMessageId: explicitTypingTargetMessageId,
@@ -1261,6 +1273,47 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }
       const payloadText =
         payload.isReasoning && payload.text ? formatReasoningMessage(payload.text) : payload.text;
+      const questionId = questionGatewayRuntime.readAskUserQuestionId(payload);
+      const questionPresentation = questionId
+        ? normalizeMessagePresentation(payload.presentation)
+        : undefined;
+      const questionContext =
+        questionId && questionPresentation
+          ? buildFeishuQuestionInteractionContext({
+              operatorOpenId: senderOpenId,
+              chatId,
+            })
+          : undefined;
+      if (questionId && questionPresentation && questionContext) {
+        const card = buildFeishuPresentationCard({
+          presentation: questionPresentation,
+          questionContext,
+        });
+        if (isFeishuCardWithinEnvelope(card)) {
+          const sent = await sendCardFeishu({
+            cfg,
+            to: sendTarget,
+            card,
+            replyToMessageId: sendReplyToMessageId,
+            replyInThread: effectiveReplyInThread,
+            allowTopLevelReplyFallback,
+            accountId,
+          });
+          registerFeishuQuestionDelivery({
+            cfg,
+            accountId,
+            questionId,
+            messageId: sent.messageId,
+            deliveryScope: chatId,
+            card,
+          });
+          return createFeishuReplyDeliveryResult({
+            results: [sent],
+            visibleReplySent: true,
+            content: payloadText,
+          });
+        }
+      }
       const reply = resolveSendableOutboundReplyParts({ ...payload, text: payloadText });
       const text =
         info?.kind === "final"

@@ -22,6 +22,8 @@ const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const getFeishuRuntimeMock = vi.hoisted(() => vi.fn());
 const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
+const sendCardFeishuMock = vi.hoisted(() => vi.fn());
+const editMessageFeishuMock = vi.hoisted(() => vi.fn());
 const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
@@ -30,6 +32,14 @@ const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
 const streamingInstances = vi.hoisted((): StreamingSessionStub[] => []);
+const questionDeliveryState = vi.hoisted(
+  (): {
+    registration?: {
+      deliveryId: string;
+      finalize: (statusLine: string) => void | Promise<void>;
+    };
+  } => ({}),
+);
 const shouldSuppressFeishuTextForVoiceMediaMock = vi.hoisted(
   () =>
     (params: {
@@ -90,7 +100,22 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, getGlobalHookRunner: getGlobalHookRunnerMock };
 });
+vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/question-gateway-runtime")>();
+  return {
+    ...actual,
+    questionGatewayRuntime: {
+      ...actual.questionGatewayRuntime,
+      registerChannelDelivery: (registration: typeof questionDeliveryState.registration) => {
+        questionDeliveryState.registration = registration;
+      },
+    },
+  };
+});
 vi.mock("./send.js", () => ({
+  editMessageFeishu: editMessageFeishuMock,
+  sendCardFeishu: sendCardFeishuMock,
   sendMessageFeishu: sendMessageFeishuMock,
   sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
   sendStructuredCardFeishu: sendStructuredCardFeishuMock,
@@ -172,6 +197,7 @@ afterAll(() => {
   vi.doUnmock("./streaming-card.js");
   vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
   vi.doUnmock("openclaw/plugin-sdk/plugin-runtime");
+  vi.doUnmock("openclaw/plugin-sdk/question-gateway-runtime");
   vi.resetModules();
 });
 
@@ -183,9 +209,18 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    questionDeliveryState.registration = undefined;
     streamingStartBackoffUntilByAccount.clear();
     streamingInstances.length = 0;
     sendMediaFeishuMock.mockResolvedValue(undefined);
+    sendCardFeishuMock.mockResolvedValue({
+      messageId: "om_question",
+      chatId: "oc_chat",
+    });
+    editMessageFeishuMock.mockResolvedValue({
+      messageId: "om_question",
+      contentType: "interactive",
+    });
     sendStructuredCardFeishuMock.mockResolvedValue(undefined);
     getGlobalHookRunnerMock.mockReturnValue(null);
 
@@ -774,6 +809,67 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("delivers ask_user tool payloads as guarded cards and finalizes them", async () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const { options } = createDispatcherHarness({
+      chatId: "oc_chat",
+      senderOpenId: "ou_user",
+      sendTarget: "chat:oc_chat",
+    });
+
+    const result = await options.deliver(
+      {
+        text: "Choose an environment",
+        channelData: { askUser: { questionId } },
+        presentation: {
+          blocks: [
+            { type: "text", text: "Choose an environment" },
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Production",
+                  action: { type: "question", questionId, optionValue: "Production" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      { kind: "tool" },
+    );
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+    const sentCard = firstMockArg(sendCardFeishuMock, "question card").card as {
+      body?: { elements?: Array<{ behaviors?: Array<{ value?: unknown }> }> };
+    };
+    expect(sentCard.body?.elements?.[1]?.behaviors?.[0]?.value).toEqual(
+      expect.objectContaining({
+        a: "feishu.payload.question",
+        m: { questionId, optionValue: "Production" },
+        c: expect.objectContaining({ u: "ou_user", h: "oc_chat" }),
+      }),
+    );
+    expect(result).toEqual(expect.objectContaining({ visibleReplySent: true }));
+    expect(questionDeliveryState.registration?.deliveryId).toBe(
+      "feishu:default:oc_chat:om_question",
+    );
+
+    await questionDeliveryState.registration?.finalize("Answered: Production");
+
+    const editedCard = firstMockArg(editMessageFeishuMock, "finalized question card").card as {
+      body?: { elements?: Array<{ tag?: string; content?: string }> };
+    };
+    expect(editedCard.body?.elements).toEqual([
+      { tag: "markdown", content: "Choose an environment" },
+      {
+        tag: "markdown",
+        content: "<font color='grey'>Answered: Production</font>",
+      },
+    ]);
   });
 
   it("disables block streaming by default to prevent silent reply drops", () => {

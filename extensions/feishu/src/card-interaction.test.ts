@@ -111,6 +111,31 @@ describe("feishu card interaction decoder", () => {
     expect(result).toEqual({ kind: "invalid", reason: "wrong_conversation" });
   });
 
+  it("matches user_id guards against the callback user_id namespace", () => {
+    const value = createFeishuCardInteractionEnvelope({
+      k: "button",
+      a: "scoped",
+      c: { i: "uid1", e: Date.now() + 60_000 },
+    });
+    const accepted = decodeFeishuCardAction({
+      event: {
+        operator: { open_id: "ou_user", user_id: "uid1" },
+        context: {},
+        action: { value },
+      },
+    });
+    const rejected = decodeFeishuCardAction({
+      event: {
+        operator: { open_id: "ou_user", user_id: "uid2" },
+        context: {},
+        action: { value },
+      },
+    });
+
+    expect(accepted).toEqual({ kind: "structured", envelope: value });
+    expect(rejected).toEqual({ kind: "invalid", reason: "wrong_user" });
+  });
+
   it("rejects malformed chat-type context", () => {
     const result = decodeFeishuCardAction({
       event: {
