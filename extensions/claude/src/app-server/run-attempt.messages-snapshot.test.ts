@@ -59,7 +59,9 @@ describe("buildMessagesSnapshot", () => {
     expect(messages).toHaveLength(5);
     const stamps = messages.map((m) => (m as unknown as { timestamp: number }).timestamp);
     for (let i = 1; i < stamps.length; i += 1) {
-      expect(stamps[i]).toBeGreaterThan(stamps[i - 1]);
+      // `?? Infinity` keeps a missing element failing the assertion rather than
+      // silently passing, now that index access is checked.
+      expect(stamps[i]).toBeGreaterThan(stamps[i - 1] ?? Number.POSITIVE_INFINITY);
     }
     // The final assistant message must carry the largest timestamp — the bug
     // was it carrying the smallest (`now`) while tool messages carried `now+n`.

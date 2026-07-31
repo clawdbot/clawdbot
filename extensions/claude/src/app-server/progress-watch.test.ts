@@ -36,7 +36,7 @@ describe("createClaudeProgressWatch", () => {
     vi.advanceTimersByTime(1);
     expect(h.stalls).toHaveLength(1);
     expect(h.stalls[0]).toMatchObject({ openItems: 0 });
-    expect(h.stalls[0].idleMs).toBeGreaterThanOrEqual(1000);
+    expect(h.stalls[0]?.idleMs ?? 0).toBeGreaterThanOrEqual(1000);
   });
 
   it("noteProgress resets the deadline so no stall fires while real activity flows", () => {
@@ -129,7 +129,7 @@ describe("createClaudeProgressWatch", () => {
       expect(h.stalls).toHaveLength(0);
       vi.advanceTimersByTime(1);
       expect(h.stalls).toHaveLength(1);
-      expect(h.stalls[0].idleMs).toBeGreaterThanOrEqual(5000);
+      expect(h.stalls[0]?.idleMs ?? 0).toBeGreaterThanOrEqual(5000);
     });
 
     it("real progress during the silent window clears the latch and restores the tight window", () => {

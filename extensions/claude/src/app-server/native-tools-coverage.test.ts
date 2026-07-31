@@ -75,7 +75,10 @@ function extractSdkInputInterfaces(source: string): string[] {
   const matches = source.matchAll(/^export interface ([A-Z][A-Za-z0-9]*)Input\b/gm);
   const names: string[] = [];
   for (const m of matches) {
-    names.push(m[1]);
+    const name = m[1];
+    if (name) {
+      names.push(name);
+    }
   }
   return [...new Set(names)].toSorted();
 }

@@ -192,6 +192,7 @@ describe("emitNativeToolWatchdogEvent", () => {
     const completed = events[1] as DiagnosticEventPayload & {
       durationMs?: number;
       toolName?: string;
+      toolCallId?: string;
     };
     expect(completed.toolName).toBe("Bash");
     expect(completed.toolCallId).toBe("item-9");
