@@ -67,6 +67,7 @@ subagents. Keep parent-thread updates to concise progress and clickable URLs.
    mutate the shared checkout while sibling workers are active. Once isolated
    worktrees exist, independent issue owners edit, inspect, and verify in
    parallel within their own checkout.
+
 6. Keep all **64** inherited high-effort agents available, but distinguish idle
    agents from active local tool users. Start with bounded waves of **4–8**
    concurrently active code/test workers and continuously reduce or expand that
