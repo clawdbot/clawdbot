@@ -161,6 +161,24 @@ describe("branch summarization", () => {
     ).toBeLessThanOrEqual(model.contextWindow);
   });
 
+  it("preserves usable caller reservations larger than half the context window", async () => {
+    const model = createModel(8192);
+    const capture = createCapturingStream(model);
+
+    const result = await generateBranchSummary(createLongBranchEntries(12), {
+      model,
+      apiKey: "test-key",
+      signal: new AbortController().signal,
+      reserveTokens: 6144,
+      streamFn: capture.streamFn,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(capture.readCapture().prompt).toContain("turn-11");
+    expect(capture.readCapture().prompt).not.toContain("turn-9");
+    expect(capture.readCapture().maxOutputTokens).toBe(2048);
+  });
+
   it("scales output headroom to narrow model contexts and model output caps", async () => {
     const model = createModel(4096, 512);
     const capture = createCapturingStream(model);

@@ -242,12 +242,11 @@ export async function generateBranchSummary(
     Math.max(1, Math.floor(contextWindow / 4)),
     model.maxTokens > 0 ? model.maxTokens : 2048,
   );
-  // A reservation larger than a small model's window must not become the
-  // nonpositive sentinel that makes prepareBranchEntries retain all history.
-  const effectiveReserveTokens = Math.max(
-    maxSummaryOutputTokens,
-    Math.min(reserveTokens, Math.floor(contextWindow / 2)),
-  );
+  // Preserve usable caller reservations; only an impossible reservation may
+  // fall back before its nonpositive budget disables history bounds entirely.
+  const usableReserveTokens =
+    reserveTokens < contextWindow ? reserveTokens : Math.floor(contextWindow / 2);
+  const effectiveReserveTokens = Math.max(maxSummaryOutputTokens, usableReserveTokens);
   const tokenBudget = Math.max(1, contextWindow - effectiveReserveTokens);
 
   const { messages, fileOps } = prepareBranchEntries(entries, tokenBudget);
