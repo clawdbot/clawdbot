@@ -1,10 +1,10 @@
 // Feishu plugin module implements bot sender name behavior.
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createFeishuClient } from "./client.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -132,7 +132,9 @@ export async function resolveFeishuSenderName(params: {
       log(`feishu: permission error resolving sender name: code=${permErr.code}`);
       return { permissionError: permErr };
     }
-    log(`feishu: failed to resolve sender name for ${normalizedSenderId}: ${formatErrorMessage(err)}`);
+    log(
+      `feishu: failed to resolve sender name for ${normalizedSenderId}: ${formatErrorMessage(err)}`,
+    );
     return {};
   }
 }
