@@ -160,6 +160,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
     };
 
     const blocks = output.content as Block[];
+    const redactedReasoningChunks = new Map<number, Uint8Array[]>();
     const fable5 = usesClaudeFable5BedrockContract(model);
     // Claude classifiers may refuse after partial output. Hold every event until
     // messageStop proves the response is safe to expose.
@@ -299,9 +300,21 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         } else if (item.contentBlockStart) {
           handleContentBlockStart(item.contentBlockStart, blocks, output, eventSink);
         } else if (item.contentBlockDelta) {
-          handleContentBlockDelta(item.contentBlockDelta, blocks, output, eventSink);
+          handleContentBlockDelta(
+            item.contentBlockDelta,
+            blocks,
+            output,
+            eventSink,
+            redactedReasoningChunks,
+          );
         } else if (item.contentBlockStop) {
-          handleContentBlockStop(item.contentBlockStop, blocks, output, eventSink);
+          handleContentBlockStop(
+            item.contentBlockStop,
+            blocks,
+            output,
+            eventSink,
+            redactedReasoningChunks,
+          );
         } else if (item.messageStop) {
           sawMessageStop = true;
           if ((item.messageStop.stopReason as string | undefined) === "refusal") {
@@ -512,6 +525,7 @@ function handleContentBlockDelta(
   blocks: Block[],
   output: AssistantMessage,
   stream: BedrockEventSink,
+  redactedReasoningChunks: Map<number, Uint8Array[]>,
 ): void {
   const contentBlockIndex = event.contentBlockIndex!;
   const delta = event.delta;
@@ -571,6 +585,16 @@ function handleContentBlockDelta(
         thinkingBlock.thinkingSignature =
           (thinkingBlock.thinkingSignature || "") + delta.reasoningContent.signature;
       }
+      if (delta.reasoningContent.redactedContent) {
+        const chunks = redactedReasoningChunks.get(contentBlockIndex);
+        if (chunks) {
+          chunks.push(delta.reasoningContent.redactedContent);
+        } else {
+          redactedReasoningChunks.set(contentBlockIndex, [delta.reasoningContent.redactedContent]);
+        }
+        thinkingBlock.thinking = "[Reasoning redacted]";
+        thinkingBlock.redacted = true;
+      }
     }
   }
 }
@@ -585,7 +609,24 @@ function handleMetadata(
     output.usage.output = event.usage.outputTokens || 0;
     output.usage.cacheRead = event.usage.cacheReadInputTokens || 0;
     output.usage.cacheWrite = event.usage.cacheWriteInputTokens || 0;
-    output.usage.totalTokens = event.usage.totalTokens || output.usage.input + output.usage.output;
+    const promptTokens = output.usage.input + output.usage.cacheRead + output.usage.cacheWrite;
+    output.usage.totalTokens = Math.max(
+      event.usage.totalTokens || 0,
+      promptTokens + output.usage.output,
+    );
+    output.usage.contextUsage = {
+      state: "available",
+      promptTokens,
+      totalTokens: promptTokens + output.usage.output,
+    };
+    const cacheWrite1h = event.usage.cacheDetails?.reduce(
+      (total, detail) =>
+        detail.ttl === CacheTTL.ONE_HOUR ? total + (detail.inputTokens ?? 0) : total,
+      0,
+    );
+    if (cacheWrite1h) {
+      output.usage.cacheWrite1h = cacheWrite1h;
+    }
     calculateCost(model, output.usage);
   }
 }
@@ -595,6 +636,7 @@ function handleContentBlockStop(
   blocks: Block[],
   output: AssistantMessage,
   stream: BedrockEventSink,
+  redactedReasoningChunks: Map<number, Uint8Array[]>,
 ): void {
   const index = blocks.findIndex((b) => b.index === event.contentBlockIndex);
   const block = blocks[index];
@@ -608,6 +650,20 @@ function handleContentBlockStop(
       stream.push({ type: "text_end", contentIndex: index, content: block.text, partial: output });
       break;
     case "thinking":
+      if (block.redacted) {
+        const chunks = redactedReasoningChunks.get(event.contentBlockIndex!);
+        if (chunks) {
+          // Encode once at the block boundary; encoding every streamed prefix is quadratic.
+          let opaqueReasoning = "";
+          for (const chunk of chunks) {
+            for (const byte of chunk) {
+              opaqueReasoning += String.fromCharCode(byte);
+            }
+          }
+          block.thinkingSignature = btoa(opaqueReasoning);
+          redactedReasoningChunks.delete(event.contentBlockIndex!);
+        }
+      }
       stream.push({
         type: "thinking_end",
         contentIndex: index,
@@ -835,6 +891,7 @@ function convertMessages(
   cacheRetention: CacheRetention,
 ): Message[] {
   const result: Message[] = [];
+  let firstVolatileMessageIndex: number | undefined;
   const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
 
   for (let i = 0; i < transformedMessages.length; i++) {
@@ -861,6 +918,9 @@ function convertMessages(
         }
         if (content.length === 0) {
           continue;
+        }
+        if (m.runtimeContextCarrier === true && firstVolatileMessageIndex === undefined) {
+          firstVolatileMessageIndex = result.length;
         }
         result.push({
           role: ConversationRole.USER,
@@ -890,6 +950,27 @@ function convertMessages(
               });
               break;
             case "thinking": {
+              if (c.redacted) {
+                // transformMessages already strips opaque reasoning after a model
+                // switch; this also rejects routes that cannot consume the format.
+                if (!supportsThinkingSignature(model)) {
+                  continue;
+                }
+                if (!c.thinkingSignature) {
+                  throw new Error(
+                    "Bedrock redacted reasoning block is missing its opaque signature",
+                  );
+                }
+                contentBlocks.push({
+                  reasoningContent: {
+                    redactedContent: decodeBedrockBase64(
+                      c.thinkingSignature,
+                      "Bedrock redacted reasoning block has a malformed opaque signature",
+                    ),
+                  },
+                });
+                break;
+              }
               const thinkingSignature = c.thinkingSignature;
               const normalizedThinkingSignature = thinkingSignature?.trim();
               const supportsSignature = supportsThinkingSignature(model);
@@ -974,11 +1055,20 @@ function convertMessages(
     }
   }
 
-  // Add cache point to the last user message for supported Claude models when caching is enabled
-  if (cacheRetention !== "none" && supportsPromptCaching(model) && result.length > 0) {
-    const lastMessage = expectDefined(result.at(-1), "non-empty converted message list");
-    if (lastMessage.role === ConversationRole.USER && lastMessage.content) {
-      lastMessage.content.push({
+  // Cache points include their entire prefix, so anchors after transient runtime
+  // context would still cache volatile bytes even when those anchors are stable.
+  if (
+    cacheRetention !== "none" &&
+    supportsPromptCaching(model) &&
+    result.at(-1)?.role === ConversationRole.USER
+  ) {
+    const cacheAnchor = result.findLast(
+      (message, index) =>
+        message.role === ConversationRole.USER &&
+        (firstVolatileMessageIndex === undefined || index < firstVolatileMessageIndex),
+    );
+    if (cacheAnchor?.content) {
+      cacheAnchor.content.push({
         cachePoint: {
           type: CachePointType.DEFAULT,
           ...(cacheRetention === "long" ? { ttl: CacheTTL.ONE_HOUR } : {}),
@@ -1204,18 +1294,26 @@ function createImageBlock(mimeType: string, data: string) {
       throw new Error(`Unknown image type: ${mimeType}`);
   }
 
+  return {
+    source: {
+      bytes: decodeBedrockBase64(data, "Amazon Bedrock image content has malformed base64"),
+    },
+    format,
+  };
+}
+
+function decodeBedrockBase64(data: string, errorMessage: string): Uint8Array {
   // Validate before portable decoding so browser runtimes keep working without leaking atob errors.
   const canonicalBase64 = canonicalizeBase64(data);
   if (!canonicalBase64) {
-    throw new Error("Amazon Bedrock image content has malformed base64");
+    throw new Error(errorMessage);
   }
   const binaryString = atob(canonicalBase64);
   const bytes = new Uint8Array(binaryString.length);
   for (let i = 0; i < binaryString.length; i++) {
     bytes[i] = binaryString.charCodeAt(i);
   }
-
-  return { source: { bytes }, format };
+  return bytes;
 }
 
 /** Test-only hooks for Bedrock runtime conversion and endpoint policy. */
