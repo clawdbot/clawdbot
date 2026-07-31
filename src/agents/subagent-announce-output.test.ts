@@ -121,6 +121,54 @@ describe("readSubagentOutput", () => {
     expect(deps.callGateway).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    {
+      shape: "OpenAI top-level snake_case function call",
+      assistant: {
+        role: "assistant",
+        content: "Waiting for child completion.",
+        tool_calls: [{ type: "function", function: { name: "sessions_yield" } }],
+      },
+    },
+    {
+      shape: "top-level camelCase tool call",
+      assistant: {
+        role: "assistant",
+        content: "Waiting for child completion.",
+        toolCalls: [{ name: "sessions_yield" }],
+      },
+    },
+    {
+      shape: "nested content function call",
+      assistant: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Waiting for child completion." },
+          { type: "function_call", function: { name: "sessions_yield" } },
+        ],
+      },
+    },
+  ])("does not expose a $shape yield turn as completion output", async ({ assistant }) => {
+    installOutputDeps({
+      messages: [assistant, { role: "tool", content: '{"status":"yielded"}' }],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+  });
+
+  it.each(["toolUse", "functionCall", "function_call"])(
+    "reports visible tool activity for provider-specific %s transcript blocks",
+    async (type) => {
+      installOutputDeps({
+        messages: [{ role: "assistant", content: [{ type, name: "read" }] }],
+      });
+
+      await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
+        "1 tool call(s) made without visible output.",
+      );
+    },
+  );
+
   it("returns final assistant output that arrives after a sessions_yield wait turn", async () => {
     installOutputDeps({
       messages: [
@@ -275,6 +323,106 @@ describe("readSubagentOutput", () => {
 });
 
 describe("buildChildCompletionFindings", () => {
+  it("hard-bounds each child result and the aggregate parent prompt", () => {
+    const findings = buildChildCompletionFindings(
+      Array.from({ length: 8 }, (_, index) => ({
+        childSessionKey: `agent:main:subagent:${index}`,
+        task: `worker ${index}`,
+        createdAt: index,
+        completion: { resultText: "🚀".repeat(60_000) },
+        outcome: { status: "ok" as const },
+      })),
+    );
+
+    expect(findings).toBeDefined();
+    expect(findings!.length).toBeLessThanOrEqual(4_096);
+    expect(findings).toContain("status: ok");
+    expect(findings).toContain("[child result truncated]");
+    expect(findings).toContain("additional child completion result");
+    expect(findings).toContain("</prompt-data>");
+    for (const character of findings ?? "") {
+      const code = character.charCodeAt(0);
+      expect(character.length > 1 || code < 0xd800 || code > 0xdfff).toBe(true);
+    }
+  });
+
+  it("retains a later actionable failure when an earlier child exceeds the remaining budget", () => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:first",
+        task: "first large result",
+        createdAt: 1,
+        completion: { resultText: "<".repeat(100_000) },
+        outcome: { status: "ok" },
+      },
+      {
+        childSessionKey: "agent:main:subagent:second",
+        task: "second large result",
+        createdAt: 2,
+        completion: { resultText: "<".repeat(100_000) },
+        outcome: { status: "ok" },
+      },
+      {
+        childSessionKey: "agent:main:subagent:failure",
+        task: "later actionable failure",
+        createdAt: 3,
+        completion: { resultText: "Permission required." },
+        outcome: { status: "error", error: "Writable session authorization required." },
+      },
+    ]);
+
+    expect(findings!.length).toBeLessThanOrEqual(4_096);
+    expect(findings).toContain("first large result");
+    expect(findings).toContain("later actionable failure");
+    expect(findings).toContain("status: error: Writable session authorization required.");
+    expect(findings).toContain("[1 additional child completion result omitted");
+  });
+
+  it("prioritizes an oversized failed completion over an earlier oversized success", () => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:success",
+        task: "earlier oversized success",
+        createdAt: 1,
+        completion: { resultText: "<".repeat(100_000) },
+        outcome: { status: "ok" },
+      },
+      {
+        childSessionKey: "agent:main:subagent:failure",
+        task: "later oversized failure",
+        createdAt: 2,
+        completion: { resultText: "<".repeat(100_000) },
+        outcome: { status: "error", error: "Writable session authorization required." },
+      },
+    ]);
+
+    expect(findings!.length).toBeLessThanOrEqual(4_096);
+    expect(findings).toContain("later oversized failure");
+    expect(findings).toContain("status: error: Writable session authorization required.");
+    expect(findings).not.toContain("earlier oversized success");
+    expect(findings).toContain("[1 additional child completion result omitted");
+  });
+
+  it("keeps escaped child data and oversized failure metadata inside the same hard cap", () => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:child",
+        label: "L".repeat(20_000),
+        task: "child task",
+        createdAt: 1,
+        completion: { resultText: "<".repeat(100_000) },
+        outcome: { status: "error", error: "E".repeat(20_000) },
+      },
+    ]);
+
+    expect(findings).toBeDefined();
+    expect(findings!.length).toBeLessThanOrEqual(4_096);
+    expect(findings).toContain("status: error:");
+    expect(findings).toContain("&lt;");
+    expect(findings).toContain("[child result truncated]");
+    expect(findings).toContain("</prompt-data>");
+  });
+
   it("does not convert ANNOUNCE_SKIP child completions into no-output findings", () => {
     const findings = buildChildCompletionFindings([
       {
