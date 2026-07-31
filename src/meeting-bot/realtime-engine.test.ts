@@ -175,6 +175,7 @@ describe("meeting realtime engine output ownership", () => {
       expect(fixture.writeOutput).toHaveBeenCalledWith(fresh);
       expect(fixture.writeOutput).not.toHaveBeenCalledWith(stale);
       expect(fixture.clearOutput).toHaveBeenCalledOnce();
+      expect(fixture.beginOutput).toHaveBeenCalledTimes(2);
       fixture.releaseWrite(0);
     } finally {
       await fixture.handle.stop();
@@ -212,6 +213,7 @@ describe("meeting realtime engine output ownership", () => {
       expect(fixture.writeOutput).not.toHaveBeenCalledWith(stale);
       expect(fixture.writeOutput).not.toHaveBeenCalledWith(late);
       expect(fixture.clearOutput).toHaveBeenCalledTimes(2);
+      expect(fixture.beginOutput).toHaveBeenCalledTimes(2);
       fixture.releaseWrite(1);
     } finally {
       await fixture.handle.stop();
