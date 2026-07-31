@@ -28,9 +28,9 @@ function createPromptSubmissionAbortError(reason: unknown): Error {
   if (reason instanceof Error) {
     return reason;
   }
-  return new Error("attempt aborted before prompt submission", {
-    ...(reason !== undefined ? { cause: reason } : {}),
-  });
+  return reason === undefined
+    ? new Error("attempt aborted before prompt submission")
+    : new Error("attempt aborted before prompt submission", { cause: reason });
 }
 
 export type EmbeddedAttemptSessionFileOwner = {

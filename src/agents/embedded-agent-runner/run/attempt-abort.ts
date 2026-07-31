@@ -190,6 +190,7 @@ export function createEmbeddedAttemptRunAbort(input: {
 
   return (isTimeout = false, reason?: unknown) => {
     input.state.markAborted();
+    let effectiveReason = reason;
     if (isTimeout) {
       input.state.markTimedOut();
       if (
@@ -199,6 +200,7 @@ export function createEmbeddedAttemptRunAbort(input: {
         input.state.markTimedOutDuringToolExecution();
       }
       const timeoutReason = reason instanceof Error ? reason : createTimeoutAbortReason();
+      effectiveReason = timeoutReason;
       input.attempt.onAttemptTimeout?.(timeoutReason);
       input.runAbortController.abort(timeoutReason);
     } else {
@@ -221,7 +223,7 @@ export function createEmbeddedAttemptRunAbort(input: {
       log: input.log,
       runId: input.attempt.runId,
       abortKind: isTimeout ? "timeout abort" : "abort",
-      reason,
+      reason: effectiveReason,
       terminal:
         isTimeout || (!isSessionsYieldAbortError(reason) && !isSessionsYieldAbortReason(reason)),
     });
