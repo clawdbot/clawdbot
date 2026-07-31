@@ -140,7 +140,22 @@ describe("setupWizardCommand", () => {
     );
   });
 
-  it("accepts explicit --reset-scope full", async () => {
+  it("accepts explicit --reset-scope full with --accept-risk", async () => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(
+      {
+        reset: true,
+        resetScope: "full",
+        acceptRisk: true,
+      },
+      runtime,
+    );
+
+    expectResetCall({ scope: "full", runtime });
+  });
+
+  it("requires --accept-risk for --reset-scope full", async () => {
     const runtime = makeRuntime();
 
     await setupWizardCommand(
@@ -151,7 +166,8 @@ describe("setupWizardCommand", () => {
       runtime,
     );
 
-    expectResetCall({ scope: "full", runtime });
+    expect(runtime.error).toHaveBeenCalledOnce();
+    expect(mocks.handleReset).not.toHaveBeenCalled();
   });
 
   it("fails fast for invalid --reset-scope", async () => {

@@ -128,11 +128,23 @@ export async function setupWizardCommand(
   if (normalizedOpts.reset) {
     // Reset runs before setup mode dispatch so both interactive and
     // non-interactive setup start from the same cleaned state.
+    const resetScope: ResetScope = normalizedOpts.resetScope ?? "config+creds+sessions";
+    if (resetScope === "full" && normalizedOpts.acceptRisk !== true) {
+      // `full` also deletes the agent workspace; require explicit risk acknowledgement so
+      // an interactive `--reset --reset-scope full` cannot trash the workspace by accident.
+      runtime.error(
+        [
+          "--reset-scope full deletes the agent workspace in addition to config/credentials/sessions.",
+          `Re-run with ${formatCliCommand("openclaw onboard --reset --reset-scope full --accept-risk")} once you have a backup.`,
+        ].join("\n"),
+      );
+      runtime.exit(1);
+      return;
+    }
     const snapshot = await readConfigFileSnapshot();
     const baseConfig = snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
     const workspaceDefault =
       normalizedOpts.workspace ?? baseConfig.agents?.defaults?.workspace ?? DEFAULT_WORKSPACE;
-    const resetScope: ResetScope = normalizedOpts.resetScope ?? "config+creds+sessions";
     await handleReset(resetScope, resolveUserPath(workspaceDefault), runtime);
   }
 
