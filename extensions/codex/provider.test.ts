@@ -27,6 +27,7 @@ function expectStaticFallbackCatalog(
   ]);
   expect(result.provider.models.find((model) => model.id === "gpt-5.6-sol")).toMatchObject({
     contextWindow: 372_000,
+    contextTokens: 272_000,
     compat: {
       supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
     },
@@ -381,6 +382,7 @@ describe("codex provider", () => {
       id: "gpt-5.6-luna",
       reasoning: true,
       contextWindow: 372_000,
+      contextTokens: 272_000,
       compat: {
         supportsReasoningEffort: true,
         supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],

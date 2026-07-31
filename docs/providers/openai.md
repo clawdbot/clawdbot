@@ -405,23 +405,24 @@ Choose your preferred auth method and follow the setup steps.
     session state, `openclaw doctor --fix` rewrites them to `openai/*` with the
     Codex runtime unless OpenClaw is explicitly configured.
 
-    ### Context window cap
+    ### Context window defaults
 
     OpenClaw treats model metadata and the runtime context cap as separate values.
 
-    For `openai/gpt-5.5` through the Codex OAuth catalog:
+    Direct GPT-5.6 models declare their native `1050000` token
+    `contextWindow`, while OpenClaw defaults their active `contextTokens` budget
+    to `272000`. The Codex OAuth catalog advertises a smaller native window for
+    GPT-5.6, but uses the same default active budget. GPT-5.5 keeps the same
+    `272000` default runtime cap.
 
-    - Native `contextWindow`: `1000000`
-    - Default runtime `contextTokens` cap: `272000`
-
-    The smaller default cap has better latency and quality characteristics in practice. Override it with `contextTokens`:
+    Override the active budget explicitly with `contextTokens`:
 
     ```json5
     {
       models: {
         providers: {
           openai: {
-            models: [{ id: "gpt-5.5", contextTokens: 160000 }],
+            models: [{ id: "gpt-5.6-terra", contextTokens: 922000 }],
           },
         },
       },

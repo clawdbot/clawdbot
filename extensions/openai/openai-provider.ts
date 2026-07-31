@@ -45,6 +45,7 @@ import {
   cloneFirstTemplateModel,
   findCatalogTemplate,
   matchesExactOrPrefix,
+  OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
 } from "./shared.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
 
@@ -65,8 +66,8 @@ const OPENAI_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
 const OPENAI_GPT_54_MINI_MODEL_ID = "gpt-5.4-mini";
 const OPENAI_GPT_54_NANO_MODEL_ID = "gpt-5.4-nano";
 const OPENAI_GPT_53_CODEX_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
-const OPENAI_GPT_56_DIRECT_CONTEXT_TOKENS = 1_050_000;
-const OPENAI_CODEX_GPT_56_CONTEXT_TOKENS = 372_000;
+const OPENAI_GPT_56_DIRECT_CONTEXT_WINDOW = 1_050_000;
+const OPENAI_CODEX_GPT_56_CONTEXT_WINDOW = 372_000;
 const OPENAI_GPT_55_CONTEXT_WINDOW = 1_000_000;
 const OPENAI_GPT_55_CONTEXT_TOKENS = 272_000;
 const OPENAI_GPT_55_PRO_CONTEXT_TOKENS = 1_000_000;
@@ -339,8 +340,8 @@ function normalizeOpenAICodexCatalogModel(
     );
     return {
       ...model,
-      contextWindow: OPENAI_CODEX_GPT_56_CONTEXT_TOKENS,
-      contextTokens: OPENAI_CODEX_GPT_56_CONTEXT_TOKENS,
+      contextWindow: OPENAI_CODEX_GPT_56_CONTEXT_WINDOW,
+      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
       thinkingLevelMap: { ...model.thinkingLevelMap, off: null },
       ...(model.compat
         ? {
@@ -371,13 +372,24 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
   if (!modelId) {
     return undefined;
   }
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
   const fallback = resolveCodexModelFallback(modelId);
   const reasoningLevels = readCodexReasoningLevels(row);
-  const contextTokens = readCodexModelPositiveInteger(row, ["context_window", "contextWindow"]);
+  const observedContextTokens = readCodexModelPositiveInteger(row, [
+    "context_window",
+    "contextWindow",
+  ]);
+  const isGpt56Model = matchesExactOrPrefix(normalizedModelId, [OPENAI_GPT_56_MODEL_ID]);
+  const contextTokens = isGpt56Model
+    ? Math.min(
+        observedContextTokens ?? fallback?.contextTokens ?? OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
+        OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
+      )
+    : observedContextTokens;
   const contextWindow =
     readCodexModelPositiveInteger(row, ["max_context_window", "maxContextWindow"]) ??
     fallback?.contextWindow ??
-    contextTokens ??
+    observedContextTokens ??
     DEFAULT_CONTEXT_TOKENS;
   const maxTokens =
     readCodexModelPositiveInteger(row, [
@@ -398,7 +410,7 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
       : fallback?.compat;
   const thinkingLevelMap = {
     ...fallback?.thinkingLevelMap,
-    ...(normalizeLowercaseStringOrEmpty(modelId).startsWith("gpt-5.6") ? { off: null } : {}),
+    ...(normalizedModelId.startsWith("gpt-5.6") ? { off: null } : {}),
     ...(reasoningLevels.includes("xhigh") ? { xhigh: "xhigh" as const } : {}),
     ...(reasoningLevels.includes("max") ? { max: "max" as const } : {}),
   };
@@ -656,8 +668,8 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
       reasoning: true,
       input: ["text", "image"],
       cost,
-      contextWindow: OPENAI_GPT_56_DIRECT_CONTEXT_TOKENS,
-      contextTokens: OPENAI_GPT_56_DIRECT_CONTEXT_TOKENS,
+      contextWindow: OPENAI_GPT_56_DIRECT_CONTEXT_WINDOW,
+      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
       maxTokens: OPENAI_GPT_54_MAX_TOKENS,
       thinkingLevelMap: OPENAI_GPT_56_THINKING_LEVEL_MAP,
     };

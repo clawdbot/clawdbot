@@ -35,6 +35,8 @@ type SyntheticOpenAIModelCatalogEntry = {
 
 const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 
+export const OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS = 272_000;
+
 export function toOpenAIDataUrl(buffer: Buffer, mimeType: string): string {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }

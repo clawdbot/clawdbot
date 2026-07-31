@@ -250,6 +250,9 @@ describe("buildOpenAIProvider", () => {
     expect(gpt56Models?.map((model) => model.contextWindow)).toEqual([
       1_050_000, 1_050_000, 1_050_000, 1_050_000,
     ]);
+    expect(gpt56Models?.map((model) => model.contextTokens)).toEqual([
+      272_000, 272_000, 272_000, 272_000,
+    ]);
     expect(gpt56Models?.map((model) => model.thinkingLevelMap?.off)).toEqual([
       "none",
       "none",
@@ -498,6 +501,7 @@ describe("buildOpenAIProvider", () => {
       ]);
       expect(openai?.models.find((model) => model.id === "gpt-5.6")).toMatchObject({
         contextWindow: 372_000,
+        contextTokens: 272_000,
         compat: {
           supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
         },
@@ -644,6 +648,51 @@ describe("buildOpenAIProvider", () => {
     expect(headers.get("Authorization")).toBe("Bearer oauth-token");
     expect(headers.get("ChatGPT-Account-ID")).toBe("acct-openai-workspace");
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("caps base and forward-compatible GPT-5.6 Codex catalog rows", async () => {
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
+      response: Response.json({
+        models: [
+          {
+            slug: "gpt-5.6",
+            display_name: "GPT-5.6",
+            visibility: "list",
+            context_window: 372_000,
+            max_context_window: 1_050_000,
+          },
+          {
+            slug: "gpt-5.6-preview-2026-07-22",
+            display_name: "GPT-5.6 Preview",
+            visibility: "list",
+            context_window: 400_000,
+            max_context_window: 1_050_000,
+          },
+        ],
+      }),
+      finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
+      release: async () => undefined,
+    }));
+
+    const provider = await buildOpenAICodexLiveProviderConfig({
+      discoveryApiKey: "oauth-token",
+      fetchGuard,
+    });
+
+    expect(provider.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "gpt-5.6",
+          contextWindow: 1_050_000,
+          contextTokens: 272_000,
+        }),
+        expect.objectContaining({
+          id: "gpt-5.6-preview-2026-07-22",
+          contextWindow: 1_050_000,
+          contextTokens: 272_000,
+        }),
+      ]),
+    );
   });
 
   it("keeps static OpenAI OAuth rows when Codex catalog discovery fails", async () => {
@@ -1130,7 +1179,7 @@ describe("buildOpenAIProvider", () => {
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
       contextWindow: 1_050_000,
-      contextTokens: 1_050_000,
+      contextTokens: 272_000,
       maxTokens: 128_000,
       cost,
       thinkingLevelMap,

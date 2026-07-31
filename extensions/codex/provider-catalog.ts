@@ -15,6 +15,7 @@ export const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 export const CODEX_APP_SERVER_AUTH_MARKER = "codex-app-server";
 
 const DEFAULT_CONTEXT_WINDOW = 272_000;
+const DEFAULT_RUNTIME_CONTEXT_TOKENS = 272_000;
 const DEFAULT_MAX_TOKENS = 128_000;
 const KNOWN_CONTEXT_WINDOW_BY_MODEL_ID: Readonly<Record<string, number>> = Object.freeze({
   "gpt-5.6-sol": 372_000,
@@ -74,6 +75,8 @@ export function buildCodexModelDefinition(model: {
 }): ModelDefinitionConfig {
   const id = model.id.trim() || model.model.trim();
   const supportedReasoningEfforts = model.supportedReasoningEfforts;
+  const contextWindow =
+    model.contextWindow ?? KNOWN_CONTEXT_WINDOW_BY_MODEL_ID[id] ?? DEFAULT_CONTEXT_WINDOW;
   return {
     id,
     name: model.displayName?.trim() || id,
@@ -84,8 +87,8 @@ export function buildCodexModelDefinition(model: {
         : shouldDefaultToReasoningModel(id),
     input: model.inputModalities.includes("image") ? ["text", "image"] : ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow:
-      model.contextWindow ?? KNOWN_CONTEXT_WINDOW_BY_MODEL_ID[id] ?? DEFAULT_CONTEXT_WINDOW,
+    contextWindow,
+    contextTokens: Math.min(contextWindow, DEFAULT_RUNTIME_CONTEXT_TOKENS),
     maxTokens: DEFAULT_MAX_TOKENS,
     compat: {
       ...(supportedReasoningEfforts !== undefined
