@@ -41,6 +41,7 @@ import {
   type CachedPricingTier,
 } from "./model-pricing-cache-state.js";
 import { isGatewayModelPricingEnabled } from "./model-pricing-config.js";
+import { isPrivateOrLoopbackHost } from "./net.js";
 
 type OpenRouterPricingEntry = {
   id: string;
@@ -786,24 +787,12 @@ function addConfiguredWebSearchPluginModels(params: {
   }
 }
 
-import { isPrivateOrLoopbackResolvedHost } from "./net.js";
-
-// Pricing-cache endpoint safety boundary: resolves DNS hostnames and checks
-// whether any resolved address is private/loopback.  IP literals are delegated
-// to the canonical isPrivateOrLoopbackHost; DNS failures are fail-closed (treat
-// as private) to prevent DNS-rebinding SSRF bypasses.
-// Replaces the former 25-line local isPrivateOrLoopbackHost duplicate, which
-// used bare string-prefix checks that were vulnerable to DNS hostnames
-// resembling private-IP prefixes (e.g. "127.evil.com").
-
-async function isPrivateOrLoopbackBaseUrl(
-  baseUrl: string | undefined,
-): Promise<boolean> {
+function isPrivateOrLoopbackBaseUrl(baseUrl: string | undefined): boolean {
   if (!baseUrl) {
     return false;
   }
   try {
-    return await isPrivateOrLoopbackResolvedHost(new URL(baseUrl).hostname);
+    return isPrivateOrLoopbackHost(new URL(baseUrl).hostname);
   } catch {
     return false;
   }
@@ -839,24 +828,23 @@ function getConfiguredModelPricing(
   return toCachedModelPricing(findConfiguredProviderModel(config, ref, options)?.cost);
 }
 
-async function hasPrivateOrLoopbackConfiguredEndpoint(
+function hasPrivateOrLoopbackConfiguredEndpoint(
   config: OpenClawConfig,
   ref: ModelRef,
   options: PricingModelNormalizationOptions = {
     allowManifestNormalization: true,
     allowPluginNormalization: true,
   },
-): Promise<boolean> {
+): boolean {
   const providerConfig = config.models?.providers?.[ref.provider];
   const model = findConfiguredProviderModel(config, ref, options);
-  const [modelPrivate, providerPrivate] = await Promise.all([
-    isPrivateOrLoopbackBaseUrl(model?.baseUrl),
-    isPrivateOrLoopbackBaseUrl(providerConfig?.baseUrl),
-  ]);
-  return modelPrivate || providerPrivate;
+  return (
+    isPrivateOrLoopbackBaseUrl(model?.baseUrl) ||
+    isPrivateOrLoopbackBaseUrl(providerConfig?.baseUrl)
+  );
 }
 
-async function shouldFetchExternalPricingForRef(params: {
+function shouldFetchExternalPricingForRef(params: {
   config: OpenClawConfig;
   ref: ModelRef;
   policies: ReadonlyMap<string, ExternalPricingPolicy>;
@@ -864,12 +852,12 @@ async function shouldFetchExternalPricingForRef(params: {
   allowManifestNormalization: boolean;
   allowPluginNormalization: boolean;
   manifestPlugins?: PluginManifestRegistry["plugins"];
-}): Promise<boolean> {
+}): boolean {
   if (params.seededPricing.has(modelKey(params.ref.provider, params.ref.model))) {
     return false;
   }
   if (
-    await hasPrivateOrLoopbackConfiguredEndpoint(params.config, params.ref, {
+    hasPrivateOrLoopbackConfiguredEndpoint(params.config, params.ref, {
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
       manifestPlugins: params.manifestPlugins,
@@ -883,7 +871,7 @@ async function shouldFetchExternalPricingForRef(params: {
   return true;
 }
 
-async function filterExternalPricingRefs(params: {
+function filterExternalPricingRefs(params: {
   config: OpenClawConfig;
   refs: ModelRef[];
   policies: ReadonlyMap<string, ExternalPricingPolicy>;
@@ -891,21 +879,18 @@ async function filterExternalPricingRefs(params: {
   allowManifestNormalization: boolean;
   allowPluginNormalization: boolean;
   manifestPlugins?: PluginManifestRegistry["plugins"];
-}): Promise<ModelRef[]> {
-  const results = await Promise.all(
-    params.refs.map((ref) =>
-      shouldFetchExternalPricingForRef({
-        config: params.config,
-        ref,
-        policies: params.policies,
-        seededPricing: params.seededPricing,
-        allowManifestNormalization: params.allowManifestNormalization,
-        allowPluginNormalization: params.allowPluginNormalization,
-        manifestPlugins: params.manifestPlugins,
-      }),
-    ),
+}): ModelRef[] {
+  return params.refs.filter((ref) =>
+    shouldFetchExternalPricingForRef({
+      config: params.config,
+      ref,
+      policies: params.policies,
+      seededPricing: params.seededPricing,
+      allowManifestNormalization: params.allowManifestNormalization,
+      allowPluginNormalization: params.allowPluginNormalization,
+      manifestPlugins: params.manifestPlugins,
+    }),
   );
-  return params.refs.filter((_, i) => results[i]);
 }
 
 function collectConfiguredModelPricingRefs(
@@ -1257,7 +1242,7 @@ async function refreshGatewayModelPricingCache(
       catalogPricing: pricingContext.catalogPricing,
       ...normalizationParams,
     });
-    const refs = await filterExternalPricingRefs({
+    const refs = filterExternalPricingRefs({
       config: params.config,
       refs: allRefs,
       policies: pricingContext.policies,

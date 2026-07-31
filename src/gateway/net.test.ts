@@ -13,7 +13,6 @@ import {
   isLoopbackHost,
   isPrivateOrLoopbackAddress,
   isPrivateOrLoopbackHost,
-  isPrivateOrLoopbackResolvedHost,
   isSecureWebSocketUrl,
   isTrustedProxyAddress,
   pickPrimaryLanIPv4,
@@ -559,103 +558,21 @@ describe("isPrivateOrLoopbackHost", () => {
   it("rejects empty/falsy input", () => {
     expect(isPrivateOrLoopbackHost("")).toBe(false);
   });
-});
 
-describe("isPrivateOrLoopbackResolvedHost", () => {
-  it("delegates IP literals to the synchronous classifier", async () => {
-    // Private IPv4
-    await expect(isPrivateOrLoopbackResolvedHost("127.0.0.1")).resolves.toBe(true);
-    await expect(isPrivateOrLoopbackResolvedHost("10.0.0.1")).resolves.toBe(true);
-    await expect(isPrivateOrLoopbackResolvedHost("192.168.1.1")).resolves.toBe(true);
-    await expect(isPrivateOrLoopbackResolvedHost("172.16.0.1")).resolves.toBe(true);
-    // Public IPv4
-    await expect(isPrivateOrLoopbackResolvedHost("1.1.1.1")).resolves.toBe(false);
-    await expect(isPrivateOrLoopbackResolvedHost("8.8.8.8")).resolves.toBe(false);
-    // Private IPv6
-    await expect(isPrivateOrLoopbackResolvedHost("[::1]")).resolves.toBe(true);
-    await expect(isPrivateOrLoopbackResolvedHost("[fc00::1]")).resolves.toBe(true);
+  it("accepts local-DNS patterns that conventionally resolve to loopback/link-local", () => {
+    expect(isPrivateOrLoopbackHost("my-gpu.local")).toBe(true);
+    expect(isPrivateOrLoopbackHost("foo.local")).toBe(true);
+    expect(isPrivateOrLoopbackHost("bar.localhost")).toBe(true);
+    expect(isPrivateOrLoopbackHost("localhost.localdomain")).toBe(true);
   });
 
-  it("classifies localhost DNS patterns as private without resolution", async () => {
-    await expect(isPrivateOrLoopbackResolvedHost("localhost")).resolves.toBe(true);
-    await expect(isPrivateOrLoopbackResolvedHost("localhost.localdomain")).resolves.toBe(
-      true,
-    );
-    await expect(isPrivateOrLoopbackResolvedHost("foo.localhost")).resolves.toBe(true);
-    await expect(isPrivateOrLoopbackResolvedHost("foo.local")).resolves.toBe(true);
-    await expect(isPrivateOrLoopbackResolvedHost("bar.local")).resolves.toBe(true);
-  });
-
-  it("returns false for public DNS hostnames with no private resolved addresses", async () => {
-    const dns = await import("node:dns");
-    const resolve4 = vi
-      .spyOn(dns.promises, "resolve4")
-      .mockResolvedValue(["93.184.216.34"]);
-    const resolve6 = vi
-      .spyOn(dns.promises, "resolve6")
-      .mockResolvedValue(["2606:2800:220:1:248:1893:25c8:1946"]);
-
-    await expect(
-      isPrivateOrLoopbackResolvedHost("example.com"),
-    ).resolves.toBe(false);
-
-    resolve4.mockRestore();
-    resolve6.mockRestore();
-  });
-
-  it("returns true (private) when a resolved address is private", async () => {
-    const dns = await import("node:dns");
-    const resolve4 = vi
-      .spyOn(dns.promises, "resolve4")
-      .mockResolvedValue(["10.0.0.5"]);
-    const resolve6 = vi
-      .spyOn(dns.promises, "resolve6")
-      .mockRejectedValue(new Error("ENODATA"));
-
-    await expect(
-      isPrivateOrLoopbackResolvedHost("internal.example.com"),
-    ).resolves.toBe(true);
-
-    resolve4.mockRestore();
-    resolve6.mockRestore();
-  });
-
-  it("fails closed — DNS resolution failure is treated as private", async () => {
-    const dns = await import("node:dns");
-    const resolve4 = vi
-      .spyOn(dns.promises, "resolve4")
-      .mockRejectedValue(new Error("ENOTFOUND"));
-    const resolve6 = vi
-      .spyOn(dns.promises, "resolve6")
-      .mockRejectedValue(new Error("ENOTFOUND"));
-
-    await expect(
-      isPrivateOrLoopbackResolvedHost("nonexistent.internal"),
-    ).resolves.toBe(true);
-
-    resolve4.mockRestore();
-    resolve6.mockRestore();
-  });
-
-  it("fails closed — empty DNS resolution result is treated as private", async () => {
-    const dns = await import("node:dns");
-    const resolve4 = vi
-      .spyOn(dns.promises, "resolve4")
-      .mockResolvedValue([]);
-    const resolve6 = vi
-      .spyOn(dns.promises, "resolve6")
-      .mockRejectedValue(new Error("ENODATA"));
-
-    await expect(
-      isPrivateOrLoopbackResolvedHost("no-addresses.example.com"),
-    ).resolves.toBe(true);
-
-    resolve4.mockRestore();
-    resolve6.mockRestore();
-  });
-
-  it("rejects empty/falsy input", async () => {
-    await expect(isPrivateOrLoopbackResolvedHost("")).resolves.toBe(false);
+  it("rejects DNS hostnames that resemble private-IP prefixes (SSRF bypass guard)", () => {
+    // DNS hostnames like 127.evil.com must NOT be matched by string-prefix
+    // checks.  The canonical function uses isIP() which returns 0 for these.
+    expect(isPrivateOrLoopbackHost("127.evil.com")).toBe(false);
+    expect(isPrivateOrLoopbackHost("10.evil.com")).toBe(false);
+    expect(isPrivateOrLoopbackHost("192.168.evil.com")).toBe(false);
+    expect(isPrivateOrLoopbackHost("172.16.evil.com")).toBe(false);
   });
 });
 

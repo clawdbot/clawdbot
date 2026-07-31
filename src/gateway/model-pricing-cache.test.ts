@@ -352,9 +352,9 @@ describe("model-pricing-cache", () => {
     ).toBeUndefined();
   });
 
-  it("skips remote pricing for .local DNS hostnames (fail-closed DNS-rebinding guard)", async () => {
-    // .local DNS hostnames are classified as private without DNS resolution
-    // by isPrivateOrLoopbackResolvedHost — prevents DNS-rebinding SSRF where
+  it("skips remote pricing for .local DNS hostnames (static host-classifier guard)", async () => {
+    // .local DNS hostnames are classified as private by the canonical
+    // isPrivateOrLoopbackHost — prevents DNS-rebinding SSRF where
     // a .local name could resolve to a loopback address on the host.
     const config = {
       agents: {
@@ -385,9 +385,9 @@ describe("model-pricing-cache", () => {
     ).toBeUndefined();
   });
 
-  it("skips remote pricing for .localhost DNS hostnames (fail-closed DNS-rebinding guard)", async () => {
-    // .localhost DNS hostnames are classified as private without DNS
-    // resolution — same fail-closed boundary as .local.
+  it("skips remote pricing for .localhost DNS hostnames (static host-classifier guard)", async () => {
+    // .localhost DNS hostnames are classified as private by the canonical
+    // isPrivateOrLoopbackHost — same static boundary as .local.
     const config = {
       agents: {
         defaults: {
