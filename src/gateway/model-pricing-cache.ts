@@ -792,7 +792,26 @@ function isPrivateOrLoopbackBaseUrl(baseUrl: string | undefined): boolean {
     return false;
   }
   try {
-    return isPrivateOrLoopbackHost(new URL(baseUrl).hostname);
+    const hostname = new URL(baseUrl).hostname;
+    // Canonical IP/loopback classifier (shared gateway predicate).
+    if (isPrivateOrLoopbackHost(hostname)) {
+      return true;
+    }
+    // Pricing-specific local-DNS hostname patterns that conventionally
+    // resolve to loopback or link-local addresses.  Kept out of the
+    // shared isPrivateOrLoopbackHost predicate because local-DNS
+    // treatment is context-specific — e.g. the plaintext-WebSocket
+    // trust path handles .local separately as an explicit policy
+    // choice rather than a universal address-classification rule.
+    const lower = hostname.toLowerCase();
+    if (
+      lower === "localhost.localdomain" ||
+      lower.endsWith(".localhost") ||
+      lower.endsWith(".local")
+    ) {
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }

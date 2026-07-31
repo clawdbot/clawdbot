@@ -417,17 +417,6 @@ export function isPrivateOrLoopbackHost(host: string): boolean {
   if (parsed.isLocalhost) {
     return true;
   }
-  // Local-DNS patterns that conventionally resolve to loopback or link-local
-  // addresses.  Classify these as private without DNS resolution — they are
-  // not IP literals so the normalizeIp path below would return null and
-  // incorrectly classify them as non-private.
-  if (
-    parsed.unbracketedHost === "localhost.localdomain" ||
-    parsed.unbracketedHost.endsWith(".localhost") ||
-    parsed.unbracketedHost.endsWith(".local")
-  ) {
-    return true;
-  }
   const normalized = normalizeIp(parsed.unbracketedHost);
   if (!normalized || !isPrivateOrLoopbackAddress(normalized)) {
     return false;

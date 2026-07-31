@@ -559,13 +559,6 @@ describe("isPrivateOrLoopbackHost", () => {
     expect(isPrivateOrLoopbackHost("")).toBe(false);
   });
 
-  it("accepts local-DNS patterns that conventionally resolve to loopback/link-local", () => {
-    expect(isPrivateOrLoopbackHost("my-gpu.local")).toBe(true);
-    expect(isPrivateOrLoopbackHost("foo.local")).toBe(true);
-    expect(isPrivateOrLoopbackHost("bar.localhost")).toBe(true);
-    expect(isPrivateOrLoopbackHost("localhost.localdomain")).toBe(true);
-  });
-
   it("rejects DNS hostnames that resemble private-IP prefixes (SSRF bypass guard)", () => {
     // DNS hostnames like 127.evil.com must NOT be matched by string-prefix
     // checks.  The canonical function uses isIP() which returns 0 for these.
