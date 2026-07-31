@@ -390,10 +390,17 @@ describe("ChatGPT Responses cached transport", () => {
     const sessionId = "concurrent-acquire-loser";
     const handshakes: Array<{ connectionId: number }> = [];
     const receivedConnectionIds: number[] = [];
+    const closedConnectionIds: number[] = [];
     const requestBodies: Array<{ connectionId: number; body: Record<string, unknown> }> = [];
     let holdLoserHandshake: ((res: boolean) => void) | undefined;
     let verifyCount = 0;
     let holdNextReconnect = false;
+    const releaseLoserHandshake = () => {
+      const heldHandshake = holdLoserHandshake;
+      holdLoserHandshake = undefined;
+      holdNextReconnect = false;
+      heldHandshake?.(true);
+    };
 
     class TrackingWebSocket extends WebSocket {
       override close(code?: number, reason?: string | Buffer): void {
@@ -419,6 +426,9 @@ describe("ChatGPT Responses cached transport", () => {
     server.on("connection", (socket) => {
       const connectionId = handshakes.length + 1;
       handshakes.push({ connectionId });
+      socket.on("close", () => {
+        closedConnectionIds.push(connectionId);
+      });
       socket.on("message", (raw: Buffer) => {
         receivedConnectionIds.push(connectionId);
         const body = JSON.parse(raw.toString("utf8")) as Record<string, unknown>;
@@ -455,8 +465,10 @@ describe("ChatGPT Responses cached transport", () => {
       expect((await winnerResult).stopReason).toBe("stop");
 
       // Release loser A's handshake; it loses the CAS and should close promptly.
-      holdLoserHandshake?.(true);
+      releaseLoserHandshake();
       expect((await loserResult).stopReason).toBe("stop");
+      await vi.waitFor(() => expect(closedConnectionIds).toContain(3));
+      expect(closedConnectionIds).not.toContain(2);
 
       // Follow-up must reuse winner B's connection, not open a fourth.
       expect(
@@ -476,7 +488,7 @@ describe("ChatGPT Responses cached transport", () => {
       expect(handshakes).toHaveLength(3);
       expect(requestBodies[3]?.body.previous_response_id).toBe("resp_2");
     } finally {
-      holdLoserHandshake?.(true);
+      releaseLoserHandshake();
       closeOpenAICodexWebSocketSessions(sessionId);
       for (const socket of server.clients) {
         socket.terminate();
