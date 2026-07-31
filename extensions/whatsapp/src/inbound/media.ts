@@ -1,8 +1,12 @@
 // Whatsapp plugin module implements media behavior.
 import type { proto, WAMessage } from "baileys";
-import { saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-store";
+import type { SavedMedia } from "openclaw/plugin-sdk/media-store";
 import type { createWaSocket } from "../session.js";
 import { extractContextInfo } from "./extract.js";
+import {
+  saveInboundMediaStreamWithIdleTimeout,
+  WHATSAPP_INBOUND_MEDIA_IDLE_TIMEOUT_MS,
+} from "./media-chunk-idle.js";
 import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import { downloadMediaMessage, normalizeMessageContent } from "./runtime-api.js";
 
@@ -22,6 +26,7 @@ export async function downloadInboundMedia(
   msg: proto.IWebMessageInfo,
   sock: Awaited<ReturnType<typeof createWaSocket>>,
   maxBytes = 50 * 1024 * 1024,
+  options?: { chunkTimeoutMs?: number },
 ): Promise<{ saved: SavedMedia; mimetype?: string; fileName?: string } | undefined> {
   const message = unwrapMessage(msg.message as proto.IMessage | undefined);
   if (!message) {
@@ -38,6 +43,7 @@ export async function downloadInboundMedia(
   ) {
     return undefined;
   }
+  const chunkTimeoutMs = options?.chunkTimeoutMs ?? WHATSAPP_INBOUND_MEDIA_IDLE_TIMEOUT_MS;
   const stream = await downloadMediaMessage(
     msg as WAMessage,
     "stream",
@@ -47,12 +53,12 @@ export async function downloadInboundMedia(
       logger: sock.logger,
     },
   );
-  const saved = await saveMediaStream(
+  const saved = await saveInboundMediaStreamWithIdleTimeout(
     stream as AsyncIterable<unknown>,
     mimetype,
-    "inbound",
     maxBytes,
     fileName,
+    chunkTimeoutMs,
   ).catch((err: unknown) => {
     if (err instanceof Error && /Media exceeds/i.test(err.message)) {
       throw new WhatsAppInboundMediaLimitExceededError(maxBytes);
@@ -66,6 +72,7 @@ export async function downloadQuotedInboundMedia(
   msg: proto.IWebMessageInfo,
   sock: Awaited<ReturnType<typeof createWaSocket>>,
   maxBytes = 50 * 1024 * 1024,
+  options?: { chunkTimeoutMs?: number },
 ): Promise<{ saved: SavedMedia; mimetype?: string; fileName?: string } | undefined> {
   const message = unwrapMessage(msg.message as proto.IMessage | undefined);
   const contextInfo = extractContextInfo(message);
@@ -86,5 +93,6 @@ export async function downloadQuotedInboundMedia(
     },
     sock,
     maxBytes,
+    options,
   );
 }
