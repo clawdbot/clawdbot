@@ -4,6 +4,7 @@ import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-w
 
 const SIDEBAR_SESSION_LIST_LIMIT = 60;
 const SIDEBAR_CATALOG_LIMIT_PER_HOST = 40;
+const SIDEBAR_CATALOG_PREWARM_MAX_SESSION_ENTRIES = 2_000;
 
 type StartupTrace = {
   measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
@@ -18,7 +19,10 @@ type GatewayHandlerPrewarmHandle = {
   stop: () => void;
 };
 
-async function prewarmGatewaySessionListData(cfg: OpenClawConfig, agentId: string): Promise<void> {
+async function prewarmGatewaySessionListData(
+  cfg: OpenClawConfig,
+  agentId: string,
+): Promise<number> {
   const [{ loadCombinedSessionStoreForGateway }, { listSessionsFromStoreAsync }] =
     await Promise.all([
       import("../config/sessions/combined-store-gateway.js"),
@@ -42,14 +46,20 @@ async function prewarmGatewaySessionListData(cfg: OpenClawConfig, agentId: strin
       limit: SIDEBAR_SESSION_LIST_LIMIT,
     },
   });
+  return Object.keys(store).length;
 }
 
 function dashboardDataPrewarmItems(cfg: OpenClawConfig): GatewayHandlerPrewarmItem[] {
   const agentIds = listAgentIds(cfg);
+  let loadedSessionStores = 0;
+  let totalSessionEntries = 0;
   return [
     ...agentIds.map((agentId) => ({
       name: `sessions.${agentId}`,
-      load: () => prewarmGatewaySessionListData(cfg, agentId),
+      load: async () => {
+        totalSessionEntries += await prewarmGatewaySessionListData(cfg, agentId);
+        loadedSessionStores += 1;
+      },
     })),
     {
       name: "plugins",
@@ -61,6 +71,14 @@ function dashboardDataPrewarmItems(cfg: OpenClawConfig): GatewayHandlerPrewarmIt
     ...agentIds.map((agentId) => ({
       name: `session-catalog.${agentId}`,
       load: async () => {
+        // Catalog providers may project every OpenClaw session before returning their bounded
+        // page. Keep that optional cold-cache work off the event loop for unusually large stores.
+        if (
+          loadedSessionStores !== agentIds.length ||
+          totalSessionEntries > SIDEBAR_CATALOG_PREWARM_MAX_SESSION_ENTRIES
+        ) {
+          return;
+        }
         const { prewarmSessionCatalogList } = await import("./server-methods/session-catalog.js");
         await prewarmSessionCatalogList({
           config: cfg,
