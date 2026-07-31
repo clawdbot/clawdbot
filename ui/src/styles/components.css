@@ -1192,6 +1192,10 @@ openclaw-session-owner-chip {
   white-space: nowrap;
 }
 
+.oc-sensitive-mask[hidden] {
+  display: none;
+}
+
 .oc-sensitive-mask > span {
   display: block;
   will-change: transform;
