@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ServerResponse } from "node:http";
+import { matchesHttpIfNoneMatch } from "./http-conditional.js";
 
 type FileIdentity = {
   size: number;
@@ -32,6 +33,11 @@ type ByteResponsePlan =
       contentLength: 0;
       etag: string;
       size: number;
+    }
+  | {
+      kind: "not-modified";
+      statusCode: 304;
+      etag: string;
     };
 
 function createByteEtag(file: FileIdentity): string {
@@ -80,8 +86,16 @@ export function resolveByteResponse(params: {
   method?: string;
   rangeHeader?: string | string[];
   ifRangeHeader?: string | string[];
+  ifNoneMatchHeader?: string | string[];
 }): ByteResponsePlan {
   const etag = createByteEtag(params.file);
+  if (
+    (params.method === "GET" || params.method === "HEAD") &&
+    matchesHttpIfNoneMatch(params.ifNoneMatchHeader, etag)
+  ) {
+    // RFC 9110 evaluates representation validators before Range or If-Range.
+    return { kind: "not-modified", statusCode: 304, etag };
+  }
   const full = {
     kind: "full",
     statusCode: 200,
@@ -122,6 +136,9 @@ export function writeByteHeaders(res: ServerResponse, plan: ByteResponsePlan): v
   res.statusCode = plan.statusCode;
   res.setHeader("Accept-Ranges", "bytes");
   res.setHeader("ETag", plan.etag);
+  if (plan.kind === "not-modified") {
+    return;
+  }
   res.setHeader("Content-Length", String(plan.contentLength));
   if (plan.kind === "partial") {
     res.setHeader("Content-Range", `bytes ${plan.range.start}-${plan.range.end}/${plan.size}`);

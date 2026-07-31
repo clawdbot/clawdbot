@@ -416,6 +416,39 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.body.toString("utf8")).toBe("image");
   });
 
+  it.each(["GET", "HEAD"])(
+    "revalidates managed media ETags before ranges for %s",
+    async (method) => {
+      const { attachmentId, sessionKey } = await createFixture(stateDir);
+      const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+      const initial = await requestManagedImage({
+        stateDir,
+        pathName,
+        authResponse: { authMethod: "token" },
+      });
+      const etag = initial.result.headers.etag;
+      expect(etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
+
+      const { result } = await requestManagedImage({
+        stateDir,
+        pathName,
+        method,
+        authResponse: { authMethod: "token" },
+        headers: {
+          "if-none-match": `W/${String(etag)}`,
+          range: "bytes=0-3",
+          "if-range": '"stale"',
+        },
+      });
+
+      expect(result.statusCode).toBe(304);
+      expect(result.headers.etag).toBe(etag);
+      expect(result.headers["content-length"]).toBeUndefined();
+      expect(result.headers["content-range"]).toBeUndefined();
+      expect(result.body).toHaveLength(0);
+    },
+  );
+
   it("serves a ticketed byte range from managed audio", async () => {
     const body = Buffer.from("original-audio");
     const { attachmentId, sessionKey } = await createFixture(stateDir, {
