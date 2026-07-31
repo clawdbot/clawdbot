@@ -4843,7 +4843,7 @@ describe("syncPluginsForUpdateChannel", () => {
       version: "2026.7.31",
     });
     expect(result.config.plugins?.load?.paths ?? []).not.toContain(bundledRoot);
-    expect(result.config.agents?.defaults?.model?.primary).toBe("tencent-tokenhub/hy3");
+    expect(result.config.agents?.defaults?.model).toEqual({ primary: "tencent-tokenhub/hy3" });
   });
 
   it("keeps a pre-externalization Tencent install untouched when the plugin was disabled", async () => {
