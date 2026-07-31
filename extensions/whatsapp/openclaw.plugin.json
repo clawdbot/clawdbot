@@ -7,6 +7,9 @@
   "activation": {
     "onStartup": false
   },
+  "install": {
+    "minHostVersion": ">=2026.7.2"
+  },
   "contracts": {
     "tools": ["whatsapp_call"]
   },
