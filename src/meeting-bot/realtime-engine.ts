@@ -25,6 +25,7 @@ import {
   meetingOutputBytesPerMs,
   resolveMeetingRealtimeProvider,
 } from "./realtime-engine-support.js";
+import { createMeetingRealtimeOutputOwner } from "./realtime-output-owner.js";
 
 export {
   formatMeetingAgentAudioModelLog,
@@ -133,10 +134,10 @@ export async function startMeetingRealtimeEngine(params: {
   let outputClearAfterActive = false;
   let outputPendingBytes = 0;
   let outputPendingFrames = 0;
-  let outputBlocked: { token: symbol } | undefined;
   let outputGenerationActive = false;
   let outputClearTail = Promise.resolve();
   const outputQueue: Array<{ audio: Buffer; generation: number }> = [];
+  const outputOwner = createMeetingRealtimeOutputOwner();
   const outputMaxPendingBytes =
     meetingOutputBytesPerMs(params.config.chrome.audioFormat) *
     MEETING_REALTIME_OUTPUT_MAX_PENDING_MS;
@@ -156,7 +157,7 @@ export async function startMeetingRealtimeEngine(params: {
   const stop = async () => {
     if (!stopped) {
       stopped = true;
-      outputBlocked = undefined;
+      outputOwner.reset();
       outputClearAfterActive = false;
       invalidateOutputQueue();
     }
@@ -308,20 +309,19 @@ export async function startMeetingRealtimeEngine(params: {
   const clearOutputPlayback = (): void => {
     void queueOutputClear();
   };
+  const invalidateOutputPlayback = (): void => {
+    outputClearAfterActive ||= outputTransportWriteStarted;
+    invalidateOutputQueue();
+  };
   const invalidateAndClearOutputPlayback = (): void => {
     blockOutput();
     clearOutputPlayback();
   };
 
   const blockOutput = (): { blocked: boolean; token: symbol } => {
-    if (outputBlocked) {
-      return { blocked: false, token: outputBlocked.token };
-    }
-    const token = Symbol("meeting-realtime-output-blocked");
-    outputBlocked = { token };
-    outputClearAfterActive = outputTransportWriteStarted;
-    invalidateOutputQueue();
-    return { blocked: true, token };
+    const result = outputOwner.block();
+    invalidateOutputPlayback();
+    return result;
   };
 
   const handleOutputBackpressure = () => {
@@ -337,15 +337,15 @@ export async function startMeetingRealtimeEngine(params: {
     harness.flushOutput(clearOutputPlayback);
     harness.finishOutputAudio("output-backpressure");
     queueMicrotask(() => {
-      if (stopped || outputBlocked?.token !== token) {
+      if (stopped || !outputOwner.isBlockedBy(token)) {
         return;
       }
       harness.handleBargeIn({ audioPlaybackActive: true, force: true }, () => {});
     });
   };
 
-  const queueOutputAudio = (audio: Buffer): boolean => {
-    if (stopped || outputBlocked) {
+  const queueOutputAudio = (audio: Buffer, responseId: string | undefined): boolean => {
+    if (stopped || !outputOwner.accept(responseId)) {
       return false;
     }
     if (
@@ -479,7 +479,8 @@ export async function startMeetingRealtimeEngine(params: {
       audioSink: {
         isOpen: () => !stopped,
         sendAudio: (audio) => {
-          if (!queueOutputAudio(audio)) {
+          const responseId = outputOwner.takeNextResponseId();
+          if (!queueOutputAudio(audio, responseId)) {
             return;
           }
           if (!outputGenerationActive) {
@@ -490,7 +491,8 @@ export async function startMeetingRealtimeEngine(params: {
           harness.recordOutputAudio(audio);
         },
         clearAudio: () => {
-          if (blockOutput().blocked) {
+          if (outputOwner.providerClear()) {
+            invalidateOutputPlayback();
             harness.flushOutput(clearOutputPlayback);
             harness.finishOutputAudio("clear");
           }
@@ -540,11 +542,14 @@ export async function startMeetingRealtimeEngine(params: {
               );
               return;
             }
+          }
+          if (role === "user" && strategy === "agent") {
             harness.talkback?.enqueue(text);
           }
         }
       },
       onEvent: (event) => {
+        outputOwner.noteEvent(event);
         if (event.type === "input_audio_buffer.speech_started") {
           harness.ensureTurn();
         } else if (event.type === "input_audio_buffer.speech_stopped") {
@@ -558,21 +563,19 @@ export async function startMeetingRealtimeEngine(params: {
             payload: { ...outputTalkPayload, source: event.type },
             final: true,
           });
-        } else if (event.type === "response.done") {
-          outputBlocked = undefined;
-          outputGenerationActive = false;
-          harness.finishOutputAudio("response.done");
-          harness.endTurn("response.done");
-        } else if (outputBlocked && event.type === "response.cancelled") {
-          outputBlocked = undefined;
-          outputGenerationActive = false;
-          harness.finishOutputAudio(event.type);
+        } else if (event.type === "response.done" || event.type === "response.cancelled") {
+          if (outputOwner.terminal(event.responseId)) {
+            outputGenerationActive = false;
+            harness.finishOutputAudio(event.type);
+            if (event.type === "response.done") {
+              harness.endTurn(event.type);
+            }
+          }
         } else if (
           event.type === "error" &&
           event.detail === MEETING_REALTIME_CANCELLATION_RACE_DETAIL
         ) {
-          if (outputBlocked) {
-            outputBlocked = undefined;
+          if (outputOwner.clearBlocked()) {
             outputGenerationActive = false;
             harness.finishOutputAudio(event.type);
           }
