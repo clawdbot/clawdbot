@@ -1,4 +1,5 @@
 // Openai tests cover openai provider plugin behavior.
+import fs from "node:fs";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import {
@@ -13,6 +14,20 @@ import {
   buildOpenAIProvider,
 } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+
+const OPENAI_CODEX_MODELS_URL = `https://chatgpt.com/backend-api/codex/models?client_version=${readPinnedCodexClientVersion()}`;
+
+// Keep OAuth discovery tied to the managed Codex runtime version.
+function readPinnedCodexClientVersion(): string {
+  const packageJson = JSON.parse(
+    fs.readFileSync(new URL("../codex/package.json", import.meta.url), "utf8"),
+  ) as { dependencies?: Record<string, unknown> };
+  const version = packageJson.dependencies?.["@openai/codex"];
+  if (typeof version !== "string") {
+    throw new Error("expected an exact @openai/codex dependency");
+  }
+  return version;
+}
 
 const mocks = vi.hoisted(() => ({
   refreshOpenAICodexToken: vi.fn(),
@@ -419,6 +434,7 @@ describe("buildOpenAIProvider", () => {
               { effort: "high", description: "high" },
               { effort: "xhigh", description: "xhigh" },
               { effort: "max", description: "max" },
+              { effort: "ultra", description: "ultra" },
             ],
             input_modalities: ["text", "image"],
             context_window: 372_000,
@@ -515,9 +531,7 @@ describe("buildOpenAIProvider", () => {
         maxTokens: 64_000,
       });
       expect(fetchSpy).toHaveBeenCalledOnce();
-      expect(fetchSpy.mock.calls[0]?.[0]).toBe(
-        "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
-      );
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe(OPENAI_CODEX_MODELS_URL);
       const headers = fetchSpy.mock.calls[0]?.[1]?.headers;
       expect(headers).toBeInstanceOf(Headers);
       if (!(headers instanceof Headers)) {
@@ -614,7 +628,7 @@ describe("buildOpenAIProvider", () => {
           },
         ],
       }),
-      finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
+      finalUrl: OPENAI_CODEX_MODELS_URL,
       release,
     }));
 
@@ -636,9 +650,7 @@ describe("buildOpenAIProvider", () => {
       maxTokens: 128_000,
     });
     const fetchParams = vi.mocked(fetchGuard).mock.calls[0]?.[0];
-    expect(fetchParams?.url).toBe(
-      "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
-    );
+    expect(fetchParams?.url).toBe(OPENAI_CODEX_MODELS_URL);
     const init = fetchParams?.init;
     const headers = init?.headers;
     expect(headers).toBeInstanceOf(Headers);
@@ -670,7 +682,7 @@ describe("buildOpenAIProvider", () => {
           },
         ],
       }),
-      finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
+      finalUrl: OPENAI_CODEX_MODELS_URL,
       release: async () => undefined,
     }));
 
@@ -699,7 +711,7 @@ describe("buildOpenAIProvider", () => {
     const release = vi.fn(async () => undefined);
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: new Response("temporarily unavailable", { status: 503 }),
-      finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
+      finalUrl: OPENAI_CODEX_MODELS_URL,
       release,
     }));
 
@@ -714,6 +726,9 @@ describe("buildOpenAIProvider", () => {
     expect(provider.baseUrl).toBe("https://chatgpt.com/backend-api/codex");
     expect(provider.models.length).toBeGreaterThan(0);
     expect(provider.models.map((model) => model.id)).toContain("gpt-5.5");
+    expect(provider.models.map((model) => model.id)).toContain("gpt-5.6-sol");
+    expect(provider.models.map((model) => model.id)).not.toContain("gpt-5.6-terra");
+    expect(provider.models.map((model) => model.id)).not.toContain("gpt-5.6-luna");
     expect(release).toHaveBeenCalledOnce();
   });
 

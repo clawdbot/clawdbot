@@ -51,7 +51,10 @@ import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
 
 const PROVIDER_ID = "openai";
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
-const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=1.0.0`;
+// Keep synchronized with extensions/codex's exact @openai/codex dependency;
+// the provider contract test fails when that managed-runtime pin changes.
+const OPENAI_CODEX_CLIENT_VERSION = "0.142.4";
+const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`;
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CHAT_LATEST_MODEL_ID = "chat-latest";
@@ -380,6 +383,9 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
     "contextWindow",
   ]);
   const isGpt56Model = matchesExactOrPrefix(normalizedModelId, [OPENAI_GPT_56_MODEL_ID]);
+  const supportedReasoningLevels = isGpt56Model
+    ? reasoningLevels.filter((effort) => effort !== "ultra")
+    : reasoningLevels;
   const contextTokens = isGpt56Model
     ? Math.min(
         observedContextTokens ?? fallback?.contextTokens ?? OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
@@ -401,18 +407,18 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
     fallback?.maxTokens ??
     OPENAI_GPT_54_MAX_TOKENS;
   const compat =
-    reasoningLevels.length > 0
+    supportedReasoningLevels.length > 0
       ? {
           ...fallback?.compat,
           supportsReasoningEffort: true,
-          supportedReasoningEfforts: [...reasoningLevels],
+          supportedReasoningEfforts: [...supportedReasoningLevels],
         }
       : fallback?.compat;
   const thinkingLevelMap = {
     ...fallback?.thinkingLevelMap,
     ...(normalizedModelId.startsWith("gpt-5.6") ? { off: null } : {}),
-    ...(reasoningLevels.includes("xhigh") ? { xhigh: "xhigh" as const } : {}),
-    ...(reasoningLevels.includes("max") ? { max: "max" as const } : {}),
+    ...(supportedReasoningLevels.includes("xhigh") ? { xhigh: "xhigh" as const } : {}),
+    ...(supportedReasoningLevels.includes("max") ? { max: "max" as const } : {}),
   };
 
   return {
@@ -440,6 +446,12 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
     api: "openai-chatgpt-responses",
     auth: "oauth",
     models: OPENAI_MANIFEST_PROVIDER.models.flatMap((model) => {
+      const modelId = normalizeLowercaseStringOrEmpty(model.id);
+      // Static OAuth rows are offline hints, not entitlement claims. Keep only
+      // the proven GPT-5.6 subscription route; live discovery may add others.
+      if (modelId.startsWith("gpt-5.6") && modelId !== OPENAI_GPT_56_SOL_MODEL_ID) {
+        return [];
+      }
       const normalized = normalizeOpenAICodexCatalogModel(model);
       return normalized ? [normalized] : [];
     }),
