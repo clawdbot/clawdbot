@@ -31,7 +31,7 @@ import {
   listTaskFlowsForOwnerKey,
   updateFlowRecordByIdExpectedRevision,
 } from "../../tasks/task-flow-runtime-internal.js";
-import { createContinuationQueueDiagnostics } from "./delegate-flow-diagnostics.js";
+import * as delegateFlowDiagnostics from "./delegate-flow-diagnostics.js";
 import {
   CONTINUATION_DELEGATE_FANOUT_MODES,
   normalizeContinuationTargetKey,
@@ -686,13 +686,6 @@ export const delegateFlowRecords = {
   delete: deleteTaskFlowRecordById,
 };
 
-function describeStoredDelegateState(stateJson: unknown): string {
-  if (!stateJson || typeof stateJson !== "object" || Array.isArray(stateJson)) {
-    return `stateType=${Array.isArray(stateJson) ? "array" : typeof stateJson}`;
-  }
-  return `stateType=object keyCount=${Object.keys(stateJson as Record<string, unknown>).length}`;
-}
-
 export function rejectCorruptDelegateFlow(
   flow: TaskFlowRecord,
   options: { kind: "pending" | "post-compaction"; sessionKey: string },
@@ -702,7 +695,7 @@ export function rejectCorruptDelegateFlow(
     ? "continuation:post-compaction-decode-failed"
     : "continuation:delegate-decode-failed";
   log.warn(
-    `[${tag}] flowId=${flow.flowId} session=${options.sessionKey} ${describeStoredDelegateState(flow.stateJson)}`,
+    `[${tag}] flowId=${flow.flowId} session=${options.sessionKey} ${delegateFlowDiagnostics.describeDelegateState(flow.stateJson)}`,
   );
   delegateFlowRecords.fail({
     flowId: flow.flowId,
@@ -719,11 +712,11 @@ export function rejectCorruptDelegateFlow(
 
 export function warnCorruptRecoverablePostCompactionFlow(flow: TaskFlowRecord): void {
   log.warn(
-    `[continuation:post-compaction-recover-decode-failed] flowId=${flow.flowId} owner=${flow.ownerKey} ${describeStoredDelegateState(flow.stateJson)}`,
+    `[continuation:post-compaction-recover-decode-failed] flowId=${flow.flowId} owner=${flow.ownerKey} ${delegateFlowDiagnostics.describeDelegateState(flow.stateJson)}`,
   );
 }
 
-const continuationQueueDiagnostics = createContinuationQueueDiagnostics({
+const continuationQueueDiagnostics = delegateFlowDiagnostics.createContinuationQueueDiagnostics({
   listFlows: listTaskFlowRecords,
   isContinuationDelegateFlow,
   isPostCompactionDelegateFlow,

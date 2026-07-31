@@ -8,6 +8,13 @@ import type { PendingContinuationDelegate } from "./types.js";
 
 const CONTINUATION_QUEUE_HISTORY_LIMIT = 8;
 
+export function describeDelegateState(stateJson: unknown): string {
+  if (!stateJson || typeof stateJson !== "object" || Array.isArray(stateJson)) {
+    return `stateType=${Array.isArray(stateJson) ? "array" : typeof stateJson}`;
+  }
+  return `stateType=object keyCount=${Object.keys(stateJson as Record<string, unknown>).length}`;
+}
+
 type ContinuationQueueDiagnosticDeps = {
   listFlows: () => TaskFlowRecord[];
   isContinuationDelegateFlow: (flow: TaskFlowRecord) => boolean;
