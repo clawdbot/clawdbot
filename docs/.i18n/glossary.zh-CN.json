@@ -1702,5 +1702,25 @@
   {
     "source": "Automations (cron)",
     "target": "自动化 (cron)"
+  },
+  {
+    "source": "Llama Server plugin",
+    "target": "Llama Server 插件"
+  },
+  {
+    "source": "llama-server",
+    "target": "llama-server"
+  },
+  {
+    "source": "llama.cpp in-process plugin",
+    "target": "llama.cpp 进程内插件"
+  },
+  {
+    "source": "Local model services",
+    "target": "本地模型服务"
+  },
+  {
+    "source": "LM Studio",
+    "target": "LM Studio"
   }
 ]

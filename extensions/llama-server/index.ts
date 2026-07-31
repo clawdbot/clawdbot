@@ -26,6 +26,7 @@ import {
   runLlamaServerSetup,
   validateLlamaServerNonInteractive,
 } from "./src/setup.js";
+import { wrapLlamaServerStream } from "./src/stream.js";
 
 export default definePluginEntry({
   id: LLAMA_SERVER_PROVIDER_ID,
@@ -76,6 +77,7 @@ export default definePluginEntry({
       normalizeConfig: ({ providerConfig }) => normalizeLlamaServerProviderConfig(providerConfig),
       prepareDynamicModel: prepareLlamaServerDynamicModels,
       resolveDynamicModel: (ctx) => resolveLlamaServerDynamicModel(ctx),
+      wrapStreamFn: wrapLlamaServerStream,
       ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
       wizard: {
         setup: {

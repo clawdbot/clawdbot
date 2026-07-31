@@ -1,20 +1,36 @@
 // Llama-server live tests exercise discovery and the shared OpenAI completions transport.
 import {
-  completeSimple,
+  streamSimple,
   type AssistantMessage,
+  type Context,
   type Model,
+  type SimpleStreamOptions,
   type Tool,
 } from "openclaw/plugin-sdk/llm";
+import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { discoverLlamaServer } from "./src/discovery.js";
+import { wrapLlamaServerStream } from "./src/stream.js";
 
 const LIVE_URL = process.env.LLAMA_SERVER_LIVE_URL?.trim() ?? "";
 const LIVE_KEY = process.env.LLAMA_SERVER_API_KEY?.trim() ?? "";
 const LIVE_MODEL_ID = process.env.LLAMA_SERVER_LIVE_MODEL_ID?.trim() ?? "";
 const LIVE = isLiveTestEnabled(["LLAMA_SERVER_LIVE_TEST"]) && LIVE_URL.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
+const liveStream = wrapLlamaServerStream({
+  streamFn: streamSimple,
+} as unknown as ProviderWrapStreamFnContext);
+
+async function completeViaPlugin(
+  model: Model<"openai-completions">,
+  context: Context,
+  options: SimpleStreamOptions,
+): Promise<AssistantMessage> {
+  const stream = await liveStream(model, context, options);
+  return await stream.result();
+}
 
 async function resolveLiveModel(): Promise<{
   model: Model<"openai-completions">;
@@ -48,6 +64,23 @@ async function resolveLiveModel(): Promise<{
   };
 }
 
+function disableThinking(payload: unknown): unknown {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return payload;
+  }
+  const record = payload as Record<string, unknown>;
+  const current =
+    record.chat_template_kwargs &&
+    typeof record.chat_template_kwargs === "object" &&
+    !Array.isArray(record.chat_template_kwargs)
+      ? (record.chat_template_kwargs as Record<string, unknown>)
+      : {};
+  return {
+    ...record,
+    chat_template_kwargs: { ...current, enable_thinking: false },
+  };
+}
+
 function echoTool(): Tool {
   return {
     name: "live_echo",
@@ -69,7 +102,7 @@ describeLive("llama-server live", () => {
     const { model } = await resolveLiveModel();
     const responses = await Promise.all(
       ["one", "two"].map((word) =>
-        completeSimple(
+        completeViaPlugin(
           model,
           {
             messages: [
@@ -80,7 +113,11 @@ describeLive("llama-server live", () => {
               },
             ],
           },
-          { apiKey: LIVE_KEY || "llama-server-local", maxTokens: 32 },
+          {
+            apiKey: LIVE_KEY || "llama-server-local",
+            maxTokens: 64,
+            onPayload: disableThinking,
+          },
         ),
       ),
     );
@@ -91,6 +128,64 @@ describeLive("llama-server live", () => {
       }
       expect(extractNonEmptyAssistantText(response.content).length).toBeGreaterThan(0);
     }
+  }, 120_000);
+
+  it("returns schema-constrained JSON", async () => {
+    const { model } = await resolveLiveModel();
+    expect(model).toMatchObject({ compat: { supportsJsonSchemaResponseFormat: true } });
+    const response = await completeViaPlugin(
+      model,
+      {
+        messages: [
+          {
+            role: "user",
+            content: "Return a JSON object with ok set to true.",
+            timestamp: Date.now(),
+          },
+        ],
+      },
+      {
+        apiKey: LIVE_KEY || "llama-server-local",
+        maxTokens: 64,
+        responseFormat: {
+          type: "object",
+          properties: { ok: { type: "boolean" } },
+          required: ["ok"],
+          additionalProperties: false,
+        },
+        onPayload: disableThinking,
+      },
+    );
+    if (response.stopReason === "error") {
+      throw new Error(response.errorMessage || "llama-server JSON turn returned an error");
+    }
+    expect(JSON.parse(extractNonEmptyAssistantText(response.content))).toEqual({ ok: true });
+  }, 120_000);
+
+  it("cancels an in-flight generation", async () => {
+    const { model } = await resolveLiveModel();
+    const controller = new AbortController();
+    const pending = completeViaPlugin(
+      model,
+      {
+        messages: [
+          {
+            role: "user",
+            content: "Write a detailed 2000-word history of computing.",
+            timestamp: Date.now(),
+          },
+        ],
+      },
+      {
+        apiKey: LIVE_KEY || "llama-server-local",
+        maxTokens: 4096,
+        signal: controller.signal,
+        onPayload: disableThinking,
+      },
+    );
+    setTimeout(() => controller.abort(), 250);
+    const response = await pending;
+    expect(response.stopReason).toBe("aborted");
   }, 120_000);
 
   it("completes a tool-call round trip when the template advertises tools", async (ctx) => {
@@ -105,10 +200,14 @@ describeLive("llama-server live", () => {
       content: "Call live_echo with value llama-server. Do not answer directly.",
       timestamp: Date.now() - 2,
     };
-    const first = await completeSimple(
+    const first = await completeViaPlugin(
       model,
       { messages: [user], tools: [tool] },
-      { apiKey: LIVE_KEY || "llama-server-local", maxTokens: 256 },
+      {
+        apiKey: LIVE_KEY || "llama-server-local",
+        maxTokens: 256,
+        onPayload: disableThinking,
+      },
     );
     if (first.stopReason === "error") {
       throw new Error(first.errorMessage || "llama-server tool turn returned an error");
@@ -117,7 +216,7 @@ describeLive("llama-server live", () => {
     expect(toolCall.name).toBe("live_echo");
     expect(toolCall.arguments).toEqual({ value: "llama-server" });
 
-    const second = await completeSimple(
+    const second = await completeViaPlugin(
       model,
       {
         messages: [
@@ -135,7 +234,11 @@ describeLive("llama-server live", () => {
         ],
         tools: [tool],
       },
-      { apiKey: LIVE_KEY || "llama-server-local", maxTokens: 64 },
+      {
+        apiKey: LIVE_KEY || "llama-server-local",
+        maxTokens: 128,
+        onPayload: disableThinking,
+      },
     );
     if (second.stopReason === "error") {
       throw new Error(second.errorMessage || "llama-server result turn returned an error");
