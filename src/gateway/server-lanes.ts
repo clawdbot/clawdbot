@@ -12,13 +12,18 @@ import { CommandLane } from "../process/lanes.js";
 
 type GatewayLaneConcurrency = {
   cron: number;
+  hookDispatch: number;
   main: number;
   subagent: number;
 };
 
+/** Hook agent runs serialize against each other; the lane is one-wide by design. */
+const HOOK_DISPATCH_LANE_CONCURRENCY = 1;
+
 export function resolveGatewayLaneConcurrency(cfg: OpenClawConfig): GatewayLaneConcurrency {
   return {
     cron: resolveCronMaxConcurrentRuns(),
+    hookDispatch: HOOK_DISPATCH_LANE_CONCURRENCY,
     main: resolveAgentMaxConcurrent(cfg),
     subagent: resolveSubagentMaxConcurrent(cfg),
   };
@@ -36,6 +41,8 @@ export function applyGatewayLaneConcurrency(
           case CommandLane.Cron:
           case CommandLane.CronNested:
             return concurrency.cron;
+          case CommandLane.HookDispatch:
+            return concurrency.hookDispatch;
           case CommandLane.Main:
             return concurrency.main;
           case CommandLane.Nested:
@@ -55,6 +62,13 @@ export function applyGatewayLaneConcurrency(
   // Cron isolated agent turns remap inner LLM work to this lane.
   if (!suspendedLaneIds.has(CommandLane.CronNested)) {
     setCommandLaneConcurrency(CommandLane.CronNested, concurrency.cron);
+  }
+  // Hook agent runs. One-wide: the guarantee is that a hook can always start
+  // under cron saturation, not that hooks run concurrently with each other.
+  // Aggregate capacity across this lane and `cron-nested` is bounded by their
+  // shared group, so this does not add a slot outside the cron budget.
+  if (!suspendedLaneIds.has(CommandLane.HookDispatch)) {
+    setCommandLaneConcurrency(CommandLane.HookDispatch, concurrency.hookDispatch);
   }
   if (!suspendedLaneIds.has(CommandLane.Main)) {
     setCommandLaneConcurrency(CommandLane.Main, concurrency.main);
