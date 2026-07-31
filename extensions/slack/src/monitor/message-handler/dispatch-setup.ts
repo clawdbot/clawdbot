@@ -36,6 +36,11 @@ import {
 } from "./dispatch-helpers.js";
 import type { PreparedSlackMessage } from "./types.js";
 
+// Slack expires thread status after two minutes. Refresh with a 30-second margin.
+const SLACK_THREAD_STATUS_KEEPALIVE_INTERVAL_MS = 90_000;
+// Match the default agent-run timeout so a hung turn cannot refresh status forever.
+const SLACK_TYPING_MAX_DURATION_MS = 600_000;
+
 export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   const { ctx, account, message, route } = prepared;
   const slackClient = prepared.eventScope?.client ?? ctx.app.client;
@@ -202,19 +207,24 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     typing: {
       start: async () => {
         didSetStatus = true;
-        await ctx.setSlackThreadStatus({
+        const statusPromise = ctx.setSlackThreadStatus({
           channelId: message.channel,
           threadTs: statusThreadTs,
           status: "is typing...",
           eventScope: prepared.eventScope,
         });
-        if (typingReaction && message.ts) {
-          await reactSlackMessage(message.channel, message.ts, typingReaction, {
-            token: ctx.botToken,
-            client: slackClient,
-          }).catch((err: unknown) => {
-            logVerbose(`slack send: typing reaction failed: ${formatSlackError(err)}`);
-          });
+        const reactionPromise =
+          typingReaction && message.ts
+            ? reactSlackMessage(message.channel, message.ts, typingReaction, {
+                token: ctx.botToken,
+                client: slackClient,
+              }).catch((err: unknown) => {
+                logVerbose(`slack send: typing reaction failed: ${formatSlackError(err)}`);
+              })
+            : Promise.resolve();
+        const [statusResult] = await Promise.allSettled([statusPromise, reactionPromise]);
+        if (statusResult.status === "rejected") {
+          throw statusResult.reason;
         }
       },
       stop: async () => {
@@ -222,21 +232,28 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
           return;
         }
         didSetStatus = false;
-        await ctx.setSlackThreadStatus({
+        const statusPromise = ctx.setSlackThreadStatus({
           channelId: message.channel,
           threadTs: statusThreadTs,
           status: "",
           eventScope: prepared.eventScope,
         });
-        if (typingReaction && message.ts) {
-          await removeSlackReaction(message.channel, message.ts, typingReaction, {
-            token: ctx.botToken,
-            client: slackClient,
-          }).catch((err: unknown) => {
-            logVerbose(`slack send: typing reaction removal failed: ${formatSlackError(err)}`);
-          });
+        const reactionPromise =
+          typingReaction && message.ts
+            ? removeSlackReaction(message.channel, message.ts, typingReaction, {
+                token: ctx.botToken,
+                client: slackClient,
+              }).catch((err: unknown) => {
+                logVerbose(`slack send: typing reaction removal failed: ${formatSlackError(err)}`);
+              })
+            : Promise.resolve();
+        const [statusResult] = await Promise.allSettled([statusPromise, reactionPromise]);
+        if (statusResult.status === "rejected") {
+          throw statusResult.reason;
         }
       },
+      keepaliveIntervalMs: SLACK_THREAD_STATUS_KEEPALIVE_INTERVAL_MS,
+      maxDurationMs: SLACK_TYPING_MAX_DURATION_MS,
       onStartError: (err) => {
         logTypingFailure({
           log: (messageValue) => runtime.error?.(danger(messageValue)),

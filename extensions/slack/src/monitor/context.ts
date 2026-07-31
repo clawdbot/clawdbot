@@ -544,7 +544,9 @@ export function createSlackMonitorContext(params: {
         ...(p.loadingMessages?.length ? { loading_messages: p.loadingMessages.slice(0, 10) } : {}),
       });
     } catch (err) {
-      logVerbose(`slack status update failed for channel ${p.channelId}: ${formatSlackError(err)}`);
+      throw new Error(`assistant.threads.setStatus failed: ${formatSlackError(err)}`, {
+        cause: err,
+      });
     }
   };
 

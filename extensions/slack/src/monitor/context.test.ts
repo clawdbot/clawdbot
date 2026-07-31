@@ -242,6 +242,33 @@ describe("createSlackMonitorContext channel metadata cache", () => {
   });
 });
 
+describe("createSlackMonitorContext setSlackThreadStatus", () => {
+  it("surfaces assistant.threads.setStatus failures with the method name", async () => {
+    const cause = Object.assign(new Error("A rate-limit has been reached"), {
+      code: "slack_webapi_rate_limited_error",
+      retryAfter: 10,
+    });
+    const setStatus = vi.fn().mockRejectedValue(cause);
+    const ctx = createTestContext({
+      appClient: {
+        assistant: { threads: { setStatus } },
+      } as unknown as App["client"],
+    });
+
+    await expect(
+      ctx.setSlackThreadStatus({
+        channelId: "C123",
+        threadTs: "1712345678.123456",
+        status: "is typing...",
+      }),
+    ).rejects.toMatchObject({
+      message:
+        "assistant.threads.setStatus failed: A rate-limit has been reached; code: slack_webapi_rate_limited_error; retryAfter: 10",
+      cause,
+    });
+  });
+});
+
 describe("createSlackMonitorContext Agent View state", () => {
   it("records Agent View in the account context without runtime state", async () => {
     const ctx = createTestContext();

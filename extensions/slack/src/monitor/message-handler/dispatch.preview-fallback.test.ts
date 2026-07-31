@@ -66,6 +66,8 @@ let capturedTyping:
       stop?: () => Promise<void>;
       onStartError: (err: unknown) => void;
       onStopError?: (err: unknown) => void;
+      keepaliveIntervalMs?: number;
+      maxDurationMs?: number;
     }
   | undefined;
 type TestReplyDispatchKind = "tool" | "block" | "final";
@@ -475,6 +477,8 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
         stop?: () => Promise<void>;
         onStartError: (err: unknown) => void;
         onStopError?: (err: unknown) => void;
+        keepaliveIntervalMs?: number;
+        maxDurationMs?: number;
       };
     }) => {
       capturedTyping = params.typing;
@@ -1792,6 +1796,29 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(requireRecord(removeReactionCall[3], "remove Slack reaction options").token).toBe(
       "xoxb-test",
     );
+  });
+
+  it("refreshes native Slack status within its transport TTL instead of every typing tick", async () => {
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    const typing = requireCapturedTyping();
+    expect(typing.keepaliveIntervalMs).toBe(90_000);
+    expect(typing.maxDurationMs).toBe(600_000);
+  });
+
+  it("keeps the typing reaction fallback when native Slack status fails", async () => {
+    const statusError = new Error("assistant.threads.setStatus failed: rate_limited");
+    const setSlackThreadStatus = vi.fn().mockRejectedValue(statusError);
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        setSlackThreadStatus,
+        typingReaction: "hourglass_flowing_sand",
+      }),
+    );
+
+    await expect(requireCapturedTyping().start()).rejects.toBe(statusError);
+    expect(reactSlackMessageMock).toHaveBeenCalledOnce();
   });
 
   it("logs the formatted Slack error when adding the typing reaction fails", async () => {
