@@ -143,6 +143,54 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     });
   });
 
+  it("resolves only explicitly referenced Google web-search headers", () => {
+    expect(
+      findBundledPluginMetadataById("google", {
+        includeChannelConfigs: false,
+        includeSyntheticChannelConfigs: false,
+      })?.manifest.configContracts?.secretInputs?.paths,
+    ).toEqual([{ path: "webSearch.headers.*", expected: "string" }]);
+    const config = {
+      agents: explicitMainRoster,
+      plugins: {
+        entries: {
+          google: {
+            enabled: true,
+            config: {
+              webSearch: {
+                headers: {
+                  "X-Routing-Target": "staging",
+                  "X-Gateway-Token": envRef("GEMINI_GATEWAY_TOKEN"),
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const context = createResolverContext({ sourceConfig: config, env: {} });
+
+    collectPluginConfigAssignments({
+      config,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: new Map([["google", "bundled"]]),
+    });
+
+    expect(context.assignments.map((assignment) => assignment.path)).toEqual([
+      "plugins.entries.google.config.webSearch.headers.X-Gateway-Token",
+    ]);
+    context.assignments[0]?.apply("resolved-gateway-token");
+    expect(config.plugins?.entries?.google?.config).toMatchObject({
+      webSearch: {
+        headers: {
+          "X-Routing-Target": "staging",
+          "X-Gateway-Token": "resolved-gateway-token",
+        },
+      },
+    });
+  });
+
   it("collects voice-call SecretRef assignments from bundled manifest contracts", () => {
     expect(
       findBundledPluginMetadataById("voice-call", {

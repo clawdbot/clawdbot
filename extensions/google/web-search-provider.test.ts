@@ -51,7 +51,7 @@ function requireFirstGeminiFetchCall(
 
 function getFetchHeaders(mockFetch: ReturnType<typeof installGeminiFetch>): Record<string, string> {
   const [, init] = requireFirstGeminiFetchCall(mockFetch);
-  return (init?.headers as Record<string, string> | undefined) ?? {};
+  return Object.fromEntries(new Headers(init?.headers).entries());
 }
 
 function getGeminiFetchUrl(mockFetch: ReturnType<typeof installGeminiFetch>): string | undefined {
@@ -140,6 +140,95 @@ describe("google web search provider", () => {
     expect(getGeminiFetchUrl(mockFetch)).toBe(
       "https://generativelanguage.googleapis.com/proxy/v1beta/models/gemini-2.5-flash:generateContent",
     );
+  });
+
+  it("merges operator headers while keeping provider-owned headers authoritative", async () => {
+    const mockFetch = installGeminiFetch();
+    const provider = createGeminiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: "AIza-plugin-test",
+                  headers: {
+                    "X-Routing-Target": "staging",
+                    "X-Goog-Api-Key": "operator-value",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: { provider: "gemini" },
+    });
+
+    await tool?.execute({ query: "OpenClaw operator headers" });
+
+    expect(getFetchHeaders(mockFetch)).toMatchObject({
+      "content-type": "application/json",
+      "x-goog-api-key": "AIza-plugin-test",
+      "x-routing-target": "staging",
+    });
+  });
+
+  it("partitions cached Gemini results by operator headers", async () => {
+    const mockFetch = installGeminiFetch();
+    const provider = createGeminiWebSearchProvider();
+    const createTool = (target: string) =>
+      provider.createTool({
+        config: {
+          plugins: {
+            entries: {
+              google: {
+                config: {
+                  webSearch: {
+                    apiKey: "AIza-plugin-test",
+                    headers: { "X-Routing-Target": target },
+                  },
+                },
+              },
+            },
+          },
+        },
+        searchConfig: { provider: "gemini" },
+      });
+
+    await createTool("staging")?.execute({ query: "OpenClaw header cache partition" });
+    await createTool("production")?.execute({ query: "OpenClaw header cache partition" });
+
+    const postCalls = mockFetch.mock.calls.filter(([, init]) => typeof init?.body === "string");
+    expect(postCalls).toHaveLength(2);
+  });
+
+  it("rejects malformed operator headers before sending a request", async () => {
+    const mockFetch = installGeminiFetch();
+    const provider = createGeminiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: "AIza-plugin-test",
+                  headers: { "Bad Header": "value" },
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: { provider: "gemini" },
+    });
+
+    await expect(tool?.execute({ query: "OpenClaw malformed header" })).rejects.toThrow(
+      'plugins.entries.google.config.webSearch.headers["Bad Header"] is not a valid HTTP header',
+    );
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("accepts Gemini success JSON with empty grounding metadata", async () => {
