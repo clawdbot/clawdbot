@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import {
   markCommandReplyForDelivery,
   markOperationalReplyPayloadForSourceSuppressionDelivery,
+  type ReplyPayload,
 } from "../reply-payload.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
