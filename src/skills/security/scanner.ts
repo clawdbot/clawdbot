@@ -334,6 +334,9 @@ function extractChildProcessBindings(source: string): ChildProcessBindings {
       let methodMatch: RegExpExecArray | null;
       while ((methodMatch = methodBindingRe.exec(bindings)) !== null) {
         const method = methodMatch[1];
+        if (!method) {
+          continue;
+        }
         const alias = methodMatch[2] ?? method;
         aliases.set(alias, method);
       }
@@ -343,7 +346,10 @@ function extractChildProcessBindings(source: string): ChildProcessBindings {
   for (const namespaceRe of [esmNamespaceRe, esmDefaultRe, cjsNamespaceRe]) {
     let namespaceMatch: RegExpExecArray | null;
     while ((namespaceMatch = namespaceRe.exec(source)) !== null) {
-      namespaces.add(namespaceMatch[1]);
+      const namespace = namespaceMatch[1];
+      if (namespace) {
+        namespaces.add(namespace);
+      }
     }
   }
 
