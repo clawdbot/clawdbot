@@ -1,11 +1,25 @@
 import * as claws from "./claws.js";
 
 export const ClawsProtocolSchemas = {
+  ClawCatalogDetail: claws.ClawCatalogDetailSchema,
+  ClawCatalogEntry: claws.ClawCatalogEntrySchema,
   ClawDoctorFinding: claws.ClawDoctorFindingSchema,
+  ClawLifecycleApplyResult: claws.ClawLifecycleApplyResultSchema,
+  ClawLifecyclePlanResult: claws.ClawLifecyclePlanResultSchema,
   ClawResourceStatus: claws.ClawResourceStatusSchema,
   ClawStatusEntry: claws.ClawStatusEntrySchema,
+  ClawsAddApplyParams: claws.ClawsAddApplyParamsSchema,
+  ClawsAddPlanParams: claws.ClawsAddPlanParamsSchema,
+  ClawsCatalogDetailParams: claws.ClawsCatalogDetailParamsSchema,
+  ClawsCatalogDetailResult: claws.ClawsCatalogDetailResultSchema,
+  ClawsCatalogSearchParams: claws.ClawsCatalogSearchParamsSchema,
+  ClawsCatalogSearchResult: claws.ClawsCatalogSearchResultSchema,
   ClawsDoctorParams: claws.ClawsDoctorParamsSchema,
   ClawsDoctorResult: claws.ClawsDoctorResultSchema,
+  ClawsRemoveApplyParams: claws.ClawsRemoveApplyParamsSchema,
+  ClawsRemovePlanParams: claws.ClawsRemovePlanParamsSchema,
   ClawsStatusParams: claws.ClawsStatusParamsSchema,
   ClawsStatusResult: claws.ClawsStatusResultSchema,
+  ClawsUpdateApplyParams: claws.ClawsUpdateApplyParamsSchema,
+  ClawsUpdatePlanParams: claws.ClawsUpdatePlanParamsSchema,
 } as const;
