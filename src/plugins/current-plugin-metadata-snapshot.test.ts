@@ -108,6 +108,48 @@ describe("current plugin metadata snapshot", () => {
     ).toBe(snapshot);
   });
 
+  it("serves every configured agent workspace listed as compatible", () => {
+    const config = { plugins: { allow: ["demo"] } };
+    const snapshot = createSnapshot({ config, workspaceDir: "/workspace/gateway" });
+    setCurrentPluginMetadataSnapshot(snapshot, {
+      config,
+      compatibleWorkspaceDirs: ["/workspace/agent-a", "/workspace/agent-b"],
+    });
+
+    expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir: "/workspace/gateway" })).toBe(
+      snapshot,
+    );
+    expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir: "/workspace/agent-a" })).toBe(
+      snapshot,
+    );
+    expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir: "/workspace/agent-b" })).toBe(
+      snapshot,
+    );
+    expect(
+      getCurrentPluginMetadataSnapshot({ config, workspaceDir: "/workspace/unconfigured" }),
+    ).toBeUndefined();
+  });
+
+  it("keeps compatible workspace dirs across a capture/restore round trip", () => {
+    const config = { plugins: { allow: ["demo"] } };
+    const snapshot = createSnapshot({ config, workspaceDir: "/workspace/gateway" });
+    setCurrentPluginMetadataSnapshot(snapshot, {
+      config,
+      compatibleWorkspaceDirs: ["/workspace/agent-a"],
+    });
+
+    const captured = captureCurrentPluginMetadataSnapshotState();
+    clearCurrentPluginMetadataSnapshot();
+    expect(
+      getCurrentPluginMetadataSnapshot({ config, workspaceDir: "/workspace/agent-a" }),
+    ).toBeUndefined();
+
+    restoreCurrentPluginMetadataSnapshotState(captured);
+    expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir: "/workspace/agent-a" })).toBe(
+      snapshot,
+    );
+  });
+
   it("rejects a current snapshot when plugin load paths change", () => {
     const config = { plugins: { load: { paths: ["/plugins/one"] } } };
     const snapshot = createSnapshot({ config });
