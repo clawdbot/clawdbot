@@ -32,6 +32,19 @@ function requireRecordProperty(
 }
 
 describe("google-shared convertTools", () => {
+  it("keeps Google tool declarations stable across discovery order", () => {
+    const tools = [
+      { name: "zeta", description: "Last", parameters: { type: "object" } },
+      { name: "alpha", description: "First", parameters: { type: "object" } },
+    ] as Tool[];
+
+    expect(convertTools(tools)).toEqual(convertTools(tools.toReversed()));
+    expect(convertTools(tools)?.[0]?.functionDeclarations.map((tool) => tool.name)).toEqual([
+      "alpha",
+      "zeta",
+    ]);
+  });
+
   it("preserves parameters when type is missing", () => {
     const tools = [
       {
@@ -154,6 +167,36 @@ describe("google-shared convertTools", () => {
 });
 
 describe("google-shared convertMessages", () => {
+  it.each([
+    { label: "empty user text", messages: [{ role: "user", content: "" }] },
+    {
+      label: "empty user text part",
+      messages: [{ role: "user", content: [{ type: "text", text: "" }] }],
+    },
+    { label: "empty user parts", messages: [{ role: "user", content: [] }] },
+    {
+      label: "whitespace-only assistant history",
+      messages: [makeGoogleAssistantMessage("gemini-3-flash", [{ type: "text", text: "   " }])],
+    },
+  ])("keeps $label valid for the Google SDK", ({ messages }) => {
+    expect(convertMessagesForTest(makeModel("gemini-3-flash"), { messages } as Context)).toEqual([
+      { role: "user", parts: [{ text: " " }] },
+    ]);
+  });
+
+  it("supplies the documented Gemini 3 thought-signature placeholder for unsigned calls", () => {
+    const model = makeModel("gemini-3-flash");
+    const contents = convertMessagesForTest(model, {
+      messages: [
+        makeGoogleAssistantMessage(model.id, [
+          { type: "toolCall", id: "provider_alpha", name: "lookup", arguments: {} },
+        ]),
+      ],
+    } as Context);
+
+    expect(contents[0]?.parts?.[0]?.thoughtSignature).toBe("skip_thought_signature_validator");
+  });
+
   function expectConsecutiveMessagesNotMerged(params: {
     modelId: string;
     first: string;

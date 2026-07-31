@@ -239,8 +239,9 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
       config.authSchemePreference = ["httpBearerAuth"];
     }
 
+    let client: BedrockRuntimeClient | undefined;
     try {
-      const client = new BedrockRuntimeClient(config);
+      client = new BedrockRuntimeClient(config);
       const cacheRetention = resolveCacheRetention(options.cacheRetention);
       const additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
       const thinking = (additionalModelRequestFields as Record<string, unknown> | undefined)
@@ -373,6 +374,9 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
       output.errorMessage = formatBedrockError(error);
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
+    } finally {
+      // The SDK client owns pooled HTTP resources; release them only after its async stream settles.
+      client?.destroy();
     }
   })();
 

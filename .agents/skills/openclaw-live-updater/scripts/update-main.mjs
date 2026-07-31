@@ -1983,7 +1983,7 @@ function readGatewayHealth(runCommand, checkout, deployment) {
   if (deployment) {
     const healthOutput = runBuiltGatewayCli(
       checkout,
-      ["health", "--port", String(deployment.port), "--verbose", "--json"],
+      ["health", "--verbose", "--json"],
       deployment,
     );
     let healthSummary;

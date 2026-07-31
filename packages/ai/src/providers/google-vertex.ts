@@ -63,7 +63,10 @@ export const streamSimpleGoogleVertex: StreamFunction<"google-vertex", SimpleStr
   const base = buildBaseOptions(model, options, undefined);
   return streamGoogleVertex(model, context, {
     ...base,
-    thinking: buildGoogleSimpleThinking(model, options),
+    thinking: buildGoogleSimpleThinking(model, options, {
+      includeGemma4ThinkingLevel: true,
+      useFlashLiteBudgets: true,
+    }),
   } satisfies GoogleVertexOptions);
 };
 

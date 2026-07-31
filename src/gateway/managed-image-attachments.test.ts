@@ -6,7 +6,7 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { maxBytesForKind } from "@openclaw/media-core/constants";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import {
   createNoisyPngBuffer as createNoisyPngFixtureBuffer,
   createSolidPngBuffer,
@@ -21,6 +21,7 @@ import {
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
+import { makeMockHttpResponse } from "./test-http-response.js";
 
 type PlaybackTranscodeResolution = Awaited<
   ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackTranscode"]>
@@ -533,6 +534,62 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.statusCode).toBe(200);
     expect(result.headers["content-type"]).toBe("audio/x-caf");
     expect(result.body).toEqual(body);
+  });
+
+  it("closes the opened managed-media descriptor when playback resolution rejects", async () => {
+    const { attachmentId, sessionKey, originalPath } = await createFixture(stateDir, {
+      filename: "voice.caf",
+      contentType: "audio/x-caf",
+      body: Buffer.from("caff-original"),
+    });
+    authorizeGatewayHttpRequestOrReplyMock.mockResolvedValue({ ok: true, authMethod: "token" });
+    resolveOpenAiCompatibleHttpOperatorScopesMock.mockReturnValue(["operator.read"]);
+    resolveOpenAiCompatibleHttpSenderIsOwnerMock.mockReturnValue(true);
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "gateway-sessions.json"),
+      entry: { sessionId: "sess-1", sessionFile: "session.jsonl" },
+    });
+    resolveSessionHistoryTranscriptPathMock.mockResolvedValue("session.jsonl");
+    readSessionMessagesMock.mockResolvedValue([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "audio",
+            url: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+          },
+        ],
+        __openclaw: { id: "msg-1" },
+      },
+    ]);
+    resolvePlaybackTranscodeMock.mockRejectedValueOnce(new Error("playback inspection failed"));
+    const originalOpen = fs.open;
+    let closeOpenedHandle: MockInstance<() => Promise<void>> | undefined;
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      if (String(args[0]) === originalPath) {
+        closeOpenedHandle = vi.spyOn(handle, "close");
+      }
+      return handle;
+    });
+    const { res } = makeMockHttpResponse();
+
+    try {
+      await expect(
+        handleManagedOutgoingImageHttpRequest(
+          {
+            url: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full?playback=1`,
+            method: "GET",
+            headers: {},
+          } as http.IncomingMessage,
+          res,
+          { auth: { mode: "test" } as never, stateDir },
+        ),
+      ).rejects.toThrow("playback inspection failed");
+      expect(closeOpenedHandle).toHaveBeenCalledOnce();
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 
   it("passes native managed playback bytes through unchanged", async () => {

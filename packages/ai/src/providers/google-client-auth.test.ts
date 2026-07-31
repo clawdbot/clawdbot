@@ -2,12 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
 
-const googleMockState = vi.hoisted(() => ({ configs: [] as unknown[] }));
+const googleMockState = vi.hoisted(() => ({ configs: [] as unknown[], requests: [] as unknown[] }));
 
 vi.mock("@google/genai", () => ({
   GoogleGenAI: class MockGoogleGenAI {
     models = {
-      generateContentStream: vi.fn(() => {
+      generateContentStream: vi.fn((params: unknown) => {
+        googleMockState.requests.push(params);
         throw new Error("stop after constructor");
       }),
     };
@@ -26,7 +27,7 @@ vi.mock("@google/genai", () => ({
   },
 }));
 
-import { streamGoogleVertex } from "./google-vertex.js";
+import { streamGoogleVertex, streamSimpleGoogleVertex } from "./google-vertex.js";
 import { streamGoogle } from "./google.js";
 
 const context = {
@@ -61,6 +62,7 @@ function vertexModel(): Model<"google-vertex"> {
 describe("Google SDK construction auth", () => {
   beforeEach(() => {
     googleMockState.configs = [];
+    googleMockState.requests = [];
   });
 
   afterEach(() => {
@@ -121,4 +123,53 @@ describe("Google SDK construction auth", () => {
     expect(JSON.stringify(googleMockState.configs[0])).not.toContain(sentinel);
     expect(buildModelFetch).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      modelId: "gemma-4-26b-a4b-it",
+      reasoning: "low",
+      expectedThinking: { includeThoughts: true, thinkingLevel: "MINIMAL" },
+    },
+    {
+      modelId: "gemma-4-26b-a4b-it",
+      reasoning: "adaptive",
+      expectedThinking: { includeThoughts: true, thinkingLevel: "HIGH" },
+    },
+    {
+      modelId: "gemini-2.5-flash-lite",
+      reasoning: "minimal",
+      expectedThinking: { includeThoughts: true, thinkingBudget: 512 },
+    },
+  ] as const)(
+    "keeps the supported Vertex thinking policy for $modelId",
+    async ({ modelId, reasoning, expectedThinking }) => {
+      configureAiTransportHost({ resolveSecretSentinel: (value) => value });
+
+      await streamSimpleGoogleVertex({ ...vertexModel(), id: modelId }, context, {
+        apiKey: "test-vertex-key",
+        reasoning: reasoning as never,
+      }).result();
+
+      expect(googleMockState.requests[0]).toMatchObject({
+        config: { thinkingConfig: expectedThinking },
+      });
+    },
+  );
+
+  it.each(["gemma-4-26b-a4b-it", "gemini-2.5-pro"])(
+    "keeps unsupported disabled-thinking config out of Vertex requests for %s",
+    async (modelId) => {
+      configureAiTransportHost({ resolveSecretSentinel: (value) => value });
+
+      await streamSimpleGoogleVertex({ ...vertexModel(), id: modelId }, context, {
+        apiKey: "test-vertex-key",
+        reasoning: "off",
+      }).result();
+
+      expect(googleMockState.requests[0]).toMatchObject({ config: {} });
+      expect((googleMockState.requests[0] as { config: unknown }).config).not.toHaveProperty(
+        "thinkingConfig",
+      );
+    },
+  );
 });

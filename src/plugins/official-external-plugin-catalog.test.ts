@@ -1960,6 +1960,27 @@ describe("official external plugin catalog", () => {
     });
   });
 
+  it("lists OpenCode Zen with its model and media install surfaces", () => {
+    const opencode = expectCatalogEntry("opencode");
+    const manifest = getOfficialExternalPluginCatalogManifest(opencode);
+
+    expect(resolveOfficialExternalPluginId(opencode)).toBe("opencode");
+    expect(resolveOfficialExternalPluginInstall(opencode)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/opencode-provider",
+      npmSpec: "@openclaw/opencode-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(manifest?.providers?.map((provider) => provider.id)).toEqual(["opencode"]);
+    expect(manifest?.contracts?.mediaUnderstandingProviders).toEqual(["opencode"]);
+    expect(manifest?.providerEndpoints).toEqual([
+      {
+        endpointClass: "opencode-native",
+        hostSuffixes: ["opencode.ai"],
+      },
+    ]);
+  });
+
   it("lists Synthetic as an official external provider", () => {
     const synthetic = expectCatalogEntry("synthetic");
 

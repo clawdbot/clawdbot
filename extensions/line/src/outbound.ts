@@ -1,6 +1,8 @@
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 // Line plugin module implements outbound behavior.
 import {
   defineChannelMessageAdapter,
+  listMessageReceiptPlatformIds,
   type ChannelMessageSendResult,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -54,7 +56,16 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     ): Promise<LineSendResult> => {
       const result = await resultPromise;
       lastResult = result;
-      await onDeliveryResult?.(createEmptyChannelResult("line", { ...result }));
+      try {
+        await onDeliveryResult?.(createEmptyChannelResult("line", { ...result }));
+      } catch (error) {
+        // Observers run after provider acceptance; losing this receipt invites duplicate delivery.
+        throw createChannelPartialDeliveryError(error, {
+          messageIds: listMessageReceiptPlatformIds(result.receipt),
+          receipt: result.receipt,
+          visibleReplySent: true,
+        });
+      }
       return result;
     };
     const quickReplies = lineData.quickReplies ?? [];
@@ -268,10 +279,10 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     }
 
     const completedResult = lastResult as LineSendResult | null;
-    if (completedResult) {
-      return createEmptyChannelResult("line", { ...completedResult });
+    if (!completedResult) {
+      throw new Error("Message must be non-empty for LINE sends");
     }
-    return createEmptyChannelResult("line", { messageId: "empty", chatId: to });
+    return createEmptyChannelResult("line", { ...completedResult });
   },
   ...createAttachedChannelResultAdapter({
     channel: "line",

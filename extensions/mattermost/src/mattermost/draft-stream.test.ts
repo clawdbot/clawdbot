@@ -1,4 +1,5 @@
 // Mattermost tests cover draft stream plugin behavior.
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
 import {
@@ -14,7 +15,7 @@ type RequestRecord = {
 function createMockClient(): {
   client: MattermostClient;
   calls: RequestRecord[];
-  requestMock: ReturnType<typeof vi.fn>;
+  requestMock: ReturnType<typeof vi.fn<MattermostClient["request"]>>;
 } {
   const calls: RequestRecord[] = [];
   let nextId = 1;
@@ -209,6 +210,45 @@ describe("createMattermostDraftStream", () => {
     expect(stream.postId()).toBeUndefined();
   });
 
+  it("retains an accepted preview failure after its background flush has settled", async () => {
+    const warn = vi.fn();
+    const { client, requestMock } = createMockClient();
+    requestMock.mockResolvedValueOnce({ message: "already visible" });
+    const stream = createMattermostDraftStream({
+      client,
+      channelId: "channel-1",
+      throttleMs: 0,
+      warn,
+    });
+
+    stream.update("Already delivered");
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledOnce());
+
+    let caught: unknown;
+    try {
+      await stream.flush();
+    } catch (error) {
+      caught = error;
+    }
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    expect(requestMock).toHaveBeenCalledOnce();
+    expect(requestMock.mock.calls[0]?.[0]).toBe("/posts");
+    stream.update("Must not create another accepted post");
+    await expect(stream.flush()).rejects.toThrow("did not include a post id");
+    expect(requestMock).toHaveBeenCalledOnce();
+    for (const finish of [
+      () => stream.discardPending(),
+      () => stream.clear(),
+      () => stream.seal(),
+      () => stream.stop(),
+      () => stream.forceNewMessage(),
+      () => stream.settleBoundaries(),
+    ]) {
+      await expect(finish()).rejects.toThrow("did not include a post id");
+    }
+    expect(requestMock).toHaveBeenCalledOnce();
+  });
+
   it("truncates on a code-point boundary so a straddling emoji is dropped whole", async () => {
     const { client, calls } = createMockClient();
     // maxChars=12 => cut point is maxChars-3=9. The emoji 😀 occupies UTF-16
@@ -285,6 +325,82 @@ describe("createMattermostDraftStream", () => {
 });
 
 describe("createMattermostDraftStream forceNewMessage", () => {
+  it("propagates a provider-accepted boundary post without an identity", async () => {
+    const { client, requestMock } = createMockClient();
+    const stream = createMattermostDraftStream({
+      client,
+      channelId: "channel-1",
+      throttleMs: 0,
+      maxChars: 10,
+      chunkText: () => ["aaaaaaaaaa", "bbbbbbbbbb"],
+    });
+
+    stream.updateAssistantText("aaaaaaaaaabbbbbbbbbb");
+    await stream.flush();
+    requestMock
+      .mockResolvedValueOnce({ id: "post-1", message: "aaaaaaaaaa" })
+      .mockResolvedValueOnce({ message: "already visible" });
+
+    await expect(stream.forceNewMessage()).rejects.toThrow("did not include a post id");
+    await expect(stream.flush()).rejects.toThrow("did not include a post id");
+    expect(requestMock.mock.calls.filter(([path]) => path === "/posts")).toHaveLength(2);
+  });
+
+  it("retains accepted boundary failures before synchronous warning callbacks re-enter", async () => {
+    const { client, requestMock } = createMockClient();
+    let reenteredBoundary: Promise<void> | undefined;
+    const warn = vi.fn(() => {
+      stream.update("must not publish twice");
+      reenteredBoundary = stream.forceNewMessage();
+      void reenteredBoundary.catch(() => {});
+    });
+    const stream = createMattermostDraftStream({
+      client,
+      channelId: "channel-1",
+      throttleMs: 0,
+      maxChars: 10,
+      chunkText: () => ["aaaaaaaaaa", "bbbbbbbbbb"],
+      warn,
+    });
+
+    stream.updateAssistantText("aaaaaaaaaabbbbbbbbbb");
+    await stream.flush();
+    requestMock
+      .mockResolvedValueOnce({ id: "post-1", message: "aaaaaaaaaa" })
+      .mockResolvedValueOnce({ message: "already visible" });
+
+    await expect(stream.forceNewMessage()).rejects.toThrow("did not include a post id");
+    await expect(reenteredBoundary).rejects.toThrow("did not include a post id");
+    expect(warn).toHaveBeenCalledOnce();
+    expect(requestMock.mock.calls.filter(([path]) => path === "/posts")).toHaveLength(2);
+  });
+
+  it("propagates an accepted background failure that settles during boundary rotation", async () => {
+    const { client, requestMock } = createMockClient();
+    let releaseCreate: (() => void) | undefined;
+    const createReady = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    requestMock.mockImplementationOnce(async () => {
+      await createReady;
+      return { message: "already visible" };
+    });
+    const stream = createMattermostDraftStream({
+      client,
+      channelId: "channel-1",
+      throttleMs: 0,
+    });
+
+    stream.update("Accepted background preview");
+    await vi.waitFor(() => expect(requestMock).toHaveBeenCalledOnce());
+    const boundary = stream.forceNewMessage();
+    releaseCreate?.();
+
+    await expect(boundary).rejects.toThrow("did not include a post id");
+    await expect(stream.flush()).rejects.toThrow("did not include a post id");
+    expect(requestMock).toHaveBeenCalledOnce();
+  });
+
   it("creates a new post on the next update after forceNewMessage", async () => {
     const { client, calls } = createMockClient();
     const stream = createMattermostDraftStream({

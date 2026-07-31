@@ -1,6 +1,10 @@
 // Feishu tests cover reply dispatcher plugin behavior.
 import os from "node:os";
 import path from "node:path";
+import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type StreamingSessionStub = {
@@ -1582,6 +1586,72 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(error).toBe(marker);
   });
+
+  it("never sends media fallback text after an accepted attachment loses its receipt", async () => {
+    useNonStreamingAutoAccount();
+    const acceptedError = createChannelPartialDeliveryError(
+      new Error("Feishu image send failed: no message_id returned"),
+      { messageIds: [], visibleReplySent: true },
+    );
+    sendMediaFeishuMock.mockRejectedValueOnce(acceptedError);
+    const { result, options } = createDispatcherHarness();
+
+    const error = await options
+      .deliver(
+        {
+          text: "caption that must not be duplicated",
+          mediaUrl: "https://example.com/reply.mp3",
+          audioAsVoice: true,
+        },
+        { kind: "final" },
+      )
+      .catch((caught: unknown) => caught);
+
+    expect(isChannelPartialDeliveryError(error)).toBe(true);
+    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result.getVisibleReplyState().visibleReplySent).toBe(true);
+    await expect(result.ensureNoVisibleReplyFallback("accepted-no-id")).resolves.toBe(false);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      kind: "text",
+      text: "already accepted",
+      provider: sendMessageFeishuMock,
+    },
+    {
+      kind: "card",
+      text: "| first | second |\n| - | - |",
+      provider: sendStructuredCardFeishuMock,
+    },
+  ])(
+    "never sends no-visible fallback after an accepted $kind reply loses its receipt",
+    async ({ text, provider }) => {
+      useNonStreamingAutoAccount();
+      const acceptedError = createChannelPartialDeliveryError(
+        new Error("Feishu reply failed: no message_id returned"),
+        { messageIds: [], visibleReplySent: true },
+      );
+      provider.mockRejectedValueOnce(acceptedError);
+      const { result, options } = createDispatcherHarness();
+
+      const error = await options
+        .deliver({ text }, { kind: "final" })
+        .catch((caught: unknown) => caught);
+
+      expect(isChannelPartialDeliveryError(error)).toBe(true);
+      expect(provider).toHaveBeenCalledOnce();
+      await Promise.resolve(options.onError?.(error, { kind: "final" }));
+      expect(result.getVisibleReplyState().visibleReplySent).toBe(true);
+      await expect(result.ensureNoVisibleReplyFallback("accepted-no-id")).resolves.toBe(false);
+      expect(provider).toHaveBeenCalledOnce();
+      if (provider !== sendMessageFeishuMock) {
+        expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("retains the finalized streaming card when companion media never dispatches", async () => {
     const marker = Object.assign(
