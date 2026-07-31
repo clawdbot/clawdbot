@@ -3,9 +3,25 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
 
+type ModelDefinition = NonNullable<
+  NonNullable<OpenClawConfig["models"]>["providers"]
+>[string]["models"][number];
+
+function modelDefinition(id: string, name: string): ModelDefinition {
+  return {
+    id,
+    name,
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 131_072,
+    maxTokens: 8_192,
+  };
+}
+
 const legacyCatalog = [
-  { id: "arcee-ai/trinity-large-preview", name: "Trinity Large Preview" },
-  { id: "arcee-ai/trinity-large-thinking", name: "Trinity Large Thinking" },
+  modelDefinition("arcee-ai/trinity-large-preview", "Trinity Large Preview"),
+  modelDefinition("arcee-ai/trinity-large-thinking", "Trinity Large Thinking"),
 ];
 
 function shippedOpenRouterConfig(): OpenClawConfig {
@@ -86,8 +102,8 @@ describe("Arcee doctor contract", () => {
       baseUrl: "https://openrouter-proxy.example.test/v1",
       api: "openai-responses",
       models: [
-        { id: "arcee-ai/trinity-large-thinking", name: "Operator override" },
-        { id: "other/model", name: "Other model" },
+        modelDefinition("arcee-ai/trinity-large-thinking", "Operator override"),
+        modelDefinition("other/model", "Other model"),
       ],
     };
 
@@ -111,7 +127,7 @@ describe("Arcee doctor contract", () => {
           arcee: {
             baseUrl: "https://api.arcee.ai/api/v1",
             api: "openai-completions",
-            models: [{ id: "trinity-large-thinking", name: "Trinity Large Thinking" }],
+            models: [modelDefinition("trinity-large-thinking", "Trinity Large Thinking")],
           },
         },
       },
