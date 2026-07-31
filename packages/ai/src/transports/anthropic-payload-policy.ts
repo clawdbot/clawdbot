@@ -16,7 +16,7 @@ type AnthropicServiceTier = "auto" | "standard_only";
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 type AnthropicEphemeralCacheControl = {
   type: "ephemeral";
-  ttl?: "1h";
+  ttl?: "1h" | "5m";
 };
 
 type AnthropicPayloadPolicyInput = {
