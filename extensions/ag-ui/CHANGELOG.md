@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **Frontend-tool transcript order** — the assistant's closing text rendered
+  ABOVE its own frontend-tool card, inverting the reference integrations. Tool
+  calls are parented to the assistant message that announced them, and AG-UI
+  clients render a message's text above its cards, so sharing one message id
+  made the order unfixable by emission sequence alone. The summary is now
+  announced as a NEW message after the card, matching the shape reference
+  integrations get from their separate follow-up run: card first, then text.
+
+### Removed
+- **`cron_report` example tool and `examples/` directory** — the tool, its
+  manifest `contracts.tools` entry, and its `api.ts` export are gone. A generic
+  transport channel should not own a feature-specific A2UI demo surface; keeping
+  it here created a second product surface and maintenance contract outside the
+  channel's ownership boundary. Generic A2UI support (`src/a2ui.ts`, the
+  `before_tool_call` / `tool_result_persist` hooks that emit `ACTIVITY_SNAPSHOT`
+  for any tool returning `a2ui_operations`) is unchanged — only the example
+  consumer was removed. Republish it as a separately owned optional package if
+  needed.
+- **Dead client-tool plugin registration** (`src/client-tools.ts`,
+  `aguiToolFactory`, and the `popTools`/`toolStore` half of `src/tool-store.ts`).
+  Nothing ever wrote to that store, so the factory could only ever return `null`.
+  Client and frontend state-writer tools reach the model through the HTTP
+  handler's `clientTools` argument to `runEmbeddedAgent`, never through the
+  plugin tool registry — so this registration was unreachable, and the plugin
+  now correctly declares no `contracts.tools` at all.
+
 ## 0.7.0 (2026-04-29)
 
 ### Added

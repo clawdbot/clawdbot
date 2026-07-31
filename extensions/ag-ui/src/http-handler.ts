@@ -854,8 +854,17 @@ async function dispatchAuthenticatedAguiRequest(
         const writerCalls = pending.filter((c) => stateWriterSpecs.has(c.name));
         const otherCalls = pending.filter((c) => !stateWriterSpecs.has(c.name));
 
-        // Flush any preamble text + close the message before snapshots/cards.
-        emitFallbackText();
+        // Reference integrations (langgraph-python) render the frontend-tool
+        // card BEFORE the assistant's closing text, because there the text is
+        // produced by the follow-up run that consumes the tool result. Our text
+        // arrives in the SAME run, so emitting it here would invert that order.
+        // Text that already streamed live cannot be reordered (its START and
+        // deltas are on the wire), so defer only the non-streamed fallback text
+        // and flush it after the cards below.
+        const deferTextUntilAfterCards = otherCalls.length > 0;
+        if (!deferTextUntilAfterCards) {
+          emitFallbackText();
+        }
         closeReasoningIfOpen();
         if (messageStarted) {
           writeEvent({
@@ -892,6 +901,26 @@ async function dispatchAuthenticatedAguiRequest(
               });
             }
             writeEvent({ type: EventType.TOOL_CALL_END, toolCallId: call.id });
+          }
+          // Closing text goes AFTER the cards so the transcript matches the
+          // reference integrations: tool card, then the assistant's summary.
+          if (deferTextUntilAfterCards) {
+            // The cards above are parented to `currentMessageId`. AG-UI clients
+            // group a tool call with its parent message and render that
+            // message's text ABOVE its tool cards, so reusing the id here would
+            // put the summary above the card no matter what order we emit in.
+            // Announce the summary as a NEW message — the same shape the
+            // reference integrations get from their separate follow-up run.
+            currentMessageId = `msg-${randomUUID()}`;
+            emitFallbackText();
+            if (messageStarted) {
+              writeEvent({
+                type: EventType.TEXT_MESSAGE_END,
+                messageId: currentMessageId,
+                runId: currentRunId,
+              });
+              messageStarted = false;
+            }
           }
           writeEvent({
             type: EventType.RUN_FINISHED,
