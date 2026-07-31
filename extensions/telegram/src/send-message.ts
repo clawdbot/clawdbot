@@ -3,7 +3,7 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runt
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { splitTelegramCaption } from "./caption.js";
+import { resolveTelegramPlainCaption, splitTelegramCaption } from "./caption.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
@@ -251,19 +251,24 @@ async function sendMessageTelegramWithContext(
       media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind ?? "document")) ?? "file";
     const file = new InputFileCtor(media.buffer, fileName);
     let caption: string | undefined;
+    let htmlCaption: string | undefined;
     let followUpText: string | undefined;
 
     if (isVideoNote) {
       caption = undefined;
       followUpText = text.trim() ? text : undefined;
     } else {
-      const split = splitTelegramCaption(text);
+      const trimmedText = text.trim();
+      const renderedCaption = trimmedText ? renderHtmlText(trimmedText) : undefined;
+      const split = splitTelegramCaption(text, renderedCaption);
       caption = split.caption;
       followUpText = split.followUpText;
+      htmlCaption = caption ? renderedCaption : undefined;
     }
-    const htmlCaption = caption ? renderHtmlText(caption) : undefined;
-    const plainCaption =
-      caption && textMode === "html" ? telegramHtmlToPlainTextFallback(caption) : caption;
+    const plainCaption = resolveTelegramPlainCaption(
+      caption && textMode === "html" ? telegramHtmlToPlainTextFallback(caption) : caption,
+      htmlCaption,
+    );
     // If text exceeds Telegram's caption limit, send media without caption
     // then send text as a separate follow-up message.
     const needsSeparateText = Boolean(followUpText);
