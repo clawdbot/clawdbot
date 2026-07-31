@@ -28,7 +28,7 @@ type QuicksilverSession = ReturnType<typeof createOpenAIQuicksilverBrowserSessio
 let sharedQuicksilverSession: QuicksilverSession | undefined;
 
 /** Test-only: drop the shared broker so repeated-registration tests start clean. */
-export function __resetSharedQuicksilverSessionForTests(): void {
+export function resetSharedQuicksilverSessionForTests(): void {
   sharedQuicksilverSession = undefined;
 }
 

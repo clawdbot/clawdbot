@@ -13,7 +13,7 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
-import plugin, { __resetSharedQuicksilverSessionForTests } from "./index.js";
+import plugin, { resetSharedQuicksilverSessionForTests } from "./index.js";
 
 const OPENAI_FRIENDLY_PROMPT_OVERLAY = GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY;
 const OPENAI_GPT5_BEHAVIOR_CONTRACT = GPT5_BEHAVIOR_CONTRACT;
@@ -168,7 +168,7 @@ function expectNoRequestUrl(mocked: unknown, url: string): void {
 describe("openai plugin", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    __resetSharedQuicksilverSessionForTests();
+    resetSharedQuicksilverSessionForTests();
   });
 
   afterEach(() => {
