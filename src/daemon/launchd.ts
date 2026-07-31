@@ -80,6 +80,11 @@ const OPENCLAW_NODE_RUNTIME_NAMES = new Set(["bun", "bun.exe", "node", "node.exe
 const OPENCLAW_SCRIPT_NAMES = new Set(["openclaw.mjs"]);
 const LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000;
 const LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS = 100;
+// launchd reserves the label until the outgoing job actually exits, and it
+// SIGKILLs that job once ExitTimeOut elapses. Bound the bootstrap retry by that
+// same deadline plus slack so a drain-on-SIGTERM gateway cannot outlast it.
+const LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_TIMEOUT_MS = (LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS + 10) * 1_000;
+const LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_POLL_MS = 500;
 const LAUNCHCTL_PROTECTED_PID_TIMEOUT_MS = 2_000;
 
 export type StaleOpenClawUpdateLaunchdJob = {
@@ -644,27 +649,34 @@ async function bootstrapLaunchAgentOrThrow(params: {
       params.onMutation?.("enable");
     }
   }
-  const boot = await execLaunchctl(["bootstrap", params.domain, params.plistPath]);
-  if (boot.code === 0) {
-    params.onMutation?.("bootstrap");
-    return;
-  }
-  const detail = (boot.stderr || boot.stdout).trim();
-  if (isUnsupportedGuiDomain(detail)) {
-    throwBootstrapGuiSessionError({
-      detail,
-      domain: params.domain,
-      actionHint: params.actionHint,
-    });
-  }
-  if (isLaunchctlOperationAlreadyInProgress(detail)) {
-    const state = await probeLaunchAgentState(params.serviceTarget);
-    if (state.state === "running" || state.state === "stopped") {
+  const teardownDeadline = Date.now() + LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_TIMEOUT_MS;
+  for (;;) {
+    const boot = await execLaunchctl(["bootstrap", params.domain, params.plistPath]);
+    if (boot.code === 0) {
       params.onMutation?.("bootstrap");
       return;
     }
+    const detail = (boot.stderr || boot.stdout).trim();
+    if (isUnsupportedGuiDomain(detail)) {
+      throwBootstrapGuiSessionError({
+        detail,
+        domain: params.domain,
+        actionHint: params.actionHint,
+      });
+    }
+    if (isLaunchctlOperationAlreadyInProgress(detail)) {
+      const state = await probeLaunchAgentState(params.serviceTarget);
+      if (state.state === "running" || state.state === "stopped") {
+        params.onMutation?.("bootstrap");
+        return;
+      }
+    }
+    const remainingMs = teardownDeadline - Date.now();
+    if (!isLaunchctlBootstrapPendingTeardown(detail) || remainingMs <= 0) {
+      throw new Error(`launchctl bootstrap failed: ${detail}`);
+    }
+    await sleep(Math.min(LAUNCH_AGENT_BOOTSTRAP_TEARDOWN_POLL_MS, remainingMs));
   }
-  throw new Error(`launchctl bootstrap failed: ${detail}`);
 }
 
 async function ensureLaunchAgentPlistReadable(plistPath: string): Promise<void> {
@@ -1010,6 +1022,14 @@ function isLaunchctlOperationAlreadyInProgress(detail: string): boolean {
     normalized.includes("operation already in progress") ||
     normalized.includes("bootstrap failed: 37")
   );
+}
+
+function isLaunchctlBootstrapPendingTeardown(detail: string): boolean {
+  // `bootout` returns once launchd accepts the request, not once the job is gone,
+  // so bootstrapping the same label mid-teardown answers EIO. The plist is valid
+  // here, so this is a timing conflict to retry rather than a real I/O fault.
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
+  return normalized.includes("bootstrap failed: 5") || normalized.includes("input/output error");
 }
 
 async function bootoutLaunchAgentOrThrow(params: {
@@ -1560,13 +1580,26 @@ export async function restartLaunchAgent({
     if (bootout.code === 0) {
       reportMutation("bootout");
     }
-    await bootstrapLaunchAgentOrThrow({
-      domain,
-      serviceTarget,
-      plistPath,
-      actionHint: "openclaw gateway restart",
-      onMutation: reportMutation,
-    });
+    try {
+      await bootstrapLaunchAgentOrThrow({
+        domain,
+        serviceTarget,
+        plistPath,
+        actionHint: "openclaw gateway restart",
+        onMutation: reportMutation,
+      });
+    } catch (error) {
+      // bootout already removed the job from the domain, so a failed bootstrap
+      // leaves the gateway down with no KeepAlive respawn to recover it. Restore
+      // the job before surfacing the original failure, as the kickstart path does.
+      await ensureLaunchAgentLoadedAfterFailure({
+        domain,
+        serviceTarget,
+        plistPath,
+        onMutation: reportMutation,
+      });
+      throw error;
+    }
     writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
     return { outcome: "completed" };
   }

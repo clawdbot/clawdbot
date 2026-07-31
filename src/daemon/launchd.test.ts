@@ -40,6 +40,7 @@ const state = vi.hoisted(() => ({
   bootstrapError: "",
   bootstrapCode: 1,
   bootstrapLoadsServiceOnFailure: false,
+  bootstrapTransient: false,
   kickstartError: "",
   kickstartCode: 1,
   kickstartFailuresRemaining: 0,
@@ -223,6 +224,23 @@ async function runStopLaunchAgentWithFakeTimers(args: Parameters<typeof stopLaun
   }
 }
 
+async function runRestartLaunchAgentWithFakeTimers(args: Parameters<typeof restartLaunchAgent>[0]) {
+  vi.useFakeTimers();
+  try {
+    const restartPromise = restartLaunchAgent(args)
+      .then((value) => ({ ok: true as const, value }))
+      .catch((error: unknown) => ({ ok: false as const, error }));
+    await vi.runAllTimersAsync();
+    const result = await restartPromise;
+    if (!result.ok) {
+      throw result.error;
+    }
+    return result.value;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 function expectLaunchctlEnableBootstrapOrder(env: Record<string, string | undefined>) {
   const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
   const label = "ai.openclaw.gateway";
@@ -343,11 +361,18 @@ function executeLaunchctlMock(file: string, args: string[]) {
   }
   if (call[0] === "bootstrap") {
     if (state.bootstrapError) {
+      const detail = state.bootstrapError;
+      // Transient failures clear after one attempt so recovery paths that retry
+      // a bootstrap can be exercised the way launchd behaves once a booted-out
+      // job finishes tearing down.
+      if (state.bootstrapTransient) {
+        state.bootstrapError = "";
+      }
       if (state.bootstrapLoadsServiceOnFailure) {
         state.serviceLoaded = true;
         state.serviceRunning = true;
       }
-      return { stdout: "", stderr: state.bootstrapError, code: state.bootstrapCode };
+      return { stdout: "", stderr: detail, code: state.bootstrapCode };
     }
     state.serviceLoaded = true;
     state.serviceRunning = true;
@@ -523,6 +548,7 @@ beforeEach(() => {
   state.bootstrapError = "";
   state.bootstrapCode = 1;
   state.bootstrapLoadsServiceOnFailure = false;
+  state.bootstrapTransient = false;
   state.kickstartError = "";
   state.kickstartCode = 1;
   state.kickstartFailuresRemaining = 0;
@@ -2647,12 +2673,69 @@ describe("launchd install", () => {
       restartLaunchAgent({ env, stdout: new PassThrough(), onMutation }),
     ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
 
+    // The trailing enable comes from the post-failure recovery attempt, which
+    // cannot report a bootstrap mutation because this bootstrap keeps failing.
     expect(onMutation.mock.calls).toEqual([
       [{ mode: "enable" }],
       [{ mode: "bootout" }],
       [{ mode: "enable" }],
+      [{ mode: "enable" }],
     ]);
     expect(onMutation).not.toHaveBeenCalledWith({ mode: "bootstrap" });
+  });
+
+  it("reloads the LaunchAgent through a transient reload bootstrap failure", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    setLaunchAgentPlist({
+      env,
+      label: "ai.openclaw.gateway",
+      programArguments: ["node", "gateway.js"],
+    });
+    // launchd answers EIO while the just-booted-out job is still tearing down.
+    state.bootstrapError = "Bootstrap failed: 5: Input/output error";
+    state.bootstrapCode = 5;
+    state.bootstrapTransient = true;
+    const onMutation = vi.fn();
+
+    const result = await runRestartLaunchAgentWithFakeTimers({
+      env,
+      stdout: new PassThrough(),
+      onMutation,
+    });
+
+    // Teardown is transient, so the retry must land a real bootstrap rather than
+    // surfacing an error the operator has to recover from by hand.
+    expect(result).toEqual({ outcome: "completed" });
+    expect(state.serviceLoaded).toBe(true);
+    expect(onMutation).toHaveBeenCalledWith({ mode: "bootstrap" });
+  });
+
+  it("fails the reload when bootstrap teardown never clears", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    setLaunchAgentPlist({
+      env,
+      label: "ai.openclaw.gateway",
+      programArguments: ["node", "gateway.js"],
+    });
+    // EIO that never clears must stay bounded instead of retrying forever.
+    state.bootstrapError = "Bootstrap failed: 5: Input/output error";
+    state.bootstrapCode = 5;
+    state.bootstrapLoadsServiceOnFailure = true;
+
+    await expect(
+      runRestartLaunchAgentWithFakeTimers({ env, stdout: new PassThrough() }),
+    ).rejects.toThrow("launchctl bootstrap failed: Bootstrap failed: 5: Input/output error");
+
+    // The operator's gateway must never be left booted out of launchd: bootout
+    // already removed the job, so a failed bootstrap has to be recovered or the
+    // service stays down with KeepAlive unable to respawn it.
+    expect(state.serviceLoaded).toBe(true);
   });
 
   it("completes reload when the mutation observer fails after bootout", async () => {
