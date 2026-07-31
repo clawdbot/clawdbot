@@ -38,6 +38,10 @@ import {
   runLegacyStateMigrations,
 } from "./state-migrations.js";
 import * as sessionStore from "./state-migrations.legacy-session-store.js";
+import {
+  migrateLegacyCurrentConversationBindings,
+  migrateLegacyPluginBindingApprovals,
+} from "./state-migrations.runtime-state.js";
 import { loadVoiceWakeRoutingConfig, setVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "./voicewake.js";
 
@@ -201,6 +205,20 @@ function failArchiveRenameOnce(sourcePath: string) {
     actualRenameSync(from, to);
   });
 }
+
+function failNextStateDbCommit(env: NodeJS.ProcessEnv) {
+  const { db } = openOpenClawStateDatabase({ env });
+  const actualExec = db.exec.bind(db);
+  let failed = false;
+  return vi.spyOn(db, "exec").mockImplementation((sql) => {
+    if (!failed && sql.trim() === "COMMIT") {
+      failed = true;
+      throw new Error("forced commit failure");
+    }
+    actualExec(sql);
+  });
+}
+
 const createTempDir = () => tempDirs.make("openclaw-state-migrations-test-");
 
 function readUpdateCheckState(env: NodeJS.ProcessEnv):
@@ -395,6 +413,139 @@ function createEnv(stateDir: string): NodeJS.ProcessEnv {
     ...process.env,
     HOME: path.dirname(stateDir),
     OPENCLAW_STATE_DIR: stateDir,
+  };
+}
+
+type MixedCommitFailureFixture = {
+  env: NodeJS.ProcessEnv;
+  expectedWarning: string;
+  migrate: () => { notices?: string[]; warnings: string[] };
+  readRowCount: () => number;
+  sourceFragment: string;
+  sourcePath: string;
+};
+
+async function createMixedPluginBindingCommitFailureFixture(): Promise<MixedCommitFailureFixture> {
+  const root = await createTempDir();
+  const stateDir = path.join(root, ".openclaw");
+  const env = createEnv(stateDir);
+  const sourcePath = path.join(stateDir, "plugin-binding-approvals.json");
+  insertPluginBindingApprovalRow(env, {
+    plugin_root: "/plugins/conflict",
+    channel: "discord",
+    account_id: "default",
+    plugin_id: "sqlite-plugin",
+    plugin_name: "SQLite Plugin",
+    approved_at: 1,
+  });
+  await fs.mkdir(stateDir, { recursive: true });
+  await fs.writeFile(
+    sourcePath,
+    JSON.stringify({
+      version: 1,
+      approvals: [
+        {
+          pluginRoot: "/plugins/conflict",
+          pluginId: "legacy-plugin",
+          pluginName: "Legacy Plugin",
+          channel: "discord",
+          accountId: "default",
+          approvedAt: 2,
+        },
+        {
+          pluginRoot: "/plugins/import",
+          pluginId: "imported-plugin",
+          pluginName: "Imported Plugin",
+          channel: "telegram",
+          accountId: "default",
+          approvedAt: 3,
+        },
+      ],
+    }),
+    "utf8",
+  );
+  return {
+    env,
+    expectedWarning:
+      "Failed migrating legacy plugin binding approvals: Error: forced commit failure",
+    migrate: () =>
+      migrateLegacyPluginBindingApprovals({
+        detected: { sourcePath, hasLegacy: true },
+        stateDir,
+      }),
+    readRowCount: () => readPluginBindingApprovalRows(env).length,
+    sourceFragment: "Imported Plugin",
+    sourcePath,
+  };
+}
+
+async function createMixedCurrentConversationCommitFailureFixture(): Promise<MixedCommitFailureFixture> {
+  const root = await createTempDir();
+  const stateDir = path.join(root, ".openclaw");
+  const env = createEnv(stateDir);
+  const bindingsDir = path.join(stateDir, "bindings");
+  const sourcePath = path.join(bindingsDir, "current-conversations.json");
+  const conflictingKey = "workspace\u241fdefault\u241f\u241fuser:U123";
+  insertCurrentConversationBindingRow(env, {
+    bindingKey: conflictingKey,
+    bindingId: `generic:${conflictingKey}`,
+    targetSessionKey: "agent:codex:acp:existing",
+    channel: "workspace",
+    accountId: "default",
+    conversationId: "user:U123",
+    recordJson: JSON.stringify({
+      bindingId: `generic:${conflictingKey}`,
+      targetSessionKey: "agent:codex:acp:existing",
+      targetKind: "session",
+      conversation: {
+        channel: "workspace",
+        accountId: "default",
+        conversationId: "user:U123",
+      },
+      status: "active",
+      boundAt: 1,
+    }),
+  });
+  await fs.mkdir(bindingsDir, { recursive: true });
+  await fs.writeFile(
+    sourcePath,
+    JSON.stringify({
+      version: 1,
+      bindings: [
+        {
+          targetSessionKey: "agent:codex:acp:legacy-conflict",
+          conversation: {
+            channel: "workspace",
+            accountId: "default",
+            conversationId: "user:U123",
+          },
+          boundAt: 2,
+        },
+        {
+          targetSessionKey: "agent:codex:acp:legacy-missing",
+          conversation: {
+            channel: "workspace",
+            accountId: "default",
+            conversationId: "user:U456",
+          },
+          boundAt: 3,
+        },
+      ],
+    }),
+    "utf8",
+  );
+  return {
+    env,
+    expectedWarning:
+      "Failed migrating legacy current-conversation bindings: Error: forced commit failure",
+    migrate: () =>
+      migrateLegacyCurrentConversationBindings({
+        detected: { sourcePath, hasLegacy: true },
+        stateDir,
+      }),
+    readRowCount: () => readCurrentConversationBindingRows(env).length,
+    sourceFragment: "legacy-missing",
+    sourcePath,
   };
 }
 
@@ -3644,6 +3795,35 @@ describe("state migrations", () => {
     await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toContain(
       "legacy-conflict",
     );
+  });
+
+  it.each([
+    {
+      name: "plugin binding approvals",
+      setup: createMixedPluginBindingCommitFailureFixture,
+    },
+    {
+      name: "current-conversation bindings",
+      setup: createMixedCurrentConversationCommitFailureFixture,
+    },
+  ])("keeps mixed $name retryable when SQLite commit fails", async ({ setup }) => {
+    const fixture = await setup();
+    const commit = failNextStateDbCommit(fixture.env);
+    const result = fixture.migrate();
+    commit.mockRestore();
+
+    expect(result.warnings).toEqual([fixture.expectedWarning]);
+    expect(result.notices).toBeUndefined();
+    expect(fixture.readRowCount()).toBe(1);
+    await expect(fs.readFile(fixture.sourcePath, "utf8")).resolves.toContain(
+      fixture.sourceFragment,
+    );
+    await expectMissingPath(`${fixture.sourcePath}.migrated`);
+
+    const retry = fixture.migrate();
+    expect(retry.warnings).toStrictEqual([]);
+    expect(fixture.readRowCount()).toBe(2);
+    await expectMissingPath(fixture.sourcePath);
   });
 
   it("archives a legacy current-conversation file when every binding conflicts", async () => {

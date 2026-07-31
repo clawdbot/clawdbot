@@ -670,10 +670,13 @@ export function migrateLegacyPluginBindingApprovals(params: {
     return { changes, warnings };
   }
 
-  let importedCount = 0;
-  let shouldArchive = approvals.length === 0;
+  let outcome = {
+    conflictCount: 0,
+    importedCount: 0,
+    shouldArchive: false,
+  };
   try {
-    runOpenClawStateWriteTransaction(
+    outcome = runOpenClawStateWriteTransaction(
       ({ db }) => {
         const stateDb = getNodeSqliteKysely<LegacyPluginBindingApprovalsImportDatabase>(db);
         const existing = executeSqliteQuerySync(
@@ -727,27 +730,30 @@ export function migrateLegacyPluginBindingApprovals(params: {
               .insertInto("plugin_binding_approvals")
               .values(approvalsToInsert.map(pluginBindingApprovalRow)),
           );
-          importedCount = approvalsToInsert.length;
         }
-        shouldArchive = true;
-        if (conflictCount > 0) {
-          // SQLite is canonical; retaining divergent JSON would block every startup.
-          notices.push(
-            `Kept shared SQLite plugin binding approvals because ${conflictCount} ${conflictCount === 1 ? "legacy approval conflicts" : "legacy approvals conflict"}: ${params.detected.sourcePath}`,
-          );
-        }
+        // Publish archive/count state only after COMMIT succeeds; otherwise retry needs the source.
+        return {
+          conflictCount,
+          importedCount: approvalsToInsert.length,
+          shouldArchive: true,
+        };
       },
       { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
     );
   } catch (err) {
     warnings.push(`Failed migrating legacy plugin binding approvals: ${String(err)}`);
   }
-  if (importedCount > 0) {
-    changes.push(
-      `Migrated ${importedCount} plugin binding ${importedCount === 1 ? "approval" : "approvals"} → shared SQLite state`,
+  if (outcome.conflictCount > 0) {
+    notices.push(
+      `Kept shared SQLite plugin binding approvals because ${outcome.conflictCount} ${outcome.conflictCount === 1 ? "legacy approval conflicts" : "legacy approvals conflict"}: ${params.detected.sourcePath}`,
     );
   }
-  if (shouldArchive) {
+  if (outcome.importedCount > 0) {
+    changes.push(
+      `Migrated ${outcome.importedCount} plugin binding ${outcome.importedCount === 1 ? "approval" : "approvals"} → shared SQLite state`,
+    );
+  }
+  if (outcome.shouldArchive) {
     archiveLegacyImportSource({
       sourcePath: params.detected.sourcePath,
       label: "plugin binding approvals",
@@ -896,10 +902,13 @@ export function migrateLegacyCurrentConversationBindings(params: {
     return { changes, warnings };
   }
 
-  let importedCount = 0;
-  let shouldArchive = records.length === 0;
+  let outcome = {
+    conflictCount: 0,
+    importedCount: 0,
+    shouldArchive: false,
+  };
   try {
-    runOpenClawStateWriteTransaction(
+    outcome = runOpenClawStateWriteTransaction(
       ({ db }) => {
         const stateDb = getNodeSqliteKysely<LegacyCurrentConversationBindingsImportDatabase>(db);
         const existing = executeSqliteQuerySync(
@@ -922,42 +931,37 @@ export function migrateLegacyCurrentConversationBindings(params: {
             conflictCount += 1;
           }
         }
-        if (recordsToInsert.length === 0) {
-          shouldArchive = true;
-          if (conflictCount > 0) {
-            // SQLite is canonical; retaining divergent JSON would block every startup.
-            notices.push(
-              `Kept shared SQLite current-conversation bindings because ${conflictCount} ${conflictCount === 1 ? "legacy binding conflicts" : "legacy bindings conflict"}: ${params.detected.sourcePath}`,
-            );
-          }
-          return;
-        }
-        executeSqliteQuerySync(
-          db,
-          stateDb
-            .insertInto("current_conversation_bindings")
-            .values(recordsToInsert.map(currentConversationBindingRow)),
-        );
-        importedCount = recordsToInsert.length;
-        shouldArchive = true;
-        if (conflictCount > 0) {
-          // SQLite is canonical; retaining divergent JSON would block every startup.
-          notices.push(
-            `Kept shared SQLite current-conversation bindings because ${conflictCount} ${conflictCount === 1 ? "legacy binding conflicts" : "legacy bindings conflict"}: ${params.detected.sourcePath}`,
+        if (recordsToInsert.length > 0) {
+          executeSqliteQuerySync(
+            db,
+            stateDb
+              .insertInto("current_conversation_bindings")
+              .values(recordsToInsert.map(currentConversationBindingRow)),
           );
         }
+        // Publish archive/count state only after COMMIT succeeds; otherwise retry needs the source.
+        return {
+          conflictCount,
+          importedCount: recordsToInsert.length,
+          shouldArchive: true,
+        };
       },
       { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
     );
   } catch (err) {
     warnings.push(`Failed migrating legacy current-conversation bindings: ${String(err)}`);
   }
-  if (importedCount > 0) {
-    changes.push(
-      `Migrated ${importedCount} current-conversation ${importedCount === 1 ? "binding" : "bindings"} → shared SQLite state`,
+  if (outcome.conflictCount > 0) {
+    notices.push(
+      `Kept shared SQLite current-conversation bindings because ${outcome.conflictCount} ${outcome.conflictCount === 1 ? "legacy binding conflicts" : "legacy bindings conflict"}: ${params.detected.sourcePath}`,
     );
   }
-  if (shouldArchive) {
+  if (outcome.importedCount > 0) {
+    changes.push(
+      `Migrated ${outcome.importedCount} current-conversation ${outcome.importedCount === 1 ? "binding" : "bindings"} → shared SQLite state`,
+    );
+  }
+  if (outcome.shouldArchive) {
     archiveLegacyImportSource({
       sourcePath: params.detected.sourcePath,
       label: "current-conversation bindings",
