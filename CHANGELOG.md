@@ -57,7 +57,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Ollama stream record bounds:** stop malformed or hostile native Ollama endpoints from growing memory with unbounded newline-free NDJSON records while preserving valid long multi-record streams. (#107473) Thanks @wahaha1223 and @wangmiao0668000666.
 - **Control UI session refreshes:** preserve explicitly queued list filters and background hydration across later Gateway event invalidation, while keeping append pagination followed by a canonical refresh. Fixes #116697. Thanks @shakkernerd.
 - **Gateway device clock skew:** sign device proofs with the Gateway-issued challenge timestamp across TypeScript, Control UI, browser extension, Android, Apple, Linux, and watchOS clients so incorrect local clocks no longer block authentication, while retaining no-challenge compatibility for pre-challenge Control UI servers and older watch-node HTTP endpoints and keeping nonce binding and freshness checks enforced. Fixes #103455.
 - **Control UI dynamic deep links:** reuse the initial route loader result when publishing real agent, session, dashboard, Workboard, Memory, and Plugins paths, avoiding redundant route-loader work during startup. Thanks @shakkernerd.
