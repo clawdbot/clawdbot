@@ -52,8 +52,7 @@ async function waitForQaChannelReady(params: {
         >;
       };
       const accounts = payload.channelAccounts?.[QA_CHANNEL_ID] ?? [];
-      const account =
-        accounts.find((entry) => entry.accountId === QA_CHANNEL_ACCOUNT_ID) ?? accounts[0];
+      const account = accounts.find((entry) => entry.accountId === QA_CHANNEL_ACCOUNT_ID);
       lastProbeError = null;
       lastAccountStatus = account
         ? JSON.stringify({
@@ -61,7 +60,11 @@ async function waitForQaChannelReady(params: {
             running: account.running ?? null,
             restartPending: account.restartPending ?? null,
           })
-        : "no qa-channel accounts reported";
+        : accounts.length > 0
+          ? `qa-channel account "${QA_CHANNEL_ACCOUNT_ID}" not reported; available accounts: ${accounts
+              .map((entry) => entry.accountId ?? "unknown")
+              .join(", ")}`
+          : "no qa-channel accounts reported";
       if (account?.running && account.restartPending !== true) {
         return;
       }
