@@ -75,6 +75,8 @@ interface EventBridgeOptions {
     journal: AttemptTranscriptJournalProjection;
     modelRef: { api?: string; id: string; provider: string };
     now: () => number;
+    /** Per-invocation sources from bridged tools that only sometimes fetch remote content. */
+    resultContentSourceByToolCallId?: ReadonlyMap<string, "network">;
     resultContentSourceByToolName?: ReadonlyMap<string, "network">;
   };
 }
@@ -376,7 +378,9 @@ export function attachEventBridge(
       );
       const resolvedToolName =
         toolName ?? event.data.toolDescription?.name ?? projectedToolName ?? "unknown";
-      const resultContentSource = projection.resultContentSourceByToolName?.get(resolvedToolName);
+      const resultContentSource =
+        projection.resultContentSourceByToolCallId?.get(event.data.toolCallId) ??
+        projection.resultContentSourceByToolName?.get(resolvedToolName);
       projection.journal.recordToolResult({
         eventId: event.id,
         replayIncomplete,

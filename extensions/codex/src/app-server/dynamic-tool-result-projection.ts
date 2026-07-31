@@ -22,5 +22,6 @@ export function recordCodexDynamicToolResult(
       response.terminalResolution?.sideEffectEvidence === true,
     contentItems: protocolResponse.contentItems,
     details: response.transcriptDetails,
+    ...(response.resultContentSource ? { resultContentSource: response.resultContentSource } : {}),
   });
 }

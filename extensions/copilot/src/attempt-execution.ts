@@ -255,6 +255,7 @@ export async function runCopilotExecution(context: {
   let codeModeEngaged: boolean | undefined;
   try {
     let sdkTools: SdkTool[] = [];
+    const resultContentSourceByToolCallId = new Map<string, "network">();
     let resultContentSourceByToolName = new Map<
       string,
       NonNullable<AnyAgentTool["resultContentSource"]>
@@ -282,8 +283,15 @@ export async function runCopilotExecution(context: {
             yieldDetected = true;
             yieldAcknowledgment = acknowledgment;
           },
-          onToolCompleted: ({ args, error, result, startedAt, toolCallId, toolName }) =>
-            runAgentHarnessAfterToolCallHook({
+          onToolCompleted: ({ args, error, result, startedAt, toolCallId, toolName }) => {
+            const resultContentSource =
+              result && typeof result === "object"
+                ? (result as { resultContentSource?: unknown }).resultContentSource
+                : undefined;
+            if (resultContentSource === "network") {
+              resultContentSourceByToolCallId.set(toolCallId, resultContentSource);
+            }
+            return runAgentHarnessAfterToolCallHook({
               toolName,
               toolCallId,
               runId: input.runId,
@@ -295,7 +303,8 @@ export async function runCopilotExecution(context: {
               ...(result !== undefined ? { result } : {}),
               ...(error ? { error } : {}),
               startedAt,
-            }),
+            });
+          },
         });
         cleanupToolBridge = toolBridge.cleanup;
         codeModeEngaged = toolBridge.codeModeEngaged;
@@ -459,6 +468,7 @@ export async function runCopilotExecution(context: {
         journal: transcriptJournal,
         modelRef,
         now,
+        resultContentSourceByToolCallId,
         resultContentSourceByToolName,
       },
     });

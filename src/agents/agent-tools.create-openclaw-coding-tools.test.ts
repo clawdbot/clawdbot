@@ -48,6 +48,7 @@ import {
   runWithCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapabilityResolver,
 } from "./cron-creator-authority-context.js";
+import { createAgentTurnTaintState } from "./embedded-agent-runner/run/turn-taint-state.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { expectReadWriteEditTools } from "./test-helpers/agent-tools-fs-helpers.js";
@@ -403,6 +404,109 @@ describe("createOpenClawCodingTools", () => {
     expect(
       toolNameList(createOpenClawCodingTools({ runId: "lifecycle-run", senderIsOwner: false })),
     ).not.toContain("automations");
+
+  it("marks memory writes untrusted after a result-only network tool outcome", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-result-taint-"));
+    const recordedOrigins: Array<"agent" | "untrusted"> = [];
+    const taintState = createAgentTurnTaintState();
+    const remotePdfTool = {
+      name: "pdf",
+      label: "PDF",
+      description: "Read a PDF.",
+      parameters: {},
+      execute: async () => ({
+        content: [{ type: "text" as const, text: "remote PDF text" }],
+        details: {},
+        resultContentSource: "network" as const,
+      }),
+    };
+    vi.mocked(createOpenClawTools).mockReturnValueOnce([remotePdfTool as never]);
+    registerMemoryCapability("memory-core", {
+      flushPlanResolver: () => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 1,
+        reserveTokensFloor: 1,
+        prompt: "flush",
+        systemPrompt: "flush",
+        relativePath: "memory/2026-07-31.md",
+        recordWriteProvenance: async ({ originClass }) => {
+          recordedOrigins.push(originClass);
+        },
+      }),
+    });
+
+    try {
+      const tools = createOpenClawCodingTools({
+        workspaceDir,
+        senderIsOwner: true,
+        sessionId: "result-taint-session",
+        isTurnTainted: taintState.isTainted,
+        onToolOutcome: taintState.observe,
+      });
+      await requireToolExecute(requireTool(tools, "pdf"))("remote-pdf", {});
+      await requireToolExecute(requireTool(tools, "write"))("memory-write", {
+        path: "memory/2026-07-31.md",
+        content: "remote-derived note\n",
+      });
+
+      expect(taintState.isTainted()).toBe(true);
+      expect(recordedOrigins).toEqual(["untrusted"]);
+      await expect(
+        fs.readFile(path.join(workspaceDir, "memory/2026-07-31.md"), "utf8"),
+      ).resolves.toBe("remote-derived note\n");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps memory writes agent-originated after an unmarked local tool outcome", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-local-result-"));
+    const recordedOrigins: Array<"agent" | "untrusted"> = [];
+    const taintState = createAgentTurnTaintState();
+    const localPdfTool = {
+      name: "pdf",
+      label: "PDF",
+      description: "Read a PDF.",
+      parameters: {},
+      execute: async () => ({
+        content: [{ type: "text" as const, text: "local PDF text" }],
+        details: {},
+      }),
+    };
+    vi.mocked(createOpenClawTools).mockReturnValueOnce([localPdfTool as never]);
+    registerMemoryCapability("memory-core", {
+      flushPlanResolver: () => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 1,
+        reserveTokensFloor: 1,
+        prompt: "flush",
+        systemPrompt: "flush",
+        relativePath: "memory/2026-07-31.md",
+        recordWriteProvenance: async ({ originClass }) => {
+          recordedOrigins.push(originClass);
+        },
+      }),
+    });
+
+    try {
+      const tools = createOpenClawCodingTools({
+        workspaceDir,
+        senderIsOwner: true,
+        sessionId: "local-result-session",
+        isTurnTainted: taintState.isTainted,
+        onToolOutcome: taintState.observe,
+      });
+      await requireToolExecute(requireTool(tools, "pdf"))("local-pdf", {});
+      await requireToolExecute(requireTool(tools, "write"))("memory-write", {
+        path: "memory/2026-07-31.md",
+        content: "local-derived note\n",
+      });
+
+      expect(taintState.isTainted()).toBe(false);
+      expect(recordedOrigins).toEqual(["agent"]);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it("re-wraps existing before_tool_call hooks once with the current context", async () => {

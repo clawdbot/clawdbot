@@ -78,6 +78,7 @@ export function event(
 export async function createFixture(
   trigger?: string,
   resultContentSourceByToolName?: ReadonlyMap<string, "network">,
+  resultContentSourceByToolCallId?: ReadonlyMap<string, "network">,
 ): Promise<AttemptTranscriptJournalFixture> {
   const tempDir = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-copilot-journal-"),
@@ -159,6 +160,7 @@ export async function createFixture(
       modelRef: { api: "openai-responses", id: "gpt-5", provider: "github-copilot" },
       now: () => 2,
       ...(resultContentSourceByToolName ? { resultContentSourceByToolName } : {}),
+      ...(resultContentSourceByToolCallId ? { resultContentSourceByToolCallId } : {}),
     },
   });
   return { attempt, bridge, journal, recorder, session, target, tempDir };

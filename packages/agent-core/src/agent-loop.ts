@@ -1598,6 +1598,10 @@ async function finalizeExecutedToolCall(
 ): Promise<FinalizedToolCallOutcome> {
   let result = executed.result;
   let isError = executed.isError;
+  // Capture provenance before hooks can replace the displayed result. The remote
+  // content was already exposed in this turn, so a hook failure must not turn a
+  // tainted call into a trusted memory write.
+  const resultContentSource = resolveToolResultContentSource(result, prepared.tool);
 
   if (executed.executionStarted && config.afterToolCall) {
     try {
@@ -1636,13 +1640,7 @@ async function finalizeExecutedToolCall(
       isError,
       executionStarted: executed.executionStarted,
       ...(prepared.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
-      // Per-invocation provenance wins over the static tool-level marker: a tool
-      // that only sometimes fetches remote content (http(s) media vs local path)
-      // sets resultContentSource on the result; otherwise fall back to the static
-      // tool-level classification.
-      ...(resolveToolResultContentSource(result, prepared.tool)
-        ? { resultContentSource: resolveToolResultContentSource(result, prepared.tool) }
-        : {}),
+      ...(resultContentSource ? { resultContentSource } : {}),
     },
     finalArgs,
     config,

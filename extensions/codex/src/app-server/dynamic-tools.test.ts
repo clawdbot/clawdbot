@@ -739,6 +739,35 @@ describe("createCodexDynamicToolBridge", () => {
     expect(bridge.resultContentSourceForTool("message")).toBeUndefined();
   });
 
+  it("retains per-invocation provenance outside Codex's protocol response", async () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "pdf",
+          execute: vi.fn(async () => ({
+            content: [{ type: "text", text: "remote PDF text" }],
+            details: {},
+            resultContentSource: "network" as const,
+          })),
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    const response = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-pdf-1",
+      namespace: null,
+      tool: "pdf",
+      arguments: {},
+    });
+
+    expect(response).toEqual(expectInputText("remote PDF text"));
+    expect(response.resultContentSource).toBe("network");
+    expect(Object.keys(response)).not.toContain("resultContentSource");
+  });
+
   it("keeps configured direct tools in the initial Codex tool context", () => {
     const bridge = createCodexDynamicToolBridge({
       tools: [createTool({ name: "message" }), createTool({ name: "web_search" })],

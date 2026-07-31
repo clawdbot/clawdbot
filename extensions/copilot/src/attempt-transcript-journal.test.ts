@@ -533,6 +533,70 @@ describe("Copilot attempt transcript journal", () => {
     expect(files.some((file) => file.endsWith(".jsonl"))).toBe(false);
   });
 
+  it("uses per-invocation provenance without tainting another local call to the same tool", async () => {
+    const { bridge, journal, session } = await createFixture(
+      undefined,
+      undefined,
+      new Map<string, "network">([["call-remote-pdf", "network"]]),
+    );
+    await journal.persistInitialUser();
+    session.emit(event("user.message", "initial-user", { content: "inspect media" }));
+    session.emit(
+      event("assistant.message", "assistant-tools", {
+        content: "checking",
+        messageId: "assistant-tools-message",
+        toolRequests: [
+          {
+            arguments: { pdf: "https://example.test/report.pdf" },
+            name: "pdf",
+            toolCallId: "call-remote-pdf",
+          },
+          {
+            arguments: { pdf: "/workspace/report.pdf" },
+            name: "pdf",
+            toolCallId: "call-local-pdf",
+          },
+        ],
+      }),
+    );
+    session.emit(
+      event("tool.execution_complete", "result-local", {
+        result: { content: "local PDF text" },
+        success: true,
+        toolCallId: "call-local-pdf",
+      }),
+    );
+    session.emit(
+      event("tool.execution_complete", "result-remote", {
+        result: { content: "remote PDF text" },
+        success: true,
+        toolCallId: "call-remote-pdf",
+      }),
+    );
+    const finalAssistant = event("assistant.message", "assistant-final", {
+      content: "finished",
+      messageId: "assistant-final-message",
+    });
+    session.emit(finalAssistant);
+    bridge.recordSendResult(finalAssistant);
+    session.emit(event("session.idle", "idle", {}));
+    await journal.barrier("per-invocation provenance");
+
+    const toolResults = journal
+      .snapshot()
+      .messagesSnapshot.filter((message) => message.role === "toolResult") as Array<
+      Record<string, unknown>
+    >;
+    expect(toolResults).toEqual([
+      expect.objectContaining({
+        toolCallId: "call-remote-pdf",
+        __openclaw: { resultContentSource: "network" },
+      }),
+      expect.objectContaining({ toolCallId: "call-local-pdf" }),
+    ]);
+    expect(toolResults[1]?.["__openclaw"]).toBeUndefined();
+  });
+
   it("groups assistant chunks from one API call before matching tool results", async () => {
     const { bridge, journal, session, target } = await createFixture();
     await journal.persistInitialUser();

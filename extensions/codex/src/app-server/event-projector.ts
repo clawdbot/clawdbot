@@ -371,9 +371,13 @@ export class CodexAppServerEventProjector {
     sideEffectEvidence?: boolean;
     contentItems: CodexDynamicToolCallOutputContentItem[];
     details?: unknown;
+    /** Per-invocation source captured from an executed OpenClaw dynamic tool. */
+    resultContentSource?: "network";
   }): void {
     this.toolProgressProjection.recordDynamicToolResult(params);
-    const source = this.options.resolveDynamicToolResultContentSource?.(params.tool);
+    const source =
+      params.resultContentSource ??
+      this.options.resolveDynamicToolResultContentSource?.(params.tool);
     this.toolTranscriptProjection.recordDynamicToolResult(params, source);
   }
 
