@@ -8,6 +8,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { HostGatewayPolicy } from "./host-gateway-policy.js";
+import { resolveHostPolicyDecision } from "./host-gateway-policy.js";
 import {
   createGatewayMethodRegistry,
   createPluginGatewayMethodDescriptor,
@@ -126,7 +127,13 @@ describe("gateway method authorization", () => {
     const respond = await dispatch(["operator.admin"], {
       hostGatewayPolicy: {
         version: 1,
-        actions: { "workboard.*": { state: "brokered" } },
+        actions: {
+          "workboard.*": {
+            state: "brokered",
+            broker: "lobster.policy.apply",
+            source: "lobster",
+          },
+        },
       },
     });
 
@@ -137,8 +144,38 @@ describe("gateway method authorization", () => {
         code: "HOST_GATEWAY_POLICY_BLOCKED",
         method: METHOD,
         state: "brokered",
+        broker: "lobster.policy.apply",
+        source: "lobster",
       },
     });
+  });
+
+  it("uses the same host policy matcher for future settings decisions", () => {
+    const policy: HostGatewayPolicy = {
+      version: 1,
+      settings: {
+        "gateway.bind": {
+          state: "disabled",
+          reason: "Active policy requires loopback-only gateway bind.",
+          source: "policy",
+        },
+        "channels.*.groupPolicy": {
+          state: "readOnly",
+          reason: "Ingress policy is managed centrally.",
+        },
+      },
+    };
+
+    expect(resolveHostPolicyDecision(policy.settings, "gateway.bind")).toEqual({
+      state: "disabled",
+      reason: "Active policy requires loopback-only gateway bind.",
+      source: "policy",
+    });
+    expect(resolveHostPolicyDecision(policy.settings, "channels.telegram.groupPolicy")).toEqual({
+      state: "readOnly",
+      reason: "Ingress policy is managed centrally.",
+    });
+    expect(resolveHostPolicyDecision(policy.settings, "models.default")).toBeUndefined();
   });
 
   it("leaves in-process synthetic dispatch outside host gateway policy", async () => {
