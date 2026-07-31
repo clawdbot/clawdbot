@@ -23,9 +23,7 @@ import { resolveConfigDir, shortenHomePath } from "../utils.js";
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const DATA_URL_RE = /^data:/i;
 const SANDBOX_CONTAINER_WORKDIR = "/workspace";
-// file_fetch/dir_fetch persist fetched files under media/file-transfer; the
-// allowlist must cover it or sandboxed replies silently drop those attachments.
-const MANAGED_MEDIA_SUBDIRS = new Set(["outbound", "file-transfer"]);
+const MANAGED_MEDIA_SUBDIRS = new Set(["outbound"]);
 
 function normalizeUnicodeSpaces(str: string): string {
   return str.replace(UNICODE_SPACES, " ");

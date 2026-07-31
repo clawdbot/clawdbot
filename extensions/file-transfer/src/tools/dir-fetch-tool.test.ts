@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DIR_FETCH_HARD_MAX_BYTES, FILE_TRANSFER_SUBDIR } from "./descriptors.js";
 
 let tmpRoot: string;
 
@@ -37,12 +38,13 @@ async function createTarBuffer(params: {
 async function importTool(tarBuffer: Buffer) {
   const archivePath = path.join(tmpRoot, `archive-${randomUUID()}.tar.gz`);
   const appendFileTransferAudit = vi.fn(async () => undefined);
+  const saveMediaBuffer = vi.fn(async () => {
+    await fs.writeFile(archivePath, tarBuffer);
+    return { path: archivePath };
+  });
   vi.resetModules();
   vi.doMock("openclaw/plugin-sdk/media-store", () => ({
-    saveMediaBuffer: vi.fn(async () => {
-      await fs.writeFile(archivePath, tarBuffer);
-      return { path: archivePath };
-    }),
+    saveMediaBuffer,
   }));
   vi.doMock("../shared/audit.js", () => ({ appendFileTransferAudit }));
   vi.doMock("./node-tool-invoke.js", () => ({
@@ -67,6 +69,7 @@ async function importTool(tarBuffer: Buffer) {
   return {
     archivePath,
     appendFileTransferAudit,
+    saveMediaBuffer,
     module: await import("./dir-fetch-tool.js"),
   };
 }
@@ -86,7 +89,7 @@ describe("dir.fetch archive extraction", () => {
         await fs.writeFile(path.join(sourceDir, "ok.txt"), "ok");
       },
     });
-    const { appendFileTransferAudit, module } = await importTool(tarBuffer);
+    const { appendFileTransferAudit, module, saveMediaBuffer } = await importTool(tarBuffer);
 
     const result = await executeDirFetch(module);
 
@@ -106,6 +109,12 @@ describe("dir.fetch archive extraction", () => {
     const localPath = (result.details as { files: Array<{ localPath: string }> }).files[0]
       ?.localPath;
     await expect(fs.readFile(localPath!, "utf8")).resolves.toBe("ok");
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      tarBuffer,
+      "application/gzip",
+      FILE_TRANSFER_SUBDIR,
+      DIR_FETCH_HARD_MAX_BYTES,
+    );
     expect(appendFileTransferAudit).toHaveBeenLastCalledWith(
       expect.objectContaining({ decision: "allowed" }),
     );
