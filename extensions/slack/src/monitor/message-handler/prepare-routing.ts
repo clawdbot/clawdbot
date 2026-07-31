@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import { resolveSlackDmThreadSessionScope } from "../../account-dm-thread-scope.js";
 import { resolveSlackReplyToMode } from "../../account-reply-mode.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { parseSlackTarget, type SlackTargetKind } from "../../targets.js";
@@ -35,6 +36,13 @@ type SlackRoutingContext = {
   threadKeys: ReturnType<typeof resolveThreadSessionKeys>;
   sessionKey: string;
   historyKey: string;
+  /**
+   * Canonical Slack `thread_ts` for an ordinary DM thread when
+   * `channels.slack.dm.threadSessionScope="thread"`. Undefined in the default
+   * `"dm"` scope, for non-DMs, and for Slack assistant threads (those keep
+   * using the assistant lifecycle thread id).
+   */
+  dmThreadTs: string | undefined;
 };
 
 type SlackRouteBinding = NonNullable<OpenClawConfig["bindings"]>[number];
@@ -207,13 +215,24 @@ export function resolveSlackRoutingContext(params: {
       : undefined;
   const roomThreadId = isThreadReply && threadTs ? threadTs : undefined;
   const assistantThreadId = assistantThreadTs;
-  // DM threads are a UI affordance, not a session boundary. Route all DM
-  // messages, including thread replies, to the user's main DM session so
-  // the agent sees them as part of the existing conversation. Slack assistant
-  // threads are the exception: Slack treats each assistant thread as its own
-  // conversation and sends the lifecycle context only on assistant events.
+  // By default DM threads are a UI affordance, not a session boundary: all DM
+  // messages, including thread replies, route to the user's main DM session so
+  // the agent sees them as part of the existing conversation.
+  //
+  // `channels.slack.dm.threadSessionScope="thread"` opts out of that. Slack's
+  // Agent messaging experience (`agent_view`) renders each conversation in the
+  // Messages tab as an ordinary DM thread, so operators need each of those
+  // threads to be its own session. A top-level DM roots `:thread:<ts>` and
+  // later replies carrying that `thread_ts` reuse it.
+  const dmThreadTs =
+    isDirectMessage && resolveSlackDmThreadSessionScope(account) === "thread"
+      ? (threadTs ?? threadContext.messageTs)
+      : undefined;
+  // Slack assistant threads stay authoritative: Slack treats each assistant
+  // thread as its own conversation and sends the lifecycle context only on
+  // assistant events.
   const canonicalThreadId = isDirectMessage
-    ? assistantThreadId
+    ? (assistantThreadId ?? dmThreadTs)
     : isRoomish
       ? roomThreadId
       : isThreadReply
@@ -290,6 +309,7 @@ export function resolveSlackRoutingContext(params: {
     threadKeys,
     sessionKey,
     historyKey,
+    dmThreadTs: assistantThreadId ? undefined : dmThreadTs,
   };
 }
 

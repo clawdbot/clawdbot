@@ -12,7 +12,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ResolvedSlackAccount } from "../../accounts.js";
+import { resolveSlackAccount, type ResolvedSlackAccount } from "../../accounts.js";
 import {
   clearSlackThreadParticipationCache,
   recordSlackThreadParticipation,
@@ -1630,6 +1630,154 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.ThreadHistoryBody).not.toContain("assistant reply");
     expect(prepared.ctxPayload.ThreadHistoryBody).not.toContain("current message");
     expect(replies).toHaveBeenCalledTimes(2);
+  });
+
+  describe("dm.threadSessionScope", () => {
+    const threadScopedAccount = () =>
+      createSlackAccount({ replyToMode: "off", dm: { threadSessionScope: "thread" } });
+
+    it("keeps DM turns on one session in the default scope", async () => {
+      const ctx = createDefaultSlackCtx();
+      const account = createSlackAccount({ replyToMode: "off" });
+
+      const root = await prepareMessageWith(ctx, account, createSlackMessage({ ts: "100.000" }));
+      const reply = await prepareMessageWith(
+        ctx,
+        account,
+        createSlackMessage({ ts: "150.000", thread_ts: "100.000", parent_user_id: "B1" }),
+      );
+
+      assertPrepared(root);
+      assertPrepared(reply);
+      expect(root.ctxPayload.SessionKey).toBe("agent:main:main");
+      expect(reply.ctxPayload.SessionKey).toBe("agent:main:main");
+      expect(root.forcedReplyThreadTs).toBeUndefined();
+    });
+
+    it("roots one session per top-level DM and forces replies into that thread", async () => {
+      const account = threadScopedAccount();
+
+      const first = await prepareMessageWith(
+        createDefaultSlackCtx(),
+        account,
+        createSlackMessage({ ts: "100.000", text: "topic A" }),
+      );
+      const second = await prepareMessageWith(
+        createDefaultSlackCtx(),
+        account,
+        createSlackMessage({ ts: "200.000", text: "topic B" }),
+      );
+
+      assertPrepared(first);
+      assertPrepared(second);
+      expect(first.ctxPayload.SessionKey).toBe("agent:main:main:thread:100.000");
+      expect(second.ctxPayload.SessionKey).toBe("agent:main:main:thread:200.000");
+      // replyToMode is "off", yet the reply must still land in the root's thread
+      // or the session key and the Slack UI would disagree.
+      expect(first.forcedReplyThreadTs).toBe("100.000");
+      expect(first.ctxPayload.MessageThreadId).toBe("100.000");
+      expect(first.ctxPayload.ReplyToId).toBe("100.000");
+      expect(first.ctxPayload.TransportThreadId).toBeUndefined();
+      expect(second.forcedReplyThreadTs).toBe("200.000");
+      // Each root carries only its own text.
+      expect(first.ctxPayload.Body).toContain("topic A");
+      expect(first.ctxPayload.Body).not.toContain("topic B");
+    });
+
+    it("reuses the root session for later replies in the same DM thread", async () => {
+      const prepared = await prepareMessageWith(
+        createDefaultSlackCtx(),
+        threadScopedAccount(),
+        createSlackMessage({ ts: "150.000", thread_ts: "100.000", parent_user_id: "B1" }),
+      );
+
+      assertPrepared(prepared);
+      expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main:thread:100.000");
+      expect(prepared.forcedReplyThreadTs).toBe("100.000");
+      expect(prepared.ctxPayload.MessageThreadId).toBe("100.000");
+    });
+
+    it("keeps Slack assistant thread ids authoritative in thread scope", async () => {
+      const prepared = await prepareMessageWith(
+        createDefaultSlackCtx(),
+        threadScopedAccount(),
+        createSlackMessage({
+          ts: "10.100",
+          parent_user_id: "B1",
+          assistant_thread: {
+            channel_id: "D123",
+            thread_ts: "10.000",
+            context: { channel_id: "C999", team_id: "T1" },
+          },
+        }),
+      );
+
+      assertPrepared(prepared);
+      const payload = prepared.ctxPayload as typeof prepared.ctxPayload & Record<string, unknown>;
+      expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main:thread:10.000");
+      expect(prepared.forcedReplyThreadTs).toBe("10.000");
+      expect(payload.SlackAssistantThread).toBe(true);
+    });
+
+    it("lets a named account override the channel-level scope", async () => {
+      const cfg = {
+        channels: {
+          slack: {
+            enabled: true,
+            dm: { threadSessionScope: "dm" },
+            accounts: { default: { dm: { threadSessionScope: "thread" } } },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const ctx = createInboundSlackCtx({ cfg });
+      ctx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+      const prepared = await prepareMessageWith(
+        ctx,
+        resolveSlackAccount({ cfg }),
+        createSlackMessage({ ts: "100.000" }),
+      );
+
+      assertPrepared(prepared);
+      expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main:thread:100.000");
+      expect(prepared.forcedReplyThreadTs).toBe("100.000");
+    });
+
+    it("does not import parent DM history into a new DM thread session", async () => {
+      const { storePath } = storeFixture.makeTmpStorePath();
+      const history = vi.fn().mockResolvedValue({
+        messages: [
+          { text: "current answer", user: "U1", ts: "300.000" },
+          { text: "unrelated earlier DM", user: "U1", ts: "299.000" },
+        ],
+      });
+      const slackCtx = createInboundSlackCtx({
+        cfg: {
+          session: { store: storePath },
+          channels: { slack: { enabled: true, dmHistoryLimit: 2 } },
+        } as OpenClawConfig,
+        appClient: { conversations: { history } } as unknown as App["client"],
+        dmHistoryLimit: 2,
+      });
+      slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+      const prepared = await prepareMessageWith(
+        slackCtx,
+        createSlackAccount({ dmHistoryLimit: 2, dm: { threadSessionScope: "thread" } }),
+        createSlackMessage({ text: "current answer", ts: "300.000" }),
+      );
+
+      assertPrepared(prepared);
+      expect(history).not.toHaveBeenCalled();
+      expect(prepared.ctxPayload.Body).not.toContain("unrelated earlier DM");
+      expect(
+        Array.from(
+          (prepared.ctxPayload.Body ?? "").matchAll(
+            /\[slack message id: 300\.000 channel: D123\]/g,
+          ),
+        ),
+      ).toHaveLength(1);
+    });
   });
 
   it("injects Slack DM history for new top-level DM sessions", async () => {

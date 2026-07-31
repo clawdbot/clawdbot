@@ -14,6 +14,10 @@ export const slackChannelConfigUiHints = {
     label: "Slack DM Policy",
     help: 'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"].',
   },
+  "dm.threadSessionScope": {
+    label: "Slack DM Thread Session Scope",
+    help: 'Session identity for ordinary DM threads. "dm" (default) keeps every DM message, including thread replies, on one direct-message session. "thread" gives each DM thread its own session and forces replies into that thread — use it with Slack\'s Agent messaging experience (agent_view), where the Messages tab shows separate conversations as DM threads, to stop transcript context leaking between them.',
+  },
   configWrites: {
     label: "Slack Config Writes",
     help: "Allow Slack to write config in response to channel events/commands (default: true).",

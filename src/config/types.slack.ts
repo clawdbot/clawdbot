@@ -23,6 +23,17 @@ import type {
 } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
+/**
+ * Session identity for ordinary Slack DM threads.
+ * - "dm" (default): every DM message, including thread replies, shares the
+ *   user's direct-message session. DM threads stay a UI affordance.
+ * - "thread": each top-level DM message roots its own `:thread:<ts>` session
+ *   and later replies with that `thread_ts` reuse it. Needed for Slack's
+ *   Agent messaging experience (`agent_view`), where the Messages tab shows
+ *   visually separate conversations as ordinary DM threads.
+ */
+export type SlackDmThreadSessionScope = "dm" | "thread";
+
 export type SlackDmConfig = {
   /** If false, ignore all incoming Slack DMs. Default: true. */
   enabled?: boolean;
@@ -36,6 +47,8 @@ export type SlackDmConfig = {
   groupChannels?: Array<string | number>;
   /** @deprecated Prefer channels.slack.replyToModeByChatType.direct. */
   replyToMode?: ReplyToMode;
+  /** Session scope for ordinary DM threads (dm|thread). Default: dm. */
+  threadSessionScope?: SlackDmThreadSessionScope;
 };
 
 export type SlackChannelConfig = {

@@ -43,16 +43,49 @@ function buildCtx(overrides?: {
   } satisfies SlackRoutingContextDeps;
 }
 
-function buildAccount(replyToMode: "all" | "first" | "off" | "batched"): ResolvedSlackAccount {
+function buildAccount(
+  replyToMode: "all" | "first" | "off" | "batched",
+  dm?: ResolvedSlackAccount["dm"],
+): ResolvedSlackAccount {
   return {
     accountId: "default",
     enabled: true,
     botTokenSource: "config",
     appTokenSource: "config",
     userTokenSource: "none",
-    config: { replyToMode },
+    config: { replyToMode, ...(dm ? { dm } : {}) },
     replyToMode,
+    dm,
   };
+}
+
+function buildDmMessage(overrides?: Partial<SlackMessageEvent>): SlackMessageEvent {
+  return {
+    channel: "D456",
+    channel_type: "im",
+    user: "U3",
+    text: "dm message",
+    ts: "1770408530.000000",
+    ...overrides,
+  } as SlackMessageEvent;
+}
+
+function routeDm(params: {
+  account: ResolvedSlackAccount;
+  message: SlackMessageEvent;
+  ctx?: ReturnType<typeof buildCtx>;
+  assistantThreadTs?: string;
+}) {
+  return resolveSlackRoutingContext({
+    ctx: params.ctx ?? buildCtx({ replyToMode: "all", dmScope: "per-channel-peer" }),
+    account: params.account,
+    message: params.message,
+    isDirectMessage: true,
+    isGroupDm: false,
+    isRoom: false,
+    isRoomish: false,
+    assistantThreadTs: params.assistantThreadTs,
+  });
 }
 
 function buildChannelMessage(overrides?: Partial<SlackMessageEvent>): SlackMessageEvent {
@@ -649,6 +682,153 @@ describe("thread-level session keys", () => {
         parentConversationId: "user:U3",
       });
       expect(touch).toHaveBeenCalledWith("test-slack-dm-thread-binding", undefined);
+    } finally {
+      unregisterSessionBindingAdapter({ channel: "slack", accountId: "default", adapter });
+    }
+  });
+
+  it("keeps DM routing flat for explicit dm.threadSessionScope=dm", () => {
+    const account = buildAccount("all", { threadSessionScope: "dm" });
+
+    const root = routeDm({ account, message: buildDmMessage() });
+    const reply = routeDm({
+      account,
+      message: buildDmMessage({
+        ts: "1770408540.000000",
+        thread_ts: "1770408530.000000",
+        parent_user_id: "B1",
+      }),
+    });
+
+    expect(root.sessionKey).toBe("agent:main:slack:direct:u3");
+    expect(reply.sessionKey).toBe("agent:main:slack:direct:u3");
+    expect(root.dmThreadTs).toBeUndefined();
+    expect(reply.dmThreadTs).toBeUndefined();
+  });
+
+  it("roots a thread-scoped session per top-level DM when dm.threadSessionScope=thread", () => {
+    const account = buildAccount("all", { threadSessionScope: "thread" });
+
+    const first = routeDm({ account, message: buildDmMessage({ ts: "100.000" }) });
+    const second = routeDm({ account, message: buildDmMessage({ ts: "200.000" }) });
+
+    expect(first.sessionKey).toBe("agent:main:slack:direct:u3:thread:100.000");
+    expect(second.sessionKey).toBe("agent:main:slack:direct:u3:thread:200.000");
+    expect(first.sessionKey).not.toBe(second.sessionKey);
+    expect(first.dmThreadTs).toBe("100.000");
+    expect(second.dmThreadTs).toBe("200.000");
+  });
+
+  it("reuses the root DM thread session for later replies when dm.threadSessionScope=thread", () => {
+    const account = buildAccount("all", { threadSessionScope: "thread" });
+    const rootTs = "100.000";
+
+    const root = routeDm({ account, message: buildDmMessage({ ts: rootTs }) });
+    const reply = routeDm({
+      account,
+      message: buildDmMessage({ ts: "150.000", thread_ts: rootTs, parent_user_id: "B1" }),
+    });
+
+    expect(root.sessionKey).toBe("agent:main:slack:direct:u3:thread:100.000");
+    expect(reply.sessionKey).toBe(root.sessionKey);
+    expect(reply.dmThreadTs).toBe(rootTs);
+  });
+
+  it("roots DM thread sessions even when replyToMode=off", () => {
+    const account = buildAccount("off", { threadSessionScope: "thread" });
+
+    const routing = routeDm({
+      ctx: buildCtx({ replyToMode: "off", dmScope: "per-channel-peer" }),
+      account,
+      message: buildDmMessage({ ts: "100.000" }),
+    });
+
+    expect(routing.sessionKey).toBe("agent:main:slack:direct:u3:thread:100.000");
+    expect(routing.dmThreadTs).toBe("100.000");
+  });
+
+  it("keeps assistant thread ids authoritative when dm.threadSessionScope=thread", () => {
+    const account = buildAccount("all", { threadSessionScope: "thread" });
+
+    const routing = routeDm({
+      account,
+      message: buildDmMessage({
+        ts: "1770408540.000000",
+        thread_ts: "1770408530.000000",
+        parent_user_id: "B1",
+      }),
+      assistantThreadTs: "1770408530.000000",
+    });
+
+    expect(routing.sessionKey).toBe("agent:main:slack:direct:u3:thread:1770408530.000000");
+    // Assistant threads keep using the assistant lifecycle thread, so the
+    // ordinary-DM thread hint stays unset.
+    expect(routing.dmThreadTs).toBeUndefined();
+  });
+
+  it("leaves group DMs and channel threads untouched by dm.threadSessionScope=thread", () => {
+    const ctx = buildCtx({ replyToMode: "all" });
+    const account = buildAccount("all", { threadSessionScope: "thread" });
+
+    const groupDm = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: buildChannelMessage({ channel: "G123", channel_type: "mpim", ts: "100.000" }),
+      isDirectMessage: false,
+      isGroupDm: true,
+      isRoom: false,
+      isRoomish: true,
+      seedTopLevelRoomThread: true,
+    });
+    const channelRoot = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: buildChannelMessage({ channel: "C123", ts: "100.000" }),
+      isDirectMessage: false,
+      isGroupDm: false,
+      isRoom: true,
+      isRoomish: true,
+    });
+
+    expect(groupDm.sessionKey).toBe("agent:main:slack:group:g123");
+    expect(channelRoot.sessionKey).toBe("agent:main:slack:channel:c123");
+    expect(groupDm.dmThreadTs).toBeUndefined();
+    expect(channelRoot.dmThreadTs).toBeUndefined();
+  });
+
+  it("still honors runtime conversation bindings when dm.threadSessionScope=thread", () => {
+    const targetSessionKey = "agent:review:acp:session-slack-dm-thread-scope";
+    const binding: SessionBindingRecord = {
+      bindingId: "test-slack-dm-thread-scope-binding",
+      targetSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "100.000",
+        parentConversationId: "user:U3",
+      },
+      status: "active",
+      boundAt: Date.now(),
+      metadata: {},
+    };
+    const adapter: SessionBindingAdapter = {
+      channel: "slack",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (ref) =>
+        ref.conversationId === "100.000" && ref.parentConversationId === "user:U3" ? binding : null,
+    };
+    registerSessionBindingAdapter(adapter);
+    try {
+      const routing = routeDm({
+        account: buildAccount("all", { threadSessionScope: "thread" }),
+        message: buildDmMessage({ ts: "100.000" }),
+      });
+
+      expect(routing.sessionKey).toBe(targetSessionKey);
+      expect(routing.runtimeBoundSessionKey).toBe(targetSessionKey);
+      expect(routing.sessionKey).not.toContain(":thread:");
     } finally {
       unregisterSessionBindingAdapter({ channel: "slack", accountId: "default", adapter });
     }

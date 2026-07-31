@@ -913,6 +913,7 @@ export const SlackDmSchema = z
     groupEnabled: z.boolean().optional(),
     groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
     replyToMode: ReplyToModeSchema.optional(),
+    threadSessionScope: z.enum(["dm", "thread"]).optional(),
   })
   .strict();
 

@@ -84,6 +84,36 @@ describe("slack config schema", () => {
     });
   });
 
+  it("accepts dm.threadSessionScope at root and account level", () => {
+    const res = SlackConfigSchema.safeParse({
+      dm: { threadSessionScope: "dm" },
+      accounts: { ops: { dm: { threadSessionScope: "thread" } } },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.dm?.threadSessionScope).toBe("dm");
+      expect(res.data.accounts?.ops?.dm?.threadSessionScope).toBe("thread");
+    }
+  });
+
+  it("leaves dm.threadSessionScope unset by default", () => {
+    const res = SlackConfigSchema.safeParse({ dm: {} });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.dm?.threadSessionScope).toBeUndefined();
+    }
+  });
+
+  it("rejects unknown dm.threadSessionScope values", () => {
+    expectSlackConfigIssue({ dm: { threadSessionScope: "per-thread" } }, "dm.threadSessionScope");
+    expectSlackConfigIssue(
+      { accounts: { ops: { dm: { threadSessionScope: true } } } },
+      "accounts.ops.dm.threadSessionScope",
+    );
+  });
+
   it("accepts user token config fields", () => {
     expectSlackConfigValid({
       botToken: "xoxb-any",

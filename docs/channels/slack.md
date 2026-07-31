@@ -1023,9 +1023,43 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 - Ordinary top-level channel messages stay on the per-channel session, even when `replyToMode` is non-`off`.
 - Slack thread replies use the parent Slack `thread_ts` for session suffixes (`:thread:<threadTs>`), even when outbound reply threading is disabled with `replyToMode="off"`.
 - OpenClaw seeds an eligible top-level channel root into `agent:<agentId>:slack:channel:<channelId>:thread:<rootTs>` when that root is expected to start a visible Slack thread, so the root and later thread replies share one OpenClaw session. This applies to `app_mention` events, explicit bot or configured mention-pattern matches, and `requireMention: false` channels with non-`off` `replyToMode`.
+- Ordinary DM threads are a UI affordance by default: top-level DMs and DM thread replies all share the direct-message session. Set `channels.slack.dm.threadSessionScope` to `"thread"` to make each DM thread its own session (see below).
 - `channels.slack.thread.historyScope` default is `thread`; `thread.inheritParent` default is `false`.
 - `channels.slack.thread.initialHistoryLimit` controls how many existing thread messages are fetched when a new thread session starts (default `20`; set `0` to disable).
 - `channels.slack.thread.requireExplicitMention` (default `false`): when `true`, suppress implicit thread mentions so the bot only responds to explicit `@bot` mentions inside threads, even when the bot already participated in the thread. Without this, replies in a bot-participated thread bypass `requireMention` gating.
+
+### DM thread sessions (`agent_view`)
+
+`channels.slack.dm.threadSessionScope` chooses whether an ordinary Slack DM thread is a session boundary:
+
+| Value            | Behavior                                                                                                                     |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `"dm"` (default) | Top-level DMs and DM thread replies share the direct-message session.                                                        |
+| `"thread"`       | Each top-level DM roots `agent:<agentId>:slack:direct:<userId>:thread:<rootTs>`; replies carrying that `thread_ts` reuse it. |
+
+```json
+{
+  "channels": {
+    "slack": {
+      "dm": {
+        "threadSessionScope": "thread"
+      }
+    }
+  }
+}
+```
+
+Set it per account with `channels.slack.accounts.<accountId>.dm.threadSessionScope`, which overrides the channel-level value.
+
+Use `"thread"` with Slack's current **Agent messaging experience** (`features.agent_view`). Agent View renders each conversation in the app's Messages tab as an ordinary DM thread, so the default `"dm"` scope collapses visually separate conversations into one transcript. The legacy **Assistant messaging experience** (`features.assistant_view`) does not need this: events carrying Slack's `assistant_thread` marker already route to their own thread sessions, and that marker stays authoritative in both scopes.
+
+In `"thread"` scope:
+
+- Replies are forced into the Slack thread rooted at the triggering message, regardless of `replyToMode` — a thread-scoped session is only coherent if its replies stay in that thread.
+- Session-scoped commands (`/new`, `/reset`, `/model`, reasoning, verbosity, compaction) affect only the selected DM thread.
+- The new session does not import parent-DM history. Set `channels.slack.thread.inheritParent: true` if you do want the parent transcript.
+- `channels.slack.thread.historyScope` keeps its meaning: it controls thread-history lookup, not session identity.
+- Group DMs, channels, and channel threads are unaffected.
 
 Reply threading controls:
 

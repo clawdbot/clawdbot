@@ -774,6 +774,7 @@ export async function prepareSlackMessage(params: {
     threadKeys,
     sessionKey,
     historyKey,
+    dmThreadTs,
   } = routing;
   const isAssistantThreadMessage = Boolean(isDirectMessage && messageAssistantThreadContext);
   const shouldForceAssistantReplyThread = Boolean(
@@ -783,6 +784,11 @@ export async function prepareSlackMessage(params: {
   const forcedAssistantReplyThreadTs = shouldForceAssistantReplyThread
     ? assistantThreadContext?.threadTs
     : undefined;
+  // A thread-scoped DM session is only coherent if replies land in the matching
+  // Slack thread, so force the thread target regardless of replyToMode. Without
+  // this the root's session is `:thread:<rootTs>` while its reply is posted at
+  // DM top level, and the next root would swallow the follow-up.
+  const forcedReplyThreadTs = forcedAssistantReplyThreadTs ?? dmThreadTs;
   if (runtimeBinding && shouldLogVerbose()) {
     logVerbose(
       `slack: routed via bound conversation ${runtimeBinding.conversation.conversationId} -> ${runtimeBinding.targetSessionKey}`,
@@ -814,8 +820,12 @@ export async function prepareSlackMessage(params: {
       return null;
     }
   }
+  // True when a DM thread reply collapsed onto the flat DM session, so thread
+  // starter/label/transport hints must be suppressed. Thread-scoped DM sessions
+  // (`dm.threadSessionScope="thread"`) keep the normal thread treatment.
   const directThreadRoutedToDmSession =
     !assistantThreadContext &&
+    !dmThreadTs &&
     isDirectMessage &&
     isThreadReply &&
     threadTs &&
@@ -1176,8 +1186,16 @@ export async function prepareSlackMessage(params: {
   });
 
   let combinedBody = body;
+  // A thread-scoped DM session must not inherit unrelated parent-DM turns; that
+  // isolation is the point of `dm.threadSessionScope="thread"`. Operators who do
+  // want the parent transcript opt in with `channels.slack.thread.inheritParent`.
+  const allowDmHistoryImport = !dmThreadTs || ctx.threadInheritParent;
   const dmHistoryContext =
-    isDirectMessage && !isThreadReply && dmHistoryLimit > 0 && !previousTimestamp
+    isDirectMessage &&
+    allowDmHistoryImport &&
+    !isThreadReply &&
+    dmHistoryLimit > 0 &&
+    !previousTimestamp
       ? await resolveSlackDmHistoryContext({
           ctx,
           channelId: message.channel,
@@ -1254,7 +1272,7 @@ export async function prepareSlackMessage(params: {
   const supplementalThreadHistoryBody =
     directThreadRoutedToDmSession && !threadHistoryBody ? threadStarterBody : threadHistoryBody;
   const effectiveMessageThreadId =
-    assistantThreadContext?.threadTs ?? threadContext.messageThreadId;
+    assistantThreadContext?.threadTs ?? dmThreadTs ?? threadContext.messageThreadId;
 
   const ctxPayload = buildChannelInboundEventContext({
     channel: "slack",
@@ -1448,7 +1466,7 @@ export async function prepareSlackMessage(params: {
           : undefined,
     },
     replyToMode,
-    ...(forcedAssistantReplyThreadTs ? { forcedReplyThreadTs: forcedAssistantReplyThreadTs } : {}),
+    ...(forcedReplyThreadTs ? { forcedReplyThreadTs } : {}),
     ...(assistantThreadContext
       ? { slackMessageMetadata: buildSlackAssistantThreadMetadata(assistantThreadContext) }
       : {}),
