@@ -196,6 +196,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
   let lastUpdateId = options.initialUpdateId;
   let failures = 0;
   let consecutiveEmptyPolls = 0;
+  let pollingConfirmed = false;
 
   port.onMessage((message) => {
     if (message?.type === "stop") {
@@ -251,7 +252,9 @@ export async function runTelegramIngressWorkerRuntime(params: {
           fetch: fetchImpl,
           url: getUpdatesUrl,
           body: {
-            timeout: pollTimeoutSeconds,
+            // Confirm getUpdates ownership with a completed short poll before
+            // entering the long poll; request start alone cannot prove connectivity.
+            timeout: pollingConfirmed ? pollTimeoutSeconds : 0,
             limit: pollLimit,
             allowed_updates: resolveTelegramAllowedUpdates(),
             ...(offset === null ? {} : { offset }),
@@ -273,6 +276,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
           }
           port.postMessage({ type: "spooled", updateId, queued: result.length });
         }
+        pollingConfirmed = true;
         failures = 0;
         port.postMessage({
           type: "poll-success",
