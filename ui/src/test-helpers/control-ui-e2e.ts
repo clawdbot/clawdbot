@@ -207,6 +207,8 @@ export type ControlUiMockGatewayScenario = {
     name: string;
     provider: string;
     available?: boolean;
+    contextWindow?: number;
+    supportsTools?: boolean;
   }>;
   /** Operator scopes returned by the mocked connect handshake. */
   operatorScopes?: string[];
@@ -1360,7 +1362,7 @@ function installControlUiMockGateway(
         return { ok: true, updatedSessions: 0, ...groupsPayload() };
       }
       case "sessions.subscribe":
-        return { ok: true };
+        return { subscribed: true };
       case "sessions.messages.subscribe":
         return {
           key: isRecord(params) && typeof params.key === "string" ? params.key : "",
@@ -1430,7 +1432,7 @@ function installControlUiMockGateway(
       this.dispatchEvent(new Event("open"));
       this.deliver({
         event: "connect.challenge",
-        payload: { nonce: "control-ui-e2e-nonce" },
+        payload: { nonce: "control-ui-e2e-nonce", ts: Date.now() },
         type: "event",
       });
     }

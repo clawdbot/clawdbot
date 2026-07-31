@@ -9,6 +9,7 @@ import {
   getWindowsPowerShellExePath,
 } from "../infra/windows-install-roots.js";
 import { sleep } from "../utils.js";
+import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { formatLine } from "./output.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { execSchtasks } from "./schtasks-exec.js";
@@ -132,8 +133,22 @@ export async function removeStartupEntries(
     try {
       await fs.unlink(startupEntryPath);
       stdout.write(`${formatLine("Removed Windows login item", startupEntryPath)}\n`);
-    } catch {}
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        throw createStartupEntryRemovalError(error);
+      }
+    }
   }
+}
+
+function createStartupEntryRemovalError(error: unknown): Error {
+  const code = (error as NodeJS.ErrnoException).code;
+  // Native filesystem errors include the private Startup-folder path in their messages.
+  return new Error(
+    `Windows login item removal failed${code ? ` (${code})` : ""}. Check permissions and retry.`,
+    { cause: code ? { code } : undefined },
+  );
 }
 
 export async function hasScheduledTaskRunningEvidence(env: GatewayServiceEnv): Promise<boolean> {
@@ -270,17 +285,9 @@ export async function resolveFallbackRuntime(
         detail: `Startup-folder login item installed; could not verify the installed process for gateway port ${port}.`,
       };
     }
-  } else {
-    const verifiedPids = findVerifiedGatewayListenerPidsOnPortSync(port);
-    if (verifiedPids.length > 0) {
-      return {
-        status: "running",
-        pid: verifiedPids[0],
-        detail: `Startup-folder login item installed; verified gateway listener detected on port ${port}.`,
-      };
-    }
   }
-  const diagnostics = await inspectPortUsage(port).catch(() => null);
+  const probeHosts = await resolveGatewayServiceProbeHosts({ env, command });
+  const diagnostics = await inspectPortUsage(port, { probeHosts }).catch(() => null);
   if (!diagnostics) {
     return {
       status: "unknown",
@@ -299,7 +306,12 @@ export async function resolveFallbackRuntime(
     };
   }
   const matchedGatewayPids = resolveGatewayListenerPids(diagnostics.listeners);
-  if (matchedGatewayPids.length > 0) {
+  const scopedListenerPids = new Set(diagnostics.listeners.map((listener) => listener.pid));
+  const verifiedGatewayPids = findVerifiedGatewayListenerPidsOnPortSync(port).filter((pid) =>
+    scopedListenerPids.has(pid),
+  );
+  const ownedGatewayPids = matchedGatewayPids.length > 0 ? matchedGatewayPids : verifiedGatewayPids;
+  if (ownedGatewayPids.length > 0) {
     return requireCommandOwnership
       ? {
           status: "unknown",
@@ -307,7 +319,7 @@ export async function resolveFallbackRuntime(
         }
       : {
           status: "running",
-          pid: matchedGatewayPids[0],
+          pid: ownedGatewayPids[0],
           detail: `Startup-folder login item installed; verified gateway listener detected on port ${port}.`,
         };
   }

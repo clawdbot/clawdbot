@@ -29,6 +29,7 @@
       "method": "local",
       "choiceId": "llama-cpp",
       "appGuidedDiscovery": true,
+      "appGuidedActionLabel": "Review download",
       "choiceLabel": "Local model (llama.cpp)",
       "choiceHint": "Downloads an approximately 5.0 GB local model; requires 16 GB RAM",
       "groupId": "llama-cpp",

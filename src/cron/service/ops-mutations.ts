@@ -8,6 +8,7 @@ import {
   isCronJobActive,
   noteActiveCronJobRemoval,
   noteActiveCronJobScheduleMutation,
+  noteActiveCronJobTriggerMutation,
 } from "../active-jobs.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { deleteCronJobScratch } from "../scratch-store.js";
@@ -161,6 +162,16 @@ async function persistUpdatedJob(params: {
     // Mark only committed edits; a failed SQLite write cannot retire the run's
     // schedule ownership, and idempotent re-saves must not create a new claim.
     noteActiveCronJobScheduleMutation(nextJob.id);
+  }
+  if (
+    !isDeepStrictEqual(previousJob.trigger, nextJob.trigger) ||
+    !isDeepStrictEqual(previousJob.state.triggerState, nextJob.state.triggerState) ||
+    ((previousJob.payload.kind === "script" || nextJob.payload.kind === "script") &&
+      !isDeepStrictEqual(previousJob.payload, nextJob.payload))
+  ) {
+    // Trigger/script definitions and shared-state edits retire the admitted
+    // state writer; otherwise an obsolete evaluation or script wins later.
+    noteActiveCronJobTriggerMutation(nextJob.id);
   }
   armTimer(state);
   emit(state, {

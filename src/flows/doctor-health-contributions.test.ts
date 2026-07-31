@@ -845,6 +845,20 @@ describe("doctor health contributions", () => {
     expect(ids.indexOf("doctor:plugin-registry")).toBeLessThan(ids.indexOf("doctor:write-config"));
   });
 
+  it("repairs canonical session rows before downstream agent-state checks", () => {
+    const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
+
+    expect(ids.indexOf("doctor:legacy-state")).toBeLessThan(
+      ids.indexOf("doctor:session-transcripts"),
+    );
+    expect(ids.indexOf("doctor:session-transcripts")).toBeLessThan(
+      ids.indexOf("doctor:agent-memory-schema"),
+    );
+    expect(ids.indexOf("doctor:session-transcripts")).toBeLessThan(
+      ids.indexOf("doctor:plugin-registry"),
+    );
+  });
+
   it("orders the config-flow commit before runtime-backed diagnostics", () => {
     const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
     const migrationWriteIndex = ids.indexOf("doctor:write-config-migrations");

@@ -2,6 +2,20 @@ import { describe, expect, it } from "vitest";
 import { OpenAIRealtimeVoiceLifecycle } from "./realtime-voice-lifecycle.js";
 
 describe("OpenAIRealtimeVoiceLifecycle", () => {
+  it("terminalizes preconnect cancellation until an explicit fresh connection", () => {
+    const lifecycle = new OpenAIRealtimeVoiceLifecycle();
+
+    expect(lifecycle.phase()).toBe("idle");
+    expect(lifecycle.cancel()).toBe(true);
+    expect(lifecycle.phase()).toBe("terminal");
+    expect(lifecycle.cancel()).toBe(false);
+
+    const connection = lifecycle.connect();
+    expect(lifecycle.phase()).toBe("connecting");
+    expect(lifecycle.ready(connection)).toBe(true);
+    expect(lifecycle.phase()).toBe("ready");
+  });
+
   it("moves a connection from connecting to ready", () => {
     const lifecycle = new OpenAIRealtimeVoiceLifecycle();
     const connection = lifecycle.connect();

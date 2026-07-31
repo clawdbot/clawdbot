@@ -23,6 +23,10 @@ const RECONNECT_BACKOFF = {
 const RECONNECT_STABLE_MS = 60_000;
 const RECONNECT_LOOKBACK_SECONDS = 24 * 60 * 60;
 
+export function getActiveBuzzBus(accountId: string): BuzzBus | undefined {
+  return activeBuses.get(accountId);
+}
+
 function resolveBuzzProfileName(params: {
   cfg: OpenClawConfig;
   account: ResolvedBuzzAccount;
@@ -93,12 +97,12 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
         channelIds,
         since: sessionSince,
         signal: ctx.abortSignal,
-        onMessage: async (message, sessionBus) => {
+        onMessage: async (message, sessionBus, signal) => {
           // Subscription filters reduce traffic, but relay events remain untrusted.
           if (!isConfiguredBuzzChannel(configuredChannelIds, message.channelId)) {
             return;
           }
-          await handleBuzzInbound({ account, cfg: ctx.cfg, bus: sessionBus, message });
+          await handleBuzzInbound({ account, cfg: ctx.cfg, bus: sessionBus, message, signal });
         },
         onMessageError: (error) => {
           ctx.log?.error?.(`[${account.accountId}] Buzz message failed: ${error.message}`);
@@ -121,6 +125,9 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
         onProfileError: (error) => {
           ctx.log?.warn?.(`[${account.accountId}] Buzz bot profile sync failed: ${error.message}`);
         },
+        onDirectoryError: (error) => {
+          ctx.log?.warn?.(`[${account.accountId}] Buzz directory refresh failed: ${error.message}`);
+        },
       });
       connectedAt = Date.now();
       activeBuses.set(account.accountId, bus);
@@ -134,7 +141,7 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
         lastError: null,
       });
       ctx.log?.info?.(
-        `[${account.accountId}] Buzz connected to ${account.relayUrl} for ${channelIds.length} channel(s)`,
+        `[${account.accountId}] Buzz connected to ${account.relayUrl} for ${bus.directory.activeRoomIds().length} channel(s)`,
       );
       const fatalError = await Promise.race([
         waitUntilAbort(ctx.abortSignal).then(() => undefined),

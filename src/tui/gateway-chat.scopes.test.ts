@@ -137,7 +137,7 @@ describe("GatewayChatClient operator scopes", () => {
         socket.receive({
           type: "event",
           event: "connect.challenge",
-          payload: { nonce },
+          payload: { nonce, ts: Date.now() },
         });
         const connect = socket.sent.find((frame) => frame.method === "connect");
         if (!connect) {

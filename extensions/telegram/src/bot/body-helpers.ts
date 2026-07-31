@@ -96,9 +96,10 @@ export type TelegramTextEntity = NonNullable<Message["entities"]>[number];
 
 const TELEGRAM_RICH_MESSAGE_PLACEHOLDER = "[unsupported Telegram rich_message received]";
 
-type TelegramTextMessage = Pick<Message, "text" | "caption" | "entities" | "caption_entities"> & {
-  rich_message?: unknown;
-};
+type TelegramTextMessage = Pick<
+  Message,
+  "text" | "caption" | "entities" | "caption_entities" | "poll"
+> & { rich_message?: unknown };
 
 function hasTelegramRichMessage(value: unknown): boolean {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -215,13 +216,67 @@ export function resolveTelegramTextContent(text: unknown, caption?: unknown): st
   return isBinaryContent(raw) ? "" : raw;
 }
 
+function formatTelegramPollText(poll: NonNullable<Message["poll"]>): string {
+  const correctOptionIds = new Set(poll.correct_option_ids ?? []);
+  const optionLines = poll.options.map((option, index) => {
+    const optionText = renderTelegramTextEntities(option.text, option.text_entities);
+    const voteLabel = option.voter_count === 1 ? "vote" : "votes";
+    const correctLabel = correctOptionIds.has(index) ? " (correct)" : "";
+    return `${index + 1}. ${optionText} — ${option.voter_count} ${voteLabel}${correctLabel}`;
+  });
+
+  return [
+    `[Poll] ${renderTelegramTextEntities(poll.question, poll.question_entities)}`,
+    ...(poll.description
+      ? [renderTelegramTextEntities(poll.description, poll.description_entities)]
+      : []),
+    ...optionLines,
+    `Total voters: ${poll.total_voter_count}`,
+    `Type: ${poll.type}`,
+    `Visibility: ${poll.is_anonymous ? "anonymous" : "public"}`,
+    `Selection: ${poll.allows_multiple_answers ? "multiple answers" : "single answer"}`,
+    `Status: ${poll.is_closed ? "closed" : "open"}`,
+    ...(poll.explanation
+      ? [`Explanation: ${renderTelegramTextEntities(poll.explanation, poll.explanation_entities)}`]
+      : []),
+  ].join("\n");
+}
+
 export function getTelegramTextParts(msg: TelegramTextMessage): {
   text: string;
   entities: TelegramTextEntity[];
 } {
   const text = resolveTelegramTextContent(msg.text, msg.caption);
-  const entities = text ? (msg.entities ?? msg.caption_entities ?? []) : [];
-  return { text, entities };
+  if (text) {
+    return { text, entities: msg.entities ?? msg.caption_entities ?? [] };
+  }
+  return { text: msg.poll ? formatTelegramPollText(msg.poll) : "", entities: [] };
+}
+
+export function joinTelegramTextParts(
+  messages: readonly Message[],
+  separator: string,
+): { text: string; entities: TelegramTextEntity[] } {
+  const textParts: string[] = [];
+  const entities: TelegramTextEntity[] = [];
+  let offset = 0;
+
+  for (const message of messages) {
+    const textPart = getTelegramTextParts(message);
+    if (!textPart.text) {
+      continue;
+    }
+    if (textParts.length > 0) {
+      offset += separator.length;
+    }
+    entities.push(
+      ...textPart.entities.map((entity) => ({ ...entity, offset: entity.offset + offset })),
+    );
+    textParts.push(textPart.text);
+    offset += textPart.text.length;
+  }
+
+  return { text: textParts.join(separator), entities };
 }
 
 function isTelegramMentionWordChar(char: string | undefined): boolean {

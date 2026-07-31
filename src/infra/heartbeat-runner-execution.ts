@@ -487,6 +487,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     // re-entry for heartbeat-created isolated sessions. Real session keys that
     // happen to end with `:heartbeat` still get a distinct isolated sibling.
     const { isolatedSessionKey, isolatedBaseSessionKey } = resolveIsolatedHeartbeatSessionKey({
+      agentId,
       sessionKey,
       configuredSessionKey: configuredSession.sessionKey,
       sessionEntry: entry,

@@ -1518,9 +1518,15 @@ export async function handleManagedOutgoingMediaHttpRequest(
     method: req.method,
     rangeHeader: req.headers.range,
     ifRangeHeader: req.headers["if-range"],
+    ifNoneMatchHeader: req.headers["if-none-match"],
   });
   writeByteHeaders(res, byteResponse);
-  if (req.method === "HEAD" || byteResponse.kind === "unsatisfiable" || opened.stat.size === 0) {
+  if (
+    req.method === "HEAD" ||
+    byteResponse.kind === "not-modified" ||
+    byteResponse.kind === "unsatisfiable" ||
+    opened.stat.size === 0
+  ) {
     await closeOpenedHandle();
     res.end();
     return true;

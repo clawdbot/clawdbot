@@ -136,6 +136,8 @@ export async function recordOutboundMessageForPromptContext(params: {
   successfulSendThread?: TelegramThreadSpec;
   promptContextTimestampMs?: number;
   promptContextProjection?: TelegramPromptContextProjection;
+  /** Edits refresh an existing cache entry without inserting another self-history turn. */
+  recordGroupHistory?: boolean;
 }): Promise<boolean> {
   try {
     const providerGeneralTopicId =
@@ -169,14 +171,16 @@ export async function recordOutboundMessageForPromptContext(params: {
       ...(providerObservedThreadId !== undefined ? { providerObservedThreadId } : {}),
       ...(messageThreadId !== undefined ? { threadId: messageThreadId } : {}),
     });
-    const timestamp = resolveOutboundCacheMessageTimestamp(cacheMessage);
-    outboundGroupHistoryRecorders.get(params.account.accountId)?.({
-      chatId: params.chatId,
-      messageId: params.messageId,
-      text: params.text ?? cacheMessage.text ?? cacheMessage.caption,
-      ...(messageThreadId !== undefined ? { messageThreadId } : {}),
-      ...(timestamp !== undefined ? { timestamp } : {}),
-    });
+    if (params.recordGroupHistory !== false) {
+      const timestamp = resolveOutboundCacheMessageTimestamp(cacheMessage);
+      outboundGroupHistoryRecorders.get(params.account.accountId)?.({
+        chatId: params.chatId,
+        messageId: params.messageId,
+        text: params.text ?? cacheMessage.text ?? cacheMessage.caption,
+        ...(messageThreadId !== undefined ? { messageThreadId } : {}),
+        ...(timestamp !== undefined ? { timestamp } : {}),
+      });
+    }
     return true;
   } catch (error) {
     logVerbose(`telegram: failed to record outbound message context: ${String(error)}`);

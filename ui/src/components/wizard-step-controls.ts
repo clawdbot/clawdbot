@@ -80,6 +80,15 @@ function renderContinueStep(props: WizardStepControlsProps) {
   `;
 }
 
+function renderProgressStep(step: WizardStep) {
+  return html`
+    <div class="wizard-step__progress" role="status" aria-live="polite">
+      <span class="wizard-step__spinner" aria-hidden="true"></span>
+      ${renderMessage(step)}
+    </div>
+  `;
+}
+
 function renderTextStep(props: WizardStepControlsProps) {
   const step = props.step;
   const value = typeof props.value === "string" ? props.value : "";
@@ -221,10 +230,12 @@ export function renderWizardStepControls(
       return renderConfirmStep(props);
     case "multiselect":
       return renderMultiselectStep(props);
-    // These carry no input of their own: they show whatever the step supplies
-    // (message, link, device code) behind a single Continue.
-    case "note":
     case "progress":
+      return props.step.executor === "gateway"
+        ? renderProgressStep(props.step)
+        : renderContinueStep(props);
+    // These show whatever the step supplies behind a single Continue.
+    case "note":
     case "action":
       return renderContinueStep(props);
   }

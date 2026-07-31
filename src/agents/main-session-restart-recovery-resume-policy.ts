@@ -3,6 +3,7 @@ import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
 import {
   getTranscriptMessageRole as getMessageRole,
+  isIntermediateAssistantTranscriptMessage,
   isMeaningfulTranscriptMessage,
   readTerminalSourceReplyDeliveryMirror,
 } from "./embedded-agent-runner/message-visibility.js";
@@ -244,6 +245,7 @@ const LEGACY_RESTART_ABORT_ERROR_MESSAGES = new Set([
   "This operation was aborted",
   AGENT_RUN_RESTART_ABORT_ERROR,
 ]);
+const CODE_MODE_RESTART_ABORT_ERROR = "code mode execution aborted";
 
 function isRestartAbortAssistantMessage(message: unknown): boolean {
   if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
@@ -297,8 +299,7 @@ function isRestartAbortedWaitFailure(message: unknown): boolean {
   if (
     !details ||
     typeof details !== "object" ||
-    (details as { status?: unknown }).status !== "failed" ||
-    (details as { code?: unknown }).code !== "internal_error"
+    (details as { status?: unknown }).status !== "failed"
   ) {
     return false;
   }
@@ -315,6 +316,16 @@ function isRestartAbortedWaitFailure(message: unknown): boolean {
   const errorText =
     normalizeOptionalString((details as { error?: unknown }).error) ??
     normalizeOptionalString(contentText);
+  const code = normalizeOptionalString((details as { code?: unknown }).code);
+  if (code === "aborted") {
+    // Current Code Mode wait aborts use the runtime's explicit abort code and
+    // message. Recovery already owns the restart boundary, so this exact pair
+    // is lifecycle noise rather than a provider or tool failure.
+    return errorText === CODE_MODE_RESTART_ABORT_ERROR;
+  }
+  if (code !== "internal_error") {
+    return false;
+  }
   return /^(?:(?:Abort)?Error:\s*)?(?:The|This) operation was aborted\.?$/u.test(errorText ?? "");
 }
 
@@ -346,7 +357,11 @@ type MainSessionResumePolicy =
     }
   | { action: "complete"; reason: "handled-silent" }
   | { action: "fail"; reason: string }
-  | { action: "resume"; forceRestartSafeTools: boolean };
+  | {
+      action: "resume";
+      forceRestartSafeTools: boolean;
+      forceCodeModeTools?: true;
+    };
 
 export function resolveMainSessionResumePolicy(
   messages: unknown[],
@@ -389,7 +404,16 @@ export function resolveMainSessionResumePolicy(
   }
   // `admitted` means no optional hook started. The dispatch boundary reloads
   // the current hook set before it permits this transcript to resume.
-  const meaningfulMessages = messages.toReversed().filter(isMeaningfulTranscriptMessage);
+  // Progress can commit after the recovery mark while the old run is winding
+  // down. It is not a terminal turn boundary; preserve it in the transcript
+  // while classifying the actual user/tool/assistant boundary beneath it.
+  const meaningfulMessages = messages
+    .toReversed()
+    .filter(
+      (message) =>
+        isMeaningfulTranscriptMessage(message) &&
+        !isIntermediateAssistantTranscriptMessage(message),
+    );
   // A restart abort tail without tool calls is lifecycle noise whether or not
   // partial streamed text was persisted with it; the partial output stays in
   // the transcript for the continuation, and the message beneath decides
@@ -417,7 +441,7 @@ export function resolveMainSessionResumePolicy(
     const waitCall = readCodeModeWaitCall(meaningfulMessages[1]);
     const checkpoint = readCodeModeCheckpoint(meaningfulMessages[2]);
     return waitCall && checkpoint?.replaySafe === true && checkpoint.runId === waitCall.runId
-      ? { action: "resume", forceRestartSafeTools: true }
+      ? { action: "resume", forceRestartSafeTools: true, forceCodeModeTools: true }
       : {
           action: "fail",
           reason: "failed Code Mode wait cannot be matched to a replay-safe checkpoint",
@@ -427,13 +451,13 @@ export function resolveMainSessionResumePolicy(
   if (waitCall) {
     const checkpoint = readCodeModeCheckpoint(meaningfulMessages[1]);
     return checkpoint?.replaySafe === true && checkpoint.runId === waitCall.runId
-      ? { action: "resume", forceRestartSafeTools: true }
+      ? { action: "resume", forceRestartSafeTools: true, forceCodeModeTools: true }
       : { action: "fail", reason: "Code Mode wait checkpoint is not replay-safe" };
   }
   const tailCheckpoint = readCodeModeCheckpoint(lastMeaningful);
   if (tailCheckpoint) {
     return tailCheckpoint.replaySafe
-      ? { action: "resume", forceRestartSafeTools: true }
+      ? { action: "resume", forceRestartSafeTools: true, forceCodeModeTools: true }
       : { action: "fail", reason: "Code Mode wait checkpoint is not replay-safe" };
   }
   // A tool call interrupted mid-execution resumes like the manual re-send the
@@ -455,8 +479,10 @@ export function resolveMainSessionResumePolicy(
   }
   // A later tool result can hide the checkpoint at the transcript tail; keep
   // the interrupted turn restricted without borrowing an earlier turn's state.
+  const forceCodeModeTools = hasReplaySafeCodeModeCheckpointInCurrentTurn(messages);
   return {
     action: "resume",
-    forceRestartSafeTools: hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
+    forceRestartSafeTools: forceCodeModeTools,
+    ...(forceCodeModeTools ? { forceCodeModeTools: true } : {}),
   };
 }

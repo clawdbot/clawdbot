@@ -166,13 +166,17 @@ describe("Slack live QA runtime helpers", () => {
     ).toEqual(["slack-mpim-app-mention-dedupe"]);
   });
 
-  it("enables group DMs for the MPIM app-mention scenario", () => {
+  it("enables group DMs and threaded replies for the MPIM app-mention scenario", () => {
+    const scenario = testing.findScenario(["slack-mpim-app-mention-dedupe"])[0];
+    if (!scenario) {
+      throw new Error("missing Slack MPIM app-mention scenario");
+    }
     const cfg = testing.buildSlackQaConfig(
       {},
       {
         channelId: "C123456789",
         driverBotUserId: "U999999999",
-        overrides: { groupDmEnabled: true },
+        overrides: scenario.configOverrides,
         sutAccountId: "sut",
         sutAppToken: "xapp-sut",
         sutBotToken: "xoxb-sut",
@@ -183,6 +187,7 @@ describe("Slack live QA runtime helpers", () => {
       enabled: true,
       groupEnabled: true,
     });
+    expect(cfg.channels?.slack?.accounts?.sut?.replyToMode).toBe("all");
   });
 
   it("surfaces MPIM cleanup failures and retains ownership for a retry", async () => {
@@ -225,6 +230,144 @@ describe("Slack live QA runtime helpers", () => {
     expect(close).toHaveBeenNthCalledWith(1, { channel: "C_MPIM" });
     expect(close).toHaveBeenNthCalledWith(2, { channel: "C_MPIM" });
     expect(close).toHaveBeenNthCalledWith(3, { channel: "C_MPIM" });
+  });
+
+  it("keeps the MPIM recall turn in the native thread", async () => {
+    const run = testing.findScenario(["slack-mpim-app-mention-dedupe"])[0]?.buildRun("U_SUT");
+    if (
+      !run ||
+      run.kind === "approval" ||
+      run.kind === "codex-approval" ||
+      run.kind === "direct-transport" ||
+      !run.afterReply
+    ) {
+      throw new Error("expected Slack MPIM message scenario with a recall turn");
+    }
+    const seedMarker = /SLACK_QA_MPIM_SEED_[A-Z0-9]+/u.exec(run.input)?.[0];
+    if (!seedMarker) {
+      throw new Error("missing Slack MPIM seed marker");
+    }
+    expect(run.input).toContain(
+      `Reply with only a marker in this exact format: ${seedMarker}_BOT_<NONCE>.`,
+    );
+    expect(run.input).toContain("Replace <NONCE> with 8 to 32 new uppercase letters or digits.");
+    const botReplyMarker = `${seedMarker}_BOT_TESTNONCE`;
+    const recallMarker = seedMarker.replace("SEED", "RECALL");
+    const expectedRecallMarker = `${recallMarker}_TESTNONCE`;
+    const postMessage = vi.fn(async (_request: { text?: string }) => ({
+      channel: "C_MPIM",
+      ts: "2.000000",
+    }));
+    const history = vi.fn(async () => ({ messages: [] }));
+    const replies = vi.fn(async () => ({
+      messages: [
+        {
+          bot_id: "B_SUT",
+          text: expectedRecallMarker,
+          thread_ts: "1.000000",
+          ts: "3.000000",
+          user: "U_SUT",
+        },
+      ],
+    }));
+
+    await expect(
+      run.afterReply(
+        {
+          text: botReplyMarker,
+          thread_ts: "1.000000",
+          ts: "1.500000",
+          user: "U_SUT",
+        },
+        {
+          channelId: "C_MPIM",
+          driverClient: { chat: { postMessage } },
+          sentTs: "1.000000",
+          sutIdentity: { botId: "B_SUT", userId: "U_SUT" },
+          sutReadClient: { conversations: { history, replies } },
+        } as never,
+      ),
+    ).resolves.toContain("recovered the prior bot reply");
+
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "C_MPIM",
+        thread_ts: "1.000000",
+      }),
+    );
+    const recallText = postMessage.mock.calls[0]?.[0]?.text;
+    expect(recallText).toContain(`previous reply beginning with ${seedMarker}_BOT_`);
+    expect(recallText).toContain(`exact format: ${recallMarker}_<NONCE>`);
+    expect(recallText).not.toContain(botReplyMarker);
+    expect(recallText).not.toContain("TESTNONCE");
+  });
+
+  it("rejects an MPIM seed reply without text before sending the recall turn", async () => {
+    const run = testing.findScenario(["slack-mpim-app-mention-dedupe"])[0]?.buildRun("U_SUT");
+    if (
+      !run ||
+      run.kind === "approval" ||
+      run.kind === "codex-approval" ||
+      run.kind === "direct-transport" ||
+      !run.afterReply
+    ) {
+      throw new Error("expected Slack MPIM message scenario with a recall turn");
+    }
+    const postMessage = vi.fn();
+
+    await expect(
+      run.afterReply(
+        {
+          thread_ts: "1.000000",
+          ts: "1.500000",
+          user: "U_SUT",
+        },
+        {
+          channelId: "C_MPIM",
+          driverClient: { chat: { postMessage } },
+          sentTs: "1.000000",
+          sutIdentity: { botId: "B_SUT", userId: "U_SUT" },
+          sutReadClient: { conversations: {} },
+        } as never,
+      ),
+    ).rejects.toThrow("MPIM seed reply did not contain the provider-generated bot nonce");
+    expect(postMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects an MPIM seed reply outside the native thread", async () => {
+    const run = testing.findScenario(["slack-mpim-app-mention-dedupe"])[0]?.buildRun("U_SUT");
+    if (
+      !run ||
+      run.kind === "approval" ||
+      run.kind === "codex-approval" ||
+      run.kind === "direct-transport" ||
+      !run.afterReply
+    ) {
+      throw new Error("expected Slack MPIM message scenario with a recall turn");
+    }
+    const seedMarker = /SLACK_QA_MPIM_SEED_[A-Z0-9]+/u.exec(run.input)?.[0];
+    if (!seedMarker) {
+      throw new Error("missing Slack MPIM seed marker");
+    }
+    const postMessage = vi.fn();
+
+    await expect(
+      run.afterReply(
+        {
+          text: `${seedMarker}_BOT_TESTNONCE`,
+          ts: "1.500000",
+          user: "U_SUT",
+        },
+        {
+          channelId: "C_MPIM",
+          driverClient: { chat: { postMessage } },
+          sentTs: "1.000000",
+          sutIdentity: { botId: "B_SUT", userId: "U_SUT" },
+          sutReadClient: { conversations: {} },
+        } as never,
+      ),
+    ).rejects.toThrow("MPIM seed reply escaped the native Slack thread");
+    expect(postMessage).not.toHaveBeenCalled();
   });
 
   it("selects native scenarios by explicit id", () => {
@@ -478,22 +621,26 @@ describe("Slack live QA runtime helpers", () => {
     const cases = [
       {
         id: "slack-progress-commentary-true",
-        commentaryTs: "2.000000",
+        commentaryTs: "1.500000",
+        commentaryStyle: "lane",
         toolProgress: "absent",
       },
       {
         id: "slack-progress-commentary-false",
-        commentaryTs: undefined,
+        commentaryTs: "1.500000",
+        commentaryStyle: "headline",
         toolProgress: "absent",
       },
       {
         id: "slack-progress-commentary-omitted",
-        commentaryTs: "2.000000",
+        commentaryTs: "1.500000",
+        commentaryStyle: "headline",
         toolProgress: "draft",
       },
       {
         id: "slack-progress-commentary-verbose-dedupe",
         commentaryTs: "1.500000",
+        commentaryStyle: "standalone",
         toolProgress: "standalone",
       },
     ] as const;
@@ -519,7 +666,8 @@ describe("Slack live QA runtime helpers", () => {
           ? [
               {
                 channelId: "C123456789",
-                text: `💬 ${commentaryMarker}`,
+                text:
+                  testCase.commentaryStyle === "lane" ? `💬 ${commentaryMarker}` : commentaryMarker,
                 ts: testCase.commentaryTs,
               },
             ]
@@ -530,7 +678,7 @@ describe("Slack live QA runtime helpers", () => {
               {
                 channelId: "C123456789",
                 text: `🛠️ Exec ${toolMarker}`,
-                ts: testCase.toolProgress === "draft" ? "2.000000" : "1.750000",
+                ts: testCase.toolProgress === "draft" ? "1.500000" : "1.750000",
               },
             ]),
       ];
@@ -576,28 +724,31 @@ describe("Slack live QA runtime helpers", () => {
           messages: mutate(completeMarkers).map((text) => ({
             channelId: "C123456789",
             text,
-            ts: "2.000000",
+            ts: text.includes(completeMarkers[2]) ? "2.000000" : "1.500000",
           })),
         });
     };
 
     expect(
-      verify("slack-progress-commentary-false", ([commentary, , final]) => [commentary, final]),
-    ).toThrow("commentary to stay out");
+      verify("slack-progress-commentary-false", ([commentary, , final]) => [
+        `💬 ${commentary}`,
+        final,
+      ]),
+    ).toThrow("status headline");
     expect(
       verify("slack-progress-commentary-true", ([commentary, tool, final]) => [
-        commentary,
+        `💬 ${commentary}`,
         tool,
         final,
       ]),
     ).toThrow("tool progress to stay out");
     expect(
       verify("slack-progress-commentary-omitted", ([commentary, , final]) => [commentary, final]),
-    ).toThrow("tool progress on the progress draft");
+    ).toThrow("tool progress on the draft");
     expect(
       verify(
         "slack-progress-commentary-true",
-        ([commentary, , final]) => [`${commentary} ${final}`],
+        ([commentary, , final]) => [`💬 ${commentary} ${final}`],
         "echo",
       ),
     ).toThrow("only the final marker");
@@ -993,13 +1144,15 @@ describe("Slack live QA runtime helpers", () => {
       { type: "raw_text", text: "Row" },
       { type: "raw_text", text: "Value" },
     ]);
-    expect(probe.firstRowText).toBe("row-001\tvalue-001");
-    expect(probe.finalRowText).toBe("row-101\tvalue-101");
+    expect(probe.cellCharacterCount).toBeGreaterThan(10_000);
+    expect(probe.firstRowText).toMatch(/^row-001\tvalue-001-x{96}$/u);
+    expect(probe.finalRowText).toMatch(/^row-101\tvalue-101-x{96}$/u);
     expect(probe.fallbackText.split("\n")).toContain(probe.firstRowText);
     expect(probe.fallbackText.split("\n")).toContain(probe.finalRowText);
   });
 
   it("proves the public Slack send path stores one complete formatting-disabled fallback", async () => {
+    const probe = testing.buildSlackInvalidBlocksTableProbe();
     const invalidBlocksError = Object.assign(new Error("An API error occurred: invalid_blocks"), {
       code: "slack_webapi_platform_error",
       data: { error: "invalid_blocks", ok: false },
@@ -1060,8 +1213,8 @@ describe("Slack live QA runtime helpers", () => {
     expect(fallbackRequest).toMatchObject({ mrkdwn: false });
     const fallbackText = typeof fallbackRequest?.text === "string" ? fallbackRequest.text : "";
     expect(fallbackText).toBe(nativeRequest?.text);
-    expect(fallbackText.split("\n")).toContain("row-001\tvalue-001");
-    expect(fallbackText.split("\n")).toContain("row-101\tvalue-101");
+    expect(fallbackText.split("\n")).toContain(probe.firstRowText);
+    expect(fallbackText.split("\n")).toContain(probe.finalRowText);
     expect(result.message).toMatchObject({
       text: fallbackText,
       ts: "2.000000",

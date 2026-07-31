@@ -54,6 +54,7 @@ type CronFailureAlertParams = {
   to?: string;
   mode?: "announce" | "webhook";
   accountId?: string;
+  threadId?: string | number;
 };
 
 function redactWebhookUrl(url: string): string {
@@ -166,7 +167,7 @@ function buildCronWebhookHeaders(webhookToken?: string): Record<string, string> 
 }
 
 function buildCronFailureWebhookPayload(params: { evt: CronEvent; job: CronJob }) {
-  const failureMessage = `Cron job "${params.job.name}" failed: ${params.evt.error ?? "unknown error"}`;
+  const failureMessage = `Automation "${params.job.name}" failed: ${params.evt.error ?? "unknown error"}`;
   return {
     jobId: params.job.id,
     jobName: params.job.name,
@@ -353,6 +354,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           channel: params.channel,
           to: params.to,
           accountId: params.accountId,
+          threadId: params.threadId,
           sessionKey: resolveCronDeliverySessionKey(params.job),
         },
         message: appendCronRunStarted(params.text, params.runAtMs, runtimeConfig),
@@ -553,6 +555,7 @@ function dispatchCronFailureDestinationNotifications(params: {
           channel: primaryPlan.channel,
           to: primaryPlan.to,
           accountId: primaryPlan.accountId,
+          threadId: primaryPlan.threadId,
           sessionKey: deliverySessionKey,
         },
         appendCronRunStarted(`⚠️ ${failurePayload.message}`, params.evt.runAtMs, runtimeConfig),

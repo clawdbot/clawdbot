@@ -51,6 +51,7 @@ async function writeFileTranscript(filePath: string, sessionId: string): Promise
 }
 
 describe("resetReplyRunSession", () => {
+  const sessionKey = "agent:main:main";
   let rootDir = "";
 
   beforeEach(async () => {
@@ -119,10 +120,10 @@ describe("resetReplyRunSession", () => {
         tools: { listChars: 0, schemaChars: 0, entries: [] },
       },
     };
-    const sessionStore = { main: sessionEntry };
+    const sessionStore = { [sessionKey]: sessionEntry };
     const followupRun = createTestFollowupRun();
     await writeFileTranscript(sessionEntry.sessionFile!, sessionEntry.sessionId);
-    await writeTestSessionStore(storePath, "main", sessionEntry);
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
 
     let activeSessionEntry: SessionEntry | undefined = sessionEntry;
     let isNewSession = false;
@@ -131,7 +132,7 @@ describe("resetReplyRunSession", () => {
         failureLabel: "compaction failure",
         buildLogMessage: (next) => `reset ${next}`,
       },
-      sessionKey: "main",
+      sessionKey,
       queueKey: "main",
       activeSessionEntry,
       activeSessionStore: sessionStore,
@@ -166,18 +167,18 @@ describe("resetReplyRunSession", () => {
       key: "main",
       previousSessionId: "session",
       nextSessionId: activeSessionEntry?.sessionId,
-      nextSessionFile: "main",
+      nextSessionFile: sessionKey,
     });
     expect(resetRegisteredAgentHarnessSessionsMock).toHaveBeenCalledWith({
       agentId: followupRun.run.agentId,
       sessionId: "session",
-      sessionKey: "main",
-      sessionFile: "main",
+      sessionKey,
+      sessionFile: sessionKey,
       reason: "reset",
     });
     expect(errorMock).toHaveBeenCalledWith("reset session");
 
-    const persisted = loadSessionEntry({ storePath, sessionKey: "main" });
+    const persisted = loadSessionEntry({ storePath, sessionKey });
     expect(persisted?.sessionId).toBe(activeSessionEntry?.sessionId);
     expect(persisted?.contextBudgetStatus).toBeUndefined();
     expect(persisted?.fallbackNotice).toBeUndefined();
@@ -194,9 +195,9 @@ describe("resetReplyRunSession", () => {
       agentHarnessId: "codex",
       modelSelectionLocked: true,
     };
-    const sessionStore = { main: sessionEntry };
+    const sessionStore = { [sessionKey]: sessionEntry };
     const followupRun = createTestFollowupRun();
-    await writeTestSessionStore(storePath, "main", sessionEntry);
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
 
     await expect(
       resetReplyRunSession({
@@ -204,7 +205,7 @@ describe("resetReplyRunSession", () => {
           failureLabel: "memory flush exhaustion",
           buildLogMessage: (next) => `reset ${next}`,
         },
-        sessionKey: "main",
+        sessionKey,
         queueKey: "main",
         activeSessionEntry: sessionEntry,
         activeSessionStore: sessionStore,
@@ -215,7 +216,7 @@ describe("resetReplyRunSession", () => {
       }),
     ).rejects.toThrow("cannot be reset while model selection is locked");
 
-    expect(sessionStore.main).toEqual(sessionEntry);
+    expect(sessionStore[sessionKey]).toEqual(sessionEntry);
     expect(followupRun.run.sessionId).not.toBe("00000000-0000-0000-0000-000000000123");
     expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
   });
@@ -229,8 +230,8 @@ describe("resetReplyRunSession", () => {
       updatedAt: 1,
       sessionFile: oldTranscriptPath,
     };
-    const sessionStore = { main: sessionEntry };
-    await writeTestSessionStore(storePath, "main", sessionEntry);
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
 
     await resetReplyRunSession({
       options: {
@@ -238,7 +239,7 @@ describe("resetReplyRunSession", () => {
         cleanupTranscripts: true,
         buildLogMessage: (next) => `reset ${next}`,
       },
-      sessionKey: "main",
+      sessionKey,
       queueKey: "main",
       activeSessionEntry: sessionEntry,
       activeSessionStore: sessionStore,
@@ -260,8 +261,8 @@ describe("resetReplyRunSession", () => {
       updatedAt: 1,
       sessionFile: oldTranscriptPath,
     };
-    const sessionStore = { main: sessionEntry };
-    await writeTestSessionStore(storePath, "main", sessionEntry);
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
 
     let rotatedSessionId: string | undefined;
     await resetReplyRunSession({
@@ -270,7 +271,7 @@ describe("resetReplyRunSession", () => {
         cleanupTranscripts: false,
         buildLogMessage: (next) => `reset ${next}`,
       },
-      sessionKey: "main",
+      sessionKey,
       queueKey: "main",
       activeSessionEntry: sessionEntry,
       activeSessionStore: sessionStore,
@@ -290,7 +291,6 @@ describe("resetReplyRunSession", () => {
 
   it("uses the same SQLite marker and appends a boundary over the kept DM tail", async () => {
     const storePath = path.join(rootDir, "sessions.json");
-    const sessionKey = "main";
     const oldSessionId = "old-session";
     const oldSessionFile = formatSqliteSessionFileMarker({
       agentId: "main",
@@ -357,7 +357,6 @@ describe("resetReplyRunSession", () => {
 
   it("migrates an unreadable legacy transcript target to the SQLite reset boundary", async () => {
     const storePath = path.join(rootDir, "sessions.json");
-    const sessionKey = "main";
     const unreadableReplaySource = path.join(rootDir, "previous-transcript-dir");
     await fs.mkdir(unreadableReplaySource);
     const sessionEntry: SessionEntry = {
@@ -399,7 +398,6 @@ describe("resetReplyRunSession", () => {
 
   it("replaces a SQLite marker for a different transcript target", async () => {
     const storePath = path.join(rootDir, "sessions.json");
-    const sessionKey = "main";
     const sessionId = "current-session";
     const staleMarker = formatSqliteSessionFileMarker({
       agentId: "main",

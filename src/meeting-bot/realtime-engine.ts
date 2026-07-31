@@ -2,28 +2,14 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
-import type {
-  RealtimeTranscriptionProviderPlugin,
-  RealtimeVoiceProviderPlugin,
-} from "../plugins/types.js";
-import {
-  getRealtimeTranscriptionProvider,
-  listRealtimeTranscriptionProviders,
-} from "../realtime-transcription/provider-registry.js";
-import type { RealtimeTranscriptionProviderConfig } from "../realtime-transcription/provider-types.js";
-import { resolveConfiguredRealtimeVoiceProvider } from "../talk/provider-resolver.js";
-import type {
-  RealtimeVoiceProviderConfig,
-  RealtimeVoiceTool,
-  RealtimeVoiceToolCallEvent,
-} from "../talk/provider-types.js";
+import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import type { RealtimeVoiceTool, RealtimeVoiceToolCallEvent } from "../talk/provider-types.js";
 import {
   createRealtimeVoiceSessionHarness,
   type RealtimeVoiceSessionHarness,
 } from "../talk/realtime-session-harness.js";
 import type { RealtimeVoiceBridgeSession } from "../talk/session-runtime.js";
 import type { TalkEventInput } from "../talk/talk-events.js";
-import { truncateUtf16Safe } from "../utils.js";
 import {
   resolveMeetingRealtimeAudioFormat,
   type MeetingRealtimeAudioFormat,
@@ -32,6 +18,23 @@ import type {
   MeetingRealtimeAudioTransport,
   MeetingRealtimeAudioTransportHealth,
 } from "./realtime-audio-transport.js";
+import {
+  buildMeetingSpeakExactUserMessage,
+  formatMeetingTranscriptSummaryLog,
+  formatMeetingRealtimeVoiceModelLog,
+  meetingOutputBytesPerMs,
+  resolveMeetingRealtimeProvider,
+} from "./realtime-engine-support.js";
+import { createMeetingRealtimeOutputOwner } from "./realtime-output-owner.js";
+
+export {
+  formatMeetingAgentAudioModelLog,
+  formatMeetingAgentTtsResultLog,
+  formatMeetingTranscriptSummaryLog,
+  meetingOutputBytesPerMs,
+  normalizeMeetingTtsPromptText,
+  resolveMeetingRealtimeTranscriptionProvider,
+} from "./realtime-engine-support.js";
 
 export type MeetingRuntimePlatform = {
   /** Adapter-owned identity keeps platform names and log prefixes out of core. */
@@ -87,191 +90,14 @@ export type MeetingRealtimeAudioEngineHandle = {
   stop: () => Promise<void>;
 };
 
-type ResolvedRealtimeProvider = {
-  provider: RealtimeVoiceProviderPlugin;
-  providerConfig: RealtimeVoiceProviderConfig;
-};
-
-type ResolvedRealtimeTranscriptionProvider = {
-  provider: RealtimeTranscriptionProviderPlugin;
-  providerConfig: RealtimeTranscriptionProviderConfig;
-};
-
 export const MEETING_AGENT_TRANSCRIPT_DEBOUNCE_MS = 900;
 // Playback duration plus a tail blocks live loopback; transcript lookback catches delayed echo.
 export const MEETING_OUTPUT_ECHO_SUPPRESSION_TAIL_MS = 3_000;
 export const MEETING_TRANSCRIPT_ECHO_LOOKBACK_MS = 45_000;
-
-export function meetingOutputBytesPerMs(audioFormat: MeetingRealtimeAudioFormat): number {
-  return audioFormat === "g711-ulaw-8khz" ? 8 : 48;
-}
-
-function resolveMeetingRealtimeProvider(params: {
-  config: MeetingRealtimeEngineConfig;
-  fullConfig: OpenClawConfig;
-  providers?: RealtimeVoiceProviderPlugin[];
-}): ResolvedRealtimeProvider {
-  const providerId = params.config.realtime.voiceProvider ?? params.config.realtime.provider;
-  return resolveConfiguredRealtimeVoiceProvider({
-    configuredProviderId: providerId,
-    providerConfigs: params.config.realtime.providers,
-    cfg: params.fullConfig,
-    providers: params.providers,
-    defaultModel: params.config.realtime.model,
-    noRegisteredProviderMessage: "No configured realtime voice provider registered",
-  });
-}
-
-export function resolveMeetingRealtimeTranscriptionProvider(params: {
-  config: MeetingRealtimeEngineConfig;
-  fullConfig: OpenClawConfig;
-  providers?: RealtimeTranscriptionProviderPlugin[];
-}): ResolvedRealtimeTranscriptionProvider {
-  const providers = params.providers ?? listRealtimeTranscriptionProviders(params.fullConfig);
-  if (providers.length === 0) {
-    throw new Error("No configured realtime transcription provider registered");
-  }
-  const providerId =
-    params.config.realtime.transcriptionProvider ?? params.config.realtime.provider;
-  const configuredProvider = providerId
-    ? (params.providers?.find(
-        (entry) => entry.id === providerId || entry.aliases?.includes(providerId),
-      ) ?? getRealtimeTranscriptionProvider(providerId, params.fullConfig))
-    : undefined;
-  const provider = configuredProvider ?? providers[0];
-  if (!provider) {
-    throw new Error("No configured realtime transcription provider registered");
-  }
-  const rawConfig = providerId
-    ? (params.config.realtime.providers[providerId] ??
-      params.config.realtime.providers[provider.id] ??
-      {})
-    : (params.config.realtime.providers[provider.id] ?? {});
-  const providerConfig = provider.resolveConfig
-    ? provider.resolveConfig({ cfg: params.fullConfig, rawConfig })
-    : rawConfig;
-  if (!provider.isConfigured({ cfg: params.fullConfig, providerConfig })) {
-    throw new Error(`Realtime transcription provider "${provider.id}" is not configured`);
-  }
-  return { provider, providerConfig };
-}
-
-function buildMeetingSpeakExactUserMessage(text: string): string {
-  return [
-    "Speak this exact OpenClaw answer to the meeting, without adding, removing, or rephrasing words.",
-    `Answer: ${JSON.stringify(text)}`,
-  ].join("\n");
-}
-
-function readLogString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function formatLogValue(value: string | undefined): string {
-  const normalized = value ? truncateUtf16Safe(value.replace(/\s+/g, "_"), 180) : undefined;
-  return normalized || "unknown";
-}
-
-function resolveProviderModelForLog(params: {
-  provider: { defaultModel?: string };
-  providerConfig: RealtimeVoiceProviderConfig | RealtimeTranscriptionProviderConfig;
-  fallbackModel?: string;
-}): string {
-  return (
-    readLogString(params.providerConfig.model) ??
-    readLogString(params.providerConfig.modelId) ??
-    readLogString(params.fallbackModel) ??
-    readLogString(params.provider.defaultModel) ??
-    "provider-default"
-  );
-}
-
-function formatMeetingRealtimeVoiceModelLog(params: {
-  logScope: string;
-  strategy: string;
-  provider: RealtimeVoiceProviderPlugin;
-  providerConfig: RealtimeVoiceProviderConfig;
-  fallbackModel?: string;
-  audioFormat: MeetingRealtimeAudioFormat;
-}): string {
-  return [
-    `${params.logScope} realtime voice bridge starting: strategy=${formatLogValue(params.strategy)}`,
-    `provider=${formatLogValue(params.provider.id)}`,
-    `model=${formatLogValue(
-      resolveProviderModelForLog({
-        provider: params.provider,
-        providerConfig: params.providerConfig,
-        fallbackModel: params.fallbackModel,
-      }),
-    )}`,
-    `audioFormat=${formatLogValue(params.audioFormat)}`,
-  ].join(" ");
-}
-
-export function formatMeetingAgentAudioModelLog(params: {
-  logScope: string;
-  provider: RealtimeTranscriptionProviderPlugin;
-  providerConfig: RealtimeTranscriptionProviderConfig;
-  audioFormat: MeetingRealtimeAudioFormat;
-}): string {
-  return [
-    `${params.logScope} agent audio bridge starting: transcriptionProvider=${formatLogValue(
-      params.provider.id,
-    )}`,
-    `transcriptionModel=${formatLogValue(
-      resolveProviderModelForLog({
-        provider: params.provider,
-        providerConfig: params.providerConfig,
-      }),
-    )}`,
-    "tts=telephony",
-    `audioFormat=${formatLogValue(params.audioFormat)}`,
-  ].join(" ");
-}
-
-type MeetingTtsResultLogFields = {
-  provider?: string;
-  providerModel?: string;
-  providerVoice?: string;
-  outputFormat?: string;
-  sampleRate?: number;
-  fallbackFrom?: string;
-};
-
-export function formatMeetingAgentTtsResultLog(
-  logScope: string,
-  prefix: string,
-  result: MeetingTtsResultLogFields,
-): string {
-  return [
-    `${logScope} ${prefix} TTS: provider=${formatLogValue(result.provider)}`,
-    `model=${formatLogValue(result.providerModel)}`,
-    `voice=${formatLogValue(result.providerVoice)}`,
-    `outputFormat=${formatLogValue(result.outputFormat)}`,
-    `sampleRate=${result.sampleRate ?? "unknown"}`,
-    ...(result.fallbackFrom ? [`fallbackFrom=${formatLogValue(result.fallbackFrom)}`] : []),
-  ].join(" ");
-}
-
-export function formatMeetingTranscriptSummaryLog(
-  logScope: string,
-  prefix: string,
-  text: string,
-): string {
-  return `${logScope} ${prefix}: chars=${text.length}`;
-}
-
-export function normalizeMeetingTtsPromptText(text: string | undefined): string | undefined {
-  const trimmed = text?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const sayExactly = trimmed.match(/^say exactly:\s*(?<text>.+)$/is)?.groups?.text?.trim();
-  if (sayExactly) {
-    return sayExactly.replace(/^["']|["']$/g, "").trim() || trimmed;
-  }
-  return trimmed;
-}
+const MEETING_REALTIME_OUTPUT_MAX_PENDING_MS = 2_000;
+const MEETING_REALTIME_OUTPUT_MAX_WRITE_MS = 500;
+const MEETING_REALTIME_OUTPUT_MAX_PENDING_FRAMES = 256;
+const MEETING_REALTIME_CANCELLATION_RACE_DETAIL = "Cancellation failed: no active response found";
 
 export async function startMeetingRealtimeEngine(params: {
   config: MeetingRealtimeEngineConfig;
@@ -301,10 +127,40 @@ export async function startMeetingRealtimeEngine(params: {
   let realtimeReady = false;
   let lastClearAt: string | undefined;
   let clearCount = 0;
+  let outputGeneration = 0;
+  let outputWriteActive = false;
+  let outputTransportWriteStarted = false;
+  let outputClearPending = 0;
+  let outputClearAfterActive = false;
+  let outputPendingBytes = 0;
+  let outputPendingFrames = 0;
+  let outputGenerationActive = false;
+  let outputClearTail = Promise.resolve();
+  const outputQueue: Array<{ audio: Buffer; generation: number }> = [];
+  const outputOwner = createMeetingRealtimeOutputOwner();
+  const outputMaxPendingBytes =
+    meetingOutputBytesPerMs(params.config.chrome.audioFormat) *
+    MEETING_REALTIME_OUTPUT_MAX_PENDING_MS;
+  const outputMaxWriteBytes =
+    meetingOutputBytesPerMs(params.config.chrome.audioFormat) *
+    MEETING_REALTIME_OUTPUT_MAX_WRITE_MS;
   const realtimeLogScope = params.logPrefix ? `${params.logPrefix} realtime` : "realtime";
 
+  const invalidateOutputQueue = () => {
+    outputGeneration += 1;
+    outputQueue.length = 0;
+    outputPendingBytes = 0;
+    outputPendingFrames = 0;
+    outputGenerationActive = false;
+  };
+
   const stop = async () => {
-    stopped = true;
+    if (!stopped) {
+      stopped = true;
+      outputOwner.reset();
+      outputClearAfterActive = false;
+      invalidateOutputQueue();
+    }
     if (stopPromise) {
       await stopPromise;
       return;
@@ -360,28 +216,152 @@ export async function startMeetingRealtimeEngine(params: {
       );
     });
   };
-  const clearOutputPlayback = () => {
+  const queueOutputClear = (): Promise<void> => {
     if (stopped) {
-      return;
+      return Promise.resolve();
     }
     clearCount += 1;
     lastClearAt = new Date().toISOString();
-    void params.transport.clearOutput().catch((error: unknown) => {
-      params.logger.warn(
-        `${params.platform.logScope} ${params.logPrefix ? `${params.logPrefix} audio clear` : "audio output clear"} failed: ${formatErrorMessage(error)}`,
-      );
-      stopAfterFailure("audio output clear");
+    outputClearPending += 1;
+    const clear = outputClearTail
+      .then(async () => {
+        if (!stopped) {
+          await params.transport.clearOutput();
+        }
+      })
+      .catch((error: unknown) => {
+        params.logger.warn(
+          `${params.platform.logScope} ${params.logPrefix ? `${params.logPrefix} audio clear` : "audio output clear"} failed: ${formatErrorMessage(error)}`,
+        );
+        stopAfterFailure("audio output clear");
+      })
+      .finally(() => {
+        outputClearPending -= 1;
+        pumpOutputQueue();
+      });
+    outputClearTail = clear;
+    return clear;
+  };
+
+  const pumpOutputQueue = () => {
+    if (stopped || outputWriteActive || outputClearPending > 0) {
+      return;
+    }
+    const next = outputQueue.shift();
+    if (!next) {
+      return;
+    }
+    if (next.generation !== outputGeneration) {
+      pumpOutputQueue();
+      return;
+    }
+    const batch = [next.audio];
+    let batchBytes = next.audio.byteLength;
+    let batchFrames = 1;
+    while (batchBytes < outputMaxWriteBytes) {
+      const queued = outputQueue[0];
+      if (
+        !queued ||
+        queued.generation !== next.generation ||
+        queued.audio.byteLength > outputMaxWriteBytes - batchBytes
+      ) {
+        break;
+      }
+      outputQueue.shift();
+      batch.push(queued.audio);
+      batchBytes += queued.audio.byteLength;
+      batchFrames += 1;
+    }
+    const audio = batch.length === 1 ? next.audio : Buffer.concat(batch, batchBytes);
+    outputWriteActive = true;
+    void Promise.resolve()
+      .then(async () => {
+        if (stopped || next.generation !== outputGeneration) {
+          return;
+        }
+        outputTransportWriteStarted = true;
+        await params.transport.writeOutput(audio);
+      })
+      .catch((error: unknown) => {
+        if (stopped || next.generation !== outputGeneration) {
+          return;
+        }
+        params.logger.warn(
+          `${params.platform.logScope} ${params.logPrefix ? `${params.logPrefix} audio output` : "audio output"} failed: ${formatErrorMessage(error)}`,
+        );
+        stopAfterFailure("audio output");
+      })
+      .finally(() => {
+        outputWriteActive = false;
+        outputTransportWriteStarted = false;
+        if (next.generation === outputGeneration) {
+          outputPendingBytes -= batchBytes;
+          outputPendingFrames -= batchFrames;
+        }
+        if (outputClearAfterActive && !stopped) {
+          outputClearAfterActive = false;
+          void queueOutputClear();
+          return;
+        }
+        pumpOutputQueue();
+      });
+  };
+  const clearOutputPlayback = (): void => {
+    void queueOutputClear();
+  };
+  const invalidateOutputPlayback = (): void => {
+    outputClearAfterActive ||= outputTransportWriteStarted;
+    invalidateOutputQueue();
+  };
+  const invalidateAndClearOutputPlayback = (): void => {
+    blockOutput();
+    clearOutputPlayback();
+  };
+
+  const blockOutput = (): { blocked: boolean; token: symbol } => {
+    const result = outputOwner.block();
+    invalidateOutputPlayback();
+    return result;
+  };
+
+  const handleOutputBackpressure = () => {
+    const pendingBytes = outputPendingBytes;
+    const pendingFrames = outputPendingFrames;
+    const { blocked, token } = blockOutput();
+    if (!blocked) {
+      return;
+    }
+    params.logger.warn(
+      `${params.platform.logScope} ${realtimeLogScope} audio output backpressured: pendingBytes=${pendingBytes} pendingFrames=${pendingFrames}`,
+    );
+    harness.flushOutput(clearOutputPlayback);
+    harness.finishOutputAudio("output-backpressure");
+    queueMicrotask(() => {
+      if (stopped || !outputOwner.isBlockedBy(token)) {
+        return;
+      }
+      harness.handleBargeIn({ audioPlaybackActive: true, force: true }, () => {});
     });
   };
-  const writeOutputAudio = (audio: Buffer) => {
-    void params.transport.writeOutput(audio).catch((error: unknown) => {
-      params.logger.warn(
-        `${params.platform.logScope} ${params.logPrefix ? `${params.logPrefix} audio output` : "audio output"} failed: ${formatErrorMessage(error)}`,
-      );
-      stopAfterFailure("audio output");
-    });
+
+  const queueOutputAudio = (audio: Buffer, responseId: string | undefined): boolean => {
+    if (stopped || !outputOwner.accept(responseId)) {
+      return false;
+    }
+    if (
+      audio.byteLength > outputMaxPendingBytes - outputPendingBytes ||
+      outputPendingFrames >= MEETING_REALTIME_OUTPUT_MAX_PENDING_FRAMES
+    ) {
+      handleOutputBackpressure();
+      return false;
+    }
+    outputPendingBytes += audio.byteLength;
+    outputPendingFrames += 1;
+    outputQueue.push({ audio, generation: outputGeneration });
+    pumpOutputQueue();
+    return true;
   };
-  let outputGenerationActive = false;
+
   const startHumanBargeInMonitor = () => {
     if (!params.transport.startBargeInMonitor) {
       return;
@@ -396,7 +376,7 @@ export async function startMeetingRealtimeEngine(params: {
       if (!playbackActive && (lastOutputAudioAt === undefined || now - lastOutputAudioAt > 1_000)) {
         return false;
       }
-      harness.handleBargeIn({ audioPlaybackActive: true }, clearOutputPlayback);
+      harness.handleBargeIn({ audioPlaybackActive: true }, invalidateAndClearOutputPlayback);
       return true;
     });
   };
@@ -499,18 +479,23 @@ export async function startMeetingRealtimeEngine(params: {
       audioSink: {
         isOpen: () => !stopped,
         sendAudio: (audio) => {
+          const responseId = outputOwner.takeNextResponseId();
+          if (!queueOutputAudio(audio, responseId)) {
+            return;
+          }
           if (!outputGenerationActive) {
             params.transport.beginOutput?.();
             outputGenerationActive = true;
           }
           harness.outputActivity.markPlaybackStarted();
           harness.recordOutputAudio(audio);
-          writeOutputAudio(audio);
         },
         clearAudio: () => {
-          outputGenerationActive = false;
-          harness.flushOutput(clearOutputPlayback);
-          harness.finishOutputAudio("clear");
+          if (outputOwner.providerClear()) {
+            invalidateOutputPlayback();
+            harness.flushOutput(clearOutputPlayback);
+            harness.finishOutputAudio("clear");
+          }
         },
       },
       onTranscript: (role, text, isFinal) => {
@@ -557,11 +542,14 @@ export async function startMeetingRealtimeEngine(params: {
               );
               return;
             }
+          }
+          if (role === "user" && strategy === "agent") {
             harness.talkback?.enqueue(text);
           }
         }
       },
       onEvent: (event) => {
+        outputOwner.noteEvent(event);
         if (event.type === "input_audio_buffer.speech_started") {
           harness.ensureTurn();
         } else if (event.type === "input_audio_buffer.speech_stopped") {
@@ -575,10 +563,22 @@ export async function startMeetingRealtimeEngine(params: {
             payload: { ...outputTalkPayload, source: event.type },
             final: true,
           });
-        } else if (event.type === "response.done") {
-          outputGenerationActive = false;
-          harness.finishOutputAudio("response.done");
-          harness.endTurn("response.done");
+        } else if (event.type === "response.done" || event.type === "response.cancelled") {
+          if (outputOwner.terminal(event.responseId)) {
+            outputGenerationActive = false;
+            harness.finishOutputAudio(event.type);
+            if (event.type === "response.done") {
+              harness.endTurn(event.type);
+            }
+          }
+        } else if (
+          event.type === "error" &&
+          event.detail === MEETING_REALTIME_CANCELLATION_RACE_DETAIL
+        ) {
+          if (outputOwner.clearBlocked()) {
+            outputGenerationActive = false;
+            harness.finishOutputAudio(event.type);
+          }
         } else if (event.type === "error") {
           harness.emit({
             type: "session.error",

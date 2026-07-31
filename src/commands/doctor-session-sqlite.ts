@@ -6,10 +6,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
-import {
-  importSqliteSessionRows,
-  loadExactSqliteSessionEntry,
-} from "../config/sessions/session-accessor.sqlite.js";
+import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import {
@@ -594,8 +591,10 @@ async function importLegacySessionRecord(
       return;
     }
     const imported = await importSqliteSessionRows({
+      allowMalformedRowRepair: true,
       agentId: target.agentId,
       entry: record.entry,
+      preserveExactStoredKey: true,
       sessionKey: record.sessionKey,
       storePath: target.storePath,
     });
@@ -609,8 +608,10 @@ async function importLegacySessionRecord(
     return;
   } else if (result.status === "malformed") {
     const imported = await importSqliteSessionRows({
+      allowMalformedRowRepair: true,
       agentId: target.agentId,
       entry: record.entry,
+      preserveExactStoredKey: true,
       sessionKey: record.sessionKey,
       storePath: target.storePath,
       ...(record.transcriptPath && shouldImportTranscript
@@ -636,8 +637,10 @@ async function importLegacySessionRecord(
     return;
   }
   const imported = await importSqliteSessionRows({
+    allowMalformedRowRepair: true,
     agentId: target.agentId,
     entry: record.entry,
+    preserveExactStoredKey: true,
     sessionKey: record.sessionKey,
     storePath: target.storePath,
     ...(record.transcriptPath && result.status === "ok" && shouldImportTranscript
@@ -688,13 +691,9 @@ function validateImportedRecordBeforeArchive(
   record: LegacySessionRecord,
   report: DoctorSessionSqliteTargetReport,
 ): void {
-  const normalizedKey = normalizeStoreSessionKey(record.sessionKey);
-  const sqliteEntry = loadExactSqliteSessionEntry({
-    agentId: target.agentId,
-    sessionKey: normalizedKey,
-    storePath: target.storePath,
-  });
-  if (!sqliteEntry) {
+  const normalizedKey = record.sessionKey;
+  const sqliteEntry = readOnlySqliteExactSessionEntry(target, normalizedKey);
+  if (!sqliteEntry.ok || !sqliteEntry.entry) {
     report.issues.push({
       code: "sqlite_entry_missing",
       message: `SQLite entry is missing for ${normalizedKey}.`,
@@ -702,10 +701,10 @@ function validateImportedRecordBeforeArchive(
     });
     return;
   }
-  if (sqliteEntry.entry.sessionId !== record.entry.sessionId) {
+  if (sqliteEntry.entry.entry.sessionId !== record.entry.sessionId) {
     report.issues.push({
       code: "sqlite_entry_mismatch",
-      message: `SQLite sessionId ${sqliteEntry.entry.sessionId} does not match ${record.entry.sessionId}.`,
+      message: `SQLite sessionId ${sqliteEntry.entry.entry.sessionId} does not match ${record.entry.sessionId}.`,
       sessionKey: record.sessionKey,
     });
     return;
@@ -1010,13 +1009,9 @@ function countAlreadyMigratedTranscriptEventsForImport(
   target: SessionStoreTarget,
   record: LegacySessionRecord,
 ): number | undefined {
-  const normalizedKey = normalizeStoreSessionKey(record.sessionKey);
-  const sqliteEntry = loadExactSqliteSessionEntry({
-    agentId: target.agentId,
-    sessionKey: normalizedKey,
-    storePath: target.storePath,
-  });
-  if (sqliteEntry?.entry.sessionId !== record.entry.sessionId) {
+  const normalizedKey = record.sessionKey;
+  const sqliteEntry = readOnlySqliteExactSessionEntry(target, normalizedKey);
+  if (!sqliteEntry.ok || sqliteEntry.entry?.entry.sessionId !== record.entry.sessionId) {
     return undefined;
   }
   const eventCount = readOnlySqliteTranscriptEventCount(target, record.entry.sessionId);

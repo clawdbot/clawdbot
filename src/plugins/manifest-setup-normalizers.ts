@@ -321,6 +321,7 @@ export function normalizeProviderAuthChoices(
     const cliOption = normalizeOptionalString(entry.cliOption) ?? "";
     const cliDescription = normalizeOptionalString(entry.cliDescription) ?? "";
     const appGuidedSecret = entry.appGuidedSecret === true;
+    const appGuidedActionLabel = normalizeOptionalString(entry.appGuidedActionLabel) ?? "";
     const appGuidedAuth =
       entry.appGuidedAuth === "oauth" || entry.appGuidedAuth === "device-code"
         ? entry.appGuidedAuth
@@ -351,6 +352,7 @@ export function normalizeProviderAuthChoices(
       ...(cliOption ? { cliOption } : {}),
       ...(cliDescription ? { cliDescription } : {}),
       ...(appGuidedSecret ? { appGuidedSecret: true } : {}),
+      ...(appGuidedActionLabel ? { appGuidedActionLabel } : {}),
       ...(appGuidedAuth ? { appGuidedAuth } : {}),
       ...(onboardingScopes.length > 0 ? { onboardingScopes } : {}),
     });

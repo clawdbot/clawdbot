@@ -22,7 +22,7 @@ import type {
   ToolCall,
   Usage,
 } from "../types.js";
-import { parseStreamingJson } from "../utils/json-parse.js";
+import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import {
   OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
   type OpenAIResponsesReasoningReplayMetadata,
@@ -104,6 +104,8 @@ export function createResponsesTerminalController(params: {
   model: Model;
   options?: TerminalOptions;
   reasoningBlocksById: Map<string, ResponsesThinkingBlock>;
+  completedOutputItemIdentities: Set<string>;
+  startedTextBlocksByItemId: Map<string, TextBlockReference>;
   getLastTextBlock: () => TextBlockReference | null;
   setLastTextBlock: (block: TextBlockReference | null) => void;
   markFinalized: () => void;
@@ -140,10 +142,31 @@ export function createResponsesTerminalController(params: {
           : (content.refusal ?? "");
       })
       .join("");
-    if (!text) {
+    const started = params.startedTextBlocksByItemId.get(item.id);
+    if (!text && !started) {
       return;
     }
     const phase = item.phase ?? undefined;
+    if (started) {
+      const previousText = started.block.text;
+      started.block.text = text;
+      started.block.textSignature = encodeTextSignatureV1(item.id, phase);
+      params.setLastTextBlock({ block: started.block, index: started.index, phase });
+      params.startedTextBlocksByItemId.delete(item.id);
+      if (text.startsWith(previousText)) {
+        const delta = text.slice(previousText.length);
+        if (delta) {
+          stream.push({ type: "text_delta", contentIndex: started.index, delta });
+        }
+      }
+      stream.push({
+        type: "text_end",
+        contentIndex: started.index,
+        content: text,
+        partial: output as never,
+      });
+      return;
+    }
     const previous = params.getLastTextBlock();
     const collapse = resolveResponsesMessageSnapshotCollapse({
       prior: previous && { text: previous.block.text, phase: previous.phase },
@@ -172,12 +195,26 @@ export function createResponsesTerminalController(params: {
     stream.push({ type: "text_start", contentIndex: index, partial: output as never });
     stream.push({ type: "text_end", contentIndex: index, content: text, partial: output as never });
   };
+  const validateCompletedToolCall = (
+    item: Extract<ResponseOutputItem, { type: "function_call" }>,
+  ) => {
+    if (item.status && item.status !== "completed") {
+      throw new Error("Responses stream completed with an incomplete terminal tool call");
+    }
+    const name = resolveCompletedToolCallName(undefined, item.name);
+    const argumentsValue = parseJsonObjectPreservingUnsafeIntegers(item.arguments);
+    if (!argumentsValue) {
+      throw new Error("Responses stream completed tool call with invalid JSON arguments");
+    }
+    return { name, arguments: argumentsValue };
+  };
   const appendToolCall = (item: Extract<ResponseOutputItem, { type: "function_call" }>) => {
+    const validated = validateCompletedToolCall(item);
     const toolCall: ToolCall = {
       type: "toolCall",
       id: resolveResponsesToolCallId(item),
-      name: resolveCompletedToolCallName(undefined, item.name),
-      arguments: parseStreamingJson(item.arguments || "{}"),
+      name: validated.name,
+      arguments: validated.arguments,
     };
     blocks.push(toolCall);
     const contentIndex = blocks.length - 1;
@@ -185,18 +222,53 @@ export function createResponsesTerminalController(params: {
     stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output as never });
   };
   const recoverTerminalOutput = (items: ResponseOutputItem[], includeToolCalls: boolean) => {
-    // Reasoning can stream before the final message appears only in the terminal snapshot.
-    // Recover that visible answer without replaying already-streamed text or tool calls.
-    if (blocks.some((block) => block.type !== "thinking")) {
-      return;
+    let hasCompletedLaterOutput = false;
+    for (const item of items.toReversed()) {
+      if (item.type === "reasoning") {
+        // Terminal snapshots only backfill streamed reasoning; missing reasoning is never emitted.
+        hasCompletedLaterOutput ||= params.reasoningBlocksById.has(item.id);
+        continue;
+      }
+      if (item.type !== "message" && item.type !== "function_call") {
+        continue;
+      }
+      const identity =
+        item.type === "message" ? `message:${item.id}` : `function_call:${item.call_id}`;
+      if (
+        params.completedOutputItemIdentities.has(identity) ||
+        (item.type === "message" && params.startedTextBlocksByItemId.has(item.id))
+      ) {
+        hasCompletedLaterOutput = true;
+        continue;
+      }
+      if (item.type === "function_call" && !includeToolCalls) {
+        continue;
+      }
+      // Previously emitted content indexes cannot be reordered after a missing earlier item.
+      if (hasCompletedLaterOutput) {
+        throw new Error("Responses stream omitted an output item before completed output");
+      }
+      if (item.type === "function_call") {
+        validateCompletedToolCall(item);
+      }
     }
     for (const item of items) {
       if (item.type === "message") {
+        const identity = `message:${item.id}`;
+        if (params.completedOutputItemIdentities.has(identity)) {
+          continue;
+        }
         appendText(item);
+        params.completedOutputItemIdentities.add(identity);
       } else {
         params.setLastTextBlock(null);
         if (includeToolCalls && item.type === "function_call") {
+          const identity = `function_call:${item.call_id}`;
+          if (params.completedOutputItemIdentities.has(identity)) {
+            continue;
+          }
           appendToolCall(item);
+          params.completedOutputItemIdentities.add(identity);
         }
       }
     }

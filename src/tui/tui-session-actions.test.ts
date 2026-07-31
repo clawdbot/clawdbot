@@ -134,6 +134,81 @@ describe("tui session actions", () => {
       ...overrides,
     });
 
+  it("keeps the cached agent roster when a refresh fails", async () => {
+    const cachedAgents = [{ id: "cached", name: "Cached Agent" }];
+    const state = createBaseState({
+      agentDefaultId: "cached",
+      sessionMainKey: "cached-main",
+      sessionScope: "per-sender",
+      agents: cachedAgents,
+      currentAgentId: "cached",
+    });
+    const agentNames = new Map([["cached", "Cached Agent"]]);
+    const addSystem = vi.fn();
+    const { refreshAgents } = createTestSessionActions({
+      client: {
+        listAgents: vi.fn().mockRejectedValue(new Error("gateway unavailable")),
+      } as unknown as TuiBackend,
+      chatLog: { addSystem } as unknown as import("./components/chat-log.js").ChatLog,
+      state,
+      agentNames,
+    });
+
+    await expect(refreshAgents()).resolves.toEqual({
+      ok: false,
+      error: "gateway unavailable",
+    });
+    expect(state.agents).toBe(cachedAgents);
+    expect(state.agentDefaultId).toBe("cached");
+    expect(state.sessionMainKey).toBe("cached-main");
+    expect(state.sessionScope).toBe("per-sender");
+    expect([...agentNames]).toEqual([["cached", "Cached Agent"]]);
+    expect(addSystem).toHaveBeenCalledWith("agents list failed: gateway unavailable");
+  });
+
+  it("returns success after applying a normalized fresh agent roster", async () => {
+    const state = createBaseState({
+      agents: [{ id: "cached", name: "Cached Agent" }],
+      currentAgentId: "cached",
+    });
+    const agentNames = new Map([["cached", "Cached Agent"]]);
+    const updateHeader = vi.fn();
+    const updateFooter = vi.fn();
+    const { refreshAgents } = createTestSessionActions({
+      client: {
+        listAgents: vi.fn().mockResolvedValue({
+          defaultId: " Team Lead ",
+          mainKey: " Primary ",
+          scope: "per-sender",
+          agents: [
+            { id: " Team Lead ", name: " Lead Agent " },
+            { id: " System Agent ", kind: "system", name: " System Agent " },
+          ],
+        }),
+      } as unknown as TuiBackend,
+      state,
+      agentNames,
+      updateHeader,
+      updateFooter,
+    });
+
+    await expect(refreshAgents()).resolves.toEqual({ ok: true, value: undefined });
+    expect(state.agentDefaultId).toBe("team-lead");
+    expect(state.sessionMainKey).toBe("primary");
+    expect(state.sessionScope).toBe("per-sender");
+    expect(state.agents).toEqual([
+      { id: "team-lead", kind: undefined, name: "Lead Agent" },
+      { id: "system-agent", kind: "system", name: "System Agent" },
+    ]);
+    expect(state.currentAgentId).toBe("team-lead");
+    expect([...agentNames]).toEqual([
+      ["team-lead", "Lead Agent"],
+      ["system-agent", "System Agent"],
+    ]);
+    expect(updateHeader).toHaveBeenCalledTimes(1);
+    expect(updateFooter).toHaveBeenCalledTimes(1);
+  });
+
   it("queues session refreshes and applies the latest result", async () => {
     let resolveFirst: ((value: unknown) => void) | undefined;
     let resolveSecond: ((value: unknown) => void) | undefined;

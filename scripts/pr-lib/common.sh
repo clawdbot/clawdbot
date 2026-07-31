@@ -26,7 +26,7 @@ file_list_is_docsish_only() {
     if ! path_is_docsish "$path"; then
       return 1
     fi
-  done <<<"$files"
+  done < <(printf '%s\n' "$files")
 
   [ "$saw_any" = "true" ]
 }

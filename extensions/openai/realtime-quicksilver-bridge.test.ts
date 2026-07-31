@@ -209,6 +209,28 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
     harness.bridge.close();
   });
 
+  it("discards audio closed before the first connection and reconnects fresh", async () => {
+    const harness = createHarness();
+
+    harness.bridge.sendAudio(Buffer.from("queued-before-connect"));
+    harness.bridge.close();
+    harness.bridge.close();
+    harness.bridge.sendAudio(Buffer.from("sent-after-close"));
+
+    expect(harness.connections).toHaveLength(0);
+    expect(harness.onClose).not.toHaveBeenCalled();
+
+    await harness.bridge.connect();
+
+    expect(
+      sentEvents(harness.socket).filter((event) => event.type === "input_audio.append"),
+    ).toHaveLength(0);
+
+    harness.bridge.close();
+    expect(harness.onClose).toHaveBeenCalledOnce();
+    expect(harness.onClose).toHaveBeenCalledWith("completed");
+  });
+
   it("does not carry queued audio across terminal close and explicit reconnect", async () => {
     const sockets: FakeSocket[] = [];
     const bridge = new OpenAIQuicksilverVoiceBridge({
@@ -368,6 +390,31 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
       channel: "speakable",
       content: [{ type: "input_text", text: "The repository is clean." }],
     });
+  });
+
+  it("bounds direct tool results before sideband sends", async () => {
+    const harness = createHarness();
+    await harness.bridge.connect();
+
+    harness.socket.serverEvent({
+      type: "delegation.created",
+      item: {
+        type: "delegation",
+        target: "client",
+        id: "delegation-large",
+        content: [{ type: "input_text", text: "summarize everything" }],
+      },
+    });
+    harness.bridge.submitToolResult("delegation-large", { text: "x".repeat(10_000) });
+
+    const appends = sentEvents(harness.socket).filter(
+      (event) => event.type === "delegation.context.append",
+    );
+    expect(appends.length).toBeGreaterThan(0);
+    expect(appends.length).toBeLessThanOrEqual(11);
+    expect(
+      appends.map((event) => (event.content as Array<{ text: string }>)[0]?.text ?? "").join(""),
+    ).toMatch(/^x+ \[truncated\]$/);
   });
 
   it("normalizes assistant completion to the shared response lifecycle", async () => {

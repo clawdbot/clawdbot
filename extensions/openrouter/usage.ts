@@ -19,6 +19,7 @@ type OpenRouterKeyData = {
   usage_daily?: unknown;
   usage_weekly?: unknown;
   usage_monthly?: unknown;
+  byok_usage?: unknown;
   byok_usage_daily?: unknown;
   byok_usage_weekly?: unknown;
   byok_usage_monthly?: unknown;
@@ -68,9 +69,23 @@ function resolveKeyBudget(
         : period === "monthly"
           ? nonNegativeNumber(data?.usage_monthly)
           : nonNegativeNumber(data?.usage);
+  const byokUsage =
+    data?.include_byok_in_limit !== true
+      ? undefined
+      : period === "daily"
+        ? nonNegativeNumber(data.byok_usage_daily)
+        : period === "weekly"
+          ? nonNegativeNumber(data.byok_usage_weekly)
+          : period === "monthly"
+            ? nonNegativeNumber(data.byok_usage_monthly)
+            : nonNegativeNumber(data.byok_usage);
   const remaining = nonNegativeNumber(data?.limit_remaining);
   // `limit_remaining` already incorporates BYOK usage when the key is configured to count it.
-  const used = remaining === undefined ? periodUsage : Math.max(0, limit - remaining);
+  const usage =
+    periodUsage === undefined && byokUsage === undefined
+      ? undefined
+      : (periodUsage ?? 0) + (byokUsage ?? 0);
+  const used = remaining === undefined ? usage : Math.max(0, limit - remaining);
   return used === undefined ? undefined : { used, limit, ...(period ? { period } : {}) };
 }
 

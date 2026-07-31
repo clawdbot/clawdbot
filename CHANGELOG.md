@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Local model setup:** advertise provider-owned Ollama, llama.cpp, and LM Studio setup choices to Control UI and macOS, retry unavailable LM Studio services in place, and verify the exact prepared model before showing success.
 - **Control UI first-run setup:** continue verified model setup into Custodian, explain that the web app is ready without a channel, and offer an optional dismissible path to Channels.
 - **Fish Audio speech:** add hosted S2.1 synthesis with streaming, voice notes, voice discovery, and telephony, plus local Fish S2 Pro reference-voice streaming in native macOS Talk. Thanks @Conan-Scott for the earlier community-plugin implementation.
 - **Control UI cloud workspace conflicts:** surface staged-ref guidance, bounded conflicted paths, structured transcript events, and sidebar attention for cloud worker results that kept local versions.
@@ -20,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - **External gateway supervision:** add `OPENCLAW_SUPERVISOR_MODE=external` for lifecycle owners such as OCM, preserving verified restart and deferral behavior without exposing native service authority, blocking native service mutation and self-update, and providing a versioned atomic restart-handoff consume contract. Thanks @shakkernerd.
 - **Buzz message fidelity:** preserve Markdown output and accept Buzz normal, rich-content, and structured-diff room messages through the existing authorized inbound path. Thanks @shakkernerd.
 - **Buzz typing indicators:** show room- and thread-scoped typing during agent replies and heartbeat deliveries, refresh through the active authenticated connection without waiting for relay acknowledgement, and drop ephemeral updates safely during disconnects or shutdown. Thanks @shakkernerd.
+- **Buzz sender directory:** expose current bot, member, room, and room-member directory entries from bounded relay state; use current Buzz profile and room names in inbound context while preserving public keys and UUIDs as stable authorization and routing identities. Thanks @shakkernerd.
 - **ClickClack guided setup:** configure ClickClack from `openclaw onboard` or `openclaw channels add clickclack` with URL, token, and workspace prompts, default-account env fallback, nonfatal live connection validation, and gateway-aware next steps that connect automatically when OpenClaw is already running. Thanks @shakkernerd.
 - **ClickClack command menus:** publish each bot's native OpenClaw commands to ClickClack composer autocomplete at gateway startup, with per-account opt-out and nonfatal compatibility handling for older tokens and servers. Thanks @shakkernerd.
 - **Skill Workshop approvals:** run agent-initiated apply, reject, and quarantine actions without an additional approval prompt by default while preserving `skills.workshop.approvalPolicy: "pending"` as an opt-in approval gate. Thanks @shakkernerd.
@@ -56,6 +58,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Buzz plugin packaging:** keep the live QA runner on the shipped QA runner SDK surface and remove the obsolete package shrinkwrap so standalone npm and ClawHub package builds use current host exports and dependency resolutions. Thanks @shakkernerd.
+- **Control UI sharing connection isolation:** discard stale visibility and membership mutation results after switching gateways or accounts so previous-connection refreshes and errors cannot update the replacement connection. Fixes #116800. Thanks @shakkernerd.
+- **Control UI session refreshes:** preserve explicitly queued list filters and background hydration across later Gateway event invalidation, while keeping append pagination followed by a canonical refresh. Fixes #116697. Thanks @shakkernerd.
+- **Gateway device clock skew:** sign device proofs with the Gateway-issued challenge timestamp across TypeScript, Control UI, browser extension, Android, Apple, Linux, and watchOS clients so incorrect local clocks no longer block authentication, while retaining no-challenge compatibility for pre-challenge Control UI servers and older watch-node HTTP endpoints and keeping nonce binding and freshness checks enforced. Fixes #103455.
 - **Control UI dynamic deep links:** reuse the initial route loader result when publishing real agent, session, dashboard, Workboard, Memory, and Plugins paths, avoiding redundant route-loader work during startup. Thanks @shakkernerd.
 - **Linux gateway service ownership:** refuse user-scope systemd publication and activation when the same gateway unit name is already owned or cannot be verified in the system scope, including `--force`, with actionable recovery guidance instead of creating restart-looping dual managers. Fixes #116129.
 - **macOS remote tunnel lifecycle:** prevent cancelled or superseded restart backoffs from recreating SSH tunnels, and join a tunnel create that another caller started while the actor was suspended.

@@ -1,4 +1,5 @@
 // Doctor cron warnings for model overrides and stale WhatsApp crontab health scripts.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import { normalizeChatChannelId } from "../../../channels/ids.js";
@@ -9,7 +10,6 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronDeliveryPlan } from "../../../cron/delivery-plan.js";
 import type { CronJob } from "../../../cron/types.js";
 import { runExec } from "../../../process/exec.js";
-import { shortenHomePath } from "../../../utils.js";
 
 type CrontabReader = () => Promise<{ stdout?: unknown; stderr?: unknown }>;
 
@@ -53,12 +53,6 @@ function normalizeModelMismatchKey(value: unknown): string | undefined {
   return normalizeModelRef(value) ?? normalizeOptionalString(value)?.toLowerCase();
 }
 
-function getRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function formatSortedCounts(counts: Map<string, number>): string {
   return [...counts.entries()]
     .toSorted(([left], [right]) => left.localeCompare(right))
@@ -70,7 +64,6 @@ function formatSortedCounts(counts: Map<string, number>): string {
 export function noteCronModelOverrides(params: {
   cfg: OpenClawConfig;
   jobs: Array<Record<string, unknown>>;
-  storePath: string;
 }) {
   const defaultModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model);
   const defaultKey = normalizeModelMismatchKey(defaultModel);
@@ -80,7 +73,10 @@ export function noteCronModelOverrides(params: {
   let mismatchCount = 0;
 
   for (const rawJob of params.jobs) {
-    const payload = getRecord(rawJob.payload);
+    if (rawJob.enabled === false) {
+      continue;
+    }
+    const payload = isRecord(rawJob.payload) ? rawJob.payload : undefined;
     const kind = normalizeOptionalString(payload?.kind)?.toLowerCase();
     if (kind && kind !== "agentturn") {
       continue;
@@ -108,7 +104,7 @@ export function noteCronModelOverrides(params: {
   }
 
   const lines = [
-    `Automation model overrides detected at ${shortenHomePath(params.storePath)}.`,
+    "Automation model overrides detected.",
     `- ${pluralize(overrideCount, "job")} set \`payload.model\` and will not inherit \`agents.defaults.model\`${defaultModel ? ` (${defaultModel})` : ""}`,
     `- Provider namespaces: ${formatSortedCounts(providerCounts)}`,
   ];
@@ -145,7 +141,7 @@ function listConcreteCronDeliveryTargets(
     }
     // Only an explicit delivery object pins a concrete channel; without one the plan resolves
     // to the pseudo "last" route decided at run time, which doctor cannot validate ahead of time.
-    if (!getRecord(job.delivery)) {
+    if (!isRecord(job.delivery)) {
       continue;
     }
     const plan = resolveCronDeliveryPlan(job as unknown as CronJob);
@@ -168,7 +164,6 @@ function listConcreteCronDeliveryTargets(
  */
 function collectCronDeliveryTargetAdvisory(params: {
   jobs: Array<Record<string, unknown>>;
-  storePath: string;
   resolveAvailableChannelIds: () => Iterable<string>;
 }): string | null {
   const concreteTargets = listConcreteCronDeliveryTargets(params.jobs);
@@ -206,7 +201,7 @@ function collectCronDeliveryTargetAdvisory(params: {
   }
 
   return [
-    `Automation delivery targets unavailable channels at ${shortenHomePath(params.storePath)}.`,
+    "Automation delivery targets unavailable channels.",
     `- ${pluralize(unavailableCount, "job")} ${unavailableCount === 1 ? "announces" : "announce"} to a channel whose plugin is not active; the next scheduled run will fail to deliver`,
     `- Channels: ${formatSortedCounts(channelCounts)}`,
     `- Examples: ${examples.join(", ")}`,
@@ -218,13 +213,11 @@ function collectCronDeliveryTargetAdvisory(params: {
 export function noteCronDeliveryTargetAdvisory(params: {
   cfg: OpenClawConfig;
   jobs: Array<Record<string, unknown>>;
-  storePath: string;
 }): void {
   let advisory: string | null;
   try {
     advisory = collectCronDeliveryTargetAdvisory({
       jobs: params.jobs,
-      storePath: params.storePath,
       // Mirror the doctor channel lookup: setup-fallback materializes configured channels even
       // when no gateway is running, so configured targets are not mistaken for unavailable ones.
       resolveAvailableChannelIds: () =>

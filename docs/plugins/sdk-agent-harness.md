@@ -153,6 +153,29 @@ export default definePluginEntry({
 `authBootstrap` is intentionally absent from this generic example. Add
 `authBootstrap: "harness"` only when the harness meets the contract above.
 
+### Isolated completion
+
+The optional `runIsolatedCompletion(params)` capability serves product paths
+that require one fresh prompt-only inference call with a literal empty
+model-callable tool surface. Core passes the exact prepared `model`, `auth`,
+provider, model id, system prompt, user prompt, timeout, abort signal, and stream
+parameters. The harness must not re-resolve credentials, switch routes, reuse a
+native thread, attach tools, invoke agent lifecycle hooks, or deliver output.
+
+Return `{ assistant: AssistantMessage }`. Core accepts only terminal text/thinking
+content with a `stop` or `length` stop reason; tool calls, failed stops, and empty
+output are rejected. If the harness cannot prove these semantics, omit the capability.
+Callers that require isolated completion then fail closed before invoking that
+harness; OpenClaw does not replay the request through another runtime.
+Plugin callers select this behavior through
+`api.runtime.llm.complete({ execution: { mode: "isolated-agent-runtime" } })`;
+the harness callback is the provider-side enforcement SPI, not a second caller
+API.
+
+Native agent servers often have ambient built-in tools even when OpenClaw sends
+an empty tool list. In that case, use a separate provider transport that can
+serialize a true zero-tool request, or leave the capability unsupported.
+
 ### Delegated execution
 
 A harness owner may set `delegatedExecutionPluginIds` to the ids of trusted

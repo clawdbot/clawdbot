@@ -5,11 +5,22 @@ import {
   createChatChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
+import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { BuzzConfigSchema } from "./config-schema.js";
+import {
+  listBuzzDirectoryGroupsFromConfig,
+  listBuzzDirectoryPeersFromConfig,
+} from "./directory-config.js";
+import {
+  getBuzzDirectorySelf,
+  listBuzzDirectoryGroupMembers,
+  listBuzzDirectoryGroupsLive,
+  listBuzzDirectoryPeersLive,
+} from "./directory.js";
 import { buzzOutboundAdapter, sendBuzzTyping, startBuzzGatewayAccount } from "./gateway.js";
 import { discoverBuzzRooms } from "./room-discovery.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
@@ -169,6 +180,14 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
     heartbeat: {
       sendTyping: sendBuzzTyping,
     },
+    directory: createChannelDirectoryAdapter({
+      self: getBuzzDirectorySelf,
+      listPeers: listBuzzDirectoryPeersFromConfig,
+      listPeersLive: listBuzzDirectoryPeersLive,
+      listGroups: listBuzzDirectoryGroupsFromConfig,
+      listGroupsLive: listBuzzDirectoryGroupsLive,
+      listGroupMembers: listBuzzDirectoryGroupMembers,
+    }),
     message: buzzMessageAdapter,
   },
   outbound: buzzOutboundAdapter,

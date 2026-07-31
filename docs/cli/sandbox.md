@@ -5,7 +5,7 @@ read_when: "You are managing sandbox runtimes or debugging sandbox/tool-policy b
 status: active
 ---
 
-Manage sandbox runtimes for isolated agent execution: Docker containers, SSH targets, or OpenShell backends.
+Manage sandbox runtimes for isolated agent execution: Docker/Podman containers, SSH targets, or OpenShell backends.
 
 [`openclaw agent exec`](/cli/agent#agent-exec) does not use these configured runtimes. Its isolated implicit policy config turns the agent sandbox off, allows full Gateway-host execution, and restricts filesystem tools to `--cwd`.
 
@@ -72,7 +72,7 @@ Prefer `openclaw sandbox recreate` over manual backend-specific cleanup. It uses
 
 | Change                                                                                                                                                         | Command                                                             |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| Docker image update (`agents.defaults.sandbox.docker.image`)                                                                                                   | `openclaw sandbox recreate --all`                                   |
+| Container sandbox image update (`agents.defaults.sandbox.docker.image`)                                                                                        | `openclaw sandbox recreate --all`                                   |
 | Sandbox config (`agents.defaults.sandbox.*`)                                                                                                                   | `openclaw sandbox recreate --all`                                   |
 | SSH target/auth (`agents.defaults.sandbox.ssh.{target,workspaceRoot,identityFile,certificateFile,knownHostsFile,identityData,certificateData,knownHostsData}`) | `openclaw sandbox recreate --all`                                   |
 | OpenShell source/policy/mode (`plugins.entries.openshell.config.{from,mode,policy}`)                                                                           | `openclaw sandbox recreate --all`                                   |

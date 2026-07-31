@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => {
     authStorage,
     modelRegistry,
     metadataSnapshot,
+    resolvePluginMetadataSnapshot: vi.fn(() => metadataSnapshot),
     resolveAmbientCredentials: vi.fn((..._args: unknown[]) => ({})),
     discoverAuthStorage: vi.fn(() => authStorage),
     discoverModels: vi.fn(() => modelRegistry),
@@ -98,7 +99,7 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: () => mocks.metadataSnapshot,
-  resolvePluginMetadataSnapshot: () => mocks.metadataSnapshot,
+  resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
 }));
 
 vi.mock("./agent-auth-discovery.js", () => ({
@@ -274,6 +275,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
     );
     expect(mocks.buildPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
     expect(mocks.loadStaticCatalog).not.toHaveBeenCalled();
+    expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledOnce();
     expect(configuredRuntimeModelCount).toBe(1);
     expect(generatedCatalogReadCount).toBe(0);
     const snapshot = getPreparedModelRuntimeSnapshot({

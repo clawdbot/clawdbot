@@ -352,7 +352,7 @@ jobs:
           }
           attempt_started_at="$(jq -er '.run_started_at | fromdateiso8601' <<< "$attempt_json")"
           if [[ "$ARTIFACT_RUN_ID" == "$GITHUB_RUN_ID" ]]; then
-            jq -e '(.status == "queued" or .status == "in_progress") and .conclusion == null' \
+            jq -e '(.status == "pending" or .status == "queued" or .status == "requested" or .status == "waiting" or .status == "in_progress") and .conclusion == null' \
               <<< "$attempt_json" >/dev/null || {
               echo "Current-run Package Telegram artifact is not from the active workflow attempt." >&2
               exit 1

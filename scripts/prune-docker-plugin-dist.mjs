@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { collectRootPackageExcludedExtensionDirs } from "./lib/bundled-plugin-build-entries.mjs";
+import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { removePathIfExists } from "./runtime-postbuild-shared.mjs";
 
 const RUNTIME_DEPENDENCY_FIELDS = ["dependencies", "optionalDependencies"];
@@ -176,6 +177,11 @@ export function pruneDockerPluginDist(params = {}) {
     [...excludedPluginIds].filter((pluginId) => !keepPluginIds.has(pluginId)),
   );
   const removed = [];
+
+  // The removals below recurse into dist/ and dist-runtime/ plugin trees;
+  // refuse to follow a symlinked output root into its target.
+  assertRealOutputRoot(path.join(repoRoot, "dist"));
+  assertRealOutputRoot(path.join(repoRoot, "dist-runtime"));
 
   removed.push(...pruneNodeModulesForOmittedPlugins(repoRoot, bundledPluginDir, omittedPluginIds));
 

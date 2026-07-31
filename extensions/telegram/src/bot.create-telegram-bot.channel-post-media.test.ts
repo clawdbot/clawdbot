@@ -849,15 +849,21 @@ describe("createTelegramBot channel_post media", () => {
     }
   });
 
-  it("durably retries every spooled album update when shutdown aborts a download", async () => {
+  it.each([
+    { failure: "shutdown aborts a download", shutdownAbort: true },
+    { failure: "Telegram temporarily throttles a download", shutdownAbort: false },
+  ])("durably retries every spooled album update when $failure", async ({ shutdownAbort }) => {
     setOpenChannelPostConfig();
     sendMessageSpy.mockClear();
     replySpy.mockClear();
 
     const shutdown = new AbortController();
     saveRemoteMedia.mockImplementationOnce(async () => {
-      shutdown.abort();
-      throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      if (shutdownAbort) {
+        shutdown.abort();
+        throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      }
+      throw new MediaFetchError("http_error", "rate limited", { status: 429 });
     });
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");

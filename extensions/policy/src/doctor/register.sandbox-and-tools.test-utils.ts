@@ -342,6 +342,58 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 
+  it("evaluates Podman container posture without reporting it as unobservable", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "podman",
+            docker: {
+              network: "host",
+              binds: ["/run/podman/podman.sock:/run/podman/podman.sock:rw"],
+              seccompProfile: "unconfined",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        sandbox: {
+          allowBackends: ["podman"],
+          containers: {
+            denyHostNetwork: true,
+            denyContainerRuntimeSocketMounts: true,
+            denyUnconfinedProfiles: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "policy/sandbox-container-host-network-denied" }),
+        expect.objectContaining({ checkId: "policy/sandbox-container-runtime-socket-mount" }),
+        expect.objectContaining({ checkId: "policy/sandbox-container-unconfined-profile" }),
+      ]),
+    );
+    expect(result.findings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/sandbox-container-posture-unobservable",
+        }),
+      ]),
+    );
+  });
+
   it("uses explicit agent sandbox scope before inherited legacy perSession", async () => {
     const cfg = {
       agents: {

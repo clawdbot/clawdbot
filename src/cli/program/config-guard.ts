@@ -189,7 +189,7 @@ function isGatewayStartupCommand(commandPath: string[]): boolean {
   );
 }
 
-async function getConfigSnapshot(options?: { observe: false }) {
+async function getConfigSnapshot(options?: { observe: false; skipPluginValidation?: true }) {
   if (options?.observe === false) {
     return readConfigFileSnapshot(options);
   }
@@ -268,12 +268,14 @@ export async function ensureConfigReady(
     preflightSnapshot = await runStateMigrationPreflight();
   }
 
-  // Status reads its materialized/source pair; remote Gateway calls must not
-  // record config health in the state owned by the Gateway being queried.
+  // Read-only diagnostics must not record config health; logs also skips plugin
+  // metadata discovery because opening the shared state DB creates SQLite sidecars.
   const configSnapshotOptions =
-    commandName === "status" || (commandName === "gateway" && subcommandName === "call")
-      ? ({ observe: false } as const)
-      : undefined;
+    commandName === "logs"
+      ? ({ observe: false, skipPluginValidation: true } as const)
+      : commandName === "status" || (commandName === "gateway" && subcommandName === "call")
+        ? ({ observe: false } as const)
+        : undefined;
   let snapshot = preflightSnapshot ?? (await getConfigSnapshot(configSnapshotOptions));
   if (
     !preflightSnapshot &&

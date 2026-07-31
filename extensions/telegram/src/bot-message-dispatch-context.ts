@@ -1,5 +1,4 @@
 // Telegram plugin module recovers dispatch routing and group-history context.
-import { CURRENT_MESSAGE_MARKER } from "openclaw/plugin-sdk/channel-mention-gating";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -83,17 +82,6 @@ function normalizeDispatchTelegramThreadPayload(params: {
       TransportThreadId: params.threadSpec.id,
     },
   };
-}
-
-function extractCurrentTelegramBody(body: string | undefined): string {
-  if (!body) {
-    return "";
-  }
-  const markerIndex = body.lastIndexOf(CURRENT_MESSAGE_MARKER);
-  if (markerIndex === -1) {
-    return body;
-  }
-  return body.slice(markerIndex + CURRENT_MESSAGE_MARKER.length).trimStart();
 }
 
 function buildRecoveredTelegramChatActionSender(params: {
@@ -231,9 +219,6 @@ export function resolveDispatchTelegramContext(params: {
         ? recoveredPromptHistoryEntries
         : undefined
       : params.context.ctxPayload.InboundHistory;
-  const recoveredBodyForAgent = extractCurrentTelegramBody(
-    params.context.ctxPayload.BodyForAgent ?? params.context.ctxPayload.Body,
-  );
   const recoveredPromptContextBase = retainTelegramGroupHistoryPromptContext({
     promptContext: params.context.ctxPayload.ChannelStructuredContext ?? [],
     entries: recoveredPromptHistoryEntries,
@@ -278,8 +263,6 @@ export function resolveDispatchTelegramContext(params: {
         ? params.context.ctxPayload
         : {
             ...params.context.ctxPayload,
-            Body: recoveredBodyForAgent,
-            BodyForAgent: recoveredBodyForAgent,
             From: recoveredFrom,
             InboundHistory: recoveredInboundHistory,
             MessageThreadId: threadSpec.id,

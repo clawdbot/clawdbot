@@ -360,7 +360,7 @@ function buildTraceRows(startup) {
   const rows = [];
   for (const result of startup?.results ?? []) {
     const traceEntries = Object.entries(result.summary?.startupTrace ?? {})
-      .filter(([, stats]) => typeof stats?.p50 === "number")
+      .filter(([name, stats]) => isStartupTraceDuration(name) && typeof stats?.p50 === "number")
       .toSorted((a, b) => (b[1].p50 ?? 0) - (a[1].p50 ?? 0))
       .slice(0, 5);
     for (const [name, stats] of traceEntries) {
@@ -368,6 +368,14 @@ function buildTraceRows(startup) {
     }
   }
   return rows;
+}
+
+function isStartupTraceDuration(name) {
+  if (name.endsWith(".total") || name.startsWith("memory.")) {
+    return false;
+  }
+  const metricName = name.slice(name.lastIndexOf(".") + 1);
+  return !metricName.endsWith("Count") && !metricName.endsWith("Mb");
 }
 
 function buildMockHelloRows(summaries) {

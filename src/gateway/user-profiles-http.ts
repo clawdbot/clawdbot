@@ -12,6 +12,7 @@ import {
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, sendMethodNotAllowed } from "./http-common.js";
+import { matchesHttpIfNoneMatch } from "./http-conditional.js";
 import {
   authorizeScopedGatewayHttpRequestOrReply,
   resolveSharedSecretHttpOperatorScopes,
@@ -267,7 +268,7 @@ function sendAvatar(
   avatar: { bytes: Uint8Array; mime: string; etag: string },
   cacheControl: string,
 ): void {
-  if (ifNoneMatchMatches(req.headers["if-none-match"], avatar.etag)) {
+  if (matchesHttpIfNoneMatch(req.headers["if-none-match"], avatar.etag)) {
     // Carry the success cache policy so a 304 does not inherit the miss-path
     // no-store and force the client to re-download an unchanged avatar.
     res.writeHead(304, { ETag: avatar.etag, "Cache-Control": cacheControl });
@@ -403,17 +404,4 @@ export async function handleUserProfileAvatarHttpRequest(
     error: { type: transientFailure ? "avatar_upstream_unavailable" : "not_found" },
   });
   return true;
-}
-
-// RFC 9110 §13.1.2 weak comparison: wildcard, comma-separated lists, and W/ prefixes
-// all revalidate; exact-string matching alone would miss proxy-normalized headers.
-function ifNoneMatchMatches(header: string | string[] | undefined, etag: string): boolean {
-  const value = Array.isArray(header) ? header.join(",") : header;
-  if (!value) {
-    return false;
-  }
-  return value.split(",").some((candidate) => {
-    const tag = candidate.trim();
-    return tag === "*" || tag === etag || (tag.startsWith("W/") && tag.slice(2) === etag);
-  });
 }

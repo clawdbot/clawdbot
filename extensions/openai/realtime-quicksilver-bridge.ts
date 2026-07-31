@@ -22,6 +22,7 @@ import {
   type OpenAIQuicksilverSocketFactory,
 } from "./realtime-quicksilver-sideband.js";
 import {
+  boundOpenAIQuicksilverDelegationResult,
   buildOpenAIQuicksilverSessionUpdate,
   buildOpenAIQuicksilverWebSocketUrl,
   chunkOpenAIQuicksilverAppendText,
@@ -342,13 +343,13 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     options?: RealtimeVoiceToolResultOptions,
   ): void {
     const channel = options?.suppressResponse || options?.willContinue ? "commentary" : "speakable";
-    const type = this.activeDelegations.has(callId)
-      ? "delegation.context.append"
-      : "session.context.append";
+    const isDelegation = this.activeDelegations.has(callId);
+    const type = isDelegation ? "delegation.context.append" : "session.context.append";
+    const text = toolResultText(result);
     this.sendContext(
       type,
-      type === "delegation.context.append" ? callId : undefined,
-      toolResultText(result),
+      isDelegation ? callId : undefined,
+      isDelegation ? boundOpenAIQuicksilverDelegationResult(text) : text,
       channel,
     );
     if (!options?.willContinue) {
@@ -360,10 +361,13 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
 
   close(): void {
     const connection = this.connection;
-    if (!connection || !this.lifecycle.cancel()) {
+    if (!this.lifecycle.cancel()) {
       return;
     }
     this.resetTerminalState();
+    if (!connection) {
+      return;
+    }
     if (this.socket?.readyState === WEBSOCKET_OPEN) {
       this.sendEvent({ type: "session.close" });
     }

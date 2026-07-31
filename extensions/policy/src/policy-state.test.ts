@@ -1,5 +1,6 @@
 // Policy tests cover policy state plugin behavior.
 import { describe, expect, it } from "vitest";
+import { scanPolicySandboxPosture } from "./policy-state-sandbox.js";
 import { collectPolicyEvidence } from "./policy-state.js";
 
 const scanPolicyChannels = (cfg: Record<string, unknown>) => collectPolicyEvidence(cfg).channels;
@@ -11,6 +12,47 @@ async function scanPolicyTools(raw: string) {
 
 const scanPolicyExecApprovals = (raw: string) =>
   collectPolicyEvidence({}, { execApprovalsRaw: raw }).execApprovals ?? [];
+
+describe("scanPolicySandboxPosture", () => {
+  it("keeps explicit Podman identity while exposing shared container settings", () => {
+    const evidence = scanPolicySandboxPosture({
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "Podman",
+            docker: {
+              network: "bridge",
+              seccompProfile: "custom-seccomp.json",
+              binds: ["/host/data:/data:ro"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "backend", value: "podman" }),
+        expect.objectContaining({
+          kind: "containerNetwork",
+          networkSurface: "docker",
+          value: "bridge",
+        }),
+        expect.objectContaining({
+          kind: "containerSecurityProfile",
+          profile: "seccomp",
+          value: "custom-seccomp.json",
+        }),
+        expect.objectContaining({
+          kind: "containerMount",
+          bindSurface: "docker",
+          bind: "/host/data:/data:ro",
+        }),
+      ]),
+    );
+  });
+});
 
 describe("scanPolicyChannels", () => {
   it("ignores reserved channel config namespaces", () => {

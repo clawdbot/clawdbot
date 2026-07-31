@@ -10,7 +10,10 @@ function renderInto(
   disabled = false,
 ): HTMLElement {
   const container = document.createElement("div");
-  render(renderDreamingSettings({ dreaming, disabled, onPatch }), container);
+  render(
+    renderDreamingSettings({ dreaming, timezoneDefault: "Asia/Singapore", disabled, onPatch }),
+    container,
+  );
   return container;
 }
 
@@ -27,6 +30,16 @@ function numberInput(container: HTMLElement, label: string): HTMLInputElement {
 function editNumber(input: HTMLInputElement, value: string) {
   input.value = value;
   input.dispatchEvent(new Event("change"));
+}
+
+function rowFor(container: HTMLElement, title: string): HTMLElement {
+  const row = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
+    (candidate) => candidate.querySelector(".settings-row__title")?.textContent?.trim() === title,
+  );
+  if (!row) {
+    throw new Error(`no row titled ${title}`);
+  }
+  return row;
 }
 
 /** Toggle state keyed by "<section heading>/<row title>"; `checked` is a property binding. */
@@ -82,6 +95,99 @@ describe("renderDreamingSettings", () => {
     expect(selectedSegment(renderInto({ storage: { mode: "both" } }))).toBe("both");
     // An unreadable stored value is not a fourth mode: it reads as the default.
     expect(selectedSegment(renderInto({ storage: { mode: "nonsense" } }))).toBe("separate");
+  });
+
+  it("shows inherited values and dynamic timezone provenance", () => {
+    const container = renderInto(null);
+
+    expect(rowFor(container, "Dreaming frequency").textContent).toContain(
+      "Using default: 0 3 * * *",
+    );
+    expect(rowFor(container, "Timezone").textContent).toContain("Using default: Asia/Singapore");
+    expect(numberInput(container, "Lookback days").placeholder).toBe("2");
+    expect(rowFor(container, "Lookback days").textContent).toContain("Using default: 2");
+    expect(container.querySelector('button[aria-label="Reset to default"]')).toBeNull();
+  });
+
+  it("shows the advanced execution model as the inherited model default", () => {
+    const onPatch = vi.fn();
+    const container = renderInto(
+      {
+        model: "anthropic/claude-sonnet",
+        execution: { defaults: { model: "openai/gpt-5.6" } },
+      },
+      onPatch,
+    );
+    const row = rowFor(container, "Dreaming model");
+
+    expect(row.textContent).toContain("Default: openai/gpt-5.6");
+    row.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
+    expect(onPatch).toHaveBeenCalledWith(["model"], undefined);
+
+    const inherited = renderInto({ execution: { defaults: { model: "openai/gpt-5.6" } } });
+    expect(rowFor(inherited, "Dreaming model").textContent).toContain(
+      "Using default: openai/gpt-5.6",
+    );
+  });
+
+  it("resets explicit dreaming values by removing their owning config keys", () => {
+    const onPatch = vi.fn();
+    const container = renderInto(
+      {
+        frequency: "0 6 * * *",
+        verboseLogging: true,
+        storage: { mode: "both" },
+        phases: { light: { lookbackDays: 5 } },
+      },
+      onPatch,
+    );
+
+    for (const title of [
+      "Dreaming frequency",
+      "Verbose logging",
+      "Storage mode",
+      "Lookback days",
+    ]) {
+      rowFor(container, title)
+        .querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')
+        ?.click();
+    }
+
+    expect(onPatch).toHaveBeenCalledWith(["frequency"], undefined);
+    expect(onPatch).toHaveBeenCalledWith(["verboseLogging"], undefined);
+    expect(onPatch).toHaveBeenCalledWith(["storage", "mode"], undefined);
+    expect(onPatch).toHaveBeenCalledWith(["phases", "light", "lookbackDays"], undefined);
+  });
+
+  it("keeps malformed explicit values resettable while displaying runtime defaults", () => {
+    const onPatch = vi.fn();
+    const container = renderInto(
+      {
+        frequency: 42,
+        verboseLogging: "yes",
+        storage: { mode: 42, separateReports: "yes" },
+      },
+      onPatch,
+    );
+
+    for (const title of [
+      "Dreaming frequency",
+      "Verbose logging",
+      "Storage mode",
+      "Separate reports",
+    ]) {
+      const row = rowFor(container, title);
+      expect(row.textContent).toContain("Default:");
+      row.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
+    }
+    expect(numberInput(container, "Dreaming frequency").value).toBe("");
+    expect(toggleStates(container)["Schedule/Verbose logging"]).toBe(false);
+    expect(selectedSegment(container)).toBe("separate");
+    expect(toggleStates(container)["Storage/Separate reports"]).toBe(false);
+    expect(onPatch).toHaveBeenCalledWith(["frequency"], undefined);
+    expect(onPatch).toHaveBeenCalledWith(["verboseLogging"], undefined);
+    expect(onPatch).toHaveBeenCalledWith(["storage", "mode"], undefined);
+    expect(onPatch).toHaveBeenCalledWith(["storage", "separateReports"], undefined);
   });
 
   it("locks every global dreaming control when config mutation is unavailable", () => {

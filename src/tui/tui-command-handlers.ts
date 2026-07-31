@@ -1,6 +1,7 @@
 // Implements TUI slash command handlers and backend action dispatch.
 import { randomUUID } from "node:crypto";
 import type { Component, OverlayHandle, SelectItem, TUI } from "@earendil-works/pi-tui";
+import type { Result } from "@openclaw/normalization-core/result";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { modelKey } from "../agents/model-ref-shared.js";
 import { shouldForwardModelCommandToServer } from "../auto-reply/commands-registry.shared.js";
@@ -74,7 +75,7 @@ type CommandHandlerContext = {
   refreshSessionInfo: () => Promise<void>;
   loadHistory: () => Promise<unknown>;
   setSession: (key: string) => Promise<void>;
-  refreshAgents: () => Promise<void>;
+  refreshAgents: () => Promise<Result<void, string>>;
   abortActive: (params?: { preferActive?: boolean }) => Promise<void>;
   setActivityStatus: (text: string) => void;
   formatSessionKey: (key: string) => string;
@@ -289,7 +290,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const openAgentSelector = async () => {
-    await refreshAgents();
+    const refreshResult = await refreshAgents();
+    if (!refreshResult.ok) {
+      tui.requestRender();
+      return;
+    }
     const selectableAgents = state.agents.filter((agent) => agent.kind !== "system");
     if (selectableAgents.length === 0) {
       chatLog.addSystem("no agents found");

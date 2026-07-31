@@ -30,6 +30,12 @@ import {
 } from "../agents/memory/dreaming.ts";
 import "./memory-dreaming-page.ts";
 import "./memory-memories.ts";
+import {
+  dreamingConfigPath,
+  resetMemoryBackend,
+  resetMemoryEngine,
+  resolveDreamingTimezoneDefault,
+} from "./memory-defaults.ts";
 import { renderDreamingSettings, renderDreamingUnsupported } from "./memory-dreaming.ts";
 import { renderMemoryOverview, type MemoryOverviewStatus } from "./memory-overview.ts";
 import {
@@ -37,7 +43,7 @@ import {
   DEFAULT_MEMORY_ENGINE_ID,
   memoryTabForRoute,
   memorySchemaKeysForTab,
-  resolveMemoryBackend,
+  resolveMemoryBackendSelection,
   resolveMemoryEngineSelection,
   selectedEngineId,
   type MemoryEngineSelection,
@@ -624,20 +630,12 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     if (this.mutationDisabled) {
       return;
     }
-    const runtimeConfig = this.context.runtimeConfig;
-    const writePath = [
-      "plugins",
-      "entries",
-      this.dreamingPluginId(),
-      "config",
-      "dreaming",
-      ...path,
-    ];
+    const writePath = dreamingConfigPath(this.dreamingPluginId(), path);
     if (value === undefined) {
-      runtimeConfig.removeFormValue(writePath);
+      this.context.runtimeConfig.removeFormValue(writePath);
       return;
     }
-    runtimeConfig.patchForm(writePath, value);
+    this.context.runtimeConfig.patchForm(writePath, value);
   }
 
   private renderDreamingControls() {
@@ -651,6 +649,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         ? renderDreamingUnsupported(pluginId)
         : renderDreamingSettings({
             dreaming: this.dreamingConfig(),
+            timezoneDefault: resolveDreamingTimezoneDefault(this.configObjectFromController()),
             disabled: this.mutationDisabled,
             onPatch: (path, value) => this.patchDreaming(path, value),
           })}
@@ -668,10 +667,9 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     const engineSelection = resolveMemoryEngineSelection(this.configObject);
     const engineMutationDisabled =
       this.mutationDisabled || (this.catalog.kind === "ready" && !this.catalog.mutationAllowed);
-    const backend = resolveMemoryBackend(this.configObject);
+    const backendSelection = resolveMemoryBackendSelection(this.configObject);
     const activeTab = this.activeTab();
     const agentId = this.resolveAgentId();
-    const agents = this.agentOptions();
     return renderMemory({
       activeTab,
       onTabChange: (tab) => this.navigateTab(tab),
@@ -681,13 +679,19 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       engineBusy: this.engineBusy || engineMutationDisabled,
       engineError: this.engineError,
       onEngineChange: (nextEngineId) => void this.changeEngine(nextEngineId, engineSelection),
-      backend,
+      onEngineReset: () => {
+        if (resetMemoryEngine(runtimeConfig, this.engineBusy || engineMutationDisabled)) {
+          this.engineError = null;
+        }
+      },
+      backendSelection,
       backendBusy: this.mutationDisabled,
       onBackendChange: (next) => {
         if (!this.mutationDisabled) {
           runtimeConfig.patchForm(["memory", "backend"], next);
         }
       },
+      onBackendReset: () => resetMemoryBackend(runtimeConfig, this.mutationDisabled),
       addons: this.addonRows(),
       canToggleAddons:
         this.catalog.kind === "ready" &&
@@ -698,7 +702,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       pluginsHref: this.pluginsHref,
       memoryImportHref: this.memoryImportHref,
       agentId,
-      agents,
+      agents: this.agentOptions(),
       onAgentChange: (next) => this.selectAgent(next),
       overview: renderMemoryOverview({
         agentId,
@@ -725,7 +729,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       dreams: html` <openclaw-memory-dreaming .agentId=${agentId}></openclaw-memory-dreaming> `,
       editor:
         activeTab === "settings"
-          ? this.buildEditor(memorySchemaKeysForTab("settings", backend))
+          ? this.buildEditor(memorySchemaKeysForTab("settings", backendSelection?.backend ?? null))
           : html``,
       dreamingSettings: activeTab === "settings" ? this.renderDreamingControls() : html``,
     });

@@ -526,4 +526,67 @@ describe("AppSidebar session ownership", () => {
       sidebar.querySelector(`[data-session-key="${childKey}"] [aria-label="Done"]`),
     ).not.toBeNull();
   });
+
+  it("renders a controlled child once under its explicit dashboard parent", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const navigationParentKey = "agent:main:dashboard:navigation-parent";
+    const controlParentKey = "agent:main:main";
+    const childKey = "agent:main:subagent:controlled-child";
+    const child = {
+      key: childKey,
+      kind: "direct" as const,
+      label: "Controlled child",
+      updatedAt: 3,
+      parentSessionKey: navigationParentKey,
+      spawnedBy: controlParentKey,
+    };
+    const harness = createSessionsHarness("main", [navigationParentKey]);
+    harness.list.mockImplementation(async (options) => {
+      const sessions = options?.spawnedBy === navigationParentKey ? [child] : [];
+      return {
+        ts: 3,
+        path: "",
+        count: sessions.length,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions,
+      };
+    });
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    harness.publishList({
+      result: {
+        ts: 3,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: navigationParentKey,
+            kind: "direct",
+            label: "Dashboard parent",
+            updatedAt: 2,
+            childSessions: [childKey],
+          },
+        ],
+      },
+    });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
+
+    sidebar
+      .querySelector<HTMLButtonElement>(`[data-child-session-toggle="${navigationParentKey}"]`)
+      ?.click();
+    await waitForFast(() =>
+      expect(harness.list).toHaveBeenCalledWith(
+        expect.objectContaining({ spawnedBy: navigationParentKey }),
+      ),
+    );
+    await waitForFast(() =>
+      expect(sidebar.querySelectorAll(`[data-session-key="${childKey}"]`)).toHaveLength(1),
+    );
+    expect(
+      sidebar
+        .querySelector(`[data-session-key="${childKey}"]`)
+        ?.classList.contains("sidebar-recent-session--child"),
+    ).toBe(true);
+  });
 });

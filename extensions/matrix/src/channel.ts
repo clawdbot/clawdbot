@@ -4,7 +4,10 @@ import {
   adaptScopedAccountAccessor,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
+import type {
+  ChannelDoctorAdapter,
+  ChannelThreadingToolContext,
+} from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   createChannelMessageAdapterFromOutbound,
@@ -339,6 +342,24 @@ function resolveMatrixDeliveryTarget(params: {
   return null;
 }
 
+function matchesMatrixToolContextRoom(params: {
+  target: string;
+  toolContext: ChannelThreadingToolContext;
+}): boolean {
+  const { toolContext } = params;
+  if (toolContext.currentChannelProvider && toolContext.currentChannelProvider !== "matrix") {
+    return false;
+  }
+  const currentTarget = toolContext.currentChannelId
+    ? resolveMatrixTargetIdentity(toolContext.currentChannelId)
+    : null;
+  const target = resolveMatrixTargetIdentity(params.target);
+  // A Matrix user target can select a different DM room; only verified room IDs may share threads.
+  return (
+    currentTarget?.kind === "room" && target?.kind === "room" && currentTarget.id === target.id
+  );
+}
+
 const matrixChannelOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: chunkTextForOutbound,
@@ -665,6 +686,14 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
       ),
     },
     threading: {
+      matchesToolContextTarget: matchesMatrixToolContextRoom,
+      resolveAutoThreadId: ({ to, toolContext }) => {
+        const threadId = normalizeOptionalString(toolContext?.currentThreadTs);
+        if (!threadId || !toolContext) {
+          return undefined;
+        }
+        return matchesMatrixToolContextRoom({ target: to, toolContext }) ? threadId : undefined;
+      },
       resolveReplyToMode: createScopedAccountReplyToModeResolver<
         ReturnType<typeof resolveMatrixAccountConfig>
       >({

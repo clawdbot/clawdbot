@@ -38,6 +38,7 @@ const incrementCompactionCountMock = vi.fn();
 const ensureSelectedAgentHarnessPluginMock = vi.fn();
 const ensureMemoryFlushTargetFileMock = vi.fn();
 const emitAgentEventMock = vi.fn();
+const registerAgentRunContextMock = vi.fn();
 const TEST_MAX_FLUSH_FAILURES = 3;
 
 function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
@@ -314,6 +315,7 @@ describe("runMemoryFlushIfNeeded", () => {
     ensureMemoryFlushTargetFileMock.mockReset().mockResolvedValue(undefined);
     ensureSelectedAgentHarnessPluginMock.mockReset().mockResolvedValue(undefined);
     emitAgentEventMock.mockReset();
+    registerAgentRunContextMock.mockReset();
     incrementCompactionCountMock.mockReset().mockImplementation(async (params) => {
       const sessionKey = String(params.sessionKey ?? "");
       if (!sessionKey || !params.sessionStore?.[sessionKey]) {
@@ -340,7 +342,7 @@ describe("runMemoryFlushIfNeeded", () => {
       ensureMemoryFlushTargetFile: ensureMemoryFlushTargetFileMock as never,
       refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock as never,
       incrementCompactionCount: incrementCompactionCountMock as never,
-      registerAgentRunContext: vi.fn() as never,
+      registerAgentRunContext: registerAgentRunContextMock as never,
       emitAgentEvent: emitAgentEventMock as never,
       resolveSessionLogPath: (
         _sessionId: string | undefined,
@@ -417,6 +419,16 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.prompt).not.toBe(flushCall.transcriptPrompt);
     expect(flushCall.memoryFlushWritePath).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
     expect(flushCall.silentExpected).toBe(true);
+    expect(registerAgentRunContextMock).toHaveBeenCalledWith(
+      "00000000-0000-0000-0000-000000000001",
+      expect.objectContaining({
+        isControlUiVisible: false,
+        projectSessionActive: false,
+        projectSessionLifecycle: false,
+        sessionId: "session",
+        sessionKey,
+      }),
+    );
     expect(ensureMemoryFlushTargetFileMock).toHaveBeenCalledWith({
       workspaceDir: followupRun.run.workspaceDir,
       relativePath: flushCall.memoryFlushWritePath,
@@ -636,6 +648,42 @@ describe("runMemoryFlushIfNeeded", () => {
       "high",
     ]);
     expect(followupRun.run.thinkLevel).toBe("ultra");
+  });
+
+  it("preserves thinking for runtime-discovered Ollama memory-flush models", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      thinkingLevel: "high",
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+    const followupRun = createTestFollowupRun({
+      provider: "ollama",
+      model: "qwen3.5:4b",
+    });
+    followupRun.run.thinkLevel = "high";
+    followupRun.run.thinkingCatalog = [{ provider: "ollama", id: "qwen3.5:4b", reasoning: true }];
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun,
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "ollama/qwen3.5:4b",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(requireEmbeddedAgentCall().thinkLevel).toBe("high");
   });
 
   it("keeps catalog-adopted sessions on Codex for memory flush turns", async () => {

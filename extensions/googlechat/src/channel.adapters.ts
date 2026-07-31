@@ -48,6 +48,7 @@ const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
 function createGoogleChatSendReceipt(params: {
   messageId?: string;
   chatId: string;
+  threadId?: string;
   kind: MessageReceiptPartKind;
 }) {
   const messageId = params.messageId?.trim();
@@ -62,7 +63,7 @@ function createGoogleChatSendReceipt(params: {
           },
         ]
       : [],
-    threadId: params.chatId,
+    threadId: params.threadId,
     kind: params.kind,
   });
 }
@@ -251,7 +252,12 @@ export const googlechatOutboundAdapter = {
       return {
         messageId,
         chatId: space,
-        receipt: createGoogleChatSendReceipt({ messageId, chatId: space, kind: "text" }),
+        receipt: createGoogleChatSendReceipt({
+          messageId,
+          chatId: space,
+          threadId: result?.threadName ?? thread,
+          kind: "text",
+        }),
       };
     },
   },

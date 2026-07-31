@@ -1,4 +1,5 @@
 // QA Lab mock provider contracts, wire helpers, and scenario constants.
+import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
@@ -123,6 +124,7 @@ export type MockOpenAiRequestSnapshot = {
   imageInputCount: number;
   plannedToolCallId?: string;
   plannedToolName?: string;
+  plannedWireToolName?: string;
   plannedToolArgs?: Record<string, unknown>;
   toolOutputCallId?: string;
   toolOutputStructuredError?: true;
@@ -206,6 +208,14 @@ export const QA_TELEGRAM_LONG_FINAL_PROMPT_RE = /telegram long final qa check/i;
 export const QA_WHATSAPP_LONG_FINAL_PROMPT_RE = /whatsapp long final qa check/i;
 export const QA_SLACK_CHART_PRESENTATION_PROMPT_RE =
   /Slack native chart QA check\s+(SLACK_QA_CHART_SUMMARY_[A-Z0-9]+)[\s\S]*?reply with only this exact marker:\s*(SLACK_QA_CHART_DONE_[A-Z0-9]+)/i;
+export const QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE =
+  /Slack MPIM assistant-history seed check[\s\S]*?exact format:\s*(SLACK_QA_MPIM_SEED_[A-Z0-9]+)_BOT_<NONCE>/i;
+export const QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE =
+  /Slack MPIM assistant-history recall check[\s\S]*?previous reply beginning with\s+(SLACK_QA_MPIM_SEED_[A-Z0-9]+_BOT_)[\s\S]*?exact format:\s*(SLACK_QA_MPIM_RECALL_[A-Z0-9]+)_<NONCE>[\s\S]*?otherwise reply with only:\s*(SLACK_QA_MPIM_MISSING_[A-Z0-9]+)/i;
+
+export function buildSlackMpimHistoryBotReply(seedMarker: string) {
+  return `${seedMarker}_BOT_${randomUUID().replaceAll("-", "").toUpperCase()}`;
+}
 export const QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE =
   /react to this whatsapp(?: group)? message with thumbs up for qa action check\s+(?:WHATSAPP_QA_AGENT_REACT|WHATSAPP_QA_GROUP_AGENT_REACT)_[A-Z0-9]+/i;
 export const QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE =
@@ -280,6 +290,7 @@ export const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa ch
 
 export type MockScenarioState = {
   anthropicThinkingErrorScenarioKeys: Set<string>;
+  subagentFanoutCompletedWorkers: Set<"alpha" | "beta">;
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;
   toolLoopReadAttempts: number;

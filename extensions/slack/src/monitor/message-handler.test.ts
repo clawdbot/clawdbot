@@ -12,7 +12,11 @@ const onFlushCallbacks: Array<
     createFlush: typeof createTestInboundDebounceFlush,
   ) => InboundDebounceFlush
 > = [];
-const prepareSlackMessageMock = vi.fn(async () => ({ ctxPayload: {} }));
+const prepareSlackMessageMock = vi.fn(
+  async (_params?: {
+    opts: { onVisibleDrop?: () => void };
+  }): Promise<{ ctxPayload: Record<string, unknown> } | null> => ({ ctxPayload: {} }),
+);
 const dispatchPreparedSlackMessageMock = vi.fn(async (_prepared: unknown) => {});
 const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
   ...message,
@@ -456,6 +460,79 @@ describe("createSlackMessageHandler", () => {
       expect(prepared.ctxPayload.MessageSids).toBeUndefined();
     },
   );
+
+  it("prepares a denied message/app_mention twin pair once without dispatching", async () => {
+    prepareSlackMessageMock.mockImplementationOnce(async (params) => {
+      params?.opts.onVisibleDrop?.();
+      return null;
+    });
+    const { handler } = createHandlerWithTracker();
+    const message = {
+      type: "message" as const,
+      channel: "C111",
+      user: "U111",
+      ts: "1709000000.001881",
+      text: "<@UBOT> hello",
+    };
+    const asMessage = handler(message as never, {
+      source: "message",
+      awaitDispatch: true,
+    });
+    const asMention = handler(message as never, {
+      source: "app_mention",
+      wasMentioned: true,
+      awaitDispatch: true,
+    });
+    await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(2));
+
+    const entries = enqueueMock.mock.calls.map((call) => call[0]) as Array<Record<string, unknown>>;
+    await runOnFlush(entries);
+    await expect(Promise.all([asMessage, asMention])).resolves.toEqual([undefined, undefined]);
+
+    expect(prepareSlackMessageMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        opts: expect.objectContaining({ source: "app_mention", wasMentioned: true }),
+      }),
+    );
+    expect(dispatchPreparedSlackMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("does not repeat a visible denial for a later message/app_mention twin", async () => {
+    prepareSlackMessageMock.mockImplementationOnce(async (params) => {
+      params?.opts.onVisibleDrop?.();
+      return null;
+    });
+    const { handler } = createHandlerWithTracker();
+    const message = {
+      type: "message" as const,
+      channel: "C111",
+      user: "U111",
+      ts: "1709000000.001882",
+      text: "<@UBOT> hello",
+    };
+
+    const asMessage = handler(message as never, {
+      source: "message",
+      awaitDispatch: true,
+    });
+    await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(1));
+    const first = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    await runOnFlush([first]);
+    await asMessage;
+
+    const asMention = handler(message as never, {
+      source: "app_mention",
+      wasMentioned: true,
+      awaitDispatch: true,
+    });
+    await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(2));
+    const second = enqueueMock.mock.calls[1]?.[0] as Record<string, unknown>;
+    await runOnFlush([second]);
+    await asMention;
+
+    expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
+    expect(dispatchPreparedSlackMessageMock).not.toHaveBeenCalled();
+  });
 
   it("preserves distinct messages and identities in the same debounced flush", async () => {
     const { handler } = createHandlerWithTracker();

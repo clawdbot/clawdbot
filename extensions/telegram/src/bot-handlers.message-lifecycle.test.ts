@@ -42,4 +42,18 @@ describe("Telegram ambient transcript media text", () => {
 
     expect(body).toBe("#9 Ada: <media:attachment>");
   });
+
+  it("preserves combined formatting entities when building synthetic text messages", () => {
+    const entities = [{ type: "bold" as const, offset: 3, length: 4 }];
+    const synthetic = runtime.buildSyntheticTextMessage({
+      base: message({ caption: "old caption", caption_entities: entities }),
+      text: "😀 bold",
+      entities,
+    });
+
+    expect(synthetic.text).toBe("😀 bold");
+    expect(synthetic.entities).toEqual(entities);
+    expect(synthetic.caption).toBeUndefined();
+    expect(synthetic.caption_entities).toBeUndefined();
+  });
 });

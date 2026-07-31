@@ -22,7 +22,6 @@ import {
   embeddedRunMock,
   installGatewayTestHooks,
   agentDiscoveryMock,
-  rpcReq,
   testState,
   writeSessionStore,
 } from "../test-helpers.js";
@@ -657,21 +656,6 @@ function expectSessionQueueCleanup(expectedQueueKeys: string[]) {
 
 export function expectNoSessionQueueCleanup() {
   expect(sessionCleanupMocks.clearSessionQueues).not.toHaveBeenCalled();
-}
-
-export async function getMainPreviewEntry(ws: import("ws").WebSocket) {
-  const preview = await rpcReq<{
-    previews: Array<{
-      key: string;
-      status: string;
-      items: Array<{ role: string; text: string }>;
-    }>;
-  }>(ws, "sessions.preview", { keys: ["main"], limit: 3, maxChars: 120 });
-  expect(preview.ok).toBe(true);
-  const entry = preview.payload?.previews[0];
-  expect(entry?.key).toBe("main");
-  expect(entry?.status).toBe("ok");
-  return entry;
 }
 
 type SessionsHandlers = Awaited<ReturnType<typeof getSessionsHandlers>>;

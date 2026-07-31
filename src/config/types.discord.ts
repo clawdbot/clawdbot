@@ -112,6 +112,11 @@ export type DiscordActionConfig = {
 };
 
 export type DiscordIntentsConfig = {
+  /**
+   * Request the privileged Message Content intent. Disable only for mention-only guild operation;
+   * Discord still includes content in DMs and messages that explicitly mention the bot. Default: true.
+   */
+  messageContent?: boolean;
   /** Enable Guild Presences privileged intent (requires Portal opt-in). Default: false. */
   presence?: boolean;
   /** Enable Guild Members privileged intent (requires Portal opt-in). Default: false. */

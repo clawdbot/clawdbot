@@ -83,6 +83,33 @@ describe("markdown sidebar", () => {
     panel.remove();
   });
 
+  it.each(["Enter", " "])("opens focused markdown preview file links with %j", async (key) => {
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+      updateComplete?: Promise<unknown>;
+    };
+    const onOpenWorkspaceFile = vi.fn();
+    panel.content = { kind: "markdown", content: "See `ui/src/pages/chat/chat-view.ts:362`" };
+    panel.onOpenWorkspaceFile = onOpenWorkspaceFile;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    const link = panel.querySelector<HTMLAnchorElement>("a.markdown-file-link");
+    link?.focus();
+    expect(document.activeElement).toBe(link);
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    link?.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onOpenWorkspaceFile).toHaveBeenCalledOnce();
+    expect(onOpenWorkspaceFile).toHaveBeenCalledWith({
+      path: "ui/src/pages/chat/chat-view.ts",
+      line: 362,
+    });
+    panel.remove();
+  });
+
   it("activates Markdown images only when a chat owner opts in", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
       content: unknown;

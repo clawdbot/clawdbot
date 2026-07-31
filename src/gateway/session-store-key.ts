@@ -161,30 +161,3 @@ export function resolveStoredSessionOwnerAgentId(params: {
   }
   return resolveSessionStoreAgentId(params.cfg, canonicalKey);
 }
-
-/** Canonicalize spawned-by parent references while preserving main-session aliases. */
-export function canonicalizeSpawnedByForAgent(
-  cfg: OpenClawConfig,
-  agentId: string,
-  spawnedBy?: string,
-): string | undefined {
-  const raw = normalizeOptionalString(spawnedBy) ?? "";
-  if (!raw) {
-    return undefined;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(raw);
-  if (lower === "global" || lower === "unknown") {
-    return lower;
-  }
-  let result: string;
-  const normalized = normalizeSessionKeyPreservingOpaquePeerIds(raw);
-  if (normalized.startsWith("agent:")) {
-    result = normalized;
-  } else {
-    result = `agent:${normalizeAgentId(agentId)}:${normalized}`;
-  }
-  // Resolve main-alias references (e.g. agent:ops:main -> configured main key).
-  const parsed = parseAgentSessionKey(result);
-  const resolvedAgent = parsed?.agentId ? normalizeAgentId(parsed.agentId) : agentId;
-  return canonicalizeMainSessionAlias({ cfg, agentId: resolvedAgent, sessionKey: result });
-}

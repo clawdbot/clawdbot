@@ -308,11 +308,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Guided setup
   - H3: Bot approval
   - H2: Agent tools and messaging
+  - H3: Directory and sender labels
   - H3: Route rooms to different agents
   - H2: Access control
   - H2: Manual configuration
   - H3: Bot key storage
   - H2: Verify the connection
+  - H3: QA Lab round trip
   - H2: Rotate the bot identity
   - H2: Current limits and roadmap
   - H2: Troubleshooting
@@ -2801,7 +2803,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Other subscription-style hosted options
   - H3: OpenCode
   - H3: Google Gemini (API key)
-  - H3: Google Vertex and Gemini CLI
+  - H3: Google Vertex and Gemini CLI runtime
   - H3: Z.AI (GLM)
   - H3: Vercel AI Gateway
   - H3: Other bundled provider plugins
@@ -2957,8 +2959,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Mantis Slack desktop and visual-task runners
   - H3: Credential pool health check
   - H2: Canonical scenario coverage
-  - H2: Discord, Slack, Telegram, and WhatsApp QA reference
+  - H2: Buzz, Discord, Slack, Telegram, and WhatsApp QA reference
   - H3: Shared CLI flags
+  - H3: Buzz QA
   - H3: Telegram QA
   - H3: Discord QA
   - H3: Slack QA
@@ -4043,6 +4046,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Supported capability matrix
   - H2: Docker backend
   - H3: Sandboxed browser
+  - H2: Podman backend
   - H2: SSH backend
   - H2: OpenShell backend
   - H2: Workspace access
@@ -4858,6 +4862,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Prerequisites
   - H2: Quick start
+  - H2: Agent sandbox backend
   - H2: Podman and Tailscale
   - H2: Systemd (Quadlet, optional)
   - H2: Config, env, and storage
@@ -7634,6 +7639,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Verified setup runtime artifacts
   - H3: Request-transport contract
   - H2: Register a harness
+  - H3: Isolated completion
   - H3: Delegated execution
   - H2: Selection policy
   - H2: Provider plus harness pairing
