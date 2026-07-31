@@ -4,6 +4,7 @@ import { zstdDecompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { configureAiTransportHost } from "../host.js";
+import { cleanupSessionResources } from "../session-resources.js";
 import type { Context, Model } from "../types.js";
 import {
   closeOpenAICodexWebSocketSessions,
@@ -499,7 +500,7 @@ describe("ChatGPT Responses cached transport", () => {
     }
   });
 
-  it("lazily builds authenticated SSE requests after session-scoped websocket fallback", async () => {
+  it("keeps SSE fallback sticky only for the active session lifecycle", async () => {
     let websocketAttempts = 0;
 
     class FailingWebSocket {
@@ -528,20 +529,31 @@ describe("ChatGPT Responses cached transport", () => {
     vi.stubGlobal("WebSocket", FailingWebSocket);
     vi.stubGlobal("fetch", fetchMock);
     const apiKey = createJwt();
-    const options = { apiKey, sessionId: "sticky-sse-fallback" };
+    const runSession = (sessionId: string) =>
+      streamOpenAICodexResponses(model, context, { apiKey, sessionId }).result();
 
-    const first = await streamOpenAICodexResponses(model, context, options).result();
-    const second = await streamOpenAICodexResponses(model, context, options).result();
+    expect((await runSession("sticky-sse-fallback")).stopReason).toBe("stop");
+    expect((await runSession("sticky-sse-fallback")).stopReason).toBe("stop");
+    expect((await runSession("unrelated-sse-fallback")).stopReason).toBe("stop");
+    expect(websocketAttempts).toBe(2);
 
-    expect(first.stopReason).toBe("stop");
-    expect(second.stopReason).toBe("stop");
-    expect(websocketAttempts).toBe(1);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    cleanupSessionResources("sticky-sse-fallback");
+    expect((await runSession("unrelated-sse-fallback")).stopReason).toBe("stop");
+    expect(websocketAttempts).toBe(2);
+    expect((await runSession("sticky-sse-fallback")).stopReason).toBe("stop");
+    expect((await runSession("sticky-sse-fallback")).stopReason).toBe("stop");
+    expect(websocketAttempts).toBe(3);
+
+    cleanupSessionResources();
+    expect((await runSession("sticky-sse-fallback")).stopReason).toBe("stop");
+    expect((await runSession("unrelated-sse-fallback")).stopReason).toBe("stop");
+    expect(websocketAttempts).toBe(5);
+    expect(fetchMock).toHaveBeenCalledTimes(8);
 
     for (const { headers, body } of captured) {
       expect(headers.get("authorization")).toBe(`Bearer ${apiKey}`);
       expect(headers.get("chatgpt-account-id")).toBe("acct-1");
-      expect(headers.get("session_id")).toBe("sticky-sse-fallback");
+      expect(headers.get("session_id")).toMatch(/^(sticky|unrelated)-sse-fallback$/);
       expect(headers.get("accept")).toBe("text/event-stream");
       expect(headers.get("content-type")).toBe("application/json");
       expect(headers.get("content-encoding")).toBe("zstd");
@@ -550,7 +562,7 @@ describe("ChatGPT Responses cached transport", () => {
         JSON.parse(Buffer.from(zstdDecompressSync(body as Uint8Array)).toString("utf8")),
       ).toMatchObject({
         model: model.id,
-        prompt_cache_key: "sticky-sse-fallback",
+        prompt_cache_key: headers.get("session_id"),
       });
     }
   });
