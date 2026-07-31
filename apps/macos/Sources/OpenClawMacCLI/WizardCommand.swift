@@ -156,6 +156,7 @@ private func resolvedPassword(opts: WizardCliOptions, config: GatewayConfig) -> 
 
 actor GatewayWizardClient {
     private enum ConnectChallengeError: Error {
+        case invalid
         case timeout
     }
 
@@ -271,14 +272,15 @@ actor GatewayWizardClient {
         } else if let password = self.password {
             params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
         }
-        let connectNonce = try await self.waitForConnectChallenge()
+        let connectChallenge = try await self.waitForConnectChallenge()
+        let connectNonce = connectChallenge.nonce
         guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else {
             throw NSError(
                 domain: "OpenClawMacCLI",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Could not access the persisted device identity"])
         }
-        let signedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let signedAtMs = connectChallenge.issuedAtMs
         let payload = GatewayDeviceAuthPayload.buildConnectCompatibilityPayload(
             fields: .init(
                 deviceId: identity.deviceId,
@@ -320,7 +322,7 @@ actor GatewayWizardClient {
         }
     }
 
-    private func waitForConnectChallenge() async throws -> String {
+    private func waitForConnectChallenge() async throws -> GatewayConnectChallenge {
         guard let task = self.task else { throw ConnectChallengeError.timeout }
         return try await AsyncTimeout.withTimeout(
             seconds: self.connectChallengeTimeoutSeconds,
@@ -329,11 +331,13 @@ actor GatewayWizardClient {
                 while true {
                     let message = try await task.receive()
                     let frame = try await self.decodeFrame(message)
-                    if case let .event(evt) = frame, evt.event == "connect.challenge",
-                       let payload = evt.payload?.value as? [String: ProtoAnyCodable],
-                       let nonce = GatewayConnectChallengeSupport.nonce(from: payload)
-                    {
-                        return nonce
+                    if case let .event(evt) = frame, evt.event == "connect.challenge" {
+                        guard let payload = evt.payload?.value as? [String: ProtoAnyCodable],
+                              let challenge = GatewayConnectChallengeSupport.challenge(from: payload)
+                        else {
+                            throw ConnectChallengeError.invalid
+                        }
+                        return challenge
                     }
                 }
             })

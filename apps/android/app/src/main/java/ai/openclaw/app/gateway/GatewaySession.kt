@@ -907,6 +907,11 @@ class GatewaySession(
     val hello: GatewayHelloSummary,
   )
 
+  private data class ConnectChallenge(
+    val nonce: String,
+    val issuedAtMs: Long,
+  )
+
   private enum class ConnectionState {
     CONNECTING,
     READY,
@@ -926,7 +931,7 @@ class GatewaySession(
     private val state = AtomicReference(ConnectionState.CONNECTING)
     private val connectDeferred = CompletableDeferred<ConnectedGateway>()
     private val closedDeferred = CompletableDeferred<Unit>()
-    private val connectNonceDeferred = CompletableDeferred<String>()
+    private val connectChallengeDeferred = CompletableDeferred<ConnectChallenge>()
     private val terminalCallbackClaimed = AtomicBoolean(false)
     private val connectResponseAccepted = AtomicBoolean(false)
 
@@ -1224,7 +1229,7 @@ class GatewaySession(
             if (connectResponseAccepted.get()) {
               connectHandshakeJob?.join()
             } else {
-              connectNonceDeferred.completeExceptionally(connectError)
+              connectChallengeDeferred.completeExceptionally(connectError)
             }
             if (shouldNotify) onDisconnected(message)
           } finally {
@@ -1262,8 +1267,8 @@ class GatewaySession(
         connectHandshakeJob =
           connectionScope.launch {
             try {
-              val nonce = awaitConnectNonce()
-              sendConnect(nonce)
+              val challenge = awaitConnectChallenge()
+              sendConnect(challenge)
             } catch (err: Throwable) {
               connectDeferred.completeExceptionally(err)
               closeQuietly()
@@ -1310,7 +1315,7 @@ class GatewaySession(
       }
     }
 
-    private suspend fun sendConnect(connectNonce: String) {
+    private suspend fun sendConnect(connectChallenge: ConnectChallenge) {
       val identity = identityStore.loadOrCreate()
       val storedEntry = deviceAuthStore.loadEntry(endpoint.stableId, identity.deviceId, options.role)
       val storedToken = storedEntry?.token?.trim()
@@ -1331,7 +1336,7 @@ class GatewaySession(
       val payload =
         buildConnectParams(
           identity = identity,
-          connectNonce = connectNonce,
+          connectChallenge = connectChallenge,
           selectedAuth = selectedAuth,
         )
       val res = request(GatewayMethod.Connect.rawValue, payload, timeoutMs = CONNECT_RPC_TIMEOUT_MS)
@@ -1512,7 +1517,7 @@ class GatewaySession(
 
     private fun buildConnectParams(
       identity: DeviceIdentity,
-      connectNonce: String,
+      connectChallenge: ConnectChallenge,
       selectedAuth: SelectedConnectAuth,
     ): JsonObject {
       val client = options.client
@@ -1548,7 +1553,8 @@ class GatewaySession(
         }
 
       val connectScopes = resolveConnectScopes(selectedAuth)
-      val signedAtMs = System.currentTimeMillis()
+      val signedAtMs = connectChallenge.issuedAtMs
+      val connectNonce = connectChallenge.nonce
       // V3 signatures bind the auth token, nonce, role, and scopes so replayed connect frames fail.
       val payload =
         DeviceAuthPayload.buildV3(
@@ -1681,9 +1687,15 @@ class GatewaySession(
       val payloadJson =
         frame["payload"]?.toString() ?: frame["payloadJSON"].asStringOrNull()
       if (event == GatewayEvent.ConnectChallenge.rawValue) {
-        val nonce = extractConnectNonce(payloadJson)
-        if (!connectNonceDeferred.isCompleted && !nonce.isNullOrBlank()) {
-          connectNonceDeferred.complete(nonce.trim())
+        if (!connectChallengeDeferred.isCompleted) {
+          val challenge = extractConnectChallenge(payloadJson)
+          if (challenge == null) {
+            connectChallengeDeferred.completeExceptionally(
+              IllegalStateException("gateway connect challenge invalid"),
+            )
+          } else {
+            connectChallengeDeferred.complete(challenge)
+          }
         }
         return
       }
@@ -1696,17 +1708,20 @@ class GatewaySession(
       onEvent(event, payloadJson)
     }
 
-    private suspend fun awaitConnectNonce(): String =
+    private suspend fun awaitConnectChallenge(): ConnectChallenge =
       try {
-        withTimeout(2_000) { connectNonceDeferred.await() }
-      } catch (err: Throwable) {
+        withTimeout(2_000) { connectChallengeDeferred.await() }
+      } catch (err: TimeoutCancellationException) {
         throw IllegalStateException("connect challenge timeout", err)
       }
 
-    private fun extractConnectNonce(payloadJson: String?): String? {
+    private fun extractConnectChallenge(payloadJson: String?): ConnectChallenge? {
       if (payloadJson.isNullOrBlank()) return null
       val obj = parseJsonOrNull(payloadJson)?.asObjectOrNull() ?: return null
-      return obj["nonce"].asStringOrNull()
+      val nonce = obj["nonce"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+      val issuedAtMs =
+        obj["ts"].asJsonIntegerLongOrNull()?.takeIf { it >= 0 } ?: return null
+      return ConnectChallenge(nonce = nonce, issuedAtMs = issuedAtMs)
     }
 
     private fun handleInvokeEvent(payloadJson: String) {
@@ -2212,6 +2227,12 @@ private fun JsonElement?.asBooleanOrNull(): Boolean? =
 private fun JsonElement?.asLongOrNull(): Long? =
   when (this) {
     is JsonPrimitive -> content.toLongOrNull()
+    else -> null
+  }
+
+private fun JsonElement?.asJsonIntegerLongOrNull(): Long? =
+  when (this) {
+    is JsonPrimitive -> if (isString) null else content.toLongOrNull()
     else -> null
   }
 

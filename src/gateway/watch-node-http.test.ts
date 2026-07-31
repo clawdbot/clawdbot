@@ -51,12 +51,13 @@ function makeConnectParams(params: {
   permissions?: ConnectParams["permissions"];
   minProtocol?: number;
   maxProtocol?: number;
+  signedAt?: number;
 }): ConnectParams {
   const publicKey = publicKeyRawBase64UrlFromPem(params.identity.publicKeyPem);
   const auth = params.deviceToken
     ? { deviceToken: params.deviceToken }
     : { bootstrapToken: params.bootstrapToken };
-  const signedAt = Date.now();
+  const signedAt = params.signedAt ?? Date.now();
   const client: ConnectParams["client"] = {
     id: GATEWAY_CLIENT_IDS.WATCHOS_APP,
     displayName: "Test Watch",
@@ -106,6 +107,7 @@ async function startRuntime(
     rateLimiter?: AuthRateLimiter;
     abortConnectResponse?: boolean;
     config?: OpenClawConfig;
+    now?: () => number;
   },
 ) {
   const nodeRegistry = new NodeRegistry({
@@ -130,6 +132,7 @@ async function startRuntime(
     onNodeConnected: (session) => connectedNodes.push(session.nodeId),
     onNodeDisconnected: (nodeId, reason) => disconnectedNodes.push({ nodeId, reason }),
     ...(options?.rateLimiter ? { rateLimiter: options.rateLimiter } : {}),
+    ...(options?.now ? { now: options.now } : {}),
   });
   let resolveConnectHandled: () => void = () => undefined;
   const connectHandled = new Promise<void>((resolve) => {
@@ -210,6 +213,7 @@ async function connectWatchNode(params: {
       makeConnectParams({
         identity: params.identity,
         nonce: String(challenge.nonce),
+        signedAt: Number(challenge.ts),
         bootstrapToken: params.bootstrapToken,
         deviceToken: params.deviceToken,
         permissions: params.permissions,
@@ -257,6 +261,24 @@ async function waitForLastConnectedMetadata(baseDir: string, nodeId: string): Pr
 }
 
 describe("watch node HTTP transport", () => {
+  it("uses Gateway time for skew-independent device proof", async () => {
+    const now = vi.fn(() => 1_700_000_000_123);
+    const { identity, issued, baseUrl, runtime } = await createWatchNodeFixture(
+      "openclaw-watch-node-challenge-time-",
+      { now },
+    );
+
+    const response = await connectWatchNode({
+      baseUrl,
+      identity,
+      bootstrapToken: issued.token,
+    });
+
+    expect(response.status).toBe(200);
+    expect(now).toHaveBeenCalled();
+    runtime.close();
+  });
+
   it("rejects capabilities and identities outside the bounded watch surface", async () => {
     const { identity, issued, baseUrl, runtime } = await createWatchNodeFixture(
       "openclaw-watch-node-surface-",
