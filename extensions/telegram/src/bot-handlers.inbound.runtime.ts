@@ -32,7 +32,12 @@ import {
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
-import { getTelegramTextParts, resolveTelegramPrimaryMedia } from "./bot/helpers.js";
+import {
+  buildTelegramThreadParams,
+  getTelegramTextParts,
+  resolveTelegramPrimaryMedia,
+  resolveTelegramThreadSpec,
+} from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
@@ -230,6 +235,13 @@ export function createTelegramHandlerInboundRuntime(
       });
     } catch (mediaErr) {
       const replayingSpooledUpdate = isTelegramSpooledReplayUpdate(ctx.update);
+      const warningThreadParams = buildTelegramThreadParams(
+        resolveTelegramThreadSpec({
+          isGroup,
+          isForum,
+          messageThreadId: resolvedThreadId ?? dmThreadId,
+        }),
+      );
       if (
         mediaRuntimeWithAbort.abortSignal?.aborted &&
         isDurablyRetryableInboundMediaError(mediaErr)
@@ -252,6 +264,7 @@ export function createTelegramHandlerInboundRuntime(
             runtime,
             fn: () =>
               bot.api.sendMessage(chatId, `⚠️ File too large. Maximum size is ${limitMb}MB.`, {
+                ...warningThreadParams,
                 reply_parameters: {
                   message_id: msg.message_id,
                   allow_sending_without_reply: true,
@@ -273,6 +286,7 @@ export function createTelegramHandlerInboundRuntime(
           runtime,
           fn: () =>
             bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
+              ...warningThreadParams,
               reply_parameters: {
                 message_id: msg.message_id,
                 allow_sending_without_reply: true,
