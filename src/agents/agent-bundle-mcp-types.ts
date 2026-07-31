@@ -10,6 +10,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
+export type McpUtilityToolOperation =
+  | "resources_list"
+  | "resources_read"
+  | "prompts_list"
+  | "prompts_get";
+
 /** Materialized MCP tools plus diagnostics and cleanup handle for one run. */
 export type BundleMcpToolRuntime = {
   tools: AnyAgentTool[];
@@ -42,6 +48,8 @@ export type McpServerCatalog = {
     include?: string[];
     exclude?: string[];
   };
+  /** Provider-safe utility names assigned before filtering, matching `mcp probe` output. */
+  projectedUtilityToolNames?: Partial<Record<McpUtilityToolOperation, string>>;
   deniedToolNames?: string[];
 };
 
@@ -50,6 +58,8 @@ export type McpCatalogTool = {
   serverName: string;
   safeServerName: string;
   toolName: string;
+  /** Provider-safe name assigned before filtering, matching `mcp probe` output. */
+  projectedName?: string;
   title?: string;
   description?: string;
   inputSchema: TSchema;

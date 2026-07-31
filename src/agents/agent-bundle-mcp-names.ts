@@ -88,3 +88,60 @@ export function buildSafeToolName(params: {
   }
   return candidate;
 }
+
+/** Reserve a precomputed projected name, falling back to normal collision handling when needed. */
+export function reserveProjectedMcpToolName(params: {
+  serverName: string;
+  toolName: string;
+  projectedName?: string;
+  reservedNames: Set<string>;
+}): string {
+  const projectedName = params.projectedName?.trim();
+  if (projectedName && !params.reservedNames.has(normalizeLowercaseStringOrEmpty(projectedName))) {
+    params.reservedNames.add(normalizeLowercaseStringOrEmpty(projectedName));
+    return projectedName;
+  }
+  const name = buildSafeToolName(params);
+  params.reservedNames.add(normalizeLowercaseStringOrEmpty(name));
+  return name;
+}
+
+/**
+ * Precompute the provider-safe names that an unfiltered MCP probe exposes.
+ * Tool filters can then accept the exact names operators copy from probe output.
+ */
+export function buildProjectedMcpToolNames(params: {
+  serverName: string;
+  toolNames: readonly string[];
+  utilityNames?: readonly string[];
+}): {
+  tools: ReadonlyMap<string, string>;
+  utilities: ReadonlyMap<string, string>;
+} {
+  const reservedNames = new Set<string>();
+  const tools = new Map<string, string>();
+  for (const toolName of [
+    ...new Set(params.toolNames.map((name) => name.trim()).filter(Boolean)),
+  ].toSorted((left, right) => left.localeCompare(right))) {
+    tools.set(
+      toolName,
+      reserveProjectedMcpToolName({
+        serverName: params.serverName,
+        toolName,
+        reservedNames,
+      }),
+    );
+  }
+  const utilities = new Map<string, string>();
+  for (const utilityName of params.utilityNames ?? []) {
+    utilities.set(
+      utilityName,
+      reserveProjectedMcpToolName({
+        serverName: params.serverName,
+        toolName: utilityName,
+        reservedNames,
+      }),
+    );
+  }
+  return { tools, utilities };
+}

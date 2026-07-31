@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getPluginToolMeta } from "../plugins/tools.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
@@ -1344,6 +1345,74 @@ describe("session MCP runtime", () => {
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts exact projected probe names for sanitized collisions and utility tools", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-projected-tool-filter-");
+    const serverPath = path.join(tempDir, "projected-tool-filter.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    const sharedPrefix = "x".repeat(80);
+    const firstCollidingName = `${sharedPrefix}-a`;
+    const secondCollidingName = `${sharedPrefix}-b`;
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { tools: {}, resources: {} },
+      tools: [
+        { name: secondCollidingName, inputSchema: { type: "object", properties: {} } },
+        { name: "resources_list", inputSchema: { type: "object", properties: {} } },
+        { name: firstCollidingName, inputSchema: { type: "object", properties: {} } },
+      ],
+    });
+
+    const createRuntime = (include?: string[]) =>
+      createSessionMcpRuntime({
+        sessionId: include ? "session-projected-filter" : "session-projected-probe",
+        workspaceDir: tempDir,
+        cfg: {
+          mcp: {
+            servers: {
+              "duck:data": {
+                command: process.execPath,
+                args: [serverPath],
+                ...(include ? { toolFilter: { include } } : {}),
+              },
+            },
+          },
+        },
+      });
+
+    const probeRuntime = createRuntime();
+    const probeTools = await materializeBundleMcpToolsForRun({ runtime: probeRuntime });
+    const projectedCollisionName = expectDefined(
+      probeTools.tools.find(
+        (tool) => getPluginToolMeta(tool)?.mcp?.toolName === secondCollidingName,
+      )?.name,
+      "projected colliding tool name",
+    );
+    const projectedUtilityName = expectDefined(
+      probeTools.tools.find((tool) => getPluginToolMeta(tool)?.mcp?.operation === "resources_list")
+        ?.name,
+      "projected resource utility name",
+    );
+    await probeTools.dispose();
+    await probeRuntime.dispose();
+
+    const filteredRuntime = createRuntime([projectedCollisionName, projectedUtilityName]);
+    try {
+      const catalog = await filteredRuntime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual([secondCollidingName]);
+      expect(catalog.servers["duck:data"]?.toolCount).toBe(1);
+      expect(catalog.servers["duck:data"]?.tools?.filteredCount).toBe(2);
+
+      const filteredTools = await materializeBundleMcpToolsForRun({ runtime: filteredRuntime });
+      expect(filteredTools.tools.map((tool) => tool.name).toSorted()).toEqual(
+        [projectedCollisionName, projectedUtilityName].toSorted(),
+      );
+      await filteredTools.dispose();
+    } finally {
+      await filteredRuntime.dispose();
     }
   });
 

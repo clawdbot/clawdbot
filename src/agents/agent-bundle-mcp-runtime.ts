@@ -21,7 +21,10 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { mergeMcpToolCatalogs } from "./agent-bundle-mcp-combined.js";
-import { matchesMcpToolFilterPattern } from "./agent-bundle-mcp-filter.js";
+import {
+  isMcpToolAllowedByFilter,
+  matchesAnyMcpToolFilterCandidate,
+} from "./agent-bundle-mcp-filter.js";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
   disposeAllSessionMcpRuntimes,
@@ -38,7 +41,11 @@ import {
   createSessionMcpRuntimeManager,
   setDefaultCreateSessionMcpRuntime,
 } from "./agent-bundle-mcp-manager.js";
-import { assignSafeServerNames, sanitizeServerName } from "./agent-bundle-mcp-names.js";
+import {
+  assignSafeServerNames,
+  buildProjectedMcpToolNames,
+  sanitizeServerName,
+} from "./agent-bundle-mcp-names.js";
 import {
   loadSessionMcpConfig,
   resolveSessionMcpConfigSummary,
@@ -50,6 +57,7 @@ import type {
   McpServerCatalog,
   McpToolCatalog,
   McpToolCatalogDiagnostic,
+  McpUtilityToolOperation,
   SessionMcpRequesterScope,
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
@@ -302,16 +310,15 @@ function getMcpToolSelection(rawServer: unknown): McpToolSelection {
   };
 }
 
-function shouldExposeMcpTool(selection: McpToolSelection, toolName: string): boolean {
-  const include = selection.include ?? [];
-  const exclude = selection.exclude ?? [];
-  if (
-    include.length > 0 &&
-    !include.some((pattern) => matchesMcpToolFilterPattern(pattern, toolName))
-  ) {
-    return false;
-  }
-  return !exclude.some((pattern) => matchesMcpToolFilterPattern(pattern, toolName));
+function shouldExposeMcpTool(
+  selection: McpToolSelection,
+  candidateNames: readonly string[],
+): boolean {
+  return isMcpToolAllowedByFilter({
+    include: selection.include,
+    exclude: selection.exclude,
+    candidateNames,
+  });
 }
 
 function summarizeServerCapabilities(capabilities: ServerCapabilities | undefined) {
@@ -828,12 +835,52 @@ export function createSessionMcpRuntime(params: {
                 });
                 failIfDisposed();
                 const selection = getMcpToolSelection(rawServer);
+                const utilityOperations: McpUtilityToolOperation[] = [
+                  ...(capabilities.resources
+                    ? (["resources_list", "resources_read"] as const)
+                    : []),
+                  ...(capabilities.prompts ? (["prompts_list", "prompts_get"] as const) : []),
+                ];
+                const rawToolNames = listedTools.map((tool) => tool.name.trim()).filter(Boolean);
+                const projectedNames = buildProjectedMcpToolNames({
+                  serverName: safeServerName,
+                  toolNames: rawToolNames,
+                  utilityNames: utilityOperations,
+                });
+                const candidateNamesForTool = (toolName: string): string[] => [
+                  toolName,
+                  ...(projectedNames.tools.get(toolName)
+                    ? [projectedNames.tools.get(toolName)!]
+                    : []),
+                ];
+                const includePatterns = selection.include ?? [];
+                const advertisedCandidateGroups = [
+                  ...rawToolNames.map(candidateNamesForTool),
+                  ...utilityOperations.map((operation) => [
+                    operation,
+                    ...(projectedNames.utilities.get(operation)
+                      ? [projectedNames.utilities.get(operation)!]
+                      : []),
+                  ]),
+                ];
+                if (
+                  includePatterns.length > 0 &&
+                  advertisedCandidateGroups.length > 0 &&
+                  !advertisedCandidateGroups.some((candidateNames) =>
+                    matchesAnyMcpToolFilterCandidate(includePatterns, candidateNames),
+                  )
+                ) {
+                  const sampleNames = advertisedCandidateGroups[0]!;
+                  logWarn(
+                    `bundle-mcp: server "${serverName}": toolFilter include matched 0 of ${advertisedCandidateGroups.length} advertised tool(s); the server will expose no tools. Filter names accept the raw form (for example "${sampleNames[0]}") or the projected form printed by mcp probe (for example "${sampleNames.at(-1)}").`,
+                  );
+                }
                 const denialMap = params.toolOverrides?.mcpToolsDeny;
                 const deniedToolNames = new Set(
                   denialMap && Object.hasOwn(denialMap, serverName) ? denialMap[serverName] : [],
                 );
                 const policyEligibleTools = listedTools.filter((tool) =>
-                  shouldExposeMcpTool(selection, tool.name.trim()),
+                  shouldExposeMcpTool(selection, candidateNamesForTool(tool.name.trim())),
                 );
                 const exposedTools = policyEligibleTools.filter((tool) => {
                   const toolName = tool.name.trim();
@@ -866,6 +913,13 @@ export function createSessionMcpRuntime(params: {
                         },
                       }
                     : {}),
+                  ...(projectedNames.utilities.size > 0
+                    ? {
+                        projectedUtilityToolNames: Object.fromEntries(
+                          projectedNames.utilities,
+                        ) as Partial<Record<McpUtilityToolOperation, string>>,
+                      }
+                    : {}),
                   ...(deniedToolNames.size > 0
                     ? { deniedToolNames: [...deniedToolNames].toSorted() }
                     : {}),
@@ -891,6 +945,9 @@ export function createSessionMcpRuntime(params: {
                     serverName,
                     safeServerName,
                     toolName,
+                    ...(projectedNames.tools.get(toolName)
+                      ? { projectedName: projectedNames.tools.get(toolName) }
+                      : {}),
                     title: tool.title,
                     description: sanitizeMcpMetadataText(tool.description),
                     inputSchema: tool.inputSchema,

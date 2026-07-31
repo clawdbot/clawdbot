@@ -372,8 +372,8 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
     - `supportsParallelToolCalls: true` marks servers that adapters can call concurrently
     - HTTP servers can use static headers, OAuth login, TLS verification control, and mTLS certificate/key paths
     - embedded OpenClaw exposes configured MCP tools in normal `coding` and `messaging` tool profiles; `minimal` still hides them, and `tools.deny: ["bundle-mcp"]` disables them explicitly
-    - per-server `toolFilter.include` and `toolFilter.exclude` filter discovered MCP tools before they become OpenClaw tools
-    - servers that advertise resources or prompts also expose utility tools for listing/reading resources and listing/fetching prompts; those generated utility names (`resources_list`, `resources_read`, `prompts_list`, `prompts_get`) use the same include/exclude filter
+    - per-server `toolFilter.include` and `toolFilter.exclude` filter discovered MCP tools before they become OpenClaw tools; entries can use raw MCP names or exact projected names printed by `mcp probe`
+    - servers that advertise resources or prompts also expose utility tools for listing/reading resources and listing/fetching prompts; those generated utility names (`resources_list`, `resources_read`, `prompts_list`, `prompts_get`) and their projected forms use the same include/exclude filter
     - dynamic MCP tool-list changes invalidate the cached catalog for that session; the next discovery/use refreshes from the server
     - repeated MCP tool request/protocol failures pause that server briefly so one broken server does not consume the whole turn
     - session-scoped bundled MCP runtimes are reaped after 10 minutes of idle time and one-shot embedded runs clean them up at run end
@@ -422,7 +422,7 @@ Notes:
 - `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags.
 - `set` expects one JSON object value on the command line.
 - `configure` updates enablement, tool filters, timeouts, OAuth, TLS, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.
-- `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs.
+- `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs. Filters accept either the raw name reported by the MCP server (for example `query`) or the exact projected name printed by `mcp probe` (for example `motherduck__query`), including sanitized, truncated, or collision-suffixed names. Generated resource and prompt utility tools follow the same rule.
 - `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. The first run prints an authorization URL; rerun with `--code` after approval.
 - `logout` clears stored OAuth credentials for the named server without removing the saved server definition.
 - `reload` disposes cached in-process MCP runtimes for the current CLI process only. Gateway or agent processes in another process still need their own reload or restart path.

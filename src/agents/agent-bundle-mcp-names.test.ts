@@ -1,6 +1,7 @@
 /** Tests MCP server/tool name sanitization, truncation, and collision handling. */
 import { describe, expect, it } from "vitest";
 import {
+  buildProjectedMcpToolNames,
   buildSafeToolName,
   normalizeReservedToolNames,
   sanitizeServerName,
@@ -69,5 +70,20 @@ describe("agent bundle MCP names", () => {
 
     expect(safeToolName.startsWith(`memory${TOOL_NAME_SEPARATOR}`)).toBe(true);
     expect(safeToolName.length).toBeLessThanOrEqual(64);
+  });
+
+  it("precomputes the exact filtered-name candidates used by MCP probe", () => {
+    const sharedPrefix = "x".repeat(80);
+    const names = buildProjectedMcpToolNames({
+      serverName: "duck-data",
+      toolNames: [`${sharedPrefix}-b`, "resources_list", `${sharedPrefix}-a`],
+      utilityNames: ["resources_list", "resources_read"],
+    });
+
+    expect(names.tools.get(`${sharedPrefix}-a`)).toBe(`duck-data__${"x".repeat(53)}`);
+    expect(names.tools.get(`${sharedPrefix}-b`)).toBe(`duck-data__${"x".repeat(51)}-2`);
+    expect(names.tools.get("resources_list")).toBe("duck-data__resources_list");
+    expect(names.utilities.get("resources_list")).toBe("duck-data__resources_list-2");
+    expect(names.utilities.get("resources_read")).toBe("duck-data__resources_read");
   });
 });

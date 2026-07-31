@@ -35,3 +35,30 @@ export function matchesMcpToolFilterPattern(pattern: string, value: string): boo
   }
   return true;
 }
+
+/** Match include/exclude patterns against every supported name for one MCP tool. */
+export function isMcpToolAllowedByFilter(params: {
+  include?: readonly string[];
+  exclude?: readonly string[];
+  candidateNames: readonly string[];
+}): boolean {
+  const matchesAny = (patterns: readonly string[]): boolean =>
+    patterns.some((pattern) =>
+      params.candidateNames.some((name) => matchesMcpToolFilterPattern(pattern, name)),
+    );
+  const include = params.include ?? [];
+  if (include.length > 0 && !matchesAny(include)) {
+    return false;
+  }
+  return !matchesAny(params.exclude ?? []);
+}
+
+/** Return whether any pattern matches any supported name for an MCP tool. */
+export function matchesAnyMcpToolFilterCandidate(
+  patterns: readonly string[],
+  candidateNames: readonly string[],
+): boolean {
+  return patterns.some((pattern) =>
+    candidateNames.some((name) => matchesMcpToolFilterPattern(pattern, name)),
+  );
+}

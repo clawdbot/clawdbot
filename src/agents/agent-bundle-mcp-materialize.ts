@@ -2,20 +2,21 @@
 import crypto from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
-import { getPluginToolMeta, setPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
-import { matchesMcpToolFilterPattern } from "./agent-bundle-mcp-filter.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
+import { isMcpToolAllowedByFilter } from "./agent-bundle-mcp-filter.js";
 import {
   buildSafeToolName,
   normalizeReservedToolNames,
+  reserveProjectedMcpToolName,
   TOOL_NAME_SEPARATOR,
 } from "./agent-bundle-mcp-names.js";
 import type {
   BundleMcpToolRuntime,
   McpCatalogTool,
   McpToolCatalog,
+  McpUtilityToolOperation,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 import { mcpContentBlockToAgentContent } from "./mcp-content.js";
@@ -57,12 +58,12 @@ function buildAppToolPolicyProjections(params: {
     return serverOrder || a.toolName.localeCompare(b.toolName);
   });
   for (const tool of appOnlyTools) {
-    const name = buildSafeToolName({
+    const name = reserveProjectedMcpToolName({
       serverName: tool.safeServerName,
       toolName: tool.toolName,
+      projectedName: tool.projectedName,
       reservedNames,
     });
-    reservedNames.add(normalizeLowercaseStringOrEmpty(name));
     const projection: AnyAgentTool = {
       name,
       label: tool.title ?? tool.toolName,
@@ -193,7 +194,8 @@ function optionalStringRecordArg(input: unknown, key: string): Record<string, st
 
 function serverAllowsUtilityTool(
   server: McpToolCatalog["servers"][string],
-  operation: string,
+  operation: McpUtilityToolOperation,
+  projectedName: string,
   sessionDeniedOnly: boolean,
 ): boolean {
   // Two disjoint passes share this gate: the executable pass (sessionDeniedOnly=false)
@@ -202,15 +204,11 @@ function serverAllowsUtilityTool(
   if ((server.deniedToolNames?.includes(operation) === true) !== sessionDeniedOnly) {
     return false;
   }
-  const include = server.toolFilter?.include ?? [];
-  const exclude = server.toolFilter?.exclude ?? [];
-  if (
-    include.length > 0 &&
-    !include.some((pattern) => matchesMcpToolFilterPattern(pattern, operation))
-  ) {
-    return false;
-  }
-  return !exclude.some((pattern) => matchesMcpToolFilterPattern(pattern, operation));
+  return isMcpToolAllowedByFilter({
+    include: server.toolFilter?.include,
+    exclude: server.toolFilter?.exclude,
+    candidateNames: [operation, projectedName],
+  });
 }
 
 function addMcpUtilityTool(params: {
@@ -218,20 +216,38 @@ function addMcpUtilityTool(params: {
   reservedNames: Set<string>;
   serverName: string;
   safeServerName: string;
+  server: McpToolCatalog["servers"][string];
   executionMode: AnyAgentTool["executionMode"];
-  operation: Exclude<PluginToolMcpMeta["operation"], "tool">;
+  operation: McpUtilityToolOperation;
   label: string;
   description: string;
   parameters: Record<string, unknown>;
   deniedBySession?: true;
   execute?: AnyAgentTool["execute"];
 }) {
-  const name = buildSafeToolName({
+  const projectedName =
+    params.server.projectedUtilityToolNames?.[params.operation] ??
+    buildSafeToolName({
+      serverName: params.safeServerName,
+      toolName: params.operation,
+      reservedNames: params.reservedNames,
+    });
+  if (
+    !serverAllowsUtilityTool(
+      params.server,
+      params.operation,
+      projectedName,
+      params.deniedBySession === true,
+    )
+  ) {
+    return;
+  }
+  const name = reserveProjectedMcpToolName({
     serverName: params.safeServerName,
     toolName: params.operation,
+    projectedName,
     reservedNames: params.reservedNames,
   });
-  params.reservedNames.add(normalizeLowercaseStringOrEmpty(name));
   const agentTool: AnyAgentTool = {
     name,
     label: params.label,
@@ -312,9 +328,10 @@ export function buildBundleMcpToolsFromCatalog(params: {
     const server = params.catalog.servers[tool.serverName];
     const executionMode: AnyAgentTool["executionMode"] =
       server?.supportsParallelToolCalls === true ? "parallel" : "sequential";
-    const safeToolName = buildSafeToolName({
+    const safeToolName = reserveProjectedMcpToolName({
       serverName: tool.safeServerName,
       toolName: originalName,
+      projectedName: tool.projectedName,
       reservedNames,
     });
     if (safeToolName !== `${tool.safeServerName}${TOOL_NAME_SEPARATOR}${originalName}`) {
@@ -322,7 +339,6 @@ export function buildBundleMcpToolsFromCatalog(params: {
         `bundle-mcp: tool "${tool.toolName}" from server "${tool.serverName}" registered as "${safeToolName}" to keep the tool name provider-safe.`,
       );
     }
-    reservedNames.add(normalizeLowercaseStringOrEmpty(safeToolName));
     const agentTool: AnyAgentTool = {
       name: safeToolName,
       label: tool.title ?? tool.toolName,
@@ -356,12 +372,13 @@ export function buildBundleMcpToolsFromCatalog(params: {
     const executionMode: AnyAgentTool["executionMode"] = server.supportsParallelToolCalls
       ? "parallel"
       : "sequential";
-    if (server.resources && serverAllowsUtilityTool(server, "resources_list", sessionDeniedOnly)) {
+    if (server.resources) {
       addMcpUtilityTool({
         tools,
         reservedNames,
         serverName: server.serverName,
         safeServerName,
+        server,
         executionMode,
         operation: "resources_list",
         label: "List MCP resources",
@@ -373,12 +390,13 @@ export function buildBundleMcpToolsFromCatalog(params: {
           : undefined,
       });
     }
-    if (server.resources && serverAllowsUtilityTool(server, "resources_read", sessionDeniedOnly)) {
+    if (server.resources) {
       addMcpUtilityTool({
         tools,
         reservedNames,
         serverName: server.serverName,
         safeServerName,
+        server,
         executionMode,
         operation: "resources_read",
         label: "Read MCP resource",
@@ -395,12 +413,13 @@ export function buildBundleMcpToolsFromCatalog(params: {
           : undefined,
       });
     }
-    if (server.prompts && serverAllowsUtilityTool(server, "prompts_list", sessionDeniedOnly)) {
+    if (server.prompts) {
       addMcpUtilityTool({
         tools,
         reservedNames,
         serverName: server.serverName,
         safeServerName,
+        server,
         executionMode,
         operation: "prompts_list",
         label: "List MCP prompts",
@@ -412,12 +431,13 @@ export function buildBundleMcpToolsFromCatalog(params: {
           : undefined,
       });
     }
-    if (server.prompts && serverAllowsUtilityTool(server, "prompts_get", sessionDeniedOnly)) {
+    if (server.prompts) {
       addMcpUtilityTool({
         tools,
         reservedNames,
         serverName: server.serverName,
         safeServerName,
+        server,
         executionMode,
         operation: "prompts_get",
         label: "Get MCP prompt",
