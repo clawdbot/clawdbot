@@ -25,7 +25,6 @@ import {
   meetingOutputBytesPerMs,
   resolveMeetingRealtimeProvider,
 } from "./realtime-engine-support.js";
-import type { MeetingRealtimeEngineConfig } from "./realtime-engine-types.js";
 import { createMeetingRealtimeOutputOwner } from "./realtime-output-owner.js";
 
 export {
@@ -36,13 +35,26 @@ export {
   normalizeMeetingTtsPromptText,
   resolveMeetingRealtimeTranscriptionProvider,
 } from "./realtime-engine-support.js";
-export type { MeetingRealtimeEngineConfig } from "./realtime-engine-types.js";
 
 export type MeetingRuntimePlatform = {
   /** Adapter-owned identity keeps platform names and log prefixes out of core. */
   displayName: string;
   logScope: string;
   sessionIdPrefix: string;
+};
+
+export type MeetingRealtimeEngineConfig = {
+  chrome: { audioFormat: MeetingRealtimeAudioFormat };
+  realtime: {
+    strategy: string;
+    provider?: string;
+    transcriptionProvider?: string;
+    voiceProvider?: string;
+    model?: string;
+    instructions?: string;
+    introMessage?: string;
+    providers: Record<string, Record<string, unknown>>;
+  };
 };
 
 export type MeetingAgentConsultParams = {

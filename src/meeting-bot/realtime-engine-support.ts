@@ -12,7 +12,16 @@ import { resolveConfiguredRealtimeVoiceProvider } from "../talk/provider-resolve
 import type { RealtimeVoiceProviderConfig } from "../talk/provider-types.js";
 import { truncateUtf16Safe } from "../utils.js";
 import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
-import type { MeetingRealtimeEngineConfig } from "./realtime-engine-types.js";
+
+type MeetingRealtimeProviderSelectionConfig = {
+  realtime: {
+    provider?: string;
+    transcriptionProvider?: string;
+    voiceProvider?: string;
+    model?: string;
+    providers: Record<string, Record<string, unknown>>;
+  };
+};
 
 type ResolvedRealtimeProvider = {
   provider: RealtimeVoiceProviderPlugin;
@@ -29,7 +38,7 @@ export function meetingOutputBytesPerMs(audioFormat: MeetingRealtimeAudioFormat)
 }
 
 export function resolveMeetingRealtimeProvider(params: {
-  config: MeetingRealtimeEngineConfig;
+  config: MeetingRealtimeProviderSelectionConfig;
   fullConfig: OpenClawConfig;
   providers?: RealtimeVoiceProviderPlugin[];
 }): ResolvedRealtimeProvider {
@@ -45,7 +54,7 @@ export function resolveMeetingRealtimeProvider(params: {
 }
 
 export function resolveMeetingRealtimeTranscriptionProvider(params: {
-  config: MeetingRealtimeEngineConfig;
+  config: MeetingRealtimeProviderSelectionConfig;
   fullConfig: OpenClawConfig;
   providers?: RealtimeTranscriptionProviderPlugin[];
 }): ResolvedRealtimeTranscriptionProvider {
