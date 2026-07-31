@@ -24,6 +24,7 @@ import type {
   AnthropicThinkingDisplay,
 } from "../provider-options.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type {
   AnthropicMessagesCompat,
   Api,
@@ -325,11 +326,12 @@ async function* iterateAnthropicEvents(
       }
       yield event;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `Could not parse Anthropic SSE event ${sse.event}: ${message}; data=${sse.data}; raw=${sse.raw.join("\\n")}`,
-        { cause: error },
-      );
+      // Frame payloads carry model output, so surface the shared malformed-fragment
+      // error instead of echoing them. The SyntaxError stays reachable on `cause`.
+      if (error instanceof SyntaxError) {
+        throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, { cause: error });
+      }
+      throw error;
     }
   }
 

@@ -351,7 +351,7 @@ Dedicated doc: [Sandboxing](/gateway/sandboxing)
 Two complementary approaches:
 
 - **Full Gateway in Docker** (container boundary): [Docker](/install/docker)
-- **Tool sandbox** (`agents.defaults.sandbox`; host gateway + sandbox-isolated tools; Docker is the default backend): [Sandboxing](/gateway/sandboxing)
+- **Tool sandbox** (`agents.defaults.sandbox`; host gateway + sandbox-isolated tools; built-in Docker and Podman backends): [Sandboxing](/gateway/sandboxing)
 
 <Note>
 To prevent cross-agent access, keep `agents.defaults.sandbox.scope` at `"agent"` (default) or use `"session"` for stricter per-session isolation. `scope: "shared"` uses a single container or workspace.

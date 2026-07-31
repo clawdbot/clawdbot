@@ -383,6 +383,7 @@ function expectFailureAnnounceCall(params: {
   sessionKey?: string;
   inheritSessionThread?: false;
   message: string;
+  includeRunStarted?: boolean;
 }) {
   expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledTimes(1);
   const call = sendFailureNotificationAnnounceMock.mock.calls.at(0);
@@ -399,7 +400,15 @@ function expectFailureAnnounceCall(params: {
     sessionKey: params.sessionKey,
     ...(params.inheritSessionThread === false ? { inheritSessionThread: false } : {}),
   });
-  expect(args[5]).toBe(params.message);
+  if (params.includeRunStarted) {
+    const lines = args[5].split("\n");
+    expect(lines).toEqual([
+      params.message,
+      expect.stringMatching(/^Run started: \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})? \S+$/),
+    ]);
+  } else {
+    expect(args[5]).toBe(params.message);
+  }
 }
 
 async function runCronJobAndWaitForFinished(ws: WebSocket, jobId: string) {
@@ -1802,7 +1811,7 @@ describe("gateway server cron", () => {
       expect(failureDestCall.url).toBe("https://example.invalid/failure-destination");
       const failureDestBody = failureDestCall.body;
       expect(failureDestBody.message).toBe(
-        'Cron job "failure destination webhook" failed: unknown error',
+        'Automation "failure destination webhook" failed: unknown error',
       );
 
       fetchWithSsrFGuardMock.mockClear();
@@ -1993,7 +2002,8 @@ describe("gateway server cron", () => {
         jobId,
         channel: "last",
         sessionKey: "agent:main:telegram:direct:123:thread:99",
-        message: '⚠️ Cron job "primary delivery fallback" failed: unknown error',
+        message: '⚠️ Automation "primary delivery fallback" failed: unknown error',
+        includeRunStarted: true,
       });
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
@@ -2051,7 +2061,8 @@ describe("gateway server cron", () => {
         to: "#alerts",
         sessionKey: undefined,
         inheritSessionThread: false,
-        message: '⚠️ Cron job "channel fd no mode" failed: unknown error',
+        message: '⚠️ Automation "channel fd no mode" failed: unknown error',
+        includeRunStarted: true,
       });
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     } finally {
@@ -2103,7 +2114,8 @@ describe("gateway server cron", () => {
         jobId,
         channel: "last",
         sessionKey: "agent:avery:feishu:direct:ou_founder",
-        message: '⚠️ Cron job "session target failure fallback" failed: unknown error',
+        message: '⚠️ Automation "session target failure fallback" failed: unknown error',
+        includeRunStarted: true,
       });
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });

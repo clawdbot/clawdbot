@@ -8,6 +8,7 @@ import {
   isCronJobActive,
   noteActiveCronJobRemoval,
   noteActiveCronJobScheduleMutation,
+  noteActiveCronJobTriggerMutation,
 } from "../active-jobs.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { deleteCronJobScratch } from "../scratch-store.js";
@@ -116,6 +117,10 @@ function finalizeUpdatedJob(params: {
 
   nextJob.updatedAtMs = now;
   if (schedulingInputsChanged) {
+    // Anchor restart catch-up to the new inputs. Without this, startup replays a
+    // slot the previous schedule never had, because lastRunAtMs still belongs to
+    // the old one and looks perpetually stale against the new slots (#91944).
+    nextJob.state.scheduleActivatedAtMs = now;
     nextJob.state.startupCatchupAtMs = undefined;
     // A paced timestamp is owned by the exact schedule, pacing bounds, and
     // trigger mode that produced it. Configuration changes release both the
@@ -157,6 +162,16 @@ async function persistUpdatedJob(params: {
     // Mark only committed edits; a failed SQLite write cannot retire the run's
     // schedule ownership, and idempotent re-saves must not create a new claim.
     noteActiveCronJobScheduleMutation(nextJob.id);
+  }
+  if (
+    !isDeepStrictEqual(previousJob.trigger, nextJob.trigger) ||
+    !isDeepStrictEqual(previousJob.state.triggerState, nextJob.state.triggerState) ||
+    ((previousJob.payload.kind === "script" || nextJob.payload.kind === "script") &&
+      !isDeepStrictEqual(previousJob.payload, nextJob.payload))
+  ) {
+    // Trigger/script definitions and shared-state edits retire the admitted
+    // state writer; otherwise an obsolete evaluation or script wins later.
+    noteActiveCronJobTriggerMutation(nextJob.id);
   }
   armTimer(state);
   emit(state, {

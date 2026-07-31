@@ -1,11 +1,12 @@
 import { createRouter } from "@openclaw/uirouter";
-import type { PageDefinition, Router, RouterHistory } from "@openclaw/uirouter";
+import type { PageDefinition, RouteLocation, Router, RouterHistory } from "@openclaw/uirouter";
 import {
   agentRouteFromPath,
   INTERNAL_AGENT_PATH_PARAM,
-  INTERNAL_SESSION_PATH_PARAM,
   INTERNAL_MEMORY_PATH_PARAM,
   INTERNAL_PLUGINS_PATH_PARAM,
+  INTERNAL_SESSION_PATH_PARAM,
+  INTERNAL_WORKBOARD_PATH_PARAM,
   memoryTabFromPath,
   pathForAgentPanel,
   pathForRoute,
@@ -117,7 +118,7 @@ function dynamicRouteFromPath(pathname: string, basePath: string): DynamicRoute 
   }
   const boardId = workboardBoardIdFromPath(pathname, basePath);
   if (boardId) {
-    return ["workboard", "board", boardId];
+    return ["workboard", INTERNAL_WORKBOARD_PATH_PARAM, pathname];
   }
   const memoryTab = memoryTabFromPath(pathname, basePath);
   if (memoryTab && memoryTab !== "overview") {
@@ -144,6 +145,12 @@ function routerHistoryLocation(location: ReturnType<RouterHistory["location"]>, 
     pathname: pathForRoute(routeId, basePath),
     search: `?${search.toString()}`,
   };
+}
+
+function sameRouteLocation(left: RouteLocation, right: RouteLocation): boolean {
+  return (
+    left.pathname === right.pathname && left.search === right.search && left.hash === right.hash
+  );
 }
 
 export async function startApplicationRouter(
@@ -190,15 +197,11 @@ export async function startApplicationRouter(
       }),
   };
   await router.start(applicationHistory, basePath, context);
-  if (initialDynamicRoute) {
+  if (initialDynamicRoute && sameRouteLocation(history.location(), location)) {
     // Replace the synthetic exact-match location with the real browser path
-    // before the shell renders; the matching loader data is already cached.
-    await router.navigate(
-      initialDynamicRoute[0],
-      context,
-      { history: "none", revalidate: true },
-      location,
-    );
+    // before the shell renders. A loader-visible redirect wins if it already
+    // moved history while startup was still resolving.
+    await router.navigate(initialDynamicRoute[0], context, { history: "none" }, location);
   }
 }
 

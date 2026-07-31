@@ -545,7 +545,6 @@ export const buildTelegramMessageContext = async ({
       isDirect: !isGroup,
       isGroup,
       isMentionableGroup: isGroup,
-      requireMention: Boolean(requireMention),
       canDetectMention: bodyResult.canDetectMention,
       effectiveWasMentioned: bodyResult.effectiveWasMentioned,
       shouldBypassMention: bodyResult.shouldBypassMention,

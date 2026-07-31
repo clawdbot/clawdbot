@@ -528,7 +528,7 @@ describe("openclaw live updater", () => {
       (command: string, args: string[]) => {
         const call = [command, ...args].join(" ");
         calls.push(call);
-        if (call.includes("gateway status") && ++statusAttempts < 3) {
+        if (call.includes("gateway status") && ++statusAttempts < 7) {
           throw new Error("RPC warming up");
         }
       },
@@ -537,8 +537,12 @@ describe("openclaw live updater", () => {
       (ms: number) => delays.push(ms),
     );
 
-    expect(delays).toEqual([5_000, 5_000]);
+    expect(delays).toEqual([5_000, 5_000, 5_000, 5_000, 5_000, 5_000]);
     expect(calls).toEqual([
+      "pnpm openclaw gateway status --deep --require-rpc --json",
+      "pnpm openclaw gateway status --deep --require-rpc --json",
+      "pnpm openclaw gateway status --deep --require-rpc --json",
+      "pnpm openclaw gateway status --deep --require-rpc --json",
       "pnpm openclaw gateway status --deep --require-rpc --json",
       "pnpm openclaw gateway status --deep --require-rpc --json",
       "pnpm openclaw gateway status --deep --require-rpc --json",
@@ -1809,7 +1813,7 @@ describe("openclaw live updater", () => {
         },
       ),
     ).toThrow("RPC unavailable");
-    expect(statusCalls).toBe(4);
+    expect(statusCalls).toBe(8);
     expect(auditCalls).toBe(1);
   });
 

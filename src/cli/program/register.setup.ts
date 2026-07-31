@@ -116,7 +116,10 @@ async function runOnboardingEntry(
       return;
     }
     const { setupCommand } = await import("../../commands/setup.js");
-    await setupCommand({ workspace: optionalString(options.workspace) }, runtime);
+    await setupCommand(
+      { workspace: optionalString(options.workspace), json: Boolean(options.json) },
+      runtime,
+    );
     return;
   }
   if (!validateOnboardAuthOptionValues(options, runtime)) {

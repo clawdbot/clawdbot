@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
 import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from "./one-shot-exit.js";
@@ -256,5 +257,43 @@ describe("one-shot CLI exit", () => {
       setImmediate(resolve);
     });
     expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it("drains large piped stdout before a requested nonzero exit", () => {
+    const env = { ...process.env };
+    delete env.VITEST;
+    delete env.VITEST_POOL_ID;
+    delete env.VITEST_WORKER_ID;
+    const oneShotExitUrl = new URL("./one-shot-exit.ts", import.meta.url).href;
+    const runtimeUrl = new URL("../runtime.ts", import.meta.url).href;
+    const payloadBytes = 1024 * 1024;
+    const script = `
+      import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from ${JSON.stringify(oneShotExitUrl)};
+      import { defaultRuntime } from ${JSON.stringify(runtimeUrl)};
+      await runCliWithExitFinalization({
+        run: async () => {
+          process.stdout.write("x".repeat(${payloadBytes}));
+          requestExitAfterOneShotOutput(defaultRuntime, 7);
+        },
+        onError: (error) => { throw error; },
+      });
+    `;
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "--eval", script],
+      {
+        encoding: "utf8",
+        env,
+        maxBuffer: 2 * payloadBytes,
+        timeout: 30_000,
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(7);
+    expect(result.signal).toBeNull();
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toHaveLength(payloadBytes);
   });
 });

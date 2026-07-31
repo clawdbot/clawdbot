@@ -3582,6 +3582,27 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it("serializes macOS Swift tests only on hosted dispatches and retries", () => {
+    const workflow = readCiWorkflow();
+    const macosSwift = workflow.jobs["macos-swift"];
+    const testStep = macosSwift.steps.find((step: WorkflowStep) => step.name === "Swift test");
+
+    expect(macosSwift.env.SWIFT_TEST_EXECUTION).toBe(
+      "${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}",
+    );
+    expect(testStep.run).toContain(
+      "swift_test_args=(--package-path apps/macos --enable-code-coverage)",
+    );
+    expect(testStep.run).toContain('if [[ "$SWIFT_TEST_EXECUTION" == "parallel" ]]');
+    expect(testStep.run).toContain("swift_test_args+=(--parallel)");
+    expect(testStep.run).toContain("else\n  swift_test_args+=(--no-parallel)");
+    expect(testStep.run).toContain('swift test "${swift_test_args[@]}"');
+    expect(testStep.run).not.toContain(
+      "swift test --package-path apps/macos --parallel --enable-code-coverage",
+    );
+    expect(testStep.run).toContain("for attempt in 1 2 3");
+  });
+
   it("bounds the Windows Crabbox hydrate main fetch", () => {
     const workflow = readFileSync(".github/workflows/crabbox-hydrate.yml", "utf8");
 
@@ -4402,6 +4423,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(scenario.run).toBe(
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner --shard ${{ matrix.shard }}/4",
     );
+    const browserCopilot = expectDefined(
+      uiE2e.steps.find((step: WorkflowStep) => step.name === "Test browser copilot end-to-end"),
+      "browser copilot E2E suite",
+    );
+    expect(browserCopilot.if).toBe("matrix.shard == 1");
+    expect(browserCopilot.run).toBe("pnpm test:e2e:browser-copilot");
     expect(JSON.stringify(uiE2e)).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
   });
 
@@ -4662,20 +4689,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runStep.env.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON).toBe(
       "${{ needs.preflight.outputs.compatibility_target == 'true' && '[\"--hookTimeout=600000\"]' || '[]' }}",
     );
-    expect(runStep.env.JOB_CONTEXT_JSON).toBe("${{ toJSON(job) }}");
-    // Shard execution policy lives in the unit-tested wrapper script. Frozen
-    // release targets load that wrapper from the exact trusted workflow SHA.
-    for (const expected of [
-      'runner="scripts/ci-run-node-test-shard.mjs"',
-      'if [[ ! -f "$runner" ]]',
-      "job_workflow_repository=$(jq -r '.workflow_repository // empty' <<<\"$JOB_CONTEXT_JSON\")",
-      "job_workflow_sha=$(jq -r '.workflow_sha // empty' <<<\"$JOB_CONTEXT_JSON\")",
-      'timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 "$workflow_remote" "$job_workflow_sha"',
-      'git show "${job_workflow_sha}:${file}" > "${harness_root}/${file}"',
-      'node "$runner"',
-    ]) {
-      expect(runStep.run).toContain(expected);
-    }
+    const trustedRunnerStep = nodeTestJob.steps.find(
+      (step: WorkflowStep) => step.name === "Checkout trusted Node shard runner",
+    );
+    expect(trustedRunnerStep).toMatchObject({
+      if: "${{ hashFiles('scripts/ci-run-node-test-shard.mjs') == '' }}",
+      uses: CHECKOUT_V6,
+      with: {
+        ref: "${{ github.workflow_sha }}",
+        path: ".ci-workflow",
+        "sparse-checkout": expect.stringContaining("scripts/ci-run-node-test-shard.mjs"),
+        "sparse-checkout-cone-mode": false,
+        "persist-credentials": false,
+      },
+    });
     expect(existsSync("scripts/ci-run-node-test-shard.mjs")).toBe(true);
   });
 

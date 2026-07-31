@@ -116,6 +116,9 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
   if (!Array.isArray(parsed)) {
     throw new Error(`${sourceLabel} must be a JSON array.`);
   }
+  if (parsed.length === 0) {
+    throw new Error(`${sourceLabel} must contain at least one config update.`);
+  }
   const out: ConfigSetBatchEntry[] = [];
   for (const [index, entry] of parsed.entries()) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {

@@ -143,6 +143,31 @@ describe("collectChannelStatusIssues", () => {
     });
   });
 
+  it("reports stopped configured accounts without treating unknown runtime state as stopped", () => {
+    mocks.listChannelPlugins.mockReturnValue([createPlugin("discord")]);
+
+    expect(
+      collectChannelStatusIssues({
+        channelAccounts: {
+          discord: [
+            { accountId: "stopped", enabled: true, configured: true, running: false },
+            { accountId: "unknown", enabled: true, configured: true },
+            { accountId: "disabled", enabled: false, configured: true, running: false },
+            { accountId: "unconfigured", enabled: true, configured: false, running: false },
+          ],
+        },
+      }),
+    ).toEqual([
+      {
+        channel: "discord",
+        accountId: "stopped",
+        kind: "runtime",
+        message: "Channel is enabled and configured, but its runtime is not running.",
+        fix: "restart the channel or gateway",
+      },
+    ]);
+  });
+
   it("reports dead ingress even while a restart is pending", () => {
     mocks.listChannelPlugins.mockReturnValue([createPlugin("slack")]);
 

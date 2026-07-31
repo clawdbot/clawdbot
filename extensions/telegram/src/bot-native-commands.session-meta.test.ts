@@ -15,6 +15,7 @@ import {
   type NativeCommandTestParams,
 } from "./bot-native-commands.fixture-test-support.js";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
+import { runWithTelegramUpdateProcessingFrame } from "./bot-processing-outcome.js";
 
 // All mocks scoped to this file only — does not affect bot-native-commands.test.ts
 
@@ -729,6 +730,39 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(call?.ctx?.Provider).toBe("telegram");
     expect(call?.sessionKey).toBe(turnPlan?.ctxPayload.CommandTargetSessionKey);
     expect(turnPlan?.record?.sessionKey).toBe(turnPlan?.ctxPayload.CommandTargetSessionKey);
+  });
+
+  it("leaves native-command outcomes to the update middleware owner", async () => {
+    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
+
+    const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
+      await handler(createTelegramPrivateCommandContext());
+    });
+
+    expect(result).toBeUndefined();
+  });
+
+  it("preserves every argument on native queue command turns", async () => {
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "queue",
+      cfg: {},
+      allowFrom: ["*"],
+    });
+
+    await handler(createTelegramPrivateCommandContext({ match: "Can you diagnose this?" }));
+
+    expect(dispatchChannelInboundTurnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctxPayload: expect.objectContaining({
+          Body: "/queue Can you diagnose this?",
+          CommandBody: "/queue Can you diagnose this?",
+          CommandTurn: expect.objectContaining({
+            kind: "native",
+            body: "/queue Can you diagnose this?",
+          }),
+        }),
+      }),
+    );
   });
 
   it("keeps one live config snapshot through native command execution", async () => {

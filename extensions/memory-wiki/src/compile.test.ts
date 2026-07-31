@@ -115,6 +115,43 @@ describe("compileMemoryWikiVault", () => {
     expect(claims.map((claim) => claim.text)).toContain("Alpha is the canonical source page.");
   });
 
+  it("preserves source page bytes while rebuilding derived artifacts", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+      config: { render: { createDashboards: false } },
+    });
+    const sourcePath = path.join(rootDir, "sources", "preserved.md");
+    const source = renderWikiMarkdown({
+      frontmatter: {
+        pageType: "source",
+        id: "source.preserved",
+        title: "Preserved",
+      },
+      body: "# Preserved\n",
+    });
+    await fs.writeFile(sourcePath, source, "utf8");
+
+    const preserved = await compileMemoryWikiVault(config, {
+      sourcePageWrites: "preserve",
+    });
+
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(source);
+    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
+      "[Preserved](sources/preserved.md)",
+    );
+    expect(preserved.updatedFiles).not.toContain(sourcePath);
+    expect((await expectCompiledCache(config)).digest.pages.map((page) => page.path)).toContain(
+      "sources/preserved.md",
+    );
+
+    const normal = await compileMemoryWikiVault(config);
+    expect(normal.updatedFiles).toContain(sourcePath);
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toContain(
+      "<!-- openclaw:wiki:related:start -->",
+    );
+  });
+
   it("excludes malformed pages from indexes, digests, counts, and page writes (#96125)", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),

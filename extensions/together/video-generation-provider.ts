@@ -87,6 +87,12 @@ function extractTogetherVideoUrl(payload: TogetherVideoResponse): string | undef
   );
 }
 
+function readTogetherVideoFailureMessage(payload: TogetherVideoResponse): string | undefined {
+  return payload.status === "failed"
+    ? (normalizeOptionalString(payload.error?.message) ?? "Together video generation failed")
+    : undefined;
+}
+
 function resolveTogetherDurationSeconds(value: unknown): string | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
@@ -120,10 +126,7 @@ async function pollTogetherVideo(params: {
     requestFailedMessage: "Together video status request failed",
     timeoutMessage: `Together video generation task ${params.videoId} did not finish in time`,
     isComplete: (payload) => payload.status === "completed",
-    getFailureMessage: (payload) =>
-      payload.status === "failed"
-        ? (normalizeOptionalString(payload.error?.message) ?? "Together video generation failed")
-        : undefined,
+    getFailureMessage: readTogetherVideoFailureMessage,
   });
 }
 
@@ -264,7 +267,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
         if (!value) {
           throw new Error("Together reference image is missing image data.");
         }
-        body.reference_images = [value];
+        body.media = { reference_images: [value] };
       }
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/videos`,
@@ -284,20 +287,27 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
           response,
           "Together video generation failed",
         );
+        const failureMessage = readTogetherVideoFailureMessage(submitted);
+        if (failureMessage) {
+          throw new Error(failureMessage);
+        }
         const videoId = normalizeOptionalString(submitted.id);
         if (!videoId) {
           throw new Error("Together video generation response missing id");
         }
-        const completed = await pollTogetherVideo({
-          videoId,
-          headers,
-          timeoutMs: resolveProviderOperationTimeoutMs({
-            deadline,
-            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-          }),
-          baseUrl,
-          fetchFn,
-        });
+        const completed =
+          submitted.status === "completed"
+            ? submitted
+            : await pollTogetherVideo({
+                videoId,
+                headers,
+                timeoutMs: resolveProviderOperationTimeoutMs({
+                  deadline,
+                  defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+                }),
+                baseUrl,
+                fetchFn,
+              });
         const videoUrl = extractTogetherVideoUrl(completed);
         if (!videoUrl) {
           throw new Error("Together video generation completed without an output URL");

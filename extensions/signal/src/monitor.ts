@@ -183,26 +183,31 @@ function isSignalReactionMessage(
 function shouldEmitSignalReactionNotification(params: {
   mode?: SignalReactionNotificationMode;
   account?: string | null;
+  accountUuid?: string | null;
   targets?: SignalReactionTarget[];
   sender?: ReturnType<typeof resolveSignalSender> | null;
   allowlist?: string[];
 }) {
-  const { mode, account, targets, sender, allowlist } = params;
+  const { mode, account, accountUuid, targets, sender, allowlist } = params;
   const effectiveMode = mode ?? "own";
   if (effectiveMode === "off") {
     return false;
   }
   if (effectiveMode === "own") {
-    const accountId = account?.trim();
-    if (!accountId || !targets || targets.length === 0) {
+    const accountId = normalizeOptionalString(account);
+    const normalizedAccountUuid = normalizeOptionalString(accountUuid);
+    if ((!accountId && !normalizedAccountUuid) || !targets || targets.length === 0) {
       return false;
     }
-    const normalizedAccount = normalizeE164(accountId);
+    const normalizedAccount = accountId ? normalizeE164(accountId) : undefined;
     return targets.some((target) => {
       if (target.kind === "uuid") {
-        return accountId === target.id || accountId === `uuid:${target.id}`;
+        // UUID-only reaction payloads omit the phone identity carried by account.
+        return [accountId, normalizedAccountUuid].some(
+          (candidate) => candidate === target.id || candidate === `uuid:${target.id}`,
+        );
       }
-      return normalizedAccount === target.id;
+      return Boolean(normalizedAccount) && normalizedAccount === target.id;
     });
   }
   if (effectiveMode === "allowlist") {

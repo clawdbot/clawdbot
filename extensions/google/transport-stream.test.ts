@@ -541,6 +541,191 @@ describe("google transport stream", () => {
     expect(result.content[2]).toHaveProperty("thoughtSignature", "Y2FsbF9zaWdfMQ==");
   });
 
+  it.each([
+    {
+      name: "includes billed tool-result prompt tokens in input accounting",
+      usageMetadata: {
+        promptTokenCount: 10,
+        cachedContentTokenCount: 2,
+        candidatesTokenCount: 3,
+        thoughtsTokenCount: 1,
+        toolUsePromptTokenCount: 5,
+        totalTokenCount: 19,
+      },
+      expectedInput: 13,
+      expectedTotal: 19,
+    },
+    {
+      name: "derives the total when Google omits its optional aggregate",
+      usageMetadata: {
+        promptTokenCount: 10,
+        cachedContentTokenCount: 2,
+        candidatesTokenCount: 3,
+        thoughtsTokenCount: 1,
+      },
+      expectedInput: 8,
+      expectedTotal: 14,
+    },
+  ])("$name", async ({ usageMetadata, expectedInput, expectedTotal }) => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([{ candidates: [{ finishReason: "STOP" }], usageMetadata }]),
+    );
+
+    const result = await runGeminiStreamResult({
+      model: buildGeminiModel({
+        cost: { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 0 },
+      }),
+      options: { apiKey: "gemini-api-key" },
+    });
+
+    expect(result.usage).toMatchObject({
+      input: expectedInput,
+      output: 4,
+      cacheRead: 2,
+      totalTokens: expectedTotal,
+      cost: { input: expectedInput / 1_000_000 },
+    });
+  });
+
+  it.each([
+    {
+      provider: "google",
+      feedback: { blockReason: "SAFETY" },
+      expectedCode: "SAFETY",
+      expectedMessage: "Google prompt blocked (SAFETY)",
+    },
+    {
+      provider: "google",
+      feedback: {},
+      expectedCode: "PROMPT_BLOCKED",
+      expectedMessage: "Google prompt blocked (PROMPT_BLOCKED)",
+    },
+    {
+      provider: "google-vertex",
+      feedback: {
+        blockReason: "PROHIBITED_CONTENT",
+        blockReasonMessage: "Prompt violates provider safety policy",
+      },
+      expectedCode: "PROHIBITED_CONTENT",
+      expectedMessage:
+        "Google prompt blocked (PROHIBITED_CONTENT): Prompt violates provider safety policy",
+    },
+    {
+      provider: "google-vertex",
+      feedback: { blockReasonMessage: "Prompt violates provider safety policy" },
+      expectedCode: "PROMPT_BLOCKED",
+      expectedMessage:
+        "Google prompt blocked (PROMPT_BLOCKED): Prompt violates provider safety policy",
+    },
+  ])(
+    "surfaces blocked $provider prompts as typed stream errors",
+    async ({ provider, feedback, expectedCode, expectedMessage }) => {
+      guardedFetchMock.mockResolvedValueOnce(buildSseResponse([{ promptFeedback: feedback }]));
+      if (provider === "google-vertex") {
+        vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+        vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+        googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+      }
+
+      const result =
+        provider === "google-vertex"
+          ? await runGoogleVertexStreamResult({ fetch: guardedFetchMock })
+          : await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+      expect(result).toMatchObject({
+        stopReason: "error",
+        errorCode: expectedCode,
+        errorType: "google_prompt_blocked",
+        errorMessage: expectedMessage,
+        content: [],
+      });
+    },
+  );
+
+  it.each(["google", "google-vertex"] as const)(
+    "rejects an unfinished %s stream instead of silently completing partial output",
+    async (provider) => {
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse([{ candidates: [{ content: { parts: [{ text: "partial output" }] } }] }]),
+      );
+      if (provider === "google-vertex") {
+        vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+        vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+        googleAuthGetAccessTokenMock.mockResolvedValueOnce("ya29.vertex-token");
+      }
+
+      const result =
+        provider === "google-vertex"
+          ? await runGoogleVertexStreamResult({ fetch: guardedFetchMock })
+          : await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+      expect(result).toMatchObject({
+        stopReason: "error",
+        errorCode: "STREAM_INCOMPLETE",
+        errorType: "google_incomplete_stream",
+        errorMessage: "Google stream ended before a terminal finish reason",
+      });
+    },
+  );
+
+  it.each(["SAFETY", "MALFORMED_FUNCTION_CALL"] as const)(
+    "preserves the actionable %s candidate finish message",
+    async (finishReason) => {
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse([
+          {
+            candidates: [
+              {
+                finishReason,
+                finishMessage: "Provider rejected the generated response",
+              },
+            ],
+          },
+        ]),
+      );
+
+      const result = await runGeminiStreamResult({ options: { apiKey: "gemini-api-key" } });
+
+      expect(result).toMatchObject({
+        stopReason: "error",
+        errorCode: finishReason,
+        errorType: "google_generation_failed",
+        errorMessage: `Google generation stopped (${finishReason}): Provider rejected the generated response`,
+      });
+    },
+  );
+
+  it("closes partial text before reporting a failed candidate", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: { parts: [{ text: "partial output" }] },
+              finishReason: "SAFETY",
+              finishMessage: "Provider rejected the generated response",
+            },
+          ],
+        },
+      ]),
+    );
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel(),
+        { messages: [{ role: "user", content: "hello", timestamp: 0 }] } as never,
+        { apiKey: "gemini-api-key" } as never,
+      ),
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      eventTypes.push(event.type);
+    }
+
+    expect(eventTypes).toEqual(["start", "text_start", "text_delta", "text_end", "error"]);
+    expect((await stream.result()).errorCode).toBe("SAFETY");
+  });
+
   it("rotates Gemini LLM API keys when a pre-stream request is rate limited", async () => {
     vi.stubEnv("OPENCLAW_LIVE_GEMINI_KEY", "");
     vi.stubEnv("GEMINI_API_KEYS", "gemini-key-2");
@@ -674,7 +859,9 @@ describe("google transport stream", () => {
   });
 
   it("strips redundant google provider prefixes from Gemini API model paths", async () => {
-    guardedFetchMock.mockResolvedValueOnce(buildSseResponse([]));
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([{ candidates: [{ finishReason: "STOP" }] }]),
+    );
 
     const model = buildGeminiModel({
       id: "google/gemini-3-flash-preview",
@@ -690,7 +877,7 @@ describe("google transport stream", () => {
         { apiKey: "gemini-api-key" } as Parameters<typeof streamFn>[2],
       ),
     );
-    await stream.result();
+    expect((await stream.result()).stopReason).toBe("stop");
 
     const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
     expect(guardedCall[0]).toBe(
@@ -1009,7 +1196,9 @@ describe("google transport stream", () => {
   });
 
   it("uses bearer auth when the Google api key is an OAuth JSON payload", async () => {
-    guardedFetchMock.mockResolvedValueOnce(buildSseResponse([]));
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([{ candidates: [{ finishReason: "STOP" }] }]),
+    );
 
     const model = attachModelProviderRequestTransport(
       {
@@ -1067,7 +1256,9 @@ describe("google transport stream", () => {
       vi.stubEnv("GOOGLE_CLOUD_PROJECT", "demo");
       vi.stubEnv("GOOGLE_CLOUD_LOCATION", location);
       googleAuthGetAccessTokenMock.mockResolvedValueOnce("oauth-token");
-      guardedFetchMock.mockResolvedValueOnce(buildSseResponse([]));
+      guardedFetchMock.mockResolvedValueOnce(
+        buildSseResponse([{ candidates: [{ finishReason: "STOP" }] }]),
+      );
       const streamFn = createGoogleVertexTransportStreamFn();
       const stream = await Promise.resolve(
         streamFn(
@@ -2053,7 +2244,9 @@ describe("google transport stream", () => {
   });
 
   it("sends stopSequences in the serialized Gemini request body via the guarded fetch transport", async () => {
-    guardedFetchMock.mockResolvedValueOnce(buildSseResponse([]));
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([{ candidates: [{ finishReason: "STOP" }] }]),
+    );
 
     const model = attachModelProviderRequestTransport(
       {

@@ -3,9 +3,10 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runt
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { splitTelegramCaption } from "./caption.js";
+import { resolveTelegramPlainCaption, splitTelegramCaption } from "./caption.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
+import { resolveTelegramOutboundMediaFilename } from "./outbound-media.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import type { TelegramOutboundPromptContextMessage as TelegramMessageLike } from "./outbound-message-context.js";
 import {
@@ -28,6 +29,7 @@ import {
   type TelegramApiContext,
   type TelegramThreadScopedParams,
 } from "./send-context.js";
+import { isTelegramPhotoLimitError } from "./send-error-predicates.js";
 import { createTelegramTextSender } from "./send-message-text.js";
 import type { TelegramSendOpts, TelegramSendResult } from "./send-message-types.js";
 import {
@@ -36,7 +38,6 @@ import {
   isGifMedia,
   kindFromMime,
   loadWebMedia,
-  type MediaKind,
   probeVideoDimensions,
   resolveMarkdownTableMode,
 } from "./send.runtime.js";
@@ -247,23 +248,32 @@ async function sendMessageTelegramWithContext(
       sendImageAsPhoto = await shouldSendTelegramImageAsPhoto(media.buffer);
     }
     const isVideoNote = deliveryKind === "video" && opts.asVideoNote === true;
-    const fileName =
-      media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind ?? "document")) ?? "file";
+    const fileName = resolveTelegramOutboundMediaFilename({
+      fileName: media.fileName,
+      contentType: media.contentType,
+      kind,
+      isGif,
+    });
     const file = new InputFileCtor(media.buffer, fileName);
     let caption: string | undefined;
+    let htmlCaption: string | undefined;
     let followUpText: string | undefined;
 
     if (isVideoNote) {
       caption = undefined;
       followUpText = text.trim() ? text : undefined;
     } else {
-      const split = splitTelegramCaption(text);
+      const trimmedText = text.trim();
+      const renderedCaption = trimmedText ? renderHtmlText(trimmedText) : undefined;
+      const split = splitTelegramCaption(text, renderedCaption);
       caption = split.caption;
       followUpText = split.followUpText;
+      htmlCaption = caption ? renderedCaption : undefined;
     }
-    const htmlCaption = caption ? renderHtmlText(caption) : undefined;
-    const plainCaption =
-      caption && textMode === "html" ? telegramHtmlToPlainTextFallback(caption) : caption;
+    const plainCaption = resolveTelegramPlainCaption(
+      caption && textMode === "html" ? telegramHtmlToPlainTextFallback(caption) : caption,
+      htmlCaption,
+    );
     // If text exceeds Telegram's caption limit, send media without caption
     // then send text as a separate follow-up message.
     const needsSeparateText = Boolean(followUpText);
@@ -305,6 +315,9 @@ async function sendMessageTelegramWithContext(
             requestWithChatNotFound(
               () => sender(effectiveParams as TelegramThreadScopedParams),
               effectiveLabel,
+              label === "photo"
+                ? { shouldLog: (error) => !isTelegramPhotoLimitError(error) }
+                : undefined,
             ),
         });
       if (!htmlCaption || !plainCaption) {
@@ -320,6 +333,17 @@ async function sendMessageTelegramWithContext(
       });
     };
 
+    const documentSender = {
+      label: "document",
+      sender: (effectiveParams: TelegramThreadScopedParams | undefined) =>
+        api.sendDocument(
+          chatId,
+          file,
+          (opts.forceDocument
+            ? { ...effectiveParams, disable_content_type_detection: true }
+            : effectiveParams) as Parameters<typeof api.sendDocument>[2],
+        ) as Promise<TelegramMessageLike>,
+    };
     const mediaSender = (() => {
       if (isGif && deliveryKind !== "document") {
         return {
@@ -393,22 +417,26 @@ async function sendMessageTelegramWithContext(
             ) as Promise<TelegramMessageLike>,
         };
       }
-      return {
-        label: "document",
-        sender: (effectiveParams: TelegramThreadScopedParams | undefined) =>
-          api.sendDocument(
-            chatId,
-            file,
-            (opts.forceDocument
-              ? { ...effectiveParams, disable_content_type_detection: true }
-              : effectiveParams) as Parameters<typeof api.sendDocument>[2],
-          ) as Promise<TelegramMessageLike>,
-      };
+      return documentSender;
     })();
 
+    let deliveredMediaSender = mediaSender;
     let mediaDelivery: Awaited<ReturnType<typeof sendMedia>>;
     try {
-      mediaDelivery = await sendMedia(mediaSender.label, mediaSender.sender);
+      try {
+        mediaDelivery = await sendMedia(mediaSender.label, mediaSender.sender);
+      } catch (error) {
+        if (mediaSender.label !== "photo" || !isTelegramPhotoLimitError(error)) {
+          throw error;
+        }
+        // The provider is authoritative for photo size/dimensions; keep the
+        // same bytes, caption, quote, keyboard, and topic when retrying as a file.
+        logVerbose(
+          `telegram sendPhoto exceeded photo limits; retrying as document: ${formatErrorMessage(error)}`,
+        );
+        deliveredMediaSender = documentSender;
+        mediaDelivery = await sendMedia(documentSender.label, documentSender.sender);
+      }
     } catch (error) {
       opts.promptContextProjectionPlan?.cursor.invalidate();
       throw error;
@@ -437,11 +465,11 @@ async function sendMessageTelegramWithContext(
       accountId: account.accountId,
       chatId: resolvedChatId,
       messageId: String(mediaMessageId),
-      operation: `send${mediaSender.label
+      operation: `send${deliveredMediaSender.label
         .split("_")
         .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
         .join("")}`,
-      deliveryKind: mediaSender.label,
+      deliveryKind: deliveredMediaSender.label,
       messageThreadId: acceptedMediaParams?.message_thread_id,
       replyToMessageId: opts.replyToMessageId,
       silent: opts.silent,
@@ -477,17 +505,4 @@ async function sendMessageTelegramWithContext(
     direction: "outbound",
   });
   return textResult;
-}
-
-function inferFilename(kind: MediaKind) {
-  switch (kind) {
-    case "image":
-      return "image.jpg";
-    case "video":
-      return "video.mp4";
-    case "audio":
-      return "audio.ogg";
-    default:
-      return "file.bin";
-  }
 }

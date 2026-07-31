@@ -30,7 +30,7 @@ const HeartbeatResponseToolSchema = Type.Object(
     scratch: Type.Optional(
       Type.String({
         description:
-          "Complete replacement for heartbeat monitor prose. Recurring schedules belong in cron jobs, not scratch.",
+          "Complete replacement for heartbeat monitor prose. Recurring schedules belong in automations, not scratch.",
       }),
     ),
   },

@@ -49,9 +49,10 @@ function buildWhatsAppMediaSendState(params: {
   forceDocument?: boolean;
 }): WhatsAppMediaSendState {
   const { media, caption } = params;
-  const forceDocumentDelivery = Boolean(
-    params.forceDocument && supportsForcedDocumentDelivery(media.kind),
-  );
+  const forceDocumentDelivery =
+    Boolean(params.forceDocument && supportsForcedDocumentDelivery(media.kind)) ||
+    (media.kind === "document" &&
+      (media.mimetype.startsWith("image/") || media.mimetype.startsWith("video/")));
   let text = caption ?? "";
   let documentFileName = media.kind === "document" ? media.fileName : undefined;
   let visibleTextAfterVoice: string | undefined;
@@ -240,7 +241,15 @@ export async function sendMessageWhatsApp(
     logger.info({ jid: redactedJid, hasMedia }, "sending message");
     if (!isWhatsAppNewsletterJid(jid)) {
       await active.assertSendReady?.(to);
-      await active.sendComposingTo(to);
+      try {
+        await active.sendComposingTo(to);
+      } catch (err) {
+        // Typing is optional; a failed chatstate update must not block the actual message.
+        logger.warn(
+          { err: String(err), jid: redactedJid },
+          "failed to send composing presence; continuing message delivery",
+        );
+      }
     }
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
@@ -397,7 +406,7 @@ export async function sendPollWhatsApp(
     const durationMs = Date.now() - startedAt;
     outboundLog.info(`Sent poll ${messageId} -> ${redactedJid} (${durationMs}ms)`);
     logger.info({ jid: redactedJid, messageId }, "sent poll");
-    return { messageId, toJid: jid };
+    return { messageId, toJid: resolveActualSentRemoteJid(result, jid) };
   } catch (err) {
     logger.error({ err: String(err), to: redactedTo }, "failed to send poll via web session");
     throw err;

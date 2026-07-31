@@ -1258,6 +1258,7 @@ describe("loadPluginManifestRegistry", () => {
           assistantPriority: 10,
           assistantVisibility: "visible",
           appGuidedSecret: true,
+          appGuidedActionLabel: "Connect account",
           appGuidedDiscovery: true,
         },
       ],
@@ -1326,6 +1327,7 @@ describe("loadPluginManifestRegistry", () => {
         assistantPriority: 10,
         assistantVisibility: "visible",
         appGuidedSecret: true,
+        appGuidedActionLabel: "Connect account",
         appGuidedDiscovery: true,
       },
     ]);

@@ -14,7 +14,6 @@ import type {
   ChannelOutboundTargetRef,
 } from "../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeMessagePresentation } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { formatErrorMessage } from "../errors.js";
@@ -158,18 +157,25 @@ export async function resolveOutboundDurableFinalDeliverySupport(params: {
 
   if (params.requirements?.reconcileUnknownSend === true) {
     const supportedKinds = messageDurableFinal?.reconcileUnknownSendKinds;
-    for (const kind of unknownSendReconciliationKinds) {
-      if (
-        supportedKinds !== undefined &&
-        params.requirements[kind] === true &&
-        supportedKinds[kind] !== true
-      ) {
-        return {
-          ok: false,
-          reason: "capability_mismatch",
-          capability: "reconcileUnknownSend",
-        };
-      }
+    // Exact durable sends reject source batches before preparation. The sole
+    // logical payload chooses one transport branch; captioned media is a media attempt.
+    // Keep this resolver correct for independent batch callers: heterogeneous
+    // batches require every concrete branch plus whole-batch reconciliation.
+    const requiredKinds = params.requirements.batch
+      ? unknownSendReconciliationKinds.filter((kind) => params.requirements?.[kind] === true)
+      : unknownSendReconciliationKinds
+          .toReversed()
+          .filter((kind) => params.requirements?.[kind] === true)
+          .slice(0, 1);
+    if (
+      supportedKinds !== undefined &&
+      requiredKinds.some((requiredKind) => supportedKinds[requiredKind] !== true)
+    ) {
+      return {
+        ok: false,
+        reason: "capability_mismatch",
+        capability: "reconcileUnknownSend",
+      };
     }
   }
 
@@ -289,7 +295,8 @@ function createPluginHandler(
     presentationCapabilities: outbound?.presentationCapabilities,
     renderPresentation: outbound?.renderPresentation
       ? async (payload) => {
-          const presentation = normalizeMessagePresentation(payload.presentation);
+          // The delivery owner already normalized/adapted this; cloning drops fallback fragments.
+          const presentation = payload.presentation;
           if (!presentation) {
             return payload;
           }

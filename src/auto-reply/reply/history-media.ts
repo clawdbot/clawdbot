@@ -13,6 +13,9 @@ export type RecentInboundHistoryImage = {
   path: string;
   contentType: string;
   sender: string;
+  sentAtMs: number;
+  messagePosition: number;
+  messageCount: number;
   messageId?: string;
 };
 
@@ -101,11 +104,19 @@ export function resolveRecentInboundHistoryImages(params: {
         path: mediaPath,
         contentType,
         sender: entry.sender,
+        sentAtMs: timestamp,
+        messagePosition: index + 1,
+        messageCount: entries.length,
         ...(messageId ? { messageId } : {}),
       });
     }
   }
   return out.toReversed();
+}
+
+function formatRecentHistoryImageSentAt(sentAtMs: number): string {
+  const date = new Date(sentAtMs);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : `${sentAtMs}ms since epoch`;
 }
 
 export function appendRecentHistoryImageContext(params: {
@@ -117,7 +128,8 @@ export function appendRecentHistoryImageContext(params: {
   }
   const notes = params.images.map((image, index) => {
     const message = image.messageId ? `, message ${image.messageId}` : "";
-    return `[Recent image ${index + 1} from ${image.sender}${message}, attached as media.]`;
+    const sentAt = formatRecentHistoryImageSentAt(image.sentAtMs);
+    return `[Recent image ${index + 1} from ${image.sender}${message}, sent at ${sentAt}, message ${image.messagePosition} of ${image.messageCount} in available history, attached as media.]`;
   });
   return [params.promptText, notes.join("\n")]
     .filter((part) => part.trim().length > 0)

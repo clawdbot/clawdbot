@@ -180,6 +180,27 @@ describe("legacy channel pairing state migration", () => {
     expect(readChannelPairingStateSnapshot("telegram", env).allowFrom).toEqual({});
   });
 
+  it("ignores invalid account candidates while resolving scoped filenames", async () => {
+    const { env, sourceDir } = await createFixture();
+    const filePath = path.join(sourceDir, "telegram-alerts-allowFrom.json");
+    writeJson(filePath, { version: 1, allowFrom: ["1003"] });
+
+    const detected = detectLegacyChannelPairingState({
+      sourceDir,
+      configuredAccountIds: { telegram: ["*", "alerts"] },
+    });
+    const result = migrateLegacyChannelPairingState({ detected, env });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated 1 telegram/alerts allowFrom entry → shared SQLite state",
+    ]);
+    expect(fs.existsSync(filePath)).toBe(false);
+    expect(readChannelPairingStateSnapshot("telegram", env).allowFrom).toEqual({
+      alerts: ["1003"],
+    });
+  });
+
   it("does not infer default accounts for external channels", async () => {
     const { env, sourceDir } = await createFixture();
     const filePath = path.join(sourceDir, "custom-channel-default-allowFrom.json");

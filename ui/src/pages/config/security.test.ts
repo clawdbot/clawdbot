@@ -48,7 +48,9 @@ function createProps(overrides: Partial<SecurityViewProps> = {}): SecurityViewPr
       execPolicy: "allowlist",
       deviceAuth: true,
       browserEnabled: true,
+      browserEnabledOverridden: true,
       toolProfile: "coding",
+      toolProfileOverridden: true,
     },
     configBusy: false,
     canPairDevice: true,
@@ -74,7 +76,9 @@ describe("renderSecurity", () => {
             execPolicy: "allowlist",
             deviceAuth: true,
             browserEnabled: false,
+            browserEnabledOverridden: true,
             toolProfile: "messaging",
+            toolProfileOverridden: true,
           },
           onBrowserEnabledToggle,
           onToolProfileChange,
@@ -127,7 +131,9 @@ describe("renderSecurity", () => {
             execPolicy: "allowlist",
             deviceAuth: true,
             browserEnabled: true,
+            browserEnabledOverridden: false,
             toolProfile: "full",
+            toolProfileOverridden: false,
           },
         }),
       ),
@@ -166,5 +172,68 @@ describe("renderSecurity", () => {
     const page = container.querySelector(".security-page");
     expect(page).not.toBeNull();
     expect(page?.querySelector("[data-testid='security-editor']")).not.toBeNull();
+  });
+
+  it("shows inherited defaults without reset actions", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderSecurity(
+        createProps({
+          security: {
+            gatewayAuth: "token",
+            execPolicy: "allowlist",
+            deviceAuth: true,
+            browserEnabled: true,
+            browserEnabledOverridden: false,
+            toolProfile: "full",
+            toolProfileOverridden: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(expectRowByTitle(container, "Browser enabled").textContent).toContain(
+      "Using default: Enabled",
+    );
+    expect(expectRowByTitle(container, "Tool profile").textContent).toContain(
+      "Using default: Full",
+    );
+    expect(container.querySelectorAll("button[aria-label='Reset to default']")).toHaveLength(0);
+  });
+
+  it("resets explicit browser and tool-profile overrides", () => {
+    const onBrowserEnabledReset = vi.fn();
+    const onToolProfileReset = vi.fn();
+    const container = document.createElement("div");
+
+    render(
+      renderSecurity(
+        createProps({
+          security: {
+            gatewayAuth: "token",
+            execPolicy: "allowlist",
+            deviceAuth: true,
+            browserEnabled: true,
+            browserEnabledOverridden: true,
+            toolProfile: "full",
+            toolProfileOverridden: true,
+          },
+          onBrowserEnabledReset,
+          onToolProfileReset,
+        }),
+      ),
+      container,
+    );
+
+    const browserRow = expectRowByTitle(container, "Browser enabled");
+    const profileRow = expectRowByTitle(container, "Tool profile");
+    expect(browserRow.textContent).toContain("Default: Enabled");
+    expect(profileRow.textContent).toContain("Default: Full");
+    browserRow.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")?.click();
+    profileRow.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")?.click();
+    expect(onBrowserEnabledReset).toHaveBeenCalledOnce();
+    expect(onToolProfileReset).toHaveBeenCalledOnce();
   });
 });

@@ -47,6 +47,14 @@ function transportContext(transport: object | undefined): RealtimeTalkTransportC
   return (transport as { ctx: RealtimeTalkTransportContext }).ctx;
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe("RealtimeTalkSession", () => {
   beforeEach(() => {
     googleStart.mockClear();
@@ -207,6 +215,97 @@ describe("RealtimeTalkSession", () => {
     expect(relayStop).toHaveBeenCalledTimes(1);
     expect(googleInstances).toHaveLength(0);
     expect(webRtcInstances).toHaveLength(0);
+  });
+
+  it("closes a Gateway relay allocated after the session stops", async () => {
+    const create = createDeferred<{
+      provider: string;
+      transport: "gateway-relay";
+      relaySessionId: string;
+      audio: {
+        inputEncoding: "pcm16";
+        inputSampleRateHz: number;
+        outputEncoding: "pcm16";
+        outputSampleRateHz: number;
+      };
+    }>();
+    const request = vi.fn((method: string) => {
+      if (method === "talk.client.create") {
+        return create.promise;
+      }
+      if (method === "talk.session.close") {
+        return Promise.resolve({ ok: true });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const session = new RealtimeTalkSession({ request } as never, "main");
+
+    const starting = session.start();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("talk.client.create", expect.anything()),
+    );
+    session.stop();
+    create.resolve({
+      provider: "openai",
+      transport: "gateway-relay",
+      relaySessionId: "relay-stale",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24_000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24_000,
+      },
+    });
+    await starting;
+
+    expect(request).toHaveBeenCalledWith("talk.session.close", { sessionId: "relay-stale" });
+    expect(relayInstances).toHaveLength(0);
+  });
+
+  it("closes a superseded client-owned allocation without replacing the active call", async () => {
+    const creates: Array<ReturnType<typeof createDeferred<unknown>>> = [];
+    const request = vi.fn((method: string) => {
+      if (method === "talk.client.create") {
+        const create = createDeferred<unknown>();
+        creates.push(create);
+        return create.promise;
+      }
+      if (method === "talk.client.close") {
+        return Promise.resolve({ ok: true });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const session = new RealtimeTalkSession({ request } as never, "main");
+
+    const firstStart = session.start();
+    await vi.waitFor(() => expect(creates).toHaveLength(1));
+    session.stop();
+    const secondStart = session.start();
+    await vi.waitFor(() => expect(creates).toHaveLength(2));
+    creates[1]!.resolve({
+      provider: "openai",
+      transport: "webrtc",
+      voiceSessionId: "voice-current",
+      clientSecret: "secret",
+    });
+    await secondStart;
+    creates[0]!.resolve({
+      provider: "openai",
+      transport: "webrtc",
+      voiceSessionId: "voice-stale",
+      clientSecret: "secret",
+    });
+    await firstStart;
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("talk.client.close", {
+        sessionKey: "main",
+        voiceSessionId: "voice-stale",
+      }),
+    );
+    expect(webRtcInstances).toHaveLength(1);
+    expect(webRtcStart).toHaveBeenCalledTimes(1);
+    session.stop();
   });
 
   it("falls back to talk.session.create when gateway-relay is rejected by talk.client.create", async () => {

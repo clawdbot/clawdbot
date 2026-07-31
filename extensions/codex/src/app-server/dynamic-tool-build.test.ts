@@ -15,6 +15,7 @@ import {
   buildDynamicTools,
   disableCodexPluginThreadConfig,
   resolveCodexAppServerExecutionCwd,
+  resolveCodexExternalSandboxPolicyForOpenClawSandbox,
   resolveCodexMessageToolProvider,
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
@@ -755,6 +756,24 @@ describe("Codex app-server dynamic tool build", () => {
     });
 
     expect(persistentWebSearchAllowed).toBe(false);
+  });
+
+  it("maps Podman sandbox network config into Codex external sandbox policy", () => {
+    expect(
+      resolveCodexExternalSandboxPolicyForOpenClawSandbox({
+        enabled: true,
+        backendId: "podman",
+        docker: { network: "none" },
+      } as never),
+    ).toEqual({ type: "externalSandbox", networkAccess: "restricted" });
+
+    expect(
+      resolveCodexExternalSandboxPolicyForOpenClawSandbox({
+        enabled: true,
+        backendId: "Podman",
+        docker: { network: "bridge" },
+      } as never),
+    ).toEqual({ type: "externalSandbox", networkAccess: "enabled" });
   });
 
   it("exposes OpenClaw sandbox shell tools under distinct names for non-Docker sandbox backends", async () => {

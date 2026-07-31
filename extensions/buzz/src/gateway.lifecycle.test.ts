@@ -7,9 +7,14 @@ import type { ResolvedBuzzAccount } from "./types.js";
 const gatewayMocks = vi.hoisted(() => ({
   close: vi.fn(async () => {}),
   busSendText: vi.fn(async () => "event-id"),
+  busSendTyping: vi.fn(async () => undefined),
   sendBuzzTextOneShot: vi.fn(async () => "standalone-event-id"),
   onMessage: undefined as
-    | ((message: import("./message-event.js").BuzzInboundMessage, bus: BuzzBus) => Promise<void>)
+    | ((
+        message: import("./message-event.js").BuzzInboundMessage,
+        bus: BuzzBus,
+        signal: AbortSignal,
+      ) => Promise<void>)
     | undefined,
   onMessageError: undefined as ((error: Error) => void) | undefined,
   onFatalError: undefined as ((error: Error) => void) | undefined,
@@ -27,12 +32,30 @@ vi.mock("./inbound.js", () => ({
   handleBuzzInbound: vi.fn(async () => {}),
 }));
 
-import { buzzOutboundAdapter, startBuzzGatewayAccount } from "./gateway.js";
+import { BuzzDirectoryState } from "./directory-state.js";
+import { buzzOutboundAdapter, sendBuzzTyping, startBuzzGatewayAccount } from "./gateway.js";
+import { BUZZ_NORMAL_MESSAGE_KIND } from "./message-event.js";
 import { setBuzzRuntime } from "./runtime.js";
 import { resolveBuzzAccount } from "./types.js";
 
 const CHANNEL_ID = "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c";
 const PRIVATE_KEY = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+const BOT_PUBLIC_KEY = "a".repeat(64);
+
+function createMockBus(): BuzzBus {
+  return {
+    publicKey: BOT_PUBLIC_KEY,
+    directory: new BuzzDirectoryState({
+      publicKey: BOT_PUBLIC_KEY,
+      fallbackProfileName: "OpenClaw",
+      channelIds: [CHANNEL_ID],
+    }),
+    refreshDirectory: vi.fn(async () => {}),
+    sendText: gatewayMocks.busSendText,
+    sendTyping: gatewayMocks.busSendTyping,
+    close: gatewayMocks.close,
+  };
+}
 
 describe("Buzz gateway lifecycle", () => {
   beforeEach(() => {
@@ -41,6 +64,7 @@ describe("Buzz gateway lifecycle", () => {
     gatewayMocks.onMessageError = undefined;
     gatewayMocks.onFatalError = undefined;
     gatewayMocks.busSendText.mockResolvedValue("event-id");
+    gatewayMocks.busSendTyping.mockResolvedValue(undefined);
     gatewayMocks.sendBuzzTextOneShot.mockResolvedValue("standalone-event-id");
     gatewayMocks.resolveAgentIdentity.mockReset().mockReturnValue(undefined);
     gatewayMocks.resolveAgentRoute.mockReset().mockReturnValue({ agentId: "main" });
@@ -63,6 +87,7 @@ describe("Buzz gateway lifecycle", () => {
         onMessage: (
           message: import("./message-event.js").BuzzInboundMessage,
           bus: BuzzBus,
+          signal: AbortSignal,
         ) => Promise<void>;
         onMessageError?: (error: Error) => void;
         onFatalError?: (error: Error) => void;
@@ -70,11 +95,7 @@ describe("Buzz gateway lifecycle", () => {
         gatewayMocks.onMessage = options.onMessage;
         gatewayMocks.onMessageError = options.onMessageError;
         gatewayMocks.onFatalError = options.onFatalError;
-        return {
-          publicKey: "a".repeat(64),
-          sendText: gatewayMocks.busSendText,
-          close: gatewayMocks.close,
-        };
+        return createMockBus();
       },
     );
   });
@@ -160,6 +181,28 @@ describe("Buzz gateway lifecycle", () => {
     });
   });
 
+  it("drops heartbeat typing when no gateway bus is running", async () => {
+    const cfg = {
+      channels: {
+        buzz: {
+          relayUrl: "wss://buzz.example.com",
+          privateKey: PRIVATE_KEY,
+          groups: { [CHANNEL_ID]: {} },
+        },
+      },
+    } as OpenClawConfig;
+
+    await sendBuzzTyping({
+      cfg,
+      to: `buzz:${CHANNEL_ID}`,
+      accountId: "default",
+      threadId: "root-id",
+    });
+
+    expect(gatewayMocks.busSendTyping).not.toHaveBeenCalled();
+    expect(gatewayMocks.sendBuzzTextOneShot).not.toHaveBeenCalled();
+  });
+
   it("reuses the gateway bus for sends in the running process", async () => {
     const abortController = new AbortController();
     const cfg = {
@@ -202,6 +245,57 @@ describe("Buzz gateway lifecycle", () => {
       replyToId: undefined,
     });
     expect(gatewayMocks.sendBuzzTextOneShot).not.toHaveBeenCalled();
+
+    abortController.abort();
+    await expect(lifecycle).resolves.toBeUndefined();
+  });
+
+  it("uses the active bus for heartbeat typing without destabilizing the account", async () => {
+    const abortController = new AbortController();
+    const cfg = {
+      channels: {
+        buzz: {
+          relayUrl: "wss://buzz.example.com",
+          privateKey: PRIVATE_KEY,
+          groups: { [CHANNEL_ID]: {} },
+        },
+      },
+    } as OpenClawConfig;
+    const account = resolveBuzzAccount({ cfg });
+    const ctx = {
+      cfg,
+      accountId: account.accountId,
+      account,
+      runtime: {},
+      abortSignal: abortController.signal,
+      log: { info: vi.fn(), error: vi.fn() },
+      getStatus: vi.fn(),
+      setStatus: vi.fn(),
+    } as unknown as ChannelGatewayContext<ResolvedBuzzAccount>;
+    const lifecycle = startBuzzGatewayAccount(ctx);
+    await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
+
+    await sendBuzzTyping({
+      cfg,
+      to: `buzz:${CHANNEL_ID}`,
+      accountId: "default",
+      threadId: "root-id",
+    });
+    expect(gatewayMocks.busSendTyping).toHaveBeenCalledWith({
+      channelId: CHANNEL_ID,
+      threadId: "root-id",
+    });
+
+    gatewayMocks.busSendTyping.mockRejectedValueOnce(new Error("socket closing"));
+    await expect(
+      sendBuzzTyping({
+        cfg,
+        to: `buzz:${CHANNEL_ID}`,
+        accountId: "default",
+      }),
+    ).rejects.toThrow("socket closing");
+    expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce();
+    expect(gatewayMocks.close).not.toHaveBeenCalled();
 
     abortController.abort();
     await expect(lifecycle).resolves.toBeUndefined();
@@ -312,17 +406,15 @@ describe("Buzz gateway lifecycle", () => {
     await gatewayMocks.onMessage?.(
       {
         id: "event-1",
+        kind: BUZZ_NORMAL_MESSAGE_KIND,
         channelId: CHANNEL_ID,
         senderPubkey: "b".repeat(64),
         text: "hello",
         createdAt,
         mentionedPubkeys: [],
       },
-      {
-        publicKey: "a".repeat(64),
-        sendText: async () => "event-id",
-        close: async () => {},
-      },
+      createMockBus(),
+      new AbortController().signal,
     );
     const reconnectStartedAt = Math.floor(Date.now() / 1000);
     gatewayMocks.onFatalError?.(new Error("relay failed"));

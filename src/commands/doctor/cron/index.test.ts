@@ -15,6 +15,7 @@ import {
 import { cronStoreKey } from "../../../cron/store/key.js";
 import { readCronTaskRunHistoryPage } from "../../../cron/task-run-history.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { withRestoredMocks } from "../../../test-utils/vitest-spies.js";
 import {
   collectLegacyCronStoreHealthFindings,
@@ -246,7 +247,7 @@ describe("collectLegacyCronStoreHealthFindings", () => {
         expect.objectContaining({
           checkId: "core/doctor/legacy-cron-store",
           severity: "warning",
-          path: storePath,
+          path: resolveOpenClawStateSqlitePath(),
           requirement: "legacy-notify-fallback",
         }),
       ]),
@@ -292,6 +293,21 @@ describe("collectLegacyCronStoreHealthFindings", () => {
       }),
     ]);
     await expect(readPersistedJobs(storePath)).resolves.toEqual([]);
+  });
+
+  it("attributes SQLite-only cron findings to the canonical state database", async () => {
+    const storePath = await makeTempStorePath();
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(path.dirname(storePath)));
+    await writeCurrentCronStore(storePath, [createCurrentCronJob({ notify: true })]);
+
+    const findings = await collectLegacyCronStoreHealthFindings({ cfg: {} });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        path: resolveOpenClawStateSqlitePath(),
+        requirement: "legacy-notify-fallback",
+      }),
+    ]);
   });
 
   it("returns no findings for an already-normalized empty cron store", async () => {
@@ -389,6 +405,11 @@ describe("maybeRepairLegacyCronStore", () => {
         },
         state: {},
       },
+      createCurrentCronJob({
+        id: "disabled-pinned",
+        enabled: false,
+        payload: { kind: "agentTurn", message: "Dormant job", model: "ollama/qwen3" },
+      }),
     ]);
     const prompter = makePrompter(true);
 
@@ -406,10 +427,12 @@ describe("maybeRepairLegacyCronStore", () => {
     });
 
     expect(prompter.confirm).not.toHaveBeenCalled();
-    expectNoteContaining("Cron model overrides detected", "Cron");
+    expectNoteContaining("Automation model overrides detected", "Cron");
     expectNoteContaining("2 jobs set `payload.model`", "Cron");
     expectNoteContaining("Provider namespaces: anthropic=1, openai=1", "Cron");
     expectNoteContaining("2 jobs use a different model than `agents.defaults.model`", "Cron");
+    expectNoNoteContaining("ollama", "Cron");
+    expectNoNoteContaining("jobs.json", "Cron");
 
     const jobs = await readPersistedJobs(storePath);
     const job = requirePersistedJob(jobs, 0);
@@ -444,7 +467,7 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    expectNoNoteContaining("Cron model overrides detected", "Cron");
+    expectNoNoteContaining("Automation model overrides detected", "Cron");
   });
 
   it("counts alias model pins as default mismatches", async () => {
@@ -503,10 +526,10 @@ describe("maybeRepairLegacyCronStore", () => {
         prompter,
       });
 
-      expectNoteContaining("1 cron job is still marked in-flight", "Cron");
+      expectNoteContaining("1 automation is still marked in-flight", "Cron");
       expectNoteContaining("shows it as `running`", "Cron");
       expectNoteContaining("marks such runs interrupted the next time it starts", "Cron");
-      expectNoteContaining("openclaw cron show <id>", "Cron");
+      expectNoteContaining("openclaw automations show <id>", "Cron");
 
       // Observer-only: no repair prompt and the running marker is left untouched.
       expect(prompter.confirm).not.toHaveBeenCalled();
@@ -529,7 +552,7 @@ describe("maybeRepairLegacyCronStore", () => {
         prompter: makePrompter(true),
       });
 
-      expectNoteContaining("2 cron jobs are still marked in-flight", "Cron");
+      expectNoteContaining("2 automations are still marked in-flight", "Cron");
       expectNoteContaining("shows them as `running`", "Cron");
     });
 
@@ -564,11 +587,11 @@ describe("maybeRepairLegacyCronStore", () => {
         prompter,
       });
 
-      expectNoteContaining("1 cron job has failed 3+ runs in a row", "Cron");
+      expectNoteContaining("1 automation has failed 3+ runs in a row", "Cron");
       expectNoteContaining("re-fires it on error backoff", "Cron");
       expectNoteContaining("resets on the next successful run", "Cron");
       expectNoteContaining("interrupted by a gateway restart", "Cron");
-      expectNoteContaining("openclaw cron show <id>", "Cron");
+      expectNoteContaining("openclaw automations show <id>", "Cron");
 
       // Observer-only: no repair prompt and the failure counters stay untouched.
       expect(prompter.confirm).not.toHaveBeenCalled();
@@ -607,7 +630,7 @@ describe("maybeRepairLegacyCronStore", () => {
         prompter: makePrompter(true),
       });
 
-      expectNoteContaining("2 cron jobs have failed 3+ runs in a row", "Cron");
+      expectNoteContaining("2 automations have failed 3+ runs in a row", "Cron");
     });
 
     it("stays silent when failure streaks are below the threshold", async () => {
@@ -1400,6 +1423,7 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoNoteContaining("Legacy cron job storage detected", "Cron");
     expectNoteContaining("Cron store issues detected", "Cron");
     expectNoteContaining("1 job still uses legacy", "Cron");
+    expectNoNoteContaining("jobs.json", "Cron");
   });
 
   it("advises on isolated shell-prompt jobs without a non-actionable --fix repair note (#94655)", async () => {
@@ -1457,7 +1481,7 @@ describe("maybeRepairLegacyCronStore", () => {
     // isolated agentTurn job, so the misleading repair note must stay absent.
     expectNoNoteContaining("Cron store issues detected", "Cron");
     expectNoteContaining(
-      "3 isolated cron jobs drive shell/process tools from the agent prompt and keep running as-is: `Shell prompt job 1`, `Shell prompt job 2`, `Shell prompt job 3`.",
+      "3 isolated automations drive shell/process tools from the agent prompt and keep running as-is: `Shell prompt job 1`, `Shell prompt job 2`, `Shell prompt job 3`.",
       "Cron",
     );
     expectNoteContaining("informational only", "Cron");
@@ -1524,11 +1548,11 @@ describe("maybeRepairLegacyCronStore", () => {
 
     expectNoNoteContaining("Cron store issues detected", "Cron");
     expectNoteContaining(
-      "1 isolated cron job describes a shell command in the agent prompt but lacks shell/process tool access: `Restricted command prompt`.",
+      "1 isolated automation describes a shell command in the agent prompt but lacks shell/process tool access: `Restricted command prompt`.",
       "Cron",
     );
     expectNoteContaining("not the supported shell-tool prompt shape", "Cron");
-    expectNoteContaining("Recreate the job as a command cron job", "Cron");
+    expectNoteContaining("Recreate it as a command automation", "Cron");
     expectNoNoteContaining("informational only", "Cron");
     expectNoNoteContaining("keep running as-is", "Cron");
     expectNoNoteContaining("openclaw doctor --fix", "Cron");

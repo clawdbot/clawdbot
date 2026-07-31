@@ -354,25 +354,26 @@ export async function runEmbeddedFallbackCandidate(params: {
               // Serialized delivery preserves tool result order across detached callbacks.
               let toolResultChain: Promise<void> = Promise.resolve();
               return (payload: ReplyPayload) => {
-                toolResultChain = toolResultChain
-                  .then(async () => {
-                    turn.replyOperation?.recordActivity();
-                    const { text, skip } = params.presentation.normalizeStreamingText(payload);
-                    if (skip) {
-                      return;
-                    }
-                    if (text !== undefined) {
-                      await turn.typingSignals.signalTextDelta(text);
-                    }
-                    await turn.opts?.onToolResult?.({ ...payload, text });
-                  })
-                  .catch((err: unknown) => {
-                    logVerbose(`tool result delivery failed: ${String(err)}`);
-                  });
+                const delivery = toolResultChain.then(async () => {
+                  turn.replyOperation?.recordActivity();
+                  const { text, skip } = params.presentation.normalizeStreamingText(payload);
+                  if (skip) {
+                    return;
+                  }
+                  if (text !== undefined) {
+                    await turn.typingSignals.signalTextDelta(text);
+                  }
+                  await turn.opts?.onToolResult?.({ ...payload, text });
+                });
+                // Keep later results best-effort while exposing this delivery to awaiting owners.
+                toolResultChain = delivery.catch((err: unknown) => {
+                  logVerbose(`tool result delivery failed: ${String(err)}`);
+                });
                 const task = toolResultChain.finally(() => {
                   turn.pendingToolTasks.delete(task);
                 });
                 turn.pendingToolTasks.add(task);
+                return delivery;
               };
             })()
           : undefined,

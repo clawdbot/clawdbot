@@ -4,6 +4,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
+import { createPluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   copyReplyPayloadMetadata,
@@ -458,6 +459,18 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
 
   // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
   if (hookRunner?.hasHooks("before_dispatch")) {
+    // This outer lookup key is resolved from the routed context; fields inside
+    // sessionStoreEntry.entry cannot redirect hook or requester lineage.
+    const beforeDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
+    const pluginSubagentRequester = createPluginSubagentRequesterContext({
+      sessionKey: beforeDispatchSessionKey,
+      origin: {
+        channel: routeReplyChannel,
+        to: routeReplyTo,
+        accountId: replyContextAccountId,
+        threadId: routeReplyThreadId,
+      },
+    });
     const beforeDispatchResult = await traceReplyPhase("reply.before_dispatch_hooks", () =>
       runWithDispatchLifecycleAdmission(
         async () =>
@@ -470,7 +483,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   content: state.hookContext.content,
                   body: state.hookContext.bodyForAgent ?? state.hookContext.body,
                   channel: state.hookContext.channelId,
-                  sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+                  sessionKey: beforeDispatchSessionKey,
                   senderId: state.hookContext.senderId,
                   replyToId: state.hookContext.replyToId,
                   replyToIdFull: state.hookContext.replyToIdFull,
@@ -485,7 +498,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   channelId: state.hookContext.channelId,
                   accountId: state.hookContext.accountId,
                   conversationId: state.inboundClaimContext.conversationId,
-                  sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+                  sessionKey: beforeDispatchSessionKey,
                   senderId: state.hookContext.senderId,
                   replyToId: state.hookContext.replyToId,
                   replyToIdFull: state.hookContext.replyToIdFull,
@@ -493,6 +506,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   replyToSender: state.hookContext.replyToSender,
                   replyToIsQuote: state.hookContext.replyToIsQuote,
                 },
+                pluginSubagentRequester,
               ),
             trackDispatchLifecycleWork,
           ),

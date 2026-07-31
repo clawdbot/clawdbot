@@ -1436,6 +1436,9 @@ export async function runMemoryFlushIfNeeded(params: {
       sessionKey: params.sessionKey,
       ...(activeSessionEntry?.sessionId ? { sessionId: activeSessionEntry.sessionId } : {}),
       verboseLevel: params.resolvedVerboseLevel,
+      isControlUiVisible: false,
+      projectSessionActive: false,
+      projectSessionLifecycle: false,
     });
   }
   let memoryCompactionCompleted = false;
@@ -1524,6 +1527,7 @@ export async function runMemoryFlushIfNeeded(params: {
           provider,
           modelId: model,
           level: params.followupRun.run.thinkLevel,
+          catalog: params.followupRun.run.thinkingCatalog,
           agentId: params.followupRun.run.agentId,
           sessionKey:
             params.runtimePolicySessionKey ??

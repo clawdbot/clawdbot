@@ -116,6 +116,16 @@ describe("createDiscordGatewayPlugin", () => {
     expect(intents & GatewayIntents.GuildVoiceStates).toBe(0);
   });
 
+  it("omits MessageContent only when explicitly disabled", () => {
+    const defaultIntents = resolveDiscordGatewayIntents();
+    const mentionOnlyIntents = resolveDiscordGatewayIntents({
+      intentsConfig: { messageContent: false },
+    });
+
+    expect(defaultIntents & GatewayIntents.MessageContent).toBe(GatewayIntents.MessageContent);
+    expect(mentionOnlyIntents & GatewayIntents.MessageContent).toBe(0);
+  });
+
   it("lets intents.voiceStates override voice enablement", () => {
     const enabled = resolveDiscordGatewayIntents({
       intentsConfig: { voiceStates: true },

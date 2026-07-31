@@ -224,7 +224,9 @@ export const mockedResolveModelAsync = vi.fn(
   async (provider?: string, modelId?: string, _agentDir?: string, cfg?: unknown) =>
     createMockResolvedModel(provider, modelId, cfg),
 );
-const mockedPrepareProviderRuntimeAuth = vi.fn(async () => undefined);
+export const mockedPrepareProviderRuntimeAuth = vi.fn<
+  (params?: { context?: { apiKey?: string } }) => Promise<{ apiKey: string } | undefined>
+>(async () => undefined);
 export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 export const mockedBuildEmbeddedRunPayloads = vi.fn<
@@ -418,7 +420,7 @@ const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 export const overflowBaseRunParams = {
   agentId: "main",
   sessionId: "test-session",
-  sessionKey: "test-key",
+  sessionKey: "agent:main:test-key",
   workspaceDir: "/tmp/workspace",
   prompt: "hello",
   timeoutMs: 30000,

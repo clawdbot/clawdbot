@@ -6,6 +6,7 @@ import { CONFIG_AUDIT_STORE_LABEL } from "../../config/io.audit.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
+import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "../../state/openclaw-state-db-schema-migration-required.js";
 import {
   captureEnv,
   deleteTestEnvValue,
@@ -36,9 +37,14 @@ const findVerifiedGatewayListenerPidsOnPortSync = vi.fn((_port: number) => [] as
 const formatGatewayPidList = vi.fn((pids: number[]) => pids.join(", "));
 const isTerminalInteractive = vi.fn(() => true);
 const offerInvalidConfigRecovery = vi.fn(async () => ({ status: "declined" as const }));
+const parkCurrentLaunchAgentForMaintenance = vi.fn(async () => false);
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unknown>;
-const runGatewayLoop = vi.fn(async ({ start }: { start: GatewayLoopStart }) => {
+type GatewayLoopParams = {
+  start: GatewayLoopStart;
+  completeBoot?: (completion: unknown) => void;
+};
+const runGatewayLoop = vi.fn(async ({ start }: GatewayLoopParams) => {
   await start();
 });
 const normalizeStateDirEnv = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
@@ -114,7 +120,9 @@ const bootLifecycle = vi.hoisted(() => ({
         recovered: false,
       },
   ),
-  record: vi.fn((_env?: NodeJS.ProcessEnv, _nowMs?: number, _reason?: string) => "boot-id"),
+  record: vi.fn(
+    (_env?: NodeJS.ProcessEnv, _nowMs?: number, _reason?: string): string | undefined => "boot-id",
+  ),
   complete: vi.fn(),
 }));
 const netState = vi.hoisted(() => ({
@@ -259,6 +267,11 @@ vi.mock("../../infra/gateway-processes.js", () => ({
 
 vi.mock("../../gateway/server.js", () => ({
   startGatewayServer: (port: number, opts?: unknown) => startGatewayServer(port, opts),
+}));
+
+vi.mock("../../daemon/launchd.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/launchd.js")>()),
+  parkCurrentLaunchAgentForMaintenance: () => parkCurrentLaunchAgentForMaintenance(),
 }));
 
 vi.mock("../../gateway/ws-logging.js", () => ({
@@ -408,6 +421,8 @@ describe("gateway run option collisions", () => {
     isTerminalInteractive.mockReset();
     isTerminalInteractive.mockReturnValue(true);
     offerInvalidConfigRecovery.mockClear();
+    parkCurrentLaunchAgentForMaintenance.mockReset();
+    parkCurrentLaunchAgentForMaintenance.mockResolvedValue(false);
     cleanStaleGatewayProcessesSync.mockClear();
     waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
@@ -1599,6 +1614,52 @@ describe("gateway run option collisions", () => {
     });
 
     expect(writeDiagnosticStabilityBundleForFailureSync).not.toHaveBeenCalled();
+  });
+
+  it("exits 78 and parks launchd for a repairable shared-state schema", async () => {
+    bootLifecycle.record.mockReturnValueOnce(undefined);
+    runGatewayLoop.mockImplementationOnce(async ({ start, completeBoot }: GatewayLoopParams) => {
+      try {
+        await start();
+      } catch (error) {
+        completeBoot?.({ outcome: "startup_failed", reason: "schema migration required" });
+        throw error;
+      }
+    });
+    startGatewayServer.mockRejectedValueOnce(
+      new OpenClawStateDatabaseSchemaMigrationRequiredError(
+        "agent-databases-composite-primary-key",
+        "/tmp/openclaw.sqlite",
+      ),
+    );
+    parkCurrentLaunchAgentForMaintenance.mockResolvedValueOnce(true);
+
+    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+      "__exit__:78",
+    );
+
+    expect(parkCurrentLaunchAgentForMaintenance).toHaveBeenCalledOnce();
+    expect(bootLifecycle.complete).toHaveBeenCalledWith(undefined, {
+      outcome: "startup_failed",
+      reason: "schema migration required",
+    });
+    expect(runtimeErrors.join("\n")).toContain(
+      "state database schema migration required (agent-databases-composite-primary-key)",
+    );
+  });
+
+  it("does not park launchd for a nonrepairable shared-state schema", async () => {
+    startGatewayServer.mockRejectedValueOnce(
+      new Error(
+        "OpenClaw state database /tmp/openclaw.sqlite has a noncanonical agent database registry schema that cannot be repaired automatically.",
+      ),
+    );
+
+    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(parkCurrentLaunchAgentForMaintenance).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -28,7 +28,6 @@ import { buildGatewaySessionEventFields } from "./session-event-payload.js";
 import { capArrayByJsonBytes } from "./session-transcript-readers.js";
 import { buildSingleRowStoreChildSessionsByKey } from "./session-utils-projection.js";
 import {
-  canonicalizeSpawnedByForAgent,
   buildGatewaySessionRow,
   deriveSessionTitle,
   getSessionDefaults,
@@ -37,7 +36,7 @@ import {
   listSessionsFromStoreAsync,
   loadSessionEntry,
   loadSessionEntryReadOnly,
-  migrateAndPruneGatewaySessionStoreKey,
+  resolveCanonicalGatewaySessionStoreKey,
   resolveDeletedAgentIdFromSessionKey,
   resolveGatewayModelSupportsImages,
   resolveGatewaySessionStoreTarget,
@@ -1720,20 +1719,6 @@ describe("gateway session utils", () => {
     ).toBe(`agent:alpha:signal:group:${mixedGroupId}`);
   });
 
-  test("canonicalizeSpawnedByForAgent preserves Signal group ids", () => {
-    const cfg = {
-      session: { mainKey: "main" },
-    } as OpenClawConfig;
-    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
-
-    expect(canonicalizeSpawnedByForAgent(cfg, "ops", `Signal:Group:${mixedGroupId}`)).toBe(
-      `agent:ops:signal:group:${mixedGroupId}`,
-    );
-    expect(
-      canonicalizeSpawnedByForAgent(cfg, "ops", `Agent:Main:Signal:Group:${mixedGroupId}`),
-    ).toBe(`agent:main:signal:group:${mixedGroupId}`);
-  });
-
   test("resolveSessionStoreKey honors global scope", () => {
     const cfg = {
       session: { scope: "global", mainKey: "work" },
@@ -2068,7 +2053,7 @@ describe("gateway session utils", () => {
     expect(spawnedByReads).toBe(1);
   });
 
-  test("loadSessionEntryReadOnly keeps children linked through a main alias", async () => {
+  test("loadSessionEntryReadOnly rejects a persisted main alias", async () => {
     resetConfigRuntimeState();
     try {
       await withStateDirEnv("session-utils-exact-alias-children-", async ({ stateDir }) => {
@@ -2090,14 +2075,12 @@ describe("gateway session utils", () => {
         });
         setRuntimeConfigSnapshot(cfg, cfg);
 
-        const loaded = loadSessionEntryReadOnly("main", {
-          clone: false,
-          includeStoreChildEntries: true,
-        });
-
-        expect(loaded.canonicalKey).toBe("agent:main:work");
-        expect(loaded.entry?.sessionId).toBe("parent");
-        expect(loaded.store[childKey]?.spawnedBy).toBe(legacyParentKey);
+        expect(() =>
+          loadSessionEntryReadOnly("main", {
+            clone: false,
+            includeStoreChildEntries: true,
+          }),
+        ).toThrow("openclaw doctor --fix");
       });
     } finally {
       resetConfigRuntimeState();
@@ -2177,7 +2160,7 @@ describe("gateway session utils", () => {
     }
   });
 
-  test("loadSessionEntry resolves deleted main aliases when mainKey is customized", async () => {
+  test("loadSessionEntry rejects deleted main aliases when mainKey is customized", async () => {
     resetConfigRuntimeState();
     try {
       await withStateDirEnv("session-utils-load-deleted-main-alias-", async ({ stateDir }) => {
@@ -2205,18 +2188,14 @@ describe("gateway session utils", () => {
         } as OpenClawConfig;
         setRuntimeConfigSnapshot(cfg, cfg);
 
-        const loaded = loadSessionEntry("agent:main:work");
-
-        expect(loaded.canonicalKey).toBe("agent:main:work");
-        expect(loaded.storePath).toBe(path.resolve(deletedStorePath));
-        expect(loaded.entry?.sessionId).toBe("sess-deleted-main");
+        expect(() => loadSessionEntry("agent:main:work")).toThrow("openclaw doctor --fix");
       });
     } finally {
       resetConfigRuntimeState();
     }
   });
 
-  test("loadSessionEntry prefers the freshest duplicate row across discovered stores", async () => {
+  test("loadSessionEntry keeps the configured canonical store authoritative", async () => {
     resetConfigRuntimeState();
     try {
       await withStateDirEnv("session-utils-load-entry-cross-store-", async ({ stateDir }) => {
@@ -2250,7 +2229,7 @@ describe("gateway session utils", () => {
     }
   });
 
-  test("migrateAndPruneGatewaySessionStoreKey promotes the freshest alias row to canonical", () => {
+  test("resolveCanonicalGatewaySessionStoreKey rejects legacy aliases", () => {
     const cfg = {
       session: { mainKey: "work" },
       agents: { list: [{ id: "ops", default: true }] },
@@ -2266,16 +2245,13 @@ describe("gateway session utils", () => {
       } as SessionEntry,
     };
 
-    const result = migrateAndPruneGatewaySessionStoreKey({
-      cfg,
-      key: "agent:ops:main",
-      store,
-    });
-
-    expect(result.primaryKey).toBe("agent:ops:work");
-    expect(result.entry?.sessionId).toBe("sess-fresh");
-    expect(store["agent:ops:work"]?.sessionId).toBe("sess-fresh");
-    expect(store["agent:ops:main"]).toBeUndefined();
+    expect(() =>
+      resolveCanonicalGatewaySessionStoreKey({
+        cfg,
+        key: "agent:ops:main",
+        store,
+      }),
+    ).toThrow("openclaw doctor --fix");
   });
 
   test("listAgentsForGateway rejects avatar symlink escapes outside workspace", () => {

@@ -30,6 +30,7 @@ import {
 } from "./realtime-quicksilver-sideband.js";
 import {
   boundOpenAIQuicksilverContextItems,
+  boundOpenAIQuicksilverDelegationResult,
   buildOpenAIQuicksilverSession,
   chunkOpenAIQuicksilverAppendText,
   createOpenAIQuicksilverCall,
@@ -71,9 +72,15 @@ type PendingOffer = {
   request: PreparedOpenAIQuicksilverSessionRequest;
 };
 
+type PendingDelegation = {
+  id: string;
+  prompt: string;
+};
+
 type ActiveSession = {
   abortController: AbortController;
   consultController?: AbortController;
+  pendingDelegation?: PendingDelegation;
   socket: OpenAIQuicksilverSocket;
   timer: NodeJS.Timeout;
   token: string;
@@ -252,6 +259,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
     reservations.delete(session.token);
     releaseOpenAIQuicksilverSession(session.token);
     clearTimeout(session.timer);
+    session.pendingDelegation = undefined;
     session.consultController?.abort(new Error("GPT-Live delegation stopped"));
     session.abortController.abort(new Error("GPT-Live session closed"));
     return true;
@@ -288,7 +296,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       if (signal.aborted) {
         return;
       }
-      finalText = result.text;
+      finalText = boundOpenAIQuicksilverDelegationResult(result.text);
     } catch (error) {
       if (signal.aborted) {
         return;
@@ -310,6 +318,42 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       text: finalText,
       channel: "speakable",
     });
+  };
+
+  const startDelegation = (
+    session: ActiveSession,
+    delegation: PendingDelegation,
+    runAgentConsult: NonNullable<OpenAIQuicksilverSessionRequest["runAgentConsult"]>,
+  ) => {
+    if (activeSessions.get(session.token) !== session || session.abortController.signal.aborted) {
+      return;
+    }
+    if (session.consultController) {
+      session.pendingDelegation = delegation;
+      session.consultController.abort(new Error("GPT-Live delegation superseded"));
+      return;
+    }
+    const consultController = new AbortController();
+    session.consultController = consultController;
+    const signal = AbortSignal.any([session.abortController.signal, consultController.signal]);
+    void handleDelegation(session, delegation.id, delegation.prompt, signal, runAgentConsult)
+      .catch((error: unknown) => {
+        params.logger.warn(
+          `OpenAI GPT-Live delegation failed: ${shortConsultFailureReason(error)}`,
+        );
+        closeSession(session);
+      })
+      .finally(() => {
+        if (session.consultController !== consultController) {
+          return;
+        }
+        session.consultController = undefined;
+        const pending = session.pendingDelegation;
+        session.pendingDelegation = undefined;
+        if (pending && activeSessions.get(session.token) === session) {
+          startDelegation(session, pending, runAgentConsult);
+        }
+      });
   };
 
   const scheduleSessionExpiry = (session: ActiveSession, ttlMs: number) => {
@@ -368,23 +412,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       input: delegationInput,
       transcript,
     });
-    // A newer spoken task supersedes the prior consult so steering is immediate.
-    session.consultController?.abort(new Error("GPT-Live delegation superseded"));
-    const consultController = new AbortController();
-    session.consultController = consultController;
-    const signal = AbortSignal.any([session.abortController.signal, consultController.signal]);
-    void handleDelegation(session, event.id, prompt, signal, runAgentConsult)
-      .catch((error: unknown) => {
-        params.logger.warn(
-          `OpenAI GPT-Live delegation failed: ${shortConsultFailureReason(error)}`,
-        );
-        closeSession(session);
-      })
-      .finally(() => {
-        if (session.consultController === consultController) {
-          session.consultController = undefined;
-        }
-      });
+    startDelegation(session, { id: event.id, prompt }, runAgentConsult);
   };
 
   const handleSidebandFrame = (

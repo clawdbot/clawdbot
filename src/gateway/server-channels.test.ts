@@ -853,7 +853,12 @@ describe("server-channels auto restart", () => {
         setStatus: ChannelGatewayContext["setStatus"];
         accountId: string;
       }) => {
-        setStatus({ accountId, terminalDisconnect: true });
+        setStatus({
+          accountId,
+          terminalDisconnect: true,
+          healthState: "logged-out",
+          lastError: "relink required",
+        });
       },
     );
     installTestRegistry(createTestPlugin({ startAccount }));
@@ -864,7 +869,12 @@ describe("server-channels auto restart", () => {
 
     expect(startAccount).toHaveBeenCalledTimes(1);
     const snapshot = manager.getRuntimeSnapshot();
-    expect(snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.terminalDisconnect).toBe(true);
+    expect(snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]).toMatchObject({
+      terminalDisconnect: true,
+      healthState: "logged-out",
+      lastError: "relink required",
+      restartPending: false,
+    });
   });
 
   it("consumes rejected stop tasks during manual abort", async () => {

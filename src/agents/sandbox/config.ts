@@ -250,6 +250,7 @@ export function resolveSandboxConfigForAgent(
   });
 
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, agentId);
+  const scopedAgentDocker = scope === "shared" ? undefined : agentSandbox?.docker;
 
   return {
     mode: agentSandbox?.mode ?? agent?.mode ?? "off",
@@ -258,10 +259,14 @@ export function resolveSandboxConfigForAgent(
     workspaceAccess: agentSandbox?.workspaceAccess ?? agent?.workspaceAccess ?? "none",
     workspaceRoot:
       agentSandbox?.workspaceRoot ?? agent?.workspaceRoot ?? DEFAULT_SANDBOX_WORKSPACE_ROOT,
+    dockerTmpfsSource:
+      scopedAgentDocker?.tmpfs === undefined && agent?.docker?.tmpfs === undefined
+        ? "default"
+        : "configured",
     docker: resolveSandboxDockerConfig({
       scope,
       globalDocker: agent?.docker,
-      agentDocker: agentSandbox?.docker,
+      agentDocker: scopedAgentDocker,
     }),
     ssh: resolveSandboxSshConfig({
       scope,

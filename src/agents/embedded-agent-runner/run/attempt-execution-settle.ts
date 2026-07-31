@@ -29,7 +29,6 @@ type StreamCleanupInput = {
   clearAttemptTimeoutTimers: () => void;
   isProbeSession: boolean;
   queueHandle: PreparedStreamRuntime["stream"]["queueHandle"];
-  removeAttemptAbortSignalListener: () => void;
   state: EmbeddedAttemptExecutionState;
   unsubscribe: () => void;
 };
@@ -63,7 +62,6 @@ function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): Error
           attempt.sessionFile,
         ),
     ],
-    ["abort listener cleanup", input.removeAttemptAbortSignalListener],
   ] as const) {
     try {
       cleanup();
@@ -140,13 +138,10 @@ export async function runEmbeddedAttemptSettledPhase(
     queueHandle,
     stopAcceptingSteerMessages,
     getBeforeAgentFinalizeRevisionReason,
+    getBeforeAgentFinalizeRevisionEntryId,
   } = preparedStream;
   const { unsubscribe, waitForPendingEvents } = subscription;
-  const {
-    getRunAbortDeadlineAtMs,
-    clearTimers: clearAttemptTimeoutTimers,
-    removeAbortSignalListener: removeAttemptAbortSignalListener,
-  } = attemptTimeout;
+  const { getRunAbortDeadlineAtMs, clearTimers: clearAttemptTimeoutTimers } = attemptTimeout;
   let promptCacheChangesForTurn: PromptCacheChange[] | null = null;
   let lastAssistant: AssistantMessage | undefined;
   let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
@@ -321,6 +316,7 @@ export async function runEmbeddedAttemptSettledPhase(
       shouldFlushForContextEngine: () =>
         Boolean(input.activeContextEngine && !getBeforeAgentFinalizeRevisionReason()),
       getBeforeAgentFinalizeRevisionReason,
+      getBeforeAgentFinalizeRevisionEntryId,
       getContextEngineAfterTurnCheckpoint: contextGuards.getAfterTurnCheckpoint,
       onSettleErrorState: (settleState) => {
         setFailure(settleState.promptError, settleState.promptErrorSource);
@@ -419,7 +415,6 @@ export async function runEmbeddedAttemptSettledPhase(
       clearAttemptTimeoutTimers,
       isProbeSession,
       queueHandle,
-      removeAttemptAbortSignalListener,
       state,
       unsubscribe,
     });

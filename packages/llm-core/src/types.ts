@@ -273,6 +273,8 @@ export interface Usage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Whether the provider reported a cache-read/write token split. */
+  cacheTelemetry?: { state: "available" | "unavailable" };
   /** Subset of `cacheWrite` written with 1-hour retention when reported. */
   cacheWrite1h?: number;
   /** Exact context snapshot for the final provider iteration. */

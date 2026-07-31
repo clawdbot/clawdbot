@@ -87,6 +87,60 @@ describe("resolveByteResponse", () => {
       }),
     ).toMatchObject({ kind: "full", statusCode: 200, contentLength: 10 });
   });
+
+  it.each([
+    { label: "exact", header: (etag: string) => etag },
+    { label: "weak", header: (etag: string) => `W/${etag}` },
+    { label: "wildcard", header: () => "*" },
+    { label: "list", header: (etag: string) => `"other", ${etag}` },
+    { label: "multiple headers", header: (etag: string) => ['"other"', `W/${etag}`] },
+  ])("returns 304 for a matching $label If-None-Match validator", ({ header }) => {
+    const etag = resolveByteResponse({ file: FILE }).etag;
+    const plan = resolveByteResponse({
+      file: FILE,
+      method: "GET",
+      ifNoneMatchHeader: header(etag),
+    });
+
+    expect(plan).toEqual({ kind: "not-modified", statusCode: 304, etag });
+    const setHeader = vi.fn();
+    const res = { statusCode: 0, setHeader } as unknown as ServerResponse;
+    writeByteHeaders(res, plan);
+    expect(res.statusCode).toBe(304);
+    expect(setHeader).toHaveBeenCalledWith("ETag", etag);
+    expect(setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
+  });
+
+  it.each(["GET", "HEAD"])(
+    "evaluates matching If-None-Match before Range and If-Range for %s",
+    (method) => {
+      const etag = resolveByteResponse({ file: FILE }).etag;
+
+      expect(
+        resolveByteResponse({
+          file: FILE,
+          method,
+          rangeHeader: "bytes=1-2",
+          ifRangeHeader: '"stale"',
+          ifNoneMatchHeader: etag,
+        }),
+      ).toEqual({ kind: "not-modified", statusCode: 304, etag });
+    },
+  );
+
+  it("keeps the requested range when If-None-Match does not match", () => {
+    const etag = resolveByteResponse({ file: FILE }).etag;
+
+    expect(
+      resolveByteResponse({
+        file: FILE,
+        method: "GET",
+        rangeHeader: "bytes=1-2",
+        ifRangeHeader: etag,
+        ifNoneMatchHeader: '"stale"',
+      }),
+    ).toMatchObject({ kind: "partial", statusCode: 206, range: { start: 1, end: 2 } });
+  });
 });
 
 describe("byte ETag generation", () => {

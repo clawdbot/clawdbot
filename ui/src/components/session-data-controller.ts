@@ -43,6 +43,7 @@ import {
   type SessionDataControllerHost,
   updateSessionCatalogData as updateSessionCatalogDataForHost,
 } from "./session-data-controller-catalog.ts";
+import { subscribeSessionDataGatewayEvents } from "./session-data-controller-events.ts";
 import {
   loadMoreSidebarSessions as loadMoreSidebarSessionPage,
   refreshSidebarSessions as refreshSidebarSessionPage,
@@ -133,19 +134,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       )
       .effect(
         () => this.context?.gateway,
-        (gateway) =>
-          gateway.subscribeEvents((event) => {
-            if (event.event === "sessions.catalog.host") {
-              this.handleSessionCatalogHostEvent(event.payload);
-              return;
-            }
-            if (event.event === "presence") {
-              const presence = readPresenceEntries(event.payload);
-              this.presencePayload = presence ? { presence } : undefined;
-              this.notify();
-              this.handleSessionCatalogPresence(event.payload);
-            }
-          }),
+        (gateway) => subscribeSessionDataGatewayEvents(gateway, this, host),
       )
       .watch(
         () => this.context?.agents,
@@ -688,6 +677,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   resetForStatusFilter(statusFilter: SidebarSessionStatusFilter): void {
     this.sidebarSessionPaginationState.listRequestToken = null;
     this.sidebarSessionPaginationState.pageRequestToken = null;
+    this.sidebarSessionPaginationState.loadedScope = undefined;
     this.sessionsLoading = false;
     this.visibleSessionLimits.clear();
     this.childSessionRowsByParent = {};

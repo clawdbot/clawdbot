@@ -1,9 +1,10 @@
 // HTTP request trace tests ensure gateway request scope reaches logs and
 // diagnostic events for per-request debugging.
 import fs from "node:fs";
+import type { ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   emitDiagnosticEvent,
   onDiagnosticEvent,
@@ -100,6 +101,141 @@ describe("gateway HTTP request trace scope", () => {
       expect(traceRecord?.spanId).toBe(activeTraceInHandler?.spanId);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("gateway HTTP request error cleanup", () => {
+  it.each([
+    {
+      label: "partially written",
+      writeResponse: (res: ServerResponse) => res.write("partial"),
+      expectedBody: "partial",
+    },
+    {
+      label: "already completed",
+      writeResponse: (res: ServerResponse) => res.end("complete"),
+      expectedBody: "complete",
+    },
+    {
+      label: "fully written fixed-length",
+      writeResponse: (res: ServerResponse) => {
+        res.setHeader("Content-Length", "7");
+        res.write("partial");
+      },
+      expectedBody: "partial",
+    },
+    {
+      label: "fully written writeHead fixed-length",
+      writeResponse: (res: ServerResponse) => {
+        res.writeHead(200, { "Content-Length": "7" });
+        res.write("partial");
+      },
+      expectedBody: "partial",
+    },
+  ])(
+    "finishes a $label response after its route throws",
+    async ({ writeResponse, expectedBody }) => {
+      const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+      const server = createGatewayHttpServer({
+        clients: new Set(),
+        controlUiEnabled: false,
+        controlUiBasePath: "",
+        openAiChatCompletionsEnabled: false,
+        openResponsesEnabled: false,
+        handleHooksRequest: async (_req, res) => {
+          writeResponse(res);
+          throw new Error("route failed after writing a response");
+        },
+        resolvedAuth,
+        getRuntimeConfig: () => ({}),
+      });
+      const port = await listen(server);
+
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/hooks/test`, {
+          signal: AbortSignal.timeout(1_000),
+        });
+
+        expect(response.status).toBe(200);
+        expect(await response.text()).toBe(expectedBody);
+        expect(errorLog).toHaveBeenCalledWith(
+          "[gateway-http] unhandled error in request handler:",
+          expect.any(Error),
+        );
+      } finally {
+        server.closeAllConnections();
+        await closeServer(server);
+        errorLog.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    {
+      label: "setHeader",
+      setContentLength: (res: ServerResponse) => res.setHeader("Content-Length", "10"),
+    },
+    {
+      label: "writeHead",
+      setContentLength: (res: ServerResponse) => res.writeHead(200, { "Content-Length": "10" }),
+    },
+  ])("closes an incomplete $label fixed-length response", async ({ setContentLength }) => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const server = createGatewayHttpServer({
+      clients: new Set(),
+      controlUiEnabled: false,
+      controlUiBasePath: "",
+      openAiChatCompletionsEnabled: false,
+      openResponsesEnabled: false,
+      handleHooksRequest: async (_req, res) => {
+        setContentLength(res);
+        res.write("partial");
+        throw new Error("route failed before completing its fixed-length response");
+      },
+      resolvedAuth,
+      getRuntimeConfig: () => ({}),
+    });
+    const port = await listen(server);
+
+    try {
+      await expect(
+        fetch(`http://127.0.0.1:${port}/hooks/test`, {
+          signal: AbortSignal.timeout(1_000),
+        }).then(async (response) => await response.text()),
+      ).rejects.toMatchObject({ name: "TypeError" });
+    } finally {
+      server.closeAllConnections();
+      await closeServer(server);
+      errorLog.mockRestore();
+    }
+  });
+
+  it("preserves the 500 response when its route fails before writing headers", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const server = createGatewayHttpServer({
+      clients: new Set(),
+      controlUiEnabled: false,
+      controlUiBasePath: "",
+      openAiChatCompletionsEnabled: false,
+      openResponsesEnabled: false,
+      handleHooksRequest: async () => {
+        throw new Error("route failed before writing a response");
+      },
+      resolvedAuth,
+      getRuntimeConfig: () => ({}),
+    });
+    const port = await listen(server);
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/hooks/test`);
+
+      expect(response.status).toBe(500);
+      expect(await response.text()).toBe("Internal Server Error");
+    } finally {
+      server.closeAllConnections();
+      await closeServer(server);
+      errorLog.mockRestore();
     }
   });
 });

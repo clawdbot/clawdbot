@@ -149,6 +149,65 @@ describe("OpenRouter usage", () => {
     ]);
   });
 
+  it.each([
+    { period: "daily", usageKey: "usage_daily", byokKey: "byok_usage_daily" },
+    { period: "weekly", usageKey: "usage_weekly", byokKey: "byok_usage_weekly" },
+    { period: "monthly", usageKey: "usage_monthly", byokKey: "byok_usage_monthly" },
+    { period: undefined, usageKey: "usage", byokKey: "byok_usage" },
+  ])(
+    "includes $period BYOK spend in key budgets when remaining credits are unavailable",
+    async ({ period, usageKey, byokKey }) => {
+      const snapshot = await fetchOpenRouterUsage({
+        token: "router-key",
+        timeoutMs: 5000,
+        fetchFn: vi.fn(async (input: string | URL | Request) =>
+          requestUrl(input).endsWith("/credits")
+            ? new Response(null, { status: 403 })
+            : Response.json({
+                data: {
+                  limit: 20,
+                  ...(period ? { limit_reset: period } : {}),
+                  [usageKey]: 5,
+                  [byokKey]: 4,
+                  include_byok_in_limit: true,
+                },
+              }),
+        ) as unknown as typeof fetch,
+      });
+
+      expect(snapshot.windows[0]?.usedPercent).toBe(45);
+      expect(snapshot.billing?.[0]).toMatchObject({
+        type: "budget",
+        used: 9,
+        limit: 20,
+        ...(period ? { period } : {}),
+      });
+    },
+  );
+
+  it("excludes BYOK spend from key budgets when the key does not count it", async () => {
+    const snapshot = await fetchOpenRouterUsage({
+      token: "router-key",
+      timeoutMs: 5000,
+      fetchFn: vi.fn(async (input: string | URL | Request) =>
+        requestUrl(input).endsWith("/credits")
+          ? new Response(null, { status: 403 })
+          : Response.json({
+              data: {
+                limit: 20,
+                limit_reset: "monthly",
+                usage_monthly: 5,
+                byok_usage_monthly: 4,
+                include_byok_in_limit: false,
+              },
+            }),
+      ) as unknown as typeof fetch,
+    });
+
+    expect(snapshot.windows[0]?.usedPercent).toBe(25);
+    expect(snapshot.billing?.[0]).toMatchObject({ type: "budget", used: 5, limit: 20 });
+  });
+
   it("keeps key usage when account credits are unavailable", async () => {
     const snapshot = await fetchOpenRouterUsage({
       token: "router-key",

@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { describe, expect, it } from "vitest";
 import { getCompletionScript, registerCompletionCli } from "./completion-cli.js";
 
@@ -400,6 +400,18 @@ describe("completion-cli", () => {
     );
   });
 
+  itWithFish.each([
+    ["a separated long optional value", "openclaw --color a", "always"],
+    ["a separated short optional value", "openclaw -c n", "never"],
+    ["an attached long optional value", "openclaw --color=a", "--color=always"],
+  ])("completes real Fish Commander choices after %s", (_name, commandLine, expected) => {
+    const program = new Command()
+      .name("openclaw")
+      .addOption(new Option("-c, --color [when]").choices(["always", "never"]));
+
+    expect(runGeneratedFishCompletion(program, commandLine)).toContain(expected);
+  });
+
   it("scopes fish value-taking option skips to the active command path", () => {
     const script = getCompletionScript("fish", createCompletionProgram());
 
@@ -420,10 +432,10 @@ describe("completion-cli", () => {
     const fishScript = getCompletionScript("fish", program);
 
     expect(fishScript).toContain(
-      "complete -c openclaw -n \"__openclaw_command_path_matches -- --trigger-script --ws --workspace\" -l trigger-script -d 'Condition script file, or - for stdin'",
+      "complete -c openclaw -n \"__openclaw_command_path_matches -- --trigger-script --ws --workspace\" -l trigger-script -r -d 'Condition script file, or - for stdin'",
     );
     expect(fishScript).not.toContain(" -s > ");
-    expect(fishScript).toContain(" -l ws -l workspace -d 'Workspace'");
+    expect(fishScript).toContain(" -l ws -l workspace -r -d 'Workspace'");
     expect(getCompletionScript("bash", program)).not.toContain("--trigger-script ->");
     expect(getCompletionScript("zsh", program)).not.toContain("{--trigger-script,->}");
   });
@@ -510,6 +522,177 @@ describe("completion-cli", () => {
     expect(zshScript).toContain("{--install,-i}");
     expect(zshScript).toContain("{--yes,-y}");
   });
+
+  it("preserves required shell values and their Commander choices in Fish and Zsh", () => {
+    const program = createDocumentedCompletionProgram();
+    const fishScript = getCompletionScript("fish", program);
+    const zshScript = getCompletionScript("zsh", program);
+
+    expect(fishScript).toContain(" -s s -l shell -r -f -a ");
+    expect(fishScript).toContain(`"'zsh' 'bash' 'powershell' 'fish'"`);
+    expect(zshScript).toContain(
+      `{--shell,-s}"[Shell to generate completion for (default: zsh)]:shell:('zsh' 'bash' 'powershell' 'fish')"`,
+    );
+    expect(zshScript).toContain('{--token,-t}"[Gateway token]:token:"');
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "completes Commander option choices instead of commands in real Bash",
+    () => {
+      const program = createDocumentedCompletionProgram();
+
+      expect(
+        runGeneratedBashCompletion(program, ["openclaw", "completion", "--shell", ""]),
+      ).toEqual(["zsh", "bash", "powershell", "fish"]);
+      expect(runGeneratedBashCompletion(program, ["openclaw", "completion", "-s", "f"])).toEqual([
+        "fish",
+      ]);
+      expect(runGeneratedBashCompletion(program, ["openclaw", "completion", "--shell=f"])).toEqual([
+        "--shell=fish",
+      ]);
+      expect(
+        runGeneratedBashCompletion(program, ["openclaw", "completion", "--shell", "=", "f"]),
+      ).toEqual(["fish"]);
+      expect(runGeneratedBashCompletion(program, ["openclaw", "completion", "-sf"])).toEqual([
+        "-sfish",
+      ]);
+      expect(runGeneratedBashCompletion(program, ["openclaw", "completion", "-ysf"])).toEqual([
+        "-ysfish",
+      ]);
+      expect(runGeneratedBashCompletion(program, ["openclaw", "completion", "-ys", "f"])).toEqual([
+        "fish",
+      ]);
+      expect(runGeneratedBashCompletion(program, ["openclaw", "completion", "-ys"])).toEqual([
+        "-yszsh",
+        "-ysbash",
+        "-yspowershell",
+        "-ysfish",
+      ]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "keeps optional choice values from consuming the following option in real Bash",
+    () => {
+      const program = new Command()
+        .name("openclaw")
+        .addOption(new Option("-c, --color [when]").choices(["always", "never"]))
+        .option("-v, --verbose", "Verbose output");
+
+      expect(runGeneratedBashCompletion(program, ["openclaw", "--color", "a"])).toEqual(["always"]);
+      expect(runGeneratedBashCompletion(program, ["openclaw", "--color", "--v"])).toEqual([
+        "--verbose",
+      ]);
+      expect(runGeneratedBashCompletion(program, ["openclaw", "-ca"])).toEqual(["-calways"]);
+      expect(runGeneratedBashCompletion(program, ["openclaw", "-vca"])).toEqual(["-vcalways"]);
+    },
+  );
+
+  it("includes Commander option choices in the PowerShell argument completer", () => {
+    const script = getCompletionScript("powershell", createDocumentedCompletionProgram());
+
+    expect(script).toContain("switch ($candidatePath)");
+    expect(script).toContain("$choiceFlag -in @('-s','--shell')");
+    expect(script).toContain("$wordToComplete -match '^(--[^=]+)=(.*)$'");
+    expect(script).toContain("$wordToComplete -match '^-[^-].+$'");
+    expect(script).toContain("[WildcardPattern]::Escape($choicePrefix)");
+    expect(script).toContain("@('zsh','bash','powershell','fish')");
+  });
+
+  it("omits empty PowerShell command-path switches for root-only programs", () => {
+    const program = new Command()
+      .name("openclaw")
+      .addOption(new Option("--theme <theme>").choices(["light", "dark"]));
+
+    expect(getCompletionScript("powershell", program)).not.toContain("switch ($candidatePath)");
+  });
+
+  it("quotes PowerShell choice completion text while preserving its display value", () => {
+    const program = new Command()
+      .name("openclaw")
+      .addOption(new Option("--theme <theme>").choices(["light blue", "Bob's green", "path`name"]));
+
+    const script = getCompletionScript("powershell", program);
+
+    expect(script).toContain('$completionText = "$choiceCompletionPrefix$_"');
+    expect(script).toContain('$completionText.Replace("\'", "\'\'")');
+    expect(script).toContain(
+      "[System.Management.Automation.CompletionResult]::new($completionText, $_, 'ParameterValue', $_)",
+    );
+  });
+
+  itWithPowerShell.each([
+    ["a separate option value", "openclaw completion --shell f", "fish"],
+    ["an attached option value", "openclaw completion --shell=f", "--shell=fish"],
+    ["an attached short option value", "openclaw completion -sf", "-sfish"],
+    ["a short-option cluster value", "openclaw completion -ysf", "-ysfish"],
+    ["a separated short-option cluster value", "openclaw completion -ys f", "fish"],
+  ])("completes PowerShell Commander choices after %s", (_name, commandLine, expected) => {
+    expect(
+      runGeneratedPowerShellCompletion(createDocumentedCompletionProgram(), commandLine),
+    ).toEqual([expected]);
+  });
+
+  itWithPowerShell("completes an empty attached short-option cluster value", () => {
+    expect(
+      runGeneratedPowerShellCompletion(
+        createDocumentedCompletionProgram(),
+        "openclaw completion -ys",
+      ),
+    ).toEqual(["-yszsh", "-ysbash", "-yspowershell", "-ysfish"]);
+  });
+
+  itWithPowerShell.each([
+    ["a spaced choice", "openclaw --theme l", "'light blue'"],
+    ["an attached spaced choice", "openclaw --theme=l", "'--theme=light blue'"],
+    ["an apostrophe", "openclaw --theme Bob", "'Bob''s green'"],
+    ["a backtick", "openclaw --theme p", "'path`name'"],
+  ])("quotes %s in real PowerShell completion text", (_name, commandLine, expected) => {
+    const program = new Command()
+      .name("openclaw")
+      .addOption(new Option("--theme <theme>").choices(["light blue", "Bob's green", "path`name"]));
+
+    expect(runGeneratedPowerShellCompletion(program, commandLine)).toEqual([expected]);
+  });
+
+  itWithPowerShell(
+    "keeps optional choice values from consuming the following PowerShell option",
+    () => {
+      const program = new Command()
+        .name("openclaw")
+        .addOption(new Option("-c, --color [when]").choices(["always", "never"]))
+        .option("-v, --verbose", "Verbose output");
+
+      expect(runGeneratedPowerShellCompletion(program, "openclaw --color a")).toEqual(["always"]);
+      expect(runGeneratedPowerShellCompletion(program, "openclaw --color --v")).toEqual([
+        "--verbose",
+      ]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "preserves spaces and apostrophes inside individual Commander choices",
+    () => {
+      const program = new Command()
+        .name("openclaw")
+        .addOption(
+          new Option("--theme <theme>", "Color theme").choices([
+            "light blue",
+            "dark",
+            "Bob's green",
+          ]),
+        );
+
+      expect(runGeneratedBashCompletion(program, ["openclaw", "--theme", "l"])).toEqual([
+        "light blue",
+      ]);
+      expect(runGeneratedBashCompletion(program, ["openclaw", "--theme", "Bob"])).toEqual([
+        "Bob's green",
+      ]);
+      expect(getCompletionScript("fish", program)).toContain(`"'light blue' 'dark'`);
+      expect(getCompletionScript("zsh", program)).toContain("('light blue' 'dark' 'Bob");
+    },
+  );
 
   it("generates valid Bash completion without subcommands", () => {
     if (process.platform === "win32") {
@@ -626,7 +809,7 @@ printf '%s\\n' "\${COMPREPLY[@]}"
       'complete -c openclaw -n "__openclaw_command_path_matches cron -- --profile" -a "create" -d \'Add a job\'',
     );
     expect(script).toContain(
-      "complete -c openclaw -n \"__openclaw_command_path_matches cron create -- --profile --at\" -l at -d 'Schedule time'",
+      "complete -c openclaw -n \"__openclaw_command_path_matches cron create -- --profile --at\" -l at -r -d 'Schedule time'",
     );
   });
 

@@ -1,7 +1,11 @@
 // Channels domain tests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../../api/types.ts";
-import { createChannelCapability } from "./index.ts";
+import {
+  channelSnapshotEntryIsActive,
+  channelSnapshotHasActiveChannel,
+  createChannelCapability,
+} from "./index.ts";
 
 function createDeferred<T>() {
   let resolve: ((value: T) => void) | undefined;
@@ -26,6 +30,39 @@ function createChannelsSnapshot(label: string): ChannelsStatusSnapshot {
     channelDefaultAccountId: {},
   };
 }
+
+describe("channel readiness", () => {
+  it("treats aggregate or account configuration as active", () => {
+    const snapshot = createChannelsSnapshot("Test");
+    snapshot.channelOrder = ["configured", "connected", "empty"];
+    snapshot.channels = {
+      configured: { configured: true },
+      connected: { configured: false, connected: false },
+      empty: { configured: false, running: false, connected: false },
+    };
+    snapshot.channelAccounts = {
+      connected: [{ accountId: "work", connected: true }],
+      empty: [],
+    };
+
+    expect(channelSnapshotEntryIsActive(snapshot, "configured")).toBe(true);
+    expect(channelSnapshotEntryIsActive(snapshot, "connected")).toBe(true);
+    expect(channelSnapshotEntryIsActive(snapshot, "empty")).toBe(false);
+    expect(channelSnapshotHasActiveChannel(snapshot)).toBe(true);
+  });
+
+  it("recognizes active channels omitted from channelOrder", () => {
+    const snapshot = createChannelsSnapshot("Test");
+    snapshot.channelOrder = [];
+    snapshot.channels = {};
+    snapshot.channelAccounts = {
+      telegram: [{ accountId: "default", running: true }],
+    };
+
+    expect(channelSnapshotHasActiveChannel(snapshot)).toBe(true);
+    expect(channelSnapshotHasActiveChannel(null)).toBe(false);
+  });
+});
 
 describe("channels controller WhatsApp wait", () => {
   beforeEach(() => {

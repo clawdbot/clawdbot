@@ -96,13 +96,14 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   }
   const basePrompt =
     sessionPromptState.activePrompt.override ??
-    resolveEmbeddedAttemptBasePrompt({ nativeModelOwned, provider, prompt: params.prompt });
+    resolveEmbeddedAttemptBasePrompt({ provider, prompt: params.prompt });
   const prompt = terminalRetryState.compactionContinuationInstruction
     ? `${basePrompt}\n\n${terminalRetryState.compactionContinuationInstruction}`
     : basePrompt;
-  const resolvedStreamApiKey = resolveAttemptDispatchApiKey({
+  const resolvedAttemptApiKey = resolveAttemptDispatchApiKey({
     apiKeyInfo: runtime.apiKeyInfo,
     runtimeAuthState: runtime.runtimeAuthState,
+    pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
   });
   const attemptFastMode = resolveAttemptFastModeParam();
   const existingSessionTarget = sessionPromptState.sessionTarget;
@@ -216,7 +217,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       expectedRuntimeArtifact: expectedHarnessArtifact?.artifact,
       runtimePlan,
       model: runtime.effectiveModel,
-      resolvedApiKey: resolvedStreamApiKey,
+      resolvedApiKey: resolvedAttemptApiKey,
       authProfileId: runtime.lastProfileId,
       authProfileIdSource: lockedProfileId ? "user" : "auto",
       initialReplayState: input.replayState,

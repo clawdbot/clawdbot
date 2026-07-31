@@ -4,7 +4,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { listAgentEntries, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
-  canonicalizeSpawnedByForAgent,
+  resolveSessionStoreKey,
   resolveStoredSessionKeyForAgentStore,
 } from "../../gateway/session-store-key.js";
 import {
@@ -18,6 +18,8 @@ import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveStorePath } from "./paths.js";
 import { listSessionEntries, listSessionEntriesReadOnly } from "./session-accessor.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
+import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
+import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
   listConfiguredSessionStoreAgentIds,
@@ -67,36 +69,31 @@ function mergeSessionEntryIntoCombined(params: {
 }) {
   const { cfg, combined, entry, agentId, canonicalKey } = params;
   const existing = combined[canonicalKey];
-
-  if (existing && (existing.updatedAt ?? 0) > (entry.updatedAt ?? 0)) {
-    // Preserve the freshest entry while still canonicalizing spawnedBy for this agent store.
-    const spawnedBy = canonicalizeSpawnedByForAgent(
-      cfg,
-      agentId,
-      existing.spawnedBy ?? entry.spawnedBy,
-    );
-    combined[canonicalKey] = {
-      ...entry,
-      ...existing,
-      spawnedBy,
-    };
+  if (existing && (canonicalKey === "global" || canonicalKey === "unknown")) {
+    // Reserved sentinels remain per-store federation state until goal 3 decides
+    // how multi-store ownership composes; target order owns the projection.
     return;
   }
-
-  const spawnedBy = canonicalizeSpawnedByForAgent(
-    cfg,
-    agentId,
-    entry.spawnedBy ?? existing?.spawnedBy,
-  );
-  if (!existing && entry.spawnedBy === spawnedBy) {
-    combined[canonicalKey] = entry;
-  } else {
-    combined[canonicalKey] = {
-      ...existing,
-      ...entry,
-      spawnedBy,
-    };
+  if (existing) {
+    throw canonicalSessionKeyMigrationRequiredError(
+      `duplicate rows resolve to canonical session key ${canonicalKey}`,
+    );
   }
+  const deliveryCanonicalKey = resolveDeliveryProvenCanonicalSessionKey(canonicalKey, entry);
+  if (deliveryCanonicalKey !== canonicalKey) {
+    throw canonicalSessionKeyMigrationRequiredError(
+      `non-canonical persisted row resolves to session key ${deliveryCanonicalKey}`,
+    );
+  }
+  const resolveLineageKey = (sessionKey: string | undefined) =>
+    sessionKey ? resolveSessionStoreKey({ cfg, sessionKey, storeAgentId: agentId }) : undefined;
+  combined[canonicalKey] = {
+    ...entry,
+    ...(entry.parentSessionKey
+      ? { parentSessionKey: resolveLineageKey(entry.parentSessionKey) }
+      : {}),
+    ...(entry.spawnedBy ? { spawnedBy: resolveLineageKey(entry.spawnedBy) } : {}),
+  };
 }
 
 function mergeOpenIncognitoStores(params: {
@@ -205,6 +202,11 @@ export function loadCombinedSessionStoreForGateway(
           agentId,
           sessionKey: key,
         });
+        if (key !== canonicalKey) {
+          throw canonicalSessionKeyMigrationRequiredError(
+            `non-canonical persisted row resolves to session key ${canonicalKey}`,
+          );
+        }
         const canonicalAgentId = normalizeAgentId(
           parseAgentSessionKey(canonicalKey)?.agentId ?? agentId,
         );
@@ -256,6 +258,11 @@ export function loadCombinedSessionStoreForGateway(
         agentId,
         sessionKey: key,
       });
+      if (key !== canonicalKey) {
+        throw canonicalSessionKeyMigrationRequiredError(
+          `non-canonical persisted row resolves to session key ${canonicalKey}`,
+        );
+      }
       const canonicalAgentId = normalizeAgentId(
         parseAgentSessionKey(canonicalKey)?.agentId ?? agentId,
       );

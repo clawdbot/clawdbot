@@ -66,6 +66,7 @@ const allowedAttrs = [
   "open",
   "rel",
   "target",
+  "tabindex",
   "title",
   "start",
   "src",
@@ -76,6 +77,7 @@ const allowedAttrs = [
   "data-file-path",
   "type",
   "aria-label",
+  "role",
 ];
 const sanitizeOptions = {
   ALLOWED_TAGS: allowedTags,

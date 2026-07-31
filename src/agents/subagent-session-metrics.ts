@@ -76,3 +76,16 @@ export function resolveSubagentSessionStatus(
   }
   return "done";
 }
+
+/** Formats the authoritative run status while preserving unfinished descendants. */
+export function resolveSubagentDisplayStatus(
+  entry: Pick<SubagentRunRecord, "endedAt" | "endedReason" | "outcome">,
+  pendingDescendants = 0,
+): string {
+  const pending = Math.max(0, pendingDescendants);
+  if (pending > 0) {
+    const childLabel = pending === 1 ? "child" : "children";
+    return `active (waiting on ${pending} ${childLabel})`;
+  }
+  return resolveSubagentSessionStatus(entry) ?? "done";
+}

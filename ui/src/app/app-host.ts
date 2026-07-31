@@ -128,6 +128,7 @@ import {
   isApplyingServerUiPrefs,
   pushServerUiPrefs,
   resetServerUiPrefsSync,
+  resolveServerUiPrefState,
 } from "./server-prefs.ts";
 import {
   NAV_WIDTH_MAX,
@@ -555,6 +556,7 @@ class OpenClawShell extends OpenClawLightDomElement {
   private sessionKeyClient: GatewayBrowserClient | null = null;
   private runtimeConfigClient: GatewayBrowserClient | null = null;
   private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
+  private lastLocalePrefSignature: string | null = null;
   private previousGatewayPhase: ApplicationContext["gateway"]["snapshot"]["phase"] | null = null;
   private sidebarWorkboardSnapshot = EMPTY_SIDEBAR_WORKBOARD_SNAPSHOT;
   private sidebarWorkboardRuntime: SidebarWorkboardRuntime | null = null;
@@ -717,18 +719,45 @@ class OpenClawShell extends OpenClawLightDomElement {
     if (!snapshot?.config || !context || context.runtimeConfig !== runtimeConfig) {
       return;
     }
+    const scope = context.gateway.connection.gatewayUrl;
     applyServerUiPrefs(snapshot.config, {
-      scope: context.gateway.connection.gatewayUrl,
+      scope,
       onApplied: (patch) => {
         if (patch.sidebarEntries !== undefined) {
           context.navigation.update({ sidebarEntries: patch.sidebarEntries });
         }
-        if (isSupportedLocale(patch.locale)) {
-          void i18n.setLocale(patch.locale);
-        }
         context.theme.refresh();
       },
     });
+    const localePref = resolveServerUiPrefState(snapshot.config, "locale", scope);
+    const localePrefSignature = JSON.stringify([scope, localePref.overridden, localePref.value]);
+    if (localePrefSignature === this.lastLocalePrefSignature) {
+      return;
+    }
+    this.lastLocalePrefSignature = localePrefSignature;
+    if (localePref.overridden && isSupportedLocale(localePref.value)) {
+      void i18n.setLocale(localePref.value);
+    } else {
+      void i18n.useSystemLocale();
+    }
+  }
+
+  private reconcileCommittedServerUiPrefs(
+    runtimeConfig: ApplicationContext["runtimeConfig"],
+    needsRefresh: boolean,
+    retainedLocal = false,
+  ) {
+    if (this.context?.runtimeConfig !== runtimeConfig) {
+      return;
+    }
+    if (needsRefresh) {
+      void runtimeConfig.refresh();
+      return;
+    }
+    this.reconcileServerUiPrefs(runtimeConfig);
+    if (retainedLocal) {
+      this.context?.theme.refresh();
+    }
   }
 
   override connectedCallback() {
@@ -764,15 +793,11 @@ class OpenClawShell extends OpenClawLightDomElement {
         return;
       }
       const prefs = changedServerUiPrefs(previous, next);
-      const snapshot = this.context?.gateway.snapshot;
-      if (prefs && snapshot?.client) {
-        pushServerUiPrefs(snapshot.client, prefs, {
-          afterCommit: () => {
-            const runtimeConfig = this.context?.runtimeConfig;
-            if (runtimeConfig) {
-              void runtimeConfig.refresh();
-            }
-          },
+      const runtimeConfig = this.context?.runtimeConfig;
+      if (prefs && runtimeConfig) {
+        pushServerUiPrefs(runtimeConfig, prefs, {
+          afterCommit: ({ needsRefresh, retainedLocal }) =>
+            this.reconcileCommittedServerUiPrefs(runtimeConfig, needsRefresh, retainedLocal),
         });
       }
     });
@@ -798,6 +823,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.outboxStoreImport.dispose();
     this.outboxStoreUnsubscribe?.();
     this.outboxStoreUnsubscribe = null;
+    this.lastLocalePrefSignature = null;
     setSettingsChangeListener(null);
     this.resetShellEpochState();
     super.disconnectedCallback();
@@ -1740,13 +1766,9 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
     this.runtimeConfigClient = snapshot.client;
     this.runtimeConfigSource = runtimeConfig;
-    flushServerUiPrefs(snapshot.client, {
-      afterCommit: () => {
-        const currentRuntimeConfig = this.context?.runtimeConfig;
-        if (currentRuntimeConfig) {
-          void currentRuntimeConfig.refresh();
-        }
-      },
+    flushServerUiPrefs(runtimeConfig, {
+      afterCommit: ({ needsRefresh, retainedLocal }) =>
+        this.reconcileCommittedServerUiPrefs(runtimeConfig, needsRefresh, retainedLocal),
     });
     void runtimeConfig.ensureLoaded();
   }
@@ -2027,7 +2049,7 @@ class OpenClawShell extends OpenClawLightDomElement {
           offline: gatewaySnapshot.offlineStable,
           queuedOutboxCount: storedOutboxes?.total ?? 0,
           lastError: gatewaySnapshot.lastError,
-          version:
+          gatewayVersion:
             context.config.current.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
           updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
           updateRunning: overlaySnapshot.updateRunning,

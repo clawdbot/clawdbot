@@ -40,6 +40,7 @@ import {
   type SessionCreateParams,
 } from "./create.ts";
 import { readSessionCustomGroupNames, readSidebarSectionOrder } from "./custom-groups.ts";
+import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { scopedAgentListParamsForSession, type SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatch, SessionPatchOptions, SessionPatchRoute } from "./patch.ts";
 import {
@@ -49,6 +50,7 @@ import {
   type SessionChangedResult,
   type SessionReconcileOptions,
 } from "./reconcile.ts";
+import { createSessionEventSubscriptionOwner } from "./session-event-subscription.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -105,9 +107,6 @@ export type SessionListOptions = {
 export const DEFAULT_SESSION_LIST_QUERY = {
   limit: 50,
 } as const satisfies SessionListOptions;
-
-const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
-const SESSION_EVENT_REFRESH_MAX_WAIT_MS = 1_000;
 
 type SessionRefreshOptions = SessionListOptions & {
   force?: boolean;
@@ -727,9 +726,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     sectionOrder: [],
   };
   let inFlight: Promise<void> | null = null;
-  let queuedRefresh: SessionRefreshOptions | null = null;
-  let eventRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  let eventRefreshDeadline: number | null = null;
+  let queuedExplicitRefresh: SessionRefreshOptions | null = null;
+  let eventRefreshQueued = false;
   let canonicalListRevision = 0;
   let disposed = false;
   let connectionEpoch = 0;
@@ -743,7 +741,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const swarmActivity = new SwarmActivityTracker();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
   const pullRequestEpochs = new Map<string, symbol>();
-  let subscribedClient: GatewayBrowserClient | null = null;
+  let hydratedClient: GatewayBrowserClient | null = null;
+  let sessionEventSubscriptionError: string | null = null;
+  let publishedErrorSource: "session-observer" | "operation" | null = null;
   let lastListOptions: SessionListOptions = {};
   let hasForegroundListOptions = false;
   let hasSeededListOptions = false;
@@ -779,12 +779,40 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return isCurrentConnection(scope) ? swarmActivity.decorate(result ?? null) : null;
   };
 
-  const publish = (next: SessionState) => {
+  const publish = (next: SessionState, errorSource?: "session-observer" | "operation") => {
+    if (next.error === null) {
+      publishedErrorSource = null;
+    } else if (errorSource || next.error !== state.error) {
+      publishedErrorSource = errorSource ?? "operation";
+    }
     state = next;
     for (const listener of listeners) {
       listener(state);
     }
   };
+
+  const sessionEventSubscription = createSessionEventSubscriptionOwner({
+    isCurrent: isCurrentConnection,
+    retryDelayMs: (error) => sessionRetryDelayMs(error),
+    onError: (scope, error) => {
+      if (!isCurrentConnection(scope)) {
+        return;
+      }
+      const previousError = sessionEventSubscriptionError;
+      sessionEventSubscriptionError = error;
+      const observerOwnsVisibleError = publishedErrorSource === "session-observer";
+      if (error !== null && (state.error === null || observerOwnsVisibleError)) {
+        publish({ ...state, error }, "session-observer");
+      } else if (error === null && observerOwnsVisibleError) {
+        publish({ ...state, error: null });
+      }
+      if (previousError !== null && error === null) {
+        // Events lost while the observer was unavailable are not replayed;
+        // one canonical catch-up list closes that reconnect visibility gap.
+        void refresh({ ...lastListOptions, backgroundHydrate: true, force: true });
+      }
+    },
+  });
 
   const pullRequestSummary = (key: string): SessionCatalogPullRequestSummary | undefined =>
     pullRequestSummaries.get(key.trim());
@@ -910,7 +938,15 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       hasSeededListOptions = true;
     }
     if (!backgroundHydrate) {
-      publish({ ...state, loading: true, error: null, deletedSessions: [] });
+      publish(
+        {
+          ...state,
+          loading: true,
+          error: sessionEventSubscriptionError,
+          deletedSessions: [],
+        },
+        sessionEventSubscriptionError ? "session-observer" : undefined,
+      );
     }
     try {
       const result = await requestSessionList(scope.client, requestOptions);
@@ -921,6 +957,17 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         result && append && requestOptions.offset && state.result
           ? appendSessionResults(state.result, result)
           : result;
+      if (append && nextResult && !backgroundHydrate) {
+        // Event replacements restart at page one, so retain the visible page
+        // depth instead of silently dropping every previously appended row.
+        lastListOptions = {
+          ...durableListOptions,
+          limit: Math.max(
+            durableListOptions.limit ?? DEFAULT_SESSION_LIST_QUERY.limit,
+            nextResult.sessions.length,
+          ),
+        };
+      }
       if (backgroundHydrate && nextResult) {
         const currentKey = gateway.snapshot.sessionKey?.trim();
         if (currentKey) {
@@ -953,26 +1000,55 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         }
       }
       canonicalListRevision += 1;
-      publish({
-        result: nextResult,
-        agentId: requestOptions.agentId?.trim() ? normalizeAgentId(requestOptions.agentId) : null,
-        modelOverrides: state.modelOverrides,
-        loading: backgroundHydrate ? state.loading : false,
-        error: null,
-        deletedSessions: [],
-        groups: state.groups,
-        sectionOrder: state.sectionOrder,
-      });
+      publish(
+        {
+          result: nextResult,
+          agentId: requestOptions.agentId?.trim() ? normalizeAgentId(requestOptions.agentId) : null,
+          modelOverrides: state.modelOverrides,
+          loading: backgroundHydrate ? state.loading : false,
+          error: sessionEventSubscriptionError,
+          deletedSessions: [],
+          groups: state.groups,
+          sectionOrder: state.sectionOrder,
+        },
+        sessionEventSubscriptionError ? "session-observer" : undefined,
+      );
     } catch (error) {
       if (isCurrentConnection(scope)) {
-        publish({
-          ...state,
-          loading: backgroundHydrate ? state.loading : false,
-          error: String(error),
-          deletedSessions: [],
-        });
+        publish(
+          {
+            ...state,
+            loading: backgroundHydrate ? state.loading : false,
+            error: String(error),
+            deletedSessions: [],
+          },
+          "operation",
+        );
       }
     }
+  };
+
+  const absorbPendingEventRefresh = () => {
+    eventRefreshCoordinator.absorb();
+    eventRefreshQueued = false;
+  };
+
+  const takeNextQueuedRefresh = (): SessionRefreshOptions | null => {
+    const explicitRefresh = queuedExplicitRefresh;
+    queuedExplicitRefresh = null;
+    if (explicitRefresh) {
+      // A replacement that has not started yet observes every earlier event.
+      // Appends still need a canonical replacement after their requested page.
+      if (explicitRefresh.append !== true) {
+        absorbPendingEventRefresh();
+      }
+      return explicitRefresh;
+    }
+    if (!eventRefreshQueued) {
+      return null;
+    }
+    eventRefreshQueued = false;
+    return { ...lastListOptions, force: true };
   };
 
   const drainRefreshQueue = async (options: SessionRefreshOptions) => {
@@ -983,37 +1059,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (disposed || connectionEpoch !== epoch) {
         return;
       }
-      next = queuedRefresh;
-      queuedRefresh = null;
+      next = takeNextQueuedRefresh();
     }
   };
 
-  const clearEventRefreshTimer = () => {
-    if (eventRefreshTimer !== null) {
-      globalThis.clearTimeout(eventRefreshTimer);
-      eventRefreshTimer = null;
-    }
-    eventRefreshDeadline = null;
-  };
-
-  const refresh = (options: SessionRefreshOptions = {}) => {
-    if (gateway.snapshot.phase !== "connected" || !gateway.snapshot.client || disposed) {
-      return Promise.resolve();
-    }
-    if (inFlight) {
-      // An explicit queued refresh subsumes any older event invalidation.
-      clearEventRefreshTimer();
-      queuedRefresh = options;
-      return inFlight;
-    }
-    const hasListOverrides = Object.entries(options).some(
-      ([key, value]) => key !== "force" && key !== "backgroundHydrate" && value !== undefined,
-    );
-    if (state.result && !options.force && !hasListOverrides) {
-      return Promise.resolve();
-    }
-    // An explicit refresh that will issue a request must run now.
-    clearEventRefreshTimer();
+  const startRefresh = (options: SessionRefreshOptions) => {
     const request = drainRefreshQueue(options).finally(() => {
       if (inFlight === request) {
         inFlight = null;
@@ -1023,30 +1073,45 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return request;
   };
 
-  const flushEventRefresh = () => {
-    if (eventRefreshTimer === null) {
-      return;
+  const refresh = (options: SessionRefreshOptions = {}) => {
+    if (gateway.snapshot.phase !== "connected" || !gateway.snapshot.client || disposed) {
+      return Promise.resolve();
     }
-    clearEventRefreshTimer();
-    void refresh({ ...lastListOptions, force: true });
+    if (inFlight) {
+      // Keep event invalidation pending until the queued request actually
+      // starts: a later explicit call can still replace this request.
+      queuedExplicitRefresh = options;
+      return inFlight;
+    }
+    const hasListOverrides = Object.entries(options).some(
+      ([key, value]) => key !== "force" && key !== "backgroundHydrate" && value !== undefined,
+    );
+    if (state.result && !options.force && !hasListOverrides) {
+      return Promise.resolve();
+    }
+    if (options.append !== true) {
+      absorbPendingEventRefresh();
+    }
+    return startRefresh(options);
   };
 
-  const scheduleEventRefresh = () => {
-    const now = Date.now();
-    eventRefreshDeadline ??= now + SESSION_EVENT_REFRESH_MAX_WAIT_MS;
-    if (eventRefreshTimer !== null) {
-      globalThis.clearTimeout(eventRefreshTimer);
+  const refreshFromEvent = () => {
+    if (gateway.snapshot.phase !== "connected" || !gateway.snapshot.client || disposed) {
+      return Promise.resolve();
     }
-    const delay = Math.min(
-      SESSION_EVENT_REFRESH_DEBOUNCE_MS,
-      Math.max(0, eventRefreshDeadline - now),
-    );
-    eventRefreshTimer = globalThis.setTimeout(() => {
-      eventRefreshTimer = null;
-      eventRefreshDeadline = null;
-      void refresh({ ...lastListOptions, force: true });
-    }, delay);
+    if (inFlight) {
+      eventRefreshQueued = true;
+      return inFlight;
+    }
+    return startRefresh({ ...lastListOptions, force: true });
   };
+
+  const eventRefreshCoordinator = createSessionEventRefreshCoordinator({
+    canRefresh: () =>
+      gateway.snapshot.phase === "connected" && gateway.snapshot.client !== null && !disposed,
+    refresh: refreshFromEvent,
+  });
+  const flushEventRefresh = () => eventRefreshCoordinator.flush();
 
   const handleVisibilityChange = () => {
     if (document.visibilityState === "hidden") {
@@ -1121,7 +1186,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (options.reconciliation === "background") {
         void reconcileCreatedSession().catch((error: unknown) => {
           if (isCurrentConnection(scope)) {
-            publish({ ...state, error: String(error) });
+            publish({ ...state, error: String(error) }, "operation");
           }
         });
       } else {
@@ -1133,7 +1198,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return result;
     } catch (error) {
       if (isCurrentConnection(scope)) {
-        publish({ ...state, error: String(error) });
+        publish({ ...state, error: String(error) }, "operation");
       }
       return null;
     }
@@ -1144,9 +1209,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
 
   const LEGACY_GROUPS_STORAGE_KEY = "openclaw:sessions:custom-groups";
   const GROUPS_LIST_METHOD = "sessions.groups.list";
-  const GROUPS_RETRY_DEFAULT_MS = 500;
-  const GROUPS_RETRY_MIN_MS = 100;
-  const GROUPS_RETRY_MAX_MS = 30_000;
+  const SESSION_RETRY_DEFAULT_MS = 500;
+  const SESSION_RETRY_MIN_MS = 100;
+  const SESSION_RETRY_MAX_MS = 30_000;
   let groupsLoadedEpoch = -1;
   let groupsLoadGeneration = 0;
   let groupsRetryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -1164,15 +1229,15 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     clearGroupsRetry();
   };
 
-  const groupsRetryDelayMs = (error: unknown): number | null => {
+  const sessionRetryDelayMs = (error: unknown): number | null => {
     if (!(error instanceof GatewayRequestError) || !error.retryable) {
       return null;
     }
     const requested =
       typeof error.retryAfterMs === "number" && Number.isFinite(error.retryAfterMs)
         ? error.retryAfterMs
-        : GROUPS_RETRY_DEFAULT_MS;
-    return Math.min(Math.max(requested, GROUPS_RETRY_MIN_MS), GROUPS_RETRY_MAX_MS);
+        : SESSION_RETRY_DEFAULT_MS;
+    return Math.min(Math.max(requested, SESSION_RETRY_MIN_MS), SESSION_RETRY_MAX_MS);
   };
 
   const publishGroupCatalog = (groups: readonly string[], sectionOrder: readonly string[]) => {
@@ -1195,7 +1260,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!current) {
       return "stale";
     }
-    publish({ ...state, error: String(error) });
+    publish({ ...state, error: String(error) }, "operation");
     throw error;
   };
 
@@ -1258,7 +1323,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         return;
       }
       groupsLoadedEpoch = -1;
-      const retryDelayMs = groupsRetryDelayMs(error);
+      const retryDelayMs = sessionRetryDelayMs(error);
       if (retryDelayMs === null) {
         return;
       }
@@ -1413,7 +1478,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!isCurrentConnection(scope)) {
         return null;
       }
-      publish({ ...state, error: String(error) });
+      publish({ ...state, error: String(error) }, "operation");
       throw error;
     }
   };
@@ -1439,6 +1504,17 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return true;
   };
 
+  const publishReconciledSessionState = (next: SessionState) => {
+    // Targeted events can outlive a failed broad observer; preserve its outage
+    // unless a newer operation already owns the visible failure.
+    const operationOwnsError = publishedErrorSource === "operation";
+    const error = operationOwnsError ? state.error : sessionEventSubscriptionError;
+    publish(
+      { ...next, error },
+      error === null ? undefined : operationOwnsError ? "operation" : "session-observer",
+    );
+  };
+
   const reconcileChanged = (
     payload: unknown,
     options?: SessionReconcileOptions,
@@ -1457,13 +1533,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       retirePullRequestSummary(reconciled.deletedKey);
     }
     if (reconciled.applied && (reconciled.result !== state.result || reconciled.deletedKey)) {
-      publish({
+      publishReconciledSessionState({
         ...state,
         result: reconciled.result,
         agentId: options?.resultAgentId?.trim()
           ? normalizeAgentId(options.resultAgentId)
           : state.agentId,
-        error: null,
         deletedSessions: reconciled.deletedKey
           ? [{ key: reconciled.deletedKey, agentId: reconciled.agentId ?? undefined }]
           : [],
@@ -1477,7 +1552,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (result === state.result) {
       return false;
     }
-    publish({ ...state, result, error: null });
+    publishReconciledSessionState({ ...state, result });
     return true;
   };
 
@@ -1510,7 +1585,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!isCurrentConnection(scope)) {
         return { deleted: false };
       }
-      publish({ ...state, error: String(error) });
+      publish({ ...state, error: String(error) }, "operation");
       throw error;
     }
   };
@@ -1577,7 +1652,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return isCurrentConnection(scope) ? "completed" : "uncertain";
     } catch (error) {
       if (isCurrentConnection(scope)) {
-        publish({ ...state, error: String(error) });
+        publish({ ...state, error: String(error) }, "operation");
       }
       // The gateway commits the new session identity before every awaited
       // post-reset lifecycle step finishes. Once requested, even a rejection
@@ -1809,8 +1884,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     connectionConnected = connected;
     if (connectionChanged) {
       const hadPullRequestSummaries = pullRequestSummaries.size > 0;
-      clearEventRefreshTimer();
+      eventRefreshCoordinator.reset();
       connectionEpoch += 1;
+      sessionEventSubscription.reset();
+      sessionEventSubscriptionError = null;
       if (previousClient) {
         resetGatewaySessionMessageSubscriptionCoordinator(previousClient);
       }
@@ -1818,7 +1895,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       invalidateGroupsLoad();
       swarmActivity.clear();
       inFlight = null;
-      queuedRefresh = null;
+      queuedExplicitRefresh = null;
+      eventRefreshQueued = false;
       rollbackPendingModelPatches();
       preparedWorkSessionKeys.clear();
       pullRequestSummaries.clear();
@@ -1830,7 +1908,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       }
     }
     if (!connected || !next.client) {
-      subscribedClient = null;
+      hydratedClient = null;
       publish({
         result: null,
         agentId: null,
@@ -1843,32 +1921,25 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       });
       return;
     }
-    if (subscribedClient !== next.client) {
+    if (hydratedClient !== next.client) {
       const scope = captureConnection();
       if (!scope) {
         return;
       }
-      subscribedClient = scope.client;
+      hydratedClient = scope.client;
       void (async () => {
-        try {
-          await scope.client.request("sessions.subscribe", {});
-        } catch (error) {
-          if (isCurrentConnection(scope)) {
-            publish({ ...state, error: String(error) });
-          }
-        } finally {
-          if (isCurrentConnection(scope)) {
-            const sessionKey = gateway.snapshot.sessionKey?.trim();
-            const agentScope = sessionKey
-              ? scopedAgentListParamsForSession(gateway.snapshot, sessionKey)
-              : { agentId: resolveUiSelectedGlobalAgentId(gateway.snapshot) };
-            await refresh({
-              ...agentScope,
-              includeDerivedTitles: true,
-              backgroundHydrate: true,
-              force: true,
-            });
-          }
+        await sessionEventSubscription.ensure(scope);
+        if (isCurrentConnection(scope)) {
+          const sessionKey = gateway.snapshot.sessionKey?.trim();
+          const agentScope = sessionKey
+            ? scopedAgentListParamsForSession(gateway.snapshot, sessionKey)
+            : { agentId: resolveUiSelectedGlobalAgentId(gateway.snapshot) };
+          await refresh({
+            ...agentScope,
+            includeDerivedTitles: true,
+            backgroundHydrate: true,
+            force: true,
+          });
         }
       })();
     }
@@ -1936,7 +2007,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       // Gateway lists are filtered and windowed. Events cannot preserve server
       // membership or ordering, so the coalesced refresh remains canonical. Only
       // events debounce, with a max wait; explicit refreshes and page exit flush it.
-      scheduleEventRefresh();
+      eventRefreshCoordinator.schedule();
     }
   });
 
@@ -1998,6 +2069,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       // Page teardown must start the trailing refresh synchronously before the
       // disposed guard makes the capability inert.
       flushEventRefresh();
+      eventRefreshCoordinator.dispose();
       if (observesPageLifecycle) {
         document.removeEventListener("visibilitychange", handleVisibilityChange);
         globalThis.removeEventListener("pagehide", flushEventRefresh);
@@ -2010,13 +2082,15 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       invalidateGroupsLoad();
       connectionConnected = false;
       inFlight = null;
-      queuedRefresh = null;
-      subscribedClient = null;
+      queuedExplicitRefresh = null;
+      eventRefreshQueued = false;
+      hydratedClient = null;
       pendingModelPatches.clear();
       preparedWorkSessionKeys.clear();
       swarmActivity.clear();
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();
+      sessionEventSubscription.dispose();
       stopGateway();
       stopEvents();
       createdListeners.clear();

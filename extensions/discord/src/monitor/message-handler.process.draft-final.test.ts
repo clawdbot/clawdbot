@@ -354,7 +354,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     await runProcessDiscordMessage(ctx);
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates).toContain("Reading the gateway config and restarting agents.");
+    expect(updates).toContain("Reading the gateway config and restarting agents.\n\n🛠️ Exec");
     expectFinalWithProgressReceipt("done", "🛠️ 1 tool call");
   });
 

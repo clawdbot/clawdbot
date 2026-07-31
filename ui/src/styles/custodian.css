@@ -165,6 +165,39 @@ openclaw-custodian-page {
   color: var(--text);
 }
 
+.custodian__nudge--channel-onboarding {
+  width: 100%;
+  max-width: none;
+  padding: 12px;
+  border-color: var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+}
+
+.custodian__nudge-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.custodian__nudge-copy strong {
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.custodian__nudge-copy span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.custodian__nudge-cta {
+  flex: 0 0 auto;
+  align-self: center;
+}
+
 .custodian__nudge-action,
 .custodian__nudge-dismiss {
   border: 0;
@@ -204,6 +237,17 @@ openclaw-custodian-page {
 .custodian__nudge-dismiss:hover {
   background: var(--bg-hover);
   color: var(--text-strong);
+}
+
+@media (max-width: 640px) {
+  .custodian__nudge--channel-onboarding {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .custodian__nudge-copy {
+    flex-basis: calc(100% - 36px);
+  }
 }
 
 .custodian__option-card {

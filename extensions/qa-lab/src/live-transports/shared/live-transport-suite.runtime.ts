@@ -20,10 +20,11 @@ export async function runLiveTransportQaSuiteCommand(params: {
   selectScenarioIds: LiveTransportScenarioSelection;
 }) {
   const options = params.options;
+  const credentialSource =
+    options.credentialSource?.trim() || process.env.OPENCLAW_QA_CREDENTIAL_SOURCE?.trim();
   if (params.credentialMode === "env-only") {
     const laneLabel = params.laneLabel ?? params.channelId;
-    const credentialSource = options.credentialSource?.trim().toLowerCase();
-    if (credentialSource && credentialSource !== "env") {
+    if (credentialSource && credentialSource.toLowerCase() !== "env") {
       throw new Error(
         `QA Lab ${laneLabel} supports only --credential-source env${params.envCredentialReason ? ` because ${params.envCredentialReason}` : "."}`,
       );
@@ -58,10 +59,11 @@ export async function runLiveTransportQaSuiteCommand(params: {
     concurrency: 1,
     scenarioIds: selectedScenarioIds,
     sutAccountId: options.sutAccountId,
+    ...(options.credentialFile ? { credentialFile: options.credentialFile } : {}),
     ...(params.credentialMode === "env-only"
       ? {}
       : {
-          credentialSource: options.credentialSource?.trim(),
+          credentialSource,
           credentialRole: options.credentialRole?.trim(),
         }),
     explicitScenarioSelection: Boolean(options.scenarioIds?.length),

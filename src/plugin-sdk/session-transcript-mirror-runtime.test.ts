@@ -1,14 +1,14 @@
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
 import {
+  runExclusiveSqliteSessionWrite,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import { withCodexSessionTranscriptMirrorWriteLock } from "./codex-session-transcript-runtime.js";
 import { readSessionTranscriptVisibleMessageDelta } from "./session-transcript-runtime.js";
 
@@ -121,13 +121,17 @@ describe("private session transcript mirror runtime", () => {
         result: { appended: true, message: { role: "assistant" } },
       });
     });
+    await waitForSessionTranscriptProjection(scope);
 
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolvedScope));
-    const external = new DatabaseSync(database.path);
-    external
-      .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
-      .run(scope.sessionId);
-    external.close();
+    await runExclusiveSqliteSessionWrite(resolvedScope, async () => {
+      runOpenClawAgentWriteTransaction((database) => {
+        database.db
+          .prepare(
+            "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+          )
+          .run(scope.sessionId);
+      }, toDatabaseOptions(resolvedScope));
+    });
 
     await withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
       expect(await locked.readMessageFacts({ idempotencyKeys: ["mirror-user"] })).toMatchObject({

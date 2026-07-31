@@ -7,9 +7,9 @@ import {
   claimDeliveryQueueEntryPlatformSend,
   promoteDeliveryQueueEntryPlatformSend,
 } from "./delivery-queue-sqlite-claim.js";
+import { commitStagedDeliveryQueueEntryOnceAcrossNamespaces } from "./delivery-queue-sqlite-namespace.js";
 import {
   commitStagedDeliveryQueueEntry,
-  commitStagedDeliveryQueueEntryOnce,
   completeDeliveryQueueEntry,
   countFailedDeliveryQueueEntries,
   deleteDeliveryQueueEntry,
@@ -242,7 +242,15 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
 
     it.each([
       { name: "ordinary", commit: commitStagedDeliveryQueueEntry, expected: true },
-      { name: "insert-only", commit: commitStagedDeliveryQueueEntryOnce, expected: "created" },
+      {
+        name: "insert-only",
+        commit: (params: Parameters<typeof commitStagedDeliveryQueueEntry>[0]) =>
+          commitStagedDeliveryQueueEntryOnceAcrossNamespaces({
+            ...params,
+            conflictQueueNames: ["outbound-legacy"],
+          }),
+        expected: "created",
+      },
     ])("indexes $name staged outbound commits", ({ commit, expected }) => {
       const stagingQueueName = "outbound-media-staging";
       const stagingId = "metadata-staged-media";

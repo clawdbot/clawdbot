@@ -17,11 +17,19 @@ import {
 import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
+  resetServerUiPref,
+  resolveServerUiPrefState,
+  type ServerUiPrefState,
+} from "../../app/server-prefs.ts";
+import {
   loadSettings,
   normalizeCatalogOpenTarget,
   normalizeTextScale,
   normalizeChatSendShortcut,
   patchSettings,
+  UI_APPEARANCE_DEFAULTS,
+  type ChatFollowUpMode,
+  type ChatSendShortcut,
   type UiSettings,
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
@@ -152,7 +160,7 @@ function configPageTitle(pageId: ConfigPageId): string {
   return titleForRoute(pageId);
 }
 
-function extractQuickSettingsSecurity(config: unknown): SecurityOverview {
+export function extractQuickSettingsSecurity(config: unknown): SecurityOverview {
   const root =
     asConfigRecord((config as { configForm?: unknown } | null)?.configForm) ??
     asConfigRecord(config);
@@ -162,13 +170,15 @@ function extractQuickSettingsSecurity(config: unknown): SecurityOverview {
       execPolicy: "unknown",
       deviceAuth: false,
       browserEnabled: true,
+      browserEnabledOverridden: false,
       toolProfile: "full",
+      toolProfileOverridden: false,
     };
   }
   const gateway = asConfigRecord(root.gateway);
   const auth = asConfigRecord(gateway?.auth);
-  const tools = asConfigRecord(root.tools) ?? {};
-  const exec = asConfigRecord(tools.exec) ?? {};
+  const tools = asConfigRecord(root.tools);
+  const exec = asConfigRecord(tools?.exec) ?? {};
   const browser = asConfigRecord(root.browser);
   const controlUi = asConfigRecord(gateway?.controlUi);
   let gatewayAuth = "unknown";
@@ -184,14 +194,16 @@ function extractQuickSettingsSecurity(config: unknown): SecurityOverview {
             ? "trusted-proxy"
             : "none";
   }
-  const profile = tools.profile;
+  const profile = tools?.profile;
   const security = exec.security;
   return {
     gatewayAuth,
     execPolicy: typeof security === "string" && security.trim() ? security.trim() : "allowlist",
     deviceAuth: controlUi?.dangerouslyDisableDeviceAuth !== true,
     browserEnabled: browser?.enabled !== false,
+    browserEnabledOverridden: browser !== null && Object.hasOwn(browser, "enabled"),
     toolProfile: typeof profile === "string" && profile.trim() ? profile.trim() : "full",
+    toolProfileOverridden: tools !== null && Object.hasOwn(tools, "profile"),
   };
 }
 
@@ -675,9 +687,87 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.context.theme.refresh();
   }
 
-  private setLocale(locale: Locale) {
+  private setLocale(locale: Locale | undefined) {
+    if (locale === undefined) {
+      this.resetLocale();
+      return;
+    }
     this.settings = patchSettings({ locale });
     void i18n.setLocale(locale);
+  }
+
+  private currentLocalePref(): ServerUiPrefState<string> {
+    return resolveServerUiPrefState(
+      this.context.runtimeConfig.state.configSnapshot?.config,
+      "locale",
+      this.context.gateway.connection.gatewayUrl,
+      this.settings,
+    );
+  }
+
+  private currentThemePref(): ServerUiPrefState<ThemeName> {
+    return resolveServerUiPrefState(
+      this.context.runtimeConfig.state.configSnapshot?.config,
+      "theme",
+      this.context.gateway.connection.gatewayUrl,
+      this.settings,
+    );
+  }
+
+  private currentThemeModePref(): ServerUiPrefState<ThemeMode> {
+    return resolveServerUiPrefState(
+      this.context.runtimeConfig.state.configSnapshot?.config,
+      "themeMode",
+      this.context.gateway.connection.gatewayUrl,
+      this.settings,
+    );
+  }
+
+  private currentChatSendShortcutPref(): ServerUiPrefState<ChatSendShortcut> {
+    return resolveServerUiPrefState(
+      this.context.runtimeConfig.state.configSnapshot?.config,
+      "chatSendShortcut",
+      this.context.gateway.connection.gatewayUrl,
+      this.settings,
+    );
+  }
+
+  private currentChatFollowUpModePref(): ServerUiPrefState<ChatFollowUpMode> {
+    return resolveServerUiPrefState(
+      this.context.runtimeConfig.state.configSnapshot?.config,
+      "chatFollowUpMode",
+      this.context.gateway.connection.gatewayUrl,
+      this.settings,
+    );
+  }
+
+  private resetLocale() {
+    this.settings = resetServerUiPref("locale", this.currentLocalePref());
+    if (isSupportedLocale(this.settings.locale)) {
+      void i18n.setLocale(this.settings.locale);
+    } else {
+      void i18n.useSystemLocale();
+    }
+  }
+
+  private resetSyncedAppearancePref(
+    key: "theme" | "themeMode" | "chatSendShortcut" | "chatFollowUpMode",
+  ) {
+    switch (key) {
+      case "theme":
+        this.settings = resetServerUiPref("theme", this.currentThemePref());
+        break;
+      case "themeMode":
+        this.settings = resetServerUiPref("themeMode", this.currentThemeModePref());
+        break;
+      case "chatSendShortcut":
+        this.settings = resetServerUiPref("chatSendShortcut", this.currentChatSendShortcutPref());
+        break;
+      case "chatFollowUpMode":
+        this.settings = resetServerUiPref("chatFollowUpMode", this.currentChatFollowUpModePref());
+        break;
+    }
+    this.context.theme.refresh();
   }
 
   private setTheme(
@@ -832,6 +922,11 @@ export class ConfigPage extends OpenClawLightDomElement {
     const gatewayConfig = asConfigRecord(configObject.gateway);
     const controlUiConfig = asConfigRecord(gatewayConfig?.controlUi);
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
+    const themePref = this.currentThemePref();
+    const themeModePref = this.currentThemeModePref();
+    const localePref = this.currentLocalePref();
+    const chatSendShortcutPref = this.currentChatSendShortcutPref();
+    const chatFollowUpModePref = this.currentChatFollowUpModePref();
     const sessionObserverBusy =
       !configState.connected ||
       configState.configSaving ||
@@ -866,6 +961,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       onFormModeChange: (mode) => this.setFormMode(mode),
       onViewStateChange: () => this.requestUpdate(),
       onFormPatch: (path, value) => runtimeConfig.patchForm(path, value),
+      onFormRemove: (path) => runtimeConfig.removeFormValue(path),
       onSectionChange: (section) => this.setActiveSection(section),
       onSubsectionChange: (section) => this.setActiveSubsection(section),
       onSave: () => void runtimeConfig.save(),
@@ -876,11 +972,26 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.context.gateway.snapshot.hello?.server?.version ??
         "",
       theme: this.settings.theme,
+      themeOverridden: themePref.overridden,
+      themeProvenance: themePref.provenance,
+      themeResetValue: themePref.resetValue ?? UI_APPEARANCE_DEFAULTS.theme,
       themeMode: this.settings.themeMode,
-      locale: isSupportedLocale(this.settings.locale) ? this.settings.locale : i18n.getLocale(),
+      themeModeOverridden: themeModePref.overridden,
+      themeModeProvenance: themeModePref.provenance,
+      themeModeResetValue: themeModePref.resetValue ?? UI_APPEARANCE_DEFAULTS.themeMode,
+      systemLocale: i18n.getSystemLocale(),
+      localeOverride: isSupportedLocale(localePref.value) ? localePref.value : undefined,
+      localeOverridden: localePref.overridden,
+      localeProvenance: localePref.provenance,
+      localeResetValue: isSupportedLocale(localePref.resetValue)
+        ? localePref.resetValue
+        : undefined,
       onLocaleChange: (locale) => this.setLocale(locale),
+      resetLocale: () => this.resetLocale(),
       setTheme: (theme, transitionContext) => this.setTheme(theme, transitionContext),
+      resetTheme: () => this.resetSyncedAppearancePref("theme"),
       setThemeMode: (mode, transitionContext) => this.setThemeMode(mode, transitionContext),
+      resetThemeMode: () => this.resetSyncedAppearancePref("themeMode"),
       hasCustomTheme: Boolean(this.settings.customTheme),
       customThemeLabel: this.settings.customTheme?.label ?? null,
       customThemeSourceUrl: this.settings.customTheme?.sourceUrl ?? null,
@@ -898,9 +1009,12 @@ export class ConfigPage extends OpenClawLightDomElement {
       onImportCustomTheme: () => void this.importCustomTheme(),
       onClearCustomTheme: () => this.clearCustomTheme(),
       onOpenCustomThemeImport: () => this.openCustomThemeImport(),
-      textScale: this.settings.textScale ?? 100,
+      textScale: this.settings.textScale ?? UI_APPEARANCE_DEFAULTS.textScale,
+      textScaleOverridden: this.settings.textScale !== undefined,
       setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
-      sidebarLiveActivity: this.settings.sidebarLiveActivity !== false,
+      resetTextScale: () => this.setSetting("textScale", undefined),
+      sidebarLiveActivity:
+        this.settings.sidebarLiveActivity ?? UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
       setSidebarLiveActivity: (enabled) => this.setSetting("sidebarLiveActivity", enabled),
       chatMessageMaxWidth: this.settings.chatMessageMaxWidth,
       setChatMessageMaxWidth: (value) => this.setSetting("chatMessageMaxWidth", value),
@@ -933,23 +1047,31 @@ export class ConfigPage extends OpenClawLightDomElement {
             }
           });
       },
-      lobsterPetVisits: this.settings.lobsterPetVisits !== false,
+      lobsterPetVisits: this.settings.lobsterPetVisits ?? UI_APPEARANCE_DEFAULTS.lobsterPetVisits,
       setLobsterPetVisits: (enabled) =>
         this.applySettings({ ...this.settings, lobsterPetVisits: enabled }),
-      lobsterPetSounds: this.settings.lobsterPetSounds === true,
+      lobsterPetSounds: this.settings.lobsterPetSounds ?? UI_APPEARANCE_DEFAULTS.lobsterPetSounds,
       setLobsterPetSounds: (enabled) =>
         this.applySettings({ ...this.settings, lobsterPetSounds: enabled }),
       lobsterdexHref: pathForRoute("lobsterdex", this.context.basePath),
       onOpenLobsterdex: () => this.context.navigate("lobsterdex"),
       chatSendShortcut: normalizeChatSendShortcut(this.settings.chatSendShortcut),
+      chatSendShortcutOverridden: chatSendShortcutPref.overridden,
+      chatSendShortcutProvenance: chatSendShortcutPref.provenance,
+      chatSendShortcutResetValue:
+        chatSendShortcutPref.resetValue ?? UI_APPEARANCE_DEFAULTS.chatSendShortcut,
       setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
+      resetChatSendShortcut: () => this.resetSyncedAppearancePref("chatSendShortcut"),
       chatFollowUpMode: this.settings.chatFollowUpMode,
+      chatFollowUpModeOverridden: chatFollowUpModePref.overridden,
+      chatFollowUpModeProvenance: chatFollowUpModePref.provenance,
       serverQueueMode: configState.configSnapshot
         ? resolveControlUiServerQueueMode(configState.configSnapshot.runtimeConfig, {
             configNeedsApply: configState.configNeedsApply,
           })
         : undefined,
       setChatFollowUpMode: (value) => this.setSetting("chatFollowUpMode", value),
+      resetChatFollowUpMode: () => this.resetSyncedAppearancePref("chatFollowUpMode"),
       catalogOpenTarget: normalizeCatalogOpenTarget(this.settings.catalogOpenTarget),
       setCatalogOpenTarget: (value) => this.setSetting("catalogOpenTarget", value),
       microphone: {
@@ -1048,9 +1170,22 @@ export class ConfigPage extends OpenClawLightDomElement {
           runtimeState.connected &&
           hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
         onPairMobile: () => void this.context.overlays.openDevicePairSetup(),
-        onBrowserEnabledToggle: (enabled) =>
-          runtimeConfig.patchForm(["browser", "enabled"], enabled),
-        onToolProfileChange: (profile) => runtimeConfig.patchForm(["tools", "profile"], profile),
+        onBrowserEnabledToggle: (enabled) => {
+          if (enabled) {
+            runtimeConfig.removeFormValue(["browser", "enabled"]);
+            return;
+          }
+          runtimeConfig.patchForm(["browser", "enabled"], false);
+        },
+        onBrowserEnabledReset: () => runtimeConfig.removeFormValue(["browser", "enabled"]),
+        onToolProfileChange: (profile) => {
+          if (profile === "full") {
+            runtimeConfig.removeFormValue(["tools", "profile"]);
+            return;
+          }
+          runtimeConfig.patchForm(["tools", "profile"], profile);
+        },
+        onToolProfileReset: () => runtimeConfig.removeFormValue(["tools", "profile"]),
         editor: renderConfig({ ...props, embeddedEditor: true }),
       });
     }

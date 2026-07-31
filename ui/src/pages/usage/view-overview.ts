@@ -1009,17 +1009,31 @@ function renderSessionsCard(
     return html`
       <div
         class="session-bar-row ${isSelected ? "selected" : ""}"
-        @click=${(e: MouseEvent) => onSelectSession(s.key, e.shiftKey)}
+        @click=${(event: MouseEvent) => {
+          if ((event.target as Element | null)?.closest("button")) {
+            return;
+          }
+          onSelectSession(s.key, event.shiftKey);
+        }}
         title="${s.key}"
       >
-        <div class="session-bar-label">
-          <div class="session-bar-title">${displayLabel}</div>
-          ${meta.length > 0
-            ? html`<div class="session-bar-meta">${meta.join(" · ")}</div>`
-            : nothing}
-        </div>
+        <button
+          type="button"
+          class="session-bar-selection"
+          aria-label=${displayLabel}
+          aria-pressed=${isSelected ? "true" : "false"}
+          @click=${(event: MouseEvent) => onSelectSession(s.key, event.shiftKey)}
+        >
+          <span class="session-bar-label">
+            <span class="session-bar-title">${displayLabel}</span>
+            ${meta.length > 0
+              ? html`<span class="session-bar-meta">${meta.join(" · ")}</span>`
+              : nothing}
+          </span>
+        </button>
         <div class="session-bar-actions">
           <button
+            type="button"
             class="btn btn--sm btn--ghost"
             @click=${(e: MouseEvent) => {
               e.stopPropagation();

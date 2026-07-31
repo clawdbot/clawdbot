@@ -25,8 +25,16 @@ const hoisted = vi.hoisted(
 );
 
 vi.mock("./docker.js", () => ({
+  DOCKER_SANDBOX_ENGINE: { id: "docker", command: "docker", displayName: "Docker" },
+  PODMAN_SANDBOX_ENGINE: { id: "podman", command: "podman", displayName: "Podman" },
+  execContainerRaw: (
+    _engine: unknown,
+    args: ExecDockerArgs,
+    opts?: Parameters<ExecDockerRawFn>[1],
+  ) => hoisted.execDockerRaw(args, opts),
   execDockerRaw: (args: ExecDockerArgs, opts?: Parameters<ExecDockerRawFn>[1]) =>
     hoisted.execDockerRaw(args, opts),
+  validateSandboxContainerEngineTarget: vi.fn(),
 }));
 
 async function createPathSafetyRuntimeMock() {
@@ -50,8 +58,16 @@ let createSandboxFsBridgeImpl: typeof import("./fs-bridge.js").createSandboxFsBr
 async function loadFreshFsBridgeModuleForTest() {
   vi.resetModules();
   vi.doMock("./docker.js", () => ({
+    DOCKER_SANDBOX_ENGINE: { id: "docker", command: "docker", displayName: "Docker" },
+    PODMAN_SANDBOX_ENGINE: { id: "podman", command: "podman", displayName: "Podman" },
+    execContainerRaw: (
+      _engine: unknown,
+      args: ExecDockerArgs,
+      opts?: Parameters<ExecDockerRawFn>[1],
+    ) => hoisted.execDockerRaw(args, opts),
     execDockerRaw: (args: ExecDockerArgs, opts?: Parameters<ExecDockerRawFn>[1]) =>
       hoisted.execDockerRaw(args, opts),
+    validateSandboxContainerEngineTarget: vi.fn(),
   }));
   vi.doMock("./fs-bridge-path-safety.runtime.js", createPathSafetyRuntimeMock);
   ({ createSandboxFsBridge: createSandboxFsBridgeImpl } = await import("./fs-bridge.js"));

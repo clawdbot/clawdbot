@@ -491,8 +491,8 @@ export function verifyTelnyxWebhook(
     return { ok: false, reason: "Missing signature or timestamp header" };
   }
 
-  const eventTimeSec = Number.parseInt(timestamp, 10);
-  if (!Number.isFinite(eventTimeSec)) {
+  const eventTimeSec = /^(?:0|[1-9]\d*)$/.test(timestamp) ? Number(timestamp) : undefined;
+  if (eventTimeSec === undefined || !Number.isSafeInteger(eventTimeSec)) {
     return { ok: false, reason: "Invalid timestamp header" };
   }
 

@@ -10,6 +10,56 @@ private enum RemoteTLSFingerprintUpdate {
     case replace(String?)
 }
 
+@MainActor
+final class VoiceWakeGlobalSyncScheduler {
+    private let delay: @Sendable () async throws -> Void
+    private let deliver: @Sendable ([String]) async -> Void
+    private var debounceTask: Task<Void, Never>?
+    private var deliveryTail: Task<Void, Never>?
+    private var generation: UInt64 = 0
+
+    init(
+        delay: @escaping @Sendable () async throws -> Void = {
+            try await Task.sleep(for: .milliseconds(650))
+        },
+        deliver: @escaping @Sendable ([String]) async -> Void = { triggers in
+            await GatewayConnection.shared.voiceWakeSetTriggers(triggers)
+        })
+    {
+        self.delay = delay
+        self.deliver = deliver
+    }
+
+    @discardableResult
+    func schedule(_ triggers: [String]) -> Task<Void, Never> {
+        self.generation &+= 1
+        let generation = self.generation
+        self.debounceTask?.cancel()
+        let delay = self.delay
+        let task = Task { [weak self] in
+            do {
+                try await delay()
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let self, self.generation == generation else { return }
+            self.enqueueDelivery(triggers, generation: generation)
+        }
+        self.debounceTask = task
+        return task
+    }
+
+    private func enqueueDelivery(_ triggers: [String], generation: UInt64) {
+        let previousDelivery = self.deliveryTail
+        let deliver = self.deliver
+        self.deliveryTail = Task { [weak self, previousDelivery] in
+            await previousDelivery?.value
+            guard let self, self.generation == generation else { return }
+            await deliver(triggers)
+        }
+    }
+}
+
 enum ExecApprovalsPolicyLoadState: Equatable {
     case loading
     case available
@@ -56,7 +106,7 @@ final class AppState {
     private var configWatcher: ConfigFileWatcher?
     private var lastConfigFingerprint: Data?
     private var suppressVoiceWakeGlobalSync = false
-    private var voiceWakeGlobalSyncTask: Task<Void, Never>?
+    @ObservationIgnored private let voiceWakeGlobalSyncScheduler = VoiceWakeGlobalSyncScheduler()
     @ObservationIgnored private var activeComputerPresenceTask: Task<Void, Never>?
     @ObservationIgnored private var activeComputerPresenceUpdateGeneration: UInt64 = 0
 
@@ -329,7 +379,7 @@ final class AppState {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.remoteCliPath, forKey: remoteCliPathKey) } }
     }
 
-    private var earBoostTask: Task<Void, Never>?
+    @ObservationIgnored private var earBoostTask: Task<Void, Never>?
 
     init(
         preview: Bool = false,
@@ -782,13 +832,20 @@ final class AppState {
 
     func triggerVoiceEars(ttl: TimeInterval? = 5) {
         self.earBoostTask?.cancel()
+        self.earBoostTask = nil
         self.earBoostActive = true
 
         guard let ttl else { return }
 
         self.earBoostTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(ttl * 1_000_000_000))
-            await MainActor.run { [weak self] in self?.earBoostActive = false }
+            do {
+                try await Task.sleep(nanoseconds: UInt64(ttl * 1_000_000_000))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.earBoostTask = nil
+            self.earBoostActive = false
         }
     }
 
@@ -872,11 +929,7 @@ final class AppState {
     private func scheduleVoiceWakeGlobalSyncIfNeeded() {
         guard !self.suppressVoiceWakeGlobalSync else { return }
         let sanitized = sanitizeVoiceWakeTriggers(swabbleTriggerWords)
-        self.voiceWakeGlobalSyncTask?.cancel()
-        self.voiceWakeGlobalSyncTask = Task { [sanitized] in
-            try? await Task.sleep(nanoseconds: 650_000_000)
-            await GatewayConnection.shared.voiceWakeSetTriggers(sanitized)
-        }
+        self.voiceWakeGlobalSyncScheduler.schedule(sanitized)
     }
 
     // MARK: - Chime persistence

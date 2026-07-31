@@ -64,7 +64,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /automation/cron-jobs
 - Headings:
   - H2: Quick start
-  - H2: How cron works
+  - H2: How automations work
   - H2: Schedule types
   - H3: Heartbeat task migration
   - H3: Stream sources
@@ -144,9 +144,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /automation
 - Headings:
   - H2: Quick decision guide
-  - H3: Scheduled Tasks (Cron) vs Heartbeat
+  - H3: Automations vs Heartbeat
   - H2: Core concepts
-  - H3: Scheduled tasks (cron)
+  - H3: Automations
   - H3: Tasks
   - H3: Task Flow
   - H3: Standing orders
@@ -168,7 +168,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Why standing orders
   - H2: How they work
   - H2: Anatomy of a standing order
-  - H2: Standing orders plus cron jobs
+  - H2: Standing orders plus automations
   - H2: Examples
   - H3: Example 1: content and social media (weekly cycle)
   - H3: Example 2: finance operations (event-triggered)
@@ -308,11 +308,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Guided setup
   - H3: Bot approval
   - H2: Agent tools and messaging
+  - H3: Directory and sender labels
   - H3: Route rooms to different agents
   - H2: Access control
   - H2: Manual configuration
   - H3: Bot key storage
   - H2: Verify the connection
+  - H3: QA Lab round trip
   - H2: Rotate the bot identity
   - H2: Current limits and roadmap
   - H2: Troubleshooting
@@ -352,6 +354,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Command menu
   - H2: Durable media delivery
   - H2: Agent activity rows
+  - H2: Group mention gating
+  - H3: Mention detection
+  - H3: Configuration example
+  - H3: Migration warning
   - H2: Targets
   - H2: Permissions
   - H2: Troubleshooting
@@ -1476,7 +1482,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /cli/cron
 - Headings:
-  - H1: openclaw cron
+  - H1: openclaw automations
   - H2: Create jobs quickly
   - H2: Sessions
   - H2: Delivery
@@ -1487,7 +1493,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Recurring jobs
   - H3: Manual runs
   - H2: Models
-  - H3: Isolated cron model precedence
+  - H3: Isolated automation model precedence
   - H3: Fast mode
   - H3: Live model switch retries
   - H2: Run output and denials
@@ -2795,7 +2801,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Other subscription-style hosted options
   - H3: OpenCode
   - H3: Google Gemini (API key)
-  - H3: Google Vertex and Gemini CLI
+  - H3: Google Vertex and Gemini CLI runtime
   - H3: Z.AI (GLM)
   - H3: Vercel AI Gateway
   - H3: Other bundled provider plugins
@@ -2951,8 +2957,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Mantis Slack desktop and visual-task runners
   - H3: Credential pool health check
   - H2: Canonical scenario coverage
-  - H2: Discord, Slack, Telegram, and WhatsApp QA reference
+  - H2: Buzz, Discord, Slack, Telegram, and WhatsApp QA reference
   - H3: Shared CLI flags
+  - H3: Buzz QA
   - H3: Telegram QA
   - H3: Discord QA
   - H3: Slack QA
@@ -3141,8 +3148,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Three timezone surfaces
   - H2: Setting the user timezone
-  - H2: Envelope timezone values
-  - H2: When to override
   - H2: Related
 
 ## concepts/typebox.md
@@ -3211,10 +3216,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Message envelopes (local by default)
   - H3: Examples
-  - H2: System prompt: current date and time
+  - H2: System prompt: temporal context
   - H2: System event lines (local by default)
-  - H3: Configure user timezone + format
-  - H2: Time format detection (auto)
+  - H3: Configure user timezone
+  - H2: Time format detection
   - H2: Tool payloads + connectors (raw provider time + normalized fields)
   - H2: Related docs
 
@@ -3419,7 +3424,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: agents.defaults.imageMaxDimensionPx
   - H3: agents.defaults.imageQuality
   - H3: agents.defaults.userTimezone
-  - H3: agents.defaults.timeFormat
   - H3: agents.defaults.model
   - H3: Runtime policy
   - H3: CLI backend selection
@@ -3564,7 +3568,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Wizard
   - H2: Identity
   - H2: Bridge (legacy, removed)
-  - H2: Cron
+  - H2: Automations (cron)
   - H3: cron.failureAlert
   - H2: Media model template variables
   - H2: Config includes ($include)
@@ -3697,7 +3701,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Per-channel vs per-account examples
   - H3: Common patterns
   - H2: Monitor scratch (optional)
-  - H3: Schedule recurring checks with cron
+  - H3: Schedule recurring checks with automations
   - H3: Can the agent update its scratch?
   - H2: Manual wake (on-demand)
   - H2: Cost awareness
@@ -4040,6 +4044,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Supported capability matrix
   - H2: Docker backend
   - H3: Sandboxed browser
+  - H2: Podman backend
   - H2: SSH backend
   - H2: OpenShell backend
   - H2: Workspace access
@@ -4855,6 +4860,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Prerequisites
   - H2: Quick start
+  - H2: Agent sandbox backend
   - H2: Podman and Tailscale
   - H2: Systemd (Quadlet, optional)
   - H2: Config, env, and storage
@@ -7631,6 +7637,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Verified setup runtime artifacts
   - H3: Request-transport contract
   - H2: Register a harness
+  - H3: Isolated completion
   - H3: Delegated execution
   - H2: Selection policy
   - H2: Provider plus harness pairing
@@ -7638,6 +7645,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Terminal outcome classification
   - H3: Agent-end side effects
   - H3: User input and tool surfaces
+  - H3: Native MCP inventory
   - H3: Native Codex harness mode
   - H2: Runtime strictness
   - H2: Native sessions and transcript mirror
@@ -8496,7 +8504,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Setup
   - H2: Defaults
-  - H2: Bundled model catalog
+  - H2: Model catalog
   - H2: When to choose Novita
   - H2: Troubleshooting
   - H2: Related
@@ -8587,7 +8595,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Getting started
   - H2: Config example
-  - H2: Built-in catalogs
+  - H2: Provider catalogs
   - H3: Zen
   - H3: Go
   - H2: Advanced configuration
@@ -10613,6 +10621,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Per-agent vs shared skills
   - H2: Agent allowlists
   - H2: Plugins and skills
+  - H2: Reference a skill in a prompt
   - H2: Skill Workshop
   - H2: Installing from ClawHub
   - H2: Security

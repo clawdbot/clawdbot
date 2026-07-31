@@ -36,6 +36,7 @@ import {
   getTelegramTextParts,
   hasBotMention,
   isBinaryContent,
+  joinTelegramTextParts,
   normalizeForwardedContext,
   resolveTelegramPrimaryMedia,
   resolveTelegramRichMessageBody,
@@ -58,6 +59,7 @@ export {
   getTelegramTextParts,
   hasBotMention,
   isBinaryContent,
+  joinTelegramTextParts,
   normalizeForwardedContext,
   resolveTelegramPrimaryMedia,
 };

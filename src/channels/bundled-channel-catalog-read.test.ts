@@ -33,6 +33,7 @@ vi.mock("../infra/openclaw-root.js", () => ({
 }));
 
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";
 
 const tempDirs: string[] = [];
@@ -235,5 +236,44 @@ describe("listBundledChannelCatalogEntries", () => {
 
     const entries = listBundledChannelCatalogEntries();
     expect(entries.map((entry) => entry.id)).toContain("fallback-channel");
+  });
+
+  it("reloads installed bundled package metadata after an explicit plugin lifecycle reset", () => {
+    const root = seedRoot("bcr-package-lifecycle-");
+    const extensionsRoot = path.join(root, "dist", "extensions");
+    const packagePath = path.join(extensionsRoot, "alpha", "package.json");
+    seedChannelPkg(packagePath, { id: "alpha", docsPath: "/channels/alpha", label: "Before" });
+    useBundledPluginsDir(extensionsRoot);
+
+    expect(
+      listBundledChannelCatalogEntries().find((entry) => entry.id === "alpha")?.channel.label,
+    ).toBe("Before");
+    seedChannelPkg(packagePath, { id: "alpha", docsPath: "/channels/alpha", label: "After" });
+    clearPluginMetadataLifecycleCaches();
+
+    expect(
+      listBundledChannelCatalogEntries().find((entry) => entry.id === "alpha")?.channel.label,
+    ).toBe("After");
+  });
+
+  it("discovers a generated catalog created after an explicit plugin lifecycle reset", () => {
+    const root = seedRoot("bcr-generated-lifecycle-");
+    useBundledPluginsDir(undefined);
+
+    expect(
+      listBundledChannelCatalogEntries().find((entry) => entry.id === "generated"),
+    ).toBeUndefined();
+    seedGeneratedChannelCatalog(root, {
+      packageName: "@openclaw/generated",
+      id: "generated",
+      label: "Generated after reset",
+      docsPath: "/channels/generated",
+      blurb: "generated channel",
+    });
+    clearPluginMetadataLifecycleCaches();
+
+    expect(
+      listBundledChannelCatalogEntries().find((entry) => entry.id === "generated")?.channel.label,
+    ).toBe("Generated after reset");
   });
 });

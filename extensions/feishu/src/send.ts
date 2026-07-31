@@ -92,6 +92,7 @@ type FeishuMessageGetItem = {
   message_id?: string;
   chat_id?: string;
   chat_type?: FeishuChatType;
+  root_id?: string;
   thread_id?: string;
   msg_type?: string;
   body?: { content?: string };
@@ -389,6 +390,7 @@ function parseFeishuMessageItem(
     content: parseFeishuMessageContent(rawContent, msgType, item.message_id),
     contentType: msgType,
     createTime: parseStrictNonNegativeInteger(item.create_time),
+    ...(item.root_id ? { rootId: item.root_id } : {}),
     threadId: item.thread_id || undefined,
   };
 }

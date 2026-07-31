@@ -7,6 +7,7 @@ import {
   collectPluginSourceEntries,
   collectTopLevelPublicSurfaceEntries,
 } from "./bundled-plugin-build-entries.mjs";
+import { assertRealOutputRoot } from "./output-root-guard.mjs";
 import {
   listMissingPackageStaticAssetSources,
   runPackageAssetBuild,
@@ -352,6 +353,7 @@ export async function buildPluginNpmRuntime(params) {
     return null;
   }
 
+  assertRealOutputRoot(plan.outDir);
   fs.rmSync(plan.outDir, { recursive: true, force: true });
   await build({
     clean: false,

@@ -72,7 +72,8 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   private closed = false;
   private connected = false;
   private currentUrl = "";
-  private queuedAudio: Buffer[] = [];
+  private queuedAudio: Array<Buffer | undefined> = [];
+  private queuedAudioHead = 0;
   private queuedBytes = 0;
   private ready = false;
   private readySinceMs: number | undefined;
@@ -140,8 +141,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     this.ready = false;
     this.readySinceMs = undefined;
     this.reconnectSupervisor.cancel();
-    this.queuedAudio = [];
-    this.queuedBytes = 0;
+    this.clearQueuedAudio();
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.forceClose();
       return;
@@ -380,21 +380,45 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
   }
 
   private queueAudio(audio: Buffer): void {
-    this.queuedAudio.push(Buffer.from(audio));
-    this.queuedBytes += audio.byteLength;
-    while (this.queuedBytes > this.maxQueuedBytes && this.queuedAudio.length > 0) {
+    const queued = Buffer.from(audio);
+    this.queuedAudio.push(queued);
+    this.queuedBytes += queued.byteLength;
+    while (
+      this.queuedBytes > this.maxQueuedBytes &&
+      this.queuedAudioHead < this.queuedAudio.length
+    ) {
       // Keep the most recent audio when reconnects stall; old buffered audio is
-      // less useful than avoiding unbounded memory growth.
-      const dropped = this.queuedAudio.shift();
+      // less useful than avoiding unbounded memory growth. Advancing a head
+      // index keeps sustained overflow amortized O(1) instead of shifting the queue.
+      const dropped = this.queuedAudio[this.queuedAudioHead];
+      this.queuedAudio[this.queuedAudioHead] = undefined;
+      this.queuedAudioHead += 1;
       this.queuedBytes -= dropped?.byteLength ?? 0;
     }
+    this.compactQueuedAudio();
   }
 
   private flushQueuedAudio(): void {
-    for (const audio of this.queuedAudio) {
-      this.options.sendAudio(audio, this.transport);
+    for (let index = this.queuedAudioHead; index < this.queuedAudio.length; index += 1) {
+      const audio = this.queuedAudio[index];
+      if (audio) {
+        this.options.sendAudio(audio, this.transport);
+      }
     }
+    this.clearQueuedAudio();
+  }
+
+  private compactQueuedAudio(): void {
+    if (this.queuedAudioHead === 0 || this.queuedAudioHead * 2 < this.queuedAudio.length) {
+      return;
+    }
+    this.queuedAudio = this.queuedAudio.slice(this.queuedAudioHead);
+    this.queuedAudioHead = 0;
+  }
+
+  private clearQueuedAudio(): void {
     this.queuedAudio = [];
+    this.queuedAudioHead = 0;
     this.queuedBytes = 0;
   }
 

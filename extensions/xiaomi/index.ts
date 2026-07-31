@@ -364,7 +364,7 @@ function createTokenPlanAuthMethod(region: XiaomiTokenPlanRegion): ProviderAuthM
 export default definePluginEntry({
   id: XIAOMI_PROVIDER_ID,
   name: "Xiaomi Provider",
-  description: "Bundled Xiaomi provider plugin",
+  description: "Xiaomi provider plugin",
   register(api) {
     api.registerProvider({
       id: XIAOMI_PROVIDER_ID,

@@ -29,10 +29,11 @@ import {
   type QaScenarioCommandResult,
 } from "./test-file-scenario-command-lifecycle.js";
 import { isDockerE2eScenario, runDockerE2eBatch } from "./test-file-scenario-docker-batch.js";
+import { readScriptProducerEvidence } from "./test-file-scenario-script-evidence.js";
 import {
-  readJsonFileIfExists,
-  readScriptProducerEvidence,
-} from "./test-file-scenario-script-evidence.js";
+  readNativeVitestExecutionFailure,
+  resolveNativeVitestReportPath,
+} from "./test-file-scenario-vitest-report.js";
 export type { QaScenarioCommandExecution } from "./test-file-scenario-command-lifecycle.js";
 
 export type QaTestFileScenario = QaSeedScenarioWithSource & {
@@ -99,10 +100,6 @@ export function isQaTestFileScenario(
     scenario.execution.kind === "playwright" ||
     scenario.execution.kind === "script"
   );
-}
-
-function resolveNativeVitestReportPath(scenario: QaTestFileScenario, outputDir: string): string {
-  return path.join(outputDir, `${scenario.id}.vitest-report.json`);
 }
 
 function vitestReporterArgs(
@@ -241,32 +238,6 @@ function withScenarioCoverage(
   return { ...entry, coverage: coverageForScenario(scenario) };
 }
 
-async function readNativeVitestExecutionFailure(params: {
-  outputDir: string;
-  scenario: QaTestFileScenario;
-}): Promise<string | undefined> {
-  const reportPath = resolveNativeVitestReportPath(params.scenario, params.outputDir);
-  const report = await readJsonFileIfExists(reportPath);
-  if (!report || typeof report !== "object") {
-    return `Vitest exited successfully without writing a valid JSON test report at ${reportPath}.`;
-  }
-  const { numFailedTests, numPassedTests, success } = report as {
-    numFailedTests?: unknown;
-    numPassedTests?: unknown;
-    success?: unknown;
-  };
-  if (
-    success !== true ||
-    typeof numPassedTests !== "number" ||
-    !Number.isSafeInteger(numPassedTests) ||
-    numPassedTests < 1 ||
-    numFailedTests !== 0
-  ) {
-    return "Vitest exited successfully without reporting a successfully executed test.";
-  }
-  return undefined;
-}
-
 async function runScenarioCommandSteps(params: {
   commandTimeoutMs: number;
   env: NodeJS.ProcessEnv;
@@ -295,13 +266,13 @@ async function runScenarioCommandSteps(params: {
       const timeoutMs =
         params.scenario.execution.kind === "script"
           ? (params.scenario.execution.timeoutMs ?? params.commandTimeoutMs)
-          : undefined;
+          : params.commandTimeoutMs;
       const result = await params.runCommand({
         command: step.command,
         args: step.args,
         cwd: params.repoRoot,
         env: params.env,
-        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        timeoutMs,
       });
       if (result.stdout) {
         logChunks.push(result.stdout);
@@ -354,16 +325,12 @@ async function runQaTestFileScenario(params: {
 }) {
   const requiresProducerEvidence =
     params.scenario.execution.kind === "script" && !isDockerE2eScenario(params.scenario);
-  let producerEvidenceStartedAtMs: number | undefined;
   if (requiresProducerEvidence) {
     const scenarioOutputDir = path.join(params.outputDir, params.scenario.id);
-    // Both producer indexes belong to one command invocation. Clear them before
-    // launch so a successful no-op cannot authenticate an earlier scenario run.
-    await Promise.all([
-      fs.rm(path.join(scenarioOutputDir, "latest-run.json"), { force: true }),
-      fs.rm(path.join(scenarioOutputDir, QA_EVIDENCE_FILENAME), { force: true }),
-    ]);
-    producerEvidenceStartedAtMs = Date.now();
+    // The whole producer artifact root belongs to one command invocation. Clear
+    // it so neither a stale index nor a stale bundle can authenticate a no-op.
+    await fs.rm(scenarioOutputDir, { force: true, recursive: true });
+    await fs.mkdir(scenarioOutputDir, { recursive: true });
   }
   const definition = testFileRunnerDefinitions[params.scenario.execution.kind];
   const result = await runScenarioCommandSteps({
@@ -379,7 +346,7 @@ async function runQaTestFileScenario(params: {
       outputDir: params.outputDir,
       repoRoot: params.repoRoot,
       scenario: params.scenario,
-      producerEvidenceStartedAtMs,
+      requireCurrentRunEvidence: requiresProducerEvidence,
     });
   } catch (error) {
     if (result.status !== "pass") {
@@ -442,7 +409,18 @@ function statusFromProducerEvidence(params: {
       status: blockingEntry.result.status,
     };
   }
-  if (producerEvidence.entries.every((entry) => entry.result.status === "skipped")) {
+  if (!producerEvidence.entries.some((entry) => entry.result.status === "pass")) {
+    // Allowing blocked checks does not make an entirely unexecuted producer a successful run.
+    const blockedEntry = producerEvidence.entries.find(
+      (entry) => entry.result.status === "blocked",
+    );
+    if (blockedEntry) {
+      return {
+        failureMessage:
+          blockedEntry.result.failure?.reason ?? `${blockedEntry.test.id} reported blocked`,
+        status: "blocked",
+      };
+    }
     return { status: "skipped" };
   }
   return { status: "pass" };

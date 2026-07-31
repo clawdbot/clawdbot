@@ -32,6 +32,7 @@ import type {
 import {
   deriveSessionTitle,
   isFinitePositiveTimestamp,
+  isCurrentSessionChildOwner,
   shouldKeepStoreOnlyChildLink,
 } from "./session-utils-core.js";
 import { getSessionDefaults } from "./session-utils-model.js";
@@ -82,6 +83,16 @@ type SessionEntrySelection = {
   hasMore: boolean;
 };
 
+function preferredCreatorIdentityValue(
+  current: string | undefined,
+  candidate: string | undefined,
+): string | undefined {
+  if (!current || !candidate) {
+    return current ?? candidate;
+  }
+  return candidate < current ? candidate : current;
+}
+
 function addSessionCreatorIdentity(
   creators: Map<string, { id: string; label?: string; avatarUrl?: string }>,
   entry: SessionEntry,
@@ -95,15 +106,13 @@ function addSessionCreatorIdentity(
   const label = normalizeOptionalString(actor?.label);
   const avatarUrl = normalizeOptionalString(actor?.avatarUrl);
   const existing = creators.get(id);
-  if (
-    !existing ||
-    (label && (!existing.label || label.localeCompare(existing.label) < 0)) ||
-    (avatarUrl && !existing.avatarUrl)
-  ) {
+  const preferredLabel = preferredCreatorIdentityValue(existing?.label, label);
+  const preferredAvatarUrl = preferredCreatorIdentityValue(existing?.avatarUrl, avatarUrl);
+  if (!existing || preferredLabel !== existing.label || preferredAvatarUrl !== existing.avatarUrl) {
     creators.set(id, {
       id,
-      ...(label ? { label } : existing?.label ? { label: existing.label } : {}),
-      ...(avatarUrl ? { avatarUrl } : existing?.avatarUrl ? { avatarUrl: existing.avatarUrl } : {}),
+      ...(preferredLabel ? { label: preferredLabel } : {}),
+      ...(preferredAvatarUrl ? { avatarUrl: preferredAvatarUrl } : {}),
     });
   }
 }
@@ -233,8 +242,13 @@ function filterSessionEntries(params: {
         ? filterRowContext.subagentRuns.getDisplaySubagentRun(key)
         : getSessionDisplaySubagentRunByChildSessionKey(key);
       const keepSpawned = latest
-        ? (normalizeOptionalString(latest.controllerSessionKey) ||
-            normalizeOptionalString(latest.requesterSessionKey)) === spawnedBy &&
+        ? isCurrentSessionChildOwner({
+            entry,
+            ownerSessionKey: spawnedBy,
+            controllerSessionKey:
+              normalizeOptionalString(latest.controllerSessionKey) ||
+              normalizeOptionalString(latest.requesterSessionKey),
+          }) &&
           shouldKeepSubagentRunChildLink(latest, {
             activeDescendants: filterRowContext
               ? filterRowContext.subagentRuns.countActiveDescendantRuns(key)

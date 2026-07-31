@@ -47,6 +47,32 @@ describe("buildMSTeamsPresentationCard", () => {
     });
   });
 
+  it("keeps unavailable select commands visible in the Adaptive Card", () => {
+    expect(
+      buildMSTeamsPresentationCard({
+        presentation: {
+          blocks: [
+            {
+              type: "select",
+              placeholder: "Environment",
+              options: [
+                { label: "Production", action: { type: "command", command: "/deploy production" } },
+                { label: "Opaque", action: { type: "callback", value: "private-callback-token" } },
+              ],
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      body: [
+        {
+          type: "TextBlock",
+          text: "Environment:\n- Production: `/deploy production`\n- Opaque",
+        },
+      ],
+    });
+  });
+
   it("renders web app button links as open-url actions", () => {
     expect(
       buildMSTeamsPresentationCard({

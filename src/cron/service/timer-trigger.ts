@@ -215,7 +215,8 @@ export function resolveDeliveryState(params: {
   error?: string;
   failureNotification: CronFailureNotificationDelivery;
 } {
-  const primaryDeliveryRequested = resolveCronDeliveryPlan(params.job).requested;
+  const primaryDeliveryPlan = resolveCronDeliveryPlan(params.job);
+  const primaryDeliveryRequested = primaryDeliveryPlan.requested;
   // Failure destinations can receive alerts even when the primary delivery
   // path was disabled or failed before direct delivery produced an ack.
   const alternateFailureNotificationRequested =
@@ -224,7 +225,9 @@ export function resolveDeliveryState(params: {
     resolveFailureDestination(params.job, params.globalFailureDestination) !== null;
   if (!primaryDeliveryRequested) {
     return {
-      status: "not-requested",
+      // Webhooks run outside the announce runner. Their completion is not yet
+      // known here, but an explicitly requested webhook is never "not-requested".
+      status: primaryDeliveryPlan.mode === "webhook" ? "unknown" : "not-requested",
       failureNotification: {
         status: alternateFailureNotificationRequested ? "unknown" : "not-requested",
       },

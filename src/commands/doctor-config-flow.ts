@@ -302,8 +302,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(sanitizeDoctorNote(unsupportedInternalHookEntryWarnings.join("\n")), "Doctor warnings");
   }
 
+  // Parsed config supplies invalid-key evidence only; migrations still mutate the
+  // include/env-resolved candidate so doctor never writes unresolved source values.
   const normalized = normalizeCompatibilityConfigValues(state.candidate, {
     blockedModelIdentities: blockedCodexModelIdentities,
+    sourceRaw: snapshot.parsed,
   });
   applyConfigMutation(normalized, {
     fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
@@ -338,14 +341,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
   });
 
-  const { repairStaleAgentModelRefs } =
-    await import("./doctor/shared/stale-agent-model-ref-repair.js");
-  const staleAgentModelRepair = repairStaleAgentModelRefs(state.candidate, { env: process.env });
-  applyConfigMutation(staleAgentModelRepair, {
-    fixHint: `Run "${doctorFixCommand}" to remove stale agent model references.`,
-    sanitize: true,
-    emitWarnings: true,
-  });
+  if (!shouldRepair) {
+    const { repairStaleAgentModelRefs } =
+      await import("./doctor/shared/stale-agent-model-ref-repair.js");
+    const staleAgentModelRepair = repairStaleAgentModelRefs(state.candidate, { env: process.env });
+    applyConfigMutation(staleAgentModelRepair, {
+      fixHint: `Run "${doctorFixCommand}" to remove stale agent model references.`,
+      sanitize: true,
+      emitWarnings: true,
+    });
+  }
 
   const { collectPluginToolAllowlistWarnings } =
     await import("./doctor/shared/plugin-tool-allowlist-warnings.js");

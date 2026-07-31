@@ -25,6 +25,7 @@ import {
   filterGeneratedPluginModelCatalogProviders,
   isGeneratedPluginModelCatalog,
   loadPersistedPluginModelCatalogs,
+  type PersistedPluginModelCatalog,
   type PluginModelCatalogMetadataSnapshot,
 } from "../plugin-model-catalog.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
@@ -264,6 +265,9 @@ function emptyCustomModelsResult(error?: string): CustomModelsResult {
 }
 
 type ModelRegistryOptions = {
+  includePluginCatalogs?: boolean;
+  modelsJsonContents?: string | null;
+  pluginCatalogs?: readonly PersistedPluginModelCatalog[];
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
   sourceSnapshot?: ModelRegistry;
   workspaceDir?: string;
@@ -328,7 +332,10 @@ export class ModelRegistry {
   private loadError: string | undefined = undefined;
   readonly authStorage: AuthStorage;
   private modelsJsonPath: string | undefined;
+  private modelsJsonContents: string | null | undefined;
+  private pluginCatalogs: readonly PersistedPluginModelCatalog[] | undefined;
   private pluginMetadataSnapshot: PluginModelCatalogMetadataSnapshot | undefined;
+  private includePluginCatalogs = true;
   private baseCatalogSnapshot: ModelRegistryCatalogSnapshot | undefined;
   private sourceSnapshot: ModelRegistryCatalogSnapshot | undefined;
 
@@ -338,6 +345,7 @@ export class ModelRegistry {
     options: ModelRegistryOptions = {},
   ) {
     this.authStorage = authStorage;
+    this.includePluginCatalogs = options.includePluginCatalogs !== false;
     initializeModelRegistryRuntime(this);
     if (options.sourceSnapshot) {
       const source = options.sourceSnapshot;
@@ -358,6 +366,8 @@ export class ModelRegistry {
       return;
     }
     this.modelsJsonPath = modelsJsonPath;
+    this.modelsJsonContents = options.modelsJsonContents;
+    this.pluginCatalogs = options.pluginCatalogs;
     this.pluginMetadataSnapshot = resolveModelPluginMetadataSnapshot({
       ...(options.pluginMetadataSnapshot
         ? { pluginMetadataSnapshot: options.pluginMetadataSnapshot }
@@ -447,20 +457,36 @@ export class ModelRegistry {
     return this.loadError;
   }
 
+  /** Returns the exact plugin metadata generation captured with this registry. */
+  getProviderMetadataOwners() {
+    return this.pluginMetadataSnapshot?.owners;
+  }
+
   private loadModels(): void {
     // Keep authored models.json separate from rebuildable provider catalogs
     // owned by the agent SQLite cache.
-    const { models: customModels, error } = this.modelsJsonPath
-      ? this.loadCustomModels(this.modelsJsonPath)
-      : emptyCustomModelsResult();
+    const customResult =
+      this.modelsJsonPath && this.modelsJsonContents !== null
+        ? this.loadCustomModels(this.modelsJsonPath, {
+            ...(this.modelsJsonContents !== undefined ? { contents: this.modelsJsonContents } : {}),
+            includePluginCatalogs: this.includePluginCatalogs && this.pluginCatalogs === undefined,
+          })
+        : emptyCustomModelsResult();
+    const capturedPluginResult =
+      this.includePluginCatalogs && this.pluginCatalogs !== undefined
+        ? this.loadCapturedPluginCatalogs(this.pluginCatalogs)
+        : emptyCustomModelsResult();
+    const errors = [customResult.error, capturedPluginResult.error].filter(
+      (error): error is string => Boolean(error),
+    );
 
-    if (error) {
-      this.loadError = error;
-      log.warn(`model catalog load issue: ${error}`);
+    if (errors.length > 0) {
+      this.loadError = errors.join("\n\n");
+      log.warn(`model catalog load issue: ${this.loadError}`);
       // Plugin catalog failures can return salvaged models; root failures return empty.
     }
 
-    let combined = customModels;
+    let combined = [...customResult.models, ...capturedPluginResult.models];
 
     // Let OAuth providers modify their models (e.g., update baseUrl)
     for (const oauthProvider of this.authStorage.getOAuthProviders()) {
@@ -471,6 +497,29 @@ export class ModelRegistry {
     }
 
     this.models = combined;
+  }
+
+  private loadCapturedPluginCatalogs(
+    pluginCatalogs: readonly PersistedPluginModelCatalog[],
+  ): CustomModelsResult {
+    const models: Model[] = [];
+    const errors: string[] = [];
+    for (const pluginCatalog of pluginCatalogs) {
+      const result = this.loadCustomModels(
+        `sqlite:plugin-model-catalog/${pluginCatalog.pluginId}`,
+        {
+          catalogPluginId: pluginCatalog.pluginId,
+          contents: pluginCatalog.contents,
+          includePluginCatalogs: false,
+          requireGeneratedCatalog: true,
+        },
+      );
+      models.push(...result.models);
+      if (result.error) {
+        errors.push(result.error);
+      }
+    }
+    return { models, error: errors.join("\n\n") || undefined };
   }
 
   private loadCustomModels(
@@ -538,11 +587,15 @@ export class ModelRegistry {
       );
       const pluginCatalogErrors: string[] = [];
       if (options.includePluginCatalogs !== false) {
-        let pluginCatalogs: ReturnType<typeof loadPersistedPluginModelCatalogs>["catalogs"] = [];
+        let pluginCatalogs: readonly PersistedPluginModelCatalog[] = [];
         try {
-          const loaded = loadPersistedPluginModelCatalogs(dirname(modelsJsonPath));
-          pluginCatalogs = loaded.catalogs;
-          pluginCatalogErrors.push(...loaded.warnings);
+          if (this.pluginCatalogs) {
+            pluginCatalogs = this.pluginCatalogs;
+          } else {
+            const loaded = loadPersistedPluginModelCatalogs(dirname(modelsJsonPath));
+            pluginCatalogs = loaded.catalogs;
+            pluginCatalogErrors.push(...loaded.warnings);
+          }
         } catch (error) {
           pluginCatalogErrors.push(
             `Failed to load generated plugin model catalogs: ${

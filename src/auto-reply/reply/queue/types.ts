@@ -24,7 +24,9 @@ import type {
   TurnAdoptionLifecycle,
 } from "../../get-reply-options.types.js";
 import type { OriginatingChannelType } from "../../templating.js";
+import type { ThinkingCatalogEntry } from "../../thinking.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
+import { releaseRecentQueueMessageId } from "./recent-message-ids.js";
 
 export type QueueMode = "steer" | "followup" | "collect" | "interrupt";
 
@@ -166,6 +168,8 @@ export type FollowupRun = {
     autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";
+    /** Prepared model metadata reused when fallbacks revalidate the immutable thinking request. */
+    thinkingCatalog?: ThinkingCatalogEntry[];
     thinkLevel?: ThinkLevel;
     fastMode?: FastMode;
     fastModeAutoOnSeconds?: number;
@@ -285,6 +289,10 @@ export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
     // non-rejecting promise. onSettled must still run after a synchronous throw.
     try {
       if (!admittedTurnAdoptionLifecycles.has(lifecycle)) {
+        // The queue is relinquishing an un-admitted message: free its dedupe
+        // identity so the abandonment-triggered ingress retry can re-enqueue
+        // instead of being rejected as a recent duplicate and falsely completed.
+        releaseRecentQueueMessageId(run);
         lifecycle.onAbandoned?.();
       }
     } finally {

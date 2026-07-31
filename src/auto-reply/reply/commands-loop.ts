@@ -1,5 +1,6 @@
 // Handles /loop by rewriting chat sugar into a cron-tool work order.
 import { createHash } from "node:crypto";
+import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
@@ -49,7 +50,7 @@ function buildLoopPayloadMessage(params: {
   ];
   if (params.selfPaced) {
     lines.push(
-      'Before replying, ALWAYS call the cron tool action:"next_check" with in:"<duration>" — pick the next check interval from how active the task is; back off toward 1h when quiet.',
+      `Before replying, ALWAYS call the ${AUTOMATIONS_TOOL_NAME} tool action:"next_check" with in:"<duration>" — pick the next check interval from how active the task is; back off toward 1h when quiet.`,
     );
   }
   return lines.join("\n");
@@ -59,19 +60,19 @@ function buildFixedLoopWorkOrder(prompt: string, everyMs: number, sessionKey: st
   const shortName = loopShortName(prompt);
   const jobName = `${loopNamePrefix(sessionKey)} ${shortName}`;
   const message = buildLoopPayloadMessage({ prompt, shortName, selfPaced: false });
-  return `Create a recurring loop with the cron tool, then confirm in one short line (name + cadence + '/loop stop' hint). ${LOOP_FINAL_REPLY_ONLY} action:"add", job:{name:${JSON.stringify(jobName)},schedule:{kind:"every",everyMs:${everyMs}},sessionTarget:"current",payload:{kind:"agentTurn",message:${JSON.stringify(message)}}}.`;
+  return `Create a recurring loop with the ${AUTOMATIONS_TOOL_NAME} tool, then confirm in one short line (name + cadence + '/loop stop' hint). ${LOOP_FINAL_REPLY_ONLY} action:"add", job:{name:${JSON.stringify(jobName)},schedule:{kind:"every",everyMs:${everyMs}},sessionTarget:"current",payload:{kind:"agentTurn",message:${JSON.stringify(message)}}}.`;
 }
 
 function buildSelfPacedLoopWorkOrder(prompt: string, sessionKey: string): string {
   const shortName = loopShortName(prompt);
   const jobName = `${loopNamePrefix(sessionKey)} ${shortName}`;
   const message = buildLoopPayloadMessage({ prompt, shortName, selfPaced: true });
-  return `Create a recurring loop with the cron tool, then confirm in one short line (name + cadence + '/loop stop' hint). ${LOOP_FINAL_REPLY_ONLY} action:"add", job:{name:${JSON.stringify(jobName)},schedule:{kind:"every",everyMs:${LOOP_DEFAULT_INTERVAL_MS}},pacing:{min:"1m",max:"1h"},sessionTarget:"current",payload:{kind:"agentTurn",message:${JSON.stringify(message)}}}.`;
+  return `Create a recurring loop with the ${AUTOMATIONS_TOOL_NAME} tool, then confirm in one short line (name + cadence + '/loop stop' hint). ${LOOP_FINAL_REPLY_ONLY} action:"add", job:{name:${JSON.stringify(jobName)},schedule:{kind:"every",everyMs:${LOOP_DEFAULT_INTERVAL_MS}},pacing:{min:"1m",max:"1h"},sessionTarget:"current",payload:{kind:"agentTurn",message:${JSON.stringify(message)}}}.`;
 }
 
 function buildLoopStatusWorkOrder(sessionKey: string): string {
   const prefix = loopNamePrefix(sessionKey);
-  return `Use the cron tool (action:"list", includeDisabled:true) and report this conversation's loop jobs — exactly those whose name starts with ${JSON.stringify(prefix)}: name, schedule/pacing, enabled, last run, next run. If none, say so. ${LOOP_FINAL_REPLY_ONLY}`;
+  return `Use the ${AUTOMATIONS_TOOL_NAME} tool (action:"list", includeDisabled:true) and report this conversation's loop jobs — exactly those whose name starts with ${JSON.stringify(prefix)}: name, schedule/pacing, enabled, last run, next run. If none, say so. ${LOOP_FINAL_REPLY_ONLY}`;
 }
 
 function buildLoopStopWorkOrder(name: string, sessionKey: string): string {
@@ -79,7 +80,7 @@ function buildLoopStopWorkOrder(name: string, sessionKey: string): string {
   const matchInstruction = name
     ? ` Among those, match ${JSON.stringify(name)} against the job name.`
     : "";
-  return `List cron jobs (action:"list", includeDisabled:true) and find this conversation's loops — exactly those whose name starts with ${JSON.stringify(prefix)}.${matchInstruction} Remove the matching jobs with action:"remove" and confirm the removed names. If none matched, say so and list this conversation's active loop names. Never remove a job whose name does not start with ${JSON.stringify(prefix)}. ${LOOP_FINAL_REPLY_ONLY}`;
+  return `List automations (action:"list", includeDisabled:true) and find this conversation's loops — exactly those whose name starts with ${JSON.stringify(prefix)}.${matchInstruction} Remove the matching jobs with action:"remove" and confirm the removed names. If none matched, say so and list this conversation's active loop names. Never remove a job whose name does not start with ${JSON.stringify(prefix)}. ${LOOP_FINAL_REPLY_ONLY}`;
 }
 
 /** Command handler for conversation-bound recurring loops. */

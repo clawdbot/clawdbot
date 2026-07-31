@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { makeExecutable, makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
   evaluateExecAllowlist,
@@ -562,27 +563,25 @@ describe("exec-command-resolution", () => {
   });
 
   it("does not synthesize cwd-joined allowlist candidates from drive-less windows roots", () => {
-    if (process.platform !== "win32") {
-      return;
-    }
-
-    expect(
-      resolveAllowlistCandidatePath(
-        {
-          rawExecutable: String.raw`:\Users\demo\AI\system\openclaw`,
-          executableName: "openclaw",
-        },
-        String.raw`C:\Users\demo\AI\system\openclaw`,
-      ),
-    ).toBeUndefined();
-    expect(
-      resolveAllowlistCandidatePath(
-        {
-          rawExecutable: String.raw`:/Users/demo/AI/system/openclaw`,
-          executableName: "openclaw",
-        },
-        String.raw`C:\Users\demo\AI\system\openclaw`,
-      ),
-    ).toBeUndefined();
+    withMockedPlatform("win32", () => {
+      expect(
+        resolveAllowlistCandidatePath(
+          {
+            rawExecutable: String.raw`:\Users\demo\AI\system\openclaw`,
+            executableName: "openclaw",
+          },
+          String.raw`C:\Users\demo\AI\system\openclaw`,
+        ),
+      ).toBeUndefined();
+      expect(
+        resolveAllowlistCandidatePath(
+          {
+            rawExecutable: String.raw`:/Users/demo/AI/system/openclaw`,
+            executableName: "openclaw",
+          },
+          String.raw`C:\Users\demo\AI\system\openclaw`,
+        ),
+      ).toBeUndefined();
+    });
   });
 });

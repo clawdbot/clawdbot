@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { loadCronQuarantineFile, resolveCronJobsStorePath } from "../../../cron/store.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
+import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { DoctorPrompter, DoctorOptions } from "../../doctor-prompter.js";
 import { countStaleDreamingJobs } from "./dreaming-payload-migration.js";
@@ -189,12 +190,13 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     return findings;
   }
 
+  const sqliteStorePath = resolveOpenClawStateSqlitePath();
   const normalized = normalizeStoredCronJobs(rawJobs);
   for (const line of formatLegacyIssuePreview(normalized.issues)) {
     findings.push(
       legacyCronStoreFinding({
         message: line.replace(/^- /u, ""),
-        path: storePath,
+        path: sqliteStorePath,
         requirement: "legacy-cron-store-shape",
       }),
     );
@@ -214,10 +216,10 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     if (names.length > 0) {
       findings.push(
         legacyCronStoreFinding({
-          message: `${pluralize(names.length, "tool-bearing cron job")} ${description}.`,
-          path: storePath,
+          message: `${pluralize(names.length, "tool-bearing automation")} ${description}.`,
+          path: sqliteStorePath,
           requirement,
-          fixHint: `Review with ${formatCliCommand("openclaw cron list")} and reauthorize with ${formatCliCommand("openclaw cron edit <id> --tools <tool,...>")}.`,
+          fixHint: `Review with ${formatCliCommand("openclaw automations list")} and reauthorize with ${formatCliCommand("openclaw automations edit <id> --tools <tool,...>")}.`,
         }),
       );
     }
@@ -227,7 +229,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     findings.push(
       legacyCronStoreFinding({
         message: `${pluralize(sqliteProjectionBackfillCount, "SQLite cron row")} will be backfilled from stored config JSON into split columns.`,
-        path: storePath,
+        path: sqliteStorePath,
         requirement: "sqlite-projection-backfill",
       }),
     );
@@ -238,7 +240,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     findings.push(
       legacyCronStoreFinding({
         message: `${pluralize(notifyCount, "job")} still uses legacy notify webhook fallback.`,
-        path: storePath,
+        path: sqliteStorePath,
         requirement: "legacy-notify-fallback",
       }),
     );
@@ -249,7 +251,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     findings.push(
       legacyCronStoreFinding({
         message: `${pluralize(dreamingStaleCount, "managed dreaming job")} still has the legacy heartbeat-coupled shape.`,
-        path: storePath,
+        path: sqliteStorePath,
         requirement: "legacy-dreaming-payload",
       }),
     );
@@ -352,17 +354,17 @@ export async function maybeRepairLegacyCronStore(params: {
     noteLegacyCronRepairResult(await applyLegacyCronStoreRepair({ cfg: params.cfg, state }));
     return;
   }
-  noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs, storePath });
-  noteCronDeliveryTargetAdvisory({ cfg: params.cfg, jobs: rawJobs, storePath });
+  noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs });
+  noteCronDeliveryTargetAdvisory({ cfg: params.cfg, jobs: rawJobs });
 
   const inFlightCount = countInFlightCronJobs(rawJobs);
   if (inFlightCount > 0) {
     const subject = inFlightCount === 1 ? "it" : "them";
     note(
       [
-        `${pluralize(inFlightCount, "cron job")} ${inFlightCount === 1 ? "is" : "are"} still marked in-flight (\`state.runningAtMs\` is set), so ${formatCliCommand("openclaw cron list")} shows ${subject} as \`running\`.`,
+        `${pluralize(inFlightCount, "automation")} ${inFlightCount === 1 ? "is" : "are"} still marked in-flight (\`state.runningAtMs\` is set), so ${formatCliCommand("openclaw automations list")} shows ${subject} as \`running\`.`,
         `- If no gateway is currently executing ${subject}, the marker is left over from an interrupted run; the gateway marks such runs interrupted the next time it starts.`,
-        `- Review with ${formatCliCommand("openclaw cron list")} or ${formatCliCommand("openclaw cron show <id>")}.`,
+        `- Review with ${formatCliCommand("openclaw automations list")} or ${formatCliCommand("openclaw automations show <id>")}.`,
       ].join("\n"),
       "Cron",
     );
@@ -372,9 +374,9 @@ export async function maybeRepairLegacyCronStore(params: {
   if (chronicFailureCount > 0) {
     note(
       [
-        `${pluralize(chronicFailureCount, "cron job")} ${chronicFailureCount === 1 ? "has" : "have"} failed ${CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS}+ runs in a row (\`state.consecutiveErrors\`), so the scheduler only re-fires ${chronicFailureCount === 1 ? "it" : "them"} on error backoff.`,
+        `${pluralize(chronicFailureCount, "automation")} ${chronicFailureCount === 1 ? "has" : "have"} failed ${CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS}+ runs in a row (\`state.consecutiveErrors\`), so the scheduler only re-fires ${chronicFailureCount === 1 ? "it" : "them"} on error backoff.`,
         `- The count resets on the next successful run and also counts runs interrupted by a gateway restart, so a lasting streak means repeated task failures, repeatedly interrupted runs, or a mix. Failure alerts are opt-in, so this may be the only notice.`,
-        `- Review with ${formatCliCommand("openclaw cron list")} or ${formatCliCommand("openclaw cron show <id>")}.`,
+        `- Review with ${formatCliCommand("openclaw automations list")} or ${formatCliCommand("openclaw automations show <id>")}.`,
       ].join("\n"),
       "Cron",
     );
@@ -436,7 +438,7 @@ export async function maybeRepairLegacyCronStore(params: {
 
   const noteHeading = legacyStoreDetected
     ? `Legacy cron job storage detected at ${shortenHomePath(storePath)}.`
-    : `Cron store issues detected at ${shortenHomePath(storePath)}.`;
+    : `Cron store issues detected at ${shortenHomePath(resolveOpenClawStateSqlitePath())}.`;
 
   note(
     [

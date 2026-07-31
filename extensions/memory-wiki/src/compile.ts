@@ -58,7 +58,7 @@ import {
 } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
-import { initializeMemoryWikiVault } from "./vault.js";
+import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
 
 const COMPILE_PAGE_GROUPS: Array<{ kind: WikiPageKind; dir: string; heading: string }> = [
   { kind: "source", dir: "sources", heading: "Sources" },
@@ -1223,8 +1223,13 @@ function buildCompiledCacheSnapshot(
 
 async function compileMemoryWikiVaultUnlocked(
   config: ResolvedMemoryWikiConfig,
+  options?: { sourcePageWrites?: "update" | "preserve" },
 ): Promise<CompileMemoryWikiResult> {
-  await initializeMemoryWikiVault(config);
+  if (options?.sourcePageWrites === "preserve") {
+    await activateExistingMemoryWikiVault(config);
+  } else {
+    await initializeMemoryWikiVault(config);
+  }
   const rootDir = config.vault.path;
   const compiledInputIdentity = await loadMemoryWikiVaultIdentity(rootDir);
   if (!compiledInputIdentity.vaultGeneration) {
@@ -1253,7 +1258,10 @@ async function compileMemoryWikiVaultUnlocked(
   );
   let scan = await readPageSummaries(rootDir);
   let pages = scan.pages;
-  const updatedFiles = await refreshPageRelatedBlocks({ config, pages });
+  const updatedFiles =
+    options?.sourcePageWrites === "preserve"
+      ? []
+      : await refreshPageRelatedBlocks({ config, pages });
   if (updatedFiles.length > 0) {
     scan = await readPageSummaries(rootDir);
     pages = scan.pages;
@@ -1385,9 +1393,10 @@ async function compileMemoryWikiVaultUnlocked(
 
 export async function compileMemoryWikiVault(
   config: ResolvedMemoryWikiConfig,
+  options?: { sourcePageWrites?: "update" | "preserve" },
 ): Promise<CompileMemoryWikiResult> {
   return await withMemoryWikiVaultMutation(config.vault.path, () =>
-    compileMemoryWikiVaultUnlocked(config),
+    compileMemoryWikiVaultUnlocked(config, options),
   );
 }
 
