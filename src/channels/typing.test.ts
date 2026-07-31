@@ -5,6 +5,10 @@ import { createTypingCallbacks } from "./typing.js";
 
 type TypingCallbackOverrides = Partial<Parameters<typeof createTypingCallbacks>[0]>;
 type TypingHarnessOptions = TypingCallbackOverrides & { useDefaultMaxDuration?: boolean };
+// NOTE: harness historically drove the sliding idle TTL via `maxDurationMs`.
+// That behavior now lives on `idleTimeoutMs`; `maxDurationMs` is the hard cap.
+// The harness maps a bare `maxDurationMs` override onto `idleTimeoutMs` so existing
+// idle-focused tests keep their meaning, and disables the hard cap by default.
 type TypingHarnessStart = ReturnType<typeof vi.fn<() => Promise<void>>>;
 type TypingHarnessError = ReturnType<typeof vi.fn<(err: unknown) => void>>;
 
@@ -66,18 +70,22 @@ function createTypingHarness(overrides: TypingHarnessOptions = {}) {
     ...(overrides.keepaliveIntervalMs !== undefined
       ? { keepaliveIntervalMs: overrides.keepaliveIntervalMs }
       : {}),
-    ...(overrides.maxDurationMs !== undefined
+    // Map a bare legacy `maxDurationMs` override onto the sliding idle TTL option.
+    ...(overrides.idleTimeoutMs !== undefined
+      ? { idleTimeoutMs: overrides.idleTimeoutMs }
+      : overrides.maxDurationMs !== undefined
+        ? { idleTimeoutMs: overrides.maxDurationMs }
+        : overrides.useDefaultMaxDuration
+          ? {}
+          : { idleTimeoutMs: 0 }),
+    // Disable the hard cap (maxDurationMs) by default so idle-TTL focused tests
+    // keep their existing timing expectations; opt in per-test (with idleTimeoutMs
+    // also set) to exercise the hard cap explicitly.
+    ...(overrides.maxDurationMs !== undefined && overrides.idleTimeoutMs !== undefined
       ? { maxDurationMs: overrides.maxDurationMs }
       : overrides.useDefaultMaxDuration
         ? {}
         : { maxDurationMs: 0 }),
-    // Disable the absolute ceiling by default so idle-TTL focused tests keep
-    // their existing timing expectations; opt in per-test to exercise the cap.
-    ...(overrides.absoluteMaxDurationMs !== undefined
-      ? { absoluteMaxDurationMs: overrides.absoluteMaxDurationMs }
-      : overrides.useDefaultMaxDuration
-        ? {}
-        : { absoluteMaxDurationMs: 0 }),
   });
   activeCallbacks.add(callbacks);
   return { start, stop, onStartError, onStopError, callbacks };
@@ -524,15 +532,15 @@ describe("createTypingCallbacks", () => {
       });
     });
 
-    it("enforces absolute ceiling despite healthy keepalive sliding the idle TTL", async () => {
+    it("enforces the maxDurationMs hard cap despite healthy keepalive sliding the idle TTL", async () => {
       await withFakeTimers(async () => {
         const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
-        // Idle TTL slides on each successful keepalive, but the absolute ceiling
-        // is armed once and must still tear typing down.
+        // idleTimeoutMs slides on each successful keepalive, but the maxDurationMs
+        // hard cap is armed once and must still tear typing down.
         const { stop, callbacks } = createTypingHarness({
           keepaliveIntervalMs: 3_000,
-          maxDurationMs: 60_000,
-          absoluteMaxDurationMs: 30_000,
+          idleTimeoutMs: 60_000,
+          maxDurationMs: 30_000,
         });
 
         await callbacks.onReplyStart();
@@ -553,13 +561,13 @@ describe("createTypingCallbacks", () => {
       });
     });
 
-    it("does not refresh the absolute ceiling on new reply starts within the window", async () => {
+    it("does not refresh the maxDurationMs hard cap on new reply starts within the window", async () => {
       await withFakeTimers(async () => {
         const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
         const { stop, callbacks } = createTypingHarness({
           keepaliveIntervalMs: 0,
-          maxDurationMs: 0,
-          absoluteMaxDurationMs: 30_000,
+          idleTimeoutMs: 0,
+          maxDurationMs: 30_000,
         });
 
         await callbacks.onReplyStart();

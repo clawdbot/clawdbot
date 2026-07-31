@@ -22,20 +22,22 @@ export type CreateTypingCallbacksParams = {
   /** Stop keepalive after this many consecutive start() failures. Default: 2 */
   maxConsecutiveFailures?: number;
   /**
-   * Idle-safety TTL: max quiet time without a successful `start()` / keepalive tick
-   * before auto-cleanup. Each successful start refreshes the window so long agent
-   * turns keep the channel indicator while keepalive is healthy. Default: 60s.
-   * Pass `0` to disable.
+   * Hard lifetime cap: absolute wall-clock ceiling armed ONCE at `onReplyStart`
+   * and never refreshed by successful keepalives. This preserves the historical
+   * exported meaning of `maxDurationMs` — a caller that sets `maxDurationMs: 10_000`
+   * still gets at most a 10s indicator lifetime regardless of keepalive success.
+   * Guarantees teardown even if a caller's normal cleanup is missed while `start()`
+   * keeps succeeding. Default: 600s (10 min). Pass `0` to disable.
    */
   maxDurationMs?: number;
   /**
-   * Absolute wall-clock ceiling armed once at `onReplyStart` and NOT refreshed by
-   * successful keepalives. Guarantees the typing indicator is torn down even if a
-   * caller's normal cleanup (`onIdle`/`onCleanup`) is missed while `start()` keeps
-   * succeeding, preserving the hard-cap safety contract alongside the idle slide.
-   * Default: 600s (10 min). Pass `0` to disable.
+   * Idle-safety TTL: max quiet time without a successful `start()` / keepalive tick
+   * before auto-cleanup. Each successful start refreshes (slides) this window so long
+   * agent turns keep the channel indicator while keepalive is healthy, fixing the
+   * premature teardown during multi-minute tool/steer turns. Default: 60s.
+   * Pass `0` to disable.
    */
-  absoluteMaxDurationMs?: number;
+  idleTimeoutMs?: number;
 };
 
 const DEFAULT_MAX_CONSECUTIVE_TYPING_FAILURES = 2;
@@ -60,8 +62,10 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     params.maxConsecutiveFailures,
     DEFAULT_MAX_CONSECUTIVE_TYPING_FAILURES,
   );
-  const maxDurationMs = resolveDurationMsOption(params.maxDurationMs, 60_000);
-  const absoluteMaxDurationMs = resolveDurationMsOption(params.absoluteMaxDurationMs, 600_000);
+  // Hard lifetime cap (armed once, never slid) keeps `maxDurationMs`'s historical
+  // meaning; the sliding idle window moves to the new `idleTimeoutMs` option.
+  const absoluteMaxDurationMs = resolveDurationMsOption(params.maxDurationMs, 600_000);
+  const idleTimeoutMs = resolveDurationMsOption(params.idleTimeoutMs, 60_000);
   let stopSent = false;
   let closed = false;
   let ttlTimer: ReturnType<typeof setTimeout> | undefined;
@@ -107,18 +111,18 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
   };
 
   const startTtlTimer = () => {
-    if (maxDurationMs <= 0 || closed) {
+    if (idleTimeoutMs <= 0 || closed) {
       return;
     }
     clearTtlTimer();
     ttlTimer = setTimeout(() => {
       if (!closed) {
         console.warn(
-          `[typing] idle TTL exceeded (${maxDurationMs}ms without successful typing start), auto-stopping typing indicator`,
+          `[typing] idle TTL exceeded (${idleTimeoutMs}ms without successful typing start), auto-stopping typing indicator`,
         );
         fireStop();
       }
-    }, maxDurationMs);
+    }, idleTimeoutMs);
     ttlTimer.unref?.();
   };
 

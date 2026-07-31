@@ -73,7 +73,9 @@ export async function runTelegramDispatchTurn(params: {
         start: context.sendTyping,
         keepaliveIntervalMs: TELEGRAM_CHAT_ACTION_INTERVAL_MS,
         // ReplyOperation owns terminal cleanup; a per-inbound TTL would kill
-        // feedback while the same long-running task is still active.
+        // feedback while the same long-running task is still active. Disable
+        // both the sliding idle TTL and the absolute hard cap here.
+        idleTimeoutMs: 0,
         maxDurationMs: 0,
         maxConsecutiveFailures: TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES,
         onStartError: (err) => {

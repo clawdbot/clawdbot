@@ -18,6 +18,7 @@ describeTelegramDispatch("dispatchTelegramMessage pipeline-init", () => {
       expect.objectContaining({
         typing: expect.objectContaining({
           keepaliveIntervalMs: 4_000,
+          idleTimeoutMs: 0,
           maxDurationMs: 0,
         }),
       }),
