@@ -375,6 +375,407 @@ describe("memory wiki source sync state", () => {
     expect(salvaged).toContain("<!-- openclaw:human:end -->");
   });
 
+  it("preserves previous Notes when a long source page is pruned again", async () => {
+    const vaultRoot = await makeTempDir();
+    const pagePath = `sources/repeated-${"a".repeat(180)}.md`;
+    const pageAbsPath = path.join(vaultRoot, pagePath);
+    await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
+    const annotations = ["first durable annotation", "second durable annotation"];
+
+    for (const annotation of annotations) {
+      await fs.writeFile(
+        pageAbsPath,
+        [
+          "# Memory Bridge (test)",
+          "## Bridge Source",
+          "## Content",
+          "```",
+          "generated content",
+          "```",
+          "## Notes",
+          "<!-- openclaw:human:start -->",
+          annotation,
+          "<!-- openclaw:human:end -->",
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const removed = await pruneImportedSourceEntries({
+        vaultRoot,
+        group: "bridge",
+        activeKeys: new Set(),
+        state: {
+          version: 1,
+          entries: {
+            "sync-key": {
+              group: "bridge",
+              pagePath,
+              sourcePath: "/tmp/source.md",
+              sourceUpdatedAtMs: 0,
+              sourceSize: 0,
+              renderFingerprint: "fp",
+            },
+          },
+        },
+      });
+
+      expect(removed).toBe(1);
+    }
+
+    const salvageDir = path.join(vaultRoot, ".salvage");
+    const salvageFiles = await fs.readdir(salvageDir);
+    expect(salvageFiles).toHaveLength(2);
+    const salvagedNotes = await Promise.all(
+      salvageFiles.map((file) => fs.readFile(path.join(salvageDir, file), "utf-8")),
+    );
+    for (const annotation of annotations) {
+      expect(salvagedNotes.some((notes) => notes.includes(annotation))).toBe(true);
+    }
+  });
+
+  it("keeps a replaced source page without following its symlink", async () => {
+    const vaultRoot = await makeTempDir();
+    const externalRoot = await makeTempDir();
+    const pagePath = "sources/replaced-with-symlink.md";
+    const pageAbsPath = path.join(vaultRoot, pagePath);
+    const externalPath = path.join(externalRoot, "private-notes.md");
+    await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
+    await fs.writeFile(externalPath, "external human Notes must not be read\n", "utf-8");
+    await fs.symlink(externalPath, pageAbsPath);
+    const state = {
+      version: 1 as const,
+      entries: {
+        "sync-key": {
+          group: "bridge" as const,
+          pagePath,
+          sourcePath: "/tmp/source.md",
+          sourceUpdatedAtMs: 0,
+          sourceSize: 0,
+          renderFingerprint: "fp",
+        },
+      },
+    };
+
+    const removed = await pruneImportedSourceEntries({
+      vaultRoot,
+      group: "bridge",
+      activeKeys: new Set(),
+      state,
+    });
+
+    expect(removed).toBe(0);
+    expect((await fs.lstat(pageAbsPath)).isSymbolicLink()).toBe(true);
+    expect(state.entries["sync-key"]).toBeDefined();
+    await expect(fs.readFile(externalPath, "utf-8")).resolves.toBe(
+      "external human Notes must not be read\n",
+    );
+    await expect(fs.access(path.join(vaultRoot, ".salvage"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("salvages Notes and prunes oversized source pages with bounded reads", async () => {
+    const vaultRoot = await makeTempDir();
+    const pagePath = "sources/oversized-recovery.md";
+    const pageAbsPath = path.join(vaultRoot, pagePath);
+    await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
+    await fs.writeFile(
+      pageAbsPath,
+      [
+        "# Memory Bridge (test)",
+        "## Content",
+        "```markdown",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "generated content, not durable annotations",
+        "<!-- openclaw:human:end -->",
+        "x".repeat(16 * 1024 * 1024),
+        "```",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "oversized annotations must survive",
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    const state = {
+      version: 1 as const,
+      entries: {
+        "sync-key": {
+          group: "bridge" as const,
+          pagePath,
+          sourcePath: "/tmp/source.md",
+          sourceUpdatedAtMs: 0,
+          sourceSize: 0,
+          renderFingerprint: "fp",
+        },
+      },
+    };
+
+    await expect(
+      pruneImportedSourceEntries({
+        vaultRoot,
+        group: "bridge",
+        activeKeys: new Set(),
+        state,
+      }),
+    ).resolves.toBe(1);
+    expect(state.entries["sync-key"]).toBeUndefined();
+    await expect(fs.stat(pageAbsPath)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    const recoveredNotes = await fs.readFile(
+      path.join(vaultRoot, ".salvage", "sources_oversized-recovery.md.notes.md"),
+      "utf8",
+    );
+    expect(recoveredNotes).toContain("oversized annotations must survive");
+    expect(recoveredNotes).not.toContain("generated content, not durable annotations");
+  });
+
+  it("prunes oversized generated pages without creating empty Notes recoveries", async () => {
+    const vaultRoot = await makeTempDir();
+    const pagePath = "sources/oversized-empty-notes.md";
+    const pageAbsPath = path.join(vaultRoot, pagePath);
+    await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
+    await fs.writeFile(
+      pageAbsPath,
+      [
+        "# Memory Bridge (test)",
+        "## Content",
+        "```",
+        "x".repeat(16 * 1024 * 1024),
+        "```",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const state = {
+      version: 1 as const,
+      entries: {
+        "sync-key": {
+          group: "unsafe-local" as const,
+          pagePath,
+          sourcePath: "/tmp/source.md",
+          sourceUpdatedAtMs: 0,
+          sourceSize: 0,
+          renderFingerprint: "fp",
+        },
+      },
+    };
+
+    await expect(
+      pruneImportedSourceEntries({
+        vaultRoot,
+        group: "unsafe-local",
+        activeKeys: new Set(),
+        state,
+      }),
+    ).resolves.toBe(1);
+    expect(state.entries["sync-key"]).toBeUndefined();
+    await expect(fs.stat(pageAbsPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(path.join(vaultRoot, ".salvage"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("keeps oversized human Notes rather than recovering a truncated annotation", async () => {
+    const vaultRoot = await makeTempDir();
+    const pagePath = "sources/oversized-human-notes.md";
+    const pageAbsPath = path.join(vaultRoot, pagePath);
+    await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
+    await fs.writeFile(
+      pageAbsPath,
+      [
+        "# Memory Bridge (test)",
+        "## Content",
+        "```",
+        "generated content",
+        "```",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "x".repeat(16 * 1024 * 1024),
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const state = {
+      version: 1 as const,
+      entries: {
+        "sync-key": {
+          group: "bridge" as const,
+          pagePath,
+          sourcePath: "/tmp/source.md",
+          sourceUpdatedAtMs: 0,
+          sourceSize: 0,
+          renderFingerprint: "fp",
+        },
+      },
+    };
+
+    await expect(
+      pruneImportedSourceEntries({
+        vaultRoot,
+        group: "bridge",
+        activeKeys: new Set(),
+        state,
+      }),
+    ).resolves.toBe(0);
+    expect(state.entries["sync-key"]).toBeDefined();
+    await expect(fs.stat(pageAbsPath)).resolves.toSatisfy((stat) => stat.isFile());
+    await expect(fs.access(path.join(vaultRoot, ".salvage"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("does not mistake a fence inside oversized human Notes for the source boundary", async () => {
+    const vaultRoot = await makeTempDir();
+    const pagePath = "sources/oversized-human-notes-fence.md";
+    const pageAbsPath = path.join(vaultRoot, pagePath);
+    await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
+    await fs.writeFile(
+      pageAbsPath,
+      [
+        "# Memory Bridge (test)",
+        "## Content",
+        "```markdown",
+        "s".repeat(1024 * 1024),
+        "```",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "n".repeat(16 * 1024 * 1024),
+        "```",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "this boundary-shaped fence belongs to the human annotation",
+        "<!-- openclaw:human:end -->",
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const state = {
+      version: 1 as const,
+      entries: {
+        "sync-key": {
+          group: "unsafe-local" as const,
+          pagePath,
+          sourcePath: "/tmp/source.md",
+          sourceUpdatedAtMs: 0,
+          sourceSize: 0,
+          renderFingerprint: "fp",
+        },
+      },
+    };
+
+    await expect(
+      pruneImportedSourceEntries({
+        vaultRoot,
+        group: "unsafe-local",
+        activeKeys: new Set(),
+        state,
+      }),
+    ).resolves.toBe(0);
+    expect(state.entries["sync-key"]).toBeDefined();
+    await expect(fs.stat(pageAbsPath)).resolves.toSatisfy((stat) => stat.isFile());
+    await expect(fs.access(path.join(vaultRoot, ".salvage"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("restores malformed oversized pages after a bounded recovery scan", async () => {
+    const vaultRoot = await makeTempDir();
+    const pagePath = "sources/bounded-malformed-recovery.md";
+    const pageAbsPath = path.join(vaultRoot, pagePath);
+    await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
+    await fs.writeFile(
+      pageAbsPath,
+      ["# Memory Bridge (test)", "## Content", "```markdown", "missing closing fence"].join("\n"),
+      "utf8",
+    );
+    await fs.truncate(pageAbsPath, 33 * 1024 * 1024);
+    const state = {
+      version: 1 as const,
+      entries: {
+        "sync-key": {
+          group: "unsafe-local" as const,
+          pagePath,
+          sourcePath: "/tmp/source.md",
+          sourceUpdatedAtMs: 0,
+          sourceSize: 0,
+          renderFingerprint: "fp",
+        },
+      },
+    };
+
+    await expect(
+      pruneImportedSourceEntries({
+        vaultRoot,
+        group: "unsafe-local",
+        activeKeys: new Set(),
+        state,
+      }),
+    ).resolves.toBe(0);
+    expect(state.entries["sync-key"]).toBeDefined();
+    await expect(fs.stat(pageAbsPath)).resolves.toMatchObject({ size: 33 * 1024 * 1024 });
+    await expect(fs.readdir(path.dirname(pageAbsPath))).resolves.toEqual([
+      "bounded-malformed-recovery.md",
+    ]);
+  });
+
+  it("does not duplicate unchanged recovered Notes on repeated prunes", async () => {
+    const vaultRoot = await makeTempDir();
+    const pagePath = "sources/retry-salvage.md";
+    const pageAbsPath = path.join(vaultRoot, pagePath);
+    await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await fs.writeFile(
+        pageAbsPath,
+        [
+          "# Memory Bridge (test)",
+          "## Content",
+          "```",
+          "generated content",
+          "```",
+          "## Notes",
+          "<!-- openclaw:human:start -->",
+          "recovery must remain idempotent",
+          "<!-- openclaw:human:end -->",
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+      await expect(
+        pruneImportedSourceEntries({
+          vaultRoot,
+          group: "bridge",
+          activeKeys: new Set(),
+          state: {
+            version: 1,
+            entries: {
+              "sync-key": {
+                group: "bridge",
+                pagePath,
+                sourcePath: "/tmp/source.md",
+                sourceUpdatedAtMs: 0,
+                sourceSize: 0,
+                renderFingerprint: "fp",
+              },
+            },
+          },
+        }),
+      ).resolves.toBe(1);
+    }
+
+    expect(await fs.readdir(path.join(vaultRoot, ".salvage"))).toHaveLength(1);
+  });
+
   it("does not create salvage files for pages without human Notes", async () => {
     const vaultRoot = await makeTempDir();
     const pagePath = "sources/no-notes.md";
@@ -405,6 +806,58 @@ describe("memory wiki source sync state", () => {
     await expect(fs.access(salvageDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it.each([
+    { label: "empty", notes: "" },
+    { label: "whitespace-only", notes: " \t " },
+  ])("does not salvage generated pages with $label Notes", async ({ notes }) => {
+    const vaultRoot = await makeTempDir();
+    const pagePath = "sources/generated-no-notes.md";
+    const pageAbsPath = path.join(vaultRoot, pagePath);
+    await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
+    await fs.writeFile(
+      pageAbsPath,
+      [
+        "# Memory Bridge (test)",
+        "## Bridge Source",
+        "## Content",
+        "```",
+        "generated content",
+        "```",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        notes,
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const removed = await pruneImportedSourceEntries({
+      vaultRoot,
+      group: "bridge",
+      activeKeys: new Set(),
+      state: {
+        version: 1,
+        entries: {
+          "sync-key": {
+            group: "bridge",
+            pagePath,
+            sourcePath: "/tmp/source.md",
+            sourceUpdatedAtMs: 0,
+            sourceSize: 0,
+            renderFingerprint: "fp",
+          },
+        },
+      },
+    });
+
+    expect(removed).toBe(1);
+    await expect(fs.access(pageAbsPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(path.join(vaultRoot, ".salvage"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("prunes pages even when the page file is already missing", async () => {
     const vaultRoot = await makeTempDir();
     const pagePath = "sources/missing.md";
@@ -431,6 +884,44 @@ describe("memory wiki source sync state", () => {
 
     expect(removed).toBe(1);
     await expect(fs.access(pageAbsPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("prunes inactive state when the entire vault is already missing", async () => {
+    const stateDir = await makeTempDir();
+    const vaultRoot = path.join(stateDir, "removed-vault");
+    const store = openStore({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
+    await writeMemoryWikiSourceSyncState(
+      vaultRoot,
+      {
+        version: 1 as const,
+        entries: {
+          "sync-key": {
+            group: "bridge" as const,
+            pagePath: "sources/missing-vault.md",
+            sourcePath: "/tmp/source.md",
+            sourceUpdatedAtMs: 0,
+            sourceSize: 0,
+            renderFingerprint: "fp",
+          },
+        },
+      },
+      store,
+    );
+    const state = await readMemoryWikiSourceSyncState(vaultRoot, store);
+
+    await expect(
+      pruneImportedSourceEntries({
+        vaultRoot,
+        group: "bridge",
+        activeKeys: new Set(),
+        state,
+      }),
+    ).resolves.toBe(1);
+    expect(state.entries).toEqual({});
+    await writeMemoryWikiSourceSyncState(vaultRoot, state, store);
+    await expect(readMemoryWikiSourceSyncState(vaultRoot, store)).resolves.toMatchObject({
+      entries: {},
+    });
   });
 
   it("does not salvage marker comments inside source content as Notes", async () => {
@@ -510,17 +1001,8 @@ describe("memory wiki source sync state", () => {
       "utf-8",
     );
 
-    // Create a file where the salvage directory would go so mkdir fails.
-    await fs.mkdir(path.join(vaultRoot, ".salvage"));
-    const salvagePath = path.join(
-      vaultRoot,
-      ".salvage",
-      `${pagePath.replace(/\//g, "_")}.notes.md`,
-    );
-    await fs.writeFile(salvagePath, "block", "utf-8");
-    // Make the salvage path a directory so writeFile fails with EISDIR.
-    await fs.rm(salvagePath);
-    await fs.mkdir(salvagePath);
+    // A file at the recovery-directory path must fail closed without deleting Notes.
+    await fs.writeFile(path.join(vaultRoot, ".salvage"), "block", "utf-8");
 
     const removed = await pruneImportedSourceEntries({
       vaultRoot,
