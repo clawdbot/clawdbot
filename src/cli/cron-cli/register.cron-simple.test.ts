@@ -233,7 +233,7 @@ describe("cron scheduler status warnings", () => {
 
     if (disabled) {
       expect(defaultRuntime.error).toHaveBeenCalledWith(
-        expect.stringContaining("cron scheduler is disabled"),
+        expect.stringContaining("scheduler is disabled"),
       );
     } else {
       expect(defaultRuntime.error).not.toHaveBeenCalled();

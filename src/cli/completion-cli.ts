@@ -435,7 +435,7 @@ ${commandPathUpdate}
     choice_flag="\${COMP_WORDS[COMP_CWORD-1]}"
     choice_prefix="\${cur}"
     choice_completion_prefix=""
-    if [[ "\${cur}" == --*=* ]]; then
+    if [[ "\${cur}" == -*=* ]]; then
         choice_flag="\${cur%%=*}"
         choice_prefix="\${cur#*=}"
         choice_completion_prefix="\${choice_flag}="
@@ -454,7 +454,7 @@ ${commandPathUpdate}
             fi
         done
     fi
-    if [[ "\${cur}" == -??* && "\${cur}" != --* ]]; then
+    if [[ "\${cur}" == -??* && "\${cur}" != --* && "\${cur}" != *=* ]]; then
         short_group="\${cur#-}"
         for ((short_index = 0; short_index < \${#short_group}; short_index++)); do
             short_flag="-\${short_group:short_index:1}"

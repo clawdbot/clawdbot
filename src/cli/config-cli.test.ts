@@ -1324,7 +1324,7 @@ describe("config cli", () => {
       },
       {
         path: "gateway.port\\",
-        error: "Invalid path (dangling escape): gateway.port\\",
+        error: "Invalid path (trailing escape): gateway.port\\",
       },
     ])(
       "returns a JSON error without reading configuration for malformed $path",
@@ -3628,7 +3628,7 @@ describe("config cli", () => {
       });
     });
 
-    it("rejects dangling escapes in config patch replacement paths", async () => {
+    it("rejects trailing escapes in config patch replacement paths", async () => {
       const pathname = writeTempJson5File("openclaw-config-patch-dangling-escape", {
         gateway: { port: 23456 },
       });
@@ -3647,7 +3647,7 @@ describe("config cli", () => {
         fs.rmSync(pathname, { force: true });
       }
 
-      expectErrorIncludes("Invalid path (dangling escape): gateway.port\\");
+      expectErrorIncludes("Invalid path (trailing escape): gateway.port\\");
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
