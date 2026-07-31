@@ -294,6 +294,28 @@
   line-height: 1.4;
 }
 
+.channels-wizard__text,
+.channels-wizard__secret {
+  display: flex;
+  width: 100%;
+  margin-top: 10px;
+}
+
+.channels-wizard__text > .input,
+.channels-wizard__secret > .input {
+  min-height: 44px;
+}
+
+.channels-wizard__secret > .input {
+  padding-right: 48px;
+}
+
+.channels-wizard__secret .settings-secret__toggle {
+  right: 0;
+  width: 44px;
+  height: 44px;
+}
+
 .channels-wizard__options {
   display: grid;
   gap: var(--space-2);

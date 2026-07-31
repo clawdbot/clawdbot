@@ -45,6 +45,10 @@ describe("renderChannelWizard", () => {
           channelLabel: (channelId) => channelId,
           multiselectValues: [],
           onToggleMultiselect: vi.fn(),
+          textValue: "",
+          secretVisible: false,
+          onTextInput: vi.fn(),
+          onToggleSecretVisibility: vi.fn(),
           onAnswer: vi.fn(),
           onClose: vi.fn(),
           whatsappQrDataUrl: null,
@@ -64,8 +68,76 @@ describe("renderChannelWizard", () => {
       expect(label?.textContent).toBe("New Matrix account id");
       expect(input?.type).toBe(expectedType);
       expect(input?.labels).toContain(label);
+      if (sensitive) {
+        expect(container.querySelector(".settings-secret__toggle")).not.toBeNull();
+      } else {
+        expect(container.querySelector(".settings-secret__toggle")).toBeNull();
+      }
     },
   );
+
+  it("reveals only the replacement value entered in a sensitive step", () => {
+    const container = document.createElement("div");
+    const onTextInput = vi.fn();
+    const onToggleSecretVisibility = vi.fn();
+    document.body.append(container);
+    const renderSensitiveStep = (secretVisible: boolean, textValue: string) =>
+      render(
+        renderChannelWizard({
+          wizard: {
+            phase: "step",
+            channel: "twitch",
+            step: {
+              id: "client-secret",
+              type: "text",
+              message: "Twitch Client Secret",
+              sensitive: true,
+            },
+            stepIndex: 1,
+            busy: false,
+            validationError: null,
+          },
+          channelLabel: (channelId) => channelId,
+          multiselectValues: [],
+          onToggleMultiselect: vi.fn(),
+          textValue,
+          secretVisible,
+          onTextInput,
+          onToggleSecretVisibility,
+          onAnswer: vi.fn(),
+          onClose: vi.fn(),
+          whatsappQrDataUrl: null,
+          whatsappMessage: null,
+          whatsappConnected: null,
+          whatsappBusy: false,
+          onWhatsAppStart: vi.fn(),
+          onWhatsAppWait: vi.fn(),
+        }),
+        container,
+      );
+
+    renderSensitiveStep(false, "");
+    const hiddenInput = container.querySelector<HTMLInputElement>("#channel-wizard-text-input");
+    const toggle = container.querySelector<HTMLButtonElement>(".settings-secret__toggle");
+    expect(hiddenInput?.type).toBe("password");
+    expect(hiddenInput?.value).toBe("");
+    expect(toggle?.getAttribute("aria-label")).toBe("Reveal value");
+    if (hiddenInput) {
+      hiddenInput.value = "new-secret";
+      hiddenInput.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    toggle?.click();
+    expect(onTextInput).toHaveBeenCalledWith("new-secret");
+    expect(onToggleSecretVisibility).toHaveBeenCalledOnce();
+
+    renderSensitiveStep(true, "new-secret");
+    const revealedInput = container.querySelector<HTMLInputElement>("#channel-wizard-text-input");
+    const hideToggle = container.querySelector<HTMLButtonElement>(".settings-secret__toggle");
+    expect(revealedInput?.type).toBe("text");
+    expect(revealedInput?.value).toBe("new-secret");
+    expect(hideToggle?.getAttribute("aria-label")).toBe("Hide value");
+    expect(hideToggle?.getAttribute("aria-pressed")).toBe("true");
+  });
 
   it("copies setup text through the plain-HTTP clipboard fallback", async () => {
     vi.stubGlobal("navigator", {});
@@ -94,6 +166,10 @@ describe("renderChannelWizard", () => {
         channelLabel: (channelId) => channelId,
         multiselectValues: [],
         onToggleMultiselect: vi.fn(),
+        textValue: "",
+        secretVisible: false,
+        onTextInput: vi.fn(),
+        onToggleSecretVisibility: vi.fn(),
         onAnswer: vi.fn(),
         onClose: vi.fn(),
         whatsappQrDataUrl: null,
