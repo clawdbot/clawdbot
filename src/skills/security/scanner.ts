@@ -163,6 +163,20 @@ type SourceRule = {
   requiresContextWindowLines?: number;
 };
 
+const CHILD_PROCESS_METHODS = [
+  "exec",
+  "execSync",
+  "spawn",
+  "spawnSync",
+  "execFile",
+  "execFileSync",
+] as const;
+
+type ChildProcessBindings = {
+  aliases: Map<string, string>;
+  namespaces: Set<string>;
+};
+
 const LINE_RULES: LineRule[] = [
   {
     ruleId: "dangerous-exec",
@@ -290,6 +304,68 @@ function isBenignMemberExecMatch(line: string, match: RegExpExecArray): boolean 
   return !/\b(?:cp|childProcess|child_process)\s*\.\s*exec\s*\(/.test(line);
 }
 
+function extractChildProcessBindings(source: string): ChildProcessBindings {
+  const aliases = new Map<string, string>();
+  const namespaces = new Set<string>();
+
+  // ESM named imports: import { spawn as launch } from "node:child_process"
+  const esmNamedRe = /import\s*\{([^}]+)\}\s*from\s*["'](?:node:)?child_process["']/g;
+  // ESM default imports: import cp from "node:child_process"
+  const esmDefaultRe = /import\s+(\w+)\s+from\s*["'](?:node:)?child_process["']/g;
+  // CJS destructuring: const { exec: run } = require("child_process")
+  const cjsDestructRe =
+    /\b(?:const|let|var)\s*\{([^}]+)\}\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
+  // CJS namespace: const cp = require("child_process")
+  const cjsNamespaceRe =
+    /\b(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
+
+  const methodBindingRe = new RegExp(
+    `\\b(${CHILD_PROCESS_METHODS.join("|")})(?:(?:\\s+as\\s+|\\s*:\\s*)(\\w+))?`,
+    "g",
+  );
+
+  for (const bindingRe of [esmNamedRe, cjsDestructRe]) {
+    let importMatch: RegExpExecArray | null;
+    while ((importMatch = bindingRe.exec(source)) !== null) {
+      const bindings = importMatch[1] ?? "";
+      methodBindingRe.lastIndex = 0;
+      let methodMatch: RegExpExecArray | null;
+      while ((methodMatch = methodBindingRe.exec(bindings)) !== null) {
+        const method = methodMatch[1];
+        const alias = methodMatch[2] ?? method;
+        aliases.set(alias, method);
+      }
+    }
+  }
+
+  for (const namespaceRe of [esmDefaultRe, cjsNamespaceRe]) {
+    let namespaceMatch: RegExpExecArray | null;
+    while ((namespaceMatch = namespaceRe.exec(source)) !== null) {
+      namespaces.add(namespaceMatch[1]);
+    }
+  }
+
+  // Always recognize literal/computed member access on these namespaces.
+  namespaces.add("child_process");
+  namespaces.add("childProcess");
+  namespaces.add("cp");
+
+  return { aliases, namespaces };
+}
+
+function buildDangerousExecPattern(bindings: ChildProcessBindings): RegExp {
+  const directMethods = CHILD_PROCESS_METHODS.join("|");
+  const aliasNames = [...bindings.aliases.keys()].filter(
+    (alias) => !CHILD_PROCESS_METHODS.includes(alias as (typeof CHILD_PROCESS_METHODS)[number]),
+  );
+  const callNames = [directMethods, ...aliasNames].join("|");
+  const namespaceNames = [...bindings.namespaces].join("|");
+  return new RegExp(
+    `(?:\\b(${callNames})\\s*\\(|\\b(${namespaceNames})\\s*\\[\\s*["']\\s*(${directMethods})\\s*["']\\s*\\]\\s*\\()`,
+    "g",
+  );
+}
+
 function stripCommentsForHeuristics(source: string): string {
   let stripped = "";
   let quote: "'" | '"' | "`" | null = null;
@@ -393,6 +469,8 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   const lines = source.split("\n");
   const heuristicSource = stripCommentsForHeuristics(source);
   const heuristicLines = heuristicSource.split("\n");
+  const childProcessBindings = extractChildProcessBindings(source);
+  const dangerousExecPattern = buildDangerousExecPattern(childProcessBindings);
 
   // --- Line rules ---
   for (const rule of LINE_RULES) {
@@ -401,14 +479,16 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       continue;
     }
 
+    const pattern = rule.ruleId === "dangerous-exec" ? dangerousExecPattern : rule.pattern;
+
     let acceptedMatches = 0;
     let omittedMatches = 0;
     let lastOmittedLine: number | undefined;
     for (const [i, line] of lines.entries()) {
       const matches = line.matchAll(
         new RegExp(
-          rule.pattern.source,
-          rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`,
+          pattern.source,
+          pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`,
         ),
       );
       for (const match of matches) {

