@@ -15,6 +15,11 @@ import {
 } from "./deliver-queue-admission.js";
 import { deliverOutboundPayloadsWithQueueCleanup } from "./deliver-queue-execute.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
+import {
+  StableDeliveryPreparationLostError,
+  withStableDeliveryPreparation,
+  type StableDeliveryPreparationOwner,
+} from "./delivery-queue-preparation.js";
 import { findDeliveryIntentOwner, loadPendingDelivery } from "./delivery-queue-storage.js";
 import { claimDeliveryPlatformSendAttempt, withActiveDeliveryClaim } from "./delivery-queue.js";
 import { createMessageSentEmitter } from "./message-sent-hook.js";
@@ -38,10 +43,15 @@ export async function runOutboundDeliveryInternal(
         : { ...params, deliveryIntentId: stableIntentId };
     // Serializing preparation prevents concurrent producers from running
     // stateful modifiers before SQLite chooses the stable delivery owner.
-    const claim = await withActiveDeliveryClaim(
-      stableIntentId,
-      async () => await runOutboundDeliveryWithQueue(stableParams, true),
-    );
+    const claim = await withActiveDeliveryClaim(stableIntentId, async () => {
+      const preparation = await withStableDeliveryPreparation({
+        id: stableIntentId,
+        run: async (owner) => await runOutboundDeliveryWithQueue(stableParams, true, owner),
+      });
+      return preparation.status === "claimed"
+        ? preparation.value
+        : await runOutboundDeliveryWithQueue(stableParams, true, undefined, false);
+    });
     if (claim.status === "claimed") {
       return claim.value;
     }
@@ -53,6 +63,8 @@ export async function runOutboundDeliveryInternal(
 async function runOutboundDeliveryWithQueue(
   params: DeliverOutboundPayloadsParams,
   stableIntentClaimHeld: boolean,
+  stablePreparationOwner?: StableDeliveryPreparationOwner,
+  allowFreshPreparation = true,
 ): Promise<OutboundDeliveryResult[]> {
   const auditStartedAt = Date.now();
   const { channel, to, payloads } = params;
@@ -94,7 +106,7 @@ async function runOutboundDeliveryWithQueue(
   const existingStableDelivery = params.deliveryIntentId
     ? await loadPendingDelivery(params.deliveryIntentId)
     : null;
-  if (params.deliveryIntentId && !existingStableDelivery) {
+  if (params.deliveryIntentId && !existingStableDelivery && !stablePreparationOwner) {
     const owner = findDeliveryIntentOwner(params.deliveryIntentId);
     if (owner) {
       throw new Error(
@@ -103,6 +115,9 @@ async function runOutboundDeliveryWithQueue(
           : `Stable delivery intent is already queued: ${params.deliveryIntentId}`,
       );
     }
+  }
+  if (params.deliveryIntentId && !existingStableDelivery && !allowFreshPreparation) {
+    throw new Error(`Stable delivery intent is already queued: ${params.deliveryIntentId}`);
   }
   if (existingStableDelivery && !params.reusePendingDeliveryIntent) {
     throw new Error(`Stable delivery intent is already queued: ${params.deliveryIntentId}`);
@@ -115,7 +130,10 @@ async function runOutboundDeliveryWithQueue(
     preparedBatch =
       existingStableDelivery?.preparedBatch ??
       params.preparedBatch ??
-      (await prepareOutboundPayloadBatch(params));
+      (await prepareOutboundPayloadBatch(params, {
+        onBeforeFirstModifier: stablePreparationOwner?.beforeFirstModifier,
+      }));
+    stablePreparationOwner?.markPrepared();
   } catch (error) {
     emitPreQueueFailure();
     const failedPayload =
@@ -186,17 +204,24 @@ async function runOutboundDeliveryWithQueue(
   const queued =
     params.skipQueue || (preparedPayloads.length === 0 && !shouldPersistSuppressedIntent)
       ? null
-      : await stageAndEnqueueOutboundDelivery(deliveryParams, preparedBatch).catch(
-          (err: unknown) => {
-            if (queuePolicy === "required") {
-              emitPreQueueFailure();
-              throw err;
-            }
-            return null;
-          },
-        ); // Best-effort delivery falls back to direct send if staging or the queue write fails.
+      : await stageAndEnqueueOutboundDelivery(
+          deliveryParams,
+          preparedBatch,
+          stablePreparationOwner
+            ? { getStablePreparation: stablePreparationOwner.current }
+            : undefined,
+        ).catch((err: unknown) => {
+          if (queuePolicy === "required" || err instanceof StableDeliveryPreparationLostError) {
+            emitPreQueueFailure();
+            throw err;
+          }
+          return null;
+        }); // Best-effort delivery falls back to direct send if staging or the queue write fails.
 
   const queueId = queued?.id ?? null;
+  if (queued?.created && stablePreparationOwner) {
+    stablePreparationOwner.markPublished();
+  }
   if (queueId) {
     params.onDeliveryIntent?.({
       id: queueId,

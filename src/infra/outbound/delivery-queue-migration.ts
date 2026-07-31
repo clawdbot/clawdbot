@@ -41,6 +41,7 @@ import {
   acceptedPreparedOutboundEntries,
   createUnavailablePreparedOutboundBatch,
   mapPreparedOutboundAcceptedPayloads,
+  projectPreparedOutboundBatchForStorage,
 } from "./prepared-batch.js";
 
 const LEGACY_PREPARATION_LEASE_MS = 5 * 60_000;
@@ -123,12 +124,27 @@ async function prepareLegacyEntryCheckpoint(params: {
     (legacyUnknownSendReconciliation == null ||
       legacyUnknownSendReconciliation.status === "unresolved")
   ) {
-    params.log.warn(
-      `Legacy delivery ${params.entry.id} migration deferred until unknown-send reconciliation settles`,
-    );
+    const reconciliationError =
+      legacyUnknownSendReconciliation?.status === "unresolved"
+        ? legacyUnknownSendReconciliation.error
+        : undefined;
+    const error = reconciliationError
+      ? `legacy unknown-send reconciliation did not settle: ${reconciliationError}`
+      : "legacy unknown-send reconciliation is unavailable";
+    // The migration owner has no safe canonical payload to publish and startup
+    // recovery does not scan this private namespace. Settle payload-free instead
+    // of retaining raw content in a permanently hidden pending row.
+    await failInterruptedLegacyPreparation({
+      entry: params.entry,
+      error,
+      log: params.log,
+      stateDir: params.stateDir,
+    });
     return "skipped";
   }
-  // Only a pre-send verdict can authorize another policy pass and provider attempt.
+  // Shipped rows did not record whether policy ran. The accepted upgrade policy
+  // preserves shipped recovery by allowing one final pass only before any provider
+  // evidence; migration then removes the raw owner so policy can never rerun again.
   // Sent or partially-sent legacy custody has no trustworthy post-policy snapshot.
   const prepareForReplay =
     !needsUnknownReconciliation ||
@@ -252,7 +268,7 @@ async function prepareLegacyEntryCheckpoint(params: {
   }
   const checkpoint: QueuedDelivery = {
     ...canonicalRetained,
-    preparedBatch,
+    preparedBatch: projectPreparedOutboundBatchForStorage(preparedBatch),
     renderedBatchPlan: createRenderedMessageBatchPlan(acceptedPayloads),
     ...(!prepareForReplay &&
     (legacyUnknownSendReconciliation?.status === "sent" ||

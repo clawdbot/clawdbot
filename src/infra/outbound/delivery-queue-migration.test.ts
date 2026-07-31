@@ -827,7 +827,7 @@ describe("outbound prepared queue migration", () => {
     );
   });
 
-  it("keeps unresolved legacy custody claimed without running modifiers", async () => {
+  it("fails unresolved legacy custody payload-free without running modifiers", async () => {
     const id = "legacy-unresolved";
     upsertDeliveryQueueEntry({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
@@ -859,13 +859,12 @@ describe("outbound prepared queue migration", () => {
     expect(hookMocks.runMessageSending).not.toHaveBeenCalled();
     expect(loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toBeNull();
     expect(loadDeliveryQueueEntry(LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toBeNull();
-    expect(
-      loadDeliveryQueueEntry(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir()),
-    ).toMatchObject({
-      legacyPreparationState: "claimed",
-      recoveryState: "send_attempt_started",
-      payloads: [{ text: "pre-policy" }],
-    });
+    expect(getDeliveryQueueEntryStatus(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir())).toBe(
+      "failed",
+    );
+    expect(readQueueEntryJson(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir())).not.toContain(
+      "pre-policy",
+    );
   });
 
   afterEach(() => {

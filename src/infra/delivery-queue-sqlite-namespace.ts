@@ -131,6 +131,7 @@ export function upsertDeliveryQueueEntryOnceAcrossNamespaces(params: {
 type MovePendingDeliveryQueueEntryNamespaceParams = {
   sourceQueueName: string;
   destinationQueueName: string;
+  conflictQueueNames?: readonly string[];
   expectedSourceEntry: DeliveryQueueEntryState;
   destinationEntry: DeliveryQueueEntryState;
   stagingQueueName?: string;
@@ -185,6 +186,42 @@ export function replacePendingDeliveryQueueEntry(params: {
   );
 }
 
+/** Completes a pending entry only while its authoritative serialized value is unchanged. */
+export function completePendingDeliveryQueueEntry(params: {
+  queueName: string;
+  expectedEntry: DeliveryQueueEntryState;
+  stateDir?: string;
+}): boolean {
+  const database = openStateDatabase(params.stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  return runSqliteImmediateTransactionSync(
+    database.db,
+    () => {
+      const source = executeSqliteQueryTakeFirstSync(
+        database.db,
+        queueDb
+          .selectFrom("delivery_queue_entries")
+          .select(["entry_json", "status"])
+          .where("queue_name", "=", params.queueName)
+          .where("id", "=", params.expectedEntry.id),
+      ) as { entry_json: string; status: QueueStatus } | undefined;
+      if (
+        !source ||
+        source.status !== "pending" ||
+        source.entry_json !== JSON.stringify(params.expectedEntry)
+      ) {
+        return false;
+      }
+      completeDeliveryQueueEntry(params.queueName, params.expectedEntry.id, params.stateDir);
+      return true;
+    },
+    {
+      databaseLabel: "openclaw-state",
+      operationLabel: "complete pending delivery queue entry",
+    },
+  );
+}
+
 /**
  * Commits an asynchronously prepared replacement only if the authoritative
  * source row is unchanged, then removes or terminally fences the old owner.
@@ -217,7 +254,10 @@ export function movePendingDeliveryQueueEntryNamespace(
         queueDb
           .selectFrom("delivery_queue_entries")
           .select("id")
-          .where("queue_name", "=", params.destinationQueueName)
+          .where("queue_name", "in", [
+            params.destinationQueueName,
+            ...(params.conflictQueueNames ?? []),
+          ])
           .where("id", "=", params.destinationEntry.id),
       );
       if (destination) {

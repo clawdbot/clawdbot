@@ -15,6 +15,7 @@ import {
 } from "../delivery-queue-sqlite-claim.js";
 import {
   commitStagedDeliveryQueueEntryOnceAcrossNamespaces,
+  movePendingDeliveryQueueEntryNamespace,
   upsertDeliveryQueueEntryOnceAcrossNamespaces,
 } from "../delivery-queue-sqlite-namespace.js";
 import {
@@ -38,15 +39,21 @@ import {
   DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
+  OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
   OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
 } from "./delivery-queue-media-staging.js";
+import {
+  StableDeliveryPreparationLostError,
+  type StableDeliveryPreparation,
+} from "./delivery-queue-preparation.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { DeliveryMirror } from "./mirror.js";
 import {
   acceptedPreparedOutboundEntries,
   createUnmodifiedPreparedOutboundBatch,
+  projectPreparedOutboundBatchForStorage,
   type PreparedOutboundBatch,
 } from "./prepared-batch.js";
 import type { OutboundSessionContext } from "./session-context.js";
@@ -187,7 +194,7 @@ function createQueuedDelivery(params: QueuedDeliveryPayload, id: string): Queued
     queuePolicy: params.queuePolicy,
     requireUnknownSendReconciliation: params.requireUnknownSendReconciliation,
     ...(params.requiresProducerClaim === true ? { requiresProducerClaim: true } : {}),
-    preparedBatch: preparedBatchFromLowLevelInput(params),
+    preparedBatch: projectPreparedOutboundBatchForStorage(preparedBatchFromLowLevelInput(params)),
     renderedBatchPlan: params.renderedBatchPlan,
     threadId: params.threadId,
     replyToId: params.replyToId,
@@ -266,6 +273,7 @@ export async function enqueueDeliveryOnce(
           stagingQueueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
           conflictQueueNames: [
             OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
+            OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
             OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
             LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
           ],
@@ -280,6 +288,7 @@ export async function enqueueDeliveryOnce(
         queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
         conflictQueueNames: [
           OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
+          OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
           OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
           LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
         ],
@@ -287,6 +296,46 @@ export async function enqueueDeliveryOnce(
         stateDir,
       });
   return { id: normalizedId, created };
+}
+
+/** Atomically replaces a payload-free stable preparation owner with prepared custody. */
+export async function enqueuePreparedDeliveryOnce(
+  params: QueuedDeliveryPayload,
+  id: string,
+  preparation: StableDeliveryPreparation,
+  stateDir?: string,
+  mediaStageId?: string,
+): Promise<{ id: string; created: boolean }> {
+  const normalizedId = id.trim();
+  if (!normalizedId || normalizedId !== preparation.id) {
+    throw new Error("Stable delivery preparation id is invalid");
+  }
+  const entry = createQueuedDelivery(params, normalizedId);
+  const result = movePendingDeliveryQueueEntryNamespace({
+    sourceQueueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
+    destinationQueueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+    conflictQueueNames: [
+      OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
+      OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+      LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
+    ],
+    expectedSourceEntry: preparation,
+    destinationEntry: entry,
+    ...(mediaStageId
+      ? {
+          stagingQueueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
+          stagingId: mediaStageId,
+        }
+      : {}),
+    stateDir,
+  });
+  if (result === "staging-missing") {
+    throw new Error(`Delivery queue media stage expired before enqueue: ${mediaStageId}`);
+  }
+  if (result !== "moved") {
+    throw new StableDeliveryPreparationLostError(normalizedId);
+  }
+  return { id: normalizedId, created: true };
 }
 
 /** Spool artifacts a pending row still references; empty once it is gone or unreadable. */
@@ -575,12 +624,20 @@ export function findDeliveryIntentOwner(
   id: string,
   stateDir?: string,
 ): {
-  namespace: "prepared" | "migration" | "legacy-preparing" | "legacy";
+  namespace: "prepared" | "preparing" | "migration" | "legacy-preparing" | "legacy";
   status: "pending" | "failed" | "completed";
 } | null {
   const preparedStatus = getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
   if (preparedStatus) {
     return { namespace: "prepared", status: preparedStatus };
+  }
+  const preparationStatus = getDeliveryQueueEntryStatus(
+    OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
+    id,
+    stateDir,
+  );
+  if (preparationStatus) {
+    return { namespace: "preparing", status: preparationStatus };
   }
   const migrationStatus = getDeliveryQueueEntryStatus(
     OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,

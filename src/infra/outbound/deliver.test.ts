@@ -71,10 +71,14 @@ const internalHookMocks = vi.hoisted(() => ({
 const queueMocks = vi.hoisted(() => ({
   enqueueDelivery: vi.fn(async (_params: unknown) => "mock-queue-id"),
   enqueueDeliveryOnce: vi.fn(async (_params: unknown, id: string) => ({ id, created: true })),
+  enqueuePreparedDeliveryOnce: vi.fn(async (_params: unknown, id: string) => ({
+    id,
+    created: true,
+  })),
   loadPendingDelivery: vi.fn(async () => null),
   findDeliveryIntentOwner: vi.fn<
     () => {
-      namespace: "prepared" | "migration" | "legacy-preparing" | "legacy";
+      namespace: "prepared" | "preparing" | "migration" | "legacy-preparing" | "legacy";
       status: "pending" | "failed" | "completed";
     } | null
   >(() => null),
@@ -91,6 +95,7 @@ const queueMocks = vi.hoisted(() => ({
       fn: () => Promise<unknown>,
     ) => Promise<{ status: "claimed"; value: unknown } | { status: "claimed-by-other-owner" }>
   >(async (_entryId, fn) => ({ status: "claimed", value: await fn() })),
+  withStableDeliveryPreparation: vi.fn(),
 }));
 const completionMocks = vi.hoisted(() => ({
   completeDurableDelivery: vi.fn(),
@@ -129,6 +134,7 @@ vi.mock("../../hooks/internal-hooks.js", () => ({
 vi.mock("./delivery-queue-storage.js", () => ({
   enqueueDelivery: queueMocks.enqueueDelivery,
   enqueueDeliveryOnce: queueMocks.enqueueDeliveryOnce,
+  enqueuePreparedDeliveryOnce: queueMocks.enqueuePreparedDeliveryOnce,
   ackDelivery: queueMocks.ackDelivery,
   failDelivery: queueMocks.failDelivery,
   failDeliveryAfterPlatformSend: queueMocks.failDeliveryAfterPlatformSend,
@@ -139,9 +145,14 @@ vi.mock("./delivery-queue-storage.js", () => ({
   loadPendingDelivery: queueMocks.loadPendingDelivery,
   findDeliveryIntentOwner: queueMocks.findDeliveryIntentOwner,
 }));
+vi.mock("./delivery-queue-preparation.js", () => ({
+  StableDeliveryPreparationLostError: class StableDeliveryPreparationLostError extends Error {},
+  withStableDeliveryPreparation: queueMocks.withStableDeliveryPreparation,
+}));
 vi.mock("./delivery-queue.js", () => ({
   enqueueDelivery: queueMocks.enqueueDelivery,
   enqueueDeliveryOnce: queueMocks.enqueueDeliveryOnce,
+  enqueuePreparedDeliveryOnce: queueMocks.enqueuePreparedDeliveryOnce,
   ackDelivery: queueMocks.ackDelivery,
   failDelivery: queueMocks.failDelivery,
   failDeliveryAfterPlatformSend: queueMocks.failDeliveryAfterPlatformSend,
@@ -416,10 +427,51 @@ describe("deliverOutboundPayloads", () => {
       id,
       created: true,
     }));
+    queueMocks.enqueuePreparedDeliveryOnce.mockClear();
+    queueMocks.enqueuePreparedDeliveryOnce.mockImplementation(async (_params, id) => ({
+      id,
+      created: true,
+    }));
     queueMocks.loadPendingDelivery.mockClear();
     queueMocks.loadPendingDelivery.mockResolvedValue(null);
     queueMocks.findDeliveryIntentOwner.mockClear();
     queueMocks.findDeliveryIntentOwner.mockReturnValue(null);
+    queueMocks.withStableDeliveryPreparation.mockReset();
+    queueMocks.withStableDeliveryPreparation.mockImplementation(
+      async (params: {
+        id: string;
+        run: (owner: {
+          current: () => Record<string, unknown>;
+          beforeFirstModifier: () => void;
+          markPrepared: () => void;
+          markPublished: () => void;
+        }) => Promise<unknown>;
+      }) => {
+        if (queueMocks.findDeliveryIntentOwner()) {
+          return { status: "existing" };
+        }
+        const entry = {
+          id: params.id,
+          enqueuedAt: 0,
+          retryCount: 0,
+          attemptCount: 0,
+          preparationState: "claimed",
+        };
+        return {
+          status: "claimed",
+          value: await params.run({
+            current: () => entry,
+            beforeFirstModifier: () => {
+              entry.preparationState = "modifiers_started";
+            },
+            markPrepared: () => {
+              entry.preparationState = "prepared";
+            },
+            markPublished: () => {},
+          }),
+        };
+      },
+    );
     completionMocks.completeDurableDelivery.mockClear();
     completionMocks.rejectDurableDelivery.mockClear();
     completionMocks.suppressDurableDelivery.mockClear();
@@ -870,7 +922,7 @@ describe("deliverOutboundPayloads", () => {
 
   it("does not cross platform I/O when a stable queue intent already exists", async () => {
     hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sending");
-    queueMocks.findDeliveryIntentOwner.mockReturnValueOnce({
+    queueMocks.findDeliveryIntentOwner.mockReturnValue({
       namespace: "prepared",
       status: "completed",
     });
@@ -888,6 +940,25 @@ describe("deliverOutboundPayloads", () => {
     expect(onDeliveryIntent).not.toHaveBeenCalled();
     expect(hookMocks.runner.runMessageSending).not.toHaveBeenCalled();
     expect(queueMocks.enqueueDeliveryOnce).not.toHaveBeenCalled();
+    expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
+  it("never falls back to fresh modifiers after another preparation owner wins", async () => {
+    queueMocks.withStableDeliveryPreparation.mockResolvedValueOnce({ status: "existing" });
+    queueMocks.loadPendingDelivery.mockResolvedValueOnce(null);
+    queueMocks.findDeliveryIntentOwner.mockReturnValueOnce(null);
+    hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sending");
+    const sendMatrix = vi.fn();
+
+    await expect(
+      deliverMatrix({
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        deliveryIntentId: "transitioning-owner",
+        reusePendingDeliveryIntent: true,
+      }),
+    ).rejects.toThrow("Stable delivery intent is already queued: transitioning-owner");
+    expect(hookMocks.runner.runMessageSending).not.toHaveBeenCalled();
     expect(sendMatrix).not.toHaveBeenCalled();
   });
 
@@ -1172,6 +1243,34 @@ describe("deliverOutboundPayloads", () => {
     expect(messageSendMedia).toHaveBeenCalledOnce();
   });
 
+  it("keeps delivery directives on a reconciliable text transport", async () => {
+    const messageSendText = vi.fn(async () => ({
+      messageId: "pinned-text",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "matrix", messageId: "pinned-text" }],
+        kind: "text",
+      }),
+    }));
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: {
+        capabilities: { text: true, reconcileUnknownSend: true },
+        reconcileUnknownSendKinds: { text: true },
+        reconcileUnknownSend: async () => ({ status: "not_sent" }),
+      },
+      send: { text: messageSendText },
+    });
+
+    await expect(
+      deliverMatrix({
+        payloads: [{ text: "pin this", delivery: { pin: true } }],
+        queuePolicy: "required",
+        requireUnknownSendReconciliation: true,
+      }),
+    ).resolves.toHaveLength(1);
+    expect(messageSendText).toHaveBeenCalledOnce();
+  });
+
   it("passes stable part indexes to exact multi-media sends", async () => {
     const messageSendMedia = vi.fn(async (ctx: ChannelMessageSendMediaContext) => ({
       messageId: `media-${ctx.deliveryPartIndex}`,
@@ -1379,6 +1478,40 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.markDeliveryPlatformOutcomeUnknown).not.toHaveBeenCalled();
     expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
     expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+  });
+
+  it("keeps cancellation metadata live but out of durable prepared custody", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "message_sending",
+    );
+    hookMocks.runner.runMessageSending.mockResolvedValueOnce({
+      cancel: true,
+      cancelReason: "owned elsewhere",
+      metadata: { nonJsonValue: 1n },
+    });
+    const outcomes: unknown[] = [];
+
+    await expect(
+      deliverMatrix({
+        queuePolicy: "required",
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId: "suppressed-metadata",
+        },
+        onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
+      }),
+    ).resolves.toEqual([]);
+
+    expect(outcomes).toEqual([
+      expect.objectContaining({
+        status: "suppressed",
+        hookEffect: {
+          cancelReason: "owned elsewhere",
+          metadata: { nonJsonValue: 1n },
+        },
+      }),
+    ]);
   });
 
   it("does not involve queue recovery for a canceled zero-result delivery", async () => {
@@ -2834,6 +2967,20 @@ describe("deliverOutboundPayloads", () => {
       | undefined;
     expect(deliveredPayload?.text).toBe("visible");
     expect(deliveredPayload?.channelData).toStrictEqual({ copiedText: "visible" });
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preparedBatch: expect.objectContaining({
+          entries: [
+            expect.objectContaining({
+              payload: expect.objectContaining({
+                text: "visible",
+                channelData: { copiedText: "visible" },
+              }),
+            }),
+          ],
+        }),
+      }),
+    );
   });
 
   it("passes delivery config and account context to adapter payload normalization", async () => {
@@ -2864,6 +3011,34 @@ describe("deliverOutboundPayloads", () => {
     const sendParams = requireMockCallArg(sendPayload, "sendPayload");
     expect((sendParams.payload as { channelData?: unknown }).channelData).toEqual({
       normalized: true,
+    });
+  });
+
+  it("normalizes low-level prepared batches that did not pass channel preparation", async () => {
+    const normalizePayload = vi.fn((payload) => ({
+      ...payload,
+      channelData: { normalized: payload.text },
+    }));
+    const sendPayload = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "low-level-normalized",
+      roomId: "!room",
+    });
+    setTestOutbound({
+      normalizePayload: ({ payload }) => normalizePayload(payload),
+      sendPayload,
+    });
+    const payload = { text: "portable" };
+
+    await deliverMatrix({
+      payloads: [payload],
+      preparedBatch: createUnmodifiedPreparedOutboundBatch([payload]),
+    });
+
+    expect(normalizePayload).toHaveBeenCalledOnce();
+    expect(requireMockCallArg(sendPayload, "sendPayload").payload).toMatchObject({
+      text: "portable",
+      channelData: { normalized: "portable" },
     });
   });
 

@@ -220,9 +220,17 @@ export async function prepareOutboundPayloadBatch(
       continue;
     }
 
-    const preparedPayload = normalizeEmptyPayloadForDelivery(
-      stripInternalRuntimeScaffoldingFromPayload(messageHookResult.payload),
-    );
+    const postHookPayload = stripInternalRuntimeScaffoldingFromPayload(messageHookResult.payload);
+    // Adapter normalization may project visible text into transport fields. Re-run it
+    // after policy so durable custody cannot retain a stale pre-rewrite projection.
+    const normalizedPostHookPayload = handler.normalizePayload
+      ? handler.normalizePayload(postHookPayload)
+      : postHookPayload;
+    const preparedPayload = normalizedPostHookPayload
+      ? normalizeEmptyPayloadForDelivery(
+          stripInternalRuntimeScaffoldingFromPayload(normalizedPostHookPayload),
+        )
+      : null;
     if (!preparedPayload) {
       entries.push({
         sourceIndex,
@@ -248,6 +256,7 @@ export async function prepareOutboundPayloadBatch(
   return {
     schemaVersion: PREPARED_OUTBOUND_BATCH_SCHEMA_VERSION,
     sourcePayloadCount: params.payloads.length,
+    channelNormalized: true,
     ...(params.replyPayloadSendingHook?.runId
       ? { runId: params.replyPayloadSendingHook.runId }
       : {}),

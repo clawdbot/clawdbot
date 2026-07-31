@@ -95,4 +95,25 @@ describe("deriveDurableFinalDeliveryRequirementsForBatch", () => {
       }),
     ).toEqual({});
   });
+
+  it("keeps post-send delivery directives on the concrete text transport", () => {
+    expect(
+      deriveDurableFinalDeliveryRequirementsForBatch({
+        payloads: [{ text: "pin this", delivery: { pin: true } }],
+        reconcileUnknownSend: true,
+      }),
+    ).toEqual({
+      text: true,
+      messageSendingHooks: true,
+      reconcileUnknownSend: true,
+    });
+  });
+
+  it("requires payload transport for structured send content", () => {
+    expect(
+      deriveDurableFinalDeliveryRequirementsForBatch({
+        payloads: [{ text: "Meet here", location: { latitude: 1, longitude: 2 } }],
+      }),
+    ).toMatchObject({ text: true, payload: true });
+  });
 });

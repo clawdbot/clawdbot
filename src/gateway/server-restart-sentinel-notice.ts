@@ -14,6 +14,10 @@ import type { OutboundDeliveryResult } from "../infra/outbound/deliver-types.js"
 import { deliverOutboundPayloadsInternal } from "../infra/outbound/deliver.js";
 import { runOutboundDeliveryCommitHooks } from "../infra/outbound/delivery-commit-hooks.js";
 import {
+  withStableDeliveryPreparation,
+  type StableDeliveryPreparationOwner,
+} from "../infra/outbound/delivery-queue-preparation.js";
+import {
   failPendingDelivery,
   findDeliveryIntentOwner,
   loadPendingDelivery,
@@ -89,10 +93,20 @@ async function enqueueRestartSentinelNoticeOwned(
   },
   deliveryIntentId: string,
 ): Promise<RestartSentinelNoticeEnqueueResult> {
-  const claim = await withActiveDeliveryClaim(
-    deliveryIntentId,
-    async () => await enqueueRestartSentinelNoticeClaimed(params, deliveryIntentId),
-  );
+  const claim = await withActiveDeliveryClaim(deliveryIntentId, async () => {
+    const preparation = await withStableDeliveryPreparation({
+      id: deliveryIntentId,
+      run: async (owner) =>
+        await enqueueRestartSentinelNoticeClaimed(params, deliveryIntentId, owner),
+    });
+    if (preparation.status === "claimed") {
+      return preparation.value;
+    }
+    if (findDeliveryIntentOwner(deliveryIntentId)) {
+      return { id: deliveryIntentId, created: false };
+    }
+    throw new Error(`Restart sentinel notice has an active producer without durable custody`);
+  });
   if (claim.status === "claimed") {
     return claim.value;
   }
@@ -110,10 +124,8 @@ async function enqueueRestartSentinelNoticeClaimed(
     revision: number;
   },
   deliveryIntentId: string,
+  preparationOwner: StableDeliveryPreparationOwner,
 ): Promise<RestartSentinelNoticeEnqueueResult> {
-  if (findDeliveryIntentOwner(deliveryIntentId)) {
-    return { id: deliveryIntentId, created: false };
-  }
   const delivery = {
     cfg: params.cfg,
     channel: params.channel,
@@ -129,11 +141,17 @@ async function enqueueRestartSentinelNoticeClaimed(
     maxRetries: RESTART_NOTICE_MAX_ATTEMPTS,
     deliveryIntentId,
   };
-  const preparedBatch = await prepareOutboundPayloadBatch(delivery);
-  const queued = await stageAndEnqueueOutboundDelivery(delivery, preparedBatch);
-  if (!queued) {
+  const preparedBatch = await prepareOutboundPayloadBatch(delivery, {
+    onBeforeFirstModifier: preparationOwner.beforeFirstModifier,
+  });
+  preparationOwner.markPrepared();
+  const queued = await stageAndEnqueueOutboundDelivery(delivery, preparedBatch, {
+    getStablePreparation: preparationOwner.current,
+  });
+  if (!queued?.created) {
     throw new Error("Restart sentinel notice could not acquire durable queue custody");
   }
+  preparationOwner.markPublished();
   return queued;
 }
 

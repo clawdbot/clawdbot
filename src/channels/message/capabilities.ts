@@ -1,4 +1,5 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { hasReplyPayloadContent } from "../../interactive/payload.js";
 /**
  * Channel message capability derivation.
  *
@@ -62,12 +63,24 @@ export function deriveDurableFinalDeliveryRequirements(
   return requirements;
 }
 
-function payloadRequiresDurablePayloadTransport(payload: ReplyPayload): boolean {
+/** Matches the structured-payload branch selected by core delivery. */
+export function payloadRequiresDurablePayloadTransport(
+  payload: ReplyPayload,
+  options?: { sendTextOnlyErrorPayloads?: boolean },
+): boolean {
   return (
-    payload.presentation !== undefined ||
-    payload.delivery !== undefined ||
-    payload.interactive !== undefined ||
-    (payload.channelData !== undefined && Object.keys(payload.channelData).length > 0)
+    (payload.isError === true && options?.sendTextOnlyErrorPayloads === true) ||
+    hasReplyPayloadContent(
+      {
+        presentation: payload.presentation,
+        interactive: payload.interactive,
+        channelData: payload.channelData,
+        location: payload.location,
+      },
+      { extraContent: payload.location != null },
+    ) ||
+    payload.audioAsVoice === true ||
+    payload.videoAsNote === true
   );
 }
 

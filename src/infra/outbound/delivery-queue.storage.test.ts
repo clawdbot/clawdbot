@@ -184,6 +184,40 @@ describe("delivery-queue storage", () => {
       expect(readQueuedEntry(tmpDir(), id).maxRetries).toBe(45);
     });
 
+    it("projects process-local hook metadata out before JSON custody", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "directchat",
+        to: "+1555",
+        preparedBatch: {
+          schemaVersion: 1,
+          sourcePayloadCount: 1,
+          entries: [
+            {
+              sourceIndex: 0,
+              status: "suppressed",
+              reason: "cancelled_by_message_sending_hook",
+              hookEffect: {
+                cancelReason: "owned elsewhere",
+                metadata: { nonJsonValue: 1n },
+              },
+            },
+          ],
+        },
+      });
+
+      expect(readQueuedEntry(tmpDir(), id).preparedBatch).toEqual({
+        schemaVersion: 1,
+        sourcePayloadCount: 1,
+        entries: [
+          {
+            sourceIndex: 0,
+            status: "suppressed",
+            reason: "cancelled_by_message_sending_hook",
+          },
+        ],
+      });
+    });
+
     it("canonicalizes duplicate singular and plural media before recording fan-out", async () => {
       const mediaUrl = "https://example.com/same.png";
       const id = await enqueueTextDelivery({

@@ -34,6 +34,8 @@ export type PreparedOutboundBatchEntry =
 export type PreparedOutboundBatch = {
   schemaVersion: typeof PREPARED_OUTBOUND_BATCH_SCHEMA_VERSION;
   sourcePayloadCount: number;
+  /** True only when accepted payloads already passed post-policy channel normalization. */
+  channelNormalized?: true;
   runId?: string;
   entries: PreparedOutboundBatchEntry[];
 };
@@ -90,6 +92,22 @@ export function preparedOutboundSuppressionOutcomes(
         ]
       : [],
   );
+}
+
+/** Removes process-local hook details before a prepared batch enters durable custody. */
+export function projectPreparedOutboundBatchForStorage(
+  batch: PreparedOutboundBatch,
+): PreparedOutboundBatch {
+  return {
+    ...batch,
+    entries: batch.entries.map((entry) => {
+      if (entry.status !== "suppressed" || !entry.hookEffect) {
+        return entry;
+      }
+      const { hookEffect: _hookEffect, ...stored } = entry;
+      return stored;
+    }),
+  };
 }
 
 export function mapPreparedOutboundAcceptedPayloads(

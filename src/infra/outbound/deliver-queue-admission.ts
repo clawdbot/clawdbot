@@ -9,8 +9,13 @@ import {
 } from "./deliver-payload.js";
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { cancelDeliveryQueueMediaStage } from "./delivery-queue-media-staging.js";
+import type { StableDeliveryPreparation } from "./delivery-queue-preparation.js";
 import { loadPendingDelivery, type QueuedDelivery } from "./delivery-queue-storage.js";
-import { enqueueDelivery, enqueueDeliveryOnce } from "./delivery-queue.js";
+import {
+  enqueueDelivery,
+  enqueueDeliveryOnce,
+  enqueuePreparedDeliveryOnce,
+} from "./delivery-queue.js";
 import {
   acceptedPreparedOutboundEntries,
   mapPreparedOutboundAcceptedPayloads,
@@ -52,6 +57,7 @@ export function restoreQueuedDeliveryCustody(
 export async function stageAndEnqueueOutboundDelivery(
   params: DeliverOutboundPayloadsParams,
   preparedBatch: PreparedOutboundBatch,
+  options?: { getStablePreparation?: () => StableDeliveryPreparation },
 ): Promise<{ id: string; created: boolean } | null> {
   const { channel, to } = params;
   const queuePolicy = params.queuePolicy ?? "best_effort";
@@ -129,12 +135,20 @@ export async function stageAndEnqueueOutboundDelivery(
       deliveryCompletion: params.deliveryCompletion,
     };
     if (params.deliveryIntentId) {
-      const queued = await enqueueDeliveryOnce(
-        delivery,
-        params.deliveryIntentId,
-        undefined,
-        staged.mediaStageId,
-      );
+      const queued = options?.getStablePreparation
+        ? await enqueuePreparedDeliveryOnce(
+            delivery,
+            params.deliveryIntentId,
+            options.getStablePreparation(),
+            undefined,
+            staged.mediaStageId,
+          )
+        : await enqueueDeliveryOnce(
+            delivery,
+            params.deliveryIntentId,
+            undefined,
+            staged.mediaStageId,
+          );
       if (!queued.created) {
         cancelDeliveryQueueMediaStage(staged.mediaStageId);
         await releaseSpoolArtifacts(staged.artifacts);

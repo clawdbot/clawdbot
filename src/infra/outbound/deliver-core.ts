@@ -1,6 +1,6 @@
 // Executes normalized outbound payloads against the selected channel transport.
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
-import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { payloadRequiresDurablePayloadTransport } from "../../channels/message/capabilities.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
@@ -258,9 +258,13 @@ export async function deliverOutboundPayloadsCore(
       const renderedHandler = await getDeliveryHandler(
         buildPayloadSummary(renderedPayload).mediaUrls,
       );
-      const normalizedEffectivePayload = renderedHandler.normalizePayload
-        ? renderedHandler.normalizePayload(renderedPayload)
-        : renderedPayload;
+      // Preparation already normalized the post-policy payload. Normalize again
+      // only when presentation rendering creates a new transport representation.
+      const normalizedEffectivePayload =
+        (preparedBatch.channelNormalized !== true || renderedPayload !== deliveryPayload) &&
+        renderedHandler.normalizePayload
+          ? renderedHandler.normalizePayload(renderedPayload)
+          : renderedPayload;
       const effectivePayload = normalizedEffectivePayload
         ? normalizeEmptyPayloadForDelivery(
             stripInternalRuntimeScaffoldingFromPayload(normalizedEffectivePayload),
@@ -310,21 +314,9 @@ export async function deliverOutboundPayloadsCore(
       const deliveryTarget = deliveryHandler.buildTargetRef({ threadId: sendOverrides.threadId });
       if (
         deliveryHandler.sendPayload &&
-        ((effectivePayload.isError === true &&
-          deliveryHandler.sendTextOnlyErrorPayloads === true) ||
-          hasReplyPayloadContent(
-            {
-              presentation: effectivePayload.presentation,
-              interactive: effectivePayload.interactive,
-              channelData: effectivePayload.channelData,
-              location: effectivePayload.location,
-            },
-            {
-              extraContent: effectivePayload.location != null,
-            },
-          ) ||
-          effectivePayload.audioAsVoice === true ||
-          effectivePayload.videoAsNote === true)
+        payloadRequiresDurablePayloadTransport(effectivePayload, {
+          sendTextOnlyErrorPayloads: deliveryHandler.sendTextOnlyErrorPayloads,
+        })
       ) {
         const beforeCount = results.length;
         const delivery = await deliveryHandler.sendPayload(
