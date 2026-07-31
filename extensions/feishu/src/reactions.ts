@@ -10,6 +10,8 @@ type FeishuReaction = {
   operatorId: string;
 };
 
+const MAX_FEISHU_REACTION_PAGES = 100;
+
 function resolveConfiguredFeishuClient(params: { cfg: ClawdbotConfig; accountId?: string }) {
   const account = resolveFeishuRuntimeAccount(params);
   if (!account.configured) {
@@ -94,37 +96,67 @@ export async function listReactionsFeishu(params: {
 }): Promise<FeishuReaction[]> {
   const { cfg, messageId, emojiType, accountId } = params;
   const client = resolveConfiguredFeishuClient({ cfg, accountId });
+  const reactions: FeishuReaction[] = [];
+  const seenPageTokens = new Set<string>();
+  let pageToken: string | undefined;
 
-  const response = (await client.im.messageReaction.list({
-    path: { message_id: messageId },
-    params: emojiType ? { reaction_type: emojiType } : undefined,
-  })) as {
-    code?: number;
-    msg?: string;
-    data?: {
-      items?: Array<{
-        reaction_id?: string;
-        reaction_type?: { emoji_type?: string };
-        operator?: {
-          operator_type?: string;
-          operator_id?: string;
-        };
-      }>;
+  for (let page = 0; page < MAX_FEISHU_REACTION_PAGES; page += 1) {
+    const response = (await client.im.messageReaction.list({
+      path: { message_id: messageId },
+      params:
+        emojiType || pageToken
+          ? {
+              ...(emojiType ? { reaction_type: emojiType } : {}),
+              ...(pageToken ? { page_token: pageToken } : {}),
+            }
+          : undefined,
+    })) as {
+      code?: number;
+      msg?: string;
+      data?: {
+        items?: Array<{
+          reaction_id?: string;
+          reaction_type?: { emoji_type?: string };
+          operator?: {
+            operator_type?: string;
+            operator_id?: string;
+          };
+        }>;
+        has_more?: boolean;
+        page_token?: string;
+      };
     };
-  };
 
-  assertFeishuReactionApiSuccess(response, "list reactions");
+    assertFeishuReactionApiSuccess(response, "list reactions");
 
-  const items = response.data?.items ?? [];
-  return items.map((item) => ({
-    reactionId: item.reaction_id ?? "",
-    emojiType: item.reaction_type?.emoji_type ?? "",
-    operatorType:
-      item.operator?.operator_type === "app"
-        ? "app"
-        : item.operator?.operator_type === "user"
-          ? "user"
-          : "unknown",
-    operatorId: item.operator?.operator_id ?? "",
-  }));
+    for (const item of response.data?.items ?? []) {
+      reactions.push({
+        reactionId: item.reaction_id ?? "",
+        emojiType: item.reaction_type?.emoji_type ?? "",
+        operatorType:
+          item.operator?.operator_type === "app"
+            ? "app"
+            : item.operator?.operator_type === "user"
+              ? "user"
+              : "unknown",
+        operatorId: item.operator?.operator_id ?? "",
+      });
+    }
+
+    if (response.data?.has_more !== true) {
+      return reactions;
+    }
+
+    const nextPageToken = response.data.page_token?.trim();
+    if (!nextPageToken) {
+      throw new Error("Feishu reaction pagination is missing its next page token");
+    }
+    if (seenPageTokens.has(nextPageToken)) {
+      throw new Error("Feishu reaction pagination returned a repeated page token");
+    }
+    seenPageTokens.add(nextPageToken);
+    pageToken = nextPageToken;
+  }
+
+  throw new Error("Feishu reaction pagination limit exceeded");
 }
