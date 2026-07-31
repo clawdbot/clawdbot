@@ -1955,6 +1955,7 @@ describe("EmbeddedTuiBackend", () => {
       payload: {
         runId: "run-validation-loop-finishing",
         sessionKey: "agent:main:main",
+        agentId: "main",
         state: "aborted",
         errorMessage: "edit tool validation failed: invalid arguments",
       },
@@ -2036,6 +2037,7 @@ describe("EmbeddedTuiBackend", () => {
         payload: {
           runId: "run-validation-fallback-recovery",
           sessionKey: "agent:main:main",
+          agentId: "main",
           state: "final",
           stopReason: "end_turn",
           message: {
@@ -2102,6 +2104,7 @@ describe("EmbeddedTuiBackend", () => {
         payload: {
           runId: "run-validation-loop-summaryless-error",
           sessionKey: "agent:main:main",
+          agentId: "main",
           state: "aborted",
           errorMessage: "edit tool validation failed: invalid arguments",
         },

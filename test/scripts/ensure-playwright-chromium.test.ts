@@ -99,7 +99,7 @@ describe("ensurePlaywrightChromium", () => {
     expect(
       ensurePlaywrightChromium({
         cwd: "/repo",
-        env: { PATH: "/bin" },
+        env: { PATH: noPnpmPath },
         executablePath: "/cache/chromium/chrome",
         existsSync: (path: string) =>
           path === "/usr/bin/chromium-browser" ||
