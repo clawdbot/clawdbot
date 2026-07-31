@@ -12,7 +12,7 @@ import {
   createMemoryTestEngine,
   selectEngine,
   toggleAddon,
-} from "./memory-page.test.support.ts";
+} from "./memory-page.test-support.ts";
 import "./memory-page.ts";
 
 vi.mock("../../lib/plugins/index.ts", async (importOriginal) => {

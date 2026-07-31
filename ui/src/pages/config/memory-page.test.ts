@@ -16,7 +16,7 @@ import {
   memoryTabRoute,
   selectEngine,
   toggleAddon,
-} from "./memory-page.test.support.ts";
+} from "./memory-page.test-support.ts";
 import type { ConfigRouteData } from "./route-data.ts";
 import "./memory-page.ts";
 

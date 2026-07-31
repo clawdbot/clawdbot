@@ -26,7 +26,7 @@ import {
 } from "./memory-schema.ts";
 
 /** One installed plugin that can claim the exclusive `plugins.slots.memory` slot. */
-export type MemoryEngineOption = {
+type MemoryEngineOption = {
   id: string;
   label: string;
   /** False when config names an engine absent from the current plugin catalog. */
@@ -109,7 +109,7 @@ export function findMemoryCatalogPlugin(catalog: MemoryCatalogState, pluginId: s
 }
 
 /** Additive memory plugin: no `kind`, so it layers on top of whichever engine wins the slot. */
-export type MemoryAddonRow = {
+type MemoryAddonRow = {
   id: string;
   label: string;
   description: string;
