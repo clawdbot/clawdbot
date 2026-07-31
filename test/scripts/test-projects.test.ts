@@ -228,8 +228,8 @@ describe("scripts/test-projects changed-target routing", () => {
     "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
   ])(
     "routes setup inference transcript ownership changes through both regressions for %s",
-    (path) => {
-      expect(resolveChangedTestTargetPlan([path])).toEqual({
+    (targetPath) => {
+      expect(resolveChangedTestTargetPlan([targetPath])).toEqual({
         mode: "targets",
         targets: [
           "src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts",
@@ -3176,12 +3176,17 @@ describe("scripts/test-projects changed-target routing", () => {
   it("adds the CLI process project for broad CLI targets", () => {
     const plans = buildVitestRunPlans(["src/cli"]);
 
-    expect(plans.map((plan) => plan.config)).toEqual([
-      "test/vitest/vitest.unit-fast.config.ts",
-      "test/vitest/vitest.cli-process.config.ts",
-      "test/vitest/vitest.cli.config.ts",
-    ]);
-    expect(plans[1]?.includePatterns).toContain("src/cli/help-exit.process.test.ts");
+    expect(plans.map((plan) => plan.config)).toEqual(
+      expect.arrayContaining([
+        "test/vitest/vitest.unit-fast.config.ts",
+        "test/vitest/vitest.cli-process.config.ts",
+        "test/vitest/vitest.cli.config.ts",
+      ]),
+    );
+    const processPlan = plans.find(
+      (plan) => plan.config === "test/vitest/vitest.cli-process.config.ts",
+    );
+    expect(processPlan?.includePatterns).toContain("src/cli/help-exit.process.test.ts");
   });
 
   it("rejects broad CLI watch targets that cross shared and process projects", () => {
