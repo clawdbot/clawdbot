@@ -35,6 +35,7 @@ import {
   DiscordPresenceReadyListener,
   DiscordReactionListener,
   DiscordReactionRemoveListener,
+  DiscordThreadDeleteListener,
   DiscordThreadUpdateListener,
   registerDiscordListener,
 } from "./listeners.js";
@@ -286,6 +287,10 @@ export function registerDiscordMonitorListeners(params: {
   registerDiscordListener(
     params.client.listeners,
     new DiscordThreadUpdateListener(params.cfg, params.accountId, params.logger),
+  );
+  registerDiscordListener(
+    params.client.listeners,
+    new DiscordThreadDeleteListener(params.cfg, params.accountId, params.logger),
   );
 
   if (params.discordConfig.intents?.presence) {
