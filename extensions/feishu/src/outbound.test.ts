@@ -454,27 +454,30 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     );
   });
 
-  it("sends an absolute existing local image path as media", async () => {
-    const { dir, file } = await createTmpImage();
-    try {
-      const result = await sendText({
-        cfg: emptyConfig,
-        to: "chat_1",
-        text: file,
-        accountId: "main",
-        mediaLocalRoots: [dir],
-      });
+  it.each([".png", ".heic", ".tif", ".tiff"])(
+    "sends an existing absolute %s image path as media instead of leaking it",
+    async (extension) => {
+      const { dir, file } = await createTmpImage(extension);
+      try {
+        const result = await sendText({
+          cfg: emptyConfig,
+          to: "chat_1",
+          text: file,
+          accountId: "main",
+          mediaLocalRoots: [dir],
+        });
 
-      expect(sendMediaCall()?.to).toBe("chat_1");
-      expect(sendMediaCall()?.mediaUrl).toBe(file);
-      expect(sendMediaCall()?.accountId).toBe("main");
-      expect(sendMediaCall()?.mediaLocalRoots).toEqual([dir]);
-      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-      expectFeishuResult(result, "media_msg");
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
-  });
+        expect(sendMediaCall()?.to).toBe("chat_1");
+        expect(sendMediaCall()?.mediaUrl).toBe(file);
+        expect(sendMediaCall()?.accountId).toBe("main");
+        expect(sendMediaCall()?.mediaLocalRoots).toEqual([dir]);
+        expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+        expectFeishuResult(result, "media_msg");
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("keeps non-path text on the text-send path", async () => {
     await sendText({
