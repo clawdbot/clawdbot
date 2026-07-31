@@ -29,6 +29,9 @@ const NODE_MCP_ERROR_MAX_CHARS = 1_024;
 const NODE_MCP_MAX_DESCRIPTORS = 128;
 const NODE_MCP_MAX_DESCRIPTOR_BYTES = 1024 * 1024;
 const NODE_MCP_MAX_CATALOG_BYTES = 10 * 1024 * 1024;
+const NODE_MCP_MAX_LIST_PAGES = NODE_MCP_MAX_DESCRIPTORS;
+// The byte cap charges every response; this separately bounds retained tiny-tool object overhead.
+const NODE_MCP_MAX_LISTED_TOOLS = NODE_MCP_MAX_DESCRIPTORS * NODE_MCP_MAX_LIST_PAGES;
 
 type NodeHostMcpClient = {
   onclose?: () => void;
@@ -260,19 +263,47 @@ async function withAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined
 async function listAllTools(
   client: NodeHostMcpClient,
   timeoutMs: number,
+  shouldInclude: (toolName: string) => boolean,
   signal?: AbortSignal,
 ): Promise<Tool[]> {
   const tools: Tool[] = [];
+  const seenCursors = new Set<string>();
+  let listingBytes = 0;
   let cursor: string | undefined;
-  do {
+
+  for (let pageNumber = 0; pageNumber < NODE_MCP_MAX_LIST_PAGES; pageNumber += 1) {
     const page = await withAbort(
       client.listTools(cursor ? { cursor } : undefined, { timeout: timeoutMs }),
       signal,
     );
-    tools.push(...page.tools);
-    cursor = page.nextCursor;
-  } while (cursor);
-  return tools;
+    listingBytes += Buffer.byteLength(JSON.stringify(page));
+    if (listingBytes > NODE_MCP_MAX_CATALOG_BYTES) {
+      throw new Error(`MCP tool listing exceeded ${NODE_MCP_MAX_CATALOG_BYTES} bytes`);
+    }
+
+    for (const tool of page.tools) {
+      const toolName = tool.name.trim();
+      if (!toolName || !shouldInclude(toolName)) {
+        continue;
+      }
+      if (tools.length >= NODE_MCP_MAX_LISTED_TOOLS) {
+        throw new Error(`MCP tool listing exceeded ${NODE_MCP_MAX_LISTED_TOOLS} tools`);
+      }
+      tools.push({ ...tool, name: toolName });
+    }
+
+    const nextCursor = page.nextCursor;
+    if (!nextCursor) {
+      return tools;
+    }
+    if (seenCursors.has(nextCursor)) {
+      throw new Error("MCP tool listing returned a repeated pagination cursor");
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  }
+
+  throw new Error(`MCP tool listing exceeded ${NODE_MCP_MAX_LIST_PAGES} pages`);
 }
 
 function resolveCallTimeoutMs(value: number | undefined): number {
@@ -341,16 +372,15 @@ export async function startNodeHostMcpManager(
           deps.signal,
         );
         session.connected = true;
-        const tools = (await listAllTools(client, resolved.requestTimeoutMs, deps.signal)).filter(
-          (tool) => {
-            const toolName = tool.name.trim();
-            return Boolean(toolName) && shouldExposeTool(config, toolName);
-          },
+        const tools = await listAllTools(
+          client,
+          resolved.requestTimeoutMs,
+          (toolName) => shouldExposeTool(config, toolName),
+          deps.signal,
         );
         for (const tool of tools) {
-          const toolName = tool.name.trim();
-          session.tools.add(toolName);
-          listedTools.push({ serverName, tool: { ...tool, name: toolName } });
+          session.tools.add(tool.name);
+          listedTools.push({ serverName, tool });
         }
         sessions.set(serverName, session);
       } catch (error) {
