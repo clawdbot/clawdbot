@@ -275,6 +275,14 @@ export function renderClawLifecycle(props: ClawLifecycleViewProps) {
           </div>`
         : nothing}
       ${renderCatalog(props)}
+      ${props.selected?.bootstrapState === "pending"
+        ? html`<div class="callout warn">
+            <div>
+              <strong>${t("clawsPage.bootstrapTrustTitle")}</strong>
+              <div>${t("clawsPage.bootstrapTrustWarning")}</div>
+            </div>
+          </div>`
+        : nothing}
       ${props.selected
         ? html`<div class="claws-lifecycle__installed-actions">
             <button

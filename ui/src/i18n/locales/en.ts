@@ -1985,6 +1985,9 @@ export const en: TranslationMap = {
     diagnostics: "Diagnostics",
     noDiagnostics: "No lifecycle findings.",
     partialGuidance: "Refresh Claws and review Diagnostics before retrying or opening chat.",
+    bootstrapTrustTitle: "Package-authored setup",
+    bootstrapTrustWarning:
+      "These instructions came from this Claw package. Review them, and never paste passwords, tokens, or other credentials into chat.",
     agent: "Agent",
     source: "Source",
     updated: "Updated",

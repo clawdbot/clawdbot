@@ -90,7 +90,19 @@ describe("renderClawLifecycle", () => {
     expect(container.textContent).toContain("Financial Analyst");
     expect(container.textContent).toContain("Workspace files");
     expect(container.textContent).toContain("Complete setup");
+    expect(container.textContent).toContain("Package-authored setup");
+    expect(container.textContent).toContain("never paste passwords, tokens");
     expect(container.querySelectorAll("button:disabled")).toHaveLength(0);
+  });
+
+  it("does not show the package-authored setup warning after bootstrap completes", () => {
+    const container = document.createElement("div");
+    render(
+      renderClawLifecycle(props({ selected: { ...selected, bootstrapState: "complete" } })),
+      container,
+    );
+    expect(container.textContent).not.toContain("Package-authored setup");
+    expect(container.textContent).not.toContain("Complete setup");
   });
 
   it("requires explicit risk consent before apply", () => {
