@@ -22,6 +22,15 @@ describe("redactSensitiveUrl", () => {
     );
   });
 
+  it("redacts sig and x-* query params shared with sibling redaction lists", () => {
+    expect(redactSensitiveUrl("https://example.com/mcp?sig=secret&safe=value")).toBe(
+      "https://example.com/mcp?sig=***&safe=value",
+    );
+    expect(redactSensitiveUrl("https://example.com/mcp?x-api-key=secret")).toBe(
+      "https://example.com/mcp?x-api-key=***",
+    );
+  });
+
   it("redacts encoded and invisible-spliced sensitive query param names", () => {
     expect(
       redactSensitiveUrl("https://example.com/mcp?client%5Fse%E2%80%8Bcret=secret&safe=value"),
@@ -263,6 +272,10 @@ describe("isSensitiveUrlQueryParamName", () => {
     expect(isSensitiveUrlQueryParamName("client_se+cret")).toBe(true);
     expect(isSensitiveUrlQueryParamName("client_se\u3164cret")).toBe(true);
     expect(isSensitiveUrlQueryParamName("credential")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("sig")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("X-Api-Key")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("x-access-token")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("x-auth-token")).toBe(true);
     expect(isSensitiveUrlQueryParamName("safe")).toBe(false);
   });
 });
