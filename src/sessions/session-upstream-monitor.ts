@@ -167,6 +167,11 @@ async function probeProvenanceUnchanged(
     return false;
   }
   const current = await loadOwnRecentUserTexts(probe, entry, options);
+  // Transcript I/O can outlive run admission or session replacement. Recheck
+  // the current idle owner after the last await before committing its result.
+  if (!loadIdleProbeSession(probe, options, expectedSessionId)) {
+    return false;
+  }
   return (
     options.signal?.aborted !== true &&
     current.length === probe.ownRecentUserTexts.length &&
