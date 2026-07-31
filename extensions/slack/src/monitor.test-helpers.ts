@@ -328,6 +328,9 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
   lastSlackTestStateDir = stateDir;
   process.env.OPENCLAW_STATE_DIR = stateDir;
   setSlackRuntime({
+    agent: {
+      resolveAgentTimeoutMs: () => 60_000,
+    },
     state: {
       openChannelIngressQueue: (
         options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
