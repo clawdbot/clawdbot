@@ -15,8 +15,9 @@ export {
 
 const LINE_CHANNEL_ID = "line";
 
-/** Pre-drain rows can outlive the account config that admitted them, so account
- *  discovery reads the durable queue itself instead of the current config. */
+/** Pre-drain rows can outlive the account config that admitted them, so the sweep
+ *  enumerates accounts from the host's queue lane instead of the config; a host
+ *  without the lane fails visibly rather than silently skipping the migration. */
 function lineSpoolQueueAccess(
   context: PluginDoctorStateMigrationContext,
 ): PluginDoctorChannelIngressQueueAccess {
