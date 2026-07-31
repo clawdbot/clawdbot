@@ -1093,14 +1093,6 @@ export function expireStaleReplyOperation(
   return expireReplyOperationByOperation.get(operation)?.(reason) ?? false;
 }
 
-export function expireStaleReplyRunBySessionId(
-  sessionId: string,
-  reason: ReplyOperationStaleReason,
-): boolean {
-  const operation = resolveReplyRunForCurrentSessionId(sessionId);
-  return operation ? expireStaleReplyOperation(operation, reason) : false;
-}
-
 // lastActivityAtMs is refreshed by agent events only; timers and user-message
 // injection never refresh it, so quiet runs age toward reclaim.
 export function isReplyRunEvidenceStale(operation: ReplyOperation): boolean {
@@ -1283,6 +1275,10 @@ export function queueReplyRunMessage(
   return true;
 }
 
+export function isReplyOperationActive(operation: ReplyOperation): boolean {
+  return replyRunState.activeRunsByKey.get(operation.key) === operation;
+}
+
 export function abortReplyRunBySessionId(sessionId: string): boolean {
   const operation = resolveReplyRunForCurrentSessionId(sessionId);
   if (!operation) {
@@ -1298,7 +1294,7 @@ export function resolveActiveReplyOperationForSessionId(
 }
 
 export function forceClearReplyOperation(operation: ReplyOperation, cause?: unknown): boolean {
-  if (replyRunState.activeRunsByKey.get(operation.key) !== operation) {
+  if (!isReplyOperationActive(operation)) {
     return false;
   }
   operation.fail("run_failed", cause);

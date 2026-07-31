@@ -70,6 +70,7 @@ const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   activeRuns: new Map<string, EmbeddedAgentQueueHandle>(),
   activeRunsByRunId: new Map<string, EmbeddedAgentQueueHandle>(),
   activeRunLifecycleGenerations: new WeakMap<EmbeddedAgentQueueHandle, string>(),
+  endedRunHandles: new WeakSet<EmbeddedAgentQueueHandle>(),
   retainedAbortabilityRunIds: new Set<string>(),
   snapshots: new Map<string, ActiveEmbeddedRunSnapshot>(),
   sessionIdsByKey: new Map<string, string>(),
@@ -92,6 +93,9 @@ const ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS =
     EmbeddedAgentQueueHandle,
     string
   >());
+export const ENDED_EMBEDDED_RUN_HANDLES =
+  embeddedRunState.endedRunHandles ??
+  (embeddedRunState.endedRunHandles = new WeakSet<EmbeddedAgentQueueHandle>());
 export const RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS =
   embeddedRunState.retainedAbortabilityRunIds ??
   (embeddedRunState.retainedAbortabilityRunIds = new Set<string>());
