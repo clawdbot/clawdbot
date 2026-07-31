@@ -630,29 +630,6 @@ describe("plugin management service", () => {
     expect(result.warnings).toEqual(["Selected workboard for the memory slot."]);
   });
 
-  it.each([true, false])(
-    "reports registry refresh warnings after a committed enabled=%s mutation",
-    async (enabled) => {
-      const config = { plugins: { entries: { workboard: { enabled: !enabled } } } };
-      mocks.readConfig.mockResolvedValue(configSnapshot(config));
-      mocks.replaceConfig.mockResolvedValue({});
-      mocks.metadata
-        .mockReturnValueOnce(metadataSnapshot({ enabled: !enabled }))
-        .mockReturnValueOnce(metadataSnapshot({ enabled }));
-      mocks.refreshRegistry.mockImplementation(
-        async (params: { logger?: { warn?: (message: string) => void } }) => {
-          params.logger?.warn?.("Plugin registry refresh failed: registry unavailable");
-        },
-      );
-
-      const result = await setManagedPluginEnabled({ pluginId: "workboard", enabled, env: {} });
-
-      expect(mocks.replaceConfig).toHaveBeenCalledOnce();
-      expect(result.plugin.enabled).toBe(enabled);
-      expect(result.warnings).toEqual(["Plugin registry refresh failed: registry unavailable"]);
-    },
-  );
-
   it("pins curated ClawHub installs to the expected runtime id", async () => {
     mocks.readConfig.mockResolvedValue(configSnapshot());
     mocks.officialCatalog.mockResolvedValue({

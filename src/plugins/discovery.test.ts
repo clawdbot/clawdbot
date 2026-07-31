@@ -8,6 +8,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import * as pluginHardlinkPolicy from "./hardlink-policy.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import type { PackageManifest } from "./manifest.js";
 import { resolvePackageSetupSource } from "./package-entry-resolution.js";
 import { listBuiltRuntimeEntryCandidates } from "./package-entrypoints.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
@@ -1429,20 +1430,18 @@ describe("discoverOpenClawPlugins", () => {
     ({ pluginMetadataId, channelMetadataId, owner }) => {
       const pluginDir = makeTempDir();
       const diagnostics: ReturnType<typeof discoverOpenClawPlugins>["diagnostics"] = [];
-      const manifest = JSON.parse(
-        JSON.stringify({
-          openclaw: {
-            setupEntry: "./missing-setup.js",
-            plugin: { id: pluginMetadataId },
-            channel: { id: channelMetadataId },
-          },
-        }),
-      );
+      const manifest = structuredClone({
+        openclaw: {
+          setupEntry: "./missing-setup.js",
+          plugin: { id: pluginMetadataId },
+          channel: { id: channelMetadataId },
+        },
+      });
 
       expect(
         resolvePackageSetupSource({
           packageDir: pluginDir,
-          manifest,
+          manifest: manifest as unknown as PackageManifest,
           origin: "global",
           sourceLabel: pluginDir,
           diagnostics,

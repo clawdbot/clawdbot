@@ -47,7 +47,7 @@ function createPlugin(params: {
 function reverseDirectoryEntries(directory: string): void {
   const readDirectory = fs.readdirSync;
   vi.spyOn(fs, "readdirSync").mockImplementation((entryPath, options) => {
-    const entries = readDirectory.call(fs, entryPath, options) as unknown as fs.Dirent[];
+    const entries = readDirectory.call(fs, entryPath, options);
     if (
       path.resolve(String(entryPath)) !== directory ||
       !options ||
@@ -55,11 +55,13 @@ function reverseDirectoryEntries(directory: string): void {
       !("withFileTypes" in options) ||
       !options.withFileTypes
     ) {
-      return entries as ReturnType<typeof fs.readdirSync>;
+      return entries;
     }
-    return entries.toSorted((left, right) =>
-      left.name > right.name ? -1 : left.name < right.name ? 1 : 0,
-    ) as ReturnType<typeof fs.readdirSync>;
+    return entries.toSorted((left, right) => {
+      const leftName = String(left.name);
+      const rightName = String(right.name);
+      return leftName > rightName ? -1 : leftName < rightName ? 1 : 0;
+    });
   });
 }
 
