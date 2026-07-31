@@ -7,7 +7,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain.js";
 import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
-import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import {
@@ -42,6 +42,7 @@ import {
   isAudioPayload,
 } from "./agent-runner-helpers.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
+import { createTouchActiveSessionEntry } from "./agent-runner-session-touch.js";
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
@@ -196,20 +197,12 @@ export async function runReplyAgent(
 
   const pendingToolTasks = new Set<Promise<void>>();
   const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
-  const touchActiveSessionEntry = async () => {
-    if (!activeSessionEntry || !activeSessionStore || !sessionKey) {
-      return;
-    }
-    const updatedAt = Date.now();
-    activeSessionEntry.updatedAt = updatedAt;
-    activeSessionStore[sessionKey] = activeSessionEntry;
-    if (storePath) {
-      await updateSessionEntry({ storePath, sessionKey }, () => ({ updatedAt }), {
-        skipMaintenance: true,
-        takeCacheOwnership: true,
-      });
-    }
-  };
+  const touchActiveSessionEntry = createTouchActiveSessionEntry({
+    getActiveSessionEntry: () => activeSessionEntry,
+    getActiveSessionStore: () => activeSessionStore,
+    sessionKey,
+    storePath,
+  });
 
   let shouldQueueAfterSteerRejection = false;
   let beforeAgentReplyDispatchedForSteer = false;

@@ -571,11 +571,7 @@ function schedulePendingWakes(readyDelayMs: number) {
       groupWakes.every(
         (pending) =>
           !pending ||
-          isAfterGlobalWakeBarrier(
-            targetKey,
-            pending.enqueueSequence,
-            globalBarrierCutoffSequence,
-          ),
+          isAfterGlobalWakeBarrier(targetKey, pending.enqueueSequence, globalBarrierCutoffSequence),
       )
     ) {
       continue;
@@ -587,11 +583,7 @@ function schedulePendingWakes(readyDelayMs: number) {
     for (const pending of groupWakes) {
       if (
         !pending ||
-        isAfterGlobalWakeBarrier(
-          targetKey,
-          pending.enqueueSequence,
-          globalBarrierCutoffSequence,
-        )
+        isAfterGlobalWakeBarrier(targetKey, pending.enqueueSequence, globalBarrierCutoffSequence)
       ) {
         continue;
       }
