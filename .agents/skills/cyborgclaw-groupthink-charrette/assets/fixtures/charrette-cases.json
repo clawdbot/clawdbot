@@ -1,0 +1,2566 @@
+{
+  "draft": {
+    "schema_version": "cyborgclaw.groupthink-charrette.session.v1",
+    "state": "draft",
+    "session_id": "charrette-fixture-001",
+    "mission_id": "fixture-mission",
+    "mission_statement": "Exercise the charrette contract without external or production effects.",
+    "contract_identity": {
+      "charter_id": "cyborgclaw.glen-proxy-charter.v1",
+      "protocol_id": "cyborgclaw.groupthink-charrette.protocol.v1",
+      "algorithm_version": "cyborgclaw.groupthink-charrette.decision.v1",
+      "constants_schema_version": "cyborgclaw.groupthink-charrette.constants.v1",
+      "session_schema": "cyborgclaw.groupthink-charrette.session.v1",
+      "findings_schema": "cyborgclaw.groupthink-charrette.findings.v1",
+      "decision_record_schema": "cyborgclaw.sadr.v1",
+      "charter_sha256": "4adb296e749822ebd26043ae2b9fd428f9672867a3db85544e8bdc11326bf9ae",
+      "protocol_sha256": "677d4c038bd734d28926cd1d79b3693cafcfa690f145f1d98b3149bb04b34509",
+      "constants_sha256": "00778f48b9e08296f640513c108d5966b5917a8c0c4a753b6ff26d18abdf77c2",
+      "session_schema_sha256": "795c911f04032c7e17c135d447c110565afbeef041ff420cce6d046d82897434",
+      "findings_schema_sha256": "2d65656c56c12e274a4730388d497ef6727d628384074e7f14445940298cd9ac",
+      "decision_record_schema_sha256": "32427e2ba5078b7fb3753d2f4cfa7c8cec7d322c105717177f5eabb96d4387fb"
+    },
+    "decision": {
+      "question": "Should the exact local validation action continue?",
+      "options": [
+        {
+          "id": "continue",
+          "summary": "Run the frozen local validation action."
+        },
+        {
+          "id": "stop",
+          "summary": "Stop without changing local files."
+        }
+      ],
+      "candidate_evidence_id": "ev-candidate",
+      "candidate_digest": "0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb",
+      "proposed_next_action": {
+        "operation_id": "RUN_LOCAL_VALIDATION",
+        "target_scope_id": "fixture-workspace",
+        "description": "Run the frozen local validation suite.",
+        "category": "repeat_validation",
+        "destination": "local_workspace",
+        "declared_effects": [
+          "local_validation"
+        ],
+        "reversible": true,
+        "parameters": {
+          "executor_adapter_id": "charrette.local-validation.v1",
+          "command_id": "run-frozen-validation",
+          "arguments": [
+            "all-contract-tests"
+          ],
+          "file_allowlist": [],
+          "change_digest": null,
+          "change_evidence_id": null,
+          "rollback_digest": null,
+          "validation_command_id": null,
+          "validation_arguments": []
+        }
+      }
+    },
+    "suitability": {
+      "material_tradeoff": true,
+      "multiple_defensible_options": true,
+      "cross_domain_risk": false,
+      "disputed_gate": true,
+      "factual_lookup": false,
+      "routine_mechanical_step": false,
+      "reversible": true
+    },
+    "proxy_charter": {
+      "delegation_id": "glen-fixture-delegation",
+      "granted_by": "Glen",
+      "decision_owner": "Glen",
+      "mission_id": "fixture-mission",
+      "decision_context_digest": "3f5b22d44ba7ad38d3774bcf99904e347009dccdaa34e4d7a63cd01484626865",
+      "proof_plan_digest": "725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a",
+      "proof_plan_committed_at": "2026-07-30T00:00:00.000Z",
+      "target_scope": {
+        "kind": "local_workspace",
+        "repository_id": "fixture-repository",
+        "workspace_id": "fixture-workspace"
+      },
+      "scope": "Fixture-only local validation and repair.",
+      "allowed_action_categories": [
+        "repeat_validation",
+        "local_test_repair"
+      ],
+      "authorized_action_digests": [
+        "88596902b271c7e9ce51148fcfd261635048c1eaf2025556e600210b03014845",
+        "374b7e544c6e26e5b53097a6e466e4e8a1aada226aefddb1bce74d80f327a310"
+      ],
+      "network_policy": "none",
+      "authority_evidence_ids": [
+        "ev-authority"
+      ],
+      "authority_custody": {
+        "method": "operator_direct_prompt",
+        "verifier_id": "FixtureCustodian",
+        "evidence_id": "ev-authority",
+        "attestation": "I received this delegation through the declared custody method; this record preserves but does not cryptographically authenticate that source."
+      },
+      "boundary_kind": "expires_at",
+      "expires_at": "2099-01-01T00:00:00.000Z",
+      "authorization_nonce": "4bd99c7dfd6201ac9f0798dca75334c2257a1484a6611e30829402ff276fe87e",
+      "authorization_use_limit": 1,
+      "mission_boundary": "This delegation ends at its exact expiry and permits at most one enforcing-executor use of the exact authorized nonce.",
+      "proof_bar": "Every frozen gate has content-addressed evidence.",
+      "claim_ceiling_code": "INTERNAL_DECISION_ONLY",
+      "claim_ceiling": "Internal decision record only; no merge, release, production, credential, external-effect, risk-acceptance, remote-repository, or mission-change authority.",
+      "mission_reserved_action_categories": [],
+      "revoked": false,
+      "stop_condition_active": false
+    },
+    "failure_lenses": [
+      "epistemic_integrity",
+      "authority_security",
+      "development_practicality"
+    ],
+    "frozen_gates": [
+      {
+        "id": "gate-tests",
+        "criterion": "The local contract tests pass.",
+        "measure": "passing_test_count",
+        "operator": "gte",
+        "threshold": 1,
+        "measurement_command_id": "fixture-contract-tests",
+        "measurement_arguments": [
+          "all-contract-tests"
+        ],
+        "required_exit_code": 0,
+        "pass_condition": "At least one frozen contract test passes.",
+        "required_evidence_ids": [
+          "ev-tests"
+        ]
+      },
+      {
+        "id": "gate-authority",
+        "criterion": "The proposed action remains inside the delegation.",
+        "measure": "authority_evidence_reviewed",
+        "operator": "manual_evidence",
+        "threshold": true,
+        "measurement_command_id": null,
+        "measurement_arguments": [],
+        "required_exit_code": null,
+        "pass_condition": "Authority evidence is present and reviewed.",
+        "required_evidence_ids": [
+          "ev-authority"
+        ]
+      }
+    ],
+    "evidence": [
+      {
+        "id": "ev-authority",
+        "kind": "inline_fixture",
+        "source": "fixture:ev-authority",
+        "sha256": "e57e9d5471ead3c47ae5e6f3affa6f59243afd406cc82789244cd763fa19d476",
+        "classification": "authority",
+        "untrusted": true,
+        "encoding": "utf8",
+        "content": "{\"proxy_charter\":{\"allowed_action_categories\":[\"repeat_validation\",\"local_test_repair\"],\"authority_custody\":{\"attestation\":\"I received this delegation through the declared custody method; this record preserves but does not cryptographically authenticate that source.\",\"evidence_id\":\"ev-authority\",\"method\":\"operator_direct_prompt\",\"verifier_id\":\"FixtureCustodian\"},\"authority_evidence_ids\":[\"ev-authority\"],\"authorization_nonce\":\"4bd99c7dfd6201ac9f0798dca75334c2257a1484a6611e30829402ff276fe87e\",\"authorization_use_limit\":1,\"authorized_action_digests\":[\"88596902b271c7e9ce51148fcfd261635048c1eaf2025556e600210b03014845\",\"374b7e544c6e26e5b53097a6e466e4e8a1aada226aefddb1bce74d80f327a310\"],\"boundary_kind\":\"expires_at\",\"claim_ceiling\":\"Internal decision record only; no merge, release, production, credential, external-effect, risk-acceptance, remote-repository, or mission-change authority.\",\"claim_ceiling_code\":\"INTERNAL_DECISION_ONLY\",\"decision_context_digest\":\"3f5b22d44ba7ad38d3774bcf99904e347009dccdaa34e4d7a63cd01484626865\",\"decision_owner\":\"Glen\",\"delegation_id\":\"glen-fixture-delegation\",\"expires_at\":\"2099-01-01T00:00:00.000Z\",\"granted_by\":\"Glen\",\"mission_boundary\":\"This delegation ends at its exact expiry and permits at most one enforcing-executor use of the exact authorized nonce.\",\"mission_id\":\"fixture-mission\",\"mission_reserved_action_categories\":[],\"network_policy\":\"none\",\"proof_bar\":\"Every frozen gate has content-addressed evidence.\",\"proof_plan_committed_at\":\"2026-07-30T00:00:00.000Z\",\"proof_plan_digest\":\"725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a\",\"revoked\":false,\"scope\":\"Fixture-only local validation and repair.\",\"stop_condition_active\":false,\"target_scope\":{\"kind\":\"local_workspace\",\"repository_id\":\"fixture-repository\",\"workspace_id\":\"fixture-workspace\"}},\"schema_version\":\"cyborgclaw.glen-delegation.v1\"}"
+      },
+      {
+        "id": "ev-tests",
+        "kind": "inline_fixture",
+        "source": "fixture:ev-tests",
+        "sha256": "d4fdb9cb689070c52611374fc4684d872805a6fcd276972f2d55cdc9166bad89",
+        "classification": "test",
+        "untrusted": true,
+        "encoding": "utf8",
+        "content": "{\"arguments\":[\"all-contract-tests\"],\"candidate_digest\":\"0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb\",\"captured_at\":\"2026-07-30T00:01:00.000Z\",\"command_id\":\"fixture-contract-tests\",\"decision_context_digest\":\"3f5b22d44ba7ad38d3774bcf99904e347009dccdaa34e4d7a63cd01484626865\",\"exit_code\":0,\"measurements\":{\"passing_test_count\":1},\"mission_id\":\"fixture-mission\",\"producer_id\":\"FixtureExecutor\",\"proof_plan_digest\":\"725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a\",\"receipt_id\":\"ev-tests\",\"repository_id\":\"fixture-repository\",\"schema_version\":\"cyborgclaw.measurement-receipt.v1\",\"session_id\":\"charrette-fixture-001\",\"workspace_id\":\"fixture-workspace\"}"
+      },
+      {
+        "id": "ev-candidate",
+        "kind": "inline_fixture",
+        "source": "fixture:ev-candidate",
+        "sha256": "0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb",
+        "classification": "source",
+        "untrusted": true,
+        "encoding": "utf8",
+        "content": "canonical-fixture-candidate-v1"
+      },
+      {
+        "id": "ev-repair-patch",
+        "kind": "inline_fixture",
+        "source": "fixture:ev-repair-patch",
+        "sha256": "9b0a2a3d14b9399d18175bc1758ffd57e69590498a96bc74ef38d8d14a6325ef",
+        "classification": "source",
+        "untrusted": true,
+        "encoding": "utf8",
+        "content": "{\"bundle_id\":\"ev-repair-patch\",\"changes\":[{\"after_content_base64\":\"YXNzZXJ0LmVxdWFsKGFjdHVhbCwgdHJ1ZSk7XG4=\",\"after_sha256\":\"9ac820ddbc1753b2bb1a3ab28edd592d55063395840db325e9a21ef84a195257\",\"before_content_base64\":\"YXNzZXJ0LmVxdWFsKGFjdHVhbCwgZmFsc2UpO1xu\",\"before_sha256\":\"d6a55333429065ff50501fb232dd5eb303db0df201681cc8413741c2ffa8321e\",\"path\":\"tests/decisions.test.mjs\"}],\"repository_id\":\"fixture-repository\",\"schema_version\":\"cyborgclaw.local-change-bundle.v1\",\"validation_arguments\":[\"tests/decisions.test.mjs\"],\"validation_command_id\":\"run-focused-validation\",\"workspace_id\":\"fixture-workspace\"}"
+      }
+    ],
+    "panel_assignments": [
+      {
+        "lens_id": "epistemic_integrity",
+        "reviewer_id": "EpistemicReviewer"
+      },
+      {
+        "lens_id": "authority_security",
+        "reviewer_id": "AuthorityReviewer"
+      },
+      {
+        "lens_id": "development_practicality",
+        "reviewer_id": "PracticalityReviewer"
+      }
+    ],
+    "roles": {
+      "builder_id": "FixtureBuilder",
+      "evidence_writer_id": "FixtureCustodian",
+      "executor_id": "FixtureExecutor",
+      "synthesis_chair_id": "Sage",
+      "final_reviewer_id": "FixtureFinalReviewer",
+      "decision_judge_id": "Sage"
+    },
+    "max_challenge_rounds": 2,
+    "frozen_at": null,
+    "freeze_digest": null
+  },
+  "frozen": {
+    "schema_version": "cyborgclaw.groupthink-charrette.session.v1",
+    "state": "frozen",
+    "session_id": "charrette-fixture-001",
+    "mission_id": "fixture-mission",
+    "mission_statement": "Exercise the charrette contract without external or production effects.",
+    "contract_identity": {
+      "charter_id": "cyborgclaw.glen-proxy-charter.v1",
+      "protocol_id": "cyborgclaw.groupthink-charrette.protocol.v1",
+      "algorithm_version": "cyborgclaw.groupthink-charrette.decision.v1",
+      "constants_schema_version": "cyborgclaw.groupthink-charrette.constants.v1",
+      "session_schema": "cyborgclaw.groupthink-charrette.session.v1",
+      "findings_schema": "cyborgclaw.groupthink-charrette.findings.v1",
+      "decision_record_schema": "cyborgclaw.sadr.v1",
+      "charter_sha256": "4adb296e749822ebd26043ae2b9fd428f9672867a3db85544e8bdc11326bf9ae",
+      "protocol_sha256": "677d4c038bd734d28926cd1d79b3693cafcfa690f145f1d98b3149bb04b34509",
+      "constants_sha256": "00778f48b9e08296f640513c108d5966b5917a8c0c4a753b6ff26d18abdf77c2",
+      "session_schema_sha256": "795c911f04032c7e17c135d447c110565afbeef041ff420cce6d046d82897434",
+      "findings_schema_sha256": "2d65656c56c12e274a4730388d497ef6727d628384074e7f14445940298cd9ac",
+      "decision_record_schema_sha256": "32427e2ba5078b7fb3753d2f4cfa7c8cec7d322c105717177f5eabb96d4387fb"
+    },
+    "decision": {
+      "question": "Should the exact local validation action continue?",
+      "options": [
+        {
+          "id": "continue",
+          "summary": "Run the frozen local validation action."
+        },
+        {
+          "id": "stop",
+          "summary": "Stop without changing local files."
+        }
+      ],
+      "candidate_evidence_id": "ev-candidate",
+      "candidate_digest": "0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb",
+      "proposed_next_action": {
+        "operation_id": "RUN_LOCAL_VALIDATION",
+        "target_scope_id": "fixture-workspace",
+        "description": "Run the frozen local validation suite.",
+        "category": "repeat_validation",
+        "destination": "local_workspace",
+        "declared_effects": [
+          "local_validation"
+        ],
+        "reversible": true,
+        "parameters": {
+          "executor_adapter_id": "charrette.local-validation.v1",
+          "command_id": "run-frozen-validation",
+          "arguments": [
+            "all-contract-tests"
+          ],
+          "file_allowlist": [],
+          "change_digest": null,
+          "change_evidence_id": null,
+          "rollback_digest": null,
+          "validation_command_id": null,
+          "validation_arguments": []
+        }
+      }
+    },
+    "suitability": {
+      "material_tradeoff": true,
+      "multiple_defensible_options": true,
+      "cross_domain_risk": false,
+      "disputed_gate": true,
+      "factual_lookup": false,
+      "routine_mechanical_step": false,
+      "reversible": true
+    },
+    "proxy_charter": {
+      "delegation_id": "glen-fixture-delegation",
+      "granted_by": "Glen",
+      "decision_owner": "Glen",
+      "mission_id": "fixture-mission",
+      "decision_context_digest": "3f5b22d44ba7ad38d3774bcf99904e347009dccdaa34e4d7a63cd01484626865",
+      "proof_plan_digest": "725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a",
+      "proof_plan_committed_at": "2026-07-30T00:00:00.000Z",
+      "target_scope": {
+        "kind": "local_workspace",
+        "repository_id": "fixture-repository",
+        "workspace_id": "fixture-workspace"
+      },
+      "scope": "Fixture-only local validation and repair.",
+      "allowed_action_categories": [
+        "repeat_validation",
+        "local_test_repair"
+      ],
+      "authorized_action_digests": [
+        "88596902b271c7e9ce51148fcfd261635048c1eaf2025556e600210b03014845",
+        "374b7e544c6e26e5b53097a6e466e4e8a1aada226aefddb1bce74d80f327a310"
+      ],
+      "network_policy": "none",
+      "authority_evidence_ids": [
+        "ev-authority"
+      ],
+      "authority_custody": {
+        "method": "operator_direct_prompt",
+        "verifier_id": "FixtureCustodian",
+        "evidence_id": "ev-authority",
+        "attestation": "I received this delegation through the declared custody method; this record preserves but does not cryptographically authenticate that source."
+      },
+      "boundary_kind": "expires_at",
+      "expires_at": "2099-01-01T00:00:00.000Z",
+      "authorization_nonce": "4bd99c7dfd6201ac9f0798dca75334c2257a1484a6611e30829402ff276fe87e",
+      "authorization_use_limit": 1,
+      "mission_boundary": "This delegation ends at its exact expiry and permits at most one enforcing-executor use of the exact authorized nonce.",
+      "proof_bar": "Every frozen gate has content-addressed evidence.",
+      "claim_ceiling_code": "INTERNAL_DECISION_ONLY",
+      "claim_ceiling": "Internal decision record only; no merge, release, production, credential, external-effect, risk-acceptance, remote-repository, or mission-change authority.",
+      "mission_reserved_action_categories": [],
+      "revoked": false,
+      "stop_condition_active": false
+    },
+    "failure_lenses": [
+      "epistemic_integrity",
+      "authority_security",
+      "development_practicality"
+    ],
+    "frozen_gates": [
+      {
+        "id": "gate-tests",
+        "criterion": "The local contract tests pass.",
+        "measure": "passing_test_count",
+        "operator": "gte",
+        "threshold": 1,
+        "measurement_command_id": "fixture-contract-tests",
+        "measurement_arguments": [
+          "all-contract-tests"
+        ],
+        "required_exit_code": 0,
+        "pass_condition": "At least one frozen contract test passes.",
+        "required_evidence_ids": [
+          "ev-tests"
+        ]
+      },
+      {
+        "id": "gate-authority",
+        "criterion": "The proposed action remains inside the delegation.",
+        "measure": "authority_evidence_reviewed",
+        "operator": "manual_evidence",
+        "threshold": true,
+        "measurement_command_id": null,
+        "measurement_arguments": [],
+        "required_exit_code": null,
+        "pass_condition": "Authority evidence is present and reviewed.",
+        "required_evidence_ids": [
+          "ev-authority"
+        ]
+      }
+    ],
+    "evidence": [
+      {
+        "id": "ev-authority",
+        "kind": "inline_fixture",
+        "source": "fixture:ev-authority",
+        "sha256": "e57e9d5471ead3c47ae5e6f3affa6f59243afd406cc82789244cd763fa19d476",
+        "classification": "authority",
+        "untrusted": true,
+        "encoding": "utf8",
+        "content": "{\"proxy_charter\":{\"allowed_action_categories\":[\"repeat_validation\",\"local_test_repair\"],\"authority_custody\":{\"attestation\":\"I received this delegation through the declared custody method; this record preserves but does not cryptographically authenticate that source.\",\"evidence_id\":\"ev-authority\",\"method\":\"operator_direct_prompt\",\"verifier_id\":\"FixtureCustodian\"},\"authority_evidence_ids\":[\"ev-authority\"],\"authorization_nonce\":\"4bd99c7dfd6201ac9f0798dca75334c2257a1484a6611e30829402ff276fe87e\",\"authorization_use_limit\":1,\"authorized_action_digests\":[\"88596902b271c7e9ce51148fcfd261635048c1eaf2025556e600210b03014845\",\"374b7e544c6e26e5b53097a6e466e4e8a1aada226aefddb1bce74d80f327a310\"],\"boundary_kind\":\"expires_at\",\"claim_ceiling\":\"Internal decision record only; no merge, release, production, credential, external-effect, risk-acceptance, remote-repository, or mission-change authority.\",\"claim_ceiling_code\":\"INTERNAL_DECISION_ONLY\",\"decision_context_digest\":\"3f5b22d44ba7ad38d3774bcf99904e347009dccdaa34e4d7a63cd01484626865\",\"decision_owner\":\"Glen\",\"delegation_id\":\"glen-fixture-delegation\",\"expires_at\":\"2099-01-01T00:00:00.000Z\",\"granted_by\":\"Glen\",\"mission_boundary\":\"This delegation ends at its exact expiry and permits at most one enforcing-executor use of the exact authorized nonce.\",\"mission_id\":\"fixture-mission\",\"mission_reserved_action_categories\":[],\"network_policy\":\"none\",\"proof_bar\":\"Every frozen gate has content-addressed evidence.\",\"proof_plan_committed_at\":\"2026-07-30T00:00:00.000Z\",\"proof_plan_digest\":\"725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a\",\"revoked\":false,\"scope\":\"Fixture-only local validation and repair.\",\"stop_condition_active\":false,\"target_scope\":{\"kind\":\"local_workspace\",\"repository_id\":\"fixture-repository\",\"workspace_id\":\"fixture-workspace\"}},\"schema_version\":\"cyborgclaw.glen-delegation.v1\"}"
+      },
+      {
+        "id": "ev-tests",
+        "kind": "inline_fixture",
+        "source": "fixture:ev-tests",
+        "sha256": "d4fdb9cb689070c52611374fc4684d872805a6fcd276972f2d55cdc9166bad89",
+        "classification": "test",
+        "untrusted": true,
+        "encoding": "utf8",
+        "content": "{\"arguments\":[\"all-contract-tests\"],\"candidate_digest\":\"0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb\",\"captured_at\":\"2026-07-30T00:01:00.000Z\",\"command_id\":\"fixture-contract-tests\",\"decision_context_digest\":\"3f5b22d44ba7ad38d3774bcf99904e347009dccdaa34e4d7a63cd01484626865\",\"exit_code\":0,\"measurements\":{\"passing_test_count\":1},\"mission_id\":\"fixture-mission\",\"producer_id\":\"FixtureExecutor\",\"proof_plan_digest\":\"725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a\",\"receipt_id\":\"ev-tests\",\"repository_id\":\"fixture-repository\",\"schema_version\":\"cyborgclaw.measurement-receipt.v1\",\"session_id\":\"charrette-fixture-001\",\"workspace_id\":\"fixture-workspace\"}"
+      },
+      {
+        "id": "ev-candidate",
+        "kind": "inline_fixture",
+        "source": "fixture:ev-candidate",
+        "sha256": "0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb",
+        "classification": "source",
+        "untrusted": true,
+        "encoding": "utf8",
+        "content": "canonical-fixture-candidate-v1"
+      },
+      {
+        "id": "ev-repair-patch",
+        "kind": "inline_fixture",
+        "source": "fixture:ev-repair-patch",
+        "sha256": "9b0a2a3d14b9399d18175bc1758ffd57e69590498a96bc74ef38d8d14a6325ef",
+        "classification": "source",
+        "untrusted": true,
+        "encoding": "utf8",
+        "content": "{\"bundle_id\":\"ev-repair-patch\",\"changes\":[{\"after_content_base64\":\"YXNzZXJ0LmVxdWFsKGFjdHVhbCwgdHJ1ZSk7XG4=\",\"after_sha256\":\"9ac820ddbc1753b2bb1a3ab28edd592d55063395840db325e9a21ef84a195257\",\"before_content_base64\":\"YXNzZXJ0LmVxdWFsKGFjdHVhbCwgZmFsc2UpO1xu\",\"before_sha256\":\"d6a55333429065ff50501fb232dd5eb303db0df201681cc8413741c2ffa8321e\",\"path\":\"tests/decisions.test.mjs\"}],\"repository_id\":\"fixture-repository\",\"schema_version\":\"cyborgclaw.local-change-bundle.v1\",\"validation_arguments\":[\"tests/decisions.test.mjs\"],\"validation_command_id\":\"run-focused-validation\",\"workspace_id\":\"fixture-workspace\"}"
+      }
+    ],
+    "panel_assignments": [
+      {
+        "lens_id": "epistemic_integrity",
+        "reviewer_id": "EpistemicReviewer"
+      },
+      {
+        "lens_id": "authority_security",
+        "reviewer_id": "AuthorityReviewer"
+      },
+      {
+        "lens_id": "development_practicality",
+        "reviewer_id": "PracticalityReviewer"
+      }
+    ],
+    "roles": {
+      "builder_id": "FixtureBuilder",
+      "evidence_writer_id": "FixtureCustodian",
+      "executor_id": "FixtureExecutor",
+      "synthesis_chair_id": "Sage",
+      "final_reviewer_id": "FixtureFinalReviewer",
+      "decision_judge_id": "Sage"
+    },
+    "max_challenge_rounds": 2,
+    "frozen_at": "2026-07-30T00:02:00.000Z",
+    "freeze_digest": "e3450ed5a44a377cdf6b35b5377611618a984e4fb956a8c7380e26f4dc1deb9e"
+  },
+  "cases": [
+    {
+      "id": "proceed",
+      "session": {
+        "schema_version": "cyborgclaw.groupthink-charrette.session.v1",
+        "state": "frozen",
+        "session_id": "charrette-fixture-001",
+        "mission_id": "fixture-mission",
+        "mission_statement": "Exercise the charrette contract without external or production effects.",
+        "contract_identity": {
+          "charter_id": "cyborgclaw.glen-proxy-charter.v1",
+          "protocol_id": "cyborgclaw.groupthink-charrette.protocol.v1",
+          "algorithm_version": "cyborgclaw.groupthink-charrette.decision.v1",
+          "constants_schema_version": "cyborgclaw.groupthink-charrette.constants.v1",
+          "session_schema": "cyborgclaw.groupthink-charrette.session.v1",
+          "findings_schema": "cyborgclaw.groupthink-charrette.findings.v1",
+          "decision_record_schema": "cyborgclaw.sadr.v1",
+          "charter_sha256": "4adb296e749822ebd26043ae2b9fd428f9672867a3db85544e8bdc11326bf9ae",
+          "protocol_sha256": "677d4c038bd734d28926cd1d79b3693cafcfa690f145f1d98b3149bb04b34509",
+          "constants_sha256": "00778f48b9e08296f640513c108d5966b5917a8c0c4a753b6ff26d18abdf77c2",
+          "session_schema_sha256": "795c911f04032c7e17c135d447c110565afbeef041ff420cce6d046d82897434",
+          "findings_schema_sha256": "2d65656c56c12e274a4730388d497ef6727d628384074e7f14445940298cd9ac",
+          "decision_record_schema_sha256": "32427e2ba5078b7fb3753d2f4cfa7c8cec7d322c105717177f5eabb96d4387fb"
+        },
+        "decision": {
+          "question": "Should the exact local validation action continue?",
+          "options": [
+            {
+              "id": "continue",
+              "summary": "Run the frozen local validation action."
+            },
+            {
+              "id": "stop",
+              "summary": "Stop without changing local files."
+            }
+          ],
+          "candidate_evidence_id": "ev-candidate",
+          "candidate_digest": "0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb",
+          "proposed_next_action": {
+            "operation_id": "RUN_LOCAL_VALIDATION",
+            "target_scope_id": "fixture-workspace",
+            "description": "Run the frozen local validation suite.",
+            "category": "repeat_validation",
+            "destination": "local_workspace",
+            "declared_effects": [
+              "local_validation"
+            ],
+            "reversible": true,
+            "parameters": {
+              "executor_adapter_id": "charrette.local-validation.v1",
+              "command_id": "run-frozen-validation",
+              "arguments": [
+                "all-contract-tests"
+              ],
+              "file_allowlist": [],
+              "change_digest": null,
+              "change_evidence_id": null,
+              "rollback_digest": null,
+              "validation_command_id": null,
+              "validation_arguments": []
+            }
+          }
+        },
+        "suitability": {
+          "material_tradeoff": true,
+          "multiple_defensible_options": true,
+          "cross_domain_risk": false,
+          "disputed_gate": true,
+          "factual_lookup": false,
+          "routine_mechanical_step": false,
+          "reversible": true
+        },
+        "proxy_charter": {
+          "delegation_id": "glen-fixture-delegation",
+          "granted_by": "Glen",
+          "decision_owner": "Glen",
+          "mission_id": "fixture-mission",
+          "decision_context_digest": "3f5b22d44ba7ad38d3774bcf99904e347009dccdaa34e4d7a63cd01484626865",
+          "proof_plan_digest": "725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a",
+          "proof_plan_committed_at": "2026-07-30T00:00:00.000Z",
+          "target_scope": {
+            "kind": "local_workspace",
+            "repository_id": "fixture-repository",
+            "workspace_id": "fixture-workspace"
+          },
+          "scope": "Fixture-only local validation and repair.",
+          "allowed_action_categories": [
+            "repeat_validation",
+            "local_test_repair"
+          ],
+          "authorized_action_digests": [
+            "88596902b271c7e9ce51148fcfd261635048c1eaf2025556e600210b03014845",
+            "374b7e544c6e26e5b53097a6e466e4e8a1aada226aefddb1bce74d80f327a310"
+          ],
+          "network_policy": "none",
+          "authority_evidence_ids": [
+            "ev-authority"
+          ],
+          "authority_custody": {
+            "method": "operator_direct_prompt",
+            "verifier_id": "FixtureCustodian",
+            "evidence_id": "ev-authority",
+            "attestation": "I received this delegation through the declared custody method; this record preserves but does not cryptographically authenticate that source."
+          },
+          "boundary_kind": "expires_at",
+          "expires_at": "2099-01-01T00:00:00.000Z",
+          "authorization_nonce": "4bd99c7dfd6201ac9f0798dca75334c2257a1484a6611e30829402ff276fe87e",
+          "authorization_use_limit": 1,
+          "mission_boundary": "This delegation ends at its exact expiry and permits at most one enforcing-executor use of the exact authorized nonce.",
+          "proof_bar": "Every frozen gate has content-addressed evidence.",
+          "claim_ceiling_code": "INTERNAL_DECISION_ONLY",
+          "claim_ceiling": "Internal decision record only; no merge, release, production, credential, external-effect, risk-acceptance, remote-repository, or mission-change authority.",
+          "mission_reserved_action_categories": [],
+          "revoked": false,
+          "stop_condition_active": false
+        },
+        "failure_lenses": [
+          "epistemic_integrity",
+          "authority_security",
+          "development_practicality"
+        ],
+        "frozen_gates": [
+          {
+            "id": "gate-tests",
+            "criterion": "The local contract tests pass.",
+            "measure": "passing_test_count",
+            "operator": "gte",
+            "threshold": 1,
+            "measurement_command_id": "fixture-contract-tests",
+            "measurement_arguments": [
+              "all-contract-tests"
+            ],
+            "required_exit_code": 0,
+            "pass_condition": "At least one frozen contract test passes.",
+            "required_evidence_ids": [
+              "ev-tests"
+            ]
+          },
+          {
+            "id": "gate-authority",
+            "criterion": "The proposed action remains inside the delegation.",
+            "measure": "authority_evidence_reviewed",
+            "operator": "manual_evidence",
+            "threshold": true,
+            "measurement_command_id": null,
+            "measurement_arguments": [],
+            "required_exit_code": null,
+            "pass_condition": "Authority evidence is present and reviewed.",
+            "required_evidence_ids": [
+              "ev-authority"
+            ]
+          }
+        ],
+        "evidence": [
+          {
+            "id": "ev-authority",
+            "kind": "inline_fixture",
+            "source": "fixture:ev-authority",
+            "sha256": "e57e9d5471ead3c47ae5e6f3affa6f59243afd406cc82789244cd763fa19d476",
+            "classification": "authority",
+            "untrusted": true,
+            "encoding": "utf8",
+            "content": "{\"proxy_charter\":{\"allowed_action_categories\":[\"repeat_validation\",\"local_test_repair\"],\"authority_custody\":{\"attestation\":\"I received this delegation through the declared custody method; this record preserves but does not cryptographically authenticate that source.\",\"evidence_id\":\"ev-authority\",\"method\":\"operator_direct_prompt\",\"verifier_id\":\"FixtureCustodian\"},\"authority_evidence_ids\":[\"ev-authority\"],\"authorization_nonce\":\"4bd99c7dfd6201ac9f0798dca75334c2257a1484a6611e30829402ff276fe87e\",\"authorization_use_limit\":1,\"authorized_action_digests\":[\"88596902b271c7e9ce51148fcfd261635048c1eaf2025556e600210b03014845\",\"374b7e544c6e26e5b53097a6e466e4e8a1aada226aefddb1bce74d80f327a310\"],\"boundary_kind\":\"expires_at\",\"claim_ceiling\":\"Internal decision record only; no merge, release, production, credential, external-effect, risk-acceptance, remote-repository, or mission-change authority.\",\"claim_ceiling_code\":\"INTERNAL_DECISION_ONLY\",\"decision_context_digest\":\"3f5b22d44ba7ad38d3774bcf99904e347009dccdaa34e4d7a63cd01484626865\",\"decision_owner\":\"Glen\",\"delegation_id\":\"glen-fixture-delegation\",\"expires_at\":\"2099-01-01T00:00:00.000Z\",\"granted_by\":\"Glen\",\"mission_boundary\":\"This delegation ends at its exact expiry and permits at most one enforcing-executor use of the exact authorized nonce.\",\"mission_id\":\"fixture-mission\",\"mission_reserved_action_categories\":[],\"network_policy\":\"none\",\"proof_bar\":\"Every frozen gate has content-addressed evidence.\",\"proof_plan_committed_at\":\"2026-07-30T00:00:00.000Z\",\"proof_plan_digest\":\"725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a\",\"revoked\":false,\"scope\":\"Fixture-only local validation and repair.\",\"stop_condition_active\":false,\"target_scope\":{\"kind\":\"local_workspace\",\"repository_id\":\"fixture-repository\",\"workspace_id\":\"fixture-workspace\"}},\"schema_version\":\"cyborgclaw.glen-delegation.v1\"}"
+          },
+          {
+            "id": "ev-tests",
+            "kind": "inline_fixture",
+            "source": "fixture:ev-tests",
+            "sha256": "d4fdb9cb689070c52611374fc4684d872805a6fcd276972f2d55cdc9166bad89",
+            "classification": "test",
+            "untrusted": true,
+            "encoding": "utf8",
+            "content": "{\"arguments\":[\"all-contract-tests\"],\"candidate_digest\":\"0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb\",\"captured_at\":\"2026-07-30T00:01:00.000Z\",\"command_id\":\"fixture-contract-tests\",\"decision_context_digest\":\"3f5b22d44ba7ad38d3774bcf99904e347009dccdaa34e4d7a63cd01484626865\",\"exit_code\":0,\"measurements\":{\"passing_test_count\":1},\"mission_id\":\"fixture-mission\",\"producer_id\":\"FixtureExecutor\",\"proof_plan_digest\":\"725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a\",\"receipt_id\":\"ev-tests\",\"repository_id\":\"fixture-repository\",\"schema_version\":\"cyborgclaw.measurement-receipt.v1\",\"session_id\":\"charrette-fixture-001\",\"workspace_id\":\"fixture-workspace\"}"
+          },
+          {
+            "id": "ev-candidate",
+            "kind": "inline_fixture",
+            "source": "fixture:ev-candidate",
+            "sha256": "0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb",
+            "classification": "source",
+            "untrusted": true,
+            "encoding": "utf8",
+            "content": "canonical-fixture-candidate-v1"
+          },
+          {
+            "id": "ev-repair-patch",
+            "kind": "inline_fixture",
+            "source": "fixture:ev-repair-patch",
+            "sha256": "9b0a2a3d14b9399d18175bc1758ffd57e69590498a96bc74ef38d8d14a6325ef",
+            "classification": "source",
+            "untrusted": true,
+            "encoding": "utf8",
+            "content": "{\"bundle_id\":\"ev-repair-patch\",\"changes\":[{\"after_content_base64\":\"YXNzZXJ0LmVxdWFsKGFjdHVhbCwgdHJ1ZSk7XG4=\",\"after_sha256\":\"9ac820ddbc1753b2bb1a3ab28edd592d55063395840db325e9a21ef84a195257\",\"before_content_base64\":\"YXNzZXJ0LmVxdWFsKGFjdHVhbCwgZmFsc2UpO1xu\",\"before_sha256\":\"d6a55333429065ff50501fb232dd5eb303db0df201681cc8413741c2ffa8321e\",\"path\":\"tests/decisions.test.mjs\"}],\"repository_id\":\"fixture-repository\",\"schema_version\":\"cyborgclaw.local-change-bundle.v1\",\"validation_arguments\":[\"tests/decisions.test.mjs\"],\"validation_command_id\":\"run-focused-validation\",\"workspace_id\":\"fixture-workspace\"}"
+          }
+        ],
+        "panel_assignments": [
+          {
+            "lens_id": "epistemic_integrity",
+            "reviewer_id": "EpistemicReviewer"
+          },
+          {
+            "lens_id": "authority_security",
+            "reviewer_id": "AuthorityReviewer"
+          },
+          {
+            "lens_id": "development_practicality",
+            "reviewer_id": "PracticalityReviewer"
+          }
+        ],
+        "roles": {
+          "builder_id": "FixtureBuilder",
+          "evidence_writer_id": "FixtureCustodian",
+          "executor_id": "FixtureExecutor",
+          "synthesis_chair_id": "Sage",
+          "final_reviewer_id": "FixtureFinalReviewer",
+          "decision_judge_id": "Sage"
+        },
+        "max_challenge_rounds": 2,
+        "frozen_at": "2026-07-30T00:02:00.000Z",
+        "freeze_digest": "e3450ed5a44a377cdf6b35b5377611618a984e4fb956a8c7380e26f4dc1deb9e"
+      },
+      "findings": {
+        "schema_version": "cyborgclaw.groupthink-charrette.findings.v1",
+        "session_id": "charrette-fixture-001",
+        "freeze_digest": "e3450ed5a44a377cdf6b35b5377611618a984e4fb956a8c7380e26f4dc1deb9e",
+        "reviews": [
+          {
+            "reviewer_id": "EpistemicReviewer",
+            "lens_id": "epistemic_integrity",
+            "freeze_digest": "e3450ed5a44a377cdf6b35b5377611618a984e4fb956a8c7380e26f4dc1deb9e",
+            "submitted_at": "2026-07-30T00:05:00.000Z",
+            "independence_attestation": "I formed these findings from the frozen evidence before seeing any peer finding or preliminary conclusion.",
+            "saw_peer_findings_before_submission": false,
+            "analysis_summary": "The epistemic_integrity lens traced the exact frozen action, delegation, measurement receipt, gate comparison, failure mode, and falsifier before reaching an independent recommendation.",
+            "review_checklist": [
+              "evidence_traceability",
+              "authority_scope",
+              "gate_validity",
+              "failure_modes",
+              "falsifiability"
+            ],
+            "evidence_examined_ids": [
+              "ev-authority",
+              "ev-tests",
+              "ev-candidate",
+              "ev-repair-patch"
+            ],
+            "observations": [
+              {
+                "id": "obs-epistemic_integrity",
+                "classification": "fact",
+                "statement": "The epistemic_integrity review used the frozen evidence.",
+                "evidence_ids": [
+                  "ev-tests"
+                ]
+              }
+            ],
+            "objections": [],
+            "contradictions": [],
+            "uncertainty": [
+              "Declared role identity is preserved as custody metadata, not authenticated."
+            ],
+            "falsifiers": [
+              "A changed freeze digest would invalidate this review."
+            ],
+            "recommendation": "PROCEED",
+            "dissent": []
+          },
+          {
+            "reviewer_id": "AuthorityReviewer",
+            "lens_id": "authority_security",
+            "freeze_digest": "e3450ed5a44a377cdf6b35b5377611618a984e4fb956a8c7380e26f4dc1deb9e",
+            "submitted_at": "2026-07-30T00:05:00.000Z",
+            "independence_attestation": "I formed these findings from the frozen evidence before seeing any peer finding or preliminary conclusion.",
+            "saw_peer_findings_before_submission": false,
+            "analysis_summary": "The authority_security lens traced the exact frozen action, delegation, measurement receipt, gate comparison, failure mode, and falsifier before reaching an independent recommendation.",
+            "review_checklist": [
+              "evidence_traceability",
+              "authority_scope",
+              "gate_validity",
+              "failure_modes",
+              "falsifiability"
+            ],
+            "evidence_examined_ids": [
+              "ev-authority",
+              "ev-tests",
+              "ev-candidate",
+              "ev-repair-patch"
+            ],
+            "observations": [
+              {
+                "id": "obs-authority_security",
+                "classification": "fact",
+                "statement": "The authority_security review used the frozen evidence.",
+                "evidence_ids": [
+                  "ev-tests"
+                ]
+              }
+            ],
+            "objections": [],
+            "contradictions": [],
+            "uncertainty": [
+              "Declared role identity is preserved as custody metadata, not authenticated."
+            ],
+            "falsifiers": [
+              "A changed freeze digest would invalidate this review."
+            ],
+            "recommendation": "PROCEED",
+            "dissent": []
+          },
+          {
+            "reviewer_id": "PracticalityReviewer",
+            "lens_id": "development_practicality",
+            "freeze_digest": "e3450ed5a44a377cdf6b35b5377611618a984e4fb956a8c7380e26f4dc1deb9e",
+            "submitted_at": "2026-07-30T00:05:00.000Z",
+            "independence_attestation": "I formed these findings from the frozen evidence before seeing any peer finding or preliminary conclusion.",
+            "saw_peer_findings_before_submission": false,
+            "analysis_summary": "The development_practicality lens traced the exact frozen action, delegation, measurement receipt, gate comparison, failure mode, and falsifier before reaching an independent recommendation.",
+            "review_checklist": [
+              "evidence_traceability",
+              "authority_scope",
+              "gate_validity",
+              "failure_modes",
+              "falsifiability"
+            ],
+            "evidence_examined_ids": [
+              "ev-authority",
+              "ev-tests",
+              "ev-candidate",
+              "ev-repair-patch"
+            ],
+            "observations": [
+              {
+                "id": "obs-development_practicality",
+                "classification": "fact",
+                "statement": "The development_practicality review used the frozen evidence.",
+                "evidence_ids": [
+                  "ev-tests"
+                ]
+              }
+            ],
+            "objections": [],
+            "contradictions": [],
+            "uncertainty": [
+              "Declared role identity is preserved as custody metadata, not authenticated."
+            ],
+            "falsifiers": [
+              "A changed freeze digest would invalidate this review."
+            ],
+            "recommendation": "PROCEED",
+            "dissent": []
+          }
+        ],
+        "cross_review_started_at": "2026-07-30T00:10:00.000Z",
+        "gate_results": [
+          {
+            "gate_id": "gate-tests",
+            "status": "PASS",
+            "evidence_ids": [
+              "ev-tests"
+            ],
+            "explanation": "The observed count meets the frozen threshold.",
+            "correctable": false,
+            "repair_action": null,
+            "observed_value": 1,
+            "evaluator_id": null,
+            "evaluator_attestation": null
+          },
+          {
+            "gate_id": "gate-authority",
+            "status": "PASS",
+            "evidence_ids": [
+              "ev-authority"
+            ],
+            "explanation": "The exact local action is delegated.",
+            "correctable": false,
+            "repair_action": null,
+            "observed_value": true,
+            "evaluator_id": "FixtureFinalReviewer",
+            "evaluator_attestation": "I evaluated this manual gate only against the cited frozen evidence and frozen pass condition."
+          }
+        ],
+        "unresolved_contradictions": [],
+        "challenge_rounds": 0,
+        "challenges": [],
+        "proposed_repair_action": null,
+        "final_review": {
+          "reviewer_id": "FixtureFinalReviewer",
+          "freeze_digest": "e3450ed5a44a377cdf6b35b5377611618a984e4fb956a8c7380e26f4dc1deb9e",
+          "reviewed_at": "2026-07-30T00:12:00.000Z",
+          "status": "ACCEPTED",
+          "attestation": "I independently reviewed the frozen session and completed findings without participating as builder, panel reviewer, or decision judge.",
+          "analysis_summary": "The final reviewer checked the frozen evidence, independent findings, gate results, and exact action custody.",
+          "review_checklist": [
+            "independence",
+            "all_lenses_present",
+            "challenge_resolutions",
+            "gate_derivation",
+            "authority_and_claim_ceiling",
+            "record_reproducibility"
+          ],
+          "evidence_examined_ids": [
+            "ev-authority",
+            "ev-tests",
+            "ev-candidate",
+            "ev-repair-patch"
+          ],
+          "accepted_resolution_ids": [],
+          "blocking_objections": []
+        },
+        "decided_at": "2026-07-30T00:15:00.000Z"
+      },
+      "evaluated_at": "2026-07-30T00:15:00.000Z",
+      "expected": "PROCEED"
+    },
+    {
+      "id": "rework-and-continue",
+      "session": {
+        "schema_version": "cyborgclaw.groupthink-charrette.session.v1",
+        "state": "frozen",
+        "session_id": "charrette-fixture-001",
+        "mission_id": "fixture-mission",
+        "mission_statement": "Exercise the charrette contract without external or production effects.",
+        "contract_identity": {
+          "charter_id": "cyborgclaw.glen-proxy-charter.v1",
+          "protocol_id": "cyborgclaw.groupthink-charrette.protocol.v1",
+          "algorithm_version": "cyborgclaw.groupthink-charrette.decision.v1",
+          "constants_schema_version": "cyborgclaw.groupthink-charrette.constants.v1",
+          "session_schema": "cyborgclaw.groupthink-charrette.session.v1",
+          "findings_schema": "cyborgclaw.groupthink-charrette.findings.v1",
+          "decision_record_schema": "cyborgclaw.sadr.v1",
+          "charter_sha256": "4adb296e749822ebd26043ae2b9fd428f9672867a3db85544e8bdc11326bf9ae",
+          "protocol_sha256": "677d4c038bd734d28926cd1d79b3693cafcfa690f145f1d98b3149bb04b34509",
+          "constants_sha256": "00778f48b9e08296f640513c108d5966b5917a8c0c4a753b6ff26d18abdf77c2",
+          "session_schema_sha256": "795c911f04032c7e17c135d447c110565afbeef041ff420cce6d046d82897434",
+          "findings_schema_sha256": "2d65656c56c12e274a4730388d497ef6727d628384074e7f14445940298cd9ac",
+          "decision_record_schema_sha256": "32427e2ba5078b7fb3753d2f4cfa7c8cec7d322c105717177f5eabb96d4387fb"
+        },
+        "decision": {
+          "question": "Should the exact local validation action continue?",
+          "options": [
+            {
+              "id": "continue",
+              "summary": "Run the frozen local validation action."
+            },
+            {
+              "id": "stop",
+              "summary": "Stop without changing local files."
+            }
+          ],
+          "candidate_evidence_id": "ev-candidate",
+          "candidate_digest": "0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb",
+          "proposed_next_action": {
+            "operation_id": "RUN_LOCAL_VALIDATION",
+            "target_scope_id": "fixture-workspace",
+            "description": "Run the frozen local validation suite.",
+            "category": "repeat_validation",
+            "destination": "local_workspace",
+            "declared_effects": [
+              "local_validation"
+            ],
+            "reversible": true,
+            "parameters": {
+              "executor_adapter_id": "charrette.local-validation.v1",
+              "command_id": "run-frozen-validation",
+              "arguments": [
+                "all-contract-tests"
+              ],
+              "file_allowlist": [],
+              "change_digest": null,
+              "change_evidence_id": null,
+              "rollback_digest": null,
+              "validation_command_id": null,
+              "validation_arguments": []
+            }
+          }
+        },
+        "suitability": {
+          "material_tradeoff": true,
+          "multiple_defensible_options": true,
+          "cross_domain_risk": false,
+          "disputed_gate": true,
+          "factual_lookup": false,
+          "routine_mechanical_step": false,
+          "reversible": true
+        },
+        "proxy_charter": {
+          "delegation_id": "glen-fixture-delegation",
+          "granted_by": "Glen",
+          "decision_owner": "Glen",
+          "mission_id": "fixture-mission",
+          "decision_context_digest": "3f5b22d44ba7ad38d3774bcf99904e347009dccdaa34e4d7a63cd01484626865",
+          "proof_plan_digest": "725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a",
+          "proof_plan_committed_at": "2026-07-30T00:00:00.000Z",
+          "target_scope": {
+            "kind": "local_workspace",
+            "repository_id": "fixture-repository",
+            "workspace_id": "fixture-workspace"
+          },
+          "scope": "Fixture-only local validation and repair.",
+          "allowed_action_categories": [
+            "repeat_validation",
+            "local_test_repair"
+          ],
+          "authorized_action_digests": [
+            "88596902b271c7e9ce51148fcfd261635048c1eaf2025556e600210b03014845",
+            "374b7e544c6e26e5b53097a6e466e4e8a1aada226aefddb1bce74d80f327a310"
+          ],
+          "network_policy": "none",
+          "authority_evidence_ids": [
+            "ev-authority"
+          ],
+          "authority_custody": {
+            "method": "operator_direct_prompt",
+            "verifier_id": "FixtureCustodian",
+            "evidence_id": "ev-authority",
+            "attestation": "I received this delegation through the declared custody method; this record preserves but does not cryptographically authenticate that source."
+          },
+          "boundary_kind": "expires_at",
+          "expires_at": "2099-01-01T00:00:00.000Z",
+          "authorization_nonce": "4bd99c7dfd6201ac9f0798dca75334c2257a1484a6611e30829402ff276fe87e",
+          "authorization_use_limit": 1,
+          "mission_boundary": "This delegation ends at its exact expiry and permits at most one enforcing-executor use of the exact authorized nonce.",
+          "proof_bar": "Every frozen gate has content-addressed evidence.",
+          "claim_ceiling_code": "INTERNAL_DECISION_ONLY",
+          "claim_ceiling": "Internal decision record only; no merge, release, production, credential, external-effect, risk-acceptance, remote-repository, or mission-change authority.",
+          "mission_reserved_action_categories": [],
+          "revoked": false,
+          "stop_condition_active": false
+        },
+        "failure_lenses": [
+          "epistemic_integrity",
+          "authority_security",
+          "development_practicality"
+        ],
+        "frozen_gates": [
+          {
+            "id": "gate-tests",
+            "criterion": "The local contract tests pass.",
+            "measure": "passing_test_count",
+            "operator": "gte",
+            "threshold": 1,
+            "measurement_command_id": "fixture-contract-tests",
+            "measurement_arguments": [
+              "all-contract-tests"
+            ],
+            "required_exit_code": 0,
+            "pass_condition": "At least one frozen contract test passes.",
+            "required_evidence_ids": [
+              "ev-tests"
+            ]
+          },
+          {
+            "id": "gate-authority",
+            "criterion": "The proposed action remains inside the delegation.",
+            "measure": "authority_evidence_reviewed",
+            "operator": "manual_evidence",
+            "threshold": true,
+            "measurement_command_id": null,
+            "measurement_arguments": [],
+            "required_exit_code": null,
+            "pass_condition": "Authority evidence is present and reviewed.",
+            "required_evidence_ids": [
+              "ev-authority"
+            ]
+          }
+        ],
+        "evidence": [
+          {
+            "id": "ev-authority",
+            "kind": "inline_fixture",
+            "source": "fixture:ev-authority",
+            "sha256": "e57e9d5471ead3c47ae5e6f3affa6f59243afd406cc82789244cd763fa19d476",
+            "classification": "authority",
+            "untrusted": true,
+            "encoding": "utf8",
+            "content": "{\"proxy_charter\":{\"allowed_action_categories\":[\"repeat_validation\",\"local_test_repair\"],\"authority_custody\":{\"attestation\":\"I received this delegation through the declared custody method; this record preserves but does not cryptographically authenticate that source.\",\"evidence_id\":\"ev-authority\",\"method\":\"operator_direct_prompt\",\"verifier_id\":\"FixtureCustodian\"},\"authority_evidence_ids\":[\"ev-authority\"],\"authorization_nonce\":\"4bd99c7dfd6201ac9f0798dca75334c2257a1484a6611e30829402ff276fe87e\",\"authorization_use_limit\":1,\"authorized_action_digests\":[\"88596902b271c7e9ce51148fcfd261635048c1eaf2025556e600210b03014845\",\"374b7e544c6e26e5b53097a6e466e4e8a1aada226aefddb1bce74d80f327a310\"],\"boundary_kind\":\"expires_at\",\"claim_ceiling\":\"Internal decision record only; no merge, release, production, credential, external-effect, risk-acceptance, remote-repository, or mission-change authority.\",\"claim_ceiling_code\":\"INTERNAL_DECISION_ONLY\",\"decision_context_digest\":\"3f5b22d44ba7ad38d3774bcf99904e347009dccdaa34e4d7a63cd01484626865\",\"decision_owner\":\"Glen\",\"delegation_id\":\"glen-fixture-delegation\",\"expires_at\":\"2099-01-01T00:00:00.000Z\",\"granted_by\":\"Glen\",\"mission_boundary\":\"This delegation ends at its exact expiry and permits at most one enforcing-executor use of the exact authorized nonce.\",\"mission_id\":\"fixture-mission\",\"mission_reserved_action_categories\":[],\"network_policy\":\"none\",\"proof_bar\":\"Every frozen gate has content-addressed evidence.\",\"proof_plan_committed_at\":\"2026-07-30T00:00:00.000Z\",\"proof_plan_digest\":\"725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a\",\"revoked\":false,\"scope\":\"Fixture-only local validation and repair.\",\"stop_condition_active\":false,\"target_scope\":{\"kind\":\"local_workspace\",\"repository_id\":\"fixture-repository\",\"workspace_id\":\"fixture-workspace\"}},\"schema_version\":\"cyborgclaw.glen-delegation.v1\"}"
+          },
+          {
+            "id": "ev-tests",
+            "kind": "inline_fixture",
+            "source": "fixture:ev-tests",
+            "sha256": "e56b58aaa09411368e3f075eb24a3941f8c583386a09b9efd80e631f3b191566",
+            "classification": "test",
+            "untrusted": true,
+            "encoding": "utf8",
+            "content": "{\"arguments\":[\"all-contract-tests\"],\"candidate_digest\":\"0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb\",\"captured_at\":\"2026-07-30T00:01:00.000Z\",\"command_id\":\"fixture-contract-tests\",\"decision_context_digest\":\"3f5b22d44ba7ad38d3774bcf99904e347009dccdaa34e4d7a63cd01484626865\",\"exit_code\":0,\"measurements\":{\"passing_test_count\":0},\"mission_id\":\"fixture-mission\",\"producer_id\":\"FixtureExecutor\",\"proof_plan_digest\":\"725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a\",\"receipt_id\":\"ev-tests\",\"repository_id\":\"fixture-repository\",\"schema_version\":\"cyborgclaw.measurement-receipt.v1\",\"session_id\":\"charrette-fixture-001\",\"workspace_id\":\"fixture-workspace\"}"
+          },
+          {
+            "id": "ev-candidate",
+            "kind": "inline_fixture",
+            "source": "fixture:ev-candidate",
+            "sha256": "0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb",
+            "classification": "source",
+            "untrusted": true,
+            "encoding": "utf8",
+            "content": "canonical-fixture-candidate-v1"
+          },
+          {
+            "id": "ev-repair-patch",
+            "kind": "inline_fixture",
+            "source": "fixture:ev-repair-patch",
+            "sha256": "9b0a2a3d14b9399d18175bc1758ffd57e69590498a96bc74ef38d8d14a6325ef",
+            "classification": "source",
+            "untrusted": true,
+            "encoding": "utf8",
+            "content": "{\"bundle_id\":\"ev-repair-patch\",\"changes\":[{\"after_content_base64\":\"YXNzZXJ0LmVxdWFsKGFjdHVhbCwgdHJ1ZSk7XG4=\",\"after_sha256\":\"9ac820ddbc1753b2bb1a3ab28edd592d55063395840db325e9a21ef84a195257\",\"before_content_base64\":\"YXNzZXJ0LmVxdWFsKGFjdHVhbCwgZmFsc2UpO1xu\",\"before_sha256\":\"d6a55333429065ff50501fb232dd5eb303db0df201681cc8413741c2ffa8321e\",\"path\":\"tests/decisions.test.mjs\"}],\"repository_id\":\"fixture-repository\",\"schema_version\":\"cyborgclaw.local-change-bundle.v1\",\"validation_arguments\":[\"tests/decisions.test.mjs\"],\"validation_command_id\":\"run-focused-validation\",\"workspace_id\":\"fixture-workspace\"}"
+          }
+        ],
+        "panel_assignments": [
+          {
+            "lens_id": "epistemic_integrity",
+            "reviewer_id": "EpistemicReviewer"
+          },
+          {
+            "lens_id": "authority_security",
+            "reviewer_id": "AuthorityReviewer"
+          },
+          {
+            "lens_id": "development_practicality",
+            "reviewer_id": "PracticalityReviewer"
+          }
+        ],
+        "roles": {
+          "builder_id": "FixtureBuilder",
+          "evidence_writer_id": "FixtureCustodian",
+          "executor_id": "FixtureExecutor",
+          "synthesis_chair_id": "Sage",
+          "final_reviewer_id": "FixtureFinalReviewer",
+          "decision_judge_id": "Sage"
+        },
+        "max_challenge_rounds": 2,
+        "frozen_at": "2026-07-30T00:02:00.000Z",
+        "freeze_digest": "baee372fe6fa0982b626fdfa97ee8d035b0c2b5415e96cd2901945085b2c465a"
+      },
+      "findings": {
+        "schema_version": "cyborgclaw.groupthink-charrette.findings.v1",
+        "session_id": "charrette-fixture-001",
+        "freeze_digest": "baee372fe6fa0982b626fdfa97ee8d035b0c2b5415e96cd2901945085b2c465a",
+        "reviews": [
+          {
+            "reviewer_id": "EpistemicReviewer",
+            "lens_id": "epistemic_integrity",
+            "freeze_digest": "baee372fe6fa0982b626fdfa97ee8d035b0c2b5415e96cd2901945085b2c465a",
+            "submitted_at": "2026-07-30T00:05:00.000Z",
+            "independence_attestation": "I formed these findings from the frozen evidence before seeing any peer finding or preliminary conclusion.",
+            "saw_peer_findings_before_submission": false,
+            "analysis_summary": "The epistemic_integrity lens traced the exact frozen action, delegation, measurement receipt, gate comparison, failure mode, and falsifier before reaching an independent recommendation.",
+            "review_checklist": [
+              "evidence_traceability",
+              "authority_scope",
+              "gate_validity",
+              "failure_modes",
+              "falsifiability"
+            ],
+            "evidence_examined_ids": [
+              "ev-authority",
+              "ev-tests",
+              "ev-candidate",
+              "ev-repair-patch"
+            ],
+            "observations": [
+              {
+                "id": "obs-epistemic_integrity",
+                "classification": "fact",
+                "statement": "The epistemic_integrity review used the frozen evidence.",
+                "evidence_ids": [
+                  "ev-tests"
+                ]
+              }
+            ],
+            "objections": [],
+            "contradictions": [],
+            "uncertainty": [
+              "Declared role identity is preserved as custody metadata, not authenticated."
+            ],
+            "falsifiers": [
+              "A changed freeze digest would invalidate this review."
+            ],
+            "recommendation": "PROCEED",
+            "dissent": [
+              "The minority view prefers another evidence pass before repair."
+            ]
+          },
+          {
+            "reviewer_id": "AuthorityReviewer",
+            "lens_id": "authority_security",
+            "freeze_digest": "baee372fe6fa0982b626fdfa97ee8d035b0c2b5415e96cd2901945085b2c465a",
+            "submitted_at": "2026-07-30T00:05:00.000Z",
+            "independence_attestation": "I formed these findings from the frozen evidence before seeing any peer finding or preliminary conclusion.",
+            "saw_peer_findings_before_submission": false,
+            "analysis_summary": "The authority_security lens traced the exact frozen action, delegation, measurement receipt, gate comparison, failure mode, and falsifier before reaching an independent recommendation.",
+            "review_checklist": [
+              "evidence_traceability",
+              "authority_scope",
+              "gate_validity",
+              "failure_modes",
+              "falsifiability"
+            ],
+            "evidence_examined_ids": [
+              "ev-authority",
+              "ev-tests",
+              "ev-candidate",
+              "ev-repair-patch"
+            ],
+            "observations": [
+              {
+                "id": "obs-authority_security",
+                "classification": "fact",
+                "statement": "The authority_security review used the frozen evidence.",
+                "evidence_ids": [
+                  "ev-tests"
+                ]
+              }
+            ],
+            "objections": [],
+            "contradictions": [],
+            "uncertainty": [
+              "Declared role identity is preserved as custody metadata, not authenticated."
+            ],
+            "falsifiers": [
+              "A changed freeze digest would invalidate this review."
+            ],
+            "recommendation": "REWORK_AND_CONTINUE",
+            "dissent": []
+          },
+          {
+            "reviewer_id": "PracticalityReviewer",
+            "lens_id": "development_practicality",
+            "freeze_digest": "baee372fe6fa0982b626fdfa97ee8d035b0c2b5415e96cd2901945085b2c465a",
+            "submitted_at": "2026-07-30T00:05:00.000Z",
+            "independence_attestation": "I formed these findings from the frozen evidence before seeing any peer finding or preliminary conclusion.",
+            "saw_peer_findings_before_submission": false,
+            "analysis_summary": "The development_practicality lens traced the exact frozen action, delegation, measurement receipt, gate comparison, failure mode, and falsifier before reaching an independent recommendation.",
+            "review_checklist": [
+              "evidence_traceability",
+              "authority_scope",
+              "gate_validity",
+              "failure_modes",
+              "falsifiability"
+            ],
+            "evidence_examined_ids": [
+              "ev-authority",
+              "ev-tests",
+              "ev-candidate",
+              "ev-repair-patch"
+            ],
+            "observations": [
+              {
+                "id": "obs-development_practicality",
+                "classification": "fact",
+                "statement": "The development_practicality review used the frozen evidence.",
+                "evidence_ids": [
+                  "ev-tests"
+                ]
+              }
+            ],
+            "objections": [],
+            "contradictions": [],
+            "uncertainty": [
+              "Declared role identity is preserved as custody metadata, not authenticated."
+            ],
+            "falsifiers": [
+              "A changed freeze digest would invalidate this review."
+            ],
+            "recommendation": "REWORK_AND_CONTINUE",
+            "dissent": []
+          }
+        ],
+        "cross_review_started_at": "2026-07-30T00:10:00.000Z",
+        "gate_results": [
+          {
+            "gate_id": "gate-tests",
+            "status": "FAIL",
+            "evidence_ids": [
+              "ev-tests"
+            ],
+            "explanation": "The observed count is below the frozen threshold.",
+            "correctable": true,
+            "repair_action": {
+              "operation_id": "APPLY_LOCAL_TEST_REPAIR",
+              "target_scope_id": "fixture-workspace",
+              "description": "Apply the single frozen local test repair and rerun its validation.",
+              "category": "local_test_repair",
+              "destination": "local_workspace",
+              "declared_effects": [
+                "local_filesystem_write",
+                "local_validation"
+              ],
+              "reversible": true,
+              "parameters": {
+                "executor_adapter_id": "charrette.exact-local-patch.v1",
+                "command_id": "apply-frozen-patch",
+                "arguments": [],
+                "file_allowlist": [
+                  "tests/decisions.test.mjs"
+                ],
+                "change_digest": "9b0a2a3d14b9399d18175bc1758ffd57e69590498a96bc74ef38d8d14a6325ef",
+                "change_evidence_id": "ev-repair-patch",
+                "rollback_digest": "b277585ab478cc1240dddc33cdc56699bbe45bb6031dbdf0cd573304ef6c2934",
+                "validation_command_id": "run-focused-validation",
+                "validation_arguments": [
+                  "tests/decisions.test.mjs"
+                ]
+              }
+            },
+            "observed_value": 0,
+            "evaluator_id": null,
+            "evaluator_attestation": null
+          },
+          {
+            "gate_id": "gate-authority",
+            "status": "PASS",
+            "evidence_ids": [
+              "ev-authority"
+            ],
+            "explanation": "The exact local action is delegated.",
+            "correctable": false,
+            "repair_action": null,
+            "observed_value": true,
+            "evaluator_id": "FixtureFinalReviewer",
+            "evaluator_attestation": "I evaluated this manual gate only against the cited frozen evidence and frozen pass condition."
+          }
+        ],
+        "unresolved_contradictions": [],
+        "challenge_rounds": 0,
+        "challenges": [],
+        "proposed_repair_action": {
+          "operation_id": "APPLY_LOCAL_TEST_REPAIR",
+          "target_scope_id": "fixture-workspace",
+          "description": "Apply the single frozen local test repair and rerun its validation.",
+          "category": "local_test_repair",
+          "destination": "local_workspace",
+          "declared_effects": [
+            "local_filesystem_write",
+            "local_validation"
+          ],
+          "reversible": true,
+          "parameters": {
+            "executor_adapter_id": "charrette.exact-local-patch.v1",
+            "command_id": "apply-frozen-patch",
+            "arguments": [],
+            "file_allowlist": [
+              "tests/decisions.test.mjs"
+            ],
+            "change_digest": "9b0a2a3d14b9399d18175bc1758ffd57e69590498a96bc74ef38d8d14a6325ef",
+            "change_evidence_id": "ev-repair-patch",
+            "rollback_digest": "b277585ab478cc1240dddc33cdc56699bbe45bb6031dbdf0cd573304ef6c2934",
+            "validation_command_id": "run-focused-validation",
+            "validation_arguments": [
+              "tests/decisions.test.mjs"
+            ]
+          }
+        },
+        "final_review": {
+          "reviewer_id": "FixtureFinalReviewer",
+          "freeze_digest": "baee372fe6fa0982b626fdfa97ee8d035b0c2b5415e96cd2901945085b2c465a",
+          "reviewed_at": "2026-07-30T00:12:00.000Z",
+          "status": "ACCEPTED",
+          "attestation": "I independently reviewed the frozen session and completed findings without participating as builder, panel reviewer, or decision judge.",
+          "analysis_summary": "The final reviewer checked the frozen evidence, independent findings, gate results, and exact action custody.",
+          "review_checklist": [
+            "independence",
+            "all_lenses_present",
+            "challenge_resolutions",
+            "gate_derivation",
+            "authority_and_claim_ceiling",
+            "record_reproducibility"
+          ],
+          "evidence_examined_ids": [
+            "ev-authority",
+            "ev-tests",
+            "ev-candidate",
+            "ev-repair-patch"
+          ],
+          "accepted_resolution_ids": [],
+          "blocking_objections": []
+        },
+        "decided_at": "2026-07-30T00:15:00.000Z"
+      },
+      "evaluated_at": "2026-07-30T00:15:00.000Z",
+      "expected": "REWORK_AND_CONTINUE"
+    },
+    {
+      "id": "abort-path",
+      "session": {
+        "schema_version": "cyborgclaw.groupthink-charrette.session.v1",
+        "state": "frozen",
+        "session_id": "charrette-fixture-001",
+        "mission_id": "fixture-mission",
+        "mission_statement": "Exercise the charrette contract without external or production effects.",
+        "contract_identity": {
+          "charter_id": "cyborgclaw.glen-proxy-charter.v1",
+          "protocol_id": "cyborgclaw.groupthink-charrette.protocol.v1",
+          "algorithm_version": "cyborgclaw.groupthink-charrette.decision.v1",
+          "constants_schema_version": "cyborgclaw.groupthink-charrette.constants.v1",
+          "session_schema": "cyborgclaw.groupthink-charrette.session.v1",
+          "findings_schema": "cyborgclaw.groupthink-charrette.findings.v1",
+          "decision_record_schema": "cyborgclaw.sadr.v1",
+          "charter_sha256": "4adb296e749822ebd26043ae2b9fd428f9672867a3db85544e8bdc11326bf9ae",
+          "protocol_sha256": "677d4c038bd734d28926cd1d79b3693cafcfa690f145f1d98b3149bb04b34509",
+          "constants_sha256": "00778f48b9e08296f640513c108d5966b5917a8c0c4a753b6ff26d18abdf77c2",
+          "session_schema_sha256": "795c911f04032c7e17c135d447c110565afbeef041ff420cce6d046d82897434",
+          "findings_schema_sha256": "2d65656c56c12e274a4730388d497ef6727d628384074e7f14445940298cd9ac",
+          "decision_record_schema_sha256": "32427e2ba5078b7fb3753d2f4cfa7c8cec7d322c105717177f5eabb96d4387fb"
+        },
+        "decision": {
+          "question": "Should the exact local validation action continue?",
+          "options": [
+            {
+              "id": "continue",
+              "summary": "Run the frozen local validation action."
+            },
+            {
+              "id": "stop",
+              "summary": "Stop without changing local files."
+            }
+          ],
+          "candidate_evidence_id": "ev-candidate",
+          "candidate_digest": "0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb",
+          "proposed_next_action": {
+            "operation_id": "RUN_LOCAL_VALIDATION",
+            "target_scope_id": "fixture-workspace",
+            "description": "Run the frozen local validation suite.",
+            "category": "repeat_validation",
+            "destination": "local_workspace",
+            "declared_effects": [
+              "local_validation"
+            ],
+            "reversible": true,
+            "parameters": {
+              "executor_adapter_id": "charrette.local-validation.v1",
+              "command_id": "run-frozen-validation",
+              "arguments": [
+                "all-contract-tests"
+              ],
+              "file_allowlist": [],
+              "change_digest": null,
+              "change_evidence_id": null,
+              "rollback_digest": null,
+              "validation_command_id": null,
+              "validation_arguments": []
+            }
+          }
+        },
+        "suitability": {
+          "material_tradeoff": true,
+          "multiple_defensible_options": true,
+          "cross_domain_risk": false,
+          "disputed_gate": true,
+          "factual_lookup": false,
+          "routine_mechanical_step": false,
+          "reversible": true
+        },
+        "proxy_charter": {
+          "delegation_id": "glen-fixture-delegation",
+          "granted_by": "Glen",
+          "decision_owner": "Glen",
+          "mission_id": "fixture-mission",
+          "decision_context_digest": "3f5b22d44ba7ad38d3774bcf99904e347009dccdaa34e4d7a63cd01484626865",
+          "proof_plan_digest": "725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a",
+          "proof_plan_committed_at": "2026-07-30T00:00:00.000Z",
+          "target_scope": {
+            "kind": "local_workspace",
+            "repository_id": "fixture-repository",
+            "workspace_id": "fixture-workspace"
+          },
+          "scope": "Fixture-only local validation and repair.",
+          "allowed_action_categories": [
+            "repeat_validation",
+            "local_test_repair"
+          ],
+          "authorized_action_digests": [
+            "88596902b271c7e9ce51148fcfd261635048c1eaf2025556e600210b03014845",
+            "374b7e544c6e26e5b53097a6e466e4e8a1aada226aefddb1bce74d80f327a310"
+          ],
+          "network_policy": "none",
+          "authority_evidence_ids": [
+            "ev-authority"
+          ],
+          "authority_custody": {
+            "method": "operator_direct_prompt",
+            "verifier_id": "FixtureCustodian",
+            "evidence_id": "ev-authority",
+            "attestation": "I received this delegation through the declared custody method; this record preserves but does not cryptographically authenticate that source."
+          },
+          "boundary_kind": "expires_at",
+          "expires_at": "2099-01-01T00:00:00.000Z",
+          "authorization_nonce": "4bd99c7dfd6201ac9f0798dca75334c2257a1484a6611e30829402ff276fe87e",
+          "authorization_use_limit": 1,
+          "mission_boundary": "This delegation ends at its exact expiry and permits at most one enforcing-executor use of the exact authorized nonce.",
+          "proof_bar": "Every frozen gate has content-addressed evidence.",
+          "claim_ceiling_code": "INTERNAL_DECISION_ONLY",
+          "claim_ceiling": "Internal decision record only; no merge, release, production, credential, external-effect, risk-acceptance, remote-repository, or mission-change authority.",
+          "mission_reserved_action_categories": [],
+          "revoked": false,
+          "stop_condition_active": false
+        },
+        "failure_lenses": [
+          "epistemic_integrity",
+          "authority_security",
+          "development_practicality"
+        ],
+        "frozen_gates": [
+          {
+            "id": "gate-tests",
+            "criterion": "The local contract tests pass.",
+            "measure": "passing_test_count",
+            "operator": "gte",
+            "threshold": 1,
+            "measurement_command_id": "fixture-contract-tests",
+            "measurement_arguments": [
+              "all-contract-tests"
+            ],
+            "required_exit_code": 0,
+            "pass_condition": "At least one frozen contract test passes.",
+            "required_evidence_ids": [
+              "ev-tests"
+            ]
+          },
+          {
+            "id": "gate-authority",
+            "criterion": "The proposed action remains inside the delegation.",
+            "measure": "authority_evidence_reviewed",
+            "operator": "manual_evidence",
+            "threshold": true,
+            "measurement_command_id": null,
+            "measurement_arguments": [],
+            "required_exit_code": null,
+            "pass_condition": "Authority evidence is present and reviewed.",
+            "required_evidence_ids": [
+              "ev-authority"
+            ]
+          }
+        ],
+        "evidence": [
+          {
+            "id": "ev-authority",
+            "kind": "inline_fixture",
+            "source": "fixture:ev-authority",
+            "sha256": "e57e9d5471ead3c47ae5e6f3affa6f59243afd406cc82789244cd763fa19d476",
+            "classification": "authority",
+            "untrusted": true,
+            "encoding": "utf8",
+            "content": "{\"proxy_charter\":{\"allowed_action_categories\":[\"repeat_validation\",\"local_test_repair\"],\"authority_custody\":{\"attestation\":\"I received this delegation through the declared custody method; this record preserves but does not cryptographically authenticate that source.\",\"evidence_id\":\"ev-authority\",\"method\":\"operator_direct_prompt\",\"verifier_id\":\"FixtureCustodian\"},\"authority_evidence_ids\":[\"ev-authority\"],\"authorization_nonce\":\"4bd99c7dfd6201ac9f0798dca75334c2257a1484a6611e30829402ff276fe87e\",\"authorization_use_limit\":1,\"authorized_action_digests\":[\"88596902b271c7e9ce51148fcfd261635048c1eaf2025556e600210b03014845\",\"374b7e544c6e26e5b53097a6e466e4e8a1aada226aefddb1bce74d80f327a310\"],\"boundary_kind\":\"expires_at\",\"claim_ceiling\":\"Internal decision record only; no merge, release, production, credential, external-effect, risk-acceptance, remote-repository, or mission-change authority.\",\"claim_ceiling_code\":\"INTERNAL_DECISION_ONLY\",\"decision_context_digest\":\"3f5b22d44ba7ad38d3774bcf99904e347009dccdaa34e4d7a63cd01484626865\",\"decision_owner\":\"Glen\",\"delegation_id\":\"glen-fixture-delegation\",\"expires_at\":\"2099-01-01T00:00:00.000Z\",\"granted_by\":\"Glen\",\"mission_boundary\":\"This delegation ends at its exact expiry and permits at most one enforcing-executor use of the exact authorized nonce.\",\"mission_id\":\"fixture-mission\",\"mission_reserved_action_categories\":[],\"network_policy\":\"none\",\"proof_bar\":\"Every frozen gate has content-addressed evidence.\",\"proof_plan_committed_at\":\"2026-07-30T00:00:00.000Z\",\"proof_plan_digest\":\"725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a\",\"revoked\":false,\"scope\":\"Fixture-only local validation and repair.\",\"stop_condition_active\":false,\"target_scope\":{\"kind\":\"local_workspace\",\"repository_id\":\"fixture-repository\",\"workspace_id\":\"fixture-workspace\"}},\"schema_version\":\"cyborgclaw.glen-delegation.v1\"}"
+          },
+          {
+            "id": "ev-tests",
+            "kind": "inline_fixture",
+            "source": "fixture:ev-tests",
+            "sha256": "e56b58aaa09411368e3f075eb24a3941f8c583386a09b9efd80e631f3b191566",
+            "classification": "test",
+            "untrusted": true,
+            "encoding": "utf8",
+            "content": "{\"arguments\":[\"all-contract-tests\"],\"candidate_digest\":\"0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb\",\"captured_at\":\"2026-07-30T00:01:00.000Z\",\"command_id\":\"fixture-contract-tests\",\"decision_context_digest\":\"3f5b22d44ba7ad38d3774bcf99904e347009dccdaa34e4d7a63cd01484626865\",\"exit_code\":0,\"measurements\":{\"passing_test_count\":0},\"mission_id\":\"fixture-mission\",\"producer_id\":\"FixtureExecutor\",\"proof_plan_digest\":\"725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a\",\"receipt_id\":\"ev-tests\",\"repository_id\":\"fixture-repository\",\"schema_version\":\"cyborgclaw.measurement-receipt.v1\",\"session_id\":\"charrette-fixture-001\",\"workspace_id\":\"fixture-workspace\"}"
+          },
+          {
+            "id": "ev-candidate",
+            "kind": "inline_fixture",
+            "source": "fixture:ev-candidate",
+            "sha256": "0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb",
+            "classification": "source",
+            "untrusted": true,
+            "encoding": "utf8",
+            "content": "canonical-fixture-candidate-v1"
+          },
+          {
+            "id": "ev-repair-patch",
+            "kind": "inline_fixture",
+            "source": "fixture:ev-repair-patch",
+            "sha256": "9b0a2a3d14b9399d18175bc1758ffd57e69590498a96bc74ef38d8d14a6325ef",
+            "classification": "source",
+            "untrusted": true,
+            "encoding": "utf8",
+            "content": "{\"bundle_id\":\"ev-repair-patch\",\"changes\":[{\"after_content_base64\":\"YXNzZXJ0LmVxdWFsKGFjdHVhbCwgdHJ1ZSk7XG4=\",\"after_sha256\":\"9ac820ddbc1753b2bb1a3ab28edd592d55063395840db325e9a21ef84a195257\",\"before_content_base64\":\"YXNzZXJ0LmVxdWFsKGFjdHVhbCwgZmFsc2UpO1xu\",\"before_sha256\":\"d6a55333429065ff50501fb232dd5eb303db0df201681cc8413741c2ffa8321e\",\"path\":\"tests/decisions.test.mjs\"}],\"repository_id\":\"fixture-repository\",\"schema_version\":\"cyborgclaw.local-change-bundle.v1\",\"validation_arguments\":[\"tests/decisions.test.mjs\"],\"validation_command_id\":\"run-focused-validation\",\"workspace_id\":\"fixture-workspace\"}"
+          }
+        ],
+        "panel_assignments": [
+          {
+            "lens_id": "epistemic_integrity",
+            "reviewer_id": "EpistemicReviewer"
+          },
+          {
+            "lens_id": "authority_security",
+            "reviewer_id": "AuthorityReviewer"
+          },
+          {
+            "lens_id": "development_practicality",
+            "reviewer_id": "PracticalityReviewer"
+          }
+        ],
+        "roles": {
+          "builder_id": "FixtureBuilder",
+          "evidence_writer_id": "FixtureCustodian",
+          "executor_id": "FixtureExecutor",
+          "synthesis_chair_id": "Sage",
+          "final_reviewer_id": "FixtureFinalReviewer",
+          "decision_judge_id": "Sage"
+        },
+        "max_challenge_rounds": 2,
+        "frozen_at": "2026-07-30T00:02:00.000Z",
+        "freeze_digest": "baee372fe6fa0982b626fdfa97ee8d035b0c2b5415e96cd2901945085b2c465a"
+      },
+      "findings": {
+        "schema_version": "cyborgclaw.groupthink-charrette.findings.v1",
+        "session_id": "charrette-fixture-001",
+        "freeze_digest": "baee372fe6fa0982b626fdfa97ee8d035b0c2b5415e96cd2901945085b2c465a",
+        "reviews": [
+          {
+            "reviewer_id": "EpistemicReviewer",
+            "lens_id": "epistemic_integrity",
+            "freeze_digest": "baee372fe6fa0982b626fdfa97ee8d035b0c2b5415e96cd2901945085b2c465a",
+            "submitted_at": "2026-07-30T00:05:00.000Z",
+            "independence_attestation": "I formed these findings from the frozen evidence before seeing any peer finding or preliminary conclusion.",
+            "saw_peer_findings_before_submission": false,
+            "analysis_summary": "The epistemic_integrity lens traced the exact frozen action, delegation, measurement receipt, gate comparison, failure mode, and falsifier before reaching an independent recommendation.",
+            "review_checklist": [
+              "evidence_traceability",
+              "authority_scope",
+              "gate_validity",
+              "failure_modes",
+              "falsifiability"
+            ],
+            "evidence_examined_ids": [
+              "ev-authority",
+              "ev-tests",
+              "ev-candidate",
+              "ev-repair-patch"
+            ],
+            "observations": [
+              {
+                "id": "obs-epistemic_integrity",
+                "classification": "fact",
+                "statement": "The epistemic_integrity review used the frozen evidence.",
+                "evidence_ids": [
+                  "ev-tests"
+                ]
+              }
+            ],
+            "objections": [],
+            "contradictions": [],
+            "uncertainty": [
+              "Declared role identity is preserved as custody metadata, not authenticated."
+            ],
+            "falsifiers": [
+              "A changed freeze digest would invalidate this review."
+            ],
+            "recommendation": "ABORT_PATH",
+            "dissent": []
+          },
+          {
+            "reviewer_id": "AuthorityReviewer",
+            "lens_id": "authority_security",
+            "freeze_digest": "baee372fe6fa0982b626fdfa97ee8d035b0c2b5415e96cd2901945085b2c465a",
+            "submitted_at": "2026-07-30T00:05:00.000Z",
+            "independence_attestation": "I formed these findings from the frozen evidence before seeing any peer finding or preliminary conclusion.",
+            "saw_peer_findings_before_submission": false,
+            "analysis_summary": "The authority_security lens traced the exact frozen action, delegation, measurement receipt, gate comparison, failure mode, and falsifier before reaching an independent recommendation.",
+            "review_checklist": [
+              "evidence_traceability",
+              "authority_scope",
+              "gate_validity",
+              "failure_modes",
+              "falsifiability"
+            ],
+            "evidence_examined_ids": [
+              "ev-authority",
+              "ev-tests",
+              "ev-candidate",
+              "ev-repair-patch"
+            ],
+            "observations": [
+              {
+                "id": "obs-authority_security",
+                "classification": "fact",
+                "statement": "The authority_security review used the frozen evidence.",
+                "evidence_ids": [
+                  "ev-tests"
+                ]
+              }
+            ],
+            "objections": [],
+            "contradictions": [],
+            "uncertainty": [
+              "Declared role identity is preserved as custody metadata, not authenticated."
+            ],
+            "falsifiers": [
+              "A changed freeze digest would invalidate this review."
+            ],
+            "recommendation": "ABORT_PATH",
+            "dissent": []
+          },
+          {
+            "reviewer_id": "PracticalityReviewer",
+            "lens_id": "development_practicality",
+            "freeze_digest": "baee372fe6fa0982b626fdfa97ee8d035b0c2b5415e96cd2901945085b2c465a",
+            "submitted_at": "2026-07-30T00:05:00.000Z",
+            "independence_attestation": "I formed these findings from the frozen evidence before seeing any peer finding or preliminary conclusion.",
+            "saw_peer_findings_before_submission": false,
+            "analysis_summary": "The development_practicality lens traced the exact frozen action, delegation, measurement receipt, gate comparison, failure mode, and falsifier before reaching an independent recommendation.",
+            "review_checklist": [
+              "evidence_traceability",
+              "authority_scope",
+              "gate_validity",
+              "failure_modes",
+              "falsifiability"
+            ],
+            "evidence_examined_ids": [
+              "ev-authority",
+              "ev-tests",
+              "ev-candidate",
+              "ev-repair-patch"
+            ],
+            "observations": [
+              {
+                "id": "obs-development_practicality",
+                "classification": "fact",
+                "statement": "The development_practicality review used the frozen evidence.",
+                "evidence_ids": [
+                  "ev-tests"
+                ]
+              }
+            ],
+            "objections": [],
+            "contradictions": [],
+            "uncertainty": [
+              "Declared role identity is preserved as custody metadata, not authenticated."
+            ],
+            "falsifiers": [
+              "A changed freeze digest would invalidate this review."
+            ],
+            "recommendation": "ABORT_PATH",
+            "dissent": []
+          }
+        ],
+        "cross_review_started_at": "2026-07-30T00:10:00.000Z",
+        "gate_results": [
+          {
+            "gate_id": "gate-tests",
+            "status": "FAIL",
+            "evidence_ids": [
+              "ev-tests"
+            ],
+            "explanation": "The path cannot satisfy the frozen gate.",
+            "correctable": false,
+            "repair_action": null,
+            "observed_value": 0,
+            "evaluator_id": null,
+            "evaluator_attestation": null
+          },
+          {
+            "gate_id": "gate-authority",
+            "status": "PASS",
+            "evidence_ids": [
+              "ev-authority"
+            ],
+            "explanation": "The exact local action is delegated.",
+            "correctable": false,
+            "repair_action": null,
+            "observed_value": true,
+            "evaluator_id": "FixtureFinalReviewer",
+            "evaluator_attestation": "I evaluated this manual gate only against the cited frozen evidence and frozen pass condition."
+          }
+        ],
+        "unresolved_contradictions": [],
+        "challenge_rounds": 0,
+        "challenges": [],
+        "proposed_repair_action": null,
+        "final_review": {
+          "reviewer_id": "FixtureFinalReviewer",
+          "freeze_digest": "baee372fe6fa0982b626fdfa97ee8d035b0c2b5415e96cd2901945085b2c465a",
+          "reviewed_at": "2026-07-30T00:12:00.000Z",
+          "status": "ACCEPTED",
+          "attestation": "I independently reviewed the frozen session and completed findings without participating as builder, panel reviewer, or decision judge.",
+          "analysis_summary": "The final reviewer checked the frozen evidence, independent findings, gate results, and exact action custody.",
+          "review_checklist": [
+            "independence",
+            "all_lenses_present",
+            "challenge_resolutions",
+            "gate_derivation",
+            "authority_and_claim_ceiling",
+            "record_reproducibility"
+          ],
+          "evidence_examined_ids": [
+            "ev-authority",
+            "ev-tests",
+            "ev-candidate",
+            "ev-repair-patch"
+          ],
+          "accepted_resolution_ids": [],
+          "blocking_objections": []
+        },
+        "decided_at": "2026-07-30T00:15:00.000Z"
+      },
+      "evaluated_at": "2026-07-30T00:15:00.000Z",
+      "expected": "ABORT_PATH"
+    },
+    {
+      "id": "hold",
+      "session": {
+        "schema_version": "cyborgclaw.groupthink-charrette.session.v1",
+        "state": "frozen",
+        "session_id": "charrette-fixture-001",
+        "mission_id": "fixture-mission",
+        "mission_statement": "Exercise the charrette contract without external or production effects.",
+        "contract_identity": {
+          "charter_id": "cyborgclaw.glen-proxy-charter.v1",
+          "protocol_id": "cyborgclaw.groupthink-charrette.protocol.v1",
+          "algorithm_version": "cyborgclaw.groupthink-charrette.decision.v1",
+          "constants_schema_version": "cyborgclaw.groupthink-charrette.constants.v1",
+          "session_schema": "cyborgclaw.groupthink-charrette.session.v1",
+          "findings_schema": "cyborgclaw.groupthink-charrette.findings.v1",
+          "decision_record_schema": "cyborgclaw.sadr.v1",
+          "charter_sha256": "4adb296e749822ebd26043ae2b9fd428f9672867a3db85544e8bdc11326bf9ae",
+          "protocol_sha256": "677d4c038bd734d28926cd1d79b3693cafcfa690f145f1d98b3149bb04b34509",
+          "constants_sha256": "00778f48b9e08296f640513c108d5966b5917a8c0c4a753b6ff26d18abdf77c2",
+          "session_schema_sha256": "795c911f04032c7e17c135d447c110565afbeef041ff420cce6d046d82897434",
+          "findings_schema_sha256": "2d65656c56c12e274a4730388d497ef6727d628384074e7f14445940298cd9ac",
+          "decision_record_schema_sha256": "32427e2ba5078b7fb3753d2f4cfa7c8cec7d322c105717177f5eabb96d4387fb"
+        },
+        "decision": {
+          "question": "Should the exact local validation action continue?",
+          "options": [
+            {
+              "id": "continue",
+              "summary": "Run the frozen local validation action."
+            },
+            {
+              "id": "stop",
+              "summary": "Stop without changing local files."
+            }
+          ],
+          "candidate_evidence_id": "ev-candidate",
+          "candidate_digest": "0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb",
+          "proposed_next_action": {
+            "operation_id": "RUN_LOCAL_VALIDATION",
+            "target_scope_id": "fixture-workspace",
+            "description": "Run the frozen local validation suite.",
+            "category": "repeat_validation",
+            "destination": "local_workspace",
+            "declared_effects": [
+              "local_validation"
+            ],
+            "reversible": true,
+            "parameters": {
+              "executor_adapter_id": "charrette.local-validation.v1",
+              "command_id": "run-frozen-validation",
+              "arguments": [
+                "all-contract-tests"
+              ],
+              "file_allowlist": [],
+              "change_digest": null,
+              "change_evidence_id": null,
+              "rollback_digest": null,
+              "validation_command_id": null,
+              "validation_arguments": []
+            }
+          }
+        },
+        "suitability": {
+          "material_tradeoff": true,
+          "multiple_defensible_options": true,
+          "cross_domain_risk": false,
+          "disputed_gate": true,
+          "factual_lookup": false,
+          "routine_mechanical_step": false,
+          "reversible": true
+        },
+        "proxy_charter": {
+          "delegation_id": "glen-fixture-delegation",
+          "granted_by": "Glen",
+          "decision_owner": "Glen",
+          "mission_id": "fixture-mission",
+          "decision_context_digest": "3f5b22d44ba7ad38d3774bcf99904e347009dccdaa34e4d7a63cd01484626865",
+          "proof_plan_digest": "725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a",
+          "proof_plan_committed_at": "2026-07-30T00:00:00.000Z",
+          "target_scope": {
+            "kind": "local_workspace",
+            "repository_id": "fixture-repository",
+            "workspace_id": "fixture-workspace"
+          },
+          "scope": "Fixture-only local validation and repair.",
+          "allowed_action_categories": [
+            "repeat_validation",
+            "local_test_repair"
+          ],
+          "authorized_action_digests": [
+            "88596902b271c7e9ce51148fcfd261635048c1eaf2025556e600210b03014845",
+            "374b7e544c6e26e5b53097a6e466e4e8a1aada226aefddb1bce74d80f327a310"
+          ],
+          "network_policy": "none",
+          "authority_evidence_ids": [
+            "ev-authority"
+          ],
+          "authority_custody": {
+            "method": "operator_direct_prompt",
+            "verifier_id": "FixtureCustodian",
+            "evidence_id": "ev-authority",
+            "attestation": "I received this delegation through the declared custody method; this record preserves but does not cryptographically authenticate that source."
+          },
+          "boundary_kind": "expires_at",
+          "expires_at": "2099-01-01T00:00:00.000Z",
+          "authorization_nonce": "4bd99c7dfd6201ac9f0798dca75334c2257a1484a6611e30829402ff276fe87e",
+          "authorization_use_limit": 1,
+          "mission_boundary": "This delegation ends at its exact expiry and permits at most one enforcing-executor use of the exact authorized nonce.",
+          "proof_bar": "Every frozen gate has content-addressed evidence.",
+          "claim_ceiling_code": "INTERNAL_DECISION_ONLY",
+          "claim_ceiling": "Internal decision record only; no merge, release, production, credential, external-effect, risk-acceptance, remote-repository, or mission-change authority.",
+          "mission_reserved_action_categories": [],
+          "revoked": false,
+          "stop_condition_active": false
+        },
+        "failure_lenses": [
+          "epistemic_integrity",
+          "authority_security",
+          "development_practicality"
+        ],
+        "frozen_gates": [
+          {
+            "id": "gate-tests",
+            "criterion": "The local contract tests pass.",
+            "measure": "passing_test_count",
+            "operator": "gte",
+            "threshold": 1,
+            "measurement_command_id": "fixture-contract-tests",
+            "measurement_arguments": [
+              "all-contract-tests"
+            ],
+            "required_exit_code": 0,
+            "pass_condition": "At least one frozen contract test passes.",
+            "required_evidence_ids": [
+              "ev-tests"
+            ]
+          },
+          {
+            "id": "gate-authority",
+            "criterion": "The proposed action remains inside the delegation.",
+            "measure": "authority_evidence_reviewed",
+            "operator": "manual_evidence",
+            "threshold": true,
+            "measurement_command_id": null,
+            "measurement_arguments": [],
+            "required_exit_code": null,
+            "pass_condition": "Authority evidence is present and reviewed.",
+            "required_evidence_ids": [
+              "ev-authority"
+            ]
+          }
+        ],
+        "evidence": [
+          {
+            "id": "ev-authority",
+            "kind": "inline_fixture",
+            "source": "fixture:ev-authority",
+            "sha256": "e57e9d5471ead3c47ae5e6f3affa6f59243afd406cc82789244cd763fa19d476",
+            "classification": "authority",
+            "untrusted": true,
+            "encoding": "utf8",
+            "content": "{\"proxy_charter\":{\"allowed_action_categories\":[\"repeat_validation\",\"local_test_repair\"],\"authority_custody\":{\"attestation\":\"I received this delegation through the declared custody method; this record preserves but does not cryptographically authenticate that source.\",\"evidence_id\":\"ev-authority\",\"method\":\"operator_direct_prompt\",\"verifier_id\":\"FixtureCustodian\"},\"authority_evidence_ids\":[\"ev-authority\"],\"authorization_nonce\":\"4bd99c7dfd6201ac9f0798dca75334c2257a1484a6611e30829402ff276fe87e\",\"authorization_use_limit\":1,\"authorized_action_digests\":[\"88596902b271c7e9ce51148fcfd261635048c1eaf2025556e600210b03014845\",\"374b7e544c6e26e5b53097a6e466e4e8a1aada226aefddb1bce74d80f327a310\"],\"boundary_kind\":\"expires_at\",\"claim_ceiling\":\"Internal decision record only; no merge, release, production, credential, external-effect, risk-acceptance, remote-repository, or mission-change authority.\",\"claim_ceiling_code\":\"INTERNAL_DECISION_ONLY\",\"decision_context_digest\":\"3f5b22d44ba7ad38d3774bcf99904e347009dccdaa34e4d7a63cd01484626865\",\"decision_owner\":\"Glen\",\"delegation_id\":\"glen-fixture-delegation\",\"expires_at\":\"2099-01-01T00:00:00.000Z\",\"granted_by\":\"Glen\",\"mission_boundary\":\"This delegation ends at its exact expiry and permits at most one enforcing-executor use of the exact authorized nonce.\",\"mission_id\":\"fixture-mission\",\"mission_reserved_action_categories\":[],\"network_policy\":\"none\",\"proof_bar\":\"Every frozen gate has content-addressed evidence.\",\"proof_plan_committed_at\":\"2026-07-30T00:00:00.000Z\",\"proof_plan_digest\":\"725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a\",\"revoked\":false,\"scope\":\"Fixture-only local validation and repair.\",\"stop_condition_active\":false,\"target_scope\":{\"kind\":\"local_workspace\",\"repository_id\":\"fixture-repository\",\"workspace_id\":\"fixture-workspace\"}},\"schema_version\":\"cyborgclaw.glen-delegation.v1\"}"
+          },
+          {
+            "id": "ev-tests",
+            "kind": "inline_fixture",
+            "source": "fixture:ev-tests",
+            "sha256": "d4fdb9cb689070c52611374fc4684d872805a6fcd276972f2d55cdc9166bad89",
+            "classification": "test",
+            "untrusted": true,
+            "encoding": "utf8",
+            "content": "{\"arguments\":[\"all-contract-tests\"],\"candidate_digest\":\"0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb\",\"captured_at\":\"2026-07-30T00:01:00.000Z\",\"command_id\":\"fixture-contract-tests\",\"decision_context_digest\":\"3f5b22d44ba7ad38d3774bcf99904e347009dccdaa34e4d7a63cd01484626865\",\"exit_code\":0,\"measurements\":{\"passing_test_count\":1},\"mission_id\":\"fixture-mission\",\"producer_id\":\"FixtureExecutor\",\"proof_plan_digest\":\"725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a\",\"receipt_id\":\"ev-tests\",\"repository_id\":\"fixture-repository\",\"schema_version\":\"cyborgclaw.measurement-receipt.v1\",\"session_id\":\"charrette-fixture-001\",\"workspace_id\":\"fixture-workspace\"}"
+          },
+          {
+            "id": "ev-candidate",
+            "kind": "inline_fixture",
+            "source": "fixture:ev-candidate",
+            "sha256": "0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb",
+            "classification": "source",
+            "untrusted": true,
+            "encoding": "utf8",
+            "content": "canonical-fixture-candidate-v1"
+          },
+          {
+            "id": "ev-repair-patch",
+            "kind": "inline_fixture",
+            "source": "fixture:ev-repair-patch",
+            "sha256": "9b0a2a3d14b9399d18175bc1758ffd57e69590498a96bc74ef38d8d14a6325ef",
+            "classification": "source",
+            "untrusted": true,
+            "encoding": "utf8",
+            "content": "{\"bundle_id\":\"ev-repair-patch\",\"changes\":[{\"after_content_base64\":\"YXNzZXJ0LmVxdWFsKGFjdHVhbCwgdHJ1ZSk7XG4=\",\"after_sha256\":\"9ac820ddbc1753b2bb1a3ab28edd592d55063395840db325e9a21ef84a195257\",\"before_content_base64\":\"YXNzZXJ0LmVxdWFsKGFjdHVhbCwgZmFsc2UpO1xu\",\"before_sha256\":\"d6a55333429065ff50501fb232dd5eb303db0df201681cc8413741c2ffa8321e\",\"path\":\"tests/decisions.test.mjs\"}],\"repository_id\":\"fixture-repository\",\"schema_version\":\"cyborgclaw.local-change-bundle.v1\",\"validation_arguments\":[\"tests/decisions.test.mjs\"],\"validation_command_id\":\"run-focused-validation\",\"workspace_id\":\"fixture-workspace\"}"
+          }
+        ],
+        "panel_assignments": [
+          {
+            "lens_id": "epistemic_integrity",
+            "reviewer_id": "EpistemicReviewer"
+          },
+          {
+            "lens_id": "authority_security",
+            "reviewer_id": "AuthorityReviewer"
+          },
+          {
+            "lens_id": "development_practicality",
+            "reviewer_id": "PracticalityReviewer"
+          }
+        ],
+        "roles": {
+          "builder_id": "FixtureBuilder",
+          "evidence_writer_id": "FixtureCustodian",
+          "executor_id": "FixtureExecutor",
+          "synthesis_chair_id": "Sage",
+          "final_reviewer_id": "FixtureFinalReviewer",
+          "decision_judge_id": "Sage"
+        },
+        "max_challenge_rounds": 2,
+        "frozen_at": "2026-07-30T00:02:00.000Z",
+        "freeze_digest": "e3450ed5a44a377cdf6b35b5377611618a984e4fb956a8c7380e26f4dc1deb9e"
+      },
+      "findings": {
+        "schema_version": "cyborgclaw.groupthink-charrette.findings.v1",
+        "session_id": "charrette-fixture-001",
+        "freeze_digest": "e3450ed5a44a377cdf6b35b5377611618a984e4fb956a8c7380e26f4dc1deb9e",
+        "reviews": [
+          {
+            "reviewer_id": "EpistemicReviewer",
+            "lens_id": "epistemic_integrity",
+            "freeze_digest": "e3450ed5a44a377cdf6b35b5377611618a984e4fb956a8c7380e26f4dc1deb9e",
+            "submitted_at": "2026-07-30T00:05:00.000Z",
+            "independence_attestation": "I formed these findings from the frozen evidence before seeing any peer finding or preliminary conclusion.",
+            "saw_peer_findings_before_submission": false,
+            "analysis_summary": "The epistemic_integrity lens traced the exact frozen action, delegation, measurement receipt, gate comparison, failure mode, and falsifier before reaching an independent recommendation.",
+            "review_checklist": [
+              "evidence_traceability",
+              "authority_scope",
+              "gate_validity",
+              "failure_modes",
+              "falsifiability"
+            ],
+            "evidence_examined_ids": [
+              "ev-authority",
+              "ev-tests",
+              "ev-candidate",
+              "ev-repair-patch"
+            ],
+            "observations": [
+              {
+                "id": "obs-epistemic_integrity",
+                "classification": "fact",
+                "statement": "The epistemic_integrity review used the frozen evidence.",
+                "evidence_ids": [
+                  "ev-tests"
+                ]
+              }
+            ],
+            "objections": [],
+            "contradictions": [],
+            "uncertainty": [
+              "Declared role identity is preserved as custody metadata, not authenticated."
+            ],
+            "falsifiers": [
+              "A changed freeze digest would invalidate this review."
+            ],
+            "recommendation": "PROCEED",
+            "dissent": []
+          },
+          {
+            "reviewer_id": "AuthorityReviewer",
+            "lens_id": "authority_security",
+            "freeze_digest": "e3450ed5a44a377cdf6b35b5377611618a984e4fb956a8c7380e26f4dc1deb9e",
+            "submitted_at": "2026-07-30T00:05:00.000Z",
+            "independence_attestation": "I formed these findings from the frozen evidence before seeing any peer finding or preliminary conclusion.",
+            "saw_peer_findings_before_submission": false,
+            "analysis_summary": "The authority_security lens traced the exact frozen action, delegation, measurement receipt, gate comparison, failure mode, and falsifier before reaching an independent recommendation.",
+            "review_checklist": [
+              "evidence_traceability",
+              "authority_scope",
+              "gate_validity",
+              "failure_modes",
+              "falsifiability"
+            ],
+            "evidence_examined_ids": [
+              "ev-authority",
+              "ev-tests",
+              "ev-candidate",
+              "ev-repair-patch"
+            ],
+            "observations": [
+              {
+                "id": "obs-authority_security",
+                "classification": "fact",
+                "statement": "The authority_security review used the frozen evidence.",
+                "evidence_ids": [
+                  "ev-tests"
+                ]
+              }
+            ],
+            "objections": [],
+            "contradictions": [],
+            "uncertainty": [
+              "Declared role identity is preserved as custody metadata, not authenticated."
+            ],
+            "falsifiers": [
+              "A changed freeze digest would invalidate this review."
+            ],
+            "recommendation": "PROCEED",
+            "dissent": []
+          },
+          {
+            "reviewer_id": "PracticalityReviewer",
+            "lens_id": "development_practicality",
+            "freeze_digest": "e3450ed5a44a377cdf6b35b5377611618a984e4fb956a8c7380e26f4dc1deb9e",
+            "submitted_at": "2026-07-30T00:05:00.000Z",
+            "independence_attestation": "I formed these findings from the frozen evidence before seeing any peer finding or preliminary conclusion.",
+            "saw_peer_findings_before_submission": false,
+            "analysis_summary": "The development_practicality lens traced the exact frozen action, delegation, measurement receipt, gate comparison, failure mode, and falsifier before reaching an independent recommendation.",
+            "review_checklist": [
+              "evidence_traceability",
+              "authority_scope",
+              "gate_validity",
+              "failure_modes",
+              "falsifiability"
+            ],
+            "evidence_examined_ids": [
+              "ev-authority",
+              "ev-tests",
+              "ev-candidate",
+              "ev-repair-patch"
+            ],
+            "observations": [
+              {
+                "id": "obs-development_practicality",
+                "classification": "fact",
+                "statement": "The development_practicality review used the frozen evidence.",
+                "evidence_ids": [
+                  "ev-tests"
+                ]
+              }
+            ],
+            "objections": [],
+            "contradictions": [],
+            "uncertainty": [
+              "Declared role identity is preserved as custody metadata, not authenticated."
+            ],
+            "falsifiers": [
+              "A changed freeze digest would invalidate this review."
+            ],
+            "recommendation": "PROCEED",
+            "dissent": []
+          }
+        ],
+        "cross_review_started_at": "2026-07-30T00:10:00.000Z",
+        "gate_results": [
+          {
+            "gate_id": "gate-tests",
+            "status": "PASS",
+            "evidence_ids": [
+              "ev-tests"
+            ],
+            "explanation": "The observed count meets the frozen threshold.",
+            "correctable": false,
+            "repair_action": null,
+            "observed_value": 1,
+            "evaluator_id": null,
+            "evaluator_attestation": null
+          },
+          {
+            "gate_id": "gate-authority",
+            "status": "PASS",
+            "evidence_ids": [
+              "ev-authority"
+            ],
+            "explanation": "The exact local action is delegated.",
+            "correctable": false,
+            "repair_action": null,
+            "observed_value": true,
+            "evaluator_id": "FixtureFinalReviewer",
+            "evaluator_attestation": "I evaluated this manual gate only against the cited frozen evidence and frozen pass condition."
+          }
+        ],
+        "unresolved_contradictions": [],
+        "challenge_rounds": 0,
+        "challenges": [],
+        "proposed_repair_action": null,
+        "final_review": {
+          "reviewer_id": "FixtureFinalReviewer",
+          "freeze_digest": "e3450ed5a44a377cdf6b35b5377611618a984e4fb956a8c7380e26f4dc1deb9e",
+          "reviewed_at": "2026-07-30T00:12:00.000Z",
+          "status": "REQUEST_CHANGES",
+          "attestation": "I independently reviewed the frozen session and completed findings without participating as builder, panel reviewer, or decision judge.",
+          "analysis_summary": "The final reviewer found that independent review custody is incomplete and therefore refused to accept autonomous continuation.",
+          "review_checklist": [
+            "independence",
+            "all_lenses_present",
+            "challenge_resolutions",
+            "gate_derivation",
+            "authority_and_claim_ceiling",
+            "record_reproducibility"
+          ],
+          "evidence_examined_ids": [
+            "ev-authority",
+            "ev-tests",
+            "ev-candidate",
+            "ev-repair-patch"
+          ],
+          "accepted_resolution_ids": [],
+          "blocking_objections": [
+            "Independent review custody is incomplete."
+          ]
+        },
+        "decided_at": "2026-07-30T00:15:00.000Z"
+      },
+      "evaluated_at": "2026-07-30T00:15:00.000Z",
+      "expected": "HOLD"
+    },
+    {
+      "id": "escalate-to-glen",
+      "session": {
+        "schema_version": "cyborgclaw.groupthink-charrette.session.v1",
+        "state": "frozen",
+        "session_id": "charrette-fixture-001",
+        "mission_id": "fixture-mission",
+        "mission_statement": "Exercise the charrette contract without external or production effects.",
+        "contract_identity": {
+          "charter_id": "cyborgclaw.glen-proxy-charter.v1",
+          "protocol_id": "cyborgclaw.groupthink-charrette.protocol.v1",
+          "algorithm_version": "cyborgclaw.groupthink-charrette.decision.v1",
+          "constants_schema_version": "cyborgclaw.groupthink-charrette.constants.v1",
+          "session_schema": "cyborgclaw.groupthink-charrette.session.v1",
+          "findings_schema": "cyborgclaw.groupthink-charrette.findings.v1",
+          "decision_record_schema": "cyborgclaw.sadr.v1",
+          "charter_sha256": "4adb296e749822ebd26043ae2b9fd428f9672867a3db85544e8bdc11326bf9ae",
+          "protocol_sha256": "677d4c038bd734d28926cd1d79b3693cafcfa690f145f1d98b3149bb04b34509",
+          "constants_sha256": "00778f48b9e08296f640513c108d5966b5917a8c0c4a753b6ff26d18abdf77c2",
+          "session_schema_sha256": "795c911f04032c7e17c135d447c110565afbeef041ff420cce6d046d82897434",
+          "findings_schema_sha256": "2d65656c56c12e274a4730388d497ef6727d628384074e7f14445940298cd9ac",
+          "decision_record_schema_sha256": "32427e2ba5078b7fb3753d2f4cfa7c8cec7d322c105717177f5eabb96d4387fb"
+        },
+        "decision": {
+          "question": "Should the exact local validation action continue?",
+          "options": [
+            {
+              "id": "continue",
+              "summary": "Run the frozen local validation action."
+            },
+            {
+              "id": "stop",
+              "summary": "Stop without changing local files."
+            }
+          ],
+          "candidate_evidence_id": "ev-candidate",
+          "candidate_digest": "0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb",
+          "proposed_next_action": {
+            "operation_id": "PRODUCTION_DEPLOYMENT",
+            "target_scope_id": "fixture-workspace",
+            "description": "Deploy the frozen candidate to production.",
+            "category": "production_deployment",
+            "destination": "production",
+            "declared_effects": [
+              "production_change"
+            ],
+            "reversible": false,
+            "parameters": {
+              "executor_adapter_id": "charrette.reserved-unavailable.v1",
+              "command_id": "production-deployment",
+              "arguments": [
+                "fixture-candidate"
+              ],
+              "file_allowlist": [],
+              "change_digest": null,
+              "change_evidence_id": null,
+              "rollback_digest": null,
+              "validation_command_id": null,
+              "validation_arguments": []
+            }
+          }
+        },
+        "suitability": {
+          "material_tradeoff": true,
+          "multiple_defensible_options": true,
+          "cross_domain_risk": false,
+          "disputed_gate": true,
+          "factual_lookup": false,
+          "routine_mechanical_step": false,
+          "reversible": true
+        },
+        "proxy_charter": {
+          "delegation_id": "glen-fixture-delegation",
+          "granted_by": "Glen",
+          "decision_owner": "Glen",
+          "mission_id": "fixture-mission",
+          "decision_context_digest": "f4ce2ba4954426cd21cf7ee5caf0ea1e81679ec00dc01f31184f036b3da37bda",
+          "proof_plan_digest": "725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a",
+          "proof_plan_committed_at": "2026-07-30T00:00:00.000Z",
+          "target_scope": {
+            "kind": "local_workspace",
+            "repository_id": "fixture-repository",
+            "workspace_id": "fixture-workspace"
+          },
+          "scope": "Fixture-only local validation and repair.",
+          "allowed_action_categories": [
+            "repeat_validation",
+            "local_test_repair"
+          ],
+          "authorized_action_digests": [
+            "3bac15a5c269287c116f98645a5148f6f3b54c41d1c3f8f23a31d5a800fe8f3c",
+            "374b7e544c6e26e5b53097a6e466e4e8a1aada226aefddb1bce74d80f327a310"
+          ],
+          "network_policy": "none",
+          "authority_evidence_ids": [
+            "ev-authority"
+          ],
+          "authority_custody": {
+            "method": "operator_direct_prompt",
+            "verifier_id": "FixtureCustodian",
+            "evidence_id": "ev-authority",
+            "attestation": "I received this delegation through the declared custody method; this record preserves but does not cryptographically authenticate that source."
+          },
+          "boundary_kind": "expires_at",
+          "expires_at": "2099-01-01T00:00:00.000Z",
+          "authorization_nonce": "d1cc33093c527ec9b485a2deb7a650c03dfcebf4c2d415721965ec49f13b4ecc",
+          "authorization_use_limit": 1,
+          "mission_boundary": "This delegation ends at its exact expiry and permits at most one enforcing-executor use of the exact authorized nonce.",
+          "proof_bar": "Every frozen gate has content-addressed evidence.",
+          "claim_ceiling_code": "INTERNAL_DECISION_ONLY",
+          "claim_ceiling": "Internal decision record only; no merge, release, production, credential, external-effect, risk-acceptance, remote-repository, or mission-change authority.",
+          "mission_reserved_action_categories": [],
+          "revoked": false,
+          "stop_condition_active": false
+        },
+        "failure_lenses": [
+          "epistemic_integrity",
+          "authority_security",
+          "development_practicality"
+        ],
+        "frozen_gates": [
+          {
+            "id": "gate-tests",
+            "criterion": "The local contract tests pass.",
+            "measure": "passing_test_count",
+            "operator": "gte",
+            "threshold": 1,
+            "measurement_command_id": "fixture-contract-tests",
+            "measurement_arguments": [
+              "all-contract-tests"
+            ],
+            "required_exit_code": 0,
+            "pass_condition": "At least one frozen contract test passes.",
+            "required_evidence_ids": [
+              "ev-tests"
+            ]
+          },
+          {
+            "id": "gate-authority",
+            "criterion": "The proposed action remains inside the delegation.",
+            "measure": "authority_evidence_reviewed",
+            "operator": "manual_evidence",
+            "threshold": true,
+            "measurement_command_id": null,
+            "measurement_arguments": [],
+            "required_exit_code": null,
+            "pass_condition": "Authority evidence is present and reviewed.",
+            "required_evidence_ids": [
+              "ev-authority"
+            ]
+          }
+        ],
+        "evidence": [
+          {
+            "id": "ev-authority",
+            "kind": "inline_fixture",
+            "source": "fixture:ev-authority",
+            "sha256": "6affe273ab6c9e5a910964beb63b3d618efd8dfc88e731d9179b9a26f09ace36",
+            "classification": "authority",
+            "untrusted": true,
+            "encoding": "utf8",
+            "content": "{\"proxy_charter\":{\"allowed_action_categories\":[\"repeat_validation\",\"local_test_repair\"],\"authority_custody\":{\"attestation\":\"I received this delegation through the declared custody method; this record preserves but does not cryptographically authenticate that source.\",\"evidence_id\":\"ev-authority\",\"method\":\"operator_direct_prompt\",\"verifier_id\":\"FixtureCustodian\"},\"authority_evidence_ids\":[\"ev-authority\"],\"authorization_nonce\":\"d1cc33093c527ec9b485a2deb7a650c03dfcebf4c2d415721965ec49f13b4ecc\",\"authorization_use_limit\":1,\"authorized_action_digests\":[\"3bac15a5c269287c116f98645a5148f6f3b54c41d1c3f8f23a31d5a800fe8f3c\",\"374b7e544c6e26e5b53097a6e466e4e8a1aada226aefddb1bce74d80f327a310\"],\"boundary_kind\":\"expires_at\",\"claim_ceiling\":\"Internal decision record only; no merge, release, production, credential, external-effect, risk-acceptance, remote-repository, or mission-change authority.\",\"claim_ceiling_code\":\"INTERNAL_DECISION_ONLY\",\"decision_context_digest\":\"f4ce2ba4954426cd21cf7ee5caf0ea1e81679ec00dc01f31184f036b3da37bda\",\"decision_owner\":\"Glen\",\"delegation_id\":\"glen-fixture-delegation\",\"expires_at\":\"2099-01-01T00:00:00.000Z\",\"granted_by\":\"Glen\",\"mission_boundary\":\"This delegation ends at its exact expiry and permits at most one enforcing-executor use of the exact authorized nonce.\",\"mission_id\":\"fixture-mission\",\"mission_reserved_action_categories\":[],\"network_policy\":\"none\",\"proof_bar\":\"Every frozen gate has content-addressed evidence.\",\"proof_plan_committed_at\":\"2026-07-30T00:00:00.000Z\",\"proof_plan_digest\":\"725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a\",\"revoked\":false,\"scope\":\"Fixture-only local validation and repair.\",\"stop_condition_active\":false,\"target_scope\":{\"kind\":\"local_workspace\",\"repository_id\":\"fixture-repository\",\"workspace_id\":\"fixture-workspace\"}},\"schema_version\":\"cyborgclaw.glen-delegation.v1\"}"
+          },
+          {
+            "id": "ev-tests",
+            "kind": "inline_fixture",
+            "source": "fixture:ev-tests",
+            "sha256": "3c4d2cec9bafb5ef4cc390fd02cb9a53e89999bae4b196c5b5ff93b89dd56068",
+            "classification": "test",
+            "untrusted": true,
+            "encoding": "utf8",
+            "content": "{\"arguments\":[\"all-contract-tests\"],\"candidate_digest\":\"0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb\",\"captured_at\":\"2026-07-30T00:01:00.000Z\",\"command_id\":\"fixture-contract-tests\",\"decision_context_digest\":\"f4ce2ba4954426cd21cf7ee5caf0ea1e81679ec00dc01f31184f036b3da37bda\",\"exit_code\":0,\"measurements\":{\"passing_test_count\":1},\"mission_id\":\"fixture-mission\",\"producer_id\":\"FixtureExecutor\",\"proof_plan_digest\":\"725eb428451d29dc46805087a05f3d7d1998a9dea7b50ca7ed79c3e633216b9a\",\"receipt_id\":\"ev-tests\",\"repository_id\":\"fixture-repository\",\"schema_version\":\"cyborgclaw.measurement-receipt.v1\",\"session_id\":\"charrette-fixture-001\",\"workspace_id\":\"fixture-workspace\"}"
+          },
+          {
+            "id": "ev-candidate",
+            "kind": "inline_fixture",
+            "source": "fixture:ev-candidate",
+            "sha256": "0c5f79448021cac09a2af127656bb5600226a4743b0ded28a4fd8b66604d71eb",
+            "classification": "source",
+            "untrusted": true,
+            "encoding": "utf8",
+            "content": "canonical-fixture-candidate-v1"
+          },
+          {
+            "id": "ev-repair-patch",
+            "kind": "inline_fixture",
+            "source": "fixture:ev-repair-patch",
+            "sha256": "9b0a2a3d14b9399d18175bc1758ffd57e69590498a96bc74ef38d8d14a6325ef",
+            "classification": "source",
+            "untrusted": true,
+            "encoding": "utf8",
+            "content": "{\"bundle_id\":\"ev-repair-patch\",\"changes\":[{\"after_content_base64\":\"YXNzZXJ0LmVxdWFsKGFjdHVhbCwgdHJ1ZSk7XG4=\",\"after_sha256\":\"9ac820ddbc1753b2bb1a3ab28edd592d55063395840db325e9a21ef84a195257\",\"before_content_base64\":\"YXNzZXJ0LmVxdWFsKGFjdHVhbCwgZmFsc2UpO1xu\",\"before_sha256\":\"d6a55333429065ff50501fb232dd5eb303db0df201681cc8413741c2ffa8321e\",\"path\":\"tests/decisions.test.mjs\"}],\"repository_id\":\"fixture-repository\",\"schema_version\":\"cyborgclaw.local-change-bundle.v1\",\"validation_arguments\":[\"tests/decisions.test.mjs\"],\"validation_command_id\":\"run-focused-validation\",\"workspace_id\":\"fixture-workspace\"}"
+          }
+        ],
+        "panel_assignments": [
+          {
+            "lens_id": "epistemic_integrity",
+            "reviewer_id": "EpistemicReviewer"
+          },
+          {
+            "lens_id": "authority_security",
+            "reviewer_id": "AuthorityReviewer"
+          },
+          {
+            "lens_id": "development_practicality",
+            "reviewer_id": "PracticalityReviewer"
+          }
+        ],
+        "roles": {
+          "builder_id": "FixtureBuilder",
+          "evidence_writer_id": "FixtureCustodian",
+          "executor_id": "FixtureExecutor",
+          "synthesis_chair_id": "Sage",
+          "final_reviewer_id": "FixtureFinalReviewer",
+          "decision_judge_id": "Sage"
+        },
+        "max_challenge_rounds": 2,
+        "frozen_at": "2026-07-30T00:02:00.000Z",
+        "freeze_digest": "c93f620fd2ff1d1d8272d926dc662d7a0b7f498e4a31aa0de3280d0e7ffb9c60"
+      },
+      "findings": {
+        "schema_version": "cyborgclaw.groupthink-charrette.findings.v1",
+        "session_id": "charrette-fixture-001",
+        "freeze_digest": "c93f620fd2ff1d1d8272d926dc662d7a0b7f498e4a31aa0de3280d0e7ffb9c60",
+        "reviews": [
+          {
+            "reviewer_id": "EpistemicReviewer",
+            "lens_id": "epistemic_integrity",
+            "freeze_digest": "c93f620fd2ff1d1d8272d926dc662d7a0b7f498e4a31aa0de3280d0e7ffb9c60",
+            "submitted_at": "2026-07-30T00:05:00.000Z",
+            "independence_attestation": "I formed these findings from the frozen evidence before seeing any peer finding or preliminary conclusion.",
+            "saw_peer_findings_before_submission": false,
+            "analysis_summary": "The epistemic_integrity lens traced the exact frozen action, delegation, measurement receipt, gate comparison, failure mode, and falsifier before reaching an independent recommendation.",
+            "review_checklist": [
+              "evidence_traceability",
+              "authority_scope",
+              "gate_validity",
+              "failure_modes",
+              "falsifiability"
+            ],
+            "evidence_examined_ids": [
+              "ev-authority",
+              "ev-tests",
+              "ev-candidate",
+              "ev-repair-patch"
+            ],
+            "observations": [
+              {
+                "id": "obs-epistemic_integrity",
+                "classification": "fact",
+                "statement": "The epistemic_integrity review used the frozen evidence.",
+                "evidence_ids": [
+                  "ev-tests"
+                ]
+              }
+            ],
+            "objections": [],
+            "contradictions": [],
+            "uncertainty": [
+              "Declared role identity is preserved as custody metadata, not authenticated."
+            ],
+            "falsifiers": [
+              "A changed freeze digest would invalidate this review."
+            ],
+            "recommendation": "PROCEED",
+            "dissent": []
+          },
+          {
+            "reviewer_id": "AuthorityReviewer",
+            "lens_id": "authority_security",
+            "freeze_digest": "c93f620fd2ff1d1d8272d926dc662d7a0b7f498e4a31aa0de3280d0e7ffb9c60",
+            "submitted_at": "2026-07-30T00:05:00.000Z",
+            "independence_attestation": "I formed these findings from the frozen evidence before seeing any peer finding or preliminary conclusion.",
+            "saw_peer_findings_before_submission": false,
+            "analysis_summary": "The authority_security lens traced the exact frozen action, delegation, measurement receipt, gate comparison, failure mode, and falsifier before reaching an independent recommendation.",
+            "review_checklist": [
+              "evidence_traceability",
+              "authority_scope",
+              "gate_validity",
+              "failure_modes",
+              "falsifiability"
+            ],
+            "evidence_examined_ids": [
+              "ev-authority",
+              "ev-tests",
+              "ev-candidate",
+              "ev-repair-patch"
+            ],
+            "observations": [
+              {
+                "id": "obs-authority_security",
+                "classification": "fact",
+                "statement": "The authority_security review used the frozen evidence.",
+                "evidence_ids": [
+                  "ev-tests"
+                ]
+              }
+            ],
+            "objections": [],
+            "contradictions": [],
+            "uncertainty": [
+              "Declared role identity is preserved as custody metadata, not authenticated."
+            ],
+            "falsifiers": [
+              "A changed freeze digest would invalidate this review."
+            ],
+            "recommendation": "PROCEED",
+            "dissent": []
+          },
+          {
+            "reviewer_id": "PracticalityReviewer",
+            "lens_id": "development_practicality",
+            "freeze_digest": "c93f620fd2ff1d1d8272d926dc662d7a0b7f498e4a31aa0de3280d0e7ffb9c60",
+            "submitted_at": "2026-07-30T00:05:00.000Z",
+            "independence_attestation": "I formed these findings from the frozen evidence before seeing any peer finding or preliminary conclusion.",
+            "saw_peer_findings_before_submission": false,
+            "analysis_summary": "The development_practicality lens traced the exact frozen action, delegation, measurement receipt, gate comparison, failure mode, and falsifier before reaching an independent recommendation.",
+            "review_checklist": [
+              "evidence_traceability",
+              "authority_scope",
+              "gate_validity",
+              "failure_modes",
+              "falsifiability"
+            ],
+            "evidence_examined_ids": [
+              "ev-authority",
+              "ev-tests",
+              "ev-candidate",
+              "ev-repair-patch"
+            ],
+            "observations": [
+              {
+                "id": "obs-development_practicality",
+                "classification": "fact",
+                "statement": "The development_practicality review used the frozen evidence.",
+                "evidence_ids": [
+                  "ev-tests"
+                ]
+              }
+            ],
+            "objections": [],
+            "contradictions": [],
+            "uncertainty": [
+              "Declared role identity is preserved as custody metadata, not authenticated."
+            ],
+            "falsifiers": [
+              "A changed freeze digest would invalidate this review."
+            ],
+            "recommendation": "PROCEED",
+            "dissent": []
+          }
+        ],
+        "cross_review_started_at": "2026-07-30T00:10:00.000Z",
+        "gate_results": [
+          {
+            "gate_id": "gate-tests",
+            "status": "PASS",
+            "evidence_ids": [
+              "ev-tests"
+            ],
+            "explanation": "The observed count meets the frozen threshold.",
+            "correctable": false,
+            "repair_action": null,
+            "observed_value": 1,
+            "evaluator_id": null,
+            "evaluator_attestation": null
+          },
+          {
+            "gate_id": "gate-authority",
+            "status": "PASS",
+            "evidence_ids": [
+              "ev-authority"
+            ],
+            "explanation": "The exact local action is delegated.",
+            "correctable": false,
+            "repair_action": null,
+            "observed_value": true,
+            "evaluator_id": "FixtureFinalReviewer",
+            "evaluator_attestation": "I evaluated this manual gate only against the cited frozen evidence and frozen pass condition."
+          }
+        ],
+        "unresolved_contradictions": [],
+        "challenge_rounds": 0,
+        "challenges": [],
+        "proposed_repair_action": null,
+        "final_review": {
+          "reviewer_id": "FixtureFinalReviewer",
+          "freeze_digest": "c93f620fd2ff1d1d8272d926dc662d7a0b7f498e4a31aa0de3280d0e7ffb9c60",
+          "reviewed_at": "2026-07-30T00:12:00.000Z",
+          "status": "ACCEPTED",
+          "attestation": "I independently reviewed the frozen session and completed findings without participating as builder, panel reviewer, or decision judge.",
+          "analysis_summary": "The final reviewer checked the frozen evidence, independent findings, gate results, and exact action custody.",
+          "review_checklist": [
+            "independence",
+            "all_lenses_present",
+            "challenge_resolutions",
+            "gate_derivation",
+            "authority_and_claim_ceiling",
+            "record_reproducibility"
+          ],
+          "evidence_examined_ids": [
+            "ev-authority",
+            "ev-tests",
+            "ev-candidate",
+            "ev-repair-patch"
+          ],
+          "accepted_resolution_ids": [],
+          "blocking_objections": []
+        },
+        "decided_at": "2026-07-30T00:15:00.000Z"
+      },
+      "evaluated_at": "2026-07-30T00:15:00.000Z",
+      "expected": "ESCALATE_TO_GLEN"
+    }
+  ]
+}

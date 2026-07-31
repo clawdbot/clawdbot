@@ -1,0 +1,4 @@
+interface:
+  display_name: "CyborgClaw GroupThink Charrette"
+  short_description: "Governed evidence-led development decisions"
+  default_prompt: "Use $cyborgclaw-groupthink-charrette to run a bounded, evidence-led development decision charrette."

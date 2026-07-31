@@ -1,0 +1,79 @@
+{
+  "schema_version": "cyborgclaw.execution-receipt.v1",
+  "mission_id": "CYBORGCLAW_GROUPTHINK_CHARRETTE_GLOBAL_SKILL_V1",
+  "recorded_at": "2026-07-31T04:04:46.000Z",
+  "authority_proof": "authority_proof.json",
+  "decision_packet": "decision_packet.json",
+  "campaign": "CYBORGCLAW_GROUPTHINK_CHARRETTE_GLOBAL_SKILL_V1",
+  "macro_objective": "production-quality governed decision charrette skill",
+  "micro_objective": "fresh independent review of repaired frozen source",
+  "source": {
+    "path": ".agents/skills/cyborgclaw-groupthink-charrette",
+    "version": "1.0.0",
+    "logical_tree_digest": "3c788a417c3b00586760845d60f5859599c85acc9673bc8775b0ea97a80c05aa",
+    "entry_count": 49
+  },
+  "validation": {
+    "focused_adversarial": {
+      "passed": 75,
+      "failed": 0
+    },
+    "complete_skill_suite": {
+      "passed": 161,
+      "failed": 0
+    },
+    "skill_validator": "PASS",
+    "checksum_validator": "PASS",
+    "structure_validator": "PASS",
+    "format_validator": "PASS",
+    "openclaw_loader_tests": {
+      "passed": 3,
+      "failed": 0
+    },
+    "repository_wide_check": "BASELINE_BLOCKED_OUTSIDE_MISSION_SCOPE"
+  },
+  "repair_history": [
+    {
+      "finding_id": "A13",
+      "finding": "proof-plan commitment equal to freeze time could reach PROCEED",
+      "disposition": "REPAIRED_AND_INDEPENDENTLY_RECHECKED",
+      "proof": "strict >= rejection in frozen validation and routing; manual-only regression; 66/66 focused and 158/158 complete"
+    },
+    {
+      "finding_id": "A14",
+      "finding": "runtime analysis-summary length used UTF-16 units while JSON Schema minLength used Unicode code points",
+      "disposition": "REPAIRED_AND_INDEPENDENTLY_RECHECKED",
+      "proof": "independent digest reproduction; runtime code-point checks; exact 40/80 engine/schema probe; focused schema 7/7, checksum and skill validation, and complete suite 159/159"
+    },
+    {
+      "finding_id": "A15",
+      "finding": "standalone schemas accepted impossible Gregorian dates rejected by the engine",
+      "disposition": "REPAIRED_AND_INDEPENDENTLY_RECHECKED",
+      "proof": "independent digest reproduction; invalid month-day and non-leap-century rejection; valid 2000/2028 leap days; schema suite 8/8 and complete suite 161/161"
+    },
+    {
+      "finding_id": "A16",
+      "finding": "fully bound local repair could target repository-governance instruction files",
+      "disposition": "REPAIRED_AND_INDEPENDENTLY_RECHECKED",
+      "proof": "original live AGENTS.md exploit plus all listed governance basenames independently replayed; every valid probe escalates RESERVED with continuation false; complete suite 161/161"
+    }
+  ],
+  "owners": {
+    "decision_owner": "Glen",
+    "execution_owner": "Codex mission executor",
+    "proof_owner": "independent reviewers",
+    "continuation_owner": "Codex within the exact operator prompt"
+  },
+  "authority_lease": "EXEMPT_NO_BOR_REQUIRED",
+  "prohibited_actions": {
+    "merge": false,
+    "production_deployment": false,
+    "release_or_publish": false,
+    "production_credentials": false,
+    "external_operational_action": false,
+    "destructive_cross_worktree_action": false
+  },
+  "current_gate": "FRESH_INDEPENDENT_REVIEW",
+  "status": "IN_PROGRESS",
+  "claim_ceiling": "No install, merge, release, production, or external operational claim until its named proof is recorded."
+}

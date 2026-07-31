@@ -1,0 +1,358 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cyborgclaw:schema:groupthink-charrette:sadr:v1",
+  "title": "CyborgClaw Scoped Architecture Decision Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "algorithm_version",
+    "implementation_identity",
+    "record_id",
+    "session_id",
+    "mission_id",
+    "decided_at",
+    "authority_verified_at",
+    "authorization_valid_until",
+    "freeze_digest",
+    "frozen_session",
+    "findings",
+    "authority_evaluation",
+    "terminal_decision",
+    "reason_codes",
+    "rationale",
+    "unresolved_contradictions",
+    "dissent",
+    "next_authorized_action",
+    "autonomous_continuation_allowed",
+    "execution_authority_recheck_required",
+    "execution_authority_granted",
+    "claim_ceiling_code",
+    "claim_ceiling",
+    "proof_bar",
+    "claim_boundary",
+    "integrity_digest"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "cyborgclaw.sadr.v1"
+    },
+    "algorithm_version": {
+      "const": "cyborgclaw.groupthink-charrette.decision.v1"
+    },
+    "implementation_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "engine_sha256",
+        "json_utils_sha256",
+        "skill_manifest_sha256",
+        "fixture_input_contract_sha256"
+      ],
+      "properties": {
+        "engine_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "json_utils_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "skill_manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "fixture_input_contract_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "record_id": {
+      "$ref": "#/$defs/id"
+    },
+    "session_id": {
+      "$ref": "#/$defs/id"
+    },
+    "mission_id": {
+      "$ref": "#/$defs/id"
+    },
+    "decided_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\\d|3[01])T(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}Z$"
+    },
+    "authority_verified_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\\d|3[01])T(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}Z$"
+    },
+    "authorization_valid_until": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\\d|3[01])T(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}Z$"
+    },
+    "freeze_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "frozen_session": {
+      "$ref": "urn:cyborgclaw:schema:groupthink-charrette:session:v1"
+    },
+    "findings": {
+      "$ref": "urn:cyborgclaw:schema:groupthink-charrette:findings:v1"
+    },
+    "authority_evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "delegation_id",
+        "action_digest",
+        "evaluated_at",
+        "authorization_valid_until",
+        "status",
+        "issue_codes",
+        "explanation"
+      ],
+      "properties": {
+        "delegation_id": {
+          "$ref": "#/$defs/id"
+        },
+        "action_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "evaluated_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\\d|3[01])T(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}Z$"
+        },
+        "authorization_valid_until": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^\\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\\d|3[01])T(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d\\.\\d{3}Z$"
+        },
+        "status": {
+          "enum": [
+            "WITHIN_DELEGATION",
+            "MISSING_AUTHORITY",
+            "EXPIRED",
+            "OUT_OF_SCOPE",
+            "RESERVED",
+            "UNKNOWN_CATEGORY",
+            "CONFLICT"
+          ]
+        },
+        "issue_codes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{1,63}$"
+          }
+        },
+        "explanation": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "terminal_decision": {
+      "enum": ["PROCEED", "REWORK_AND_CONTINUE", "ABORT_PATH", "HOLD", "ESCALATE_TO_GLEN"]
+    },
+    "reason_codes": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z][A-Z0-9_]{1,63}$"
+      }
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1
+    },
+    "unresolved_contradictions": {
+      "type": "array",
+      "items": {
+        "$ref": "urn:cyborgclaw:schema:groupthink-charrette:findings:v1#/$defs/contradiction"
+      }
+    },
+    "dissent": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reviewer_id", "statements"],
+        "properties": {
+          "reviewer_id": {
+            "$ref": "#/$defs/id"
+          },
+          "statements": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "next_authorized_action": {
+      "$ref": "#/$defs/nullableAction"
+    },
+    "autonomous_continuation_allowed": {
+      "type": "boolean"
+    },
+    "execution_authority_recheck_required": {
+      "const": true
+    },
+    "execution_authority_granted": {
+      "const": false
+    },
+    "claim_ceiling_code": {
+      "const": "INTERNAL_DECISION_ONLY"
+    },
+    "claim_ceiling": {
+      "const": "Internal decision record only; no merge, release, production, credential, external-effect, risk-acceptance, remote-repository, or mission-change authority."
+    },
+    "proof_bar": {
+      "type": "string",
+      "minLength": 1
+    },
+    "claim_boundary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "integrity_digest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "actionShape": {
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "target_scope_id",
+        "description",
+        "category",
+        "destination",
+        "declared_effects",
+        "reversible",
+        "parameters"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/id"
+        },
+        "target_scope_id": {
+          "$ref": "#/$defs/id"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1
+        },
+        "destination": {
+          "type": "string",
+          "minLength": 1
+        },
+        "declared_effects": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "reversible": {
+          "type": "boolean"
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "executor_adapter_id",
+            "command_id",
+            "arguments",
+            "file_allowlist",
+            "change_digest",
+            "change_evidence_id",
+            "rollback_digest",
+            "validation_command_id",
+            "validation_arguments"
+          ],
+          "properties": {
+            "executor_adapter_id": {
+              "$ref": "#/$defs/id"
+            },
+            "command_id": {
+              "$ref": "#/$defs/id"
+            },
+            "arguments": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+              }
+            },
+            "file_allowlist": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/relativePath"
+              }
+            },
+            "change_digest": {
+              "type": ["string", "null"],
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "change_evidence_id": {
+              "type": ["string", "null"],
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            },
+            "rollback_digest": {
+              "type": ["string", "null"],
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "validation_command_id": {
+              "type": ["string", "null"],
+              "minLength": 1
+            },
+            "validation_arguments": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/relativePath"
+              }
+            }
+          }
+        }
+      }
+    },
+    "action": {
+      "$ref": "#/$defs/actionShape",
+      "type": "object"
+    },
+    "nullableAction": {
+      "$ref": "#/$defs/actionShape",
+      "type": ["object", "null"]
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._@+=-]*(?:/[A-Za-z0-9][A-Za-z0-9._@+=-]*)*$"
+    }
+  }
+}

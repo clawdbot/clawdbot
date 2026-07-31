@@ -1,0 +1,29 @@
+{
+  "schema_version": "cyborgclaw.skill-manifest.v1",
+  "name": "cyborgclaw-groupthink-charrette",
+  "version": "1.0.0",
+  "status": "production",
+  "entrypoint": "SKILL.md",
+  "minimum_node_version": "22.0.0",
+  "runtime_dependencies": [],
+  "execution_model": {
+    "kind": "decision_only",
+    "action_executor": "external_enforcing_mission_runtime_required",
+    "router_outputs_are_capabilities": false,
+    "recheck_outputs_are_capabilities": false
+  },
+  "decision_record_schema": "references/DECISION_RECORD_SCHEMA.json",
+  "session_schema": "references/SESSION_SCHEMA.json",
+  "findings_schema": "references/FINDINGS_SCHEMA.json",
+  "fixture_input_contract": "references/FIXTURE_INPUT_DIGESTS.json",
+  "contract_constants": "references/CONTRACT_CONSTANTS.json",
+  "provenance": "references/PROVENANCE.json",
+  "test_command": "node --test tests/*.test.mjs",
+  "validation_command": "node scripts/validate-skill.mjs",
+  "schema_validation": {
+    "draft": "2020-12",
+    "engine": "ajv-8-standalone",
+    "artifact": "scripts/generated-schema-validators.mjs",
+    "build_command": "node scripts/build-schema-validators.mjs"
+  }
+}

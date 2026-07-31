@@ -1,0 +1,47 @@
+{
+  "schema_version": "cyborgclaw.skill-provenance.v1",
+  "skill": {
+    "name": "cyborgclaw-groupthink-charrette",
+    "version": "1.0.0",
+    "source_mission": "CYBORGCLAW_GROUPTHINK_CHARRETTE_GLOBAL_SKILL_V1"
+  },
+  "governing_groupthink_artifact": {
+    "kind": "operator_mission_prompt",
+    "sha256": "8f0aeb90670e7a63578673a04c760afed2ec4ea89a9c3c844dd83e80c5e19148",
+    "named_prior_art_recovered": false
+  },
+  "prompt_architect": {
+    "name": "cyborgclaw-prompt-architect",
+    "review_surface_version": "2.1.1",
+    "execution_contract": "cyborgclaw.prompt-execution-contract.v2",
+    "execution_contract_version": "2.0.0",
+    "commit": "02f531aea69a78898aabb4f23f0f2818ca777697",
+    "skill_tree": "d6af830db0594ed7abe47074a2c16de1be8d8586",
+    "skill_md_sha256": "d19bb279e09714e5ad38c7ae01917680c902ec5ac24c1842a4d2d31a429abeb2",
+    "skill_manifest_sha256": "519db46f13d0cfc49a7e7b23436eb6a0316bfabe69c4ea5c06561e0aa3e480ef",
+    "admission_decision_sha256": "7c6c8fcc7d0f2e469c645efd59f2207c8365a14d31e84e6e4274371907aa257d",
+    "admission_packet_sha256": "610d4533fc2aaa7c9b5a3dc416a1e94b65bca2a425d83cbadaee68f02c879616",
+    "use": "read_only"
+  },
+  "historical_prior_art": {
+    "status": "non_governing_anti_pattern_evidence",
+    "artifacts": [
+      {
+        "id": "GROUPTHINK_OPERATING_SYSTEM_V1_PRD",
+        "sha256": "d15eba9e031184586c1230babec4de31985e86b79362baa93a9b2df48eba4031"
+      },
+      {
+        "id": "GROUPTHINK_OPTIMAL_SPOKEN_PRIMER_V2",
+        "sha256": "256ac7f5aed986e54b49e68b8d9901a8761b0dcee450a0bbeaac4ee06943e5c6"
+      },
+      {
+        "id": "GROUPTHINK_OPTIMIZED_CONVERSATIONAL_PRIMER_V1",
+        "sha256": "2e330cf9320c297f4a0adc0198053b85362e9389b6cdc355736e50c610dec1b8"
+      },
+      {
+        "id": "GROUPTHINK_PROMPT_DESIGN_SPEC_V1",
+        "sha256": "95f9fe8cb2fe54ce6e4df1b3b3071d29dc8e52cd833d02e5d1c6cb41a2f03c32"
+      }
+    ]
+  }
+}

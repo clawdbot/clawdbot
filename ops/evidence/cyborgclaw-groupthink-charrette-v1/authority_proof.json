@@ -1,0 +1,67 @@
+{
+  "schema_version": "cyborgclaw.authority-proof.v1",
+  "mission_id": "CYBORGCLAW_GROUPTHINK_CHARRETTE_GLOBAL_SKILL_V1",
+  "recorded_at": "2026-07-31T02:59:41.406Z",
+  "authority_source": "operator_direct_prompt",
+  "authority_layer": "operator",
+  "authority_owner": "Glen",
+  "prompt_sha256": "8f0aeb90670e7a63578673a04c760afed2ec4ea89a9c3c844dd83e80c5e19148",
+  "authorized_effects": [
+    "mission_scoped_source_and_tests",
+    "mission_evidence",
+    "user_scoped_skill_installation",
+    "dedicated_branch_commit_and_push",
+    "draft_pull_request",
+    "clean_context_fixture_validation"
+  ],
+  "reserved_effects": [
+    "merge",
+    "production_deployment_or_restart",
+    "production_credentials_or_access",
+    "external_operational_messages",
+    "unrelated_worktree_branch_session_or_skill_changes",
+    "destructive_cleanup"
+  ],
+  "allowed_tool_classes": [
+    "read_only_host_discovery",
+    "mission_scoped_filesystem_edits",
+    "local_validation",
+    "user_scoped_transactional_install",
+    "git_commit_and_push_on_dedicated_branch",
+    "draft_pull_request_creation"
+  ],
+  "forbidden_tool_classes": [
+    "merge",
+    "release_or_publish",
+    "production_runtime_control",
+    "production_credentials",
+    "external_operational_messaging",
+    "destructive_cross_worktree_operations"
+  ],
+  "dormant_capabilities": ["production_access", "merge", "release", "external_operational_actions"],
+  "repository": {
+    "origin": "THESPRYGUY/openclaw-CyborgClaw",
+    "base": "main",
+    "branch": "agent/groupthink-charrette-global-skill-v1",
+    "starting_head": "cb91659ac6318d4d06b161e24d37b406466e8caa"
+  },
+  "bor_quorum": "EXEMPT_NO_BOR_REQUIRED",
+  "authority_lease": "EXEMPT_NO_BOR_REQUIRED",
+  "freshness": {
+    "basis": "direct operator prompt remains the active mission authority",
+    "revalidate_on": [
+      "scope_change",
+      "repository_or_base_conflict",
+      "reserved_effect",
+      "operator_revocation"
+    ],
+    "expires_at": null
+  },
+  "custody": {
+    "execution_owner": "Codex mission executor",
+    "proof_owner": "independent reviewers and final Prompt Architect reviewer",
+    "continuation_owner": "Codex within the direct mission prompt",
+    "decision_owner": "Glen"
+  },
+  "status": "VALID_FOR_EXACT_REMAINING_MISSION_STEPS"
+}

@@ -1,0 +1,335 @@
+{
+  "schema_version": "cyborgclaw.logical-tree-inventory.v1",
+  "source_path": ".agents/skills/cyborgclaw-groupthink-charrette",
+  "digest": "3c788a417c3b00586760845d60f5859599c85acc9673bc8775b0ea97a80c05aa",
+  "entry_count": 49,
+  "file_count": 40,
+  "directory_count": 9,
+  "entries": [
+    {
+      "path": ".",
+      "type": "directory",
+      "mode": 448
+    },
+    {
+      "path": "SHA256SUMS.sha256",
+      "type": "file",
+      "mode": 384,
+      "size": 3675,
+      "sha256": "67a199980d30931dfd049a84c8f6c3f863550919347b05b20b2200c15e9c3813"
+    },
+    {
+      "path": "SKILL.md",
+      "type": "file",
+      "mode": 384,
+      "size": 10337,
+      "sha256": "118925c8e8f465eb02b5d41698adbb5da6759b8f22217160fac2aa393f057da9"
+    },
+    {
+      "path": "agents",
+      "type": "directory",
+      "mode": 448
+    },
+    {
+      "path": "agents/openai.yaml",
+      "type": "file",
+      "mode": 384,
+      "size": 248,
+      "sha256": "53829ca74b1b1d91711fdb48d36d35cbd0d2ddf95a9850beb6f3165825f78203"
+    },
+    {
+      "path": "assets",
+      "type": "directory",
+      "mode": 448
+    },
+    {
+      "path": "assets/examples",
+      "type": "directory",
+      "mode": 448
+    },
+    {
+      "path": "assets/examples/abort-path.json",
+      "type": "file",
+      "mode": 384,
+      "size": 21739,
+      "sha256": "8b8430cb51632c03ad8e53872e73e7bbeac5b0e320a75ad94aab21d71b93a2dd"
+    },
+    {
+      "path": "assets/examples/escalate-to-glen.json",
+      "type": "file",
+      "mode": 384,
+      "size": 22144,
+      "sha256": "1355913c68f9c7de1aa09234de98a6d99b0ec706494db5ebedbbb42e9d4138bb"
+    },
+    {
+      "path": "assets/examples/hold.json",
+      "type": "file",
+      "mode": 384,
+      "size": 22195,
+      "sha256": "e1b5a6e4ee8a681802d0ac95d74de8c1fe251dc867d489ee29835f009af277b0"
+    },
+    {
+      "path": "assets/examples/proceed.json",
+      "type": "file",
+      "mode": 384,
+      "size": 22420,
+      "sha256": "37b527f1070f4d73a51ad54b8fba6287b43c8ff662d455a9a9ba91c30d78e67f"
+    },
+    {
+      "path": "assets/examples/rework-and-continue.json",
+      "type": "file",
+      "mode": 384,
+      "size": 25143,
+      "sha256": "857c86f00331f54eca7b200da39d9b79f290fb1cb82d5c7ca22cc44caec488bd"
+    },
+    {
+      "path": "assets/fixtures",
+      "type": "directory",
+      "mode": 448
+    },
+    {
+      "path": "assets/fixtures/charrette-cases.json",
+      "type": "file",
+      "mode": 384,
+      "size": 129737,
+      "sha256": "7ac43412006c55e1ceb208ca5ae6036b1b9caf1150f27e3b0de9d9f7e9691243"
+    },
+    {
+      "path": "assets/templates",
+      "type": "directory",
+      "mode": 448
+    },
+    {
+      "path": "assets/templates/decision-record.md",
+      "type": "file",
+      "mode": 384,
+      "size": 6256,
+      "sha256": "88f359124d0e9268509392bf17cc13e952c9a0cdef733337ebc7b5b7987c4e09"
+    },
+    {
+      "path": "manifest.json",
+      "type": "file",
+      "mode": 384,
+      "size": 1138,
+      "sha256": "b3da7ed17fba41e171bfa4533031a5057253ebd8543db374e55a93ef2ee82c41"
+    },
+    {
+      "path": "references",
+      "type": "directory",
+      "mode": 448
+    },
+    {
+      "path": "references/CHARRETTE_PROTOCOL.md",
+      "type": "file",
+      "mode": 384,
+      "size": 13104,
+      "sha256": "677d4c038bd734d28926cd1d79b3693cafcfa690f145f1d98b3149bb04b34509"
+    },
+    {
+      "path": "references/CONTRACT_CONSTANTS.json",
+      "type": "file",
+      "mode": 384,
+      "size": 12401,
+      "sha256": "00778f48b9e08296f640513c108d5966b5917a8c0c4a753b6ff26d18abdf77c2"
+    },
+    {
+      "path": "references/DECISION_RECORD_SCHEMA.json",
+      "type": "file",
+      "mode": 384,
+      "size": 9494,
+      "sha256": "32427e2ba5078b7fb3753d2f4cfa7c8cec7d322c105717177f5eabb96d4387fb"
+    },
+    {
+      "path": "references/FINDINGS_SCHEMA.json",
+      "type": "file",
+      "mode": 384,
+      "size": 14071,
+      "sha256": "2d65656c56c12e274a4730388d497ef6727d628384074e7f14445940298cd9ac"
+    },
+    {
+      "path": "references/FIXTURE_INPUT_DIGESTS.json",
+      "type": "file",
+      "mode": 384,
+      "size": 455,
+      "sha256": "2ed74c4254ce01a93ab7c65c97bbb03a401f540414f6b5ad8394f08f7e8d9648"
+    },
+    {
+      "path": "references/GLEN_PROXY_CHARTER.md",
+      "type": "file",
+      "mode": 384,
+      "size": 6599,
+      "sha256": "4adb296e749822ebd26043ae2b9fd428f9672867a3db85544e8bdc11326bf9ae"
+    },
+    {
+      "path": "references/INSTALLATION.md",
+      "type": "file",
+      "mode": 384,
+      "size": 4512,
+      "sha256": "e8b2667e794eb5f195f2a86943324111e8d6c01f57f518823fc24b6f66a6a65b"
+    },
+    {
+      "path": "references/PROVENANCE.json",
+      "type": "file",
+      "mode": 384,
+      "size": 1910,
+      "sha256": "e6a3fc9a7c50e9b800c23aa603eb91760bc9d35e15786f354dc5122523a9af40"
+    },
+    {
+      "path": "references/SESSION_SCHEMA.json",
+      "type": "file",
+      "mode": 384,
+      "size": 19017,
+      "sha256": "795c911f04032c7e17c135d447c110565afbeef041ff420cce6d046d82897434"
+    },
+    {
+      "path": "scripts",
+      "type": "directory",
+      "mode": 448
+    },
+    {
+      "path": "scripts/build-checksums.mjs",
+      "type": "file",
+      "mode": 384,
+      "size": 3035,
+      "sha256": "b00deb3678d71ff052fbd50ed897025e437dcee34c2b369c47672682d1297e9d"
+    },
+    {
+      "path": "scripts/build-schema-validators.mjs",
+      "type": "file",
+      "mode": 384,
+      "size": 7394,
+      "sha256": "707ad0fe19034ba2c25231e8405324d28e6f06c2a4a5fead238abde6790c11e3"
+    },
+    {
+      "path": "scripts/charrette-lib.mjs",
+      "type": "file",
+      "mode": 384,
+      "size": 110762,
+      "sha256": "2daa6023a936e97576a913e64ed68eadd545c4b9c33a8d69e4b312693429e823"
+    },
+    {
+      "path": "scripts/charrette.mjs",
+      "type": "file",
+      "mode": 384,
+      "size": 11252,
+      "sha256": "5cd0a90b4b72a093cb1912a540451c005159c45926ff6d53852ee40aecce179e"
+    },
+    {
+      "path": "scripts/generate-fixtures.mjs",
+      "type": "file",
+      "mode": 384,
+      "size": 17180,
+      "sha256": "080c03497c6feb32c6f0e0c8b466b4f02ff099a80290bca2383421020aa214a7"
+    },
+    {
+      "path": "scripts/generated-schema-validators.mjs",
+      "type": "file",
+      "mode": 384,
+      "size": 406875,
+      "sha256": "4a671b75153117c3331c8d5f0aab303e21abd55160ab8d29b4a3df0d228d7861"
+    },
+    {
+      "path": "scripts/install.mjs",
+      "type": "file",
+      "mode": 384,
+      "size": 65395,
+      "sha256": "a53d2c0b72035078cf0440f5cc329b6d75c22ba2404b0c5f2ea2afd8a53319bf"
+    },
+    {
+      "path": "scripts/json-utils.mjs",
+      "type": "file",
+      "mode": 384,
+      "size": 10260,
+      "sha256": "9d390eb830cea07e1feb2da4c350ff43054106b8f1c90cdd27b5c813b00fcf60"
+    },
+    {
+      "path": "scripts/tree-integrity.mjs",
+      "type": "file",
+      "mode": 384,
+      "size": 7626,
+      "sha256": "aec131c849dbb1efb4c502791a0cb9a98b38b0691698ecb86dedd1642f8fd7ed"
+    },
+    {
+      "path": "scripts/validate-skill.mjs",
+      "type": "file",
+      "mode": 384,
+      "size": 12612,
+      "sha256": "5f54bd30749e6fd74ae2514c36249459e8f1ef5a89f2f909b25d4071d355f514"
+    },
+    {
+      "path": "tests",
+      "type": "directory",
+      "mode": 448
+    },
+    {
+      "path": "tests/adversarial.test.mjs",
+      "type": "file",
+      "mode": 384,
+      "size": 31258,
+      "sha256": "45d7788514cc839278df4b3300deb897d01cc29d39076d4cfd8915bd7bfffd54"
+    },
+    {
+      "path": "tests/cli.test.mjs",
+      "type": "file",
+      "mode": 384,
+      "size": 16813,
+      "sha256": "4de6a770d038ddbcbe5ebc39100bb9d40676c8d46e08c04db02e28a3870d1a11"
+    },
+    {
+      "path": "tests/contracts.test.mjs",
+      "type": "file",
+      "mode": 384,
+      "size": 3521,
+      "sha256": "9042e0ff2600cad6b14e1036bfe029318ca7d879aade8f499d2b20d77c09ed94"
+    },
+    {
+      "path": "tests/decisions.test.mjs",
+      "type": "file",
+      "mode": 384,
+      "size": 8483,
+      "sha256": "ac01799da160e7c435bde0272c4c811e490ca2984216b785be09cf86eee54b86"
+    },
+    {
+      "path": "tests/install.test.mjs",
+      "type": "file",
+      "mode": 384,
+      "size": 21840,
+      "sha256": "486e15a409e67fcd4a4d180372c2a1530f4341bbd35d70952237bc7b50fdf621"
+    },
+    {
+      "path": "tests/json-utils.test.mjs",
+      "type": "file",
+      "mode": 384,
+      "size": 6226,
+      "sha256": "47a668ba6ead83d64abf4ae48674f1313f44f6bc190475b34d38e07f158b3740"
+    },
+    {
+      "path": "tests/render.test.mjs",
+      "type": "file",
+      "mode": 384,
+      "size": 7323,
+      "sha256": "8719accdf8cb809786493ef2f2cda40489a9d7c32f7184e89623f8fc509437a8"
+    },
+    {
+      "path": "tests/routing.test.mjs",
+      "type": "file",
+      "mode": 384,
+      "size": 4332,
+      "sha256": "6af2c622acde82aaebd3064518cc39f7db8856551c4c5a19370b1c8ed1b48bc8"
+    },
+    {
+      "path": "tests/schema-validation.test.mjs",
+      "type": "file",
+      "mode": 384,
+      "size": 13316,
+      "sha256": "ead5ba43427d48301659bb4a5a69719dc9c7505e50a24489cdcd8b06edd9e492"
+    },
+    {
+      "path": "tests/test-helpers.mjs",
+      "type": "file",
+      "mode": 384,
+      "size": 7248,
+      "sha256": "81dc7c01df5813b3b89a9fa9ee210c255b6e9d605469cc8fb75f18e3f18c4f8a"
+    }
+  ]
+}

@@ -1,0 +1,361 @@
+{
+  "schema_version": "cyborgclaw.groupthink-charrette.constants.v1",
+  "skill_version": "1.0.0",
+  "charter_id": "cyborgclaw.glen-proxy-charter.v1",
+  "charter_version": "1.0.0",
+  "delegation_schema": "cyborgclaw.glen-delegation.v1",
+  "decision_context_schema": "cyborgclaw.groupthink-charrette.decision-context.v1",
+  "proof_plan_schema": "cyborgclaw.groupthink-charrette.proof-plan.v1",
+  "measurement_receipt_schema": "cyborgclaw.measurement-receipt.v1",
+  "local_change_bundle_schema": "cyborgclaw.local-change-bundle.v1",
+  "authority_recheck_schema": "cyborgclaw.authority-recheck.v1",
+  "authority_recheck_ttl_seconds": 60,
+  "protocol_id": "cyborgclaw.groupthink-charrette.protocol.v1",
+  "algorithm_version": "cyborgclaw.groupthink-charrette.decision.v1",
+  "session_schema": "cyborgclaw.groupthink-charrette.session.v1",
+  "findings_schema": "cyborgclaw.groupthink-charrette.findings.v1",
+  "decision_record_schema": "cyborgclaw.sadr.v1",
+  "session_schema_uri": "urn:cyborgclaw:schema:groupthink-charrette:session:v1",
+  "findings_schema_uri": "urn:cyborgclaw:schema:groupthink-charrette:findings:v1",
+  "decision_record_schema_uri": "urn:cyborgclaw:schema:groupthink-charrette:sadr:v1",
+  "router_results": ["RUN_CHARRETTE", "DIRECT_WITHIN_DELEGATION", "HOLD", "ESCALATE_TO_GLEN"],
+  "terminal_decisions": [
+    "PROCEED",
+    "REWORK_AND_CONTINUE",
+    "ABORT_PATH",
+    "ESCALATE_TO_GLEN",
+    "HOLD"
+  ],
+  "terminal_precedence": [
+    "ESCALATE_TO_GLEN",
+    "HOLD",
+    "ABORT_PATH",
+    "REWORK_AND_CONTINUE",
+    "PROCEED"
+  ],
+  "continuation_decisions": ["PROCEED", "REWORK_AND_CONTINUE"],
+  "repair_action_categories": ["exact_local_change", "local_test_repair", "repeat_validation"],
+  "required_failure_lenses": [
+    "epistemic_integrity",
+    "authority_security",
+    "development_practicality"
+  ],
+  "required_review_checks": [
+    "evidence_traceability",
+    "authority_scope",
+    "gate_validity",
+    "failure_modes",
+    "falsifiability"
+  ],
+  "required_final_review_checks": [
+    "independence",
+    "all_lenses_present",
+    "challenge_resolutions",
+    "gate_derivation",
+    "authority_and_claim_ceiling",
+    "record_reproducibility"
+  ],
+  "allowed_action_categories": [
+    "exact_local_change",
+    "implementation_selection",
+    "local_test_repair",
+    "repeat_validation",
+    "work_ordering",
+    "no_action"
+  ],
+  "action_profiles": {
+    "RUN_LOCAL_VALIDATION": {
+      "description": "Run the frozen local validation suite.",
+      "category": "repeat_validation",
+      "destination": "local_workspace",
+      "declared_effects": ["local_validation"],
+      "reversible": true
+    },
+    "APPLY_LOCAL_TEST_REPAIR": {
+      "description": "Apply the single frozen local test repair and rerun its validation.",
+      "category": "local_test_repair",
+      "destination": "local_workspace",
+      "declared_effects": ["local_filesystem_write", "local_validation"],
+      "reversible": true
+    },
+    "APPLY_EXACT_LOCAL_CHANGE": {
+      "description": "Apply the exact frozen local change and run its frozen validation.",
+      "category": "exact_local_change",
+      "destination": "local_workspace",
+      "declared_effects": ["local_filesystem_write", "local_validation"],
+      "reversible": true
+    },
+    "RECORD_IMPLEMENTATION_SELECTION": {
+      "description": "Record the frozen implementation selection without executing it.",
+      "category": "implementation_selection",
+      "destination": "internal_evidence",
+      "declared_effects": ["internal_state_change"],
+      "reversible": true
+    },
+    "RECORD_AUTHORIZED_WORK_ORDER": {
+      "description": "Record the frozen ordering of already-authorized work.",
+      "category": "work_ordering",
+      "destination": "internal_evidence",
+      "declared_effects": ["internal_state_change"],
+      "reversible": true
+    },
+    "NO_ACTION": {
+      "description": "Take no implementation action.",
+      "category": "no_action",
+      "destination": "none",
+      "declared_effects": ["none"],
+      "reversible": true
+    },
+    "PRODUCTION_DEPLOYMENT": {
+      "description": "Deploy the frozen candidate to production.",
+      "category": "production_deployment",
+      "destination": "production",
+      "declared_effects": ["production_change"],
+      "reversible": false
+    },
+    "GIT_PUSH": {
+      "description": "Push the frozen commit to a remote repository.",
+      "category": "git_push",
+      "destination": "remote_repository",
+      "declared_effects": ["remote_repository_write"],
+      "reversible": false
+    },
+    "SEND_EXTERNAL_MESSAGE": {
+      "description": "Send the frozen message to an external channel.",
+      "category": "external_communication",
+      "destination": "external_channel",
+      "declared_effects": ["external_communication"],
+      "reversible": false
+    }
+  },
+  "action_parameter_contracts": {
+    "RUN_LOCAL_VALIDATION": {
+      "executor_adapter_id": "charrette.local-validation.v1",
+      "command_id": "run-frozen-validation",
+      "arguments_policy": "required",
+      "file_allowlist_policy": "empty",
+      "change_digest_policy": "null",
+      "validation_command_id": null,
+      "validation_arguments_policy": "empty"
+    },
+    "APPLY_LOCAL_TEST_REPAIR": {
+      "executor_adapter_id": "charrette.exact-local-patch.v1",
+      "command_id": "apply-frozen-patch",
+      "arguments_policy": "empty",
+      "file_allowlist_policy": "required",
+      "change_digest_policy": "required",
+      "validation_command_id": "run-focused-validation",
+      "validation_arguments_policy": "frozen_exact"
+    },
+    "APPLY_EXACT_LOCAL_CHANGE": {
+      "executor_adapter_id": "charrette.exact-local-patch.v1",
+      "command_id": "apply-frozen-change",
+      "arguments_policy": "empty",
+      "file_allowlist_policy": "required",
+      "change_digest_policy": "required",
+      "validation_command_id": "run-focused-validation",
+      "validation_arguments_policy": "frozen_exact"
+    },
+    "RECORD_IMPLEMENTATION_SELECTION": {
+      "executor_adapter_id": "charrette.internal-record-writer.v1",
+      "command_id": "record-implementation-selection",
+      "arguments_policy": "required",
+      "file_allowlist_policy": "empty",
+      "change_digest_policy": "null",
+      "validation_command_id": null,
+      "validation_arguments_policy": "empty"
+    },
+    "RECORD_AUTHORIZED_WORK_ORDER": {
+      "executor_adapter_id": "charrette.internal-record-writer.v1",
+      "command_id": "record-authorized-work-order",
+      "arguments_policy": "required",
+      "file_allowlist_policy": "empty",
+      "change_digest_policy": "null",
+      "validation_command_id": null,
+      "validation_arguments_policy": "empty"
+    },
+    "NO_ACTION": {
+      "executor_adapter_id": "charrette.noop.v1",
+      "command_id": "no-action",
+      "arguments_policy": "empty",
+      "file_allowlist_policy": "empty",
+      "change_digest_policy": "null",
+      "validation_command_id": null,
+      "validation_arguments_policy": "empty"
+    },
+    "PRODUCTION_DEPLOYMENT": {
+      "executor_adapter_id": "charrette.reserved-unavailable.v1",
+      "command_id": "production-deployment",
+      "arguments_policy": "required",
+      "file_allowlist_policy": "empty",
+      "change_digest_policy": "null",
+      "validation_command_id": null,
+      "validation_arguments_policy": "empty"
+    },
+    "GIT_PUSH": {
+      "executor_adapter_id": "charrette.reserved-unavailable.v1",
+      "command_id": "git-push",
+      "arguments_policy": "required",
+      "file_allowlist_policy": "empty",
+      "change_digest_policy": "null",
+      "validation_command_id": null,
+      "validation_arguments_policy": "empty"
+    },
+    "SEND_EXTERNAL_MESSAGE": {
+      "executor_adapter_id": "charrette.reserved-unavailable.v1",
+      "command_id": "send-external-message",
+      "arguments_policy": "required",
+      "file_allowlist_policy": "empty",
+      "change_digest_policy": "null",
+      "validation_command_id": null,
+      "validation_arguments_policy": "empty"
+    }
+  },
+  "reserved_action_categories": [
+    "mission_purpose_change",
+    "material_scope_expansion",
+    "gate_weakening",
+    "safety_gate_weakening",
+    "production_deployment",
+    "production_access",
+    "release",
+    "merge_pull_request",
+    "external_communication",
+    "external_side_effect",
+    "credentials_or_privileged_access",
+    "material_security_or_privacy_risk_acceptance",
+    "financial_commitment",
+    "material_vendor_selection",
+    "legal_regulatory_or_contractual_commitment",
+    "destructive_or_hard_to_reverse_action",
+    "live_database_or_service",
+    "schema_or_product_data_mutation",
+    "remote_repository_write",
+    "git_push",
+    "create_pull_request",
+    "conflicting_governing_authority",
+    "glen_reserved_decision",
+    "material_uncertainty"
+  ],
+  "allowed_action_destinations": [
+    "local_workspace",
+    "local_user_skill_directory",
+    "internal_evidence",
+    "none"
+  ],
+  "allowed_declared_effects": [
+    "local_filesystem_write",
+    "local_validation",
+    "internal_state_change",
+    "none"
+  ],
+  "protected_local_change_path_prefixes": [
+    ".git",
+    ".github/workflows",
+    ".circleci",
+    ".agents",
+    "ops",
+    "deploy",
+    "deployment",
+    "infra/production",
+    "release"
+  ],
+  "protected_local_change_basenames": [
+    ".env",
+    ".npmrc",
+    ".pypirc",
+    ".clinerules",
+    ".cursorrules",
+    ".windsurfrules",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "CLAUDE.local.md",
+    "CODEOWNERS",
+    "CODEX.md",
+    "CONTRIBUTING.md",
+    "GEMINI.md",
+    "SECURITY.md",
+    "copilot-instructions.md",
+    "credentials",
+    "credentials.json",
+    "id_rsa",
+    "id_ed25519",
+    "secrets",
+    "secrets.json"
+  ],
+  "reserved_declared_effects": [
+    "external_communication",
+    "production_change",
+    "credential_use",
+    "destructive_change",
+    "gate_or_scope_change",
+    "material_risk_acceptance",
+    "merge_or_release",
+    "remote_repository_write",
+    "financial_or_legal_commitment"
+  ],
+  "escalation_issue_codes": [
+    "AUTHORITY_CONFLICT",
+    "AUTHORITY_EXPIRED",
+    "AUTHORITY_OUT_OF_SCOPE",
+    "MATERIAL_RISK_ACCEPTANCE",
+    "MATERIAL_UNCERTAINTY",
+    "RESERVED_ACTION",
+    "UNKNOWN_ACTION_CATEGORY"
+  ],
+  "hold_issue_codes": [
+    "CHALLENGE_BLOCKING",
+    "EVIDENCE_DRIFT",
+    "INDEPENDENCE_BREACH",
+    "MISSING_EVIDENCE",
+    "PROCESS_INTEGRITY",
+    "REVIEW_INCOMPLETE",
+    "SUITABILITY_INCOMPLETE",
+    "THRESHOLD_DRIFT",
+    "UNRESOLVED_CONTRADICTION",
+    "UNRESOLVED_MATERIAL_OBJECTION"
+  ],
+  "repairable_issue_codes": [
+    "ANCHORING",
+    "FRAMING_BIAS",
+    "GATE_FAILED",
+    "GROUPTHINK",
+    "PROMPT_INJECTION",
+    "UNSUPPORTED_CLAIM"
+  ],
+  "non_resolvable_challenge_codes": [
+    "AUTHORITY_CONFLICT",
+    "AUTHORITY_EXPIRED",
+    "AUTHORITY_OUT_OF_SCOPE",
+    "EVIDENCE_DRIFT",
+    "INDEPENDENCE_BREACH",
+    "MATERIAL_RISK_ACCEPTANCE",
+    "MATERIAL_UNCERTAINTY",
+    "MISSING_EVIDENCE",
+    "PROCESS_INTEGRITY",
+    "RESERVED_ACTION",
+    "REVIEW_INCOMPLETE",
+    "SUITABILITY_INCOMPLETE",
+    "THRESHOLD_DRIFT",
+    "UNKNOWN_ACTION_CATEGORY",
+    "UNRESOLVED_CONTRADICTION",
+    "UNRESOLVED_MATERIAL_OBJECTION"
+  ],
+  "role_incompatibilities": [
+    ["builder_id", "final_reviewer_id"],
+    ["builder_id", "decision_judge_id"],
+    ["final_reviewer_id", "decision_judge_id"],
+    ["evidence_writer_id", "final_reviewer_id"],
+    ["executor_id", "final_reviewer_id"],
+    ["evidence_writer_id", "executor_id"]
+  ],
+  "synthesis_chair": "Sage",
+  "max_challenge_rounds": 2,
+  "network_policy": "none",
+  "claim_ceiling_code": "INTERNAL_DECISION_ONLY",
+  "claim_ceiling_text": "Internal decision record only; no merge, release, production, credential, external-effect, risk-acceptance, remote-repository, or mission-change authority.",
+  "independence_attestation": "I formed these findings from the frozen evidence before seeing any peer finding or preliminary conclusion.",
+  "final_review_attestation": "I independently reviewed the frozen session and completed findings without participating as builder, panel reviewer, or decision judge.",
+  "manual_gate_attestation": "I evaluated this manual gate only against the cited frozen evidence and frozen pass condition.",
+  "authority_custody_attestation": "I received this delegation through the declared custody method; this record preserves but does not cryptographically authenticate that source."
+}
