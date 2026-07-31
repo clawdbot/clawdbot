@@ -1183,7 +1183,7 @@ describe("scripts/crabbox-wrapper", () => {
     const result = runWrapper("provider: aws, azure, blacksmith-testbox, or daytona\n", args, {
       env: {
         OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0",
-        ...env,
+        ...(env as Record<string, string>),
       },
     });
 

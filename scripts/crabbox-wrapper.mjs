@@ -573,10 +573,6 @@ function configProvider() {
   }
 }
 
-function configuredProvider() {
-  return envProvider() || configProvider();
-}
-
 function effectiveTargetContext(commandArgs) {
   const config = resolvedCrabboxConfig();
   const configuredTarget = typeof config?.target === "string" ? config.target.trim() : "";
