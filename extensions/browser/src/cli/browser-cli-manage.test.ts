@@ -15,10 +15,18 @@ function lastRuntimeLog(): string {
   return value;
 }
 
+function parseSingleRuntimeJson(): unknown {
+  const logs = getBrowserCliRuntimeCapture().runtimeLogs;
+  expect(logs).toHaveLength(1);
+  return JSON.parse(logs[0] ?? "");
+}
+
 describe("browser manage output", () => {
   beforeEach(() => {
     getBrowserManageCallBrowserRequestMock().mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
+    getBrowserCliRuntime().exit.mockClear();
+    getBrowserCliRuntime().writeJson.mockClear();
   });
 
   it("shows chrome-mcp transport for existing-session status without fake CDP fields", async () => {
@@ -524,6 +532,69 @@ describe("browser manage output", () => {
     expect(output).toContain("OK gateway: browser control endpoint reachable");
     expect(output).toContain("OK graphics: software");
     expect(output).toContain("OK tabs: 1 visible, use tab reference t1");
+    expect(getBrowserCliRuntime().writeJson).not.toHaveBeenCalled();
+    expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
+  });
+
+  it("prints one complete JSON browser doctor failure before exiting nonzero", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/") {
+        return {
+          enabled: false,
+          profile: "openclaw",
+          transport: "cdp",
+          running: false,
+        };
+      }
+      if (req.path === "/profiles") {
+        return { profiles: [] };
+      }
+      return {};
+    });
+
+    const program = createBrowserManageProgram();
+    await expect(
+      program.parseAsync(["browser", "--json", "doctor"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(parseSingleRuntimeJson()).toMatchObject({
+      ok: false,
+      checks: [
+        { name: "gateway", ok: true },
+        { name: "plugin", ok: false },
+      ],
+    });
+    expect(getBrowserCliRuntime().writeJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("prints one JSON browser doctor report and succeeds when every check passes", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
+      if (req.path === "/") {
+        return {
+          enabled: true,
+          profile: "openclaw",
+          transport: "cdp",
+          running: true,
+        };
+      }
+      if (req.path === "/profiles") {
+        return { profiles: [{ name: "openclaw", running: true }] };
+      }
+      if (req.path === "/tabs") {
+        return { running: true, tabs: [] };
+      }
+      return {};
+    });
+
+    const program = createBrowserManageProgram();
+    await expect(
+      program.parseAsync(["browser", "--json", "doctor"], { from: "user" }),
+    ).resolves.toBeUndefined();
+
+    expect(parseSingleRuntimeJson()).toMatchObject({ ok: true });
+    expect(getBrowserCliRuntimeCapture().runtimeErrors).toEqual([]);
+    expect(getBrowserCliRuntime().writeJson).toHaveBeenCalledTimes(1);
+    expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
   });
 
   it("prints a readable browser doctor failure when gateway auth SecretRefs are unavailable", async () => {
@@ -544,5 +615,6 @@ describe("browser manage output", () => {
     );
     expect(output).toContain("OPENCLAW_GATEWAY_TOKEN");
     expect(output).not.toContain("GatewaySecretRefUnavailableError");
+    expect(getBrowserCliRuntime().writeJson).not.toHaveBeenCalled();
   });
 });

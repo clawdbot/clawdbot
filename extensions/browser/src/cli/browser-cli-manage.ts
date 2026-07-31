@@ -413,10 +413,9 @@ export function registerBrowserManageCommands(
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
         const result = await runBrowserDoctor(parent, profile, opts.deep === true);
-        if (printJsonResult(parent, result)) {
-          return;
+        if (!printJsonResult(parent, result)) {
+          defaultRuntime.log(result.checks.map(formatDoctorLine).join("\n"));
         }
-        defaultRuntime.log(result.checks.map(formatDoctorLine).join("\n"));
         if (!result.ok) {
           defaultRuntime.exit(1);
         }
