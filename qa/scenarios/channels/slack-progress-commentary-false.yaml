@@ -1,4 +1,4 @@
-title: Slack progress commentary false stays out of the progress draft
+title: Slack progress commentary false uses the status headline instead of the commentary lane
 scenario:
   id: slack-progress-commentary-false
   surface: channels
