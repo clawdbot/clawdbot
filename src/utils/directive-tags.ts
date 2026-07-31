@@ -40,7 +40,7 @@ function createBlockSentinel(text: string): string {
   return sentinel;
 }
 
-function normalizeDirectiveWhitespace(text: string): string {
+export function normalizeDirectiveWhitespace(text: string): string {
   // Extract → normalize prose → restore:
   // Stash every code block (fenced ``` / ~~~ and indent-code 4-space/tab)
   // under a sentinel-delimited placeholder so the prose regexes never touch them.

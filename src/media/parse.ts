@@ -12,6 +12,7 @@ import {
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
+import { normalizeDirectiveWhitespace } from "../utils/directive-tags.js";
 import { parseAudioTag } from "./audio-tags.js";
 
 /** Captures legacy MEDIA: attachment directives from model/tool output. */
@@ -687,12 +688,10 @@ export function splitMediaFromOutput(
     lineOffset += line.length + 1; // +1 for newline
   }
 
-  let cleanedText = keptLines
-    .join("\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/\n{2,}/g, "\n")
-    .trim();
+  // Reuse the code-block-aware normalizer from directive-tags instead of the
+  // prose-only collapse below (which flattened indentation inside fenced blocks
+  // and deleted every blank line whenever a media token was present).
+  let cleanedText = normalizeDirectiveWhitespace(keptLines.join("\n"));
 
   // Detect and strip [[audio_as_voice]] tag
   const audioTagResult = parseAudioTag(cleanedText);

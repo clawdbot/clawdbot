@@ -287,4 +287,55 @@ describe("splitMediaFromOutput", () => {
       extractMarkdownImages,
     );
   });
+
+  describe("preserves code-block whitespace when media is present (#116458)", () => {
+    const yamlReply = [
+      "Here is the config you asked for.",
+      "",
+      "```yaml",
+      "server:",
+      "  host: 0.0.0.0",
+      "  ports:",
+      "    - 80",
+      "    - 443",
+      "```",
+    ].join("\n");
+
+    it("keeps fenced code indentation and blank lines when a MEDIA: line is present", () => {
+      const input = `${yamlReply}\n\nMEDIA:/tmp/generated.png`;
+      expectParsedMediaOutputCase(input, {
+        text: yamlReply,
+        mediaUrls: ["/tmp/generated.png"],
+      });
+    });
+
+    it("keeps fenced code indentation and blank lines when a markdown image is extracted", () => {
+      const pythonReply = [
+        "Rendered the chart, and here is the code behind it.",
+        "",
+        "```python",
+        "def summarize(results):",
+        "    total = 0",
+        "    for r in results:",
+        '        total += r["value"]',
+        "",
+        "    return total",
+        "```",
+      ].join("\n");
+      const input = `${pythonReply}\n\n![chart](https://example.com/chart.png)`;
+      expectParsedMediaOutputCase(
+        input,
+        {
+          text: pythonReply,
+          mediaUrls: ["https://example.com/chart.png"],
+        },
+        extractMarkdownImages,
+      );
+    });
+
+    it("delivers the media-free control reply byte-for-byte", () => {
+      const input = `${yamlReply}\n`;
+      expectParsedMediaOutputCase(input, { text: yamlReply, mediaUrls: undefined });
+    });
+  });
 });
