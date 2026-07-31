@@ -883,6 +883,9 @@ async fn evaluate_sidecar_admission<A: SidecarCapabilityAdapter + ?Sized>(
         context.cancellation.cancel();
         return Err(channel_retired());
     }
+    if !node_invocation_is_portable(&context.invocation) {
+        return Err(nonportable_json());
+    }
     let invocation_ref = SidecarInvocationRef::from(&context.invocation);
     if !runtime_message_within_limit(
         &SidecarRuntimeMessageRef::AdmissionRequest {
@@ -931,6 +934,9 @@ async fn evaluate_sidecar_invocation<A: SidecarCapabilityAdapter + ?Sized>(
         context.cancellation.cancel();
         return Err(channel_retired());
     }
+    if !node_invocation_is_portable(&context.invocation) {
+        return Err(nonportable_json());
+    }
     let invocation_ref = SidecarInvocationRef::from(&context.invocation);
     if !runtime_message_within_limit(
         &SidecarRuntimeMessageRef::Invoke {
@@ -954,6 +960,9 @@ async fn evaluate_sidecar_invocation<A: SidecarCapabilityAdapter + ?Sized>(
         },
         result = &mut adapter_future => result.map_err(|error| adapter_failure(&error))?,
     };
+    if !invocation_result_is_portable(&result) {
+        return Err(nonportable_json());
+    }
     if !runtime_message_within_limit(
         &SidecarRuntimeMessageRef::Result {
             invocation_id: &context.invocation.id,
@@ -1090,6 +1099,27 @@ fn message_too_large() -> HandlerError {
         "SIDECAR_MESSAGE_TOO_LARGE",
         "complete sidecar message exceeds the authenticated payload limit",
     )
+}
+
+fn nonportable_json() -> HandlerError {
+    HandlerError::new(
+        "SIDECAR_NON_PORTABLE_JSON",
+        "sidecar message contains an integer outside the exact JSON range",
+    )
+}
+
+fn node_invocation_is_portable(invocation: &NodeInvocation) -> bool {
+    invocation
+        .timeout_ms
+        .is_none_or(|value| value <= MAX_PORTABLE_JSON_INTEGER)
+        && portable_json_value(&invocation.params)
+}
+
+fn invocation_result_is_portable(result: &SidecarInvocationResult) -> bool {
+    match result {
+        SidecarInvocationResult::Success { payload } => portable_json_value(payload),
+        SidecarInvocationResult::Failure { .. } => true,
+    }
 }
 
 fn channel_retired() -> HandlerError {
@@ -1463,6 +1493,79 @@ mod tests {
                 })
             })
         }
+    }
+
+    struct NonPortableResultAdapter;
+
+    impl SidecarCapabilityAdapter for NonPortableResultAdapter {
+        fn admit(
+            &self,
+            _invocation: SidecarInvocation,
+            _cancellation: CancellationToken,
+        ) -> SidecarAdapterFuture<Result<SidecarAdmissionDecision, SidecarAdapterError>> {
+            Box::pin(async { Ok(SidecarAdmissionDecision::Allow) })
+        }
+
+        fn invoke(
+            &self,
+            _invocation: SidecarInvocation,
+            _cancellation: CancellationToken,
+        ) -> SidecarAdapterFuture<Result<SidecarInvocationResult, SidecarAdapterError>> {
+            Box::pin(async {
+                Ok(SidecarInvocationResult::Success {
+                    payload: json!({"unsafe": MAX_PORTABLE_JSON_INTEGER + 1}),
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn nonportable_json_has_a_distinct_runtime_failure() {
+        let (mut exchange, mut channel, _configuration) =
+            validated_runtime_exchange(&configuration());
+        let adapter = Arc::new(RecordingAdapter::default());
+        let bridge = SidecarRuntimeBridge::activate(&mut exchange, &mut channel, &adapter).unwrap();
+        assert_eq!(
+            bridge
+                .runtime()
+                .evaluate(NodeInvocation::new(
+                    "invoke-unsafe-input",
+                    "node-1",
+                    "product.status",
+                    json!({"unsafe": MAX_PORTABLE_JSON_INTEGER + 1}),
+                ))
+                .await,
+            InvocationResult::failure(
+                "SIDECAR_NON_PORTABLE_JSON",
+                "sidecar message contains an integer outside the exact JSON range"
+            )
+        );
+        assert_eq!(adapter.admissions.load(Ordering::SeqCst), 0);
+
+        let (mut result_exchange, mut result_channel, _configuration) =
+            validated_runtime_exchange(&configuration());
+        let result_adapter = Arc::new(NonPortableResultAdapter);
+        let result_bridge = SidecarRuntimeBridge::activate(
+            &mut result_exchange,
+            &mut result_channel,
+            &result_adapter,
+        )
+        .unwrap();
+        assert_eq!(
+            result_bridge
+                .runtime()
+                .evaluate(NodeInvocation::new(
+                    "invoke-unsafe-result",
+                    "node-1",
+                    "product.status",
+                    Value::Null,
+                ))
+                .await,
+            InvocationResult::failure(
+                "SIDECAR_NON_PORTABLE_JSON",
+                "sidecar message contains an integer outside the exact JSON range"
+            )
+        );
     }
 
     #[tokio::test]
