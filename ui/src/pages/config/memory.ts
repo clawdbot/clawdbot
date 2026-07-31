@@ -47,6 +47,8 @@ export type MemoryAddonRow = {
   notice: string | null;
 };
 
+export type MemoryEngineOutcome = { kind: "error" | "warning"; message: string };
+
 type MemoryViewProps = {
   activeTab: MemoryTab;
   onTabChange: (tab: MemoryTab) => void;
@@ -59,8 +61,8 @@ type MemoryViewProps = {
    */
   engineState: MemoryPluginState;
   engineBusy: boolean;
-  /** Last failed engine write, so a rejected change is not just a snap-back. */
-  engineError: string | null;
+  /** Distinguishes a rejected write from a committed write with a failed refresh. */
+  engineOutcome: MemoryEngineOutcome | null;
   onEngineChange: (engineId: string | null) => void;
   /** null when the slot owner runs its own retrieval, so this row does not apply. */
   backend: MemoryBackend | null;
@@ -145,12 +147,23 @@ function renderEngineSection(props: MemoryViewProps) {
         }),
       })}
       ${renderDisabledEngineRow(props, engineId)}
-      ${props.engineError === null
+      ${props.engineOutcome === null
         ? nothing
         : renderSettingsRow({
-            title: t("memoryPage.engine.changeFailed"),
-            description: props.engineError,
-            control: renderSettingsStatus({ kind: "danger", label: t("common.failed") }),
+            title: t(
+              props.engineOutcome.kind === "error"
+                ? "memoryPage.engine.changeFailed"
+                : "pluginsPage.needsAttention",
+            ),
+            description: props.engineOutcome.message,
+            control: renderSettingsStatus({
+              kind: props.engineOutcome.kind === "error" ? "danger" : "warn",
+              label: t(
+                props.engineOutcome.kind === "error"
+                  ? "common.failed"
+                  : "pluginsPage.needsAttention",
+              ),
+            }),
           })}
     `,
   );
