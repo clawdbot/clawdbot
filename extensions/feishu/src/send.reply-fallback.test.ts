@@ -142,7 +142,6 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     "never duplicates an accepted $label reply with a missing platform id",
     async ({ prefix, send }) => {
       replyMock.mockResolvedValueOnce({ code: 0, data: {} });
-      createMock.mockResolvedValueOnce({ code: 0, data: { message_id: "om_duplicate" } });
 
       let caught: unknown;
       try {
