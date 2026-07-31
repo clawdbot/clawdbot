@@ -83,6 +83,11 @@ Onboarding starts with **QuickStart** (defaults) vs **Advanced** (full control).
 
 1. **Model/Auth** — choose any supported provider/auth flow (API key, OAuth, or provider-specific manual auth), including Custom Provider
    (OpenAI-compatible, Anthropic-compatible, or Unknown auto-detect). Pick a default model.
+   Fresh OpenAI API-key setup defaults to `openai/gpt-5.6` (the bare direct-API
+   id resolves to Sol); fresh ChatGPT/Codex setup defaults to
+   `openai/gpt-5.6-sol`. Re-running setup preserves an existing explicit model,
+   including `openai/gpt-5.5`. Select `openai/gpt-5.5` explicitly if the
+   account does not expose GPT-5.6.
    Security note: if this agent will run tools or process webhook/hooks content, prefer the strongest latest-generation model available and keep tool policy strict. Weaker/older tiers are easier to prompt-inject.
    For non-interactive runs, `--secret-input-mode ref` stores env-backed refs in auth profiles instead of plaintext API key values.
    In non-interactive `ref` mode, the provider env var must be set; passing inline key flags without that env var fails fast.

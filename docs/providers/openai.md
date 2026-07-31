@@ -34,10 +34,11 @@ changing config.
 
 | Goal                                                 | Use                                                      | Notes                                                                 |
 | ---------------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------- |
-| ChatGPT/Codex subscription with native Codex runtime | `openai/gpt-5.5`                                         | Default OpenAI agent setup. Sign in with Codex auth.                  |
-| GPT-5.6 limited preview                              | `openai/gpt-5.6-sol`, `-terra`, or `-luna`               | Requires an OpenAI-approved API organization or Codex workspace.      |
-| Direct API-key billing for agent models              | `openai/gpt-5.5` plus a Codex-compatible API-key profile | Use `auth.order.openai` to place the backup after subscription auth.  |
-| Direct API-key billing through explicit OpenClaw     | `openai/gpt-5.5` plus provider/model runtime `openclaw`  | Select a normal `openai` API-key profile.                             |
+| ChatGPT/Codex subscription with native Codex runtime | `openai/gpt-5.6-sol`                                     | Fresh setup. Sign in with Codex auth.                                 |
+| Direct API-key billing for agent models              | `openai/gpt-5.6` plus a Codex-compatible API-key profile | The bare direct-API id resolves to Sol.                               |
+| Choose an exact GPT-5.6 tier                         | `openai/gpt-5.6-sol`, `-terra`, or `-luna`               | Check `models list` for the tiers available to the account.           |
+| Account without GPT-5.6 access                       | `openai/gpt-5.5`                                         | Explicit recovery choice; OpenClaw does not silently downgrade.       |
+| Direct API-key billing through explicit OpenClaw     | `openai/gpt-5.6` plus provider/model runtime `openclaw`  | Select a normal `openai` API-key profile.                             |
 | Latest ChatGPT Instant API alias                     | `openai/chat-latest`                                     | Direct API-key only. Moving alias for experiments, not the default.   |
 | ChatGPT/Codex subscription auth through OpenClaw     | `openai/gpt-5.5` plus provider/model runtime `openclaw`  | Select an `openai` OAuth profile for the compatibility route.         |
 | Image generation or editing                          | `openai/gpt-image-2`                                     | Works with either `OPENAI_API_KEY` or OpenAI Codex OAuth.             |
@@ -63,11 +64,10 @@ legacy Codex model refs, legacy Codex auth profile ids, and
 legacy Codex auth order to the canonical OpenAI route.
 
 <Note>
-GPT-5.5 is available through both direct OpenAI Platform API-key access and
-subscription/OAuth routes. For ChatGPT/Codex subscription plus native Codex
-execution, use `openai/gpt-5.5`; unset runtime config now selects the Codex
-harness for OpenAI agent turns. Use OpenAI API-key profiles only when you want
-direct API-key auth for an OpenAI agent model.
+Fresh OpenAI setup applies a GPT-5.6 primary only when no primary model is
+configured. Adding or refreshing OpenAI auth preserves an existing explicit
+selection, including `openai/gpt-5.5`. Use an API-key auth profile only when
+you want direct API-key auth for an OpenAI agent model.
 </Note>
 
 ## GPT-5.6 limited preview
@@ -84,10 +84,11 @@ balanced tier, and Luna as the fast, lower-cost tier. See the
 [GPT-5.6 launch announcement](https://openai.com/index/previewing-gpt-5-6-sol/)
 and [preview access guide](https://help.openai.com/en/articles/20001325-a-preview-of-gpt-5-6-sol-terra-and-luna).
 
-Access is allowlisted during the preview and can be granted separately for the
-API and Codex. A paid ChatGPT plan alone does not grant access. OpenClaw keeps
-`openai/gpt-5.5` as the default; selecting a GPT-5.6 ref without access returns
-the upstream access error instead of falling back silently.
+With direct OpenAI API-key auth, the bare `openai/gpt-5.6` id resolves to Sol.
+The native Codex catalog uses exact Sol, Terra, and Luna ids according to
+workspace access, so fresh ChatGPT/Codex setup uses `openai/gpt-5.6-sol`.
+If GPT-5.6 is unavailable, select `openai/gpt-5.5` explicitly. OpenClaw
+surfaces the upstream access error instead of falling back silently.
 
 <Note>
 OpenAI agent model turns require the bundled Codex app-server plugin. Explicit

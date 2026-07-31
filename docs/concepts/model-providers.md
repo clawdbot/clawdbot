@@ -37,7 +37,12 @@ Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram)
 
     Plugin auto-enable follows the same boundary: `openai/*` agent refs enable the Codex plugin for the default route, and explicit provider/model `agentRuntime.id: "codex"` or legacy `codex/<model>` refs also require it.
 
-    GPT-5.5 is available through the native Codex app-server harness by default on `openai/gpt-5.5`, and through the OpenClaw runtime when provider/model runtime policy explicitly selects `openclaw`.
+    Fresh OpenAI setup uses a route-specific GPT-5.6 ref: API-key setup selects
+    `openai/gpt-5.6` (the bare direct-API id resolves to Sol), while
+    ChatGPT/Codex OAuth selects exact `openai/gpt-5.6-sol` for the native Codex
+    catalog. Existing explicit primaries, including `openai/gpt-5.5`, are
+    preserved when OpenAI auth is added or refreshed. GPT-5.5 remains available
+    as an explicit recovery choice for accounts without GPT-5.6 access.
 
   </Accordion>
   <Accordion title="CLI runtimes">
@@ -89,7 +94,8 @@ Official provider plugins publish their own model catalog rows. These providers 
 - Provider: `openai`
 - Auth: `OPENAI_API_KEY`
 - Optional rotation: `OPENAI_API_KEYS`, `OPENAI_API_KEY_1`, `OPENAI_API_KEY_2`, plus `OPENCLAW_LIVE_OPENAI_KEY` (single override)
-- Example models: `openai/gpt-5.5`, `openai/gpt-5.4-mini`
+- Fresh setup default: `openai/gpt-5.6`; on the direct API, the bare id resolves to Sol.
+- Example models: `openai/gpt-5.6`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`, `openai/gpt-5.5`
 - Verify account/model availability with `openclaw models list --provider openai` if a specific install or API key behaves differently.
 - CLI: `openclaw onboard --auth-choice openai-api-key`
 - Default transport is `auto`; OpenClaw passes the transport choice to the shared model runtime.
@@ -103,9 +109,13 @@ Official provider plugins publish their own model catalog rows. These providers 
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+  agents: { defaults: { model: { primary: "openai/gpt-5.6" } } },
 }
 ```
+
+If the API organization does not expose GPT-5.6, set `openai/gpt-5.5`
+explicitly. Normal onboarding and reauthentication preserve an existing
+explicit primary model.
 
 ### Anthropic
 
@@ -135,7 +145,7 @@ Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so Ope
 - Provider: `openai`
 - Auth: OAuth (ChatGPT)
 - Legacy OpenAI Codex model ref: `openai/gpt-5.5`
-- Native Codex app-server harness ref: `openai/gpt-5.5`
+- Fresh native Codex app-server harness ref: `openai/gpt-5.6-sol`
 - Native Codex app-server harness docs: [Codex harness](/plugins/codex-harness)
 - Legacy model refs: `codex/gpt-*`
 - Plugin boundary: `openai/*` loads the OpenAI plugin; the native Codex app-server plugin is selected by the Codex harness runtime.
@@ -147,16 +157,17 @@ Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so Ope
 - Shares the same `/fast` toggle and `params.fastMode` config as direct `openai/*`; OpenClaw maps that to `service_tier=priority`
 - `openai/gpt-5.5` uses the Codex catalog native `contextWindow = 400000` and default runtime `contextTokens = 272000`; override the runtime cap with `models.providers.openai.models[].contextTokens`
 - Policy note: OpenAI Codex OAuth is explicitly supported for external tools/workflows like OpenClaw.
-- For the common subscription plus native Codex runtime route, sign in with `openai` auth and configure `openai/gpt-5.5`; OpenAI agent turns select Codex by default.
-- Use provider/model `agentRuntime.id: "openclaw"` only when you want the built-in OpenClaw route; otherwise keep `openai/gpt-5.5` on the default Codex harness.
-- legacy Codex GPT refs are legacy state, not a live provider route. Use `openai/gpt-5.5` on the native Codex runtime for new agent config, and run `openclaw doctor --fix` to migrate old legacy Codex model refs to canonical `openai/*` refs.
+- The native Codex catalog can expose exact `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, and `openai/gpt-5.6-luna` refs according to account access.
+- For a fresh subscription plus native Codex runtime route, sign in with `openai` auth and use `openai/gpt-5.6-sol`; select `openai/gpt-5.5` explicitly if the workspace does not expose GPT-5.6.
+- Use provider/model `agentRuntime.id: "openclaw"` only when you want the built-in OpenClaw route.
+- Legacy Codex GPT refs are legacy state, not a live provider route. Run `openclaw doctor --fix` to migrate them to canonical `openai/*` refs without upgrading an existing explicit GPT-5.5 selection.
 
 ```json5
 {
   plugins: { entries: { codex: { enabled: true } } },
   agents: {
     defaults: {
-      model: { primary: "openai/gpt-5.5" },
+      model: { primary: "openai/gpt-5.6-sol" },
     },
   },
 }

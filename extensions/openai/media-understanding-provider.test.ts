@@ -16,7 +16,7 @@ describe("openaiMediaUnderstandingProvider", () => {
   it("declares audio support with the transcription default", () => {
     expect(openaiMediaUnderstandingProvider.capabilities).toEqual(["image", "audio"]);
     expect(openaiMediaUnderstandingProvider.defaultModels).toEqual({
-      image: "gpt-5.5",
+      image: "gpt-5.6-sol",
       audio: "gpt-4o-transcribe",
     });
     expect(openaiMediaUnderstandingProvider.autoPriority).toEqual({ image: 20, audio: 20 });

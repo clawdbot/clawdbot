@@ -6,7 +6,7 @@ import {
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { OPENAI_DEFAULT_MODEL } from "./default-models.js";
+import { OPENAI_CODEX_DEFAULT_MODEL, OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import {
   buildOpenAICodexLiveProviderConfig,
   buildOpenAILiveProviderConfig,
@@ -164,6 +164,45 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
+  it("preserves existing model selection during non-interactive API key setup", async () => {
+    const provider = buildOpenAIProvider();
+    const apiKey = provider.auth.find((method) => method.id === "api-key");
+    if (!apiKey?.runNonInteractive) {
+      throw new Error("expected OpenAI API key non-interactive auth");
+    }
+    const primaryModel = "anthropic/claude-opus-4-6";
+    const fallbackModel = "openai/gpt-5.5";
+
+    const next = await apiKey.runNonInteractive({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: primaryModel, fallbacks: [fallbackModel] },
+            models: {
+              [primaryModel]: { alias: "Primary" },
+              [fallbackModel]: { alias: "Fallback" },
+            },
+          },
+        },
+      },
+      opts: {},
+      env: {},
+      runtime: {},
+      resolveApiKey: async () => ({ key: "sk-test", source: "profile" }),
+      toApiKeyCredential: () => null,
+    } as never);
+
+    expect(next?.agents?.defaults?.model).toEqual({
+      primary: primaryModel,
+      fallbacks: [fallbackModel],
+    });
+    expect(next?.agents?.defaults?.models).toMatchObject({
+      [primaryModel]: { alias: "Primary" },
+      [fallbackModel]: { alias: "Fallback" },
+      [OPENAI_DEFAULT_MODEL]: { alias: "GPT" },
+    });
+  });
+
   it("marks the OpenAI manifest catalog as runtime-discovered", () => {
     expect(manifest.modelCatalog.discovery.openai).toBe("runtime");
   });
@@ -197,18 +236,28 @@ describe("buildOpenAIProvider", () => {
     }
     const gpt55 = result.providers.openai?.models.find((model) => model.id === "gpt-5.5");
     const gpt56Models = result.providers.openai?.models.filter((model) =>
-      model.id.startsWith("gpt-5.6-"),
+      model.id.startsWith("gpt-5.6"),
     );
     expect(gpt55?.mediaInput).toEqual({
       image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
     });
     expect(gpt56Models?.map((model) => model.id)).toEqual([
+      "gpt-5.6",
       "gpt-5.6-sol",
       "gpt-5.6-terra",
       "gpt-5.6-luna",
     ]);
-    expect(gpt56Models?.map((model) => model.thinkingLevelMap?.off)).toEqual([null, null, null]);
-    expect(OPENAI_DEFAULT_MODEL).toBe("openai/gpt-5.5");
+    expect(gpt56Models?.map((model) => model.contextWindow)).toEqual([
+      1_050_000, 1_050_000, 1_050_000, 1_050_000,
+    ]);
+    expect(gpt56Models?.map((model) => model.thinkingLevelMap?.off)).toEqual([
+      "none",
+      "none",
+      "none",
+      "none",
+    ]);
+    expect(OPENAI_DEFAULT_MODEL).toBe("openai/gpt-5.6");
+    expect(OPENAI_CODEX_DEFAULT_MODEL).toBe("openai/gpt-5.6-sol");
   });
 
   it("scopes the OpenAI API-key catalog to the OpenAI provider id", async () => {
@@ -1030,21 +1079,26 @@ describe("buildOpenAIProvider", () => {
 
   it.each([
     {
+      id: "gpt-5.6",
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+      thinkingLevelMap: { off: "none", xhigh: "xhigh", max: "max" },
+    },
+    {
       id: "gpt-5.6-sol",
       cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
-      thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+      thinkingLevelMap: { off: "none", xhigh: "xhigh", max: "max" },
     },
     {
       id: "gpt-5.6-terra",
       cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 },
-      thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+      thinkingLevelMap: { off: "none", xhigh: "xhigh", max: "max" },
     },
     {
       id: "gpt-5.6-luna",
       cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
-      thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+      thinkingLevelMap: { off: "none", xhigh: "xhigh", max: "max" },
     },
-  ])("resolves $id locally with preview metadata", ({ id, cost, thinkingLevelMap }) => {
+  ])("resolves $id locally with direct API metadata", ({ id, cost, thinkingLevelMap }) => {
     const provider = buildOpenAIProvider();
 
     const model = provider.resolveDynamicModel?.({
@@ -1075,8 +1129,8 @@ describe("buildOpenAIProvider", () => {
       provider: "openai",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-      contextWindow: 372_000,
-      contextTokens: 372_000,
+      contextWindow: 1_050_000,
+      contextTokens: 1_050_000,
       maxTokens: 128_000,
       cost,
       thinkingLevelMap,

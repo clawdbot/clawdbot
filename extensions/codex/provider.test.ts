@@ -19,7 +19,18 @@ afterEach(() => {
 function expectStaticFallbackCatalog(
   result: Awaited<ReturnType<typeof buildCodexProviderCatalog>>,
 ) {
-  expect(result.provider.models.map((model) => model.id)).toEqual(["gpt-5.5", "gpt-5.4-mini"]);
+  expect(result.provider.models.map((model) => model.id)).toEqual([
+    "gpt-5.6-sol",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4-mini",
+  ]);
+  expect(result.provider.models.find((model) => model.id === "gpt-5.6-sol")).toMatchObject({
+    contextWindow: 372_000,
+    compat: {
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    },
+  });
 }
 
 function createFakeCodexClient(): CodexAppServerClient {
@@ -358,7 +369,7 @@ describe("codex provider", () => {
     ).toBe(true);
   });
 
-  it("keeps undiscovered GPT-5.6 models on family reasoning rules", () => {
+  it("uses fallback reasoning metadata for GPT-5.6 Luna", () => {
     const provider = buildCodexProvider();
     const model = provider.resolveDynamicModel?.({
       provider: "codex",
@@ -369,7 +380,12 @@ describe("codex provider", () => {
     expectRecordFields(model, {
       id: "gpt-5.6-luna",
       reasoning: true,
-      compat: { supportsUsageInStreaming: true },
+      contextWindow: 372_000,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+        supportsUsageInStreaming: true,
+      },
     });
     expect(
       provider
@@ -526,7 +542,7 @@ describe("codex provider", () => {
     const authResult = await authChoice?.run({} as never);
     expectRecordFields(authResult, {
       profiles: [],
-      defaultModel: "codex/gpt-5.5",
+      defaultModel: "codex/gpt-5.6-sol",
     });
   });
 
@@ -546,7 +562,7 @@ describe("codex provider", () => {
 
     expect(
       result && "provider" in result ? result.provider.models.map((model) => model.id) : [],
-    ).toEqual(["gpt-5.5", "gpt-5.4-mini"]);
+    ).toEqual(["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4-mini"]);
   });
 
   it("adds the GPT-5 prompt overlay to Codex provider runs", () => {

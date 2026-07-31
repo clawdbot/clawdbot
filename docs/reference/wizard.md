@@ -33,11 +33,12 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - **Anthropic API key**: preferred Anthropic assistant choice in onboarding/configure.
     - **Anthropic setup-token**: still available in onboarding/configure, though OpenClaw now prefers Claude CLI reuse when available.
     - **OpenAI Code (Codex) subscription (OAuth)**: browser flow; paste the `code#state`.
-      - Sets `agents.defaults.model` to `openai/gpt-5.5` through the Codex runtime when model is unset or already OpenAI-family.
+      - On a fresh setup with no primary model, sets `agents.defaults.model` to `openai/gpt-5.6-sol` through the Codex runtime.
     - **OpenAI Code (Codex) subscription (device pairing)**: browser pairing flow with a short-lived device code.
-      - Sets `agents.defaults.model` to `openai/gpt-5.5` through the Codex runtime when model is unset or already OpenAI-family.
+      - On a fresh setup with no primary model, sets `agents.defaults.model` to `openai/gpt-5.6-sol` through the Codex runtime.
     - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then stores it in auth profiles.
-      - Sets `agents.defaults.model` to `openai/gpt-5.5` when model is unset, `openai/*`, or legacy Codex model refs.
+      - On a fresh setup with no primary model, sets `agents.defaults.model` to `openai/gpt-5.6`; the bare direct-API model id resolves to Sol.
+    - Adding or reauthenticating OpenAI preserves an existing explicit primary model, including `openai/gpt-5.5`. If the account does not expose GPT-5.6, select `openai/gpt-5.5` explicitly; OpenClaw does not silently downgrade it.
     - **xAI (Grok) OAuth / API key**: signs in with xAI OAuth when chosen, or prompts for `XAI_API_KEY` on the API-key path, and configures xAI as a model provider.
     - **OpenCode**: prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`, get it at https://opencode.ai/auth) and lets you pick the Zen or Go catalog.
     - **Ollama**: offers **Cloud + Local**, **Cloud only**, or **Local only** first. `Cloud only` prompts for `OLLAMA_API_KEY` and uses `https://ollama.com`; the host-backed modes prompt for the Ollama base URL, discover available models, and auto-pull the selected local model when needed; `Cloud + Local` also checks whether that Ollama host is signed in for cloud access.

@@ -905,7 +905,7 @@ function buildMissingApiKeyFailureText(input: { message: string; error?: unknown
     return null;
   }
   if (provider === "openai" && normalizedMessage.includes("OpenAI Codex OAuth")) {
-    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
+    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.6-sol` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
   }
   if (provider === "openai") {
     return '⚠️ Missing API key for provider "openai". Run `openclaw doctor --fix` to repair stale OpenAI model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai` or run `openclaw configure`.';
