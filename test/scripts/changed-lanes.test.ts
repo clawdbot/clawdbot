@@ -300,7 +300,7 @@ describe("scripts/changed-lanes", () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.stderr).toContain("delegating to Blacksmith Testbox");
+    expect(result.stderr).toContain("delegating through Crabbox workload routing");
     expect(result.stderr).not.toContain("ambiguous argument");
   });
 
@@ -334,7 +334,7 @@ describe("scripts/changed-lanes", () => {
     );
 
     expect(result.status).toBe(0);
-    expect(result.stderr).toContain("delegating to Blacksmith Testbox");
+    expect(result.stderr).toContain("delegating through Crabbox workload routing");
   });
 
   it.each([
@@ -1140,8 +1140,8 @@ describe("scripts/changed-lanes", () => {
     expect(buildChangedCheckCrabboxArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual([
       "scripts/crabbox-wrapper.mjs",
       "run",
-      "--provider",
-      "blacksmith-testbox",
+      "--workload",
+      "ci-fast",
       "--blacksmith-org",
       "openclaw",
       "--blacksmith-workflow",
