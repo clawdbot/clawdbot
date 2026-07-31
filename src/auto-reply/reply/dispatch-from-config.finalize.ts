@@ -251,7 +251,13 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   }
 
   if (finalPolicySettlements.length > 0) {
-    const settlement = Promise.all(finalPolicySettlements).then(() => undefined);
+    const settlement = Promise.all(finalPolicySettlements)
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        logVerbose(
+          `dispatch-from-config: final operational policy settlement failed: ${formatErrorMessage(error)}`,
+        );
+      });
     registerReplyDispatcherSettledTask(dispatcher, () => settlement);
   }
 

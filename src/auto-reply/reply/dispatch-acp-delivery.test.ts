@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { markCommandReplyForDelivery } from "../reply-payload.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
@@ -1130,5 +1131,37 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     await expect(coordinator.deliver("block", notice, { skipTts: true })).resolves.toBe(false);
     await expect(coordinator.deliver("block", notice, { skipTts: true })).resolves.toBe(true);
     expect(coordinator.getRoutedCounts().block).toBe(1);
+  });
+
+  it("keeps marked command replies visible under silent operational policy", async () => {
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: {
+        ...createAcpTestConfig(),
+        messages: {
+          operationalReplies: { policy: "silent" },
+        },
+      },
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      shouldRouteToOriginating: true,
+      originatingChannel: "visiblechat",
+      originatingTo: "channel:thread-1",
+    });
+    const commandReply = markCommandReplyForDelivery({
+      text: "compacted",
+      isCompactionNotice: true,
+    });
+
+    await expect(coordinator.deliver("final", commandReply, { skipTts: true })).resolves.toBe(true);
+    expect(deliveryMocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ text: "compacted" }),
+      }),
+    );
   });
 });

@@ -454,7 +454,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       isExplicitOperationalToolPayload &&
       isOperationalReplyPayload({
         payload: visiblePayload,
-        explicitCommandTurn: false,
+        explicitCommandTurn: payloadMetadata?.commandReply === true,
       });
     if (params.sendPolicyDenied) {
       return false;

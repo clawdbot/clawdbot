@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { applyOperationalReplyPolicy } from "./operational-reply-policy.js";
@@ -36,7 +37,7 @@ export function createAcpOperationalReplyPolicyApplier(params: {
       abortSignal: params.abortSignal,
       cfg: params.cfg,
       payload,
-      explicitCommandTurn: false,
+      explicitCommandTurn: getReplyPayloadMetadata(payload)?.commandReply === true,
       sendPolicyDenied: params.sendPolicyDenied === true,
       sourceSessionKey: params.deliverySessionKey,
       sourceEventKey,

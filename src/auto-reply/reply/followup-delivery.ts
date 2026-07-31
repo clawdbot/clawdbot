@@ -493,8 +493,7 @@ async function sendFollowupPayloads(params: {
             ? "origin"
             : "dispatcher";
     if (route !== "origin") {
-      await typing.signalTextDelta(payload.text);
-      // The dispatcher applies and settles operational policy for this path.
+      // The dispatcher owns both typing and operational policy for this path.
       await defaults.opts?.onBlockReply?.(payload);
     } else if (isRoutableChannel(originatingChannel) && originatingTo) {
       const policyResult = await applyFollowupPayloadPolicy(payload);

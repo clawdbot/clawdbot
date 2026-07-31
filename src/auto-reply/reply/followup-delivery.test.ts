@@ -872,6 +872,41 @@ describe("deliverFollowupDecision", () => {
     }
   });
 
+  it("leaves dispatcher typing to the policy-owning callback", async () => {
+    const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
+    const defaults = createDefaults(onBlockReply);
+    defaults.typingMode = "instant";
+    deliveryState.followupRoute = { route: "dispatcher" };
+
+    try {
+      await deliverFollowupDecision({
+        decision: {
+          kind: "deliver",
+          payloads: [
+            markOperationalReplyPayloadForSourceSuppressionDelivery({
+              text: "private runtime notice",
+            }),
+          ],
+        },
+        turn: createTurn({
+          config: {
+            messages: {
+              operationalReplies: { policy: "silent" },
+            },
+          },
+        }),
+        defaults,
+        runId: "run-typing",
+        runFollowup: vi.fn(async () => {}),
+      });
+
+      expect(onBlockReply).toHaveBeenCalledOnce();
+      expect(defaults.typing.startTypingOnText).not.toHaveBeenCalled();
+    } finally {
+      deliveryState.followupRoute = undefined;
+    }
+  });
+
   it("never forwards cross-channel reply content to the live dispatcher on route failure", async () => {
     const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
     deliveryState.routeReply.mockReset();
