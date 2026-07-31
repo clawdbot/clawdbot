@@ -34,6 +34,7 @@ import {
   installPlugin,
   pluginInstallNeedsRiskAcknowledgement,
   readPluginInstallTrustError,
+  runPluginConfigMutation,
   setPluginEnabled,
   uninstallPlugin,
   type PluginCatalogItem,
@@ -70,33 +71,6 @@ export type PluginsRouteData = {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-async function runPluginConfigMutation<T>(
-  runtimeConfig: ApplicationContext["runtimeConfig"],
-  expectedClient: GatewayBrowserClient,
-  task: (client: GatewayBrowserClient) => Promise<T>,
-): Promise<{ value: T; refreshError: string | null }> {
-  let taskError: Error | undefined;
-  const mutation = await runtimeConfig.runExternalMutation(async (client) => {
-    if (client !== expectedClient) {
-      throw new Error("Connection changed before the plugin update started.");
-    }
-    try {
-      return await task(client);
-    } catch (error) {
-      // Preserve structured Gateway errors used by the ClawHub risk prompt.
-      taskError = error instanceof Error ? error : new Error(String(error));
-      throw taskError;
-    }
-  });
-  if (mutation.ok) {
-    return {
-      value: mutation.value,
-      refreshError: mutation.refresh.ok ? null : mutation.refresh.error,
-    };
-  }
-  throw taskError ?? new Error(mutation.error);
 }
 
 function committedMutationMessage(success: string, refreshError: string | null): PluginRowMessage {

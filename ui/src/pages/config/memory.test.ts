@@ -27,7 +27,7 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
     engineSelection: { kind: "auto", engineId: "memory-core" },
     engineState: "enabled",
     engineBusy: false,
-    engineError: null,
+    engineOutcome: null,
     onEngineChange: vi.fn(),
     onEngineReset: vi.fn(),
     backendSelection: { kind: "default", backend: "builtin" },
@@ -207,7 +207,9 @@ describe("renderMemory", () => {
   it("surfaces a failed engine write next to the control", () => {
     expect(renderInto(createProps()).textContent).not.toContain("Could not change");
 
-    const failed = renderInto(createProps({ engineError: "gateway rejected the change" }));
+    const failed = renderInto(
+      createProps({ engineOutcome: { kind: "error", message: "gateway rejected the change" } }),
+    );
     expect(failed.textContent).toContain("Could not change the memory engine");
     expect(failed.textContent).toContain("gateway rejected the change");
   });
