@@ -19,6 +19,7 @@ import {
   publishLaneConfiguration,
   resetAllLanes,
   setCommandLaneConcurrency,
+  setCommandLaneGroup,
 } from "./command-queue.js";
 
 const CRON = "cron-nested";
@@ -175,6 +176,67 @@ describe("publishLaneConfiguration", () => {
     extra.release();
     clearCommandLane(CRON);
     await Promise.allSettled([...runs, extraRun]);
+  });
+
+  test("a rejected replacement does not tear down the existing group first", async () => {
+    // costaff round-5: combining clearGroups with an invalid replacement is the
+    // worst case — the old group could be removed before the new one throws,
+    // leaving BOTH lane width and group membership partially committed. Phase 0
+    // validation has to run before the clear, not just before the install.
+    publishLaneConfiguration({
+      lanes: { [CRON]: 8, [HOOK]: 1 },
+      groups: {
+        [GROUP]: { budget: 8, members: [CRON, HOOK], reservations: { [HOOK]: 1 } },
+      },
+    });
+    expect(getCommandLaneSnapshot(CRON).group).toBe(GROUP);
+
+    expect(() =>
+      publishLaneConfiguration({
+        lanes: { [CRON]: 99 },
+        clearGroups: [GROUP],
+        groups: {
+          "replacement-group": {
+            budget: 1,
+            members: [CRON, HOOK],
+            reservations: { [CRON]: 1, [HOOK]: 1 },
+          },
+        },
+      }),
+    ).toThrow(/reserves 2 slots but its budget is 1/);
+
+    // Everything must be exactly as before: group intact, width untouched.
+    expect(getCommandLaneSnapshot(CRON).group).toBe(GROUP);
+    expect(getCommandLaneSnapshot(CRON).groupBudget).toBe(8);
+    expect(getCommandLaneSnapshot(CRON).maxConcurrent).toBe(8);
+    expect(getCommandLaneSnapshot(HOOK).reservedForLane).toBe(1);
+  });
+
+  test("setCommandLaneGroup wakes members when a replacement frees capacity", async () => {
+    // costaff round-5: the exported primitive's "replace" semantics were not
+    // self-waking. publishLaneConfiguration drains at commit, but a direct
+    // setCommandLaneGroup that widens a budget or drops a reservation would
+    // leave queued members stuck until some unrelated enqueue poked the lane.
+    setCommandLaneConcurrency(CRON, 8);
+    setCommandLaneConcurrency(HOOK, 1);
+    setCommandLaneGroup(GROUP, { budget: 2, members: [CRON, HOOK] });
+
+    const gates = Array.from({ length: 5 }, () => gate());
+    const runs = gates.map((g) => enqueueCommandInLane(CRON, async () => await g.promise));
+    await settle();
+    expect(getCommandLaneSnapshot(CRON).activeCount).toBe(2);
+    expect(getCommandLaneSnapshot(CRON).queuedCount).toBe(3);
+
+    // Widen the budget via the bare primitive — no publication involved.
+    setCommandLaneGroup(GROUP, { budget: 5, members: [CRON, HOOK] });
+    await settle();
+
+    // The queued work must start on the replacement itself.
+    expect(getCommandLaneSnapshot(CRON).activeCount).toBe(5);
+    expect(getCommandLaneSnapshot(CRON).queuedCount).toBe(0);
+
+    for (const g of gates) g.release();
+    await Promise.all(runs);
   });
 
   test("republishing a narrower budget does not admit beyond the new cap", async () => {

@@ -140,7 +140,15 @@ export type CommandLaneGroupSpec = {
   /** Hard aggregate cap across all members. */
   budget: number;
   members: readonly string[];
-  /** Slots a member may always claim, non-borrowable by siblings. */
+  /**
+   * Slots a member may always claim, non-borrowable by siblings.
+   *
+   * Not validated against the member's own `maxConcurrent`, because lane widths
+   * and group definitions are published together and the width may not be
+   * applied yet at validation time. A reservation larger than the lane's width
+   * is therefore accepted but partly unusable: the excess is withheld from
+   * siblings while its owner cannot claim it.
+   */
   reservations?: Readonly<Record<string, number>>;
 };
 
@@ -699,7 +707,24 @@ function installCommandLaneGroup(next: LaneGroupState): void {
 }
 
 export function setCommandLaneGroup(group: string, spec: CommandLaneGroupSpec): void {
-  installCommandLaneGroup(validateCommandLaneGroupSpec(group, spec));
+  const next = validateCommandLaneGroupSpec(group, spec);
+  const previous = getGroupRegistry().groups.get(group);
+  installCommandLaneGroup(next);
+  // Replacing a group can FREE capacity — a wider budget, a dropped
+  // reservation, or a removed member — and queued work must not sit behind
+  // capacity that is already available. `publishLaneConfiguration` drains at
+  // commit, but this primitive is exported and must be self-waking too, or its
+  // "replace" semantics silently strand members until an unrelated poke.
+  const affected = new Set<string>(next.members);
+  for (const member of previous?.members ?? []) {
+    affected.add(member);
+  }
+  for (const member of affected) {
+    const state = getQueueState().lanes.get(member);
+    if (state && state.maxConcurrent > 0 && state.queue.length > 0 && !state.draining) {
+      drainLane(member);
+    }
+  }
 }
 
 /** Remove a group and release its members back to lane-local admission. */
