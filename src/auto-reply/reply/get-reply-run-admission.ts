@@ -563,6 +563,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     kind: "ready",
     context,
     resolvedThinkLevel,
+    thinkingCatalog,
     sessionEntry,
     skillsSnapshot,
     prefixedCommandBody,
