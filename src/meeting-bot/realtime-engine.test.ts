@@ -13,6 +13,7 @@ type PendingWrite = {
 
 async function createEngineFixture() {
   let callbacks: RealtimeVoiceBridgeCreateRequest | undefined;
+  let onHumanBargeIn: ((audio: Buffer) => boolean) | undefined;
   const handleBargeIn = vi.fn();
   const bridge: RealtimeVoiceBridge = {
     acknowledgeMark: vi.fn(),
@@ -47,6 +48,9 @@ async function createEngineFixture() {
     clearOutput,
     dispose: vi.fn(async () => {}),
     onFatal: vi.fn(),
+    startBargeInMonitor: (handler) => {
+      onHumanBargeIn = handler;
+    },
     startInput: vi.fn(),
     stop: vi.fn(async () => {}),
     writeOutput,
@@ -96,6 +100,12 @@ async function createEngineFixture() {
       }
       pending.resolve();
     },
+    triggerHumanBargeIn(audio = Buffer.from([1])) {
+      if (!onHumanBargeIn) {
+        throw new Error("Expected human barge-in monitor");
+      }
+      return onHumanBargeIn(audio);
+    },
     writeOutput,
   };
 }
@@ -142,6 +152,39 @@ describe("meeting realtime engine output ownership", () => {
 
       expect(fixture.writeOutput).not.toHaveBeenCalled();
       expect(fixture.clearOutput).toHaveBeenCalled();
+    } finally {
+      await fixture.handle.stop();
+    }
+  });
+
+  it("invalidates queued output when human barge-in clears playback", async () => {
+    const fixture = await createEngineFixture();
+    try {
+      const active = Buffer.from([1]);
+      const stale = Buffer.from([2]);
+      const fresh = Buffer.from([3]);
+
+      fixture.callbacks.onAudio(active);
+      await vi.waitFor(() => {
+        expect(fixture.writeOutput).toHaveBeenCalledTimes(1);
+      });
+      fixture.callbacks.onAudio(stale);
+
+      expect(fixture.triggerHumanBargeIn()).toBe(true);
+      await vi.waitFor(() => {
+        expect(fixture.clearOutput).toHaveBeenCalledOnce();
+      });
+      fixture.callbacks.onEvent?.({ direction: "server", type: "response.cancelled" });
+      fixture.callbacks.onAudio(fresh);
+      fixture.releaseWrite(0);
+
+      await vi.waitFor(() => {
+        expect(fixture.writeOutput).toHaveBeenCalledTimes(2);
+      });
+      expect(fixture.writeOutput).toHaveBeenLastCalledWith(fresh);
+      expect(fixture.writeOutput).not.toHaveBeenCalledWith(stale);
+      expect(fixture.clearOutput).toHaveBeenCalledTimes(2);
+      fixture.releaseWrite(1);
     } finally {
       await fixture.handle.stop();
     }
