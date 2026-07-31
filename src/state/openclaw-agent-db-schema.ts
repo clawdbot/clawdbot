@@ -527,13 +527,6 @@ function assertAgentSchemaVersion(
       `OpenClaw agent database ${options.pathname} did not converge on schema version ${options.version}.`,
     );
   }
-  if (options.version === OPENCLAW_AGENT_SCHEMA_VERSION) {
-    assertOpenClawAgentCurrentRuntimeSchema(db, {
-      agentId: options.agentId,
-      pathname: options.pathname,
-    });
-    return;
-  }
   assertOpenClawAgentSchemaContains(db, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL);
 }
 

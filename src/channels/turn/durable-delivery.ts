@@ -1,10 +1,5 @@
 // Durable final-reply delivery for inbound channel turns.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { preparePrivateOwnerModelSpendAlertBestEffort } from "../../agents/model-spend-alert-delivery.js";
-import {
-  markModelSpendAlertsQueued,
-  releasePreparedModelSpendAlertsBestEffort,
-} from "../../agents/model-spend-alerts.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -209,72 +204,27 @@ export async function deliverInboundReplyWithMessageSendContext(
     requesterSenderUsername: params.ctxPayload.SenderUsername,
     requesterSenderE164: params.ctxPayload.SenderE164,
   });
-  // Agent-wide billing totals are private operator data. Leave alerts pending
-  // until a final reply targets a configured owner in an explicit direct chat.
-  const spendAlert = preparePrivateOwnerModelSpendAlertBestEffort({
+
+  const send = await sendDurableMessageBatch({
     cfg: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.ctxPayload.SessionKey,
     channel,
     to,
-    chatType: session?.conversationKind,
+    accountId: params.accountId,
+    payloads: [params.payload],
+    threadId,
+    replyToId,
+    replyToMode: params.replyToMode,
+    formatting: params.formatting,
+    identity: params.identity,
+    deps: params.deps,
+    mediaAccess: params.mediaAccess,
+    silent: params.silent,
+    durability,
+    ...(durability === "required" ? { requireUnknownSendReconciliation: true } : {}),
+    session,
+    gatewayClientScopes: params.ctxPayload.GatewayClientScopes ?? [],
   });
-  const deliveryPayload = spendAlert
-    ? {
-        ...params.payload,
-        text: [params.payload.text, spendAlert.text].filter(Boolean).join("\n\n"),
-      }
-    : params.payload;
-  const spendAlertCompletion = spendAlert
-    ? {
-        kind: "model_spend_alert" as const,
-        agentId: params.agentId,
-        alertIds: spendAlert.alertIds,
-        deliveryIntentId: spendAlert.deliveryIntentId,
-      }
-    : undefined;
-
-  let send: Awaited<ReturnType<typeof sendDurableMessageBatch>>;
-  try {
-    send = await sendDurableMessageBatch({
-      cfg: params.cfg,
-      channel,
-      to,
-      accountId: params.accountId,
-      payloads: [deliveryPayload],
-      threadId,
-      replyToId,
-      replyToMode: params.replyToMode,
-      formatting: params.formatting,
-      identity: params.identity,
-      deps: params.deps,
-      mediaAccess: params.mediaAccess,
-      silent: params.silent,
-      durability,
-      ...(durability === "required" ? { requireUnknownSendReconciliation: true } : {}),
-      session,
-      gatewayClientScopes: params.ctxPayload.GatewayClientScopes ?? [],
-      ...(spendAlertCompletion
-        ? {
-            deliveryCompletion: spendAlertCompletion,
-            deliveryIntentId: spendAlertCompletion.deliveryIntentId,
-            // This is the fencing check before platform I/O. A stale lease must
-            // abort the queued send instead of delivering an old alert payload.
-            onDeliveryIntent: (intent) =>
-              markModelSpendAlertsQueued(spendAlertCompletion, intent.id),
-          }
-        : {}),
-    });
-  } catch (error) {
-    if (spendAlertCompletion) {
-      releasePreparedModelSpendAlertsBestEffort(spendAlertCompletion);
-    }
-    return { status: "failed", error };
-  }
   if (send.status === "failed") {
-    if (spendAlertCompletion) {
-      releasePreparedModelSpendAlertsBestEffort(spendAlertCompletion);
-    }
     return { status: "failed" as const, error: send.error };
   }
   if (send.status === "partial_failed") {
