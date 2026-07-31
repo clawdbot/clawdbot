@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCronAssistantCompletion } from "./run-finalize.js";
+import { buildCronAssistantCompletion } from "./assistant-completion.js";
 
 function buildResult(params: {
   text?: string;
