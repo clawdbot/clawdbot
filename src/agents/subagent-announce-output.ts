@@ -146,6 +146,23 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
       continue;
     }
     const role = (message as { role?: unknown }).role;
+    const provenance = (message as { provenance?: unknown }).provenance;
+    if (
+      role === "user" ||
+      (provenance &&
+        typeof provenance === "object" &&
+        !Array.isArray(provenance) &&
+        (provenance as { kind?: unknown }).kind === "inter_session")
+    ) {
+      // A fresh input owns a new turn; never announce an older turn's reply
+      // when the current run fails or completes without visible output.
+      snapshot.latestAssistantText = undefined;
+      snapshot.latestSilentText = undefined;
+      snapshot.latestToolCallCount = undefined;
+      snapshot.waitingForContinuation = false;
+      previousAssistantCalledYield = false;
+      continue;
+    }
     if (role === "assistant") {
       if (assistantCallsSessionsYield(message)) {
         snapshot.latestAssistantText = undefined;
@@ -400,7 +417,16 @@ export function buildChildCompletionFindings(
     }
     const aEnded = typeof a.endedAt === "number" ? a.endedAt : Number.MAX_SAFE_INTEGER;
     const bEnded = typeof b.endedAt === "number" ? b.endedAt : Number.MAX_SAFE_INTEGER;
-    return aEnded - bEnded;
+    if (aEnded !== bEnded) {
+      return aEnded - bEnded;
+    }
+    // Parallel children commonly share millisecond timestamps; their stable
+    // session identity keeps parent-visible findings and prompt bytes ordered.
+    return a.childSessionKey < b.childSessionKey
+      ? -1
+      : a.childSessionKey > b.childSessionKey
+        ? 1
+        : 0;
   });
 
   const sections: string[] = [];

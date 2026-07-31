@@ -190,6 +190,52 @@ describe("readSubagentOutput", () => {
     );
   });
 
+  it("does not replay an older assistant reply after a newer user turn", async () => {
+    installOutputDeps({
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "Completed the old task." }] },
+        { role: "user", content: [{ type: "text", text: "Start the next task." }] },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+  });
+
+  it("does not treat a projected inter-session input as an assistant completion", async () => {
+    installOutputDeps({
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "Completed the old task." }] },
+        {
+          role: "assistant",
+          provenance: { kind: "inter_session", sourceSessionKey: "agent:main:main" },
+          content: [{ type: "text", text: "Start the next task." }],
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+  });
+
+  it("reports only tool calls belonging to the latest user turn", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "old-call", name: "read", arguments: {} }],
+        },
+        { role: "user", content: [{ type: "text", text: "Start the next task." }] },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "current-call", name: "exec", arguments: {} }],
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
+      "1 tool call(s) made without visible output.",
+    );
+  });
+
   it("does not fall back to tool output when the last assistant turn is empty", async () => {
     installOutputDeps({
       messages: [
@@ -397,6 +443,29 @@ describe("buildChildCompletionFindings", () => {
 
     expect(findings).toContain("1. visible task");
     expect(findings).not.toContain("2. visible task");
+  });
+
+  it("orders same-timestamp child completions by stable session identity", () => {
+    const laterKey = {
+      childSessionKey: "agent:main:subagent:z",
+      task: "Z task",
+      createdAt: 1_000,
+      endedAt: 2_000,
+      completion: { resultText: "Z result" },
+      outcome: { status: "ok" as const },
+    };
+    const earlierKey = {
+      ...laterKey,
+      childSessionKey: "agent:main:subagent:a",
+      task: "A task",
+      completion: { resultText: "A result" },
+    };
+
+    const forward = buildChildCompletionFindings([laterKey, earlierKey]);
+    const reverse = buildChildCompletionFindings([earlierKey, laterKey]);
+
+    expect(forward).toBe(reverse);
+    expect(forward).toMatch(/1\. A task[\s\S]*2\. Z task/);
   });
 });
 
