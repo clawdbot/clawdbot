@@ -8,7 +8,9 @@ type CopilotReasoningCompat = {
   supportedReasoningEfforts?: readonly string[] | null;
 };
 
-export const DEFAULT_COPILOT_MODEL = "github-copilot/claude-opus-5";
+// GitHub Copilot CLI's documented general-purpose default. Setup treats this
+// as a preference only and verifies it against the authenticated live catalog.
+export const DEFAULT_COPILOT_MODEL = "github-copilot/claude-sonnet-4.6";
 
 const COPILOT_CHAT_COMPLETIONS_COMPAT: ModelDefinitionConfig["compat"] = {
   supportsStore: false,
