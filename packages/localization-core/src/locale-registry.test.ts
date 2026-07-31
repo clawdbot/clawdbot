@@ -30,14 +30,19 @@ describe("localization locale registry", () => {
     ["zh-Hans", "zh-CN"],
     ["zh_TW.UTF-8", "zh-TW"],
     ["zh-Hant", "zh-TW"],
-    ["zh-Hant-HK", "zh-TW"],
-    ["zh-Hans-SG", "zh-CN"],
     ["zh-HK", "zh-TW"],
     ["zh-SG", "zh-CN"],
     ["en_US.UTF-8", "en"],
   ] as const)("matches explicit locale %s as %s", (value, expected) => {
     expect(matchExactOpenClawLocale(value)).toBe(expected);
   });
+
+  it.each(["zh-Hant-HK", "zh-Hans-SG"])(
+    "rejects unregistered explicit wildcard locale %s",
+    (value) => {
+      expect(matchExactOpenClawLocale(value)).toBeNull();
+    },
+  );
 
   it.each([
     ["zh-HK", "zh-TW"],

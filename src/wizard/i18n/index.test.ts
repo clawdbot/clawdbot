@@ -1,6 +1,6 @@
 // Wizard i18n tests cover locale lookup and fallback behavior through retained translators.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSetupTranslator, t } from "./index.js";
+import { createSetupTranslator, runWithWizardLocalization, t } from "./index.js";
 import { en } from "./locales/en.js";
 import { zh_CN } from "./locales/zh-CN.js";
 import { zh_TW } from "./locales/zh-TW.js";
@@ -27,9 +27,7 @@ describe("wizard i18n", () => {
   it.each([
     ["zh_CN.UTF-8", "Gateway 端口"],
     ["zh-Hans", "Gateway 端口"],
-    ["zh-Hans-SG", "Gateway 端口"],
     ["zh_TW.UTF-8", "Gateway 連接埠"],
-    ["zh-Hant-HK", "Gateway 連接埠"],
     ["zh-HK", "Gateway 連接埠"],
     ["en_US.UTF-8", "Gateway port"],
     ["de_DE.UTF-8", "Gateway port"],
@@ -37,6 +35,15 @@ describe("wizard i18n", () => {
     vi.stubEnv("OPENCLAW_LOCALE", locale);
     expect(t("wizard.gateway.port")).toBe(expected);
   });
+
+  it.each(["zh-Hans-SG", "zh-Hant-HK"])(
+    "falls directly to English for unregistered explicit locale %s",
+    (locale) => {
+      vi.stubEnv("OPENCLAW_LOCALE", locale);
+      vi.stubEnv("LANG", "zh-CN");
+      expect(t("wizard.gateway.port")).toBe("Gateway port");
+    },
+  );
 
   it("uses OPENCLAW_LOCALE before process locale variables", () => {
     vi.stubEnv("OPENCLAW_LOCALE", "en");
@@ -92,6 +99,24 @@ describe("wizard i18n", () => {
         { locale: "en" },
       ),
     ).toBe('Endpoint ID "custom" already exists for a different base URL. Using "custom-2".');
+  });
+
+  it("keeps one locale context for an entire async wizard operation", async () => {
+    vi.stubEnv("OPENCLAW_LOCALE", "zh-CN");
+    await runWithWizardLocalization(async () => {
+      expect(t("wizard.gateway.port")).toBe("Gateway 端口");
+      vi.stubEnv("OPENCLAW_LOCALE", "en");
+      await Promise.resolve();
+      expect(t("wizard.gateway.port")).toBe("Gateway 端口");
+    });
+    expect(t("wizard.gateway.port")).toBe("Gateway port");
+  });
+
+  it("captures one context when a setup translator is created", () => {
+    vi.stubEnv("OPENCLAW_LOCALE", "zh-CN");
+    const translator = createSetupTranslator({ keyPrefix: "wizard.gateway" });
+    vi.stubEnv("OPENCLAW_LOCALE", "en");
+    expect(translator("port")).toBe("Gateway 端口");
   });
 
   it("creates scoped setup translators without exporting a generic SDK t helper", () => {

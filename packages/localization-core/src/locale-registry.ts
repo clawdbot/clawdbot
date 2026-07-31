@@ -148,18 +148,7 @@ export function matchExactOpenClawLocale(
     return null;
   }
   const localeId = EXACT_LOCALE_LOOKUP.get(normalized.toLowerCase());
-  if (localeId && supportedLocales.includes(localeId)) {
-    return localeId;
-  }
-
-  const lower = normalized.toLowerCase();
-  if (lower.startsWith("zh-hant-") && supportedLocales.includes("zh-TW")) {
-    return "zh-TW";
-  }
-  if (lower.startsWith("zh-hans-") && supportedLocales.includes("zh-CN")) {
-    return "zh-CN";
-  }
-  return null;
+  return localeId && supportedLocales.includes(localeId) ? localeId : null;
 }
 
 export function matchInferredOpenClawLocale(

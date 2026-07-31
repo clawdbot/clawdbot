@@ -34,6 +34,7 @@
     "build": "tsdown --config tsdown.config.ts"
   },
   "dependencies": {
+    "@openclaw/normalization-core": "workspace:*",
     "intl-messageformat": "11.2.12"
   }
 }

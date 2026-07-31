@@ -56,7 +56,7 @@ describe("localization context", () => {
     expect(result.context.source).toBe("english-default");
   });
 
-  it("honors POSIX locale precedence when the highest-priority value is unsupported", () => {
+  it("continues POSIX locale precedence after an unsupported value", () => {
     const result = resolveProcessLocalizationContext(
       {
         LC_ALL: "de",
@@ -64,7 +64,8 @@ describe("localization context", () => {
       },
       { audience: "operator", supportedLocales: ["en", "zh-CN", "zh-TW"] },
     );
-    expect(result.context.locale).toBe("en");
+    expect(result.context.locale).toBe("zh-TW");
+    expect(result.context.source).toBe("platform");
     expect(result.findings).toEqual([
       { source: "platform", value: "de", reason: "unsupported-by-surface" },
     ]);

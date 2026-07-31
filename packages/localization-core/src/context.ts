@@ -118,24 +118,29 @@ export function resolveProcessLocalizationContext(
     ]);
   }
 
-  const processLocale = [env.LC_ALL, env.LC_MESSAGES, env.LANG].find((value) => value?.trim());
-  if (processLocale) {
+  const findings: LocaleResolutionFinding[] = [];
+  for (const processLocale of [env.LC_ALL, env.LC_MESSAGES, env.LANG]) {
+    if (!processLocale?.trim()) {
+      continue;
+    }
     const locale =
       isPosixEnglishLocale(processLocale) && supportedLocales.includes("en")
         ? "en"
         : matchInferredOpenClawLocale(processLocale, supportedLocales);
     if (locale) {
-      return resolution(locale, "platform", options.audience, supportedLocales, []);
+      return resolution(locale, "platform", options.audience, supportedLocales, findings);
     }
-    return resolution("en", "english-default", options.audience, supportedLocales, [
-      rejection("platform", processLocale, supportedLocales),
-    ]);
+    findings.push(rejection("platform", processLocale, supportedLocales));
   }
 
-  return resolveLocalizationContext({
+  const platformResult = resolveLocalizationContext({
     audience: options.audience,
     platform: options.platform ?? readRuntimePlatformLocales(),
     supportedLocales,
+  });
+  return Object.freeze({
+    context: platformResult.context,
+    findings: Object.freeze([...findings, ...platformResult.findings]),
   });
 }
 

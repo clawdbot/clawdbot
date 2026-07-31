@@ -1,12 +1,27 @@
 import { describe, expect, it } from "vitest";
 import {
   createCatalogSnapshot,
+  createCatalogStore,
   interpolateMessage,
+  isolateLocalizationLiteral,
   renderLocalizedMessage,
   validateCatalog,
+  type CatalogSnapshotInput,
   type LocalizationCatalog,
 } from "./catalog.js";
 import { createLocalizationContext } from "./context.js";
+
+function createTestSnapshot(params: Omit<CatalogSnapshotInput, "namespace">) {
+  const result = createCatalogSnapshot({ namespace: "core", ...params });
+  if (!result.ok) {
+    throw new Error("Test catalog was invalid.");
+  }
+  return result.value;
+}
+
+function renderTestMessage(...params: Parameters<typeof renderLocalizedMessage>): string {
+  return renderLocalizedMessage(...params).value;
+}
 
 describe("localization catalogs", () => {
   const english: LocalizationCatalog = {
@@ -20,21 +35,24 @@ describe("localization catalogs", () => {
     ["pl", 2, "2 pliki"],
     ["ar", 2, "2 ملفان"],
   ] as const)("renders plural categories for %s", (locale, count, expected) => {
-    const snapshot = createCatalogSnapshot({
+    const snapshot = createTestSnapshot({
       catalogRevision: "test",
       catalogs: {
         en: english,
         ru: {
           "core.files.count":
             "{count, plural, one {{count} файл} few {{count} файла} many {{count} файлов} other {{count} файла}}",
+          "core.state.label": english["core.state.label"]!,
         },
         pl: {
           "core.files.count":
             "{count, plural, one {{count} plik} few {{count} pliki} many {{count} plików} other {{count} pliku}}",
+          "core.state.label": english["core.state.label"]!,
         },
         ar: {
           "core.files.count":
             "{count, plural, one {{count} ملف} two {{count} ملفان} other {{count} ملفات}}",
+          "core.state.label": english["core.state.label"]!,
         },
       },
     });
@@ -44,7 +62,7 @@ describe("localization catalogs", () => {
       audience: "user",
     });
     expect(
-      renderLocalizedMessage(snapshot, context, {
+      renderTestMessage(snapshot, context, {
         key: "core.files.count",
         params: { count },
         fallback: "Files: {count}",
@@ -53,30 +71,30 @@ describe("localization catalogs", () => {
   });
 
   it("renders select messages through ICU MessageFormat", () => {
-    const snapshot = createCatalogSnapshot({ catalogRevision: "test", catalogs: { en: english } });
+    const snapshot = createTestSnapshot({ catalogRevision: "test", catalogs: { en: english } });
     const context = createLocalizationContext({
       locale: "en",
       source: "english-default",
       audience: "user",
     });
     expect(
-      renderLocalizedMessage(snapshot, context, {
+      renderTestMessage(snapshot, context, {
         key: "core.state.label",
         params: { state: "ready", name: "Patrick" },
-        fallback: "State for {name}",
+        fallback: "State {state} for {name}",
       }),
     ).toBe("Ready for Patrick");
   });
 
   it("uses a whole-message fallback for unknown keys", () => {
-    const snapshot = createCatalogSnapshot({ catalogRevision: "test", catalogs: { en: english } });
+    const snapshot = createTestSnapshot({ catalogRevision: "test", catalogs: { en: english } });
     const context = createLocalizationContext({
       locale: "de",
       source: "platform",
       audience: "operator",
     });
     expect(
-      renderLocalizedMessage(snapshot, context, {
+      renderTestMessage(snapshot, context, {
         key: "core.unknown",
         fallback: "Reviewed English fallback",
       }),
@@ -84,14 +102,17 @@ describe("localization catalogs", () => {
   });
 
   it("interpolates whole-message fallbacks", () => {
-    const snapshot = createCatalogSnapshot({ catalogRevision: "test", catalogs: {} });
+    const snapshot = createTestSnapshot({
+      catalogRevision: "test",
+      catalogs: { en: { "core.known": "Known" } },
+    });
     const context = createLocalizationContext({
       locale: "de",
       source: "platform",
       audience: "operator",
     });
     expect(
-      renderLocalizedMessage(snapshot, context, {
+      renderTestMessage(snapshot, context, {
         key: "core.unknown",
         params: { target: "gateway" },
         fallback: "Approve {target}?",
@@ -100,7 +121,7 @@ describe("localization catalogs", () => {
   });
 
   it.each([false, true])("renders boolean params as text (%s)", (enabled) => {
-    const snapshot = createCatalogSnapshot({
+    const snapshot = createTestSnapshot({
       catalogRevision: "test",
       catalogs: { en: { "core.setting.enabled": "Enabled: {enabled}" } },
     });
@@ -110,7 +131,7 @@ describe("localization catalogs", () => {
       audience: "operator",
     });
     expect(
-      renderLocalizedMessage(snapshot, context, {
+      renderTestMessage(snapshot, context, {
         key: "core.setting.enabled",
         params: { enabled },
         fallback: "Setting enabled: {enabled}",
@@ -120,14 +141,14 @@ describe("localization catalogs", () => {
   });
 
   it("uses the matched catalog locale for plural fallback", () => {
-    const snapshot = createCatalogSnapshot({ catalogRevision: "test", catalogs: { en: english } });
+    const snapshot = createTestSnapshot({ catalogRevision: "test", catalogs: { en: english } });
     const context = createLocalizationContext({
       locale: "ru",
       source: "platform",
       audience: "operator",
     });
     expect(
-      renderLocalizedMessage(snapshot, context, {
+      renderTestMessage(snapshot, context, {
         key: "core.files.count",
         params: { count: 21 },
         fallback: "21 files",
@@ -136,11 +157,11 @@ describe("localization catalogs", () => {
   });
 
   it("freezes snapshots and captures catalog replacement by reference", () => {
-    const first = createCatalogSnapshot({
+    const first = createTestSnapshot({
       catalogRevision: "first",
       catalogs: { en: { "core.label": "First" } },
     });
-    const second = createCatalogSnapshot({
+    const second = createTestSnapshot({
       catalogRevision: "second",
       catalogs: { en: { "core.label": "Second" } },
     });
@@ -150,8 +171,8 @@ describe("localization catalogs", () => {
       audience: "user",
     });
     const message = { key: "core.label", fallback: "Fallback" };
-    expect(renderLocalizedMessage(first, context, message)).toBe("First");
-    expect(renderLocalizedMessage(second, context, message)).toBe("Second");
+    expect(renderTestMessage(first, context, message)).toBe("First");
+    expect(renderTestMessage(second, context, message)).toBe("Second");
     expect(Object.isFrozen(first.catalogs.en)).toBe(true);
   });
 
@@ -252,6 +273,74 @@ describe("localization catalogs", () => {
       code: "unknown-key",
       key: "core.extra",
       detail: "Candidate catalog contains a key that is absent from the source catalog.",
+    });
+  });
+
+  it("rejects invalid snapshots and preserves the previous active revision", () => {
+    const store = createCatalogStore({
+      namespace: "core",
+      catalogRevision: "first",
+      catalogs: { en: { "core.label": "First" } },
+    });
+    expect(store.ok).toBe(true);
+    if (!store.ok) {
+      return;
+    }
+
+    const rejected = store.value.activate({
+      catalogRevision: "broken",
+      catalogs: { en: { "core.label": "Open {path}" }, de: { "core.label": "Öffnen {file}" } },
+    });
+    expect(rejected.ok).toBe(false);
+    expect(store.value.snapshot.catalogRevision).toBe("first");
+    expect(
+      renderTestMessage(
+        store.value.snapshot,
+        createLocalizationContext({
+          locale: "en",
+          source: "english-default",
+          audience: "operator",
+        }),
+        { key: "core.label", fallback: "Fallback" },
+      ),
+    ).toBe("First");
+  });
+
+  it("returns bounded findings for missing catalogs and invalid parameters", () => {
+    const snapshot = createTestSnapshot({
+      catalogRevision: "test",
+      catalogs: { en: { "core.path": "Open {path}" } },
+    });
+    const context = createLocalizationContext({
+      locale: "ar",
+      source: "explicit-user",
+      audience: "operator",
+    });
+    const missingCatalog = renderLocalizedMessage(snapshot, context, {
+      key: "core.path",
+      params: { path: "/tmp/openclaw" },
+      fallback: "Open {path}",
+    });
+    expect(missingCatalog.value).toBe("Open /tmp/openclaw");
+    expect(missingCatalog.findings.map((finding) => finding.code)).toEqual(["missing-catalog"]);
+
+    const invalidParams = renderLocalizedMessage(snapshot, context, {
+      key: "core.path",
+      params: { other: "value" },
+      fallback: "Open {path}",
+    });
+    expect(invalidParams.value).toBe("Open {path}");
+    expect(invalidParams.findings.map((finding) => finding.code)).toEqual(["invalid-parameter"]);
+  });
+
+  it("isolates RTL literals with renderer-owned controls", () => {
+    expect(isolateLocalizationLiteral("openclaw gateway status")).toEqual({
+      ok: true,
+      value: "\u2068openclaw gateway status\u2069",
+    });
+    expect(isolateLocalizationLiteral("unsafe\u202evalue")).toEqual({
+      ok: false,
+      error: { code: "forbidden-bidi-control" },
     });
   });
 });

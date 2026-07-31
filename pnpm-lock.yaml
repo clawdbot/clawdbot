@@ -2240,6 +2240,9 @@ importers:
 
   packages/localization-core:
     dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
       intl-messageformat:
         specifier: 11.2.12
         version: 11.2.12

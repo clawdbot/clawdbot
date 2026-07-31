@@ -1,6 +1,7 @@
 // Wizard i18n helpers resolve translated onboarding copy by locale.
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
-  createCatalogSnapshot,
+  createCatalogStore,
   createLocalizationContext,
   renderLocalizedMessage,
   resolveProcessLocalizationContext,
@@ -32,7 +33,8 @@ const LOCALES: Record<WizardLocale, WizardTranslationMap> = {
 
 const WIZARD_DEFAULT_LOCALE: WizardLocale = "en";
 const WIZARD_LOCALES = ["en", "zh-CN", "zh-TW"] as const;
-const WIZARD_CATALOG_SNAPSHOT = createCatalogSnapshot({
+const wizardCatalogStoreResult = createCatalogStore({
+  namespace: ["common", "wizard"],
   catalogRevision: "wizard:1",
   catalogs: {
     en: flattenTranslationMap(en),
@@ -40,6 +42,11 @@ const WIZARD_CATALOG_SNAPSHOT = createCatalogSnapshot({
     "zh-TW": flattenTranslationMap(zh_TW),
   },
 });
+if (!wizardCatalogStoreResult.ok) {
+  throw new Error("The built-in wizard localization catalogs are invalid.");
+}
+const WIZARD_CATALOG_STORE = wizardCatalogStoreResult.value;
+const WIZARD_LOCALIZATION_CONTEXT = new AsyncLocalStorage<LocalizationContext>();
 
 function resolveWizardContextFromEnv(env: NodeJS.ProcessEnv = process.env): LocalizationContext {
   return resolveProcessLocalizationContext(env, {
@@ -71,14 +78,16 @@ export function wizardT(
         audience: "operator",
         supportedLocales: WIZARD_LOCALES,
       })
-    : resolveWizardContextFromEnv();
-  const messageParams = toMessageParams(params);
-  const fallback = readKey(LOCALES[WIZARD_DEFAULT_LOCALE], key) ?? key;
-  return renderLocalizedMessage(WIZARD_CATALOG_SNAPSHOT, context, {
-    key,
-    params: messageParams,
-    fallback,
-  });
+    : (WIZARD_LOCALIZATION_CONTEXT.getStore() ?? resolveWizardContextFromEnv());
+  return renderWizardMessage(context, key, params);
+}
+
+export function runWithWizardLocalization<T>(
+  run: () => T,
+  env: NodeJS.ProcessEnv = process.env,
+): T {
+  const context = WIZARD_LOCALIZATION_CONTEXT.getStore() ?? resolveWizardContextFromEnv(env);
+  return WIZARD_LOCALIZATION_CONTEXT.run(context, run);
 }
 
 export const t = wizardT;
@@ -90,13 +99,35 @@ export function createSetupTranslator(options?: {
   keyPrefix?: string;
 }): SetupTranslator {
   const normalizedPrefix = options?.keyPrefix?.replace(/\.$/, "");
+  const context = options?.locale
+    ? createLocalizationContext({
+        locale: options.locale,
+        source: "explicit-user",
+        audience: "operator",
+        supportedLocales: WIZARD_LOCALES,
+      })
+    : (WIZARD_LOCALIZATION_CONTEXT.getStore() ?? resolveWizardContextFromEnv());
   return (key, params) => {
     const resolvedKey =
       normalizedPrefix && !key.startsWith("common.") && !key.startsWith("wizard.")
         ? `${normalizedPrefix}.${key}`
         : key;
-    return wizardT(resolvedKey, params, { locale: options?.locale });
+    return renderWizardMessage(context, resolvedKey, params);
   };
+}
+
+function renderWizardMessage(
+  context: LocalizationContext,
+  key: string,
+  params?: WizardI18nParams,
+): string {
+  const messageParams = toMessageParams(params);
+  const fallback = readKey(LOCALES[WIZARD_DEFAULT_LOCALE], key) ?? key;
+  return renderLocalizedMessage(WIZARD_CATALOG_STORE.snapshot, context, {
+    key,
+    params: messageParams,
+    fallback,
+  }).value;
 }
 
 function flattenTranslationMap(
