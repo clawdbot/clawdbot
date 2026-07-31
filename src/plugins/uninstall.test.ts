@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { runCommandWithTimeout } from "../process/exec.js";
 import { toRepoRelativePath } from "../test-utils/repo-files.js";
 import { resolvePluginNpmProjectDir } from "./install-paths.js";
 import { resolvePluginInstallDir } from "./install.js";
@@ -10,9 +11,9 @@ import {
   cleanupTrackedTempDirsAsync,
   makeTrackedTempDirAsync,
 } from "./test-helpers/fs-fixtures.js";
+import { pruneManagedNpmPeerDependenciesAfterUninstall } from "./uninstall-managed-npm.js";
 import {
   applyPluginUninstallDirectoryRemoval,
-  pruneManagedNpmPeerDependenciesAfterUninstall,
   removePluginFromConfig,
   planPluginUninstall,
   resolveUninstallChannelConfigKeys,
@@ -1342,9 +1343,9 @@ describe("uninstallPlugin", () => {
     );
 
     let cleanupAttempts = 0;
-    const runCommand = vi.fn(async (argv: string[], options?: { cwd?: string }) => {
+    const runCommand: typeof runCommandWithTimeout = vi.fn(async (argv, optionsOrTimeout) => {
+      const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
       if (argv.includes("--package-lock-only")) {
-        const cwd = options?.cwd;
         expect(cwd).toBeTruthy();
         const manifest = JSON.parse(
           await fs.readFile(path.join(cwd as string, "package.json"), "utf8"),
@@ -1468,9 +1469,9 @@ describe("uninstallPlugin", () => {
     );
 
     let cleanupAttempts = 0;
-    const runCommand = vi.fn(async (argv: string[], options?: { cwd?: string }) => {
+    const runCommand: typeof runCommandWithTimeout = vi.fn(async (argv, optionsOrTimeout) => {
+      const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
       if (argv.includes("--package-lock-only")) {
-        const cwd = options?.cwd;
         expect(cwd).toBeTruthy();
         await fs.writeFile(
           path.join(cwd as string, "package-lock.json"),
