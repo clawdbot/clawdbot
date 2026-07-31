@@ -21,14 +21,6 @@ export function formatRunLabel(entry: SubagentRunRecord, options?: { maxLength?:
   return raw.length > maxLength ? `${truncateUtf16Safe(raw, maxLength).trimEnd()}…` : raw;
 }
 
-export function formatRunStatus(entry: SubagentRunRecord) {
-  if (!entry.endedAt) {
-    return "running";
-  }
-  const status = entry.outcome?.status ?? "done";
-  return status === "ok" ? "done" : status;
-}
-
 export function sortSubagentRuns(runs: SubagentRunRecord[]) {
   return [...runs].toSorted((a, b) => {
     const aTime = a.startedAt ?? a.createdAt ?? 0;
