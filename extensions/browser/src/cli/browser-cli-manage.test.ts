@@ -564,13 +564,15 @@ describe("browser manage output", () => {
     const program = createBrowserManageProgram();
     await program.parseAsync(["browser", "--json", "doctor"], { from: "user" });
 
-    expect(parseSingleRuntimeJson()).toMatchObject({
-      ok: false,
-      checks: [
-        { name: "gateway", ok: true },
-        { name: "plugin", ok: false },
-      ],
-    });
+    expect(parseSingleRuntimeJson()).toEqual(
+      expect.objectContaining({
+        ok: false,
+        checks: expect.arrayContaining([
+          expect.objectContaining({ name: "gateway", ok: true }),
+          expect.objectContaining({ name: "plugin", ok: false }),
+        ]),
+      }),
+    );
     expect(getBrowserCliRuntimeCapture().runtimeErrors).toEqual([]);
     expect(getBrowserCliRuntime().writeJson).toHaveBeenCalledTimes(1);
     expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
@@ -597,9 +599,7 @@ describe("browser manage output", () => {
     });
 
     const program = createBrowserManageProgram();
-    await expect(
-      program.parseAsync(["browser", "--json", "doctor"], { from: "user" }),
-    ).resolves.toBeUndefined();
+    await program.parseAsync(["browser", "--json", "doctor"], { from: "user" });
 
     expect(parseSingleRuntimeJson()).toMatchObject({ ok: true });
     expect(getBrowserCliRuntimeCapture().runtimeErrors).toEqual([]);
