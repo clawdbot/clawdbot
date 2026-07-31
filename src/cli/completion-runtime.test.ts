@@ -1,7 +1,6 @@
 // Completion runtime tests cover shell completion generation and runtime file writes.
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -21,13 +20,41 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function withBashCompletionHome(
   run: (paths: { homeDir: string; stateDir: string }) => Promise<void>,
+  stateDirPrefix = "openclaw-bash-completion-state-",
 ): Promise<void> {
   const homeDir = tempDirs.make("openclaw-bash-completion-home-");
-  const stateDir = tempDirs.make("openclaw-bash-completion-state-");
+  const stateDir = tempDirs.make(stateDirPrefix);
 
-  await withEnvAsync({ HOME: homeDir, OPENCLAW_STATE_DIR: stateDir }, async () => {
-    await run({ homeDir, stateDir });
-  });
+  await withEnvAsync(
+    {
+      HOME: homeDir,
+      USERPROFILE: homeDir,
+      OPENCLAW_STATE_DIR: stateDir,
+      XDG_CONFIG_HOME: undefined,
+      ZDOTDIR: undefined,
+    },
+    async () => {
+      await run({ homeDir, stateDir });
+    },
+  );
+}
+
+function expectAvailableShellToSucceed(
+  shellName: "bash" | "zsh",
+  result: SpawnSyncReturns<string>,
+): void {
+  if (result.error) {
+    if (
+      shellName === "zsh" &&
+      "code" in result.error &&
+      (result.error.code === "ENOENT" || result.error.code === "EACCES")
+    ) {
+      return;
+    }
+    throw result.error;
+  }
+  expect(result.stderr).toBe("");
+  expect(result.status).toBe(0);
 }
 
 describe("completion-runtime", () => {
@@ -71,8 +98,7 @@ describe("completion-runtime", () => {
             encoding: "utf8",
             env: process.env,
           });
-          expect(shell.stderr).toBe("");
-          expect(shell.status).toBe(0);
+          expectAvailableShellToSucceed("zsh", shell);
         }
       },
     );
@@ -383,6 +409,7 @@ describe("completion-runtime", () => {
       await fs.writeFile(profilePath, "OPENCLAW_COMPLETION_LOADED=ready\n", "utf-8");
 
       const reloadCommand = formatCompletionReloadCommand(shellName, profilePath);
+      expect(reloadCommand).toBe(`source '${profilePath.replaceAll("'", "'\\''")}'`);
       const shell = spawnSync(
         shellName,
         ["-c", `${reloadCommand}; [ "$OPENCLAW_COMPLETION_LOADED" = ready ]`],
@@ -390,9 +417,7 @@ describe("completion-runtime", () => {
           encoding: "utf8",
         },
       );
-
-      expect(shell.stderr).toBe("");
-      expect(shell.status).toBe(0);
+      expectAvailableShellToSucceed(shellName, shell);
     },
   );
 
@@ -460,40 +485,24 @@ describe("completion-runtime", () => {
   });
 
   it("installs PowerShell completion into the concrete profile path", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-home-"));
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-state-bob's-"));
+    await withBashCompletionHome(async () => {
+      const cachePath = resolveCompletionCachePath("powershell", "openclaw");
+      await fs.mkdir(path.dirname(cachePath), { recursive: true });
+      await fs.writeFile(cachePath, "# powershell completion\n", "utf-8");
 
-    try {
-      await withEnvAsync({ HOME: homeDir, OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const cachePath = resolveCompletionCachePath("powershell", "openclaw");
-        await fs.mkdir(path.dirname(cachePath), { recursive: true });
-        await fs.writeFile(cachePath, "# powershell completion\n", "utf-8");
+      await installCompletion("powershell", true, "openclaw");
 
-        await installCompletion("powershell", true, "openclaw");
-
-        const profilePath = resolveCompletionProfilePath("powershell");
-        const profile = await fs.readFile(profilePath, "utf-8");
-        expect(profile).toBe(`# OpenClaw Completion\n. '${cachePath.replace(/'/g, "''")}'\n`);
-      });
-    } finally {
-      await fs.rm(homeDir, { recursive: true, force: true });
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
+      const profilePath = resolveCompletionProfilePath("powershell");
+      const profile = await fs.readFile(profilePath, "utf-8");
+      expect(profile).toBe(`# OpenClaw Completion\n. '${cachePath.replace(/'/g, "''")}'\n`);
+    }, "openclaw-completion-state-bob's-");
   });
 
   it("rejects install when the completion cache is missing", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-home-"));
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-state-"));
-
-    try {
-      await withEnvAsync({ HOME: homeDir, OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await expect(installCompletion("zsh", true, "openclaw")).rejects.toThrow(
-          "Completion cache not found",
-        );
-      });
-    } finally {
-      await fs.rm(homeDir, { recursive: true, force: true });
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
+    await withBashCompletionHome(async () => {
+      await expect(installCompletion("zsh", true, "openclaw")).rejects.toThrow(
+        "Completion cache not found",
+      );
+    });
   });
 });
