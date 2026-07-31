@@ -130,6 +130,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   const messageTs = message.ts ?? message.event_ts;
   const incomingThreadTs = message.thread_ts;
   let didSetStatus = false;
+  let didAttemptTypingReaction = false;
   const statusReactionsEnabled =
     prepared.ctxPayload.InboundEventKind !== "room_event" &&
     Boolean(prepared.ackReactionPromise) &&
@@ -213,15 +214,26 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
           status: "is typing...",
           eventScope: prepared.eventScope,
         });
-        const reactionPromise =
-          typingReaction && message.ts
-            ? reactSlackMessage(message.channel, message.ts, typingReaction, {
+        const typingReactionTarget =
+          !didAttemptTypingReaction && typingReaction && message.ts
+            ? { messageTs: message.ts, emoji: typingReaction }
+            : undefined;
+        if (typingReactionTarget) {
+          didAttemptTypingReaction = true;
+        }
+        const reactionPromise = typingReactionTarget
+          ? reactSlackMessage(
+              message.channel,
+              typingReactionTarget.messageTs,
+              typingReactionTarget.emoji,
+              {
                 token: ctx.botToken,
                 client: slackClient,
-              }).catch((err: unknown) => {
-                logVerbose(`slack send: typing reaction failed: ${formatSlackError(err)}`);
-              })
-            : Promise.resolve();
+              },
+            ).catch((err: unknown) => {
+              logVerbose(`slack send: typing reaction failed: ${formatSlackError(err)}`);
+            })
+          : Promise.resolve();
         const [statusResult] = await Promise.allSettled([statusPromise, reactionPromise]);
         if (statusResult.status === "rejected") {
           throw statusResult.reason;

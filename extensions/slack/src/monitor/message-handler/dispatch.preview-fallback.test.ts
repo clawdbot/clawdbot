@@ -1818,6 +1818,24 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(resolveAgentTimeoutMsMock).toHaveBeenCalledWith({ cfg });
   });
 
+  it("refreshes only the expiring native status, not the persistent typing reaction", async () => {
+    const setSlackThreadStatus = vi.fn(async () => {});
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        setSlackThreadStatus,
+        typingReaction: "hourglass_flowing_sand",
+      }),
+    );
+
+    const typing = requireCapturedTyping();
+    await typing.start();
+    await typing.start();
+
+    expect(setSlackThreadStatus).toHaveBeenCalledTimes(2);
+    expect(reactSlackMessageMock).toHaveBeenCalledOnce();
+  });
+
   it("keeps the typing reaction fallback when native Slack status fails", async () => {
     const statusError = new Error("assistant.threads.setStatus failed: rate_limited");
     const setSlackThreadStatus = vi.fn().mockRejectedValue(statusError);
