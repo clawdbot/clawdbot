@@ -1109,6 +1109,53 @@ describe("web auto-reply connection", () => {
     }
   });
 
+  it("resolves root conversation debounce overrides for the default account", async () => {
+    const capture = createWebListenerFactoryCapture();
+
+    setLoadConfigMock({
+      channels: {
+        whatsapp: {
+          debounceMs: 3000,
+          direct: {
+            "+15551234567": {
+              debounceMs: 0,
+            },
+          },
+          groups: {
+            "456@g.us": {
+              debounceMs: 1200,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    await monitorWebChannel(false, capture.listenerFactory as never, false, async () => ({
+      text: "ok",
+    }));
+
+    const resolveDebounceMs = capture.getLastOptions()?.resolveDebounceMs;
+    expect(resolveDebounceMs).toBeTypeOf("function");
+    try {
+      expect(
+        resolveDebounceMs?.(
+          createTestWebInboundMessage({
+            admission: { conversation: { kind: "direct", id: "+15551234567" } },
+          }),
+        ),
+      ).toBe(0);
+      expect(
+        resolveDebounceMs?.(
+          createTestWebInboundMessage({
+            admission: { conversation: { kind: "group", id: "456@g.us" } },
+          }),
+        ),
+      ).toBe(1200);
+    } finally {
+      resetLoadConfigMock();
+    }
+  });
+
   it("normalizes legacy flat listener messages and rejects partial nested input", async () => {
     const capture = createWebListenerFactoryCapture();
     const { sendMedia, sendComposing, reply } = createWebInboundDeliverySpies();
