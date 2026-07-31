@@ -51,7 +51,9 @@ function expectAcceptedRunDetails(details: unknown): string {
   // Accepted details must include the run id used by later lifecycle events.
   const rec = details as { status?: string; runId?: unknown } | undefined;
   const runId = rec?.runId;
-  expect(rec?.status).toBe("accepted");
+  expect(rec?.status, JSON.stringify(details, null, 2) ?? "missing sessions_spawn details").toBe(
+    "accepted",
+  );
   expect(typeof runId).toBe("string");
   if (typeof runId !== "string") {
     throw new Error("missing accepted runId");
