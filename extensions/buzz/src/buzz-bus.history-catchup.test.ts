@@ -273,7 +273,7 @@ describe("Buzz reconnect history catch-up", () => {
     expect(relayMocks.historyRequests.length).toBeGreaterThan(1);
   });
 
-  it("reports a backlog that cannot be paged past one timestamp", async () => {
+  it("drains a backlog that exceeds one page at the same timestamp", async () => {
     seedOfflineBacklog(HISTORY_LIMIT + 1, () => BASE_TIMESTAMP);
     const historyErrors: string[] = [];
     const received: string[] = [];
@@ -291,11 +291,13 @@ describe("Buzz reconnect history catch-up", () => {
         historyErrors.push(error.message);
       },
     });
-    await waitForSettled(() => historyErrors.length > 0);
+    await waitForSettled(() => received.length >= HISTORY_LIMIT + 1);
     await bus.close();
 
-    expect(historyErrors[0]).toContain("messages at one timestamp");
-    expect(received.length).toBe(HISTORY_LIMIT);
+    expect(historyErrors).toEqual([]);
+    expect(new Set(received).size).toBe(HISTORY_LIMIT + 1);
+    expect(received.length).toBe(HISTORY_LIMIT + 1);
+    expect(relayMocks.historyRequests.some((filter) => filter.limit === undefined)).toBe(true);
   });
 
   it("bounds a catch-up page when the relay ignores its history limit", async () => {
@@ -317,13 +319,44 @@ describe("Buzz reconnect history catch-up", () => {
         historyErrors.push(error.message);
       },
     });
-    await waitForSettled(() => historyErrors.length > 0);
+    await waitForSettled(() => received.length >= 250);
     await bus.close();
 
-    expect(historyErrors[0]).toContain("more than the requested 100 history messages");
-    expect(new Set(received).size).toBe(199);
-    expect(received.length).toBe(199);
-    expect(relayMocks.historySubscriptionCloses).toBe(1);
+    expect(historyErrors).toEqual([]);
+    expect(new Set(received).size).toBe(250);
+    expect(received.length).toBe(250);
+    expect(relayMocks.historySubscriptionCloses).toBe(2);
+  });
+
+  it("bisects an overfull relay range until every bounded page fits", async () => {
+    const backlogSize = 1_300;
+    seedOfflineBacklog(backlogSize, (index) => BASE_TIMESTAMP + index);
+    relayMocks.overReturnHistoryPages = true;
+    const historyErrors: string[] = [];
+    const received: string[] = [];
+
+    const bus = await startBuzzBus({
+      accountId: ACCOUNT_ID,
+      relayUrl: "wss://buzz.example.com",
+      privateKey: PRIVATE_KEY,
+      channelIds: [CHANNEL_ID],
+      since: BASE_TIMESTAMP - 60,
+      onMessage: async (message) => {
+        received.push(message.text);
+      },
+      onHistoryError: (error) => {
+        historyErrors.push(error.message);
+      },
+    });
+    await waitForSettled(() => received.length >= backlogSize);
+    await bus.close();
+
+    expect(historyErrors).toEqual([]);
+    expect(new Set(received).size).toBe(backlogSize);
+    expect(received.length).toBe(backlogSize);
+    expect(
+      relayMocks.historyRequests.filter((filter) => filter.limit === undefined).length,
+    ).toBeGreaterThan(2);
   });
 
   it("fails the bus when a catch-up subscription never reaches EOSE", async () => {

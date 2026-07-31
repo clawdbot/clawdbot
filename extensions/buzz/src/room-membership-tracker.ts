@@ -2,7 +2,10 @@ import type { Event, Relay } from "nostr-tools";
 import { catchUpBuzzRoomHistory } from "./history-catchup.js";
 import { BUZZ_INBOUND_MESSAGE_KINDS, isBuzzInboundMessageKind } from "./message-event.js";
 import { openBuzzRelaySubscription } from "./relay-subscription.js";
-import type { BuzzReplayDispatchReservation } from "./replay-dispatch.js";
+import {
+  BUZZ_REPLAY_DISPATCH_MAX_PENDING,
+  type BuzzReplayDispatchReservation,
+} from "./replay-dispatch.js";
 import { queryBuzzRoomMemberships } from "./room-membership-query.js";
 import {
   BUZZ_ROOM_SYSTEM_KIND,
@@ -376,16 +379,10 @@ export async function createBuzzRoomMembershipTracker(params: {
             onEvent: handleRoomEvent,
             signal: params.signal,
           });
-          if (outcome === "stalled") {
+          if (outcome === "timestamp-over-limit") {
             params.onHistoryError?.(
               new Error(
-                `Buzz room ${channelId} kept more than ${params.messageLimit} messages at one timestamp; older history was not recovered`,
-              ),
-            );
-          } else if (outcome === "over-limit") {
-            params.onHistoryError?.(
-              new Error(
-                `Buzz room ${channelId} returned more than the requested ${params.messageLimit} history messages; older history was not recovered`,
+                `Buzz room ${channelId} kept more than ${BUZZ_REPLAY_DISPATCH_MAX_PENDING} additional messages at one timestamp; older history was not recovered`,
               ),
             );
           }
