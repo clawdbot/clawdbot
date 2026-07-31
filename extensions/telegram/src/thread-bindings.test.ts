@@ -408,7 +408,10 @@ describe("telegram thread bindings", () => {
     expect(entries).not.toHaveBeenCalled();
 
     register.mockClear();
-    await getSessionBindingService().unbind({ bindingId: first.bindingId });
+    await getSessionBindingService().unbind({
+      bindingId: first.bindingId,
+      reason: "test-row-delete",
+    });
     expect(remove).toHaveBeenCalledTimes(1);
     expect(register).not.toHaveBeenCalled();
     expect(entries).not.toHaveBeenCalled();
