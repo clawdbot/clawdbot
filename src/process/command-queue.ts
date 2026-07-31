@@ -328,6 +328,22 @@ function enqueueLaneEntry(state: LaneState, entry: QueueEntry): void {
   state.queue.splice(insertAt, 0, entry);
 }
 
+function shouldReserveLaneSlotFromEntry(state: LaneState, entry: QueueEntry): boolean {
+  return (
+    entry.priority < 0 &&
+    state.maxConcurrent > 1 &&
+    state.activeTaskIds.size >= state.maxConcurrent - 1
+  );
+}
+
+function shiftNextRunnableLaneEntry(state: LaneState): QueueEntry | undefined {
+  const index = state.queue.findIndex((entry) => !shouldReserveLaneSlotFromEntry(state, entry));
+  if (index < 0) {
+    return undefined;
+  }
+  return state.queue.splice(index, 1)[0];
+}
+
 async function runQueueEntryTask(
   lane: string,
   entry: QueueEntry,
@@ -472,7 +488,10 @@ function drainLane(lane: string) {
   const pump = () => {
     try {
       while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
-        const entry = state.queue.shift() as QueueEntry;
+        const entry = shiftNextRunnableLaneEntry(state);
+        if (!entry) {
+          break;
+        }
         const waitedMs = Date.now() - entry.enqueuedAt;
         if (waitedMs >= entry.warnAfterMs) {
           try {

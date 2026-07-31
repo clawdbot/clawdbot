@@ -278,6 +278,8 @@ export function startAgentRunExecution(params: {
           params.client.internal.runtimePluginToolGrant?.pluginId
           ? params.client.internal.runtimePluginToolGrant
           : undefined;
+      const internalRunTrigger =
+        params.client?.internal?.agentRunTracking === "plugin_subagent" ? "overflow" : undefined;
       const trustedInternalHandoff =
         params.client?.internal?.delegatedToolPolicyHandoff === true &&
         params.inputProvenance?.kind === "inter_session" &&
@@ -341,6 +343,7 @@ export function startAgentRunExecution(params: {
           messageChannel: params.delivery.originMessageChannel,
           runId: params.runId,
           lane: params.request.lane,
+          trigger: internalRunTrigger,
           modelRun: params.request.modelRun === true,
           promptMode: params.request.promptMode,
           extraSystemPrompt: params.request.extraSystemPrompt,

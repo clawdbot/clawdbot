@@ -2841,6 +2841,52 @@ describe("WorkboardStore", () => {
     expect(stopped.metadata?.failureCount).toBeUndefined();
   });
 
+  it("preserves a forced status-hold override through dispatch and completion", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Blocked parent", status: "running" });
+    const child = await store.create({ title: "Forced child", parents: [parent.id] });
+
+    await expect(store.claim(child.id, { ownerId: "worker" })).rejects.toThrow(/dependencies/);
+    const promoted = await store.promote(child.id, {
+      force: true,
+      reason: "operator recovery",
+    });
+    expect(promoted).toMatchObject({
+      status: "ready",
+      metadata: {
+        statusHoldOverride: { reason: "operator recovery" },
+      },
+    });
+
+    await store.dispatch();
+    await expect(store.get(child.id)).resolves.toMatchObject({ status: "ready" });
+
+    const claimed = await store.claim(child.id, { ownerId: "worker", token: "test-token" });
+    expect(claimed.card.status).toBe("running");
+    const completed = await store.complete(child.id, {
+      ownerId: "worker",
+      token: "test-token",
+      summary: "Recovered.",
+    });
+    expect(completed.status).toBe("done");
+    expect(completed.metadata?.statusHoldOverride).toBeUndefined();
+  });
+
+  it("does not accept status-hold overrides from ordinary card metadata", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const injected = { createdAt: Date.now(), reason: "not operator-approved" };
+    const card = await store.create({
+      title: "No injected override",
+      metadata: { statusHoldOverride: injected },
+    });
+    expect(card.metadata?.statusHoldOverride).toBeUndefined();
+
+    const updated = await store.update(card.id, {
+      metadata: { ...card.metadata, statusHoldOverride: injected },
+    });
+    expect(updated.metadata?.statusHoldOverride).toBeUndefined();
+  });
+
   it("includes parent results and recent assignee work in worker context", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const parent = await store.create({

@@ -464,6 +464,7 @@ export class WorkboardCoreStore {
     patch: WorkboardCardPatch,
     options: {
       allowMetadataDependencyLinks?: boolean;
+      allowStatusHoldOverride?: boolean;
       enforceStatusHolds?: boolean;
       preserveProofId?: string;
     } = {},
@@ -524,6 +525,7 @@ export class WorkboardCoreStore {
         : normalizeExecution(effectivePatch.execution);
     let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
+      allowStatusHoldOverride: options.allowStatusHoldOverride,
       preserveProofId: options.preserveProofId,
     });
     if (status !== existing.status && !hasFreshLifecycleStatusSource) {
@@ -610,6 +612,14 @@ export class WorkboardCoreStore {
     if (options.enforceStatusHolds && effectivePatch.status !== undefined) {
       await this.assertActiveStatusAllowed(existing, next, now);
     }
+    if (
+      next.metadata?.statusHoldOverride &&
+      status !== "ready" &&
+      status !== "running" &&
+      status !== "review"
+    ) {
+      delete next.metadata.statusHoldOverride;
+    }
     if (status !== "done") {
       delete next.completedAt;
     }
@@ -638,6 +648,11 @@ export class WorkboardCoreStore {
       next.status !== "review" &&
       next.status !== "done"
     ) {
+      return;
+    }
+    // A force promotion is an explicit operator recovery decision. Preserve it through the
+    // worker lifecycle so the next dispatch cannot silently reapply the bypassed hold.
+    if (next.metadata?.statusHoldOverride) {
       return;
     }
     const parents = cardParentIds(next);
@@ -805,6 +820,9 @@ export class WorkboardCoreStore {
 
   private async dependencyTargetStatus(card: WorkboardCard, now: number): Promise<WorkboardStatus> {
     const scheduledAt = card.metadata?.automation?.scheduledAt;
+    if (card.metadata?.statusHoldOverride) {
+      return card.status;
+    }
     const parents = cardParentIds(card);
     if (card.status === "scheduled" && !scheduledAt) {
       return "scheduled";

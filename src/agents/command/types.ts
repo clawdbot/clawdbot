@@ -18,6 +18,7 @@ import type {
 } from "../../sessions/user-turn-transcript.types.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
+import type { EmbeddedRunTrigger } from "../embedded-agent-runner/run/params.js";
 import type { CliSessionBindingFacts } from "../cli-runner/types.js";
 import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery-store.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
@@ -132,6 +133,8 @@ export type AgentCommandOpts = {
   bestEffortDeliver?: boolean;
   abortSignal?: AbortSignal;
   lane?: string;
+  /** Internal priority/admission trigger. Public gateway requests cannot set this directly. */
+  trigger?: EmbeddedRunTrigger;
   runId?: string;
   /** Immutable gateway lifecycle ownership captured when this run was admitted. */
   lifecycleGeneration?: string;

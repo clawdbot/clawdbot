@@ -2325,6 +2325,53 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it("forwards internal background triggers to CLI runs", async () => {
+    const sessionKey = "agent:main:direct:claude-background-trigger";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-background-trigger",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await writeSessionStoreSeed(sessionStore);
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("background aware"));
+
+    await runAgentAttempt({
+      providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
+      modelOverride: "opus",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "route this in the background",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-cli-background-trigger",
+      opts: {
+        trigger: "overflow",
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "telegram",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "claude-cli",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expectMockArgFields(runCliAgentMock, {
+      trigger: "overflow",
+    });
+  });
+
   it("forwards message-tool-only policy and requires explicit subagent targets", async () => {
     const sessionKey = "agent:main:subagent:claude-message-policy";
     const sessionEntry: SessionEntry = {
@@ -2919,6 +2966,15 @@ describe("CLI attempt execution", () => {
     });
 
     expect(embeddedArg.allowGatewaySubagentBinding).toBe(true);
+  });
+
+  it("forwards internal background triggers to embedded runs", async () => {
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      opts: { trigger: "overflow" },
+      runId: "embedded-background-trigger",
+    });
+
+    expect(embeddedArg.trigger).toBe("overflow");
   });
 
   it("suppresses live stream output for hidden internal runs", async () => {

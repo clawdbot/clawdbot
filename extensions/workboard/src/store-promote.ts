@@ -56,11 +56,12 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
         throw new Error(`card not found: ${id}`);
       }
       assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
+      const now = Date.now();
       const reason = normalizeBoundedString(input.reason, undefined, 1000, "promote reason");
       const comments = reason
         ? [
             ...(existing.metadata?.comments ?? []),
-            { id: randomUUID(), body: reason, createdAt: Date.now() },
+            { id: randomUUID(), body: reason, createdAt: now },
           ].slice(-MAX_CARD_COMMENTS)
         : existing.metadata?.comments;
       return await this.updateCard(
@@ -71,9 +72,15 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
             ...clearDiagnostics(existing.metadata, ["stranded_ready", "blocked_too_long"]),
             comments,
             stale: null,
+            ...(input.force === true
+              ? { statusHoldOverride: { createdAt: now, ...(reason ? { reason } : {}) } }
+              : {}),
           },
         },
-        { enforceStatusHolds: input.force !== true },
+        {
+          allowStatusHoldOverride: input.force === true,
+          enforceStatusHolds: input.force !== true,
+        },
       );
     });
   }

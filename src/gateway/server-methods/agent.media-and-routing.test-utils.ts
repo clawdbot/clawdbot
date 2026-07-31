@@ -412,11 +412,13 @@ describe("gateway agent handler", () => {
 
     const call = await waitForAgentCommandCall<{
       runtimePluginToolGrant?: { pluginId: string; toolNames: readonly string[] };
+      trigger?: string;
     }>();
     expect(call.runtimePluginToolGrant).toEqual({
       pluginId: "workboard",
       toolNames: ["workboard_heartbeat", "workboard_complete"],
     });
+    expect(call.trigger).toBe("overflow");
   });
 
   it("forwards trusted delegated policy handoffs only from internal client metadata", async () => {

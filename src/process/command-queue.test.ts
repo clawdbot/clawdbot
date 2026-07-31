@@ -193,6 +193,64 @@ describe("command queue", () => {
     expect(calls).toEqual(["foreground", "normal", "background"]);
   });
 
+  it("reserves the last multi-concurrency slot from background work", async () => {
+    setCommandLaneConcurrency(CommandLane.Main, 2);
+    const calls: string[] = [];
+    const backgroundOne = createDeferred();
+    const backgroundTwo = createDeferred();
+    const foregroundRelease = createDeferred();
+
+    const firstBackground = enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        calls.push("background-1");
+        await backgroundOne.promise;
+        return "background-1";
+      },
+      { priority: "background" },
+    );
+    const secondBackground = enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        calls.push("background-2");
+        await backgroundTwo.promise;
+        return "background-2";
+      },
+      { priority: "background" },
+    );
+
+    await vi.waitFor(() => {
+      expect(calls).toEqual(["background-1"]);
+      expectLaneSnapshotFields(CommandLane.Main, { activeCount: 1, queuedCount: 1 });
+    });
+
+    const foreground = enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        calls.push("foreground");
+        await foregroundRelease.promise;
+        return "foreground";
+      },
+      { priority: "foreground" },
+    );
+
+    await vi.waitFor(() => {
+      expect(calls).toEqual(["background-1", "foreground"]);
+      expectLaneSnapshotFields(CommandLane.Main, { activeCount: 2, queuedCount: 1 });
+    });
+
+    foregroundRelease.resolve();
+    backgroundOne.resolve();
+    await expect(foreground).resolves.toBe("foreground");
+    await expect(firstBackground).resolves.toBe("background-1");
+
+    await vi.waitFor(() => {
+      expect(calls).toEqual(["background-1", "foreground", "background-2"]);
+    });
+    backgroundTwo.resolve();
+    await expect(secondBackground).resolves.toBe("background-2");
+  });
+
   it("preserves FIFO order within each priority", async () => {
     const { task: blocker, release } = enqueueBlockedMainTask(async () => "blocker");
     const calls: string[] = [];
