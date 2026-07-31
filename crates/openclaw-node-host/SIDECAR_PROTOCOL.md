@@ -183,6 +183,8 @@ adapter decision/result, the bridge runs a borrowed non-allocating serialization
 preflight for the complete admission, invocation, decision, or result message
 against the live channel's exact payload budget
 (frame ceiling minus fixed header, session identifier, and authentication tag).
+Adapter infrastructure errors are first normalized into the same denial or
+failure wire shape, so they cannot bypass the complete-message preflight.
 A value that fits its logical JSON limit but not its full envelope receives the
 stable `SIDECAR_MESSAGE_TOO_LARGE` result without attempting transport.
 

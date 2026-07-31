@@ -912,7 +912,16 @@ async fn evaluate_sidecar_admission<A: SidecarCapabilityAdapter + ?Sized>(
             cancellation.cancel();
             return Err(channel_retired());
         },
-        result = &mut adapter_future => result.map_err(|error| adapter_failure(&error))?,
+        result = &mut adapter_future => match result {
+            Ok(decision) => decision,
+            Err(error) => {
+                let error = adapter_failure(&error);
+                SidecarAdmissionDecision::Deny {
+                    code: error.code,
+                    message: error.message,
+                }
+            }
+        },
     };
     if !runtime_message_within_limit(
         &SidecarRuntimeMessageRef::AdmissionDecision {
@@ -963,7 +972,16 @@ async fn evaluate_sidecar_invocation<A: SidecarCapabilityAdapter + ?Sized>(
             cancellation.cancel();
             return Err(channel_retired());
         },
-        result = &mut adapter_future => result.map_err(|error| adapter_failure(&error))?,
+        result = &mut adapter_future => match result {
+            Ok(result) => result,
+            Err(error) => {
+                let error = adapter_failure(&error);
+                SidecarInvocationResult::Failure {
+                    code: error.code,
+                    message: error.message,
+                }
+            }
+        },
     };
     if !invocation_result_is_portable(&result) {
         return Err(nonportable_json());
@@ -1510,6 +1528,77 @@ mod tests {
                     payload: json!({"data": "x".repeat(3_950)}),
                 })
             })
+        }
+    }
+
+    struct OversizedAdapterError {
+        fail_admission: bool,
+    }
+
+    impl SidecarCapabilityAdapter for OversizedAdapterError {
+        fn admit(
+            &self,
+            _invocation: SidecarInvocation,
+            _cancellation: CancellationToken,
+        ) -> SidecarAdapterFuture<Result<SidecarAdmissionDecision, SidecarAdapterError>> {
+            let fail_admission = self.fail_admission;
+            Box::pin(async move {
+                if fail_admission {
+                    Err(SidecarAdapterError::new(
+                        "C".repeat(2_000),
+                        "M".repeat(2_000),
+                    ))
+                } else {
+                    Ok(SidecarAdmissionDecision::Allow)
+                }
+            })
+        }
+
+        fn invoke(
+            &self,
+            _invocation: SidecarInvocation,
+            _cancellation: CancellationToken,
+        ) -> SidecarAdapterFuture<Result<SidecarInvocationResult, SidecarAdapterError>> {
+            Box::pin(async {
+                Err(SidecarAdapterError::new(
+                    "C".repeat(2_000),
+                    "M".repeat(2_000),
+                ))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn adapter_errors_obey_complete_sidecar_message_budget() {
+        let handler_payload = json!({
+            "code": "C".repeat(2_000),
+            "message": "M".repeat(2_000),
+        });
+        assert!(serde_json::to_vec(&handler_payload).unwrap().len() <= 4_096);
+
+        for fail_admission in [true, false] {
+            let mut bounded = configuration();
+            bounded.max_output_bytes = 4_096;
+            let (mut exchange, mut channel, _configuration) = validated_runtime_exchange(&bounded);
+            let adapter = Arc::new(OversizedAdapterError { fail_admission });
+            let bridge =
+                SidecarRuntimeBridge::activate(&mut exchange, &mut channel, &adapter).unwrap();
+
+            assert_eq!(
+                bridge
+                    .runtime()
+                    .evaluate(NodeInvocation::new(
+                        "invoke-adapter-error",
+                        "node-1",
+                        "product.status",
+                        Value::Null,
+                    ))
+                    .await,
+                InvocationResult::failure(
+                    "SIDECAR_MESSAGE_TOO_LARGE",
+                    "complete sidecar message exceeds the authenticated payload limit"
+                )
+            );
         }
     }
 
