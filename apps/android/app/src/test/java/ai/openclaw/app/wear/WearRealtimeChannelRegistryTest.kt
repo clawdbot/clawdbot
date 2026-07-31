@@ -727,9 +727,16 @@ class WearRealtimeChannelRegistryTest {
         releaseReservedClose.complete(Unit)
 
         val owner = checkNotNull(withTimeout(1_000L) { replacementClaim.await() }).owner
-        assertEquals(4L, owner.channelGeneration)
-        assertEquals(1, transport.closeCount(reserved))
-        assertEquals(1, transport.closeCount(firstReconnect))
+        withTimeout(1_000L) {
+          while (
+            transport.closeCount(reserved) != 1 ||
+            transport.closeCount(firstReconnect) != 1 ||
+            !transport.hasStartedReading(latestReconnect)
+          ) {
+            yield()
+          }
+        }
+        assertEquals("attempt-b", owner.attemptId)
         assertEquals(0, transport.closeCount(latestReconnect))
         assertTrue(registry.isCurrent(owner))
         registry.close(owner)
