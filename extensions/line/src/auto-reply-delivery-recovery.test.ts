@@ -1,5 +1,6 @@
 // LINE auto-reply tests cover HTTP rejection recovery and replay safety.
 import { HTTPFetchError, type messagingApi } from "@line/bot-sdk";
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { describe, expect, it, vi } from "vitest";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import {
@@ -11,6 +12,65 @@ import {
 } from "./auto-reply-delivery.test-helpers.js";
 
 describe("deliverLineAutoReply HTTP recovery", () => {
+  it("does not replay an accepted reply after local bookkeeping fails", async () => {
+    const acceptedError = createChannelPartialDeliveryError(
+      new Error("activity store unavailable"),
+      { messageIds: ["line-reply-final"], visibleReplySent: true },
+    );
+    const replyMessageLine = vi.fn(async () => {
+      throw acceptedError;
+    });
+    const { deps, pushMessagesLine } = createDeps({
+      replyMessageLine: replyMessageLine as LineAutoReplyDeps["replyMessageLine"],
+    });
+
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: "already delivered" },
+      lineData: {},
+      deps,
+    });
+
+    expect(result).toMatchObject({
+      status: "partial",
+      replyTokenUsed: true,
+      visibleReplySent: true,
+      error: acceptedError,
+    });
+    expect(replyMessageLine).toHaveBeenCalledOnce();
+    expect(pushMessagesLine).not.toHaveBeenCalled();
+  });
+
+  it("preserves a provider-accepted push when local bookkeeping fails", async () => {
+    const acceptedError = createChannelPartialDeliveryError(
+      new Error("activity store unavailable"),
+      { messageIds: ["line-push-final"], visibleReplySent: true },
+    );
+    const pushMessagesLine = vi.fn(async () => {
+      throw acceptedError;
+    });
+    const { deps, replyMessageLine } = createDeps({
+      pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
+    });
+
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      replyToken: undefined,
+      payload: { text: "already delivered" },
+      lineData: {},
+      deps,
+    });
+
+    expect(result).toMatchObject({
+      status: "partial",
+      replyTokenUsed: false,
+      visibleReplySent: true,
+      error: acceptedError,
+    });
+    expect(pushMessagesLine).toHaveBeenCalledOnce();
+    expect(replyMessageLine).not.toHaveBeenCalled();
+  });
+
   it("retries push-only quick-reply text after a mixed batch is rejected", async () => {
     const lineData = {
       flexMessage: { altText: "Card", contents: { type: "bubble" } },

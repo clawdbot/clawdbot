@@ -1,4 +1,5 @@
 // Mattermost plugin module implements client behavior.
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -287,11 +288,19 @@ export function createMattermostClient(params: {
       return undefined as T;
     }
 
-    const contentType = res.headers.get("content-type") ?? "";
-    if (contentType.includes("application/json")) {
-      return await readProviderJsonResponse<T>(res, `Mattermost API ${path}`);
+    try {
+      const contentType = res.headers.get("content-type") ?? "";
+      if (contentType.includes("application/json")) {
+        return await readProviderJsonResponse<T>(res, `Mattermost API ${path}`);
+      }
+      return (await readMattermostSuccessText(res, path)) as T;
+    } catch (error) {
+      if (path === "/posts" && init?.method?.toUpperCase() === "POST") {
+        // POST already succeeded; a lost/unreadable receipt must never schedule another visible post.
+        throw createChannelPartialDeliveryError(error, { messageIds: [], visibleReplySent: true });
+      }
+      throw error;
     }
-    return (await readMattermostSuccessText(res, path)) as T;
   };
 
   return { baseUrl, apiBaseUrl, token, request, fetchImpl };
@@ -709,10 +718,19 @@ export async function createMattermostPost(
   if (params.props) {
     payload.props = params.props;
   }
-  return await client.request<MattermostPost>("/posts", {
+  const post = await client.request<MattermostPost>("/posts", {
     method: "POST",
     body: JSON.stringify(payload),
   });
+  const postId = post && typeof post === "object" ? normalizeOptionalString(post.id) : undefined;
+  if (!postId) {
+    // Successful POST may already be visible; retrying because its receipt is malformed duplicates it.
+    throw createChannelPartialDeliveryError(
+      new Error("Mattermost post creation response did not include a post id"),
+      { messageIds: [], visibleReplySent: true },
+    );
+  }
+  return postId === post.id ? post : { ...post, id: postId };
 }
 
 type MattermostTeam = {
