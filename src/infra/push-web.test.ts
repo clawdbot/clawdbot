@@ -281,7 +281,7 @@ describe("subscription CRUD", () => {
 describe("sending", () => {
   const keys = { p256dh: "p256dh-key", auth: "auth-key" };
 
-  it("configures VAPID details once before broadcasting", async () => {
+  it("passes VAPID details per send without mutating shared global state", async () => {
     await registerWebPushSubscription({
       endpoint: "https://push.example.com/a",
       keys,
@@ -297,8 +297,49 @@ describe("sending", () => {
 
     expect(results).toHaveLength(2);
     expect(results.every((result) => result.ok)).toBe(true);
-    expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledTimes(1);
+    // The broadcaster must not touch setVapidDetails: each send carries its own
+    // vapidDetails option so concurrent broadcasts cannot clobber global state.
+    expect(vi.mocked(webPush.setVapidDetails)).not.toHaveBeenCalled();
     expect(vi.mocked(webPush.sendNotification)).toHaveBeenCalledTimes(2);
+    for (const call of vi.mocked(webPush.sendNotification).mock.calls) {
+      const options = call[2] as { vapidDetails?: { subject: string } } | undefined;
+      expect(options?.vapidDetails?.subject).toBe("https://openclaw.ai");
+    }
+  });
+
+  it("bounds concurrent sends while delivering to every subscription", async () => {
+    // Register more subscriptions than the WEB_PUSH_SEND_CONCURRENCY cap so the
+    // worker pool is forced to schedule work instead of firing everything at once.
+    for (let i = 0; i < 20; i += 1) {
+      await registerWebPushSubscription({
+        endpoint: `https://push.example.com/c-${i}`,
+        keys,
+        baseDir: tmpDir,
+      });
+    }
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    vi.mocked(webPush.sendNotification).mockImplementation(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      try {
+        await new Promise((resolve) => {
+          setImmediate(resolve);
+        });
+        return { statusCode: 201 } as never;
+      } finally {
+        inFlight -= 1;
+      }
+    });
+
+    const results = await broadcastWebPush({ title: "Bounded" }, tmpDir);
+
+    expect(results).toHaveLength(20);
+    expect(results.every((result) => result.ok)).toBe(true);
+    // Concurrency is capped at WEB_PUSH_SEND_CONCURRENCY (12), never unbounded.
+    expect(maxInFlight).toBeLessThanOrEqual(12);
+    expect(maxInFlight).toBeGreaterThan(1);
   });
 
   it("does not delete a subscription re-registered during an expired send", async () => {

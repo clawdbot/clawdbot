@@ -5,6 +5,7 @@ import path from "node:path";
 import { expectDefined, normalizeOptionalString } from "@openclaw/normalization-core";
 import { resolveStateDir } from "../config/paths.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import {
   createWebPushVapidKeyPair,
   deleteWebPushSubscriptionByEndpoint,
@@ -33,6 +34,10 @@ type WebPushSendResult = {
 // --- Constants ---
 
 const LEGACY_WEB_PUSH_PATHS = ["push/web-push-subscriptions.json", "push/vapid-keys.json"] as const;
+
+// Bound the number of concurrent web push sends so a large subscriber list
+// cannot fan out into an unbounded thundering herd of HTTP requests.
+const WEB_PUSH_SEND_CONCURRENCY = 12;
 
 type WebPushRuntime = typeof import("web-push");
 type WebPushRuntimeModule = WebPushRuntime & { default?: WebPushRuntime };
@@ -174,14 +179,11 @@ type WebPushPayload = {
   url?: string;
 };
 
-function applyVapidDetails(webPush: WebPushRuntime, keys: VapidKeyPair): void {
-  webPush.setVapidDetails(keys.subject, keys.publicKey, keys.privateKey);
-}
-
 async function sendPreparedWebPushNotification(
   webPush: WebPushRuntime,
   subscription: WebPushSubscription,
   payload: WebPushPayload,
+  vapidKeys: VapidKeyPair,
 ): Promise<WebPushSendResult> {
   const pushSubscription = {
     endpoint: subscription.endpoint,
@@ -192,7 +194,16 @@ async function sendPreparedWebPushNotification(
   };
 
   try {
-    const result = await webPush.sendNotification(pushSubscription, JSON.stringify(payload));
+    // Pass VAPID details per send instead of mutating shared global state via
+    // setVapidDetails. Concurrent broadcasts then cannot clobber each other's
+    // signing identity, and a single send never races another send's setup.
+    const result = await webPush.sendNotification(pushSubscription, JSON.stringify(payload), {
+      vapidDetails: {
+        subject: vapidKeys.subject,
+        publicKey: vapidKeys.publicKey,
+        privateKey: vapidKeys.privateKey,
+      },
+    });
     return {
       ok: true,
       subscriptionId: subscription.subscriptionId,
@@ -229,23 +240,16 @@ export async function broadcastWebPush(
   const vapidKeys = await resolveVapidKeys(baseDir);
   const webPush = await loadWebPushRuntime();
 
-  // Set VAPID details once before fanning out concurrent sends.
-  applyVapidDetails(webPush, vapidKeys);
-
-  const results = await Promise.allSettled(
-    subscriptions.map((sub) => sendPreparedWebPushNotification(webPush, sub, payload)),
-  );
-
-  const mapped = results.map((r, i) =>
-    r.status === "fulfilled"
-      ? r.value
-      : {
-          ok: false,
-          subscriptionId: expectDefined(subscriptions[i], "subscriptions entry at i")
-            .subscriptionId,
-          error: r.reason instanceof Error ? r.reason.message : "unknown error",
-        },
-  );
+  // Fan out through a bounded worker pool so a large subscriber list does not
+  // open an unbounded number of concurrent push endpoints at once. Each send
+  // carries its own VAPID details, so workers never mutate shared state.
+  const { results: mapped } = await runTasksWithConcurrency({
+    tasks: subscriptions.map(
+      (subscription) => () =>
+        sendPreparedWebPushNotification(webPush, subscription, payload, vapidKeys),
+    ),
+    limit: WEB_PUSH_SEND_CONCURRENCY,
+  });
 
   // Clean up expired subscriptions (HTTP 410 Gone or 404 Not Found) per Web Push spec.
   const expiredSubscriptions = mapped
