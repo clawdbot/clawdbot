@@ -885,7 +885,7 @@ function resolveSafeControlUiFile(
   rootReal: string,
   filePath: string,
   rejectHardlinks: boolean,
-): { path: string; fd: number } | null {
+): { path: string; fd: number; size: number } | null {
   const opened = openRootFileSync({
     absolutePath: filePath,
     rootPath: rootReal,
@@ -902,7 +902,7 @@ function resolveSafeControlUiFile(
       fallback: () => null,
     });
   }
-  return { path: opened.path, fd: opened.fd };
+  return { path: opened.path, fd: opened.fd, size: opened.stat.size };
 }
 
 function isSafeRelativePath(relPath: string) {
@@ -1214,6 +1214,7 @@ export async function handleControlUiHttpRequest(
         respondHeadForControlUiFile(res, representation.contentPath, {
           immutable: immutableAsset,
           encoding: representation.encoding,
+          contentLength: representation.bodyFile.size,
         });
         return true;
       } finally {

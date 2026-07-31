@@ -2567,7 +2567,7 @@ describe("handleControlUiHttpRequest", () => {
               req: {
                 headers: { "accept-encoding": "br, identity;q=0" },
               } as IncomingMessage,
-              sourceFile: { path: filePath, fd },
+              sourceFile: { path: filePath, fd, size: fsSync.fstatSync(fd).size },
               precompressed: true,
               openPrecompressedFile: () => {
                 throw openError;
@@ -2749,6 +2749,38 @@ describe("handleControlUiHttpRequest", () => {
       },
     });
   });
+
+  it.each(["identity", "gzip", "br"] as const)(
+    "preserves the selected %s static-asset Content-Length for HEAD",
+    async (encoding) => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const source = "console.log('static asset metadata');\n".repeat(12);
+          const { filePath } = await writeAssetFile(tmp, "app-HeAd1234.js", source);
+          await fs.writeFile(`${filePath}.gz`, gzipSync(source));
+          await fs.writeFile(`${filePath}.br`, brotliCompressSync(source));
+          const request = {
+            url: "/assets/app-HeAd1234.js",
+            rootPath: tmp,
+            rootKind: "bundled" as const,
+            headers: { "accept-encoding": encoding },
+          };
+          const get = await runControlUiRequest({ ...request, method: "GET" });
+          const head = await runControlUiRequest({ ...request, method: "HEAD" });
+          const body = get.end.mock.calls[0]?.[0];
+
+          expect(Buffer.isBuffer(body)).toBe(true);
+          expect(head.setHeader).toHaveBeenCalledWith("Content-Length", String(body.byteLength));
+          expect(firstEndCallLength(head.end)).toBe(0);
+          if (encoding === "identity") {
+            expect(head.setHeader).not.toHaveBeenCalledWith("Content-Encoding", expect.anything());
+          } else {
+            expect(head.setHeader).toHaveBeenCalledWith("Content-Encoding", encoding);
+          }
+        },
+      });
+    },
+  );
 
   it.each([
     {
