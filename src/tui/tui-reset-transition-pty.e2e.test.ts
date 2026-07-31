@@ -1,7 +1,7 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   objectFieldEquals,
   readFixtureLog,
@@ -14,12 +14,13 @@ const STARTUP_TIMEOUT_MS = 20_000;
 const OUTPUT_TIMEOUT_MS = 2_000;
 const EXIT_TIMEOUT_MS = 8_000;
 const TEST_TIMEOUT_MS = 25_000;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("TUI reset transition PTY", () => {
   it(
     "preserves overlapping input while /reset owns the terminal session transition",
     async () => {
-      const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-reset-pty-"));
+      const tempDir = tempDirs.make("openclaw-tui-reset-pty-");
       const scriptPath = await writeTuiPtyFixtureScript(tempDir);
       const logPath = path.join(tempDir, "fixture-log.jsonl");
       const resetReleasePath = path.join(tempDir, "release-reset-session");
@@ -29,7 +30,6 @@ describe("TUI reset transition PTY", () => {
           OPENCLAW_THEME: "dark",
           OPENCLAW_TUI_PTY_LOG_PATH: logPath,
           OPENCLAW_TUI_PTY_RESET_RELEASE_PATH: resetReleasePath,
-          OPENCLAW_TUI_PTY_SUBMIT_BURST_ENABLED: "1",
           OPENCLAW_TUI_PTY_SUBMIT_BURST_WINDOW_MS: "1000",
           OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE: "1",
           OPENCLAW_TUI_PTY_TYPE_DELAY_MS: "2",
@@ -91,7 +91,6 @@ describe("TUI reset transition PTY", () => {
       } finally {
         await run.forceKill();
         await run.dispose();
-        await rm(tempDir, { recursive: true, force: true });
       }
     },
     TEST_TIMEOUT_MS,

@@ -101,7 +101,6 @@ const SESSION_SUBSCRIPTION_RETRY_DELAY_MS = 25;
 
 type RunTuiOptions = TuiOptions & {
   backend?: TuiBackend;
-  submitBurstEnabled?: boolean;
   submitBurstWindowMs?: number;
   ctrlCExitWindowMs?: number;
   onSubmitBurstCaptured?: (value: string) => void;
@@ -1622,7 +1621,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   editor.onSubmit = createSubmitBurstCoalescer({
     submit: submitHandler,
     captureSnapshot: captureMessageAdmission,
-    enabled: opts.submitBurstEnabled ?? shouldEnableWindowsGitBashPasteFallback(),
+    enabled: opts.submitBurstWindowMs !== undefined || shouldEnableWindowsGitBashPasteFallback(),
     burstWindowMs: opts.submitBurstWindowMs,
     onCapture: opts.onSubmitBurstCaptured,
   });
