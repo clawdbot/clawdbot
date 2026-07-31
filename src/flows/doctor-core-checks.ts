@@ -523,6 +523,10 @@ function createRuntimeToolSchemaCheck(deps: CoreHealthCheckDeps): HealthCheck {
     kind: "core",
     description: "Active agent tool schemas project into model/runtime-compatible tool inputs.",
     source: "doctor",
+    // detect() spins up a per-workspace bundled-MCP tool runtime (createBundleMcpToolRuntime)
+    // that can hang indefinitely on an MCP server that never initializes. Default-off so a
+    // plain `openclaw doctor --lint` cannot stall on it; opt in via --only / --include-all.
+    defaultEnabled: false,
     async detect(ctx) {
       return deps.collectRuntimeToolSchemaFindings(ctx);
     },

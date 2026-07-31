@@ -135,6 +135,21 @@ describe("runDoctorLintChecks", () => {
       },
     ]);
   });
+
+  it("times out a check whose detect never resolves", async () => {
+    const result = await runDoctorLintChecks(ctx, {
+      checks: [check("slow", () => new Promise<readonly never[]>(() => {}))],
+      checkTimeoutMs: 20,
+    });
+
+    expect(result.findings).toEqual([
+      {
+        checkId: "slow",
+        severity: "error",
+        message: "health check timed out after 20ms",
+      },
+    ]);
+  });
 });
 
 describe("exitCodeFromFindings", () => {

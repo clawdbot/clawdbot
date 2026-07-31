@@ -16,6 +16,39 @@ export interface DoctorLintRunOptions {
   readonly skipIds?: ReadonlySet<string> | readonly string[];
   readonly onlyIds?: ReadonlySet<string> | readonly string[];
   readonly includeAllChecks?: boolean;
+  /** Per-check timeout in ms. A check whose `detect` never resolves is reported as an error finding instead of hanging the whole run. */
+  readonly checkTimeoutMs?: number;
+}
+
+/** Default per-check timeout for lint mode so one hanging check cannot block the whole run. */
+const DOCTOR_LINT_DEFAULT_CHECK_TIMEOUT_MS = 30_000;
+
+async function runDoctorCheckWithTimeout(
+  check: HealthCheck,
+  ctx: HealthCheckContext,
+  timeoutMs: number,
+): Promise<readonly HealthFinding[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<readonly HealthFinding[]>((resolve) => {
+    timer = setTimeout(() => {
+      resolve([
+        {
+          checkId: check.id,
+          severity: "error",
+          message: `health check timed out after ${timeoutMs}ms`,
+        },
+      ]);
+    }, timeoutMs);
+  });
+  try {
+    // `detect` winning resolves with its findings; the timeout winning resolves with a
+    // single error finding. A rejecting `detect` propagates to the caller's try/catch.
+    return await Promise.race([Promise.resolve(check.detect(ctx)), timeout]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 export interface DoctorLintRunResult {
@@ -59,9 +92,10 @@ export async function runDoctorLintChecks(
       });
     }
   }
+  const timeoutMs = opts.checkTimeoutMs ?? DOCTOR_LINT_DEFAULT_CHECK_TIMEOUT_MS;
   for (const check of selected) {
     try {
-      const out = await check.detect(ctx);
+      const out = await runDoctorCheckWithTimeout(check, ctx, timeoutMs);
       for (const f of out) {
         findings.push(f);
       }
