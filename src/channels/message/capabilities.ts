@@ -1,3 +1,4 @@
+import type { ReplyPayload } from "../../auto-reply/types.js";
 /**
  * Channel message capability derivation.
  *
@@ -58,5 +59,42 @@ export function deriveDurableFinalDeliveryRequirements(
     setRequired(requirements, capability, required);
   }
 
+  return requirements;
+}
+
+function payloadRequiresDurablePayloadTransport(payload: ReplyPayload): boolean {
+  return (
+    payload.presentation !== undefined ||
+    payload.delivery !== undefined ||
+    payload.interactive !== undefined ||
+    (payload.channelData !== undefined && Object.keys(payload.channelData).length > 0)
+  );
+}
+
+/** Derives the union of required capabilities from the final concrete batch. */
+export function deriveDurableFinalDeliveryRequirementsForBatch(params: {
+  payloads: readonly ReplyPayload[];
+  replyToId?: string | null;
+  threadId?: string | number | null;
+  silent?: boolean;
+  reconcileUnknownSend?: boolean;
+}): DurableFinalDeliveryRequirementMap {
+  const requirements: DurableFinalDeliveryRequirementMap = {};
+  for (const payload of params.payloads) {
+    const current = deriveDurableFinalDeliveryRequirements({
+      payload,
+      replyToId: params.replyToId,
+      threadId: params.threadId,
+      silent: params.silent,
+      payloadTransport: payloadRequiresDurablePayloadTransport(payload),
+      batch: params.payloads.length > 1,
+      reconcileUnknownSend: params.reconcileUnknownSend,
+    });
+    for (const [capability, required] of Object.entries(current) as Array<
+      [DurableFinalDeliveryCapability, boolean | undefined]
+    >) {
+      setRequired(requirements, capability, required);
+    }
+  }
   return requirements;
 }
