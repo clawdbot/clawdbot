@@ -1709,6 +1709,42 @@
       }
     },
     {
+      "name": "@openclaw/voyage-provider",
+      "description": "OpenClaw Voyage embedding provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "voyage",
+          "label": "Voyage"
+        },
+        "providers": [
+          {
+            "id": "voyage",
+            "name": "Voyage",
+            "docs": "/reference/memory-config",
+            "categories": [
+              "cloud"
+            ],
+            "envVars": [
+              "VOYAGE_API_KEY"
+            ]
+          }
+        ],
+        "contracts": {
+          "memoryEmbeddingProviders": [
+            "voyage"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/voyage-provider",
+          "npmSpec": "@openclaw/voyage-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/stepfun-provider",
       "description": "OpenClaw StepFun provider plugin.",
       "source": "official",
