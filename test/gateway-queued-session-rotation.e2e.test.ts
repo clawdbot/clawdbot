@@ -205,7 +205,12 @@ describe("Gateway queued session rotation", () => {
           enabled: true,
           allow: ["queued-rotation-tracer"],
           load: { paths: [pluginDir] },
-          entries: { "queued-rotation-tracer": { enabled: true } },
+          entries: {
+            "queued-rotation-tracer": {
+              enabled: true,
+              hooks: { allowConversationAccess: true },
+            },
+          },
           slots: { memory: "none" },
         },
         agents: {

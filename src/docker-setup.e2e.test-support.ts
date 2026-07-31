@@ -163,6 +163,10 @@ export async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
     join(rootDir, "scripts", "lib", "docker-e2e-container.sh"),
   );
   await copyFile(
+    join(repoRoot, "scripts", "lib", "docker-e2e-resource-diagnostics.sh"),
+    join(rootDir, "scripts", "lib", "docker-e2e-resource-diagnostics.sh"),
+  );
+  await copyFile(
     join(repoRoot, "scripts", "lib", "host-timeout.sh"),
     join(rootDir, "scripts", "lib", "host-timeout.sh"),
   );

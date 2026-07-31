@@ -2465,6 +2465,14 @@ describe("ci workflow guards", () => {
       const source = readFileSync(workflowPath, "utf8");
       expect(source, workflowPath).not.toContain("build-all-cache-scope:");
     }
+
+    const releaseChecks = parse(
+      readFileSync(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml", "utf8"),
+    );
+    expect(releaseChecks.jobs.validate_repo_e2e.env).toMatchObject({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+    });
   });
 
   it("persists Node 22 declarations through trusted bounded artifacts", () => {
