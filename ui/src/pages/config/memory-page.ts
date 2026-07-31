@@ -392,6 +392,29 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       : pluginState(this.catalog, findMemoryPlugin(this.catalog, engineId));
   }
 
+  private applyPluginRefreshOutcome(
+    connection: CatalogConnection,
+    refreshError: string | null,
+    pluginId?: string,
+  ) {
+    if (this.connection !== connection) {
+      return;
+    }
+    if (!refreshError) {
+      this.addonRefreshWarnings = new Map();
+      if (this.engineOutcome?.kind === "warning") {
+        this.engineOutcome = null;
+      }
+      return;
+    }
+    const message = t("pluginsPage.configRefreshFailed", { error: refreshError });
+    if (pluginId) {
+      this.addonRefreshWarnings = new Map(this.addonRefreshWarnings).set(pluginId, message);
+    } else {
+      this.engineOutcome = { kind: "warning", message };
+    }
+  }
+
   private async changeAddon(pluginId: string, enabled: boolean) {
     if (
       this.addonBusy.has(pluginId) ||
@@ -440,18 +463,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         .filter(Boolean)
         .join(" ");
       if (this.addonNoticeOperations.get(pluginId) === noticeOperation) {
-        if (this.connection === connection) {
-          const currentWarnings = new Map(this.addonRefreshWarnings);
-          if (mutation.refreshError) {
-            currentWarnings.set(
-              pluginId,
-              t("pluginsPage.configRefreshFailed", { error: mutation.refreshError }),
-            );
-          } else {
-            currentWarnings.delete(pluginId);
-          }
-          this.addonRefreshWarnings = currentWarnings;
-        }
+        this.applyPluginRefreshOutcome(connection, mutation.refreshError, pluginId);
         const noticeProcessInstanceId = notice ? await processInstanceId : null;
         if (this.addonNoticeOperations.get(pluginId) === noticeOperation) {
           const notices = new Map(this.addonNotices);
@@ -522,10 +534,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         client,
         (current) => setPluginEnabled(current, engineId, true),
       );
-      if (mutation.refreshError && this.connection === connection) {
-        const message = t("pluginsPage.configRefreshFailed", { error: mutation.refreshError });
-        this.engineOutcome = { kind: "warning", message };
-      }
+      this.applyPluginRefreshOutcome(connection, mutation.refreshError);
       const currentConnection = this.connection;
       if (currentConnection?.connected && currentConnection.client) {
         await this.loadCatalog(currentConnection.client, currentConnection);

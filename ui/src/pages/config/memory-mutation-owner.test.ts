@@ -460,6 +460,71 @@ describe("Memory plugin mutation ownership", () => {
     }
   });
 
+  it.each([
+    ["active-memory", "memory-wiki"],
+    ["engine", "active-memory"],
+    ["active-memory", "engine"],
+  ] as const)(
+    "clears a %s refresh warning when %s refreshes authoritative configuration",
+    async (first, second) => {
+      let refreshCalls = 0;
+      const { element, runExternalMutation } = createMemoryPage({
+        configObject: {},
+        catalog: [
+          createMemoryTestEngine("memory-core", true),
+          createMemoryTestEngine("other", false),
+          createMemoryTestAddon("active-memory", true),
+          createMemoryTestAddon("memory-wiki", false),
+        ],
+        processInfo: () => Promise.resolve({ processInstanceId: "same-process" }),
+        refresh: () =>
+          refreshCalls++ === 0
+            ? Promise.reject(new Error("previous authoritative refresh failed"))
+            : Promise.resolve(),
+        setEnabled: (pluginId, enabled) =>
+          Promise.resolve(
+            pluginId === "active-memory"
+              ? { restartRequired: true, plugin: createMemoryTestAddon(pluginId, enabled) }
+              : {},
+          ),
+      });
+      document.body.append(element);
+      const mutate = (owner: typeof first | typeof second) => {
+        if (owner === "engine") {
+          selectEngine(element, "other");
+          return;
+        }
+        toggleAddon(
+          element,
+          owner === "active-memory" ? "Active memory" : "Memory wiki",
+          owner === "memory-wiki",
+        );
+      };
+      try {
+        await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
+        await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+        mutate(first);
+        await waitForFast(() =>
+          expect(element.textContent).toContain("previous authoritative refresh failed"),
+        );
+
+        mutate(second);
+        await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
+        await waitForFast(() =>
+          expect(element.textContent).not.toContain("previous authoritative refresh failed"),
+        );
+        if (first === "active-memory") {
+          expect(element.textContent).toContain(
+            "Disabled active-memory. A Gateway restart is required to apply the change.",
+          );
+        }
+      } finally {
+        await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
+        element.remove();
+      }
+    },
+  );
+
   it("reloads the replacement connection after an older engine change commits", async () => {
     const pendingMutation = createMemoryTestDeferred<unknown>();
     const { element, request, runExternalMutation, setPhase } = createMemoryPage({
