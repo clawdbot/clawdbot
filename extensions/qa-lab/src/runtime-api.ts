@@ -6,6 +6,10 @@ export { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 export { defaultQaRuntimeModelForMode } from "./model-selection.runtime.js";
 export {
+  acquireQaCredentialLease,
+  startQaCredentialLeaseHeartbeat,
+} from "./live-transports/shared/credential-lease.runtime.js";
+export {
   buildQaTarget,
   createQaBusThread,
   deleteQaBusMessage,
