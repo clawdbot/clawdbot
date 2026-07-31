@@ -856,7 +856,7 @@ Direct Gateway connections need access to both ports. If a reverse proxy or TLS 
 }
 ```
 
-The sandbox origin must differ from the Control UI origin. Do not host other authenticated or sensitive content on it.
+The sandbox origin must differ from the Control UI origin. Do not host other authenticated or sensitive content on it. For proxies and tunnels, see [Widget sandbox behind proxies and tunnels](/web/dashboard#widget-sandbox-behind-proxies-and-tunnels).
 
 For example, the official basic React demo can be configured as:
 
