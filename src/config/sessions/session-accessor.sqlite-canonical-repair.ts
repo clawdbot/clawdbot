@@ -483,11 +483,15 @@ function copySqliteSessionOwnedStateForRepair(params: {
     );
   }
   for (const sessionId of sessionIds) {
-    copySqliteSessionGenerationRows({
+    const replaced = copySqliteSessionGenerationRows({
       destination: params.destination,
       sessionId,
       source: params.source,
+      sourceWindowPresent: copiedWindowIds.has(sessionId),
     });
+    if (!replaced) {
+      continue;
+    }
     // Search and active-event tables are derived from transcript_events; force their canonical rebuild.
     deleteSessionTranscriptIndexInTransaction(params.destination.db, sessionId);
     reconcileSessionTranscriptIndexInTransaction(params.destination.db, sessionId);
@@ -515,7 +519,8 @@ function copySqliteSessionGenerationRows(params: {
   destination: OpenClawAgentDatabase;
   sessionId: string;
   source: OpenClawAgentDatabase;
-}): void {
+  sourceWindowPresent: boolean;
+}): boolean {
   const sourceDb = getSessionKysely(params.source.db);
   const destinationDb = getSessionKysely(params.destination.db);
   const transcriptEvents = executeSqliteQuerySync(
@@ -550,6 +555,16 @@ function copySqliteSessionGenerationRows(params: {
       .selectAll()
       .where("session_id", "=", params.sessionId),
   ).rows;
+  if (
+    !params.sourceWindowPresent &&
+    transcriptEvents.length === 0 &&
+    transcriptIdentities.length === 0 &&
+    rewriteWatermarks.length === 0 &&
+    trajectoryEvents.length === 0 &&
+    parentStreamEvents.length === 0
+  ) {
+    return false;
+  }
   for (const table of [
     "transcript_event_identities",
     "transcript_events",
@@ -592,4 +607,5 @@ function copySqliteSessionGenerationRows(params: {
       destinationDb.insertInto("acp_parent_stream_events").values(row),
     );
   }
+  return true;
 }

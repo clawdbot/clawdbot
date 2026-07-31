@@ -342,6 +342,17 @@ export function deleteSessionMembersForRepair(
   );
 }
 
+export function deleteSessionDeliveryArtifacts(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+): void {
+  const db = getSessionKysely(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    db.deleteFrom("conversation_deliveries").where("source_session_key", "=", sessionKey),
+  );
+}
+
 export function deleteSessionNodeArtifacts(
   database: OpenClawAgentDatabase,
   sessionKey: string,

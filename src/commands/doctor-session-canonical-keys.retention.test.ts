@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import {
-  applySessionEntryLifecycleMutation,
   loadExactSessionEntryReadOnly,
   loadTranscriptEvents,
   replaceSessionEntrySync,
@@ -40,18 +39,42 @@ describe("doctor canonical session-key retention repair", () => {
           sessionKey: "agent:main:shared",
           storePath: mainStore,
         },
-        { sessionId: "retained-destination", updatedAt: 5 },
+        {
+          previousSessionId: "destination-only-previous",
+          sessionId: "retained-destination",
+          updatedAt: 5,
+        },
       );
-      await applySessionEntryLifecycleMutation({
+      const destinationDatabase = openOpenClawAgentDatabase({
         agentId: "main",
-        removals: [{ sessionKey: "agent:main:shared" }],
-        skipMaintenance: true,
-        storePath: mainStore,
+        env,
+        path: resolveSqliteTargetFromSessionStorePath(mainStore, { agentId: "main", env }).path,
       });
+      destinationDatabase.db
+        .prepare(
+          "INSERT INTO session_windows (session_id, session_key, reason, session_scope, created_at, updated_at) VALUES ('destination-only-previous', 'agent:main:shared', 'recovery', 'conversation', 4, 4)",
+        )
+        .run();
+      destinationDatabase.db
+        .prepare(
+          "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES ('destination-only-previous', 0, ?, 4)",
+        )
+        .run(
+          JSON.stringify({
+            id: "destination-only-message",
+            message: { content: "destination-only history", role: "user" },
+            parentId: null,
+            type: "message",
+          }),
+        );
 
       insertLegacySession({
         agentId: "ops",
-        entry: { sessionId: "winner", updatedAt: 20 },
+        entry: {
+          previousSessionId: "destination-only-previous",
+          sessionId: "winner",
+          updatedAt: 20,
+        },
         env,
         eventText: "winner history",
         sessionKey: "agent:main:main ",
@@ -140,11 +163,19 @@ describe("doctor canonical session-key retention repair", () => {
           storePath: mainStore,
         }),
       ).resolves.toEqual([]);
-      const destinationDatabase = openOpenClawAgentDatabase({
-        agentId: "main",
-        env,
-        path: resolveSqliteTargetFromSessionStorePath(mainStore, { agentId: "main", env }).path,
-      });
+      await expect(
+        loadTranscriptEvents({
+          agentId: "main",
+          env,
+          sessionId: "destination-only-previous",
+          sessionKey: "agent:main:shared",
+          storePath: mainStore,
+        }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          message: expect.objectContaining({ content: "destination-only history" }),
+        }),
+      ]);
       expect(
         destinationDatabase.db
           .prepare(

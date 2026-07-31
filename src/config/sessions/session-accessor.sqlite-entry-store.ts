@@ -14,6 +14,7 @@ import {
 import { publishSqliteSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import {
   clearSessionCollaborationForKey,
+  deleteSessionDeliveryArtifacts,
   deleteSessionNodeArtifacts,
   rehomeLegacySessionNodeArtifacts,
 } from "./session-accessor.sqlite-node-artifacts.js";
@@ -385,10 +386,7 @@ export function deleteSqliteSessionEntryRows(
     }
   }
   if (options.deleteOwnedWindows) {
-    executeSqliteQuerySync(
-      database.db,
-      db.deleteFrom("conversation_deliveries").where("source_session_key", "=", sessionKey),
-    );
+    deleteSessionDeliveryArtifacts(database, sessionKey);
     deleteSessionNodeArtifacts(database, sessionKey);
     executeSqliteQuerySync(
       database.db,
