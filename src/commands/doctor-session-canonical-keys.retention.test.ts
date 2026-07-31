@@ -205,4 +205,70 @@ describe("doctor canonical session-key retention repair", () => {
       expect(readSessionArchiveContentSync(loserArchive as string)).toContain("loser history");
     });
   });
+
+  it("copies a lone cross-store winner's normalized delivery key", async () => {
+    await withStateDirEnv(
+      "openclaw-doctor-canonical-cross-store-delivery-",
+      async ({ stateDir }) => {
+        const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+        const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
+        const mainStore = resolveStorePath(storeTemplate, { agentId: "main", env });
+        const opsStore = resolveStorePath(storeTemplate, { agentId: "ops", env });
+        const cfg = {
+          agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+          session: { mainKey: "work", store: storeTemplate },
+        } as OpenClawConfig;
+        insertLegacySession({
+          agentId: "ops",
+          entry: { sessionId: "winner", updatedAt: 20 },
+          env,
+          sessionKey: "agent:main:main ",
+          storePath: opsStore,
+        });
+        const sourceDatabase = openOpenClawAgentDatabase({
+          agentId: "ops",
+          env,
+          path: resolveSqliteTargetFromSessionStorePath(opsStore, { agentId: "ops", env }).path,
+        });
+        sourceDatabase.db
+          .prepare(
+            "INSERT INTO conversations (conversation_id, channel, account_id, kind, peer_id, delivery_target, metadata_json, created_at, updated_at) VALUES ('winner-conversation', 'webchat', 'default', 'direct', 'winner', 'winner', '{}', 10, 10)",
+          )
+          .run();
+        sourceDatabase.db
+          .prepare(
+            "INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at) VALUES ('winner-operation', 'turn', 'winner-conversation', 'agent:main:main', 'hash', 'sent', 10, 10)",
+          )
+          .run();
+        sourceDatabase.db
+          .prepare(
+            "INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at) VALUES ('canonical-operation', 'turn', 'winner-conversation', 'agent:main:work', 'canonical-hash', 'sent', 10, 10)",
+          )
+          .run();
+
+        expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
+          foundGroups: 1,
+          repairedGroups: 1,
+        });
+        const destinationDatabase = openOpenClawAgentDatabase({
+          agentId: "main",
+          env,
+          path: resolveSqliteTargetFromSessionStorePath(mainStore, { agentId: "main", env }).path,
+        });
+        expect(
+          destinationDatabase.db
+            .prepare(
+              "SELECT operation_id, source_session_key FROM conversation_deliveries ORDER BY operation_id",
+            )
+            .all(),
+        ).toEqual([
+          { operation_id: "canonical-operation", source_session_key: "agent:main:work" },
+          { operation_id: "winner-operation", source_session_key: "agent:main:work" },
+        ]);
+        expect(
+          sourceDatabase.db.prepare("SELECT count(*) AS count FROM conversation_deliveries").get(),
+        ).toEqual({ count: 0 });
+      },
+    );
+  });
 });

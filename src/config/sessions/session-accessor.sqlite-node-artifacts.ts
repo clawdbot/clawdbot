@@ -1,9 +1,11 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 
 export function clearSessionCollaborationForKey(
   database: OpenClawAgentDatabase,
@@ -345,11 +347,30 @@ export function deleteSessionMembersForRepair(
 export function deleteSessionDeliveryArtifacts(
   database: OpenClawAgentDatabase,
   sessionKey: string,
+  additionalKeys: readonly string[] = [],
 ): void {
   const db = getSessionKysely(database.db);
+  const trimmedKey = sessionKey.trim();
+  const lookupKeys = uniqueStrings([
+    sessionKey,
+    trimmedKey,
+    normalizeStoreSessionKey(trimmedKey),
+    ...additionalKeys,
+  ]);
+  const competingIdentities = new Set(
+    executeSqliteQuerySync(
+      database.db,
+      db.selectFrom("session_nodes").select("session_key"),
+    ).rows.flatMap((row) =>
+      row.session_key === sessionKey ? [] : [normalizeStoreSessionKey(row.session_key.trim())],
+    ),
+  );
+  const sessionKeys = lookupKeys.filter(
+    (key) => key === sessionKey || !competingIdentities.has(normalizeStoreSessionKey(key.trim())),
+  );
   executeSqliteQuerySync(
     database.db,
-    db.deleteFrom("conversation_deliveries").where("source_session_key", "=", sessionKey),
+    db.deleteFrom("conversation_deliveries").where("source_session_key", "in", sessionKeys),
   );
 }
 

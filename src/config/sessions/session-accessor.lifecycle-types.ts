@@ -100,6 +100,8 @@ type SessionEntryLifecycleRemovalBase = {
   exactStoredKey?: boolean;
   /** Doctor cross-store repair only: copied/archived windows may be removed with the source node. */
   deleteOwnedWindows?: boolean;
+  /** Doctor cross-store repair only: delivery aliases copied under the canonical destination key. */
+  deliveryCleanupKeys?: readonly string[];
   archiveRemovedTranscript?: boolean;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;

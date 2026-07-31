@@ -495,6 +495,7 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
         } else {
           deleteSqliteSessionEntryRows(transactionDb, removal.sessionKey, {
             deleteOwnedWindows: removal.removal.deleteOwnedWindows === true,
+            deliveryCleanupKeys: removal.removal.deliveryCleanupKeys,
           });
         }
         removedSessionKeys.push(removal.sessionKey);

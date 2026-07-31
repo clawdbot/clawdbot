@@ -350,7 +350,7 @@ export function normalizeSqliteLifecycleTarget(target: {
 export function deleteSqliteSessionEntryRows(
   database: OpenClawAgentDatabase,
   sessionKey: string,
-  options: { deleteOwnedWindows?: boolean } = {},
+  options: { deleteOwnedWindows?: boolean; deliveryCleanupKeys?: readonly string[] } = {},
 ): void {
   const db = getSessionKysely(database.db);
   const windows = executeSqliteQuerySync(
@@ -386,7 +386,7 @@ export function deleteSqliteSessionEntryRows(
     }
   }
   if (options.deleteOwnedWindows) {
-    deleteSessionDeliveryArtifacts(database, sessionKey);
+    deleteSessionDeliveryArtifacts(database, sessionKey, options.deliveryCleanupKeys);
     deleteSessionNodeArtifacts(database, sessionKey);
     executeSqliteQuerySync(
       database.db,

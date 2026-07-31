@@ -198,6 +198,21 @@ describe("doctor canonical session-key repair", () => {
         sessionKey: "",
         storePath,
       });
+      const database = openOpenClawAgentDatabase({
+        agentId: "main",
+        env,
+        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main", env }).path,
+      });
+      database.db
+        .prepare(
+          "INSERT INTO conversations (conversation_id, channel, account_id, kind, peer_id, delivery_target, metadata_json, created_at, updated_at) VALUES ('empty-key-conversation', 'webchat', 'default', 'direct', 'empty', 'empty', '{}', 10, 10)",
+        )
+        .run();
+      database.db
+        .prepare(
+          "INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at) VALUES ('empty-key-operation', 'turn', 'empty-key-conversation', '', 'hash', 'sent', 10, 10)",
+        )
+        .run();
 
       expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
         foundGroups: 1,
@@ -228,6 +243,13 @@ describe("doctor canonical session-key repair", () => {
           message: expect.objectContaining({ content: "empty key history" }),
         }),
       ]);
+      expect(
+        database.db
+          .prepare(
+            "SELECT source_session_key FROM conversation_deliveries WHERE operation_id = 'empty-key-operation'",
+          )
+          .get(),
+      ).toEqual({ source_session_key: "agent:main:main" });
     });
   });
 

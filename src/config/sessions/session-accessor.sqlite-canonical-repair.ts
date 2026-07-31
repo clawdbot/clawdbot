@@ -45,12 +45,12 @@ function resolveSqliteCanonicalRepairLookupKeys(
 ): string[] {
   return uniqueStrings([
     canonicalKey,
-    ...storedKeys.filter((key) => key.length > 0),
+    ...storedKeys,
     ...storedKeys.flatMap((key) => {
       const trimmedKey = key.trim();
       return [trimmedKey, normalizeStoreSessionKey(trimmedKey)];
     }),
-  ]).filter(Boolean);
+  ]);
 }
 
 /** Doctor probes only the exact staged target and may replace a malformed partial row. */
@@ -141,7 +141,7 @@ export function rehomeSqliteSessionDeliveryReferencesForCanonicalRepair(
   previousKeys: readonly string[],
 ): void {
   const aliases = resolveSqliteCanonicalRepairLookupKeys(canonicalKey, previousKeys).filter(
-    (key) => key && key !== canonicalKey,
+    (key) => key !== canonicalKey,
   );
   if (aliases.length === 0) {
     return;
@@ -355,7 +355,26 @@ function copySqliteSessionOwnedStateForRepair(params: {
     ...sessionLinks.map((row) => row.conversation_id),
   ]);
   const sourceKeyReferences = new Set(sourceKeys);
-  const deliverySourceKeys = [...sourceKeyReferences].filter(Boolean);
+  const deliveryLookupKeys = resolveSqliteCanonicalRepairLookupKeys(
+    params.canonicalKey,
+    sourceKeys,
+  );
+  const competingDeliveryIdentities = new Set(
+    executeSqliteQuerySync(
+      params.source.db,
+      sourceDb.selectFrom("session_nodes").select("session_key"),
+    ).rows.flatMap((row) =>
+      sourceKeyReferences.has(row.session_key)
+        ? []
+        : [normalizeStoreSessionKey(row.session_key.trim())],
+    ),
+  );
+  const deliverySourceKeys = deliveryLookupKeys.filter(
+    (key) =>
+      sourceKeyReferences.has(key) ||
+      !competingDeliveryIdentities.has(normalizeStoreSessionKey(key.trim())),
+  );
+  const deliverySourceKeyReferences = new Set(deliverySourceKeys);
   const deliveries = executeSqliteQuerySync(
     params.source.db,
     sourceDb
@@ -397,7 +416,8 @@ function copySqliteSessionOwnedStateForRepair(params: {
       const canonicalDelivery = {
         ...delivery,
         source_session_key:
-          delivery.source_session_key && sourceKeyReferences.has(delivery.source_session_key)
+          delivery.source_session_key !== null &&
+          deliverySourceKeyReferences.has(delivery.source_session_key)
             ? params.canonicalKey
             : delivery.source_session_key,
       };

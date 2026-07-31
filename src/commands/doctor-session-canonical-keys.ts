@@ -15,6 +15,7 @@ import {
   copySessionNodeArtifactsForRepair,
   deleteSessionMembersForRepair,
 } from "../config/sessions/session-accessor.sqlite-node-artifacts.js";
+import { collectSqliteSessionStateIdsForEntry } from "../config/sessions/session-accessor.sqlite-references.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { setCanonicalSqliteSessionMainKey } from "../config/sessions/session-canonical-key.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "../config/sessions/store-entry.js";
@@ -44,11 +45,16 @@ type CanonicalSessionCandidate = {
 
 function createCanonicalRepairRemoval(
   candidate: CanonicalSessionCandidate,
-  params: { archiveRemovedTranscript: boolean; deleteOwnedWindows: boolean },
+  params: {
+    archiveRemovedTranscript: boolean;
+    deleteOwnedWindows: boolean;
+    deliveryCleanupKeys?: readonly string[];
+  },
 ): SessionEntryLifecycleRemoval {
   const removal = {
     archiveRemovedTranscript: params.archiveRemovedTranscript,
     deleteOwnedWindows: params.deleteOwnedWindows,
+    ...(params.deliveryCleanupKeys ? { deliveryCleanupKeys: params.deliveryCleanupKeys } : {}),
     exactStoredKey: true,
     expectedEntry: candidate.expectedEntry,
     sessionKey: candidate.sessionKey,
@@ -370,7 +376,7 @@ async function repairCanonicalSessionGroup(
         sourceKeys: [winner.sessionKey],
         storePath: winner.storePath,
       }),
-      winner.entry.sessionId,
+      ...collectSqliteSessionStateIdsForEntry(winner.entry),
     ]);
     for (const sessionId of generationIds) {
       if (!sessionId) {
@@ -505,6 +511,7 @@ async function repairCanonicalSessionGroup(
         createCanonicalRepairRemoval(candidate, {
           archiveRemovedTranscript: true,
           deleteOwnedWindows: true,
+          deliveryCleanupKeys: [winner.canonicalKey],
         }),
       ),
       skipMaintenance: true,
