@@ -225,4 +225,77 @@ describe("cleanSchemaForGemini", () => {
 
     expect(cleaned.properties?.agentId?.type).toBe("string");
   });
+
+  it.each([
+    {
+      name: "integer enum",
+      schema: { type: "integer", enum: [1, 2, 3] },
+      expected: { type: "integer", enum: ["1", "2", "3"] },
+    },
+    {
+      name: "integer enum before type",
+      schema: { enum: [1, 2, 3], type: "integer" },
+      expected: { enum: ["1", "2", "3"], type: "integer" },
+    },
+    {
+      name: "boolean enum",
+      schema: { type: "boolean", enum: [true, false] },
+      expected: { type: "boolean", enum: ["true", "false"] },
+    },
+    {
+      name: "string enum",
+      schema: { type: "string", enum: ["a", "b", "c"] },
+      expected: { type: "string", enum: ["a", "b", "c"] },
+    },
+    {
+      name: "integer const before type",
+      schema: { const: 42, type: "integer" },
+      expected: { enum: ["42"], type: "integer" },
+    },
+  ])("stringifies $name values without changing the schema type", ({ schema, expected }) => {
+    expect(cleanSchemaForGemini(schema)).toStrictEqual(expected);
+  });
+
+  it("drops null/undefined enum entries and de-duplicates", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "integer",
+      enum: [1, 2, 2, null, undefined, 3],
+    }) as { enum?: unknown };
+
+    expect(cleaned.enum).toStrictEqual(["1", "2", "3"]);
+  });
+
+  it("stringifies nested numeric enums while preserving their number type", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "object",
+      properties: {
+        outer: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              score: { type: "number", enum: [1, 2, 3, 4, 5] },
+            },
+          },
+        },
+      },
+    }) as {
+      properties?: {
+        outer?: { items?: { properties?: { score?: { type?: unknown; enum?: unknown } } } };
+      };
+    };
+
+    const score = cleaned.properties?.outer?.items?.properties?.score;
+    expect(score?.type).toBe("number");
+    expect(score?.enum).toStrictEqual(["1", "2", "3", "4", "5"]);
+  });
+
+  it("returns no enum key when array becomes empty after coercion", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "integer",
+      enum: [null, undefined, {}],
+    }) as { enum?: unknown };
+
+    expect(cleaned.enum).toBeUndefined();
+  });
 });

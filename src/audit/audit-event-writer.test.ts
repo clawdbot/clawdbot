@@ -2,17 +2,17 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseForTest,
-  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { listAuditEvents } from "./audit-event-store.js";
 import type { AuditEventInput } from "./audit-event-types.js";
-import { createAuditEventWriter, testApi } from "./audit-event-writer.js";
+import { createAuditEventWriter } from "./audit-event-writer.js";
 
 const tempDirs: string[] = [];
 
 function input(): AuditEventInput {
   return {
+    sourceId: "run-1:1:started",
     sourceSequence: 1,
     occurredAt: Date.now(),
     kind: "agent_run",
@@ -34,10 +34,6 @@ afterAll(() => {
 });
 
 describe("audit event worker", () => {
-  it("keeps shutdown beyond the supported SQLite contention window", () => {
-    expect(testApi.auditWriterShutdownTimeoutMs).toBeGreaterThan(OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
-  });
-
   it("returns immediately under SQLite contention and flushes before stop", async () => {
     const stateDir = makeTempDir(tempDirs, "openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };

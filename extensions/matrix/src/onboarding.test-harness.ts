@@ -1,4 +1,5 @@
 // Matrix setup module handles plugin onboarding behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OutputRuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { ChannelSetupWizardAdapter } from "openclaw/plugin-sdk/setup";
 import { afterEach, vi } from "vitest";
@@ -66,7 +67,7 @@ export function createMatrixWizardPrompter(params: {
     fallback: PromptHandler<T | Promise<T>> | undefined,
   ): Promise<T> => {
     if (values && message in values) {
-      return values[message];
+      return expectDefined(values[message], `${kind} prompt value for ${message}`);
     }
     if (fallback) {
       return await fallback(message);

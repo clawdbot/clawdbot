@@ -26,7 +26,9 @@ describe("exec approvals protocol validators", () => {
               source: "allow-always" as const,
               commandText: "python3 -c 'print(123)'",
               argPattern: "-c *",
-              lastUsedAt: 1775154056736,
+              // The Mac App records Date.timeIntervalSince1970, which retains
+              // sub-millisecond precision when converted to milliseconds.
+              lastUsedAt: 1775154056736.5,
               lastUsedCommand: "python3 -c 'print(123)'",
               lastResolvedPath: "/usr/bin/python3",
             },
@@ -73,6 +75,31 @@ describe("exec approvals protocol validators", () => {
     ).toBe(true);
   });
 
+  it("accepts file-backed node snapshots with host-resolved defaults", () => {
+    expect(
+      validateExecApprovalsNodeSnapshot({
+        path: "/tmp/exec-approvals.json",
+        exists: true,
+        hash: "sha256:file",
+        file: { version: 1 },
+      }),
+    ).toBe(true);
+    expect(
+      validateExecApprovalsNodeSnapshot({
+        path: "/tmp/exec-approvals.json",
+        exists: true,
+        hash: "sha256:file",
+        file: { version: 1 },
+        resolvedDefaults: {
+          security: "deny",
+          ask: "on-miss",
+          askFallback: "deny",
+          autoAllowSkills: false,
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("rejects ambiguous or unsafe host-native approval payloads", () => {
     for (const snapshot of [
       {},
@@ -87,11 +114,45 @@ describe("exec approvals protocol validators", () => {
         defaultAction: "deny",
       },
       {
+        path: "/tmp/exec-approvals.json",
+        exists: true,
+        hash: "sha256:file",
+        file: { version: 1 },
+        resolvedDefaults: {
+          security: "full",
+          ask: "sometimes",
+          askFallback: "deny",
+          autoAllowSkills: false,
+        },
+      },
+      {
         enabled: true,
         hash: "sha256:current",
         defaultAction: "deny",
         rules: [],
         message: "mixed state",
+      },
+      {
+        enabled: true,
+        hash: "sha256:current",
+        defaultAction: "deny",
+        rules: [],
+        resolvedDefaults: {
+          security: "deny",
+          ask: "on-miss",
+          askFallback: "deny",
+          autoAllowSkills: false,
+        },
+      },
+      {
+        enabled: false,
+        message: "No exec policy configured",
+        resolvedDefaults: {
+          security: "deny",
+          ask: "on-miss",
+          askFallback: "deny",
+          autoAllowSkills: false,
+        },
       },
       { enabled: false, rules: [] },
     ]) {

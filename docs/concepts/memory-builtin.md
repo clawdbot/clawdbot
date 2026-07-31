@@ -15,6 +15,8 @@ started.
 - **Keyword search** via FTS5 full-text indexing (BM25 scoring).
 - **Vector search** via embeddings from any supported provider.
 - **Hybrid search** that combines both for best results.
+- **Deterministic ranking** by relevance, recency, and write-time importance.
+- **Trusted trigger recall** for bounded pre-reply context without a recall model.
 - **CJK support** via trigram tokenization for Chinese, Japanese, and Korean.
 - **sqlite-vec acceleration** for in-database vector queries (optional).
 
@@ -28,11 +30,9 @@ To set a provider explicitly:
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "openai",
-      },
+  memory: {
+    search: {
+      provider: "openai",
     },
   },
 }
@@ -49,14 +49,12 @@ openclaw plugins install @openclaw/llama-cpp-provider
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "local",
-        fallback: "none",
-        local: {
-          modelPath: "~/.node-llama-cpp/models/embeddinggemma-300m-qat-Q8_0.gguf",
-        },
+  memory: {
+    search: {
+      provider: "local",
+      fallback: "none",
+      local: {
+        modelPath: "~/.node-llama-cpp/models/embeddinggemma-300m-qat-Q8_0.gguf",
       },
     },
   },
@@ -79,12 +77,23 @@ openclaw plugins install @openclaw/llama-cpp-provider
 | OpenAI-compatible | `openai-compatible` | Generic `/v1/embeddings` endpoint   |
 | Voyage            | `voyage`            |                                     |
 
-Set `memorySearch.provider` to switch away from OpenAI.
+Set `memory.search.provider` to switch away from OpenAI.
 
 ## How indexing works
 
-OpenClaw indexes `MEMORY.md` and `memory/*.md` into chunks (400 tokens with
-80-token overlap by default) and stores them in a per-agent SQLite database.
+OpenClaw indexes `MEMORY.md`, an existing root `USER.md`, and `memory/*.md` into
+chunks (400 tokens with 80-token overlap by default) and stores them in a
+per-agent SQLite database. OpenClaw does not create `USER.md` automatically.
+
+Each chunk can carry nullable importance and trigger metadata. Null values are
+neutral, so older indexes remain usable. Search combines hybrid relevance,
+recency decay, and importance; trigger recall only injects curated or
+promoted-trusted entries.
+
+Each indexed chunk also has SQLite-owned provenance: origin class (`owner`,
+`agent`, `untrusted`, or `system`), session kind, observation time, and an
+optional supersession key. This metadata is stored separately from Markdown
+so recalled prose cannot rewrite its own trust classification.
 
 - **Index location:** the owning agent database at
   `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
@@ -98,7 +107,7 @@ OpenClaw indexes `MEMORY.md` and `memory/*.md` into chunks (400 tokens with
 
 <Info>
 You can also index Markdown files outside the workspace with
-`memorySearch.extraPaths`. See the
+`memory.search.extraPaths`. See the
 [configuration reference](/reference/memory-config#additional-memory-paths).
 </Info>
 
@@ -130,7 +139,7 @@ openclaw memory index --force --agent main
 ```
 
 Both standalone CLI commands and the Gateway use the same `local` provider id.
-Set `memorySearch.provider: "local"` when you want local embeddings.
+Set `memory.search.provider: "local"` when you want local embeddings.
 
 **Stale results?** Run `openclaw memory index --force` to rebuild. The watcher
 may miss changes in rare edge cases.

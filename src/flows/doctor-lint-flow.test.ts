@@ -135,6 +135,19 @@ describe("runDoctorLintChecks", () => {
       },
     ]);
   });
+
+  it("keeps truncated thrown error messages UTF-16 safe", async () => {
+    const emoji = "\u{1F600}";
+    const result = await runDoctorLintChecks(ctx, {
+      checks: [
+        check("emoji-boom", async () => {
+          throw new Error(`${"A".repeat(252)}${emoji}${"B".repeat(10)}`);
+        }),
+      ],
+    });
+
+    expect(result.findings[0]?.message).toBe(`health check threw: ${"A".repeat(252)}...`);
+  });
 });
 
 describe("exitCodeFromFindings", () => {

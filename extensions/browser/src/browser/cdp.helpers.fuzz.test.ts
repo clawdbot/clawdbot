@@ -1,4 +1,5 @@
 // Browser tests cover cdp.helpers.fuzz plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   appendCdpPath,
@@ -7,7 +8,9 @@ import {
   isWebSocketUrl,
   normalizeCdpHttpBaseForJsonEndpoints,
   parseBrowserHttpUrl,
+  redactCdpErrorText,
   redactCdpUrl,
+  stripCdpUrlCredentials,
 } from "./cdp.helpers.js";
 
 /**
@@ -42,7 +45,8 @@ function randInt(rng: () => number, loInclusive: number, hiInclusive: number): n
 }
 
 function pick<T>(rng: () => number, arr: readonly T[]): T {
-  return arr[randInt(rng, 0, arr.length - 1)];
+  const index = randInt(rng, 0, arr.length - 1);
+  return expectDefined(arr[index], `fuzz choice at index ${index}`);
 }
 
 function randHost(rng: () => number): string {
@@ -389,6 +393,27 @@ describe("fuzz: redactCdpUrl", () => {
       const out = redactCdpUrl(junk);
       expect(typeof out).toBe("string");
     }
+  });
+});
+
+describe("CDP credential boundaries", () => {
+  it("moves URL userinfo out of dependency-facing connection URLs", () => {
+    expect(
+      stripCdpUrlCredentials(
+        "wss://alice:p%40ss@browserless.example/devtools/browser/id?token=keep-query",
+      ),
+    ).toBe("wss://browserless.example/devtools/browser/id?token=keep-query");
+  });
+
+  it("redacts embedded CDP URL credentials from dependency error prose", () => {
+    const message = redactCdpErrorText(
+      "connect failed for wss://alice:browser-password@browserless.example/devtools/browser/id?token=browser-token",
+    );
+
+    expect(message).toContain("browserless.example/devtools/browser/id");
+    expect(message).not.toContain("alice");
+    expect(message).not.toContain("browser-password");
+    expect(message).not.toContain("browser-token");
   });
 });
 

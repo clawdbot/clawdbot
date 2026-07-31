@@ -47,7 +47,7 @@ jobs:
     environment: android-release
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
@@ -63,6 +63,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Validate release approval and target
+        id: release_approval
         env:
           APPROVAL_PATH: ${{ runner.temp }}/android-release-approval/approval.json
           DIRECT_RELEASE_RECOVERY: ${{ inputs.direct_release_recovery && 'true' || 'false' }}
@@ -105,7 +106,7 @@ jobs:
             exit 1
           fi
 
-          release_json="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName,isDraft,isPrerelease,assets,url)"
+          release_json="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json tagName,isDraft,isPrerelease,createdAt,assets,url)"
           if [[ "$(printf '%s' "${release_json}" | jq -r '.tagName')" != "${RELEASE_TAG}" ]]; then
             echo "GitHub release tag does not match ${RELEASE_TAG}." >&2
             exit 1
@@ -118,6 +119,9 @@ jobs:
             echo "Normal Android promotion requires the target GitHub release to remain a draft." >&2
             exit 1
           fi
+          release_created_at="$(printf '%s' "${release_json}" | jq -er '.createdAt')"
+          build_timestamp="$(date -u -d "${release_created_at}" +%Y-%m-%dT%H:%M:%SZ)"
+          echo "build_timestamp=${build_timestamp}" >> "${GITHUB_OUTPUT}"
           unexpected_assets="$(printf '%s' "${release_json}" | jq -r '[.assets[]? | select(.name | startswith("OpenClaw-Android")) | .name] | join(", ")')"
           if [[ -n "${unexpected_assets}" ]]; then
             echo "Target release already contains Android assets: ${unexpected_assets}. Immutable recovery accepts them only after rebuilding identical bytes." >&2
@@ -165,52 +169,8 @@ jobs:
           install-deps: "false"
           use-actions-cache: "false"
 
-      - name: Setup Java
-        uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5
-        with:
-          distribution: temurin
-          java-version: 17
-          cache: gradle
-          cache-dependency-path: |
-            apps/android/**/*.gradle*
-            apps/android/**/gradle-wrapper.properties
-            apps/android/gradle/libs.versions.toml
-
-      - name: Cache Android SDK
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-        with:
-          path: ~/.android-sdk
-          key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-37.0-build-tools-36.0.0
-          restore-keys: |
-            ${{ runner.os }}-android-sdk-v1-
-
-      - name: Setup Android SDK
-        run: |
-          set -euo pipefail
-          ANDROID_SDK_ROOT="$HOME/.android-sdk"
-          CMDLINE_TOOLS_VERSION="14742923"
-          ARCHIVE="commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
-          URL="https://dl.google.com/android/repository/${ARCHIVE}"
-          if [[ ! -x "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" ]]; then
-            mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools"
-            curl -fsSL "${URL}" -o "${RUNNER_TEMP}/${ARCHIVE}"
-            rm -rf "${ANDROID_SDK_ROOT}/cmdline-tools/latest"
-            unzip -q "${RUNNER_TEMP}/${ARCHIVE}" -d "${ANDROID_SDK_ROOT}/cmdline-tools"
-            mv "${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools" "${ANDROID_SDK_ROOT}/cmdline-tools/latest"
-          fi
-          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> "${GITHUB_ENV}"
-          echo "ANDROID_HOME=${ANDROID_SDK_ROOT}" >> "${GITHUB_ENV}"
-          echo "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin" >> "${GITHUB_PATH}"
-          echo "${ANDROID_SDK_ROOT}/platform-tools" >> "${GITHUB_PATH}"
-
-      - name: Install Android SDK packages
-        run: |
-          set -eu
-          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null
-          sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
-            "platform-tools" \
-            "platforms;android-37.0" \
-            "build-tools;36.0.0"
+      - name: Setup Android toolchain
+        uses: ./.github/actions/setup-android-toolchain
 
       - name: Create apps-signing read token
         if: ${{ steps.release_source.outputs.fallback_base_tag == '' }}
@@ -225,7 +185,7 @@ jobs:
 
       - name: Checkout encrypted Android signing assets
         if: ${{ steps.release_source.outputs.fallback_base_tag == '' }}
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: openclaw/apps-signing
           ref: main
@@ -247,7 +207,9 @@ jobs:
 
       - name: Prepare and verify signed Android APK
         env:
+          GIT_COMMIT: ${{ inputs.release_target_sha }}
           GH_TOKEN: ${{ github.token }}
+          OPENCLAW_BUILD_TIMESTAMP: ${{ steps.release_approval.outputs.build_timestamp }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
@@ -388,7 +350,7 @@ jobs:
           fi
 
       - name: Attest Android APK provenance
-        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
           subject-path: dist/OpenClaw-Android.apk
 

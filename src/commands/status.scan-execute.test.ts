@@ -72,10 +72,7 @@ describe("executeStatusScanFromOverview", () => {
     });
 
     expect(resolveMemoryPluginStatus).toHaveBeenCalledWith(overview.cfg);
-    expect(resolveStatusSummaryFromOverview).toHaveBeenCalledWith({
-      overview,
-      includeChannelSummary: undefined,
-    });
+    expect(resolveStatusSummaryFromOverview).toHaveBeenCalledWith({ overview });
     expect(resolveMemory).toHaveBeenCalledWith({
       cfg: overview.cfg,
       agentStatus: overview.agentStatus,

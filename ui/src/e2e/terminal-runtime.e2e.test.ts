@@ -55,10 +55,18 @@ describeControlUiE2e("Control UI terminal runtime isolation", () => {
 
     try {
       await page.goto(server.baseUrl);
+      // addScriptTag resolves before the module body runs, so the global is not
+      // observable yet; wait for the assignment instead of racing page.evaluate.
       await page.addScriptTag({
         content: `globalThis.openclawTerminalRuntimeModule = import(${JSON.stringify(moduleUrl)});`,
         type: "module",
       });
+      await page.waitForFunction(() =>
+        Boolean(
+          (globalThis as unknown as { openclawTerminalRuntimeModule?: unknown })
+            .openclawTerminalRuntimeModule,
+        ),
+      );
       const sentinel = "CLOSE_RESET_SENTINEL";
       const result = await page.evaluate(
         async ({ staleText }) => {

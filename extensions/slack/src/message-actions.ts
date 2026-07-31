@@ -3,7 +3,8 @@ import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { extractToolSend, type ChannelToolSend } from "openclaw/plugin-sdk/tool-send";
-import { listEnabledSlackAccounts, resolveSlackAccount } from "./accounts.js";
+import { inspectSlackAccount } from "./account-inspect.js";
+import { listSlackAccountIds } from "./accounts.js";
 import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
 
 export function listSlackMessageActions(
@@ -11,8 +12,18 @@ export function listSlackMessageActions(
   accountId?: string | null,
 ): ChannelMessageActionName[] {
   const accounts = (
-    accountId ? [resolveSlackAccount({ cfg, accountId })] : listEnabledSlackAccounts(cfg)
-  ).filter((account) => account.enabled && account.botTokenSource !== "none");
+    accountId
+      ? [inspectSlackAccount({ cfg, accountId })]
+      : listSlackAccountIds(cfg).map((listedAccountId) =>
+          inspectSlackAccount({ cfg, accountId: listedAccountId }),
+        )
+  ).filter(
+    (account) =>
+      account.enabled &&
+      (account.identity === "user"
+        ? account.userTokenStatus === "available"
+        : account.botTokenStatus === "available"),
+  );
   if (accounts.length === 0) {
     return [];
   }

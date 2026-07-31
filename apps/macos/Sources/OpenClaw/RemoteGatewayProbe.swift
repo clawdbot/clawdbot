@@ -155,7 +155,9 @@ struct RemoteGatewayProbeSuccess: Equatable {
 enum RemoteGatewayProbe {
     @MainActor
     static func run() async -> RemoteGatewayProbeResult {
-        AppStateStore.shared.syncGatewayConfigNow()
+        guard AppStateStore.shared.syncGatewayConfigNow() else {
+            return .failed("Save valid remote gateway settings before checking the connection")
+        }
         let settings = CommandResolver.connectionSettings()
         let transport = AppStateStore.shared.remoteTransport
 
@@ -165,7 +167,7 @@ enum RemoteGatewayProbe {
                 return .failed("Set a gateway URL first")
             }
             guard self.isValidWsUrl(trimmedUrl) else {
-                return .failed("Gateway URL must use wss:// for remote hosts (ws:// only for localhost)")
+                return .failed(GatewayRemoteConfig.directGatewayUrlValidationMessage)
             }
         } else {
             let trimmedTarget = settings.target.trimmingCharacters(in: .whitespacesAndNewlines)

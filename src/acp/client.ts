@@ -72,10 +72,6 @@ function resolveSelfEntryPath(): string | null {
 
 function printSessionUpdate(notification: SessionNotification): void {
   const update = notification.update;
-  if (!("sessionUpdate" in update)) {
-    return;
-  }
-
   switch (update.sessionUpdate) {
     case "agent_message_chunk": {
       if (update.content?.type === "text") {
@@ -150,6 +146,10 @@ async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHa
   if (!agent.stdin || !agent.stdout) {
     throw new Error("Failed to create ACP stdio pipes");
   }
+
+  agent.on("error", (err) => {
+    log(`agent error: ${String(err)}`);
+  });
 
   const input = Writable.toWeb(agent.stdin);
   const output = Readable.toWeb(agent.stdout) as unknown as ReadableStream<Uint8Array>;

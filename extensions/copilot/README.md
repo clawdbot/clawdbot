@@ -14,13 +14,11 @@ The harness claims the canonical subscription `github-copilot` provider plus
 custom BYOK provider entries that the Copilot SDK can represent. Manifest-owned
 native provider ids stay with their owning runtimes. The harness is opt-in only:
 selection requires explicit `agentRuntime.id: "copilot"` on a model or provider
-entry; `auto` never picks it. PI remains the default embedded runtime.
+entry; `auto` never picks it. OpenClaw remains the default embedded runtime.
 
 See [GitHub Copilot agent runtime](../../docs/plugins/copilot.md) for
 configuration, the doctor contract, transcript mirroring, compaction, side
 questions, replay, and the supported-surface contract.
-See [qa/copilot-capabilities.md](../../qa/copilot-capabilities.md)
-for the SDK capability inventory the harness is pinned to.
 
 ## Package
 

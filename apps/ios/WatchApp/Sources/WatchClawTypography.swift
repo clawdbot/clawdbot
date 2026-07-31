@@ -37,6 +37,10 @@ enum WatchClawType {
         body(size: 11, relativeTo: .caption2)
     }
 
+    static var command: Font {
+        .custom("JetBrainsMono-Regular", size: 11, relativeTo: .body)
+    }
+
     private static func display(size: CGFloat, weight: Font.Weight, relativeTo textStyle: Font.TextStyle) -> Font {
         .custom("RedHatDisplay-Regular", size: size, relativeTo: textStyle).weight(weight)
     }

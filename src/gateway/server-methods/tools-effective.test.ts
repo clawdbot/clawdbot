@@ -1,8 +1,11 @@
 // Effective tools tests cover session-scoped tool inventory, MCP catalog state,
 // caching behavior, delivery context, and policy filtering.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
+import { setPluginToolMeta } from "../../plugins/tools.js";
 import { testing, toolsEffectiveHandlers } from "./tools-effective.js";
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -18,6 +21,7 @@ const runtimeMocks = vi.hoisted(() => ({
   buildBundleMcpToolsFromCatalog: vi.fn(() => [] as unknown[]),
   getActivePluginChannelRegistryVersion: vi.fn(() => 1),
   getActivePluginRegistryVersion: vi.fn(() => 1),
+  getRegisteredAgentHarness: vi.fn(),
   resolveRuntimeConfigCacheKey: vi.fn(() => "runtime:1:test"),
   resolveAgentDir: vi.fn(() => "/tmp/agents/main/agent"),
   listAgentIds: vi.fn(() => ["main"]),
@@ -66,13 +70,23 @@ const runtimeMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("./tools-effective.runtime.js", () => runtimeMocks);
+vi.mock("./tools-effective.runtime.js", () => ({
+  ...runtimeMocks,
+  loadSessionEntryReadOnly: runtimeMocks.loadSessionEntry,
+}));
+
+const nodePluginToolSnapshotMocks = vi.hoisted(() => ({
+  version: 1,
+  getConnectedNodePluginToolsVersion: vi.fn(() => nodePluginToolSnapshotMocks.version),
+}));
+
+vi.mock("../node-plugin-tool-snapshot.js", () => nodePluginToolSnapshotMocks);
 
 type RespondCall = [boolean, unknown?, { code: number; message: string }?];
 type ToolsEffectivePayload = {
   agentId?: string;
   profile?: string;
-  notices?: Array<{ id?: string; severity?: string; message?: string }>;
+  notices?: Array<{ id?: string; severity?: string; message?: string; servers?: string[] }>;
   groups?: Array<{
     id?: string;
     label?: string;
@@ -84,6 +98,9 @@ type ToolsEffectivePayload = {
       rawDescription?: string;
       source?: string;
       pluginId?: string;
+      mcpServer?: string;
+      mcpToolName?: string;
+      deniedBySession?: true;
     }>;
   }>;
 };
@@ -93,7 +110,10 @@ function createInvokeParams(params: Record<string, unknown>) {
   return {
     respond,
     invoke: async () =>
-      await toolsEffectiveHandlers["tools.effective"]({
+      await expectDefined(
+        toolsEffectiveHandlers["tools.effective"],
+        'toolsEffectiveHandlers["tools.effective"] test invariant',
+      )({
         params,
         respond: respond as never,
         context: { getRuntimeConfig: () => ({}) } as never,
@@ -116,13 +136,24 @@ function firstRespondCall(respond: ReturnType<typeof vi.fn>): RespondCall | unde
 }
 
 function makeMcpTool(params: Record<string, unknown> = { type: "object", properties: {} }) {
-  return {
+  const tool = {
     name: "reproProbe__probe_tool",
     label: "Probe Tool",
     description: "Probe from MCP",
     parameters: params,
     execute: vi.fn(),
   };
+  setPluginToolMeta(tool, {
+    pluginId: "bundle-mcp",
+    optional: false,
+    mcp: {
+      serverName: "reproProbe",
+      safeServerName: "reproProbe",
+      toolName: "probe_tool",
+      operation: "tool",
+    },
+  });
+  return tool;
 }
 
 function makeCoreInventory(
@@ -224,6 +255,7 @@ describe("tools.effective handler", () => {
     vi.clearAllMocks();
     testing.resetToolsEffectiveCacheForTest();
     testing.resetToolsEffectiveNowForTest();
+    nodePluginToolSnapshotMocks.version = 1;
     runtimeMocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/workspace-main");
     runtimeMocks.resolveAgentDir.mockReturnValue("/tmp/agents/main/agent");
     runtimeMocks.getActivePluginChannelRegistryVersion.mockReturnValue(1);
@@ -244,6 +276,7 @@ describe("tools.effective handler", () => {
       serverNames: [] as string[],
     });
     runtimeMocks.peekSessionMcpRuntime.mockReturnValue(undefined);
+    runtimeMocks.getRegisteredAgentHarness.mockReturnValue(undefined);
     runtimeMocks.buildBundleMcpToolsFromCatalog.mockReturnValue([]);
     runtimeMocks.applyFinalEffectiveToolPolicy.mockImplementation(
       (params: { bundledTools: unknown[] }) => params.bundledTools,
@@ -345,6 +378,19 @@ describe("tools.effective handler", () => {
     expectResponsesOk(first.respond, second.respond);
   });
 
+  it("recomputes fresh base inventory when connected node plugin tools change", async () => {
+    const first = createInvokeParams({ sessionKey: "main:abc" });
+    await first.invoke();
+
+    nodePluginToolSnapshotMocks.version = 2;
+    const second = createInvokeParams({ sessionKey: "main:abc" });
+    await second.invoke();
+
+    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(2);
+    expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledTimes(2);
+    expectResponsesOk(first.respond, second.respond);
+  });
+
   it("keeps separate base inventory cache entries for spawned workspaces", async () => {
     const first = createInvokeParams({ sessionKey: "main:abc" });
     await first.invoke();
@@ -441,12 +487,14 @@ describe("tools.effective handler", () => {
   });
 
   it("reports configured MCP servers as not connected without starting them", async () => {
-    mockMcpConfigSummary();
+    mockMcpConfigSummary({ serverNames: ["zeta", "alpha"] });
     const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
     await invoke();
 
     expectPayloadGroupIds(respond, ["core"]);
-    expect(expectPayloadNotice(respond, "mcp-not-yet-connected")?.message).toContain("reproProbe");
+    const notice = expectPayloadNotice(respond, "mcp-not-yet-connected");
+    expect(notice?.message).toContain('"alpha", "zeta"');
+    expect(notice?.servers).toEqual(["alpha", "zeta"]);
   });
 
   it("projects MCP tools from an already-populated session runtime catalog", async () => {
@@ -469,13 +517,142 @@ describe("tools.effective handler", () => {
           rawDescription: "Probe from MCP",
           source: "mcp",
           pluginId: "bundle-mcp",
+          mcpServer: "reproProbe",
+          mcpToolName: "probe_tool",
         },
       ],
     });
     expect(runtimeMocks.buildBundleMcpToolsFromCatalog).toHaveBeenCalledWith({
       catalog,
       reservedToolNames: ["exec"],
+      includeSessionDenied: true,
     });
+  });
+
+  it("projects MCP tools from the session-owning native harness catalog", async () => {
+    const loaded = runtimeMocks.loadSessionEntry();
+    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
+      ...loaded,
+      entry: {
+        ...loaded.entry,
+        agentHarnessId: "codex",
+        toolOverrides: { mcpToolsDeny: { docs: ["delete"] } },
+      },
+    } as never);
+    mockMcpConfigSummary();
+    const catalog = makeMcpCatalog();
+    const loadMcpToolCatalog = vi.fn().mockResolvedValue(catalog);
+    runtimeMocks.getRegisteredAgentHarness.mockReturnValueOnce({
+      harness: { loadMcpToolCatalog },
+    });
+    runtimeMocks.buildBundleMcpToolsFromCatalog.mockReturnValueOnce([makeMcpTool()]);
+
+    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
+    await invoke();
+
+    expect(loadMcpToolCatalog).toHaveBeenCalledWith({
+      config: {},
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "main:abc",
+      workspaceDir: "/tmp/workspace-main",
+      mcpServerNames: ["reproProbe"],
+      toolOverrides: { mcpToolsDeny: { docs: ["delete"] } },
+    });
+    expect(runtimeMocks.buildBundleMcpToolsFromCatalog).toHaveBeenCalledWith({
+      catalog,
+      reservedToolNames: ["exec"],
+      includeSessionDenied: true,
+    });
+    expectPayloadGroupIds(respond, ["core", "mcp"]);
+    expect(runtimeMocks.peekSessionMcpRuntime).not.toHaveBeenCalled();
+  });
+
+  it("does not substitute the core MCP catalog when native inventory is unavailable", async () => {
+    const loaded = runtimeMocks.loadSessionEntry();
+    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
+      ...loaded,
+      entry: { ...loaded.entry, agentHarnessId: "codex" },
+    } as never);
+    runtimeMocks.resolveSessionMcpConfigSummary.mockReturnValueOnce({
+      fingerprint: "mcp:1:test",
+      serverNames: ["reproProbe"],
+    });
+    const loadMcpToolCatalog = vi.fn().mockResolvedValue(undefined);
+    runtimeMocks.getRegisteredAgentHarness.mockReturnValueOnce({
+      harness: { loadMcpToolCatalog },
+    });
+    runtimeMocks.peekSessionMcpRuntime.mockReturnValue({
+      workspaceDir: "/tmp/workspace-main",
+      configFingerprint: "mcp:1:test",
+      peekCatalog: () => makeMcpCatalog(),
+    });
+
+    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
+    await invoke();
+
+    expectPayloadGroupIds(respond, ["core"]);
+    expectPayloadNotice(respond, "mcp-not-yet-connected");
+    expect(runtimeMocks.peekSessionMcpRuntime).not.toHaveBeenCalled();
+  });
+
+  it("preserves raw MCP identities and session denials across sanitized collisions", async () => {
+    const enabled = makeMcpTool();
+    enabled.name = "collision__alpha-";
+    enabled.label = "Alpha bang";
+    setPluginToolMeta(enabled, {
+      pluginId: "bundle-mcp",
+      optional: false,
+      mcp: {
+        serverName: "collision",
+        safeServerName: "collision",
+        toolName: "alpha!",
+        operation: "tool",
+      },
+    });
+    const denied = makeMcpTool();
+    denied.name = "collision__alpha--2";
+    denied.label = "Alpha question";
+    setPluginToolMeta(denied, {
+      pluginId: "bundle-mcp",
+      optional: false,
+      mcp: {
+        serverName: "collision",
+        safeServerName: "collision",
+        toolName: "alpha?",
+        operation: "tool",
+        deniedBySession: true,
+      },
+    });
+    const catalog = makeMcpCatalog();
+    mockMcpConfigSummary({ serverNames: ["collision"] });
+    mockWarmMcpRuntime(catalog);
+    runtimeMocks.buildBundleMcpToolsFromCatalog.mockReturnValueOnce([enabled, denied]);
+
+    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
+    await invoke();
+
+    const payload = firstRespondCall(respond)?.[1] as ToolsEffectivePayload | undefined;
+    expect(payload?.groups?.[0]?.tools?.[0]).toEqual({
+      id: "exec",
+      label: "Exec",
+      description: "Run shell commands",
+      rawDescription: "Run shell commands",
+      source: "core",
+    });
+    expect(payload?.groups?.[1]?.tools).toEqual([
+      expect.objectContaining({
+        id: "collision__alpha-",
+        mcpServer: "collision",
+        mcpToolName: "alpha!",
+      }),
+      expect.objectContaining({
+        id: "collision__alpha--2",
+        mcpServer: "collision",
+        mcpToolName: "alpha?",
+        deniedBySession: true,
+      }),
+    ]);
   });
 
   it("uses the warm runtime workspace when comparing sandboxed MCP catalogs", async () => {

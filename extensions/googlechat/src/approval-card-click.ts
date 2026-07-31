@@ -1,4 +1,8 @@
-import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import {
+  resolveApprovalOverGateway,
+  type ApprovalResolveResult,
+} from "openclaw/plugin-sdk/approval-gateway-runtime";
+import { updateGoogleChatMessage } from "./api.js";
 import { googleChatApprovalAuth } from "./approval-auth.js";
 import {
   claimGoogleChatApprovalCardBinding,
@@ -7,6 +11,7 @@ import {
   releaseGoogleChatApprovalCardBinding,
   readGoogleChatApprovalActionToken,
 } from "./approval-card-actions.js";
+import { buildGoogleChatCanonicalApprovalTerminalCards } from "./approval-terminal-card.js";
 import type { WebhookTarget } from "./monitor-types.js";
 import type { GoogleChatEvent } from "./types.js";
 
@@ -73,22 +78,30 @@ export async function maybeHandleGoogleChatApprovalCardClick(params: {
   }
   const consumed = claim.binding;
 
+  let result: ApprovalResolveResult;
   try {
-    await resolveApprovalOverGateway({
+    result = await resolveApprovalOverGateway({
       cfg: params.target.config,
       approvalId: consumed.approvalId,
+      approvalKind: consumed.approvalKind,
       decision: consumed.decision,
       senderId: actor,
-      allowPluginFallback: consumed.approvalKind === "exec",
       clientDisplayName: `Google Chat approval (${actor?.trim() || "unknown"})`,
+    });
+    await updateGoogleChatMessage({
+      account: params.target.account,
+      messageName: consumed.messageName,
+      cardsV2: buildGoogleChatCanonicalApprovalTerminalCards(result),
     });
   } catch (error) {
     releaseGoogleChatApprovalCardBinding(token);
     throw error;
   }
   completeGoogleChatApprovalCardBinding(token);
+  const outcome = result.applied ? "resolved" : "already resolved";
+  const decision = "decision" in result.approval ? result.approval.decision : "none";
   params.target.runtime.log?.(
-    `[${params.target.account.accountId}] googlechat approval resolved id=${consumed.approvalId} decision=${consumed.decision} sender=${actor || "unknown"}`,
+    `[${params.target.account.accountId}] googlechat approval ${outcome} id=${consumed.approvalId} status=${result.approval.status} decision=${decision} sender=${actor || "unknown"}`,
   );
   return true;
 }

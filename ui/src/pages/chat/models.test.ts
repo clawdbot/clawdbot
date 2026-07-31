@@ -31,6 +31,32 @@ describe("loadModels", () => {
     expect(request).toHaveBeenCalledTimes(1);
     expect(first).toBe(second);
   });
+
+  it("keeps a late stale response from clobbering a fresher refresh result", async () => {
+    const stale = [{ id: "stale", name: "Stale", provider: "openai" }];
+    const fresh = [{ id: "fresh", name: "Fresh", provider: "openai" }];
+    let releaseStale: (() => void) | undefined;
+    const staleGate = new Promise<void>((resolve) => {
+      releaseStale = resolve;
+    });
+    const request = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await staleGate;
+        return { models: stale };
+      })
+      .mockImplementationOnce(async () => ({ models: fresh }));
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    const stalePromise = loadModels(client);
+    const freshModels = await loadModels(client, { refresh: true });
+    releaseStale?.();
+    await stalePromise;
+
+    expect(freshModels).toEqual(fresh);
+    expect(await loadModels(client)).toEqual(fresh);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("applyModelCatalogResult", () => {

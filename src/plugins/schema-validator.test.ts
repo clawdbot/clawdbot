@@ -2129,3 +2129,4 @@ describe("schema validator", () => {
     expect(Format.Get("uuid")?.("not a uuid")).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

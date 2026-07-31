@@ -93,6 +93,7 @@ function createLazyRegistration<TApi extends Api, TOptions extends StreamOptions
 }
 
 const registerBuiltIns: RegisterBuiltIn[] = [
+  // Registration is transport-free; each lazy adapter owns its fetch or construction unwrap.
   createLazyRegistration(
     "anthropic-messages",
     () => import("./anthropic.js"),

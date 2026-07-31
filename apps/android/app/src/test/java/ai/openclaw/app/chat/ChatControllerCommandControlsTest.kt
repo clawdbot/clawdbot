@@ -1,5 +1,7 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewayRequestRejected
+import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -249,11 +251,62 @@ class ChatControllerCommandControlsTest {
       assertTrue(create.second.orEmpty().contains("\"agentId\":\"main\""))
       assertTrue(create.second.orEmpty().contains("\"parentSessionKey\":\"main\""))
       assertTrue(create.second.orEmpty().contains("\"emitCommandHooks\":true"))
+      assertTrue(create.second.orEmpty().contains("\"succeedsParent\":false"))
       assertTrue(create.second.orEmpty().contains("\"label\":\"New chat\""))
       assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
       assertEquals("fresh-session", controller.sessionId.value)
       assertTrue(requests.any { it.first == "chat.history" })
       assertTrue(requests.any { it.first == "sessions.list" })
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun startNewChatRetriesWithoutParentLifecycleAgainstOlderGateway() =
+    runTest {
+      val requests = mutableListOf<Pair<String, String?>>()
+      var createCalls = 0
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            requests += method to paramsJson
+            when (method) {
+              "sessions.create" -> {
+                createCalls += 1
+                if (createCalls == 1) {
+                  throw GatewayRequestRejected(
+                    GatewaySession.ErrorShape(
+                      code = "INVALID_REQUEST",
+                      message =
+                        "invalid sessions.create params: at root: unexpected property 'succeedsParent'",
+                    ),
+                  )
+                }
+                """{"ok":true,"key":"agent:main:dashboard:fresh"}"""
+              }
+              "chat.history" -> """{"sessionId":"fresh-session","messages":[]}"""
+              "health" -> "{}"
+              "sessions.list" -> """{"sessions":[]}"""
+              else -> "{}"
+            }
+          },
+        )
+      controller.handleGatewayEvent("health", null)
+      controller.load("main")
+      advanceUntilIdle()
+
+      assertTrue(controller.startNewChatAwait())
+
+      val creates = requests.filter { it.first == "sessions.create" }
+      assertEquals(2, creates.size)
+      assertTrue(creates[0].second.orEmpty().contains("\"succeedsParent\":false"))
+      assertEquals(false, creates[1].second.orEmpty().contains("\"succeedsParent\""))
+      assertEquals(false, creates[1].second.orEmpty().contains("\"parentSessionKey\""))
+      assertEquals(false, creates[1].second.orEmpty().contains("\"emitCommandHooks\""))
+      assertTrue(creates[1].second.orEmpty().contains("\"agentId\":\"main\""))
+      assertTrue(creates[1].second.orEmpty().contains("\"label\":\"New chat\""))
+      assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
     }
 
   @OptIn(ExperimentalCoroutinesApi::class)
@@ -296,22 +349,28 @@ class ChatControllerCommandControlsTest {
           json = json,
           requestGateway = { method, paramsJson ->
             requests += method to paramsJson
-            if (method == "sessions.list") """{"sessions":[]}""" else "{}"
+            when (method) {
+              "sessions.list" -> """{"sessions":[]}"""
+              "sessions.delete" -> """{"deleted":true}"""
+              else -> "{}"
+            }
           },
         )
 
       controller.patchSession(
         key = "main",
+        ownerAgentId = "owner-a",
         clearLabel = true,
         clearCategory = true,
         pinned = true,
         archived = false,
         unread = true,
       )
-      controller.deleteSession("main")
+      controller.deleteSession("main", ownerAgentId = "main")
 
       val patch = requests.first { it.first == "sessions.patch" }.second.orEmpty()
       assertTrue(patch.contains("\"key\":\"main\""))
+      assertTrue(patch.contains("\"agentId\":\"owner-a\""))
       assertTrue(patch.contains("\"label\":null"))
       assertTrue(patch.contains("\"category\":null"))
       assertTrue(patch.contains("\"pinned\":true"))
@@ -422,14 +481,20 @@ class ChatControllerCommandControlsTest {
       val create = requests.first { it.first == "sessions.create" }.second.orEmpty()
       assertTrue(create.contains("\"parentSessionKey\":\"main\""))
       assertTrue(create.contains("\"fork\":true"))
-      // Unqualified parent keys leave agent resolution to the gateway.
-      assertEquals(false, create.contains("\"agentId\""))
+      // The active unqualified parent keeps the captured default-agent owner.
+      assertTrue(create.contains("\"agentId\":\"main\""))
 
       // Agent-qualified parents keep the fork under the parent's agent.
       controller.forkSession("agent:ops:dashboard:abc")
       val scopedCreate = requests.last { it.first == "sessions.create" }.second.orEmpty()
       assertTrue(scopedCreate.contains("\"parentSessionKey\":\"agent:ops:dashboard:abc\""))
       assertTrue(scopedCreate.contains("\"agentId\":\"ops\""))
+
+      // Unqualified list rows carry their captured owner through a later default-agent change.
+      controller.forkSession("custom", ownerAgentId = "owner-a")
+      val capturedOwnerCreate = requests.last { it.first == "sessions.create" }.second.orEmpty()
+      assertTrue(capturedOwnerCreate.contains("\"parentSessionKey\":\"custom\""))
+      assertTrue(capturedOwnerCreate.contains("\"agentId\":\"owner-a\""))
       assertTrue(requests.any { it.first == "sessions.list" })
       assertEquals(
         false,
@@ -507,7 +572,7 @@ class ChatControllerCommandControlsTest {
       // Another client cleared the group and name; the gateway sends explicit nulls.
       controller.handleGatewayEvent(
         "sessions.changed",
-        """{"sessionKey":"main","session":{"key":"main","label":null,"category":null}}""",
+        """{"sessionKey":"main","session":{"key":"main","agentId":"main","label":null,"category":null}}""",
       )
       advanceUntilIdle()
       val merged = controller.sessions.value.single()
@@ -545,7 +610,7 @@ class ChatControllerCommandControlsTest {
       failPatches = false
       controller.handleGatewayEvent(
         "sessions.changed",
-        """{"sessionKey":"main","session":{"key":"main","unread":true}}""",
+        """{"sessionKey":"main","session":{"key":"main","agentId":"main","unread":true}}""",
       )
       advanceUntilIdle()
       assertEquals(2, requests.count { it.first == "sessions.patch" })
@@ -564,6 +629,7 @@ class ChatControllerCommandControlsTest {
             requests += method to paramsJson
             when (method) {
               "sessions.list" -> """{"sessions":[{"key":"agent:main:side"}]}"""
+              "sessions.delete" -> """{"deleted":true}"""
               else -> "{}"
             }
           },
@@ -611,7 +677,7 @@ class ChatControllerCommandControlsTest {
       // A run completes while the session stays open: the gateway flags it unread again.
       controller.handleGatewayEvent(
         "sessions.changed",
-        """{"sessionKey":"main","session":{"key":"main","unread":true}}""",
+        """{"sessionKey":"main","session":{"key":"main","agentId":"main","unread":true}}""",
       )
       advanceUntilIdle()
       assertEquals(1, requests.count { it.first == "sessions.patch" })
@@ -619,12 +685,12 @@ class ChatControllerCommandControlsTest {
       // Server-confirmed read resets the episode; a stale duplicate must not re-patch.
       controller.handleGatewayEvent(
         "sessions.changed",
-        """{"sessionKey":"main","session":{"key":"main","unread":false}}""",
+        """{"sessionKey":"main","session":{"key":"main","agentId":"main","unread":false}}""",
       )
       advanceUntilIdle()
       controller.handleGatewayEvent(
         "sessions.changed",
-        """{"sessionKey":"main","session":{"key":"main","unread":true}}""",
+        """{"sessionKey":"main","session":{"key":"main","agentId":"main","unread":true}}""",
       )
       advanceUntilIdle()
       assertEquals(2, requests.count { it.first == "sessions.patch" })

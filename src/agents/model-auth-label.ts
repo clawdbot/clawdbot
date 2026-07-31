@@ -148,11 +148,17 @@ export function resolveModelAuthLabel(params: {
   ) {
     return "oauth (codex-cli)";
   }
-  if (
-    providerKey === "claude-cli" &&
-    readClaudeCliCredentialsCached({ ttlMs: 5_000, allowKeychainPrompt: false })
-  ) {
-    return "oauth (claude-cli)";
+  if (providerKey === "claude-cli") {
+    const auth = readClaudeCliCredentialsCached({
+      ttlMs: 5_000,
+      allowKeychainPrompt: false,
+    });
+    if (auth?.type === "api_key_helper") {
+      return "api-key-helper (claude-cli)";
+    }
+    if (auth) {
+      return "oauth (claude-cli)";
+    }
   }
 
   const customKey = resolveUsableCustomProviderApiKey({

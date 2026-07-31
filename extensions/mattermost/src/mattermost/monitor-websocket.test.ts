@@ -1,14 +1,16 @@
 // Mattermost tests cover monitor websocket plugin behavior.
 import { once } from "node:events";
+import net from "node:net";
+import type { AddressInfo } from "node:net";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { WebSocketServer } from "ws";
+import WebSocket, { WebSocketServer } from "ws";
 import type { RuntimeEnv } from "../../runtime-api.js";
 import {
   createMattermostConnectOnce,
-  MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES,
-  type MattermostWebSocketLike,
-  WebSocketClosedBeforeOpenError,
+  type MattermostWebSocketFactory,
 } from "./monitor-websocket.js";
+import { runWithReconnect } from "./reconnect.js";
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
   let count = 0;
@@ -20,7 +22,7 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
   return count;
 }
 
-class FakeWebSocket implements MattermostWebSocketLike {
+class FakeWebSocket implements ReturnType<MattermostWebSocketFactory> {
   public readonly sent: string[] = [];
   public pingCalls = 0;
   public closeCalls = 0;
@@ -113,6 +115,32 @@ const testRuntime = (): RuntimeEnv =>
     }) as RuntimeEnv["exit"],
   }) as RuntimeEnv;
 
+async function startStalledWebSocketHandshakeServer(): Promise<{
+  url: string;
+  close: () => Promise<void>;
+}> {
+  const accepted: net.Socket[] = [];
+  const server = net.createServer((socket) => {
+    accepted.push(socket);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `ws://127.0.0.1:${port}`,
+    close: async () => {
+      for (const socket of accepted) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    },
+  };
+}
+
 describe("mattermost websocket monitor", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -139,12 +167,12 @@ describe("mattermost websocket monitor", () => {
     } catch (caught) {
       failure = caught;
     }
-    expect(failure).toBeInstanceOf(WebSocketClosedBeforeOpenError);
-    expect((failure as WebSocketClosedBeforeOpenError).message).toBe(
-      "websocket closed before open (code 1006)",
-    );
-    expect((failure as WebSocketClosedBeforeOpenError).code).toBe(1006);
-    expect((failure as WebSocketClosedBeforeOpenError).reason).toBe("connection refused");
+    expect(failure).toMatchObject({
+      name: "WebSocketClosedBeforeOpenError",
+      code: 1006,
+      reason: "connection refused",
+    });
+    expect((failure as Error).message).toBe("websocket closed before open (code 1006)");
   });
 
   it("retries when first attempt errors before open and next attempt succeeds", async () => {
@@ -181,14 +209,16 @@ describe("mattermost websocket monitor", () => {
     });
 
     const firstAttempt = connectOnce();
-    await expect(firstAttempt).rejects.toBeInstanceOf(WebSocketClosedBeforeOpenError);
+    await expect(firstAttempt).rejects.toMatchObject({ name: "WebSocketClosedBeforeOpenError" });
 
     await connectOnce();
 
     expect(sockets).toHaveLength(2);
-    expect(sockets[0].closeCalls).toBe(1);
-    expect(sockets[1].sent).toHaveLength(1);
-    expect(JSON.parse(sockets[1].sent[0] ?? "")).toEqual({
+    const firstSocket = expectDefined(sockets[0], "first Mattermost socket");
+    const secondSocket = expectDefined(sockets[1], "second Mattermost socket");
+    expect(firstSocket.closeCalls).toBe(1);
+    expect(secondSocket.sent).toHaveLength(1);
+    expect(JSON.parse(expectDefined(secondSocket.sent[0], "Mattermost auth payload"))).toEqual({
       action: "authentication_challenge",
       data: { token: "token" },
       seq: 1,
@@ -219,9 +249,7 @@ describe("mattermost websocket monitor", () => {
     });
     expect(JSON.stringify(largeProps).length).toBeLessThan(800_000);
     expect(Buffer.byteLength(largePostEnvelope)).toBeGreaterThan(1024 * 1024);
-    expect(Buffer.byteLength(largePostEnvelope)).toBeLessThan(
-      MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES,
-    );
+    expect(Buffer.byteLength(largePostEnvelope)).toBeLessThan(16 * 1024 * 1024);
 
     const runtime = testRuntime();
     const onPosted = vi.fn(async () => {});
@@ -239,7 +267,7 @@ describe("mattermost websocket monitor", () => {
           }),
         );
         socket.send(largePostEnvelope);
-        socket.send(Buffer.alloc(MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES + 1, 0x78));
+        socket.send(Buffer.alloc(16 * 1024 * 1024 + 1, 0x78));
       });
     });
 
@@ -256,14 +284,10 @@ describe("mattermost websocket monitor", () => {
       await once(server, "close");
     }
 
-    expect(onPosted).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "post-1", message: "normal Mattermost post" }),
-      expect.any(Object),
-    );
-    expect(onPosted).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "post-large", props: largeProps }),
-      expect.any(Object),
-    );
+    // onPosted now receives the raw envelope; the post rides inside it as a
+    // nested JSON string, so its fields appear escaped.
+    expect(onPosted).toHaveBeenCalledWith(expect.stringContaining('\\"id\\":\\"post-1\\"'));
+    expect(onPosted).toHaveBeenCalledWith(expect.stringContaining('\\"id\\":\\"post-large\\"'));
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("Max payload size exceeded"),
     );
@@ -317,6 +341,52 @@ describe("mattermost websocket monitor", () => {
       event: "reaction_added",
       data: { reaction },
     });
+  });
+
+  it("hands posted envelopes to ingress raw and keeps post_edited out", async () => {
+    const socket = new FakeWebSocket();
+    const onPosted = vi.fn(async () => {});
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime: testRuntime(),
+      nextSeq: () => 1,
+      onPosted,
+      webSocketFactory: () => socket,
+    });
+    const posted = {
+      event: "posted",
+      data: {
+        post: JSON.stringify({
+          id: "post-raw",
+          channel_id: "channel-raw",
+          unexpected_transport_field: true,
+        }),
+      },
+    };
+
+    const connected = connectOnce();
+    socket.emitOpen();
+    socket.emitMessage(
+      Buffer.from(
+        JSON.stringify({
+          ...posted,
+          event: "post_edited",
+        }),
+      ),
+    );
+    await new Promise<void>((resolve) => {
+      queueMicrotask(resolve);
+    });
+    expect(onPosted).not.toHaveBeenCalled();
+    socket.emitMessage(Buffer.from(JSON.stringify(posted)));
+    await vi.waitFor(() => {
+      expect(onPosted).toHaveBeenCalledTimes(1);
+    });
+    socket.emitClose(1000);
+    await connected;
+
+    expect(onPosted).toHaveBeenCalledWith(JSON.stringify(posted));
   });
 
   it("terminates when bot update_at changes (disable/enable cycle)", async () => {
@@ -581,5 +651,115 @@ describe("mattermost websocket monitor", () => {
     socket.emitClose(1000);
     await connected;
     vi.useRealTimers();
+  });
+
+  it("passes bounded payload and handshake options to the websocket factory", async () => {
+    const socket = new FakeWebSocket();
+    let clientOptions: Parameters<MattermostWebSocketFactory>[1] | undefined;
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime: testRuntime(),
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: (_url, options) => {
+        clientOptions = options;
+        queueMicrotask(() => socket.emitClose(1006));
+        return socket;
+      },
+    });
+
+    await expect(connectOnce()).rejects.toMatchObject({
+      name: "WebSocketClosedBeforeOpenError",
+    });
+    expect(clientOptions).toEqual({
+      handshakeTimeout: 30_000,
+      maxPayload: 16 * 1024 * 1024,
+    });
+  });
+
+  it("fails connect when the websocket handshake never completes", async () => {
+    const stalledServer = await startStalledWebSocketHandshakeServer();
+
+    try {
+      const connectOnce = createMattermostConnectOnce({
+        wsUrl: stalledServer.url,
+        botToken: "token",
+        runtime: testRuntime(),
+        nextSeq: () => 1,
+        onPosted: async () => {},
+        webSocketFactory: (url, options) =>
+          new WebSocket(url, {
+            ...options,
+            handshakeTimeout: 200,
+          }) as ReturnType<MattermostWebSocketFactory>,
+      });
+
+      const outcome = await connectOnce().then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) {
+        // ws surfaces handshake timeout as error then close-before-open (1006).
+        expect(outcome.error).toMatchObject({ name: "WebSocketClosedBeforeOpenError" });
+        console.log(
+          `[mattermost handshake proof] timed_out=true name=${
+            outcome.error instanceof Error ? outcome.error.name : typeof outcome.error
+          } message=${
+            outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
+          }`,
+        );
+      }
+    } finally {
+      await stalledServer.close();
+    }
+  });
+
+  it("returns control to reconnect after a stalled handshake", async () => {
+    const stalledServer = await startStalledWebSocketHandshakeServer();
+
+    const runtime = testRuntime();
+    const reconnectDelays: number[] = [];
+    const connectErrors: string[] = [];
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: stalledServer.url,
+      botToken: "token",
+      runtime,
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      webSocketFactory: (url, options) =>
+        new WebSocket(url, {
+          ...options,
+          handshakeTimeout: 200,
+        }) as ReturnType<MattermostWebSocketFactory>,
+    });
+
+    try {
+      await runWithReconnect(connectOnce, {
+        initialDelayMs: 50,
+        maxDelayMs: 50,
+        jitterRatio: 0,
+        shouldReconnect: ({ attempt }) => attempt < 1,
+        onError: (err) => {
+          connectErrors.push(err instanceof Error ? err.name : String(err));
+        },
+        onReconnect: (delayMs) => {
+          reconnectDelays.push(delayMs);
+        },
+      });
+
+      // attempt 0 times out → reconnect; attempt 1 times out → stop.
+      expect(connectErrors).toEqual([
+        "WebSocketClosedBeforeOpenError",
+        "WebSocketClosedBeforeOpenError",
+      ]);
+      expect(reconnectDelays).toEqual([50]);
+      console.log(
+        `[mattermost handshake reconnect proof] timeout_then_reconnect=true errors=${connectErrors.join(",")} reconnect_delays_ms=${reconnectDelays.join(",")}`,
+      );
+    } finally {
+      await stalledServer.close();
+    }
   });
 });

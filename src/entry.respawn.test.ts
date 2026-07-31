@@ -37,6 +37,18 @@ describe("buildCliRespawnPlan", () => {
     ).toBeNull();
   });
 
+  it("does not detach native hook relays through a startup respawn", () => {
+    expect(
+      buildCliRespawnPlan({
+        argv: ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"],
+        env: {},
+        execArgv: [],
+        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+        platform: "linux",
+      }),
+    ).toBeNull();
+  });
+
   it("adds NODE_EXTRA_CA_CERTS and warning suppression in one respawn", () => {
     const plan = buildCliRespawnPlan({
       argv: ["node", "openclaw", "status"],
@@ -87,6 +99,56 @@ describe("buildCliRespawnPlan", () => {
     const respawnPlan = expectCliRespawnPlan(plan);
     expect(respawnPlan.argv).toEqual([EXPERIMENTAL_WARNING_FLAG, "openclaw"]);
     expect(respawnPlan.detachForProcessTree).toBe(false);
+  });
+
+  it("preserves macOS system CA trust through one-shot warning respawns", () => {
+    const plan = buildCliRespawnPlan({
+      argv: ["node", "openclaw", "cron", "list", "--json"],
+      env: { NODE_USE_SYSTEM_CA: "1" },
+      execArgv: [],
+      autoNodeExtraCaCerts: undefined,
+      platform: "darwin",
+    });
+
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.argv).toEqual([
+      EXPERIMENTAL_WARNING_FLAG,
+      "openclaw",
+      "cron",
+      "list",
+      "--json",
+    ]);
+    expect(respawnPlan.env.NODE_USE_SYSTEM_CA).toBe("1");
+  });
+
+  it.each([
+    ["interactive commands", ["node", "openclaw", "tui"]],
+    ["the foreground Gateway", ["node", "openclaw", "gateway", "run"]],
+  ] as const)("keeps macOS system CA loading for %s", (_label, argv) => {
+    expect(
+      buildCliRespawnPlan({
+        argv: [...argv],
+        env: { NODE_USE_SYSTEM_CA: "1" },
+        execArgv: [],
+        autoNodeExtraCaCerts: undefined,
+        platform: "darwin",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not respawn one-shot commands only to change CA trust", () => {
+    expect(
+      buildCliRespawnPlan({
+        argv: ["node", "openclaw", "cron", "list", "--json"],
+        env: {
+          NODE_USE_SYSTEM_CA: "1",
+          [OPENCLAW_NODE_OPTIONS_READY]: "1",
+        },
+        execArgv: [EXPERIMENTAL_WARNING_FLAG],
+        autoNodeExtraCaCerts: undefined,
+        platform: "darwin",
+      }),
+    ).toBeNull();
   });
 
   it("does not respawn interactive commands for warning suppression only", () => {
@@ -258,8 +320,7 @@ describe("runCliRespawnPlan", () => {
       {
         stdio: "inherit",
         env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
-        detached:
-          process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
+        detached: process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
       },
     );
     const [bridgeChild, bridgeOptions] = requireFirstMockCall(

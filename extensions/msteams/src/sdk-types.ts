@@ -27,7 +27,7 @@ type MSTeamsActivity = {
   locale?: string;
   serviceUrl?: string;
   channelData?: {
-    team?: { id?: string; name?: string };
+    team?: { id?: string; aadGroupId?: string; name?: string };
     channel?: { id?: string; name?: string };
     tenant?: { id?: string };
     [key: string]: unknown;
@@ -56,6 +56,7 @@ export type MSTeamsActivityLike = MSTeamsActivityParams | string;
 type MSTeamsStreamer = {
   emit(activity: MSTeamsActivityParams | string): void;
   update(text: string): void;
+  clearText(): void;
   close(): Promise<unknown>;
   readonly canceled: boolean;
 };
@@ -66,5 +67,7 @@ export type MSTeamsTurnContext = {
   sendActivities: (activities: Array<MSTeamsActivityParams>) => Promise<unknown>;
   updateActivity: (activity: MSTeamsActivityParams) => Promise<{ id?: string } | void>;
   deleteActivity: (activityId: string) => Promise<void>;
+  /** Resolve Bot Framework team metadata through this activity's regional service URL. */
+  getTeamDetails?: (teamId: string) => Promise<{ aadGroupId?: string }>;
   stream?: MSTeamsStreamer;
 };

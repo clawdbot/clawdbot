@@ -56,10 +56,6 @@
     "target": "Pi"
   },
   {
-    "source": "Plugin",
-    "target": "Plugin"
-  },
-  {
     "source": "Skills",
     "target": "Skills"
   },
@@ -78,5 +74,13 @@
   {
     "source": "Webhook",
     "target": "Webhook"
+  },
+  {
+    "source": "Pull request review flow",
+    "target": "Процесс ревью pull request"
+  },
+  {
+    "source": "CI pipeline",
+    "target": "CI-пайплайн"
   }
 ]

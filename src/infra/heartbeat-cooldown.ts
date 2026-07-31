@@ -17,20 +17,25 @@ import type { HeartbeatWakeIntent, HeartbeatWakeSource } from "./heartbeat-wake.
 // Default minimum spacing between heartbeat runs for the same agent, regardless
 // of configured `every`. Even when `nextDueMs` is enforced, two wakes arriving
 // within milliseconds can race the schedule update; this floor prevents that.
-export const DEFAULT_MIN_WAKE_SPACING_MS = 30_000;
+const DEFAULT_MIN_WAKE_SPACING_MS = 30_000;
 
 // Flood guard: if more than this many wakes for the same agent fall within the
 // flood window, the dispatcher logs a warning and forces the wake to defer to
 // the next scheduled tick. Tuned so a normal heartbeat that legitimately uses
 // `manual` retry doesn't trip it but a feedback loop does.
 const DEFAULT_FLOOD_WINDOW_MS = 60_000;
-export const DEFAULT_FLOOD_THRESHOLD = 5;
+const DEFAULT_FLOOD_THRESHOLD = 5;
 
 export type DeferDecision =
   | { defer: false }
-  | { defer: true; reason: "not-due" | "min-spacing" | "flood" };
+  | {
+      defer: true;
+      reason: "not-due" | "min-spacing" | "flood";
+      /** First wall-clock instant at which this guard can admit the wake. */
+      retryAtMs: number;
+    };
 
-export type ShouldDeferInput = {
+type ShouldDeferInput = {
   /** Scheduler behavior requested by the wake producer. */
   intent: HeartbeatWakeIntent;
   /** Wake producer, used for diagnostics and future source-specific telemetry. */
@@ -51,6 +56,8 @@ export type ShouldDeferInput = {
   floodWindowMs?: number;
   /** Override the flood-window threshold. */
   floodThreshold?: number;
+  /** Work already retained by the wake queue after a prior guard deferral. */
+  retainedWork?: boolean;
 };
 
 /**
@@ -63,6 +70,7 @@ export type ShouldDeferInput = {
  * | manual        | Run                        | Run (never deferred)                    |
  * | immediate     | Run                        | Run (never deferred, except flood)      |
  * | scheduled     | Defer if now < nextDueMs   | Defer if now < nextDueMs                |
+ * | task          | Run                        | Defer only within floor or on flood      |
  * | event         | Run (bootstrap responsive) | Defer if now < nextDueMs OR within floor |
  *
  * Immediate is for documented wake-now delivery paths such as `openclaw system
@@ -96,6 +104,18 @@ export function shouldDeferWake(input: ShouldDeferInput): DeferDecision {
     return floodDefer ?? { defer: false };
   }
 
+  if (input.intent === "task") {
+    const floodDefer = checkFloodGuard(input);
+    if (floodDefer) {
+      return floodDefer;
+    }
+    const spacingRetryAtMs = resolveMinSpacingRetryAtMs(input);
+    if (spacingRetryAtMs !== undefined) {
+      return { defer: true, reason: "min-spacing", retryAtMs: spacingRetryAtMs };
+    }
+    return { defer: false };
+  }
+
   // Flood guard applies to every non-immediate wake regardless of run history.
   // It is the last line of defense against feedback loops.
   const floodDefer = checkFloodGuard(input);
@@ -104,7 +124,9 @@ export function shouldDeferWake(input: ShouldDeferInput): DeferDecision {
   }
 
   if (input.intent === "scheduled") {
-    return input.now < input.nextDueMs ? { defer: true, reason: "not-due" } : { defer: false };
+    return input.now < input.nextDueMs
+      ? { defer: true, reason: "not-due", retryAtMs: input.nextDueMs }
+      : { defer: false };
   }
 
   // Event-driven wakes. First wake (no prior run) bypasses cooldown gates so
@@ -114,16 +136,30 @@ export function shouldDeferWake(input: ShouldDeferInput): DeferDecision {
     return { defer: false };
   }
 
-  if (input.now < input.nextDueMs) {
-    return { defer: true, reason: "not-due" };
+  if (!input.retainedWork && input.now < input.nextDueMs) {
+    const spacingRetryAtMs = resolveMinSpacingRetryAtMs(input);
+    return {
+      defer: true,
+      reason: "not-due",
+      retryAtMs: Math.min(input.nextDueMs, spacingRetryAtMs ?? input.nextDueMs),
+    };
   }
 
-  const minSpacing = input.minSpacingMs ?? DEFAULT_MIN_WAKE_SPACING_MS;
-  if (minSpacing > 0 && input.now - input.lastRunStartedAtMs < minSpacing) {
-    return { defer: true, reason: "min-spacing" };
+  const spacingRetryAtMs = resolveMinSpacingRetryAtMs(input);
+  if (spacingRetryAtMs !== undefined) {
+    return { defer: true, reason: "min-spacing", retryAtMs: spacingRetryAtMs };
   }
 
   return { defer: false };
+}
+
+function resolveMinSpacingRetryAtMs(input: ShouldDeferInput): number | undefined {
+  const minSpacing = input.minSpacingMs ?? DEFAULT_MIN_WAKE_SPACING_MS;
+  if (minSpacing <= 0 || input.lastRunStartedAtMs === undefined) {
+    return undefined;
+  }
+  const retryAtMs = input.lastRunStartedAtMs + minSpacing;
+  return input.now < retryAtMs ? retryAtMs : undefined;
 }
 
 function checkFloodGuard(input: ShouldDeferInput): DeferDecision | null {
@@ -134,14 +170,20 @@ function checkFloodGuard(input: ShouldDeferInput): DeferDecision | null {
   }
   const windowStart = input.now - floodWindow;
   let inWindow = 0;
+  let thresholdOldestTs: number | undefined;
   for (let i = input.recentRunStarts.length - 1; i >= 0; i--) {
     const ts = input.recentRunStarts[i];
     if (ts === undefined || ts < windowStart) {
       break;
     }
     inWindow += 1;
+    if (inWindow === floodThreshold) {
+      thresholdOldestTs = ts;
+    }
   }
-  return inWindow >= floodThreshold ? { defer: true, reason: "flood" } : null;
+  return inWindow >= floodThreshold && thresholdOldestTs !== undefined
+    ? { defer: true, reason: "flood", retryAtMs: thresholdOldestTs + floodWindow + 1 }
+    : null;
 }
 
 /**

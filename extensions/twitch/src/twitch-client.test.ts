@@ -9,6 +9,7 @@
  * - Error handling and edge cases
  */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveTwitchToken } from "./token.js";
 import { TwitchClientManager } from "./twitch-client.js";
@@ -31,6 +32,15 @@ const messageHandlers: Array<(channel: string, user: string, message: string, ms
 const authSuccessHandlers: Array<() => void> = [];
 const authFailureHandlers: Array<(text: string, retryCount: number) => void> = [];
 const disconnectHandlers: Array<(manual: boolean, reason?: Error) => void> = [];
+
+type TwitchClientManagerState = {
+  clients: Map<string, unknown>;
+  messageHandlers: Map<string, (message: TwitchChatMessage) => void>;
+};
+
+function managerState(manager: TwitchClientManager): TwitchClientManagerState {
+  return manager as unknown as TwitchClientManagerState;
+}
 
 // Mock functions that track handlers and return unbind objects
 const mockOnMessage = vi.fn((handler: any) => {
@@ -338,7 +348,7 @@ describe("TwitchClientManager", () => {
       // The broken auth provider must not be cached as a usable client;
       // otherwise later sends fail with an opaque error instead of failing fast.
       const key = manager.getAccountKey(refreshingAccount);
-      expect((manager as any).clients.has(key)).toBe(false);
+      expect(managerState(manager).clients.has(key)).toBe(false);
     });
 
     it("retries client creation after an earlier addUserForToken failure (83853)", async () => {
@@ -422,7 +432,7 @@ describe("TwitchClientManager", () => {
 
       // Check the stored handler is handler2
       const key = manager.getAccountKey(testAccount);
-      expect((manager as any).messageHandlers.get(key)).toBe(handler2);
+      expect(managerState(manager).messageHandlers.get(key)).toBe(handler2);
     });
 
     it("cleanup of an earlier handler does not remove a newer registered handler (#83888)", () => {
@@ -436,7 +446,7 @@ describe("TwitchClientManager", () => {
       // Running the first handler's cleanup must not drop handler2.
       cleanup1();
 
-      expect((manager as any).messageHandlers.get(key)).toBe(handler2);
+      expect(managerState(manager).messageHandlers.get(key)).toBe(handler2);
     });
 
     it("cleanup of an earlier registration does not remove a newer registration using the same handler", () => {
@@ -447,7 +457,7 @@ describe("TwitchClientManager", () => {
       manager.onMessage(testAccount, handler);
       cleanup1();
 
-      expect((manager as any).messageHandlers.get(key)).toBe(handler);
+      expect(managerState(manager).messageHandlers.get(key)).toBe(handler);
     });
 
     it("cleanup of the current handler removes it", () => {
@@ -457,7 +467,7 @@ describe("TwitchClientManager", () => {
       const cleanup = manager.onMessage(testAccount, handler);
       cleanup();
 
-      expect((manager as any).messageHandlers.has(key)).toBe(false);
+      expect(managerState(manager).messageHandlers.has(key)).toBe(false);
     });
   });
 
@@ -478,8 +488,8 @@ describe("TwitchClientManager", () => {
       await manager.disconnect(testAccount);
 
       const key = manager.getAccountKey(testAccount);
-      expect((manager as any).clients.has(key)).toBe(false);
-      expect((manager as any).messageHandlers.has(key)).toBe(false);
+      expect(managerState(manager).clients.has(key)).toBe(false);
+      expect(managerState(manager).messageHandlers.has(key)).toBe(false);
     });
 
     it("clears pending client message handlers when disconnect cancels connection", async () => {
@@ -492,7 +502,7 @@ describe("TwitchClientManager", () => {
       await manager.disconnect(testAccount);
 
       const key = manager.getAccountKey(testAccount);
-      expect((manager as any).messageHandlers.has(key)).toBe(false);
+      expect(managerState(manager).messageHandlers.has(key)).toBe(false);
       authSuccessHandlers[0]?.();
       await expect(connection).rejects.toThrow("Twitch connection cancelled");
 
@@ -527,7 +537,7 @@ describe("TwitchClientManager", () => {
       expect(mockQuit).toHaveBeenCalledTimes(1);
 
       const key2 = manager.getAccountKey(testAccount2);
-      expect((manager as any).clients.has(key2)).toBe(true);
+      expect(managerState(manager).clients.has(key2)).toBe(true);
     });
   });
 
@@ -539,8 +549,8 @@ describe("TwitchClientManager", () => {
       await manager.disconnectAll();
 
       expect(mockQuit).toHaveBeenCalledTimes(2);
-      expect((manager as any).clients.size).toBe(0);
-      expect((manager as any).messageHandlers.size).toBe(0);
+      expect(managerState(manager).clients.size).toBe(0);
+      expect(managerState(manager).messageHandlers.size).toBe(0);
     });
 
     it("should handle empty client list gracefully", async () => {
@@ -562,6 +572,18 @@ describe("TwitchClientManager", () => {
       expect(resultRest).toEqual({ ok: true });
       expect(messageId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
       expect(mockSay).toHaveBeenCalledWith("testchannel", "Hello, world!");
+    });
+
+    it("should keep surrogate pairs intact when pre-chunking long messages", async () => {
+      const prefix = "a".repeat(499);
+
+      const result = await manager.sendMessage(testAccount, "testchannel", `${prefix}😀b`);
+
+      expect(result.ok).toBe(true);
+      expect(mockSay.mock.calls).toEqual([
+        ["testchannel", prefix],
+        ["testchannel", "😀b"],
+      ]);
     });
 
     it("should generate unique message ID for each message", async () => {
@@ -604,7 +626,7 @@ describe("TwitchClientManager", () => {
 
     it("should create client if not already connected", async () => {
       // Clear the existing client
-      (manager as any).clients.clear();
+      managerState(manager).clients.clear();
 
       // Reset connect call count for this specific test
       const connectCallCountBefore = mockConnect.mock.calls.length;
@@ -632,7 +654,7 @@ describe("TwitchClientManager", () => {
       await manager.getClient(testAccount);
 
       // Get the onMessage callback
-      const onMessageCallback = messageHandlers[0];
+      const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");
       if (!onMessageCallback) {
         throw new Error("onMessageCallback not found");
       }
@@ -655,14 +677,14 @@ describe("TwitchClientManager", () => {
       expect(capturedMessage?.displayName).toBe("TestUser");
       expect(capturedMessage?.userId).toBe("12345");
       expect(capturedMessage?.message).toBe("Hello bot!");
-      expect(capturedMessage?.channel).toBe("testchannel");
+      expect(capturedMessage?.channel).toBe("#testchannel");
       expect(capturedMessage?.chatType).toBe("group");
     });
 
-    it("should normalize channel names without # prefix", async () => {
+    it("should preserve channel names without a # prefix", async () => {
       await manager.getClient(testAccount);
 
-      const onMessageCallback = messageHandlers[0];
+      const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");
 
       onMessageCallback("testchannel", "testuser", "Test", {
         userInfo: {
@@ -683,7 +705,7 @@ describe("TwitchClientManager", () => {
     it("should include user role flags in message", async () => {
       await manager.getClient(testAccount);
 
-      const onMessageCallback = messageHandlers[0];
+      const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");
 
       onMessageCallback("#testchannel", "moduser", "Test", {
         userInfo: {
@@ -707,7 +729,7 @@ describe("TwitchClientManager", () => {
     it("should handle broadcaster messages", async () => {
       await manager.getClient(testAccount);
 
-      const onMessageCallback = messageHandlers[0];
+      const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");
 
       onMessageCallback("#testchannel", "broadcaster", "Test", {
         userInfo: {

@@ -1,8 +1,6 @@
 // Minimal @openclaw/ai consumer: one isolated runtime, built-in providers,
 // one streamed completion. Uses only the public package surface — no OpenClaw
-// application code. Run with:
-//   ANTHROPIC_API_KEY=... node index.mjs "your prompt"
-//   OPENAI_API_KEY=... node index.mjs --provider openai "your prompt"
+// application code. See README.md for build prerequisites and run commands.
 import { createLlmRuntime } from "@openclaw/ai";
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 
@@ -20,16 +18,16 @@ const MODELS = {
     maxTokens: 8192,
   },
   openai: {
-    id: "gpt-5.5",
-    name: "GPT-5.5",
+    id: "gpt-5.6-sol",
+    name: "GPT-5.6 Sol",
     api: "openai-responses",
     provider: "openai",
     baseUrl: "https://api.openai.com/v1",
     reasoning: true,
     input: ["text"],
-    cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
-    contextWindow: 400_000,
-    maxTokens: 16_384,
+    cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+    contextWindow: 1_050_000,
+    maxTokens: 128_000,
   },
   // Local Ollama server; no API key required.
   ollama: {

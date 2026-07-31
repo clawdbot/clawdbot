@@ -12,11 +12,12 @@ import {
 import {
   createOpenClawTestState,
   type OpenClawTestState,
-  type OpenClawTestStateOptions,
 } from "../../src/test-utils/openclaw-test-state.js";
 import { sleep } from "../../src/utils.js";
 
-export type OpenClawTestInstanceOptions = {
+type OpenClawTestStateOptions = NonNullable<Parameters<typeof createOpenClawTestState>[0]>;
+
+type OpenClawTestInstanceOptions = {
   name: string;
   cwd?: string;
   port?: number;
@@ -30,7 +31,7 @@ export type OpenClawTestInstanceOptions = {
   stopTimeoutMs?: number;
 };
 
-export type OpenClawTestInstanceCommandResult = {
+type OpenClawTestInstanceCommandResult = {
   code: number | null;
   signal: NodeJS.Signals | null;
   stdout: string;
@@ -213,7 +214,7 @@ const getFreePort = async () => {
 };
 
 async function waitForPortOpen(
-  proc: OpenClawTestProcess,
+  proc: Pick<OpenClawTestProcess, "exitCode" | "signalCode">,
   chunksOut: string[],
   chunksErr: string[],
   port: number,

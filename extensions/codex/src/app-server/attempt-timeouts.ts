@@ -5,20 +5,50 @@
 import { addTimerTimeoutGraceMs, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
 /** Minimum startup timeout accepted by the Codex app-server harness. */
-export const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
+const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
 /** Default idle timeout while waiting for app-server turn completion. */
-export const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
+const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
 /** Short guard after apparent assistant completion. */
-export const CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10_000;
+const CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10_000;
 // Native Codex can spend a long quiet window synthesizing after tool results,
 // raw assistant/reasoning completions, or reasoning progress. Forwarded deltas
 // count as activity, but older native paths may not surface them, so keep this
 // terminal guard conservative.
-export const CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 5 * 60_000;
+const CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 5 * 60_000;
 /** Guard after reasoning/commentary progress when no tool handoff occurred. */
 export const CODEX_POST_REASONING_REPLY_IDLE_TIMEOUT_MS = 5 * 60_000;
 /** Long terminal idle watch for app-server turns that never send completion. */
-export const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
+const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
+
+type CodexAppServerStartupErrorReason = "aborted" | "timed_out";
+
+export class CodexAppServerStartupError extends Error {
+  readonly code = "CODEX_APP_SERVER_STARTUP_CANCELLED";
+
+  constructor(
+    readonly reason: CodexAppServerStartupErrorReason,
+    message = reason === "timed_out"
+      ? "codex app-server startup timed out"
+      : "codex app-server startup aborted",
+  ) {
+    super(message);
+    this.name = "CodexAppServerStartupError";
+  }
+}
+
+export function isCodexAppServerStartupError(
+  error: unknown,
+  reason?: CodexAppServerStartupErrorReason,
+): error is CodexAppServerStartupError {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "CODEX_APP_SERVER_STARTUP_CANCELLED" &&
+    "reason" in error &&
+    (error.reason === "aborted" || error.reason === "timed_out") &&
+    (reason === undefined || error.reason === reason)
+  );
+}
 
 function resolvePositiveIntegerTimeoutMs(value: number | undefined, fallbackMs: number): number {
   const fallback = resolveTimerTimeoutMs(fallbackMs, 1);
@@ -33,7 +63,7 @@ export async function withCodexStartupTimeout<T>(params: {
   operation: () => Promise<T>;
 }): Promise<T> {
   if (params.signal.aborted) {
-    throw new Error("codex app-server startup aborted");
+    throw new CodexAppServerStartupError("aborted");
   }
   let timeout: NodeJS.Timeout | undefined;
   let abortCleanup: (() => void) | undefined;
@@ -51,7 +81,7 @@ export async function withCodexStartupTimeout<T>(params: {
           reject(error);
         };
         timeout = setTimeout(() => {
-          timeoutError = new Error("codex app-server startup timed out");
+          timeoutError = new CodexAppServerStartupError("timed_out");
           timeoutCleanup = Promise.resolve(params.onTimeout?.()).then(
             () => undefined,
             () => undefined,
@@ -60,7 +90,7 @@ export async function withCodexStartupTimeout<T>(params: {
             rejectOnce(timeoutError!);
           });
         }, params.timeoutMs);
-        const abortListener = () => rejectOnce(new Error("codex app-server startup aborted"));
+        const abortListener = () => rejectOnce(new CodexAppServerStartupError("aborted"));
         params.signal.addEventListener("abort", abortListener, { once: true });
         abortCleanup = () => params.signal.removeEventListener("abort", abortListener);
       }),

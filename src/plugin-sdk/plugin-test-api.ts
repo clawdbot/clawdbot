@@ -23,8 +23,10 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     registerHook() {},
     registerHttpRoute() {},
     registerHostedMediaResolver() {},
+    registerMcpServerConnectionResolver() {},
     registerChannel() {},
     registerGatewayMethod() {},
+    registerSessionCatalog() {},
     registerCli() {},
     registerNodeCliFeature() {},
     registerCliBackend() {},
@@ -51,6 +53,7 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     registerVideoGenerationProvider() {},
     registerWebFetchProvider() {},
     registerWebSearchProvider() {},
+    registerWorkerProvider() {},
     registerInteractiveHandler() {},
     onConversationBindingResolved() {},
     registerCommand() {},
@@ -81,18 +84,16 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     scheduleSessionTurn: async () => undefined,
     unscheduleSessionTurnsByTag: async () => ({ removed: 0, failed: 0 }),
     registerMemoryCapability() {},
-    registerMemoryPromptSection() {},
     registerMemoryPromptSupplement() {},
+    registerMemoryPromptPreparation() {},
     registerMemoryCorpusSupplement() {},
-    registerMemoryFlushPlan() {},
-    registerMemoryRuntime() {},
     registerMemoryEmbeddingProvider() {},
     resolvePath(input: string) {
       return input;
     },
     on() {},
     ...flatApi,
-  } as OpenClawPluginApiWithoutFacades;
+  } satisfies OpenClawPluginApiWithoutFacades;
   // Facades derive nested `agent`, `lifecycle`, `runContext`, and `session`
   // views from the flat API; explicit overrides below let tests replace only
   // the nested surface under test without rebuilding every no-op method.

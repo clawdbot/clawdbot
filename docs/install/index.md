@@ -9,7 +9,7 @@ title: "Install"
 
 ## System requirements
 
-- **Node 22.19+, 23.11+, or 24+** - Node 24 is the default target; the installer script handles this automatically.
+- **Node 22.22.3+, 24.15+, or 25.9+** - Node 26 is the recommended default; the installer script provisions it automatically when Node is missing.
 - **macOS, Linux, or Windows** - Windows users can start with the native Windows Hub app, the PowerShell CLI installer, or a WSL2 Gateway. See [Windows](/platforms/windows).
 - `pnpm` is only needed if you build from source.
 
@@ -81,6 +81,23 @@ If you already manage Node yourself:
     ```
 
     <Note>
+    npm 12 blocks package lifecycle scripts by default, so the command above
+    skips OpenClaw's `preinstall` and `postinstall` steps — npm reports them
+    as `blocked because they are not covered by allowScripts`. Allow them
+    explicitly:
+
+    ```bash
+    npm install -g openclaw@latest --allow-scripts openclaw
+    ```
+
+    npm 11.16.x only warns that the scripts are `not yet covered by
+    allowScripts` and still runs them. If you want to clear that warning, be
+    aware that the `npm approve-scripts openclaw` command it suggests does not
+    work for a global install — it fails with `ENOMATCH  No installed packages
+    match: openclaw`. npm 11.12 and earlier have no such policy.
+    </Note>
+
+    <Note>
     The hosted installer clears npm freshness filters such as `min-release-age`
     for the OpenClaw package install. If you install manually with npm, your own
     npm policy still applies.
@@ -89,13 +106,12 @@ If you already manage Node yourself:
   </Tab>
   <Tab title="pnpm">
     ```bash
-    pnpm add -g openclaw@latest
-    pnpm approve-builds -g
+    pnpm add -g --allow-build=openclaw openclaw@latest
     openclaw onboard --install-daemon
     ```
 
     <Note>
-    pnpm requires explicit approval for packages with build scripts. Run `pnpm approve-builds -g` after the first install.
+    pnpm requires explicit approval for packages with build scripts. `approve-builds -g` is not supported for global installs, so pass `--allow-build=openclaw` on the `pnpm add -g` command instead.
     </Note>
 
   </Tab>
@@ -106,7 +122,7 @@ If you already manage Node yourself:
     ```
 
     <Note>
-    Bun is supported for the global CLI install path. For the Gateway runtime, Node remains the recommended daemon runtime.
+    Bun can install the global package, but the resulting `openclaw` executable requires a supported Node runtime because OpenClaw state uses `node:sqlite`.
     </Note>
 
   </Tab>
@@ -148,7 +164,7 @@ curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -
     Automated fleet provisioning.
   </Card>
   <Card title="Bun" href="/install/bun" icon="zap">
-    CLI-only usage via the Bun runtime.
+    Optional dependency installer and package-script runner.
   </Card>
 </CardGroup>
 

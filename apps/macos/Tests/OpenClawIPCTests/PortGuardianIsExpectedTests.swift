@@ -35,6 +35,46 @@ struct PortGuardianIsExpectedTests {
             mode: .local))
     }
 
+    @Test func `local mode preserves exact launchd pid from renamed checkout`() {
+        let fullCommand = """
+        /usr/local/bin/node /Users/dev/Projects/openclaw-codex-coexistence-live/dist/index.js gateway --port 18789
+        """
+
+        #expect(PortGuardian._testIsExpected(
+            command: "node",
+            fullCommand: fullCommand,
+            port: 18789,
+            mode: .local,
+            pid: 4242,
+            managedGatewayPID: 4242))
+        #expect(!PortGuardian._testIsExpected(
+            command: "node",
+            fullCommand: fullCommand,
+            port: 18789,
+            mode: .local,
+            pid: 4242))
+    }
+
+    @Test func `local mode rejects stale launchd pid after listener replacement`() {
+        #expect(!PortGuardian._testIsExpected(
+            command: "node",
+            fullCommand: "/tmp/openclaw-tools/dist/index.js gateway --port 18789",
+            port: 18789,
+            mode: .local,
+            pid: 5252,
+            managedGatewayPID: 4242))
+    }
+
+    @Test func `local mode rejects unmanaged listener when launchd pid is absent`() {
+        #expect(!PortGuardian._testIsExpected(
+            command: "node",
+            fullCommand: "/tmp/service/dist/index.js gateway --port 18789",
+            port: 18789,
+            mode: .local,
+            pid: 5252,
+            managedGatewayPID: nil))
+    }
+
     @Test func `local mode rejects gateway appearing after another node argument`() {
         #expect(!PortGuardian._testIsExpected(
             command: "node",

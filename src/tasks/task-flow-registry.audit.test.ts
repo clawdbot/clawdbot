@@ -1,5 +1,5 @@
 // Covers managed task-flow audit summaries and stale-flow classification.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
@@ -15,16 +15,16 @@ import {
 import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   requestFlowCancel,
-  resetTaskFlowRegistryForTests,
   setFlowWaiting,
 } from "./task-flow-registry.js";
-import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import type { TaskRecord } from "./task-registry.types.js";
 import {
+  configureTaskFlowRegistryRuntime,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
-} from "./task-registry.js";
-import type { TaskRecord } from "./task-registry.types.js";
+  resetTaskFlowRegistryForTests,
+} from "./task-runtime.test-helpers.js";
 
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 
@@ -93,20 +93,24 @@ describe("task-flow-registry audit", () => {
   });
 
   it("surfaces restore failures as task-flow audit findings", () => {
+    const loadSnapshot = vi.fn(() => {
+      throw new Error("boom");
+    });
     configureTaskFlowRegistryRuntime({
       store: {
-        loadSnapshot: () => {
-          throw new Error("boom");
-        },
+        loadSnapshot,
         saveSnapshot: () => {},
       },
     });
 
-    const findings = listTaskFlowAuditFindings();
-    expect(findings).toHaveLength(1);
-    expect(findings[0]?.severity).toBe("error");
-    expect(findings[0]?.code).toBe("restore_failed");
-    expect(findings[0]?.detail).toContain("boom");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const findings = listTaskFlowAuditFindings();
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.severity).toBe("error");
+      expect(findings[0]?.code).toBe("restore_failed");
+      expect(findings[0]?.detail).toContain("boom");
+    }
+    expect(loadSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("clears restore-failed findings after a clean reset and restore", () => {
@@ -229,6 +233,25 @@ describe("task-flow-registry audit", () => {
         flow.flowId,
       );
     });
+  });
+
+  it("does not flag retained terminal blocked flows after their task is pruned", () => {
+    const now = 60 * 60_000;
+    const flow: TaskFlowRecord = {
+      flowId: "flow-terminal-blocked",
+      syncMode: "task_mirrored",
+      ownerKey: "agent:main:main",
+      revision: 0,
+      status: "blocked",
+      notifyPolicy: "done_only",
+      goal: "Historical blocked task",
+      blockedTaskId: "task-pruned",
+      createdAt: 1,
+      updatedAt: 100,
+      endedAt: 100,
+    };
+
+    expect(listTaskFlowAuditFindings({ flows: [flow], now })).toStrictEqual([]);
   });
 
   it("reports cancel-stuck before maintenance finalizes the flow", async () => {

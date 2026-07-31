@@ -1,5 +1,6 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSkillStatusReport } from "../../lib/skills/index.ts";
 import type { SkillsRouteData } from "./skills-page.ts";
@@ -9,11 +10,15 @@ function errorMessage(error: unknown): string {
 }
 
 async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsRouteData> {
-  const gateway = context.gateway.snapshot;
-  const client = gateway.client;
-  if (!gateway.connected || !client) {
+  const gateway = context.gateway;
+  const gatewaySnapshot = gateway.snapshot;
+  const agents = context.agents;
+  const client = gatewaySnapshot.client;
+  if (gatewaySnapshot.phase !== "connected" || !client) {
     return {
-      connected: false,
+      gateway,
+      gatewaySnapshot,
+      agents,
       agentsList: null,
       selectedAgentId: null,
       report: null,
@@ -25,7 +30,7 @@ async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsR
   let agentsList: SkillsRouteData["agentsList"] = null;
   let report: SkillsRouteData["report"] = null;
   try {
-    agentsList = await context.agents.ensureList();
+    agentsList = await agents.ensureList();
   } catch (err) {
     error = errorMessage(err);
   }
@@ -35,7 +40,9 @@ async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsR
     error ??= errorMessage(err);
   }
   return {
-    connected: true,
+    gateway,
+    gatewaySnapshot,
+    agents,
     agentsList,
     selectedAgentId: null,
     report,
@@ -44,8 +51,7 @@ async function loadSkillsRouteData(context: ApplicationContext): Promise<SkillsR
 }
 
 export const page = definePage({
-  id: "skills",
-  path: "/skills",
+  ...routePageSpec("skills"),
   loader: loadSkillsRouteData,
   component: () =>
     import("./skills-page.ts").then(() => ({

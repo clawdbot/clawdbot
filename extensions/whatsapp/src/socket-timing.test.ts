@@ -4,7 +4,6 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_WHATSAPP_SOCKET_TIMING,
-  WhatsAppSocketOperationTimeoutError,
   createWhatsAppSocketOperationTimeoutAdapter,
   isWhatsAppSocketOperationTimeoutError,
   resolveWhatsAppSocketOperationTimeoutMs,
@@ -14,63 +13,29 @@ import {
 
 describe("resolveWhatsAppSocketTiming", () => {
   it("uses OpenClaw's explicit WhatsApp Web socket defaults", () => {
-    expect(resolveWhatsAppSocketTiming({})).toEqual(DEFAULT_WHATSAPP_SOCKET_TIMING);
+    expect(resolveWhatsAppSocketTiming()).toEqual(DEFAULT_WHATSAPP_SOCKET_TIMING);
   });
 
-  it("reads Baileys timing values from web.whatsapp config", () => {
+  it("lets call-site overrides take precedence over defaults", () => {
     expect(
       resolveWhatsAppSocketTiming({
-        web: {
-          whatsapp: {
-            keepAliveIntervalMs: 10_000,
-            connectTimeoutMs: 90_000,
-            defaultQueryTimeoutMs: 120_000,
-          },
-        },
+        keepAliveIntervalMs: 20_000,
       }),
     ).toEqual({
-      keepAliveIntervalMs: 10_000,
-      connectTimeoutMs: 90_000,
-      defaultQueryTimeoutMs: 120_000,
-    });
-  });
-
-  it("lets call-site overrides take precedence over config", () => {
-    expect(
-      resolveWhatsAppSocketTiming(
-        {
-          web: {
-            whatsapp: {
-              keepAliveIntervalMs: 10_000,
-              connectTimeoutMs: 90_000,
-              defaultQueryTimeoutMs: 120_000,
-            },
-          },
-        },
-        {
-          keepAliveIntervalMs: 20_000,
-        },
-      ),
-    ).toEqual({
       keepAliveIntervalMs: 20_000,
-      connectTimeoutMs: 90_000,
-      defaultQueryTimeoutMs: 120_000,
+      connectTimeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.connectTimeoutMs,
+      defaultQueryTimeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
     });
   });
 
-  it("marks operation timeout errors as unknown delivery state", () => {
-    const error = new WhatsAppSocketOperationTimeoutError(
-      "sendMessage",
-      DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
-    );
-
-    expect(error).toMatchObject({
-      name: "WhatsAppSocketOperationTimeoutError",
-      operation: "sendMessage",
-      timeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
-      deliveryState: "unknown",
-    });
-    expect(isWhatsAppSocketOperationTimeoutError(error)).toBe(true);
+  it("rejects invalid numeric timing values", () => {
+    expect(
+      resolveWhatsAppSocketTiming({
+        keepAliveIntervalMs: -1,
+        connectTimeoutMs: Number.POSITIVE_INFINITY,
+        defaultQueryTimeoutMs: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    ).toEqual(DEFAULT_WHATSAPP_SOCKET_TIMING);
   });
 
   it("clamps oversized operation timeouts before scheduling timers", async () => {
@@ -94,14 +59,16 @@ describe("withWhatsAppSocketOperationTimeout", () => {
       stalled,
       DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
     );
-    const rejection = expect(bounded).rejects.toMatchObject({
+    const failurePromise = bounded.catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
+    const failure = await failurePromise;
+    expect(failure).toMatchObject({
       name: "WhatsAppSocketOperationTimeoutError",
       operation: "readMessages",
       timeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
       deliveryState: "unknown",
     });
-    await vi.advanceTimersByTimeAsync(DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
-    await rejection;
+    expect(isWhatsAppSocketOperationTimeoutError(failure)).toBe(true);
     // The bounding timer is cleared once the operation settles.
     expect(vi.getTimerCount()).toBe(0);
   });

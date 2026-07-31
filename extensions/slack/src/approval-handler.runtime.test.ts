@@ -1,6 +1,8 @@
 // Slack tests cover approval handler plugin behavior.
 import { describe, expect, it, vi } from "vitest";
+import { decodeSlackApprovalAction } from "./approval-actions.js";
 import { slackApprovalNativeRuntime } from "./approval-handler.runtime.js";
+import { countSlackTextUtf8Bytes } from "./truncate.js";
 
 type SlackPayload = {
   text: string;
@@ -12,10 +14,18 @@ type ChatUpdatePayload = {
   text?: string;
   blocks?: unknown;
 };
-const SLACK_CHAT_UPDATE_TEXT_LIMIT = 4000;
+const SLACK_CHAT_UPDATE_TEXT_MAX_BYTES = 4000;
 
 function findSlackActionsBlock(blocks: Array<{ type?: string; elements?: unknown[] }>) {
   return blocks.find((block) => block.type === "actions");
+}
+
+function decodeSlackApprovalElements(block: { elements?: unknown[] } | undefined) {
+  return (block?.elements ?? []).map((element) =>
+    decodeSlackApprovalAction(
+      element && typeof element === "object" ? (element as { value?: unknown }).value : undefined,
+    ),
+  );
 }
 
 function readChatUpdatePayload(
@@ -117,6 +127,12 @@ describe("slackApprovalNativeRuntime", () => {
           {
             decision: "allow-once",
             label: "Allow Once",
+            action: {
+              type: "approval",
+              approvalId: "req-surrogate",
+              approvalKind: "exec",
+              decision: "allow-once",
+            },
             command: "/approve req-surrogate allow-once",
             style: "success",
           },
@@ -163,6 +179,12 @@ describe("slackApprovalNativeRuntime", () => {
           {
             decision: "deny",
             label: "Deny",
+            action: {
+              type: "approval",
+              approvalId: "plugin:req-surrogate",
+              approvalKind: "plugin",
+              decision: "deny",
+            },
             command: "/approve plugin:req-surrogate deny",
             style: "danger",
           },
@@ -204,6 +226,12 @@ describe("slackApprovalNativeRuntime", () => {
           {
             decision: "allow-once",
             label: "Allow Once",
+            action: {
+              type: "approval",
+              approvalId: "req-bmp",
+              approvalKind: "exec",
+              decision: "allow-once",
+            },
             command: "/approve req-bmp allow-once",
             style: "success",
           },
@@ -244,12 +272,24 @@ describe("slackApprovalNativeRuntime", () => {
           {
             decision: "allow-once",
             label: "Allow Once",
+            action: {
+              type: "approval",
+              approvalId: "req-1",
+              approvalKind: "exec",
+              decision: "allow-once",
+            },
             command: "/approve req-1 allow-once",
             style: "success",
           },
           {
             decision: "deny",
             label: "Deny",
+            action: {
+              type: "approval",
+              approvalId: "req-1",
+              approvalKind: "exec",
+              decision: "deny",
+            },
             command: "/approve req-1 deny",
             style: "danger",
           },
@@ -271,6 +311,12 @@ describe("slackApprovalNativeRuntime", () => {
 
     expect(labels).toEqual(["Allow Once", "Deny"]);
     expect(JSON.stringify(payload.blocks)).not.toContain("Allow Always");
+    expect(JSON.stringify(payload.blocks)).not.toContain("/approve");
+    expect(JSON.stringify(payload.blocks)).toContain("openclaw:approval_button");
+    expect(decodeSlackApprovalElements(actionsBlock)).toEqual([
+      expect.objectContaining({ approvalKind: "exec", decision: "allow-once" }),
+      expect.objectContaining({ approvalKind: "exec", decision: "deny" }),
+    ]);
   });
 
   it("renders plugin pending approvals with plugin approval actions", async () => {
@@ -309,18 +355,36 @@ describe("slackApprovalNativeRuntime", () => {
           {
             decision: "allow-once",
             label: "Allow Once",
+            action: {
+              type: "approval",
+              approvalId: "plugin:req-1",
+              approvalKind: "plugin",
+              decision: "allow-once",
+            },
             command: "/approve plugin:req-1 allow-once",
             style: "success",
           },
           {
             decision: "allow-always",
             label: "Allow Always",
+            action: {
+              type: "approval",
+              approvalId: "plugin:req-1",
+              approvalKind: "plugin",
+              decision: "allow-always",
+            },
             command: "/approve plugin:req-1 allow-always",
             style: "success",
           },
           {
             decision: "deny",
             label: "Deny",
+            action: {
+              type: "approval",
+              approvalId: "plugin:req-1",
+              approvalKind: "plugin",
+              decision: "deny",
+            },
             command: "/approve plugin:req-1 deny",
             style: "danger",
           },
@@ -346,6 +410,12 @@ describe("slackApprovalNativeRuntime", () => {
 
     expect(labels).toEqual(["Allow Once", "Allow Always", "Deny"]);
     expect(JSON.stringify(payload.blocks)).toContain("plugin:req-1");
+    expect(JSON.stringify(payload.blocks)).not.toContain("/approve");
+    expect(decodeSlackApprovalElements(actionsBlock)).toEqual([
+      expect.objectContaining({ approvalKind: "plugin", decision: "allow-once" }),
+      expect.objectContaining({ approvalKind: "plugin", decision: "allow-always" }),
+      expect.objectContaining({ approvalKind: "plugin", decision: "deny" }),
+    ]);
   });
 
   it("renders resolved updates without interactive blocks", async () => {
@@ -521,7 +591,7 @@ describe("slackApprovalNativeRuntime", () => {
         messageTs: "1712345678.999999",
       },
       payload: {
-        text: "a".repeat(SLACK_CHAT_UPDATE_TEXT_LIMIT),
+        text: "a".repeat(SLACK_CHAT_UPDATE_TEXT_MAX_BYTES),
         blocks,
       },
       phase: "resolved",
@@ -546,13 +616,13 @@ describe("slackApprovalNativeRuntime", () => {
     const secondUpdate = readChatUpdatePayload(chatUpdate, 1);
     expect(firstUpdate.channel).toBe("C123");
     expect(firstUpdate.ts).toBe("1712345678.999999");
-    expect(firstUpdate.text).toBe("a".repeat(SLACK_CHAT_UPDATE_TEXT_LIMIT));
+    expect(firstUpdate.text).toBe("a".repeat(SLACK_CHAT_UPDATE_TEXT_MAX_BYTES));
     expect(firstUpdate.blocks).toBe(blocks);
     expect(secondUpdate.channel).toBe("C123");
     expect(secondUpdate.ts).toBe("1712345678.999999");
     expect(secondUpdate.text).toMatch(/…$/);
     expect(secondUpdate.blocks).toBe(blocks);
-    expect(secondUpdate.text).toHaveLength(SLACK_CHAT_UPDATE_TEXT_LIMIT);
+    expect(countSlackTextUtf8Bytes(secondUpdate.text ?? "")).toBe(SLACK_CHAT_UPDATE_TEXT_MAX_BYTES);
   });
 
   it("keeps pending metadata context within Slack Block Kit limits", async () => {
@@ -585,6 +655,12 @@ describe("slackApprovalNativeRuntime", () => {
           {
             decision: "allow-once",
             label: "Allow Once",
+            action: {
+              type: "approval",
+              approvalId: "req-1",
+              approvalKind: "exec",
+              decision: "allow-once",
+            },
             command: "/approve req-1 allow-once",
             style: "success",
           },

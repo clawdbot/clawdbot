@@ -2,7 +2,7 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 
 /** Cached installed plugin records for one store/recovery key. */
-export type InstallRecordsCacheEntry = {
+type InstallRecordsCacheEntry = {
   records: Record<string, PluginInstallRecord>;
 };
 

@@ -8,7 +8,12 @@ title: "Wiki"
 
 # `openclaw wiki`
 
-Inspect and maintain the `memory-wiki` vault. Provided by the bundled `memory-wiki` plugin.
+Inspect and maintain the `memory-wiki` vault. Provided by the bundled optional `memory-wiki` plugin. Enable it before first use:
+
+```bash
+openclaw plugins enable memory-wiki
+openclaw gateway restart
+```
 
 Related: [Memory Wiki plugin](/plugins/memory-wiki), [Memory Overview](/concepts/memory), [CLI: memory](/cli/memory)
 
@@ -47,11 +52,33 @@ openclaw wiki obsidian command workspace:quick-switcher
 openclaw wiki obsidian daily
 ```
 
+## Agent selection
+
+When `plugins.entries.memory-wiki.config.vault.scope` is `agent`, select the
+vault with the top-level `--agent <id>` option:
+
+```bash
+openclaw wiki --agent support status
+openclaw wiki --agent support search "refund policy"
+openclaw wiki --agent marketing ingest ./campaign-notes.md
+```
+
+In a setup with multiple configured agents, `--agent` is required for CLI
+operations so a command cannot read or write an arbitrary default vault. If
+only one agent is configured, that agent remains the default. Unknown agent ids
+fail before the vault operation starts. The option does not change the selected
+path when `vault.scope` is `global`.
+
+Gateway clients follow the same rule: pass `agentId` on vault-backed `wiki.*`
+requests in an agent-scoped multi-agent setup. A missing or unknown id is an
+error. Agent turns, wiki tools, memory corpus supplements, and compiled prompt
+digests already carry the active runtime agent context.
+
 ## Commands
 
 ### `wiki status`
 
-Show vault mode, health, and Obsidian CLI availability. Use this first to check whether the vault is initialized, bridge mode is healthy, or Obsidian integration is available.
+Show vault mode and scope, resolved agent, health, and Obsidian CLI availability. Use this first to check whether the intended vault is initialized, bridge mode is healthy, or Obsidian integration is available.
 
 When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway so it sees the same active memory plugin context as agent/runtime memory.
 
@@ -98,10 +125,7 @@ openclaw wiki get <path-from-json-result>
 
 ### `wiki compile`
 
-Rebuild indexes, related blocks, dashboards, and compiled digests. Writes stable machine-facing artifacts under:
-
-- `.openclaw-wiki/cache/agent-digest.json`
-- `.openclaw-wiki/cache/claims.jsonl`
+Rebuild indexes, related blocks, dashboards, and the compiled query/prompt snapshot. The snapshot is persisted in OpenClaw's shared SQLite plugin state and kept in memory for synchronous prompt projection; it does not create cache files in the vault.
 
 If `render.createDashboards` is enabled, compile also refreshes report pages.
 
@@ -192,11 +216,16 @@ A non-dry-run import that changes any page records an import run id, printed in 
 
 ### `wiki chatgpt rollback <run-id>`
 
-Roll back a previously applied ChatGPT import run, removing pages it created and restoring pages it overwrote. No-ops (and reports `alreadyRolledBack`) if the run was already rolled back.
+Roll back a previously applied ChatGPT import run, removing pages it created and restoring pages it overwrote. Pages changed after import are moved under the run's `.openclaw-wiki/import-runs/<run-id>/recovered/` directory instead of being deleted. Recovery paths remain in the command result on retries and later `alreadyRolledBack` responses. Interrupted runs remain `rolling_back` while target recovery or derived-artifact compilation is incomplete. A persisted process-restart fence separates those phases: after it, retries rebuild indexes and compiled caches without rewriting source pages or moving later pathname writes. A later normal compile may refresh machine-managed Related blocks. This covers in-process failure and process restart after ordinary filesystem calls return, not kernel or host power-loss ordering.
 
 ### `wiki obsidian ...`
 
 Obsidian helper commands for vaults running in Obsidian-friendly mode: `status`, `search`, `open`, `command`, `daily`. These require the official `obsidian` CLI on `PATH` when `obsidian.useOfficialCli` is enabled.
+
+Configuration validation rejects `obsidian.useOfficialCli: true` when
+`vault.scope` is `agent` because `obsidian.vaultName` is one global setting,
+not a per-agent mapping. Obsidian-friendly Markdown rendering remains
+available.
 
 ## Practical usage guidance
 
@@ -212,6 +241,8 @@ Obsidian helper commands for vaults running in Obsidian-friendly mode: `status`,
 `openclaw wiki` behavior is shaped by:
 
 - `plugins.entries.memory-wiki.config.vaultMode`
+- `plugins.entries.memory-wiki.config.vault.scope`
+- `plugins.entries.memory-wiki.config.vault.path`
 - `plugins.entries.memory-wiki.config.search.backend`
 - `plugins.entries.memory-wiki.config.search.corpus`
 - `plugins.entries.memory-wiki.config.bridge.*`

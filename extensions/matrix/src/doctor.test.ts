@@ -4,32 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  applyMatrixDoctorRepair,
   cleanStaleMatrixPluginConfig,
   collectMatrixInstallPathWarnings,
-  formatMatrixLegacyCryptoPreview,
-  formatMatrixLegacyStatePreview,
   matrixDoctor,
-  runMatrixDoctorSequence,
 } from "./doctor.js";
-
-vi.mock("./matrix-migration.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./matrix-migration.runtime.js")>(
-    "./matrix-migration.runtime.js",
-  );
-  return {
-    ...actual,
-    maybeCreateMatrixMigrationSnapshot: vi.fn(),
-    autoMigrateLegacyMatrixState: vi.fn(async () => ({ changes: [], warnings: [] })),
-    autoPrepareLegacyMatrixCrypto: vi.fn(async () => ({ changes: [], warnings: [] })),
-    resolveMatrixMigrationStatus: vi.fn(() => ({
-      legacyState: null,
-      legacyCrypto: { inspectorAvailable: true, warnings: [], plans: [] },
-      pending: false,
-      actionable: false,
-    })),
-  };
-});
 
 describe("matrix doctor", () => {
   beforeEach(() => {
@@ -62,42 +40,6 @@ describe("matrix doctor", () => {
     expect(changes.join("\n")).toContain(fragment);
   }
 
-  it("formats state and crypto previews", () => {
-    expect(
-      formatMatrixLegacyStatePreview({
-        accountId: "default",
-        legacyStoragePath: "/tmp/legacy-sync.json",
-        targetStoragePath: "/tmp/new-sync.json",
-        legacyCryptoPath: "/tmp/legacy-crypto.json",
-        targetCryptoPath: "/tmp/new-crypto.json",
-        selectionNote: "Picked the newest account.",
-        targetRootDir: "/tmp/account-root",
-      }),
-    ).toContain("Matrix plugin upgraded in place.");
-
-    const previews = formatMatrixLegacyCryptoPreview({
-      inspectorAvailable: true,
-      warnings: ["matrix warning"],
-      plans: [
-        {
-          accountId: "default",
-          rootDir: "/tmp/account-root",
-          homeserver: "https://matrix.example.org",
-          userId: "@bot:example.org",
-          accessToken: "tok-123",
-          deviceId: "DEVICE123",
-          legacyCryptoPath: "/tmp/legacy-crypto.json",
-          recoveryKeyPath: "/tmp/recovery-key.txt",
-          statePath: "/tmp/state.json",
-        },
-      ],
-    });
-    expect(previews[0]).toBe("- matrix warning");
-    expect(previews[1]).toContain("/tmp/recovery-key.txt");
-    expect(previews[1]).toContain("Recovery key state: Matrix SQLite state");
-    expect(previews[1]).toContain("Migration state: Matrix SQLite state");
-  });
-
   it("warns on stale custom Matrix plugin paths and cleans them", async () => {
     const missingPath = path.join(tmpdir(), `openclaw-matrix-missing-${Date.now()}`);
     await fs.rm(missingPath, { recursive: true, force: true });
@@ -123,47 +65,6 @@ describe("matrix doctor", () => {
     expect(cleaned.changes[0]).toContain("Removed stale Matrix plugin references");
     expect(cleaned.config.plugins?.load?.paths).toEqual(["/other/path"]);
     expect(cleaned.config.plugins?.allow).toEqual(["other-plugin"]);
-  });
-
-  it("surfaces matrix sequence warnings and repair changes", async () => {
-    const runtimeApi = await import("./matrix-migration.runtime.js");
-    vi.mocked(runtimeApi.resolveMatrixMigrationStatus).mockReturnValue({
-      legacyState: null,
-      legacyCrypto: { inspectorAvailable: true, warnings: [], plans: [] },
-      pending: true,
-      actionable: true,
-    });
-    vi.mocked(runtimeApi.maybeCreateMatrixMigrationSnapshot).mockResolvedValue({
-      archivePath: "/tmp/matrix-backup.tgz",
-      created: true,
-      markerPath: "/tmp/marker.json",
-    });
-    vi.mocked(runtimeApi.autoMigrateLegacyMatrixState).mockResolvedValue({
-      migrated: true,
-      changes: ["Migrated legacy sync state"],
-      warnings: [],
-    });
-    vi.mocked(runtimeApi.autoPrepareLegacyMatrixCrypto).mockResolvedValue({
-      migrated: true,
-      changes: ["Prepared recovery key export"],
-      warnings: [],
-    });
-
-    const cfg = {
-      channels: {
-        matrix: {},
-      },
-    } as never;
-
-    const repair = await applyMatrixDoctorRepair({ cfg, env: process.env });
-    expect(repair.changes.join("\n")).toContain("Matrix migration snapshot");
-
-    const sequence = await runMatrixDoctorSequence({
-      cfg,
-      env: process.env,
-      shouldRepair: true,
-    });
-    expect(sequence.changeNotes.join("\n")).toContain("Matrix migration snapshot");
   });
 
   it("normalizes legacy Matrix room allow aliases to enabled", () => {
@@ -402,5 +303,123 @@ describe("matrix doctor", () => {
         },
       },
     });
+  });
+});
+
+describe("matrix doctor streaming alias migration", () => {
+  function normalizeMatrixEntry(entry: Record<string, unknown>) {
+    const normalize = matrixDoctor.normalizeCompatibilityConfig;
+    if (!normalize) {
+      throw new Error("expected Matrix doctor compatibility normalizer");
+    }
+    return normalize({ cfg: { channels: { matrix: entry } } as never });
+  }
+
+  function matrixEntryOf(result: { config: unknown }): Record<string, unknown> {
+    const channels = (result.config as { channels?: Record<string, unknown> }).channels;
+    return channels?.matrix as Record<string, unknown>;
+  }
+
+  it("preserves the matrix-local quiet mode when migrating scalar streaming", () => {
+    const result = normalizeMatrixEntry({ streaming: "quiet" });
+    expect(matrixEntryOf(result).streaming).toEqual({ mode: "quiet" });
+  });
+
+  it("migrates boolean streaming plus flat delivery keys into the nested shape", () => {
+    const result = normalizeMatrixEntry({
+      streaming: true,
+      blockStreaming: true,
+      chunkMode: "newline",
+    });
+    expect(matrixEntryOf(result).streaming).toEqual({
+      mode: "partial",
+      chunkMode: "newline",
+      block: { enabled: true },
+    });
+    const matrix = matrixEntryOf(result);
+    expect(matrix.blockStreaming).toBeUndefined();
+    expect(matrix.chunkMode).toBeUndefined();
+  });
+
+  it("leaves mode unset when only flat delivery keys migrate (matrix defaults to off)", () => {
+    const result = normalizeMatrixEntry({ blockStreaming: true });
+    // No mode source: streaming stays mode-less because runtime resolves both
+    // "absent" and "object without mode" to "off".
+    expect(matrixEntryOf(result).streaming).toEqual({ block: { enabled: true } });
+  });
+
+  it("seeds materialized account objects from root (account merge replaces wholesale)", () => {
+    const result = normalizeMatrixEntry({
+      streaming: { mode: "quiet", chunkMode: "newline" },
+      accounts: {
+        work: { blockStreaming: true },
+      },
+    });
+    const accounts = matrixEntryOf(result).accounts as Record<string, Record<string, unknown>>;
+    // Matrix's account merge replaces root streaming wholesale, so the
+    // migrated account object carries the inherited root settings (copying
+    // freezes inheritance at fix time by design; the change message says so).
+    expect(accounts.work?.streaming).toEqual({
+      mode: "quiet",
+      chunkMode: "newline",
+      block: { enabled: true },
+    });
+    expect(accounts.work?.blockStreaming).toBeUndefined();
+  });
+
+  it("seeds root FLAT delivery keys into accounts that already had a streaming value", () => {
+    // Pre-migration, root flat keys resolved per-key for every account even
+    // when the account's own streaming value replaced the root object
+    // wholesale; migration must not silently drop that inherited behavior.
+    const result = normalizeMatrixEntry({
+      blockStreaming: true,
+      accounts: {
+        work: { streaming: { mode: "quiet" } },
+      },
+    });
+    const accounts = matrixEntryOf(result).accounts as Record<string, Record<string, unknown>>;
+    expect(accounts.work?.streaming).toEqual({ mode: "quiet", block: { enabled: true } });
+  });
+
+  it("keeps canonical root nested values over conflicting account flat keys", () => {
+    const result = normalizeMatrixEntry({
+      streaming: { mode: "quiet", block: { enabled: false } },
+      accounts: {
+        work: { blockStreaming: true },
+      },
+    });
+    const accounts = matrixEntryOf(result).accounts as Record<string, Record<string, unknown>>;
+    // Pre-migration the resolvers read the merged nested object first, so the
+    // account flat key was dead while root nested set block.enabled.
+    expect(accounts.work?.streaming).toEqual({ mode: "quiet", block: { enabled: false } });
+  });
+
+  it("strips junk streamMode keys instead of treating them as mode intent", () => {
+    // Matrix never had a streamMode key (no schema field, no runtime read), so
+    // migrating it into streaming.mode would invent a mode the account never
+    // ran with; the root scalar keeps flowing to the account at runtime.
+    const result = normalizeMatrixEntry({
+      streaming: "quiet",
+      accounts: {
+        work: { streamMode: "partial" },
+      },
+    });
+    const matrix = matrixEntryOf(result);
+    expect(matrix.streaming).toEqual({ mode: "quiet" });
+    const accounts = matrix.accounts as Record<string, Record<string, unknown>>;
+    expect(accounts.work?.streamMode).toBeUndefined();
+    expect(accounts.work?.streaming).toBeUndefined();
+  });
+
+  it("is idempotent: a second run reports no changes", () => {
+    const normalize = matrixDoctor.normalizeCompatibilityConfig;
+    if (!normalize) {
+      throw new Error("expected Matrix doctor compatibility normalizer");
+    }
+    const first = normalizeMatrixEntry({ streaming: "quiet", blockStreaming: true });
+    expect(first.changes.length).toBeGreaterThan(0);
+    const second = normalize({ cfg: first.config });
+    expect(second.changes).toEqual([]);
+    expect(second.config).toBe(first.config);
   });
 });

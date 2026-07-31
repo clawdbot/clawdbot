@@ -19,6 +19,7 @@ type WebProviderRuntimeMetadata = RuntimeWebFetchMetadata | RuntimeWebSearchMeta
 type ResolvedWebToolRuntimeContext<TMetadata extends WebProviderRuntimeMetadata> = {
   config?: OpenClawConfig;
   preferRuntimeProviders: boolean;
+  providerSelectionId: string;
   runtimeMetadata?: TMetadata;
 };
 
@@ -79,6 +80,7 @@ function resolveWebToolRuntimeContext<TMetadata extends WebProviderRuntimeMetada
       kind: params.kind,
       providerSelectionId,
     }),
+    providerSelectionId,
     runtimeMetadata,
   };
 }
@@ -88,9 +90,7 @@ export function resolveWebSearchToolRuntimeContext(params: {
   config?: OpenClawConfig;
   lateBindRuntimeConfig?: boolean;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
-}): ResolvedWebToolRuntimeContext<RuntimeWebSearchMetadata> & {
-  runtimeWebSearch?: RuntimeWebSearchMetadata;
-} {
+}) {
   const resolved = resolveWebToolRuntimeContext({
     capturedConfig: params.config,
     capturedRuntimeMetadata: params.runtimeWebSearch,
@@ -100,7 +100,7 @@ export function resolveWebSearchToolRuntimeContext(params: {
   return {
     config: resolved.config,
     preferRuntimeProviders: resolved.preferRuntimeProviders,
-    runtimeMetadata: resolved.runtimeMetadata,
+    providerSelectionId: resolved.providerSelectionId,
     runtimeWebSearch: resolved.runtimeMetadata,
   };
 }
@@ -110,9 +110,7 @@ export function resolveWebFetchToolRuntimeContext(params: {
   config?: OpenClawConfig;
   lateBindRuntimeConfig?: boolean;
   runtimeWebFetch?: RuntimeWebFetchMetadata;
-}): ResolvedWebToolRuntimeContext<RuntimeWebFetchMetadata> & {
-  runtimeWebFetch?: RuntimeWebFetchMetadata;
-} {
+}) {
   const resolved = resolveWebToolRuntimeContext({
     capturedConfig: params.config,
     capturedRuntimeMetadata: params.runtimeWebFetch,
@@ -122,7 +120,7 @@ export function resolveWebFetchToolRuntimeContext(params: {
   return {
     config: resolved.config,
     preferRuntimeProviders: resolved.preferRuntimeProviders,
-    runtimeMetadata: resolved.runtimeMetadata,
+    providerSelectionId: resolved.providerSelectionId,
     runtimeWebFetch: resolved.runtimeMetadata,
   };
 }

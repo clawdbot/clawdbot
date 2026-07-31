@@ -702,7 +702,7 @@ function resolveDetailFromKeys(
     return undefined;
   }
   if (entries.length === 1) {
-    return entries[0].value;
+    return entries.at(0)?.value;
   }
 
   const seen = new Set<string>();
@@ -816,3 +816,4 @@ export function formatToolDetailText(
   }
   return opts.prefixWithWith ? `with ${normalized}` : normalized;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2,19 +2,14 @@
 import { describe, expect, it } from "vitest";
 import {
   hasChromeProxyControlArg,
-  hasExplicitChromeProxyRoutingArg,
   omitChromeProxyEnv,
   resolveBrowserNavigationProxyMode,
 } from "./browser-proxy-mode.js";
 
 describe("browser proxy mode", () => {
-  it("detects Chrome proxy-routing args separately from direct proxy controls", () => {
+  it("detects Chrome proxy control args", () => {
     expect(hasChromeProxyControlArg(["--no-proxy-server"])).toBe(true);
-    expect(hasExplicitChromeProxyRoutingArg(["--no-proxy-server"])).toBe(false);
-    expect(hasExplicitChromeProxyRoutingArg(["--proxy-server=http://127.0.0.1:7890"])).toBe(true);
-    expect(hasExplicitChromeProxyRoutingArg(["--proxy-pac-url", "http://proxy.test/pac"])).toBe(
-      true,
-    );
+    expect(hasChromeProxyControlArg(["--proxy-server=http://127.0.0.1:7890"])).toBe(true);
   });
 
   it("removes proxy env before launching managed Chrome", () => {
@@ -35,19 +30,25 @@ describe("browser proxy mode", () => {
     expect(
       resolveBrowserNavigationProxyMode({
         resolved,
-        profile: { driver: "openclaw", cdpIsLoopback: true },
+        profile: { driver: "openclaw", cdpIsLoopback: true, attachOnly: false },
       }),
     ).toBe("explicit-browser-proxy");
     expect(
       resolveBrowserNavigationProxyMode({
         resolved,
-        profile: { driver: "existing-session", cdpIsLoopback: true },
+        profile: { driver: "existing-session", cdpIsLoopback: true, attachOnly: true },
       }),
     ).toBe("direct");
     expect(
       resolveBrowserNavigationProxyMode({
         resolved,
-        profile: { driver: "openclaw", cdpIsLoopback: false },
+        profile: { driver: "openclaw", cdpIsLoopback: false, attachOnly: true },
+      }),
+    ).toBe("direct");
+    expect(
+      resolveBrowserNavigationProxyMode({
+        resolved,
+        profile: { driver: "openclaw", cdpIsLoopback: true, attachOnly: true },
       }),
     ).toBe("direct");
   });

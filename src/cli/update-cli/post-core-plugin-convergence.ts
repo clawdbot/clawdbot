@@ -1,32 +1,30 @@
 // Reconciles configured plugin installs after the core package update has completed.
+import path from "node:path";
 import { repairMissingConfiguredPluginInstalls } from "../../commands/doctor/shared/missing-configured-plugin-install.js";
 import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "../../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import type { ClawHubRiskAcknowledgementRequest } from "../../infra/clawhub-install-trust.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import { resolveDefaultPluginNpmDir } from "../../plugins/install-paths.js";
 import { listManagedPluginNpmRoots } from "../../plugins/npm-project-roots.js";
-import {
-  resolveTrustedSourceLinkedOfficialClawHubSpec,
-  resolveTrustedSourceLinkedOfficialNpmSpec,
-} from "../../plugins/official-external-install-records.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "../../plugins/plugin-peer-link.js";
 import { pruneStaleLocalBundledPluginInstallRecords } from "../../plugins/stale-local-bundled-plugin-install-records.js";
+import { resolveUserPath } from "../../utils.js";
 import { VERSION } from "../../version.js";
 import {
-  runPluginPayloadSmokeCheck,
-  type PluginPayloadSmokeFailure,
-} from "./plugin-payload-validation.js";
+  filterRecordsToActive,
+  runActivePluginPayloadSmokeCheck,
+} from "./active-plugin-payload-validation.js";
+import type { PluginPayloadSmokeFailure } from "./plugin-payload-validation.js";
 
-export type PostCoreConvergenceWarning = {
+type PostCoreConvergenceWarning = {
   pluginId?: string;
   reason: string;
   message: string;
   guidance: string[];
 };
 
-export type PostCoreConvergenceResult = {
+type PostCoreConvergenceResult = {
   changes: string[];
   notices?: PostCoreConvergenceWarning[];
   warnings: PostCoreConvergenceWarning[];
@@ -49,9 +47,25 @@ const REPAIR_GUIDANCE = "Run `openclaw update repair` to retry plugin repair.";
 const inspectGuidance = (pluginId: string) =>
   `Run \`openclaw plugins inspect ${pluginId} --runtime --json\` for details.`;
 
-async function repairManagedNpmOpenClawPeerLinks(params: {
-  env: NodeJS.ProcessEnv;
-}): Promise<{ changes: string[]; warnings: PostCoreConvergenceWarning[] }> {
+function smokeFailureGuidance(failure: PluginPayloadSmokeFailure): string[] {
+  if (failure.reason !== "unreadable-package-json") {
+    return [REPAIR_GUIDANCE, inspectGuidance(failure.pluginId)];
+  }
+  const packageJsonPath = failure.installPath
+    ? path.join(failure.installPath, "package.json")
+    : "the plugin package.json";
+  return [
+    `Fix file access for ${packageJsonPath} so it is readable by the user running OpenClaw. For EACCES or EPERM, correct its ownership or permissions; otherwise resolve the reported filesystem I/O error, then retry.`,
+    inspectGuidance(failure.pluginId),
+  ];
+}
+
+async function repairManagedNpmOpenClawPeerLinks(params: { env: NodeJS.ProcessEnv }): Promise<{
+  changes: string[];
+  warnings: PostCoreConvergenceWarning[];
+  packageReadFailures: Array<{ error: unknown; packageDir: string }>;
+}> {
+  const packageReadFailures: Array<{ error: unknown; packageDir: string }> = [];
   try {
     const npmRoots = await listManagedPluginNpmRoots(resolveDefaultPluginNpmDir(params.env));
     const results = await Promise.all(
@@ -59,6 +73,9 @@ async function repairManagedNpmOpenClawPeerLinks(params: {
         relinkOpenClawPeerDependenciesInManagedNpmRoot({
           npmRoot,
           logger: {},
+          onPackageReadError: (error, packageDir) => {
+            packageReadFailures.push({ error, packageDir });
+          },
         }),
       ),
     );
@@ -69,6 +86,7 @@ async function repairManagedNpmOpenClawPeerLinks(params: {
           ? [`Repaired OpenClaw host peer link(s) for ${repaired} managed npm plugin package(s).`]
           : [],
       warnings: [],
+      packageReadFailures,
     };
   } catch (err) {
     const message = `Failed to repair managed npm OpenClaw host peer links: ${err instanceof Error ? err.message : String(err)}`;
@@ -81,8 +99,18 @@ async function repairManagedNpmOpenClawPeerLinks(params: {
           guidance: [REPAIR_GUIDANCE],
         },
       ],
+      packageReadFailures,
     };
   }
+}
+
+function formatPeerLinkPackageReadWarning(failure: { error: unknown }): PostCoreConvergenceWarning {
+  const message = `Failed to repair managed npm OpenClaw host peer links: ${failure.error instanceof Error ? failure.error.message : String(failure.error)}`;
+  return {
+    reason: message,
+    message,
+    guidance: [REPAIR_GUIDANCE],
+  };
 }
 
 /**
@@ -90,8 +118,10 @@ async function repairManagedNpmOpenClawPeerLinks(params: {
  * are swapped and the in-update doctor pass has already returned, but BEFORE
  * the gateway is restarted. Missing-plugin repair failures stay nonblocking:
  * an external package fetch may be transient, and failing the core update
- * would strand the user. Payload smoke failures still block the restart so we
- * never restart with an installed active plugin whose payload is unloadable.
+ * would strand the user. Explicit `openclaw update` callers keep reporting
+ * payload smoke failures as errors. Gateway startup consumes the same typed
+ * failures by quarantining each known plugin owner before any module import,
+ * then boots with that plugin marked configured-unavailable.
  */
 export async function runPostCorePluginConvergence(params: {
   cfg: OpenClawConfig;
@@ -149,14 +179,48 @@ export async function runPostCorePluginConvergence(params: {
   // this filter, a stale install record for a disabled or no-longer-
   // configured plugin whose payload was deleted on disk would block the
   // entire update — even though the gateway will never load that plugin.
+  const smoke = await runActivePluginPayloadSmokeCheck({
+    cfg: params.cfg,
+    records,
+    env,
+  });
   const smokeRecords = filterRecordsToActive({ cfg: params.cfg, records });
-  const smoke = await runPluginPayloadSmokeCheck({ records: smokeRecords, env });
+  const resolveInstallRecordPaths = (
+    installRecords: Record<string, PluginInstallRecord>,
+  ): Set<string> =>
+    new Set(
+      Object.values(installRecords).flatMap((record) => {
+        const installPath = record.installPath?.trim();
+        return installPath ? [path.resolve(resolveUserPath(installPath, env))] : [];
+      }),
+    );
+  const knownInstallPaths = resolveInstallRecordPaths(records);
+  const activeInstallPaths = resolveInstallRecordPaths(smokeRecords);
+  const smokeFailureInstallPaths = new Set(
+    smoke.failures.flatMap((failure) =>
+      failure.installPath ? [path.resolve(failure.installPath)] : [],
+    ),
+  );
+  for (const failure of peerLinkRepair.packageReadFailures.toSorted((left, right) =>
+    left.packageDir.localeCompare(right.packageDir),
+  )) {
+    // A typed smoke failure owns this exact package and startup quarantines it.
+    // Re-emitting the repair error without that owner would turn it back into
+    // an unknown warning and incorrectly block gateway readiness.
+    const packageDir = path.resolve(failure.packageDir);
+    const hasTypedFailure = smokeFailureInstallPaths.has(packageDir);
+    const belongsToInactivePlugin =
+      knownInstallPaths.has(packageDir) && !activeInstallPaths.has(packageDir);
+    if (!hasTypedFailure && !belongsToInactivePlugin) {
+      warnings.push(formatPeerLinkPackageReadWarning(failure));
+    }
+  }
   for (const failure of smoke.failures) {
     warnings.push({
       pluginId: failure.pluginId,
       reason: `${failure.reason}: ${failure.detail}`,
       message: `Plugin "${failure.pluginId}" failed post-core payload smoke check (${failure.reason}): ${failure.detail}`,
-      guidance: [REPAIR_GUIDANCE, inspectGuidance(failure.pluginId)],
+      guidance: smokeFailureGuidance(failure),
     });
   }
 
@@ -188,38 +252,6 @@ export async function runPostCorePluginConvergence(params: {
  * that are enabled implicitly via auth profiles or model refs. Effective
  * enable state is the right precision boundary.
  */
-export function filterRecordsToActive(params: {
-  cfg: OpenClawConfig;
-  records: Record<string, PluginInstallRecord>;
-}): Record<string, PluginInstallRecord> {
-  const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
-  const filtered: Record<string, PluginInstallRecord> = {};
-  for (const [pluginId, record] of Object.entries(params.records)) {
-    if (!record || typeof record !== "object") {
-      continue;
-    }
-    const enableState = resolveEffectiveEnableState({
-      id: pluginId,
-      origin: "global",
-      config: normalizedPluginConfig,
-      rootConfig: params.cfg,
-    });
-    if (enableState.enabled) {
-      filtered[pluginId] = record;
-      continue;
-    }
-    // Even when disabled, retain trusted-source-linked official installs
-    // because the existing post-update sync path treats them as
-    // authoritative regardless of the entry's enable flag.
-    const officialNpm = resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record });
-    const officialClawHub = resolveTrustedSourceLinkedOfficialClawHubSpec({ pluginId, record });
-    if (officialNpm || officialClawHub) {
-      filtered[pluginId] = record;
-    }
-  }
-  return filtered;
-}
-
 /**
  * Pure helper used by `updatePluginsAfterCoreUpdate` to fold a convergence
  * result into the existing `PluginUpdateOutcome[]` / warning shape that the
@@ -230,8 +262,8 @@ export function filterRecordsToActive(params: {
  *    warnings that name a `pluginId` produce per-plugin error outcomes; the
  *    rest are surfaced via `warnings`.
  *  - `errored` boolean that callers translate into `status: "error"`.
- *    Repair warnings are nonblocking; smoke failures remain blocking
- *    because they prove an active installed payload is unloadable.
+ *    Repair warnings are nonblocking; smoke failures remain errors on the
+ *    explicit update path even though Gateway startup can quarantine them.
  */
 export function convergenceWarningsToOutcomes(convergence: PostCoreConvergenceResult): {
   warnings: PostCoreConvergenceWarning[];

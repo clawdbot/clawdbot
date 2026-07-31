@@ -6,23 +6,32 @@ import {
   closeMemorySearchManager,
   getMemorySearchManager,
 } from "./memory/index.js";
+import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 
-export const memoryRuntime: MemoryPluginRuntime = {
-  async getMemorySearchManager(params) {
-    const { manager, debug, error } = await getMemorySearchManager(params);
-    return {
-      manager,
-      debug,
-      error,
-    };
-  },
-  resolveMemoryBackendConfig(params) {
-    return resolveMemoryBackendConfig(params);
-  },
-  async closeAllMemorySearchManagers() {
-    await closeAllMemorySearchManagers();
-  },
-  async closeMemorySearchManager(params) {
-    await closeMemorySearchManager(params);
-  },
-};
+export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}): MemoryPluginRuntime {
+  return {
+    async getMemorySearchManager(params) {
+      const { manager, debug, error } = await getMemorySearchManager({
+        ...params,
+        ...(host.acquireLocalService ? { acquireLocalService: host.acquireLocalService } : {}),
+        ...(host.withLease ? { withLease: host.withLease } : {}),
+      });
+      return {
+        manager,
+        debug,
+        error,
+      };
+    },
+    resolveMemoryBackendConfig(params) {
+      return resolveMemoryBackendConfig(params);
+    },
+    async closeAllMemorySearchManagers() {
+      await closeAllMemorySearchManagers();
+    },
+    async closeMemorySearchManager(params) {
+      await closeMemorySearchManager(params);
+    },
+  };
+}
+
+export const memoryRuntime = createMemoryRuntime();

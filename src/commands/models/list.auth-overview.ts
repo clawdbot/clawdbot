@@ -218,6 +218,16 @@ export function resolveProviderAuthOverview(params: {
           },
         }
       : {}),
-    ...(params.syntheticAuth ? { syntheticAuth: params.syntheticAuth } : {}),
+    // Re-project instead of passing the caller's object through: status callers
+    // hand richer runtime shapes that also carry the raw synthetic credential,
+    // and structural typing would let it leak into `--json` output verbatim.
+    ...(params.syntheticAuth
+      ? {
+          syntheticAuth: {
+            value: params.syntheticAuth.value,
+            source: params.syntheticAuth.source,
+          },
+        }
+      : {}),
   };
 }

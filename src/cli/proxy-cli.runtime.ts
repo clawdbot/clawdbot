@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import process from "node:process";
+import { expectDefined } from "@openclaw/normalization-core";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
@@ -21,6 +22,7 @@ import {
   getDebugProxyCaptureStore,
 } from "../proxy-capture/store.sqlite.js";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
+import { resolveSubprocessExitCode } from "./subprocess-exit-code.js";
 
 export async function runDebugProxyStartCommand(opts: { host?: string; port?: number }) {
   const settings = resolveDebugProxySettings();
@@ -100,14 +102,14 @@ export async function runDebugProxyRunCommand(opts: {
   });
   try {
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(command, args, {
+      const child = spawn(expectDefined(command, "proxy cli.runtime command"), args, {
         stdio: "inherit",
         env: childEnv,
         cwd: process.cwd(),
       });
       child.once("error", reject);
       child.once("exit", (code, signal) => {
-        process.exitCode = signal ? 1 : (code ?? 1);
+        process.exitCode = resolveSubprocessExitCode(code, signal);
         resolve();
       });
     });
@@ -185,11 +187,6 @@ function formatProxyCheckLine(
 function formatProxyValidationNextSteps(result: ProxyValidationResult): string[] {
   if (result.ok) {
     return [];
-  }
-  if (result.config.errors.some((error) => error.includes("proxy.enabled"))) {
-    return [
-      "Enable proxy.enabled with proxy.proxyUrl or OPENCLAW_PROXY_URL, or pass --proxy-url for an explicit one-off validation.",
-    ];
   }
   if (result.config.errors.some((error) => error.includes("proxy CA file could not be read"))) {
     return [

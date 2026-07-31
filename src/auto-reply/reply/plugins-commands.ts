@@ -8,7 +8,7 @@ import {
 type PluginsCommand =
   | { action: "list" }
   | { action: "inspect"; name?: string }
-  | { action: "install"; spec: string }
+  | { action: "install"; force: boolean; spec: string }
   | { action: "enable"; name: string }
   | { action: "disable"; name: string }
   | { action: "error"; message: string };
@@ -43,13 +43,18 @@ export function parsePluginsCommand(raw: string): PluginsCommand | null {
   }
 
   if (action === "install" || action === "add") {
-    if (!name) {
+    const force = rest.at(-1) === "--force";
+    const specParts = force ? rest.slice(0, -1) : rest;
+    const hasMisplacedForce = specParts.includes("--force");
+    const spec = specParts.join(" ").trim();
+    if (!spec || hasMisplacedForce) {
       return {
         action: "error",
-        message: "Usage: /plugins install <path|archive|npm-spec|git:repo|clawhub:pkg>",
+        message:
+          "Usage: /plugins install <path|archive|npm-spec|npm-pack:path|git:repo|clawhub:pkg> [--force]",
       };
     }
-    return { action: "install", spec: name };
+    return { action: "install", force, spec };
   }
 
   if (action === "enable" || action === "disable") {

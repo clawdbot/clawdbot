@@ -122,7 +122,6 @@ internal object MobileColorsAccessor {
 // Keep these accessors while screens migrate to `MobileColorsAccessor.current`.
 // Each getter must stay composable so callers always read the active theme.
 internal val mobileSurface: Color @Composable get() = LocalMobileColors.current.surface
-internal val mobileSurfaceStrong: Color @Composable get() = LocalMobileColors.current.surfaceStrong
 internal val mobileCardSurface: Color @Composable get() = LocalMobileColors.current.cardSurface
 internal val mobileBorder: Color @Composable get() = LocalMobileColors.current.border
 internal val mobileBorderStrong: Color @Composable get() = LocalMobileColors.current.borderStrong
@@ -132,8 +131,6 @@ internal val mobileTextTertiary: Color @Composable get() = LocalMobileColors.cur
 internal val mobileAccent: Color @Composable get() = LocalMobileColors.current.accent
 internal val mobileAccentSoft: Color @Composable get() = LocalMobileColors.current.accentSoft
 internal val mobileAccentBorderStrong: Color @Composable get() = LocalMobileColors.current.accentBorderStrong
-internal val mobileSuccess: Color @Composable get() = LocalMobileColors.current.success
-internal val mobileSuccessSoft: Color @Composable get() = LocalMobileColors.current.successSoft
 internal val mobileWarning: Color @Composable get() = LocalMobileColors.current.warning
 internal val mobileWarningSoft: Color @Composable get() = LocalMobileColors.current.warningSoft
 internal val mobileDanger: Color @Composable get() = LocalMobileColors.current.danger
@@ -141,7 +138,6 @@ internal val mobileDangerSoft: Color @Composable get() = LocalMobileColors.curre
 internal val mobileCodeBg: Color @Composable get() = LocalMobileColors.current.codeBg
 internal val mobileCodeText: Color @Composable get() = LocalMobileColors.current.codeText
 internal val mobileCodeBorder: Color @Composable get() = LocalMobileColors.current.codeBorder
-internal val mobileCodeAccent: Color @Composable get() = LocalMobileColors.current.codeAccent
 
 // Build the page backdrop from semantic surfaces so light/dark palettes keep
 // their contrast relationship without duplicating raw color stops.
@@ -163,15 +159,6 @@ internal val mobileFontFamily =
     Font(resId = R.font.manrope_500_medium, weight = FontWeight.Medium),
     Font(resId = R.font.manrope_600_semibold, weight = FontWeight.SemiBold),
     Font(resId = R.font.manrope_700_bold, weight = FontWeight.Bold),
-  )
-
-internal val mobileTitle1 =
-  TextStyle(
-    fontFamily = mobileFontFamily,
-    fontWeight = FontWeight.SemiBold,
-    fontSize = 24.sp,
-    lineHeight = 30.sp,
-    letterSpacing = (-0.5).sp,
   )
 
 internal val mobileHeadline =

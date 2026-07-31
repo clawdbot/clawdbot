@@ -12,6 +12,7 @@
  */
 
 import { isImplicitSameChatApprovalAuthorization } from "openclaw/plugin-sdk/approval-auth-runtime";
+import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { authorizeQQBotApprovalAction } from "../../exec-approvals.js";
@@ -26,7 +27,7 @@ import { getPluginVersion, getFrameworkVersion } from "../commands/slash-command
 import { resolveGroupConfig, resolveMentionPatterns } from "../config/group.js";
 import { resolveAccountBase } from "../config/resolve.js";
 import type { GroupActivationMode } from "../group/activation.js";
-import { accountToCreds, acknowledgeInteraction } from "../messaging/sender.js";
+import { accountToCreds, acknowledgeInteraction, sendText } from "../messaging/sender.js";
 import type { InteractionEvent, QQBotAccountConfigView } from "../types.js";
 import { InteractionType } from "./constants.js";
 import type { GatewayAccount, GatewayPluginRuntime, EngineLogger } from "./types.js";
@@ -225,7 +226,11 @@ async function handleApprovalButtonInteraction(params: {
   event: InteractionEvent;
   getActiveCfg?: () => OpenClawConfig | Record<string, unknown>;
   log?: EngineLogger;
-  parsed: { approvalId: string; decision: "allow-once" | "allow-always" | "deny" };
+  parsed: {
+    approvalId: string;
+    approvalKind: "exec" | "plugin";
+    decision: "allow-once" | "allow-always" | "deny";
+  };
   resolveCommandAuthorized?: QQBotCommandAuthorizationResolver;
 }): Promise<void> {
   if (!params.getActiveCfg) {
@@ -255,7 +260,7 @@ async function handleApprovalButtonInteraction(params: {
     cfg,
     account: params.account,
     event: params.event,
-    approvalKind: resolveApprovalKind(params.parsed.approvalId),
+    approvalKind: params.parsed.approvalKind,
     resolveCommandAuthorized: params.resolveCommandAuthorized,
   });
   if (!authorization.authorized) {
@@ -266,30 +271,93 @@ async function handleApprovalButtonInteraction(params: {
     return;
   }
 
-  await acknowledgeApprovalInteraction(params.creds, params.event, params.log);
+  // QQ applies the clicked button's visited state as soon as the interaction is ACKed. Keep that
+  // state neutral, ACK promptly, then post the durable canonical outcome once Gateway resolves.
+  await acknowledgeApprovalInteraction(params.creds, params.event, params.log, {
+    content: "Approval response received.",
+  });
 
   const adapter = getPlatformAdapter();
   if (!adapter.resolveApproval) {
+    await reportApprovalInteractionOutcome({
+      creds: params.creds,
+      event: params.event,
+      log: params.log,
+      content: "Approval is unavailable.",
+    });
     params.log?.error("resolveApproval not available on PlatformAdapter");
     return;
   }
 
   try {
-    const ok = await adapter.resolveApproval(params.parsed.approvalId, params.parsed.decision);
-    if (ok) {
-      params.log?.info(
-        `Approval resolved: id=${params.parsed.approvalId}, decision=${params.parsed.decision}`,
-      );
-    } else {
-      params.log?.error(`Approval resolve failed: id=${params.parsed.approvalId}`);
-    }
+    const result = await adapter.resolveApproval(params.parsed);
+    const canonicalDecision =
+      "decision" in result.approval ? `, decision=${result.approval.decision}` : "";
+    const canonicalOutcome = formatCanonicalApprovalOutcome(result.approval);
+    await reportApprovalInteractionOutcome({
+      creds: params.creds,
+      event: params.event,
+      log: params.log,
+      content: result.applied
+        ? `Approval resolved: ${canonicalOutcome}.`
+        : `This approval was already resolved: ${canonicalOutcome}.`,
+    });
+    params.log?.info(
+      result.applied
+        ? `Approval resolved: id=${result.approval.id}, status=${result.approval.status}${canonicalDecision}`
+        : `Approval already resolved: id=${result.approval.id}, status=${result.approval.status}${canonicalDecision}`,
+    );
   } catch (err) {
+    await reportApprovalInteractionOutcome({
+      creds: params.creds,
+      event: params.event,
+      log: params.log,
+      content: "Approval could not be resolved.",
+    });
     params.log?.error(
       `Approval resolve failed: id=${params.parsed.approvalId}: ${
         err instanceof Error ? err.message : String(err)
       }`,
     );
   }
+}
+
+async function reportApprovalInteractionOutcome(params: {
+  creds: { appId: string; clientSecret: string };
+  event: InteractionEvent;
+  log?: EngineLogger;
+  content: string;
+}): Promise<void> {
+  const target = params.event.group_openid
+    ? { type: "group" as const, id: params.event.group_openid }
+    : params.event.user_openid
+      ? { type: "c2c" as const, id: params.event.user_openid }
+      : params.event.channel_id
+        ? { type: "channel" as const, id: params.event.channel_id }
+        : null;
+  if (!target) {
+    params.log?.info(`Approval interaction outcome: ${params.content}`);
+    return;
+  }
+  try {
+    await sendText(target, params.content, params.creds, {
+      msgId: params.event.data.resolved.message_id,
+    });
+  } catch (err) {
+    params.log?.error(
+      `Approval outcome delivery failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+function formatCanonicalApprovalOutcome(approval: ApprovalResolveResult["approval"]): string {
+  if (approval.status === "allowed") {
+    return approval.decision === "allow-always" ? "Allowed always" : "Allowed once";
+  }
+  if (approval.status === "denied") {
+    return "Denied";
+  }
+  return approval.status === "expired" ? "Expired" : "Cancelled";
 }
 
 async function acknowledgeApprovalInteraction(
@@ -407,10 +475,6 @@ function resolveApprovalActorSenderIds(event: InteractionEvent): string[] {
     return normalized ? [normalized] : [];
   });
   return uniqueStrings(ids);
-}
-
-function resolveApprovalKind(approvalId: string): "exec" | "plugin" {
-  return approvalId.toLowerCase().startsWith("plugin:") ? "plugin" : "exec";
 }
 
 /** Execute an async handler, ACK with the result, and handle errors. */

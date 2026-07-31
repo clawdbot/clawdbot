@@ -1,6 +1,7 @@
 /** Tests native module require behavior for plugin runtime loading. */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import Module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -56,6 +57,30 @@ describe("tryNativeRequireJavaScriptModule", () => {
     });
   });
 
+  it("declines an in-flight ESM require race for source-transform fallback", () => {
+    const modulePath = "/plugins/discord/dist/index.js";
+    const error = Object.assign(new Error("ESM is still loading"), {
+      code: "ERR_REQUIRE_ESM_RACE_CONDITION",
+    });
+    type ModuleLoad = (
+      request: string,
+      parent: NodeJS.Module | undefined,
+      isMain: boolean,
+    ) => unknown;
+    const originalLoad = Reflect.get(Module, "_load") as ModuleLoad;
+    Reflect.set(Module, "_load", () => {
+      throw error;
+    });
+
+    try {
+      expect(tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true })).toEqual({
+        ok: false,
+      });
+    } finally {
+      Reflect.set(Module, "_load", originalLoad);
+    }
+  });
+
   it("declines missing target modules so callers can try source fallback", () => {
     const modulePath = path.join(makeTempDir(), "missing.cjs");
 
@@ -77,7 +102,7 @@ describe("tryNativeRequireJavaScriptModule", () => {
   it("declines missing dependency errors when source-transform fallback is available", () => {
     const dir = makeTempDir();
     const modulePath = path.join(dir, "plugin.cjs");
-    fs.writeFileSync(modulePath, 'require("openclaw/plugin-sdk");\n', "utf8");
+    fs.writeFileSync(modulePath, 'require("openclaw/plugin-sdk/core");\n', "utf8");
 
     expect(
       tryNativeRequireJavaScriptModule(modulePath, {

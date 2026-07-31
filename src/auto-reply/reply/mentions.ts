@@ -15,8 +15,23 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { compileConfigRegexes, type ConfigRegexRejectReason } from "../../security/config-regex.js";
 import { escapeRegExp } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
+import { HISTORY_CONTEXT_MARKER } from "./history.js";
 import type { BuildMentionRegexesOptions, ExplicitMentionSignal } from "./mentions.types.js";
-export type { BuildMentionRegexesOptions, ExplicitMentionSignal } from "./mentions.types.js";
+export type { BuildMentionRegexesOptions } from "./mentions.types.js";
+export { CURRENT_MESSAGE_MARKER } from "./history.js";
+
+type ResolvedMentionPatterns = {
+  patterns: string[];
+  unicode: boolean;
+};
+
+const UNICODE_WORD_CHAR = String.raw`[\p{L}\p{M}\p{N}\p{Pc}\u200C\u200D]`;
+
+function wrapDerivedMentionPattern(pattern: string): string {
+  // JavaScript \b is ASCII-oriented. Derived identity names need Unicode word
+  // boundaries so a name is neither missed nor matched inside another word.
+  return `(?:@|(?<!${UNICODE_WORD_CHAR}))${pattern}(?!${UNICODE_WORD_CHAR})`;
+}
 
 function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
   const patterns: string[] = [];
@@ -24,7 +39,7 @@ function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
   if (name) {
     const parts = name.split(/\s+/).filter(Boolean).map(escapeRegExp);
     const re = parts.length ? parts.join(String.raw`\s+`) : escapeRegExp(name);
-    patterns.push(String.raw`\b@?${re}\b`);
+    patterns.push(wrapDerivedMentionPattern(re));
   }
   const emoji = normalizeOptionalString(identity?.emoji);
   if (emoji) {
@@ -40,8 +55,6 @@ const MAX_MENTION_REGEX_COMPILE_CACHE_KEYS = 512;
 const mentionPatternWarningCache = new Set<string>();
 const MAX_MENTION_PATTERN_WARNING_KEYS = 512;
 const log = createSubsystemLogger("mentions");
-
-export const CURRENT_MESSAGE_MARKER = "[Current message - respond to this]";
 
 function normalizeMentionPattern(pattern: string): string {
   if (!pattern.includes(BACKSPACE_CHAR)) {
@@ -112,21 +125,24 @@ function compileMentionPatternsCached(params: {
   return cacheMentionRegexes(params.cache, cacheKey, compiled.regexes);
 }
 
-function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: string): string[] {
+function resolveMentionPatterns(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string,
+): ResolvedMentionPatterns {
   if (!cfg) {
-    return [];
+    return { patterns: [], unicode: false };
   }
   const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
   const agentGroupChat = agentConfig?.groupChat;
   if (agentGroupChat && Object.hasOwn(agentGroupChat, "mentionPatterns")) {
-    return agentGroupChat.mentionPatterns ?? [];
+    return { patterns: agentGroupChat.mentionPatterns ?? [], unicode: false };
   }
   const globalGroupChat = cfg.messages?.groupChat;
   if (globalGroupChat && Object.hasOwn(globalGroupChat, "mentionPatterns")) {
-    return globalGroupChat.mentionPatterns ?? [];
+    return { patterns: globalGroupChat.mentionPatterns ?? [], unicode: false };
   }
   const derived = deriveMentionPatterns(agentConfig?.identity);
-  return derived.length > 0 ? derived : [];
+  return { patterns: derived, unicode: derived.length > 0 };
 }
 
 /** Builds mention regexes from config, agent identity, and channel policy. */
@@ -138,10 +154,11 @@ export function buildMentionRegexes(
   if (!resolveMentionPatternPolicy({ ...options, cfg, agentId }).enabled) {
     return [];
   }
-  const patterns = normalizeMentionPatterns(resolveMentionPatterns(cfg, agentId));
+  const resolved = resolveMentionPatterns(cfg, agentId);
+  const patterns = normalizeMentionPatterns(resolved.patterns);
   return compileMentionPatternsCached({
     patterns,
-    flags: "i",
+    flags: resolved.unicode ? "iu" : "i",
     cache: mentionMatchRegexCompileCache,
     warnRejected: true,
   });
@@ -187,10 +204,13 @@ export function stripStructuralPrefixes(text: string): string {
   }
   // Ignore wrapper labels, timestamps, and sender prefixes so directive-only
   // detection still works in group batches that include history/context.
-  const afterMarker = text.includes(CURRENT_MESSAGE_MARKER)
-    ? text.slice(text.indexOf(CURRENT_MESSAGE_MARKER) + CURRENT_MESSAGE_MARKER.length).trimStart()
-    : text;
-  const afterEnvelope = afterMarker.replace(/\[[^\]]+\]\s*/g, "");
+  if (text.trimStart().startsWith(HISTORY_CONTEXT_MARKER)) {
+    // Flat history has no trustworthy current-message range when users can quote
+    // marker text. Leave it non-command-shaped instead of guessing a boundary.
+    return text.trim();
+  }
+  const afterMarker = text;
+  const afterEnvelope = afterMarker.replace(/^(?:[ \t]*\[[^\]\n]+\][ \t]*)+/, "");
   const senderPrefixPattern =
     afterEnvelope === afterMarker
       ? /^[ \t]*(?!\/)[^\n:]{1,120}:\s+/gm
@@ -218,9 +238,10 @@ export function stripMentions(
   const providerMentions = providerId
     ? (getLoadedChannelPluginById(providerId) as ChannelPlugin | undefined)?.mentions
     : undefined;
+  const resolvedPatterns = resolveMentionPatterns(cfg, agentId);
   const configRegexes = compileMentionPatternsCached({
-    patterns: normalizeMentionPatterns(resolveMentionPatterns(cfg, agentId)),
-    flags: "gi",
+    patterns: normalizeMentionPatterns(resolvedPatterns.patterns),
+    flags: resolvedPatterns.unicode ? "giu" : "gi",
     cache: mentionStripRegexCompileCache,
     warnRejected: true,
   });

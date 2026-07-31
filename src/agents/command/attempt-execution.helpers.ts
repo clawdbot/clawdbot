@@ -5,6 +5,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   isSilentReplyPrefixText,
   isSilentReplyText,
@@ -92,7 +93,7 @@ export async function sessionFileHasContent(sessionFile: string | undefined): Pr
 }
 
 /** Resolves the expected Claude CLI transcript JSONL path for a session. */
-export function claudeCliSessionTranscriptPath(params: {
+function claudeCliSessionTranscriptPath(params: {
   sessionId: string | undefined;
   workspaceDir: string | undefined;
   homeDir?: string;
@@ -382,7 +383,7 @@ function formatFallbackTurns(
  * Returns an empty string when neither a summary nor any usable turn fits in
  * the budget; callers can treat that as "no context to seed".
  */
-export function formatClaudeCliFallbackPrelude(
+function formatClaudeCliFallbackPrelude(
   seed: ClaudeCliFallbackSeed,
   options?: { charBudget?: number },
 ): string {
@@ -402,7 +403,7 @@ export function formatClaudeCliFallbackPrelude(
       // Truncate the summary at a word boundary if it's huge; clearly mark
       // the truncation so the fallback model treats the prelude as a hint,
       // not exhaustive state.
-      const slice = seed.summaryText.slice(0, Math.max(0, remaining - 64));
+      const slice = truncateUtf16Safe(seed.summaryText, Math.max(0, remaining - 64));
       const lastBreak = slice.lastIndexOf(" ");
       const trimmed = lastBreak > 0 ? slice.slice(0, lastBreak).trimEnd() : slice.trimEnd();
       sections.push(`\nSummary of earlier conversation (truncated):\n${trimmed} …`);
@@ -538,4 +539,10 @@ export function createAcpVisibleTextAccumulator() {
       return visibleText;
     },
   };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.attemptExecutionHelpersTestApi")
+  ] = { claudeCliSessionTranscriptPath, formatClaudeCliFallbackPrelude };
 }

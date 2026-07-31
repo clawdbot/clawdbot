@@ -1,6 +1,6 @@
 // Network Policy tests cover ipv4 behavior.
 import { describe, expect, it } from "vitest";
-import { validateDottedDecimalIPv4Input, validateIPv4AddressInput } from "./ipv4.js";
+import { validateDottedDecimalIPv4Input } from "./ipv4.js";
 
 describe("net-policy/ipv4", () => {
   it("requires a value for custom bind mode", () => {
@@ -27,10 +27,5 @@ describe("net-policy/ipv4", () => {
     expect(validateDottedDecimalIPv4Input("example.com")).toBe(
       "Invalid IPv4 address (e.g., 192.168.1.100)",
     );
-  });
-
-  it("keeps the backward-compatible alias wired to the same validation", () => {
-    expect(validateIPv4AddressInput("192.168.1.100")).toBeUndefined();
-    expect(validateIPv4AddressInput("bad-ip")).toBe("Invalid IPv4 address (e.g., 192.168.1.100)");
   });
 });

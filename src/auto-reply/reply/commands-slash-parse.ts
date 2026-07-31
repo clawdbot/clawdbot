@@ -9,7 +9,7 @@ type SlashCommandParseResult =
   | { kind: "parsed"; action: string; args: string };
 
 /** Public slash-command parse result returned to command handlers. */
-export type ParsedSlashCommand =
+type ParsedSlashCommand =
   | { ok: true; action: string; args: string }
   | { ok: false; message: string };
 

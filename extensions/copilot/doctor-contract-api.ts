@@ -35,8 +35,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
  * Session-state ownership claim for the copilot agent runtime.
  *
  * - id / label: Identify the extension in doctor output.
- * - providerIds: The subscription Copilot providers (kept in sync
- *   with `SUPPORTED_PROVIDERS` in attempt.ts).
+ * - providerIds: The subscription Copilot providers.
  * - runtimeIds: Our harness id (matches harness.ts `id` field).
  * - cliSessionKeys: Session keys this harness writes; doctor uses
  *   this when pruning stale CLI session state.

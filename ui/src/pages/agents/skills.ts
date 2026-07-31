@@ -6,6 +6,7 @@ import { loadSkillStatusReport } from "../../lib/skills/index.ts";
 type AgentSkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  requestGeneration: number;
   agentSkillsLoading: boolean;
   agentSkillsError: string | null;
   agentSkillsReport: SkillStatusReport | null;
@@ -13,23 +14,31 @@ type AgentSkillsState = {
 };
 
 export async function loadAgentSkills(state: AgentSkillsState, agentId: string) {
-  if (!state.client || !state.connected) {
+  const client = state.client;
+  if (!client || !state.connected) {
     return;
   }
   if (state.agentSkillsLoading) {
     return;
   }
+  const generation = state.requestGeneration;
+  const isCurrent = () =>
+    state.client === client && state.connected && state.requestGeneration === generation;
   state.agentSkillsLoading = true;
   state.agentSkillsError = null;
   try {
-    const res = await loadSkillStatusReport(state.client, agentId);
-    if (res) {
+    const res = await loadSkillStatusReport(client, agentId);
+    if (res && isCurrent()) {
       state.agentSkillsReport = res;
       state.agentSkillsAgentId = agentId;
     }
   } catch (err) {
-    state.agentSkillsError = String(err);
+    if (isCurrent()) {
+      state.agentSkillsError = String(err);
+    }
   } finally {
-    state.agentSkillsLoading = false;
+    if (isCurrent()) {
+      state.agentSkillsLoading = false;
+    }
   }
 }

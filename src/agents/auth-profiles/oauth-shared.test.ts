@@ -3,6 +3,8 @@
  * Covers runtime-only provenance, cloned store isolation, and stale credential
  * replacement decisions.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import {
@@ -50,8 +52,11 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
       expect(overlaidCodexProfile.access).toBe("access-1");
       expect(store.profiles["openai:default"]?.type).toBe("api_key");
 
-      overlaid.profiles["openai:default"].provider = "mutated";
-      overlaid.order!.openai.push("mutated");
+      expectDefined(
+        overlaid.profiles["openai:default"],
+        'overlaid.profiles["openai:default"] test invariant',
+      ).provider = "mutated";
+      expectDefined(overlaid.order?.openai, "OpenAI profile order").push("mutated");
 
       expect(store.profiles["openai:default"]?.provider).toBe("openai");
       expect(store.order?.openai).toEqual(["openai:default"]);

@@ -3,9 +3,14 @@ import {
   assertCodexThreadResumeSubscription,
   CodexAppServerUnsafeSubscriptionError,
 } from "./attempt-client-cleanup.js";
-import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
+import {
+  CodexAppServerRpcError,
+  isCodexAppServerPrewriteRequestCancellationError,
+  type CodexAppServerClient,
+} from "./client.js";
 import { assertCodexThreadResumeResponse } from "./protocol-validators.js";
 import type { CodexThreadResumeParams, CodexThreadResumeResponse } from "./protocol.js";
+import { isCodexAppServerStartSelectionChangedError } from "./shared-client.js";
 
 /** Resumes one thread and retires the physical client when acceptance is indeterminate. */
 export async function resumeCodexAppServerThread(params: {
@@ -26,6 +31,12 @@ export async function resumeCodexAppServerThread(params: {
     );
     assertCodexThreadResumeSubscription(threadId, response.thread.id);
   } catch (error) {
+    if (
+      isCodexAppServerStartSelectionChangedError(error) ||
+      isCodexAppServerPrewriteRequestCancellationError(error)
+    ) {
+      throw error;
+    }
     if (error instanceof CodexAppServerRpcError) {
       // A structured RPC error proves Codex rejected the resume, so the client
       // holds no hidden subscription and can safely stay in the shared pool.

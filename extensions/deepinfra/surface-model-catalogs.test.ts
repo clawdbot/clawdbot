@@ -1,6 +1,6 @@
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 // Deepinfra tests cover surface model catalogs plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetDeepInfraModelCacheForTest } from "./provider-models.js";
 import {
   listDeepInfraImageGenCatalog,
   listDeepInfraVideoGenCatalog,
@@ -8,7 +8,7 @@ import {
 } from "./surface-model-catalogs.js";
 
 beforeEach(() => {
-  resetDeepInfraModelCacheForTest();
+  clearLiveCatalogCacheForTests();
 });
 
 function makeCtx(overrides: Partial<Parameters<typeof listDeepInfraImageGenCatalog>[0]> = {}) {
@@ -208,6 +208,10 @@ describe("listDeepInfraVideoGenCatalog", () => {
       expect(first?.kind).toBe("video_generation");
       expect(first?.capabilities?.generate?.supportsAspectRatio).toBe(true);
       expect(first?.capabilities?.generate?.supportedDurationSeconds).toEqual([5, 8]);
+      // Catalog must not advertise options the runtime drops: guidance is not
+      // part of the /v1/openai/videos contract, so catalog == runtime providerOptions.
+      expect(first?.capabilities?.providerOptions).not.toHaveProperty("guidance_scale");
+      expect(first?.capabilities?.providerOptions).not.toHaveProperty("guidanceScale");
     });
   });
 });

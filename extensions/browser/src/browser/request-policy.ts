@@ -27,11 +27,40 @@ export function isPersistentBrowserProfileMutation(method: string, path: string)
   const normalizedPath = normalizeBrowserRequestPath(path);
   if (
     method === "POST" &&
-    (normalizedPath === "/profiles/create" || normalizedPath === "/reset-profile")
+    (normalizedPath === "/profiles/create" ||
+      normalizedPath === "/profiles/import" ||
+      normalizedPath === "/reset-profile")
   ) {
     return true;
   }
   return method === "DELETE" && /^\/profiles\/[^/]+$/.test(normalizedPath);
+}
+
+/**
+ * Returns true for the system-profile cookie import route. Import must run where
+ * the user's Keychain lives, so it is exempt from the host-local persistent
+ * mutation block while remaining blocked over a node proxy.
+ */
+function isBrowserSystemProfileImport(method: string, path: string): boolean {
+  return method === "POST" && normalizeBrowserRequestPath(path) === "/profiles/import";
+}
+
+/**
+ * Returns true for routes that only make sense on the host that owns the local
+ * Keychain and Chrome-family profiles: system-profile listing and import. These
+ * must be dispatched host-local and never proxied to a browser node.
+ */
+export function isBrowserHostLocalRoute(method: string, path: string): boolean {
+  if (isBrowserSystemProfileImport(method, path)) {
+    return true;
+  }
+  const normalizedPath = normalizeBrowserRequestPath(path);
+  return (
+    (method === "GET" &&
+      (normalizedPath === "/system-profiles" ||
+        normalizedPath === "/system-profile-import/status")) ||
+    (method === "POST" && normalizedPath === "/system-profile-import/dismiss")
+  );
 }
 
 /** Resolves the requested profile from query, body, or route defaults. */

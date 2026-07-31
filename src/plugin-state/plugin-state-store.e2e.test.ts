@@ -1,13 +1,15 @@
 // Plugin state store E2E tests cover persisted plugin state across runtime calls.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closePluginStateDatabase,
   createPluginStateKeyedStore,
-  probePluginStateStore,
   resetPluginStateStoreForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
+import { probePluginStateStore } from "./plugin-state-store.test-helpers.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -109,7 +111,7 @@ describe("TTL", () => {
       // After sweep the entry list contains only the long-lived record.
       const remaining = await store.entries();
       expect(remaining).toHaveLength(1);
-      expect(remaining[0].key).toBe("long");
+      expect(expectDefined(remaining[0], "remaining[0] test invariant").key).toBe("long");
     });
   });
 });

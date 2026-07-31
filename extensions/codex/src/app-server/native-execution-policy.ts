@@ -31,6 +31,17 @@ export type CodexNativeExecutionPolicy = {
   blockReason?: string;
 };
 
+/** Projects node execution ownership into the runtime tool factory options. */
+export function resolveCodexNodeExecToolOverrides(
+  policy: CodexNativeExecutionPolicy,
+): { host: "node"; node?: string } | undefined {
+  if (policy.effectiveExecHost !== "node") {
+    return undefined;
+  }
+  const node = policy.node?.trim();
+  return { host: "node", ...(node ? { node } : {}) };
+}
+
 /** Resolves node/gateway/sandbox execution ownership from overrides, session, agent, and config. */
 export function resolveCodexNativeExecutionPolicy(params: {
   config?: OpenClawConfig;

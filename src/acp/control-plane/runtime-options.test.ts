@@ -90,3 +90,19 @@ describe("buildRuntimeConfigOptionPairs timeout advertisement", () => {
     ]);
   });
 });
+
+describe("buildRuntimeConfigOptionPairs thinking advertisement", () => {
+  it("omits automatic thinking when the backend advertises no thinking alias", () => {
+    expect(buildRuntimeConfigOptionPairs({ thinking: "high" }, ["mode", "model"])).toEqual([]);
+  });
+
+  it("maps automatic thinking to the advertised reasoning_effort alias", () => {
+    expect(
+      buildRuntimeConfigOptionPairs({ thinking: "high" }, ["model", "reasoning_effort"]),
+    ).toEqual([["reasoning_effort", "high"]]);
+  });
+
+  it("keeps automatic thinking when advertised keys are unknown", () => {
+    expect(buildRuntimeConfigOptionPairs({ thinking: "high" })).toEqual([["thinking", "high"]]);
+  });
+});

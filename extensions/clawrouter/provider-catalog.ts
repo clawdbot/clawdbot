@@ -9,7 +9,7 @@ import type {
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 
-export const CLAWROUTER_DEFAULT_BASE_URL = "https://clawrouter.openclaw.ai";
+const CLAWROUTER_DEFAULT_BASE_URL = "https://clawrouter.openclaw.ai";
 
 const PROVIDER_ID = "clawrouter";
 const CATALOG_CACHE_TTL_MS = 60_000;

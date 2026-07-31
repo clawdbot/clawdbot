@@ -321,14 +321,13 @@ async function runVoiceCallGatewayProducer(
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: "voice-call-cli-rpc-agent-tool.log",
-    primaryModel: "mock-openai/gpt-5.5",
+    primaryModel: "mock-openai/gpt-5.6-luna",
     providerMode: "mock-openai",
     repoRoot: options.repoRoot,
     target: {
       id: "voice-call-cli-rpc-agent-tool",
       title: "Voice Call CLI, RPC, and agent tool flow",
       sourcePath: "qa/scenarios/plugins/voice-call-cli-rpc-agent-tool.yaml",
-      primaryCoverageIds: ["voice-call.cli-rpc-agent-tool"],
       docsRefs: ["docs/cli/voicecall.md", "docs/plugins/voice-call.md"],
       codeRefs: [
         SOURCE_PATH,

@@ -20,6 +20,10 @@
 	<string>$(OPENCLAW_MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(OPENCLAW_BUILD_VERSION)</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>OpenClaw connects this Apple Watch directly to your Gateway on trusted local networks.</string>
+	<key>WKPrefersNetworkUponForeground</key>
+	<true/>
 	<key>UIAppFonts</key>
 	<array>
 		<string>RedHatDisplay[wght].ttf</string>

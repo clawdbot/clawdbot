@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   openClawNpmPrepublishVerifyUsage,
   parseOpenClawNpmPrepublishVerifyArgs,
+  usesPreparedLocalDependencyInstall,
 } from "../scripts/openclaw-npm-prepublish-verify.ts";
 
 describe("parseOpenClawNpmPrepublishVerifyArgs", () => {
@@ -45,5 +46,13 @@ describe("parseOpenClawNpmPrepublishVerifyArgs", () => {
     expect(() =>
       parseOpenClawNpmPrepublishVerifyArgs(["openclaw.tgz", "2026.3.23", "--bad"]),
     ).toThrow("Invalid dependency tarball path: --bad");
+  });
+});
+
+describe("usesPreparedLocalDependencyInstall", () => {
+  it("uses the prepared local project only for the single AI tarball release path", () => {
+    expect(usesPreparedLocalDependencyInstall(0)).toBe(false);
+    expect(usesPreparedLocalDependencyInstall(1)).toBe(true);
+    expect(usesPreparedLocalDependencyInstall(2)).toBe(false);
   });
 });

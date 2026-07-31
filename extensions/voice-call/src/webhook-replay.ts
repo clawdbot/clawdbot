@@ -8,7 +8,7 @@ const REPLAY_WINDOW_MS = 10 * 60 * 1000;
 const REPLAY_CACHE_MAX_ENTRIES = 10_000;
 const REPLAY_CACHE_PRUNE_INTERVAL = 64;
 
-export type WebhookReplayCache = {
+type WebhookReplayCache = {
   seenUntil: Map<string, number>;
   calls: number;
 };

@@ -991,3 +991,4 @@ function readFirstString(record: JsonObject | undefined, keys: string[]): string
   }
   return undefined;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

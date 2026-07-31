@@ -241,7 +241,7 @@ export async function resolveSessionAuthProfileOverride(params: {
     }
     for (let offset = 1; offset <= order.length; offset += 1) {
       const candidate = order[(startIndex + offset) % order.length];
-      if (!isProfileInCooldown(store, candidate)) {
+      if (candidate && !isProfileInCooldown(store, candidate)) {
         return candidate;
       }
     }

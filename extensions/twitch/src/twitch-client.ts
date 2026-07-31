@@ -3,7 +3,9 @@ import { RefreshingAuthProvider, StaticAuthProvider } from "@twurple/auth";
 import { ChatClient, LogLevel } from "@twurple/chat";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { TWITCH_CHAT_MESSAGE_LIMIT } from "./constants.js";
 import { resolveTwitchToken } from "./token.js";
 import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
@@ -272,11 +274,10 @@ export class TwitchClientManager {
     client.onMessage((channelName, _user, messageText, msg) => {
       const handler = this.messageHandlers.get(key);
       if (handler) {
-        const normalizedChannel = channelName.startsWith("#") ? channelName.slice(1) : channelName;
         const from = `twitch:${msg.userInfo.userName}`;
         const preview = sliceUtf16Safe(messageText, 0, 100).replace(/\n/g, "\\n");
         this.logger.debug?.(
-          `twitch inbound: channel=${normalizedChannel} from=${from} len=${messageText.length} preview="${preview}"`,
+          `twitch inbound: channel=${channelName} from=${from} len=${messageText.length} preview="${preview}"`,
         );
 
         handler({
@@ -284,9 +285,10 @@ export class TwitchClientManager {
           displayName: msg.userInfo.displayName,
           userId: msg.userInfo.userId,
           message: messageText,
-          channel: normalizedChannel,
+          // Preserve the raw callback channel; durable dispatch normalizes it.
+          channel: channelName,
           id: msg.id,
-          timestamp: new Date(),
+          timestamp: Date.now(),
           isMod: msg.userInfo.isMod,
           isOwner: msg.userInfo.isBroadcaster,
           isVip: msg.userInfo.isVip,
@@ -379,8 +381,10 @@ export class TwitchClientManager {
       // Generate a message ID (Twurple's say() doesn't return the message ID, so we generate one)
       const messageId = crypto.randomUUID();
 
-      // Send message (Twurple handles rate limiting)
-      await client.say(channel, message);
+      // Pre-chunk so Twurple's raw UTF-16 fallback cannot split surrogate pairs.
+      for (const chunk of chunkTextForOutbound(message, TWITCH_CHAT_MESSAGE_LIMIT)) {
+        await client.say(channel, chunk);
+      }
 
       return { ok: true, messageId };
     } catch (error) {

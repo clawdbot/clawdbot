@@ -1,4 +1,6 @@
 // Node list parsing tests cover normalized node inventory records.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { parseNodeList, parsePairingList } from "./node-list-parse.js";
 
@@ -77,13 +79,13 @@ describe("shared/node-list-parse", () => {
     // row survives with optional scalars normalized to undefined so renderers never trim a non-string.
     expect(pending).toHaveLength(1);
     expect(pending[0]).toMatchObject({ requestId: "r1", nodeId: "n1" });
-    expect(pending[0].displayName).toBeUndefined();
-    expect(pending[0].remoteIp).toBeUndefined();
-    expect(pending[0].platform).toBeUndefined();
+    expect(expectDefined(pending[0], "pending[0] test invariant").displayName).toBeUndefined();
+    expect(expectDefined(pending[0], "pending[0] test invariant").remoteIp).toBeUndefined();
+    expect(expectDefined(pending[0], "pending[0] test invariant").platform).toBeUndefined();
     expect(paired).toHaveLength(1);
     expect(paired[0]).toMatchObject({ nodeId: "n2" });
-    expect(paired[0].displayName).toBeUndefined();
-    expect(paired[0].remoteIp).toBeUndefined();
-    expect(paired[0].lastSeenReason).toBeUndefined();
+    expect(expectDefined(paired[0], "paired[0] test invariant").displayName).toBeUndefined();
+    expect(expectDefined(paired[0], "paired[0] test invariant").remoteIp).toBeUndefined();
+    expect(expectDefined(paired[0], "paired[0] test invariant").lastSeenReason).toBeUndefined();
   });
 });

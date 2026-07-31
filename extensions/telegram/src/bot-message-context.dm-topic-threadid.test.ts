@@ -19,7 +19,6 @@ vi.mock("./bot-message-context.body.js", () => ({
       wasMentioned: true,
       effectiveWasMentioned: true,
       requireMention: false,
-      shouldSkip: false,
     },
     canDetectMention: false,
     shouldBypassMention: false,
@@ -179,7 +178,7 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expectRecordedRoute({ to: "telegram:-1001234567890:topic:99", threadId: "99" });
   });
 
-  it("passes threadId to updateLastRoute for the forum General topic", async () => {
+  it("keeps the forum General topic target aligned with live routing", async () => {
     const ctx = await buildCtx({
       message: {
         chat: { id: -1001234567890, type: "supergroup", title: "Test Group", is_forum: true },
@@ -194,6 +193,6 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     }
     expect(recordInboundSessionMock).toHaveBeenCalled();
 
-    expectRecordedRoute({ to: "telegram:-1001234567890:topic:1", threadId: "1" });
+    expectRecordedRoute({ to: "telegram:-1001234567890", threadId: "1" });
   });
 });

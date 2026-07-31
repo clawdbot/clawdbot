@@ -39,7 +39,7 @@ type BundledPluginPathPair = {
 };
 
 /** Metadata collected from a bundled plugin package and manifest. */
-export type BundledPluginMetadata = {
+type BundledPluginMetadata = {
   dirName: string;
   idHint: string;
   source: BundledPluginPathPair;

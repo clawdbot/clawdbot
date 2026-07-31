@@ -10,7 +10,11 @@ import type { AgentTool, AgentToolResult } from "openclaw/plugin-sdk/agent-core"
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import * as windowsEncoding from "../infra/windows-encoding.js";
-import { createOpenClawReadTool, createSandboxedReadTool } from "./agent-tools.read.js";
+import {
+  createOpenClawReadTool,
+  createSandboxedReadTool,
+  wrapReadToolWithSkillContent,
+} from "./agent-tools.read.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 function extractToolText(result: unknown): string {
@@ -33,6 +37,28 @@ function extractToolText(result: unknown): string {
 }
 
 describe("createOpenClawCodingTools read behavior", () => {
+  it("reads exact node skill locators without sending them to the filesystem backend", async () => {
+    const locator = "node://node-1/skills/pond/SKILL.md";
+    const execute = vi.fn(async () => {
+      throw new Error("filesystem backend should not run");
+    });
+    const tool = wrapReadToolWithSkillContent(
+      {
+        name: "read",
+        label: "read",
+        description: "read a file",
+        parameters: {},
+        execute,
+      } as never,
+      [{ filePath: locator, readContent: "# Pond\nremote-marker" }],
+    );
+
+    const result = await tool.execute("node-skill-read", { path: locator });
+
+    expect(extractToolText(result)).toContain("remote-marker");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("uses host decoding only for host-backed sandbox paths", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sbx-encoding-"));
     await fs.writeFile(path.join(tmpDir, "notes.txt"), "hello", "utf8");

@@ -26,7 +26,7 @@ import { reconstructWebhookUrl, verifyPlivoWebhook } from "../webhook-security.j
 import type { VoiceCallProvider } from "./base.js";
 import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
 
-export interface PlivoProviderOptions {
+interface PlivoProviderOptions {
   /** Override public URL origin for signature verification */
   publicUrl?: string;
   /** Skip webhook signature verification (development only) */
@@ -574,8 +574,6 @@ export class PlivoProvider implements VoiceCallProvider {
     try {
       if (this.options.publicUrl) {
         const base = new URL(this.options.publicUrl);
-        const requestUrl = new URL(ctx.url);
-        base.pathname = requestUrl.pathname;
         return `${base.origin}${base.pathname}`;
       }
 

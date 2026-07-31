@@ -1,13 +1,8 @@
 // Nostr tests cover nostr bus.fuzz plugin behavior.
 import { describe, expect, it } from "vitest";
-import { createMetrics, type MetricName } from "./metrics.js";
-import { validatePrivateKey, isValidPubkey, normalizePubkey } from "./nostr-key-utils.js";
-import { createSeenTracker } from "./seen-tracker.js";
+import { createMetrics } from "./metrics.js";
+import { validatePrivateKey, normalizePubkey } from "./nostr-key-utils.js";
 import { TEST_HEX_PRIVATE_KEY } from "./test-fixtures.js";
-
-function createTracker(maxEntries = 100) {
-  return createSeenTracker({ maxEntries });
-}
 
 function createPlainMetrics() {
   return createMetrics();
@@ -100,32 +95,6 @@ describe("validatePrivateKey fuzz", () => {
   });
 });
 
-// ============================================================================
-// Fuzz Tests for isValidPubkey
-// ============================================================================
-
-describe("isValidPubkey fuzz", () => {
-  describe("isValidPubkey type confusion", () => {
-    it("handles non-string input gracefully", () => {
-      for (const value of [null, undefined, 123, {}]) {
-        expect(isValidPubkey(value as unknown as string)).toBe(false);
-      }
-    });
-  });
-
-  describe("malicious inputs", () => {
-    it("rejects prototype property names", () => {
-      for (const value of ["__proto__", "constructor", "toString"]) {
-        expect(isValidPubkey(value)).toBe(false);
-      }
-    });
-  });
-});
-
-// ============================================================================
-// Fuzz Tests for normalizePubkey
-// ============================================================================
-
 describe("normalizePubkey fuzz", () => {
   describe("prototype pollution attempts", () => {
     it("throws for prototype property names", () => {
@@ -149,122 +118,6 @@ describe("normalizePubkey fuzz", () => {
 });
 
 // ============================================================================
-// Fuzz Tests for SeenTracker
-// ============================================================================
-
-describe("SeenTracker fuzz", () => {
-  describe("malformed IDs", () => {
-    it("handles empty string IDs", () => {
-      const tracker = createTracker();
-      expect(tracker.add("")).toBeUndefined();
-      expect(tracker.peek("")).toBe(true);
-      tracker.stop();
-    });
-
-    it("handles very long IDs", () => {
-      const tracker = createTracker();
-      const longId = "a".repeat(100000);
-      expect(tracker.add(longId)).toBeUndefined();
-      expect(tracker.peek(longId)).toBe(true);
-      tracker.stop();
-    });
-
-    it("handles unicode IDs", () => {
-      const tracker = createTracker();
-      const unicodeId = "事件ID_🎉_тест";
-      expect(tracker.add(unicodeId)).toBeUndefined();
-      expect(tracker.peek(unicodeId)).toBe(true);
-      tracker.stop();
-    });
-
-    it("handles IDs with null bytes", () => {
-      const tracker = createTracker();
-      const idWithNull = "event\x00id";
-      expect(tracker.add(idWithNull)).toBeUndefined();
-      expect(tracker.peek(idWithNull)).toBe(true);
-      tracker.stop();
-    });
-
-    it("handles prototype property names as IDs", () => {
-      const tracker = createTracker();
-
-      // These should not affect the tracker's internal operation
-      expect(tracker.add("__proto__")).toBeUndefined();
-      expect(tracker.add("constructor")).toBeUndefined();
-      expect(tracker.add("toString")).toBeUndefined();
-      expect(tracker.add("hasOwnProperty")).toBeUndefined();
-
-      expect(tracker.peek("__proto__")).toBe(true);
-      expect(tracker.peek("constructor")).toBe(true);
-      expect(tracker.peek("toString")).toBe(true);
-      expect(tracker.peek("hasOwnProperty")).toBe(true);
-
-      tracker.stop();
-    });
-  });
-
-  describe("rapid operations", () => {
-    it("handles rapid add/check cycles", () => {
-      const tracker = createTracker(1000);
-
-      for (let i = 0; i < 10000; i++) {
-        const id = `event-${i}`;
-        tracker.add(id);
-        // Recently added should be findable
-        if (i < 1000) {
-          tracker.peek(id);
-        }
-      }
-
-      // Size should be capped at maxEntries
-      expect(tracker.size()).toBeLessThanOrEqual(1000);
-      tracker.stop();
-    });
-
-    it("handles concurrent-style operations", () => {
-      const tracker = createTracker();
-
-      // Simulate interleaved operations
-      for (let i = 0; i < 100; i++) {
-        tracker.add(`add-${i}`);
-        tracker.peek(`peek-${i}`);
-        tracker.has(`has-${i}`);
-        if (i % 10 === 0) {
-          tracker.delete(`add-${i - 5}`);
-        }
-      }
-
-      expect(tracker.size()).toBeGreaterThan(0);
-      tracker.stop();
-    });
-  });
-
-  describe("seed edge cases", () => {
-    it("handles empty seed array", () => {
-      const tracker = createTracker();
-      expect(tracker.seed([])).toBeUndefined();
-      expect(tracker.size()).toBe(0);
-      tracker.stop();
-    });
-
-    it("handles seed with duplicate IDs", () => {
-      const tracker = createTracker();
-      tracker.seed(["id1", "id1", "id1", "id2", "id2"]);
-      expect(tracker.size()).toBe(2);
-      tracker.stop();
-    });
-
-    it("handles seed larger than maxEntries", () => {
-      const tracker = createTracker(5);
-      const ids = Array.from({ length: 100 }, (_, i) => `id-${i}`);
-      tracker.seed(ids);
-      expect(tracker.size()).toBeLessThanOrEqual(5);
-      tracker.stop();
-    });
-  });
-});
-
-// ============================================================================
 // Fuzz Tests for Metrics
 // ============================================================================
 
@@ -274,7 +127,8 @@ describe("Metrics fuzz", () => {
       const metrics = createPlainMetrics();
 
       // Cast to bypass type checking - testing runtime behavior
-      expect(metrics.emit("invalid.metric.name" as MetricName)).toBeUndefined();
+      type EmitMetricName = Parameters<typeof metrics.emit>[0];
+      expect(metrics.emit("invalid.metric.name" as EmitMetricName)).toBeUndefined();
     });
   });
 

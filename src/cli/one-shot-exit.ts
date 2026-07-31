@@ -6,7 +6,9 @@ type VitestWorkerMarkers = {
   vitestWorker?: unknown;
 };
 
-let requestedExitCode: number | undefined;
+const SYSTEM_CA_FLAG = "--use-system-ca";
+
+let requestedExitCode: number | "process" | undefined;
 
 function resolveVitestWorkerMarkers(): VitestWorkerMarkers {
   const processMarkers = process as NodeJS.Process & Record<string, unknown>;
@@ -15,6 +17,34 @@ function resolveVitestWorkerMarkers(): VitestWorkerMarkers {
     tinypoolState: processMarkers["__tinypool_state__"],
     vitestWorker: globalMarkers["__vitest_worker__"],
   };
+}
+
+function hasNodeRuntimeOption(
+  option: string,
+  env: NodeJS.ProcessEnv,
+  execArgv: readonly string[],
+): boolean {
+  const normalize = (value: string) => value.replaceAll("_", "-");
+  if (execArgv.some((arg) => normalize(arg) === option)) {
+    return true;
+  }
+  return (env.NODE_OPTIONS ?? "").split(/\s+/u).some((token) => {
+    const quote = token[0];
+    const unquoted =
+      (quote === '"' || quote === "'") && token.at(-1) === quote ? token.slice(1, -1) : token;
+    return normalize(unquoted) === option;
+  });
+}
+
+function resolveProcessExitCode(fallback = 0): number {
+  const value = process.exitCode;
+  if (typeof value === "number") {
+    return Number.isInteger(value) ? value : fallback;
+  }
+  if (typeof value === "string" && /^-?\d+$/u.test(value.trim())) {
+    return Number.parseInt(value, 10);
+  }
+  return fallback;
 }
 
 function isVitestWorker(
@@ -31,6 +61,54 @@ function isVitestWorker(
   );
 }
 
+function requestExitAfterSystemCaCliCompletion(
+  runtime: RuntimeEnv = defaultRuntime,
+  params: {
+    env?: NodeJS.ProcessEnv;
+    execArgv?: readonly string[];
+    platform?: NodeJS.Platform;
+    exitCode?: number;
+  } = {},
+): boolean {
+  const env = params.env ?? process.env;
+  const execArgv = params.execArgv ?? process.execArgv;
+  const platform = params.platform ?? process.platform;
+  const usesSystemCa =
+    env.NODE_USE_SYSTEM_CA === "1" || hasNodeRuntimeOption(SYSTEM_CA_FLAG, env, execArgv);
+  if (platform !== "darwin" || !usesSystemCa || runtime !== defaultRuntime) {
+    return false;
+  }
+  if (requestedExitCode === undefined) {
+    requestedExitCode = params.exitCode ?? "process";
+  }
+  return true;
+}
+
+export async function runCliWithExitFinalization(params: {
+  run: () => Promise<void>;
+  onError: (error: unknown) => void | Promise<void>;
+  runtime?: RuntimeEnv;
+  env?: NodeJS.ProcessEnv;
+  execArgv?: readonly string[];
+  platform?: NodeJS.Platform;
+  markers?: VitestWorkerMarkers;
+}): Promise<void> {
+  const runtime = params.runtime ?? defaultRuntime;
+  try {
+    await params.run();
+  } catch (error) {
+    await params.onError(error);
+    requestExitAfterOneShotOutput(runtime, resolveProcessExitCode(1));
+  } finally {
+    requestExitAfterSystemCaCliCompletion(runtime, {
+      env: params.env,
+      execArgv: params.execArgv,
+      platform: params.platform,
+    });
+    flushExitAfterOneShotOutput(runtime, params.env, params.markers);
+  }
+}
+
 export function requestExitAfterOneShotOutput(
   runtime: RuntimeEnv = defaultRuntime,
   exitCode = 0,
@@ -42,18 +120,19 @@ export function requestExitAfterOneShotOutput(
   return true;
 }
 
-export function flushExitAfterOneShotOutput(
+function flushExitAfterOneShotOutput(
   runtime: RuntimeEnv = defaultRuntime,
   env: NodeJS.ProcessEnv = process.env,
   markers: VitestWorkerMarkers = resolveVitestWorkerMarkers(),
 ): void {
-  const exitCode = requestedExitCode;
+  const requestedCode = requestedExitCode;
   requestedExitCode = undefined;
-  if (exitCode === undefined || runtime !== defaultRuntime || isVitestWorker(env, markers)) {
+  if (requestedCode === undefined || runtime !== defaultRuntime || isVitestWorker(env, markers)) {
     return;
   }
 
-  const exit = () => runtime.exit(exitCode);
+  const exit = () =>
+    runtime.exit(requestedCode === "process" ? resolveProcessExitCode() : requestedCode);
   let pendingStreams = 2;
 
   const drain = (stream: NodeJS.WriteStream) => {

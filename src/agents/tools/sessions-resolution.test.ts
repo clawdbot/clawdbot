@@ -8,7 +8,6 @@ const callGatewayMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
-let looksLikeSessionKey: typeof import("./sessions-resolution.js").looksLikeSessionKey;
 let resolveCurrentSessionClientAlias: typeof import("./sessions-resolution.js").resolveCurrentSessionClientAlias;
 let resolveDisplaySessionKey: typeof import("./sessions-resolution.js").resolveDisplaySessionKey;
 let resolveInternalSessionKey: typeof import("./sessions-resolution.js").resolveInternalSessionKey;
@@ -19,7 +18,6 @@ let shouldResolveSessionIdInput: typeof import("./sessions-resolution.js").shoul
 
 beforeAll(async () => {
   ({
-    looksLikeSessionKey,
     resolveCurrentSessionClientAlias,
     resolveDisplaySessionKey,
     resolveInternalSessionKey,
@@ -144,25 +142,39 @@ describe("session reference shape detection", () => {
     expect(looksLikeSessionId("not-a-uuid")).toBe(false);
   });
 
-  it("detects canonical session key families", () => {
-    expect(looksLikeSessionKey("main")).toBe(true);
-    expect(looksLikeSessionKey("current")).toBe(true);
-    expect(looksLikeSessionKey("agent:main:main")).toBe(true);
-    expect(looksLikeSessionKey("cron:daily-report")).toBe(true);
-    expect(looksLikeSessionKey("node:macbook")).toBe(true);
-    expect(looksLikeSessionKey("forum:group:123")).toBe(true);
-    expect(looksLikeSessionKey("random-slug")).toBe(false);
-  });
-
   it("treats non-keys as session-id candidates", () => {
+    expect(shouldResolveSessionIdInput("main")).toBe(false);
     expect(shouldResolveSessionIdInput("agent:main:main")).toBe(false);
     expect(shouldResolveSessionIdInput("current")).toBe(false);
+    expect(shouldResolveSessionIdInput("cron:daily-report")).toBe(false);
+    expect(shouldResolveSessionIdInput("node:macbook")).toBe(false);
+    expect(shouldResolveSessionIdInput("forum:group:123")).toBe(false);
     expect(shouldResolveSessionIdInput("d4f5a5a1-9f75-42cf-83a6-8d170e6a1538")).toBe(true);
     expect(shouldResolveSessionIdInput("random-slug")).toBe(true);
   });
 });
 
 describe("resolved session visibility checks", () => {
+  it("rejects incognito targets even when the requester is the same session", async () => {
+    const sessionKey = "agent:main:dashboard:incognito-private";
+
+    await expect(
+      resolveVisibleSessionReference({
+        action: "history",
+        resolvedSession: {
+          ok: true,
+          key: sessionKey,
+          displayKey: sessionKey,
+          resolvedViaSessionId: false,
+        },
+        requesterSessionKey: sessionKey,
+        restrictToSpawned: false,
+        visibilitySessionKey: sessionKey,
+      }),
+    ).resolves.toMatchObject({ ok: false, status: "forbidden" });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("requires spawned-session verification only for sandboxed key-based cross-session access", async () => {
     const cases = [
       {
@@ -198,6 +210,7 @@ describe("resolved session visibility checks", () => {
     for (const testCase of cases) {
       callGatewayMock.mockResolvedValueOnce({ key: testCase.targetSessionKey });
       const result = resolveVisibleSessionReference({
+        action: "history",
         resolvedSession: {
           ok: true,
           key: testCase.targetSessionKey,
@@ -240,6 +253,7 @@ describe("resolved session visibility checks", () => {
 
     await expect(
       resolveVisibleSessionReference({
+        action: "history",
         resolvedSession: {
           ok: true,
           key: "agent:main:subagent:worker-999",

@@ -1,4 +1,6 @@
 // Google shared conversion tests cover runtime-to-Google payload conversion.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { Context, Tool } from "../types.js";
 import { convertMessages, convertTools } from "./google-shared.js";
@@ -30,6 +32,19 @@ function requireRecordProperty(
 }
 
 describe("google-shared convertTools", () => {
+  it("keeps Google tool declarations stable across discovery order", () => {
+    const tools = [
+      { name: "zeta", description: "Last", parameters: { type: "object" } },
+      { name: "alpha", description: "First", parameters: { type: "object" } },
+    ] as Tool[];
+
+    expect(convertTools(tools)).toEqual(convertTools(tools.toReversed()));
+    expect(convertTools(tools)?.[0]?.functionDeclarations.map((tool) => tool.name)).toEqual([
+      "alpha",
+      "zeta",
+    ]);
+  });
+
   it("preserves parameters when type is missing", () => {
     const tools = [
       {
@@ -152,6 +167,36 @@ describe("google-shared convertTools", () => {
 });
 
 describe("google-shared convertMessages", () => {
+  it.each([
+    { label: "empty user text", messages: [{ role: "user", content: "" }] },
+    {
+      label: "empty user text part",
+      messages: [{ role: "user", content: [{ type: "text", text: "" }] }],
+    },
+    { label: "empty user parts", messages: [{ role: "user", content: [] }] },
+    {
+      label: "whitespace-only assistant history",
+      messages: [makeGoogleAssistantMessage("gemini-3-flash", [{ type: "text", text: "   " }])],
+    },
+  ])("keeps $label valid for the Google SDK", ({ messages }) => {
+    expect(convertMessagesForTest(makeModel("gemini-3-flash"), { messages } as Context)).toEqual([
+      { role: "user", parts: [{ text: " " }] },
+    ]);
+  });
+
+  it("supplies the documented Gemini 3 thought-signature placeholder for unsigned calls", () => {
+    const model = makeModel("gemini-3-flash");
+    const contents = convertMessagesForTest(model, {
+      messages: [
+        makeGoogleAssistantMessage(model.id, [
+          { type: "toolCall", id: "provider_alpha", name: "lookup", arguments: {} },
+        ]),
+      ],
+    } as Context);
+
+    expect(contents[0]?.parts?.[0]?.thoughtSignature).toBe("skip_thought_signature_validator");
+  });
+
   function expectConsecutiveMessagesNotMerged(params: {
     modelId: string;
     first: string;
@@ -173,10 +218,10 @@ describe("google-shared convertMessages", () => {
 
     const contents = convertMessagesForTest(model, context);
     expect(contents).toHaveLength(2);
-    expect(contents[0].role).toBe("user");
-    expect(contents[1].role).toBe("user");
-    expect(contents[0].parts).toHaveLength(1);
-    expect(contents[1].parts).toHaveLength(1);
+    expect(expectDefined(contents[0], "contents[0] test invariant").role).toBe("user");
+    expect(expectDefined(contents[1], "contents[1] test invariant").role).toBe("user");
+    expect(expectDefined(contents[0], "contents[0] test invariant").parts).toHaveLength(1);
+    expect(expectDefined(contents[1], "contents[1] test invariant").parts).toHaveLength(1);
   }
 
   it("keeps thinking blocks when provider/model match", () => {
@@ -195,8 +240,8 @@ describe("google-shared convertMessages", () => {
 
     const contents = convertMessagesForTest(model, context);
     expect(contents).toHaveLength(1);
-    expect(contents[0].role).toBe("model");
-    const part = asRecord(contents[0].parts?.[0]);
+    expect(expectDefined(contents[0], "contents[0] test invariant").role).toBe("model");
+    const part = asRecord(expectDefined(contents[0], "contents[0] test invariant").parts?.[0]);
     expect(part.thought).toBe(true);
     expect(part.thoughtSignature).toBe("c2ln");
   });
@@ -254,8 +299,8 @@ describe("google-shared convertMessages", () => {
 
     const contents = convertMessagesForTest(model, context);
     expectConvertedRoles(contents, ["user", "model", "model"]);
-    expect(contents[1].parts).toHaveLength(1);
-    expect(contents[2].parts).toHaveLength(1);
+    expect(expectDefined(contents[1], "contents[1] test invariant").parts).toHaveLength(1);
+    expect(expectDefined(contents[2], "contents[2] test invariant").parts).toHaveLength(1);
   });
 
   it("handles user message after tool result without model response in between", () => {
@@ -291,16 +336,16 @@ describe("google-shared convertMessages", () => {
 
     const contents = convertMessagesForTest(model, context);
     expect(contents).toHaveLength(4);
-    expect(contents[0].role).toBe("user");
-    expect(contents[1].role).toBe("model");
-    expect(contents[2].role).toBe("user");
-    expect(contents[3].role).toBe("user");
-    const toolResponsePart = contents[2].parts?.find(
+    expect(expectDefined(contents[0], "contents[0] test invariant").role).toBe("user");
+    expect(expectDefined(contents[1], "contents[1] test invariant").role).toBe("model");
+    expect(expectDefined(contents[2], "contents[2] test invariant").role).toBe("user");
+    expect(expectDefined(contents[3], "contents[3] test invariant").role).toBe("user");
+    const toolResponsePart = expectDefined(contents[2], "contents[2] test invariant").parts?.find(
       (part) => typeof part === "object" && part !== null && "functionResponse" in part,
     );
     const toolResponse = asRecord(toolResponsePart);
     expect(requireRecordProperty(toolResponse, "functionResponse").name).toBe("myTool");
-    expect(contents[3].role).toBe("user");
+    expect(expectDefined(contents[3], "contents[3] test invariant").role).toBe("user");
   });
 
   it("ensures function call comes after user turn, not after model turn", () => {
@@ -325,7 +370,7 @@ describe("google-shared convertMessages", () => {
 
     const contents = convertMessagesForTest(model, context);
     expectConvertedRoles(contents, ["user", "model", "model", "user"]);
-    const toolCallPart = contents[2].parts?.find(
+    const toolCallPart = expectDefined(contents[2], "contents[2] test invariant").parts?.find(
       (part) => typeof part === "object" && part !== null && "functionCall" in part,
     );
     const toolCall = asRecord(toolCallPart);
@@ -399,5 +444,26 @@ describe("google-shared convertMessages", () => {
     expect(asRecord(toolResponse.response).output).toBe(
       '{"type":"json","payload":{"sessionKey":"current","status":"ok"}}',
     );
+  });
+
+  it("does not emit inline data or media placeholders for payload-less tool images", () => {
+    const model = makeModel("gemini-3-flash");
+    const contents = convertMessagesForTest(model, {
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call_husk",
+          toolName: "screenshot",
+          content: [{ type: "image", mimeType: "image/png", data: "" }],
+          isError: false,
+          timestamp: 0,
+        },
+      ],
+    } as unknown as Context);
+
+    const serialized = JSON.stringify(contents);
+    expect(serialized).toContain('"output":""');
+    expect(serialized).not.toContain("inlineData");
+    expect(serialized).not.toContain("see attached image");
   });
 });

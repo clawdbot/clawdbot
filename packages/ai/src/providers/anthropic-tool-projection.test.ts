@@ -2,6 +2,28 @@ import { describe, expect, it } from "vitest";
 import { projectAnthropicTools } from "./anthropic-tool-projection.js";
 
 describe("projectAnthropicTools", () => {
+  it("keeps projected wire tools identical across discovery orders", () => {
+    const tools = [
+      {
+        name: "ZuluLookup",
+        description: "Look up the last value",
+        parameters: { type: "object", properties: { value: { type: "string" } } },
+      },
+      {
+        name: "AlphaLookup",
+        description: "Look up the first value",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+    ];
+    const toWireName = (name: string) => name.toLowerCase();
+
+    const first = projectAnthropicTools(tools, toWireName);
+    const reversed = projectAnthropicTools(tools.toReversed(), toWireName);
+
+    expect(first.tools.map((tool) => tool.wireName)).toEqual(["alphalookup", "zululookup"]);
+    expect(reversed.tools).toEqual(first.tools);
+  });
+
   it("converts draft-07 tuple items to draft 2020-12 prefixItems for Anthropic", () => {
     const projection = projectAnthropicTools(
       [
@@ -88,6 +110,33 @@ describe("projectAnthropicTools", () => {
       items: [{ type: "string" }],
       additionalItems: { type: "number" },
     });
+  });
+
+  it("quarantines Anthropic tools with non-finite numeric schema values", () => {
+    const projection = projectAnthropicTools(
+      [
+        {
+          name: "BadLimits",
+          description: "Read a numeric value",
+          parameters: {
+            type: "object",
+            properties: {
+              amount: { type: "number", maximum: Number.POSITIVE_INFINITY },
+            },
+          },
+        },
+        {
+          name: "Lookup",
+          description: "Lookup a value",
+          parameters: { type: "object", properties: {} },
+        },
+      ],
+      (name) => name.toLowerCase(),
+    );
+
+    expect(projection.tools).toHaveLength(1);
+    expect(projection.tools[0]?.wireName).toBe("lookup");
+    expect(projection.unavailableOriginalNames).toEqual(new Set(["BadLimits"]));
   });
 
   it("does not rewrite instance data that resembles a tuple schema", () => {

@@ -1,4 +1,5 @@
 // Qqbot plugin entrypoint registers its OpenClaw integration.
+import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { ResolvedChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { EffectivePolicyInput } from "../access/resolve-policy.js";
 import type { FetchMediaOptions, FetchMediaResult, SecretInputRef } from "./types.js";
@@ -46,7 +47,11 @@ export interface PlatformAdapter {
   hasConfiguredSecret(value: unknown): boolean;
   normalizeSecretInputString(value: unknown): string | undefined;
   resolveSecretInputString(params: { value: unknown; path: string }): string | undefined;
-  resolveApproval?(approvalId: string, decision: string): Promise<boolean>;
+  resolveApproval?(params: {
+    approvalId: string;
+    approvalKind: "exec" | "plugin";
+    decision: "allow-once" | "allow-always" | "deny";
+  }): Promise<ApprovalResolveResult>;
 }
 
 let platformAdapter: PlatformAdapter | null = null;

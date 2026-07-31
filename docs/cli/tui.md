@@ -17,25 +17,26 @@ Related guide: [TUI](/web/tui)
 
 ## Options
 
-| Flag                  | Default                                   | Description                                                                        |
-| --------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------- |
-| `--local`             | `false`                                   | Run against the local embedded agent runtime instead of a Gateway.                 |
-| `--url <url>`         | `gateway.remote.url` from config          | Gateway WebSocket URL.                                                             |
-| `--token <token>`     | (none)                                    | Gateway token if required.                                                         |
-| `--password <pass>`   | (none)                                    | Gateway password if required.                                                      |
-| `--session <key>`     | `main` (or `global` when scope is global) | Session key. Inside an agent workspace it auto-selects that agent unless prefixed. |
-| `--deliver`           | `false`                                   | Deliver assistant replies through configured channels.                             |
-| `--thinking <level>`  | (model default)                           | Thinking level override.                                                           |
-| `--message <text>`    | (none)                                    | Send an initial message after connecting.                                          |
-| `--timeout-ms <ms>`   | `agents.defaults.timeoutSeconds`          | Agent timeout. Invalid values log a warning and are ignored.                       |
-| `--history-limit <n>` | `200`                                     | History entries to load on attach.                                                 |
+| Flag                         | Default                                   | Description                                                                        |
+| ---------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------- |
+| `--local`                    | `false`                                   | Run against the local embedded agent runtime instead of a Gateway.                 |
+| `--url <url>`                | `gateway.remote.url` from config          | Gateway WebSocket URL.                                                             |
+| `--token <token>`            | (none)                                    | Gateway token if required.                                                         |
+| `--password <pass>`          | (none)                                    | Gateway password if required.                                                      |
+| `--tls-fingerprint <sha256>` | `gateway.remote.tlsFingerprint`           | Expected TLS certificate fingerprint for a pinned `wss://` Gateway.                |
+| `--session <key>`            | `main` (or `global` when scope is global) | Session key. Inside an agent workspace it auto-selects that agent unless prefixed. |
+| `--deliver`                  | `false`                                   | Deliver assistant replies through configured channels.                             |
+| `--thinking <level>`         | (model default)                           | Thinking level override.                                                           |
+| `--message <text>`           | (none)                                    | Send an initial message after connecting.                                          |
+| `--timeout-ms <ms>`          | `agents.defaults.timeoutSeconds`          | Agent timeout. Invalid values log a warning and are ignored.                       |
+| `--history-limit <n>`        | `200`                                     | History entries to load on attach.                                                 |
 
 Aliases: `openclaw chat` and `openclaw terminal` invoke this command with
 `--local` implied.
 
 ## Notes
 
-- `--local` cannot combine with `--url`, `--token`, or `--password`.
+- `--local` cannot combine with `--url`, `--token`, `--password`, or `--tls-fingerprint`.
 - `tui` resolves configured Gateway auth SecretRefs for token/password auth
   when possible (`env`/`file`/`exec` providers).
 - With no explicit URL or port, `tui` follows the active local Gateway port
@@ -44,9 +45,6 @@ Aliases: `openclaw chat` and `openclaw terminal` invoke this command with
 - Launched from inside a configured agent workspace directory, TUI auto-selects
   that agent for the session key default (unless `--session` is explicitly
   `agent:<id>:...`).
-- To show the Gateway hostname in the footer for non-local URL-backed
-  connections, run `openclaw config set tui.footer.showRemoteHost true`. Off by
-  default; never shown for loopback or embedded local connections.
 - Local mode uses the embedded agent runtime directly. Most local tools work,
   but Gateway-only features are unavailable.
 - Local mode adds `/auth [provider]` to the TUI command surface.

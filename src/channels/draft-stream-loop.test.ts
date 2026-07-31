@@ -147,6 +147,39 @@ describe("createDraftStreamLoop", () => {
     }
   });
 
+  it("takes the latest queued text without interrupting the in-flight send", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let releaseSend: (() => void) | undefined;
+    const sendPending = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    const sendOrEditStreamMessage = vi.fn(async () => {
+      await sendPending;
+      return true;
+    });
+    const loop = createDraftStreamLoop({
+      throttleMs: 0,
+      isStopped: () => false,
+      sendOrEditStreamMessage,
+    });
+
+    loop.update("in flight");
+    await flushMicrotasks();
+    loop.update("queued first");
+    loop.update("queued latest");
+
+    expect(vi.getTimerCount()).toBe(1);
+    expect(loop.takePending()).toBe("queued latest");
+    expect(vi.getTimerCount()).toBe(0);
+
+    releaseSend?.();
+    await loop.waitForInFlight();
+    await flushMicrotasks();
+
+    expect(sendOrEditStreamMessage).toHaveBeenCalledExactlyOnceWith("in flight");
+  });
+
   it("contains synchronous sender failures from background flushes", async () => {
     await captureUnhandledRejections(async (rejections) => {
       const error = new Error("send failed");

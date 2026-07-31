@@ -9,9 +9,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageTelegramMock = vi.fn();
 const reactMessageTelegramMock = vi.fn();
+const sendLocationTelegramMock = vi.fn();
 
 vi.mock("./send.js", () => ({
   reactMessageTelegram: (...args: unknown[]) => reactMessageTelegramMock(...args),
+  sendLocationTelegram: (...args: unknown[]) => sendLocationTelegramMock(...args),
   sendMessageTelegram: (...args: unknown[]) => sendMessageTelegramMock(...args),
 }));
 
@@ -29,6 +31,7 @@ function requireTelegramMessageAdapter(): TelegramMessageAdapter {
 describe("telegram channel message adapter", () => {
   beforeEach(() => {
     reactMessageTelegramMock.mockReset();
+    sendLocationTelegramMock.mockReset();
     sendMessageTelegramMock.mockReset();
   });
 

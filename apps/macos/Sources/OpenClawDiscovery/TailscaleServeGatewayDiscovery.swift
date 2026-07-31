@@ -12,6 +12,7 @@ enum TailscaleServeGatewayDiscovery {
     private static let maxCandidates = 32
     private static let probeConcurrency = 6
     private static let defaultProbeTimeoutSeconds: TimeInterval = 1.6
+    private static let probeSession = URLSession(configuration: .ephemeral)
 
     struct DiscoveryContext {
         var tailscaleStatus: @Sendable () async -> String?
@@ -125,9 +126,7 @@ enum TailscaleServeGatewayDiscovery {
     private static func displayName(hostName: String?, dnsName: String) -> String {
         if let hostName {
             let trimmed = hostName.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
-                return trimmed
-            }
+            if !trimmed.isEmpty { return trimmed }
         }
         return dnsName
             .split(separator: ".")
@@ -154,7 +153,12 @@ enum TailscaleServeGatewayDiscovery {
 
         for candidate in candidates {
             guard let executable = self.resolveExecutablePath(candidate) else { continue }
-            if let stdout = await self.run(path: executable, args: ["status", "--json"], timeout: 1.0) {
+            if let stdout = await BoundedCommand.run(
+                path: executable,
+                arguments: ["status", "--json"],
+                environment: self.commandEnvironment(),
+                timeout: 1.0)
+            {
                 return stdout
             }
         }
@@ -191,43 +195,6 @@ enum TailscaleServeGatewayDiscovery {
         return nil
     }
 
-    private static func run(path: String, args: [String], timeout: TimeInterval) async -> String? {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                continuation.resume(returning: self.runBlocking(path: path, args: args, timeout: timeout))
-            }
-        }
-    }
-
-    private static func runBlocking(path: String, args: [String], timeout: TimeInterval) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = args
-        process.environment = self.commandEnvironment()
-        let outPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning, Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.02)
-        }
-        if process.isRunning {
-            process.terminate()
-        }
-        process.waitUntilExit()
-
-        let data = (try? outPipe.fileHandleForReading.readToEnd()) ?? Data()
-        let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return output?.isEmpty == false ? output : nil
-    }
-
     static func commandEnvironment(
         base: [String: String] = ProcessInfo.processInfo.environment) -> [String: String]
     {
@@ -252,16 +219,13 @@ enum TailscaleServeGatewayDiscovery {
         components.host = host
         guard let url = components.url else { return false }
 
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = max(0.5, timeout)
-        config.timeoutIntervalForResource = max(0.5, timeout)
-        let session = URLSession(configuration: config)
-        let task = session.webSocketTask(with: url)
+        // Discovery fans out and retries during startup. Reuse the session;
+        // AsyncTimeout owns each deadline and every websocket task owns its cancel.
+        let task = self.probeSession.webSocketTask(with: url)
         task.resume()
 
         defer {
             task.cancel(with: .goingAway, reason: nil)
-            session.invalidateAndCancel()
         }
 
         do {
@@ -304,6 +268,12 @@ enum TailscaleServeGatewayDiscovery {
 
         return event == "connect.challenge"
     }
+
+    #if DEBUG
+    static func probeSessionIdentifierForTesting() -> ObjectIdentifier {
+        ObjectIdentifier(self.probeSession)
+    }
+    #endif
 }
 
 private struct TailscaleStatus: Decodable {

@@ -24,42 +24,88 @@
         "api": "openai-completions",
         "models": [
           {
-            "id": "seed-1-8-251228",
-            "name": "Seed 1.8",
+            "id": "dola-seed-2-1-turbo-260628",
+            "name": "Dola Seed 2.1 Turbo",
+            "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 256000,
-            "maxTokens": 4096,
+            "maxTokens": 256000,
             "cost": {
-              "input": 0.0001,
-              "output": 0.0002,
-              "cacheRead": 0,
+              "input": 0.5,
+              "output": 2.5,
+              "cacheRead": 0.1,
               "cacheWrite": 0
             }
           },
           {
-            "id": "kimi-k2-5-260127",
-            "name": "Kimi K2.5",
+            "id": "seed-2-0-code-preview-260328",
+            "name": "Seed 2.0 Code Preview",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 256000,
-            "maxTokens": 32768,
+            "maxTokens": 128000,
             "cost": {
-              "input": 0.6,
-              "output": 2.5,
-              "cacheRead": 0.12,
+              "input": 0.5,
+              "output": 3,
+              "cacheRead": 0.1,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "glm-5-2-260617",
+            "name": "GLM 5.2",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1024000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 1.4,
+              "output": 4.4,
+              "cacheRead": 0.26,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "deepseek-v4-pro-260425",
+            "name": "DeepSeek V4 Pro",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1024000,
+            "maxTokens": 384000,
+            "cost": {
+              "input": 1.74,
+              "output": 3.48,
+              "cacheRead": 0.145,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "deepseek-v4-flash-260425",
+            "name": "DeepSeek V4 Flash",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1024000,
+            "maxTokens": 384000,
+            "cost": {
+              "input": 0.14,
+              "output": 0.28,
+              "cacheRead": 0.028,
               "cacheWrite": 0
             }
           },
           {
             "id": "glm-4-7-251222",
             "name": "GLM 4.7",
-            "input": ["text", "image"],
-            "contextWindow": 200000,
-            "maxTokens": 4096,
+            "status": "deprecated",
+            "replacedBy": "glm-5-2-260617",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 256000,
+            "maxTokens": 128000,
             "cost": {
-              "input": 0.0001,
-              "output": 0.0002,
-              "cacheRead": 0,
+              "input": 0.6,
+              "output": 2.2,
+              "cacheRead": 0.11,
               "cacheWrite": 0
             }
           }
@@ -68,6 +114,7 @@
       "byteplus-plan": {
         "baseUrl": "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
         "api": "openai-completions",
+        "defaultModel": "ark-code-latest",
         "models": [
           {
             "id": "ark-code-latest",
@@ -76,49 +123,9 @@
             "contextWindow": 256000,
             "maxTokens": 4096,
             "cost": {
-              "input": 0.0001,
-              "output": 0.0002,
+              "input": 0,
+              "output": 0,
               "cacheRead": 0,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "doubao-seed-code",
-            "name": "Doubao Seed Code",
-            "input": ["text"],
-            "contextWindow": 256000,
-            "maxTokens": 4096,
-            "cost": {
-              "input": 0.0001,
-              "output": 0.0002,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "glm-4.7",
-            "name": "GLM 4.7 Coding",
-            "input": ["text"],
-            "contextWindow": 200000,
-            "maxTokens": 4096,
-            "cost": {
-              "input": 0.0001,
-              "output": 0.0002,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "kimi-k2-thinking",
-            "name": "Kimi K2 Thinking",
-            "reasoning": true,
-            "input": ["text"],
-            "contextWindow": 256000,
-            "maxTokens": 32768,
-            "cost": {
-              "input": 0.6,
-              "output": 2.5,
-              "cacheRead": 0.12,
               "cacheWrite": 0
             }
           },
@@ -126,13 +133,13 @@
             "id": "kimi-k2.5",
             "name": "Kimi K2.5 Coding",
             "reasoning": true,
-            "input": ["text"],
+            "input": ["text", "image"],
             "contextWindow": 256000,
             "maxTokens": 32768,
             "cost": {
-              "input": 0.6,
-              "output": 2.5,
-              "cacheRead": 0.12,
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
               "cacheWrite": 0
             }
           }
@@ -140,8 +147,8 @@
       }
     },
     "discovery": {
-      "byteplus": "static",
-      "byteplus-plan": "static"
+      "byteplus": "refreshable",
+      "byteplus-plan": "refreshable"
     }
   },
   "providerAuthChoices": [

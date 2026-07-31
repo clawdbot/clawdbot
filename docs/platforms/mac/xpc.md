@@ -7,12 +7,12 @@ title: "macOS IPC"
 
 # OpenClaw macOS IPC architecture
 
-A local Unix socket connects the node host service to the macOS app for exec approvals and `system.run`. An `openclaw-mac` debug CLI (`apps/macos/Sources/OpenClawMacCLI`) exists for discovery/connect checks; agent actions still flow through the Gateway WebSocket and `node.invoke`. UI automation uses PeekabooBridge.
+A local Unix socket connects the node host service to the macOS app for exec approvals and `system.run`. An `openclaw-mac` debug CLI (`apps/macos/Sources/OpenClawMacCLI`) exists for discovery/connect checks; agent actions still flow through the Gateway WebSocket and `node.invoke`. The node-backed `computer.act` path runs embedded Peekaboo automation in-process; standalone Peekaboo clients use PeekabooBridge.
 
 ## Goals
 
 - Single GUI app instance that owns all TCC-facing work (notifications, screen recording, mic, speech, AppleScript).
-- A small surface for automation: Gateway + node commands, plus PeekabooBridge for UI automation.
+- A small surface for automation: Gateway + node commands, in-process `computer.act`, plus PeekabooBridge for standalone UI automation clients.
 - Predictable permissions: always the same signed bundle ID, launched by launchd, so TCC grants stick.
 
 ## How it works
@@ -21,7 +21,7 @@ A local Unix socket connects the node host service to the macOS app for exec app
 
 - The app runs the Gateway (local mode) and connects to it as a node.
 - Agent actions are performed via `node.invoke` (e.g. `system.run`, `system.notify`, `canvas.*`).
-- Node commands include `canvas.*`, `camera.snap`, `camera.clip`, `screen.snapshot`, `screen.record`, `system.run`, and `system.notify`.
+- Node commands include `canvas.*`, `camera.snap`, `camera.clip`, `screen.snapshot`, `screen.record`, `computer.act`, `system.run`, and `system.notify`.
 - The node reports a `permissions` map so agents can see whether screen, camera, microphone, speech, automation, or accessibility access is available.
 
 ### Node service + app IPC
@@ -41,6 +41,7 @@ Agent -> Gateway -> Node Service (WS)
 
 ### PeekabooBridge (UI automation)
 
+- The built-in agent `computer` tool does **not** use this socket. A paired macOS node fulfills `computer.act` in the app process with embedded Peekaboo services.
 - UI automation uses a separate UNIX socket (`~/Library/Application Support/OpenClaw/<socket>`) and the PeekabooBridge JSON protocol.
 - Host preference order (client-side): Peekaboo.app -> Claude.app -> OpenClaw.app -> local execution.
 - Security: bridge hosts require an allowlisted TeamID (the bundled `PeekabooBridgeHostCoordinator` allowlists a fixed team plus the app's own signing team); a DEBUG-only same-UID escape hatch is guarded by `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` (Peekaboo convention).
@@ -57,7 +58,9 @@ Agent -> Gateway -> Node Service (WS)
 - PeekabooBridge: `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` (DEBUG-only) may allow same-UID callers for local development.
 - All communication remains local-only; no network sockets are exposed.
 - TCC prompts originate only from the GUI app bundle; keep the signed bundle ID stable across rebuilds.
-- Exec approvals socket hardening: file mode `0600`, shared token, peer-UID check (`getpeereid`), HMAC-SHA256 challenge/response, and a short TTL on requests.
+- Exec approvals socket hardening: file mode `0600`, shared token stored in the
+  `exec_approvals_config` row of `state/openclaw.sqlite`, peer-UID check
+  (`getpeereid`), HMAC-SHA256 challenge/response, and a short TTL on requests.
 
 ## Related
 

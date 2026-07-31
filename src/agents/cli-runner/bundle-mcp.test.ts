@@ -14,6 +14,19 @@ import {
 setupCliBundleMcpTestHarness();
 
 describe("prepareCliBundleMcpConfig", () => {
+  it("disables Claude native web search without bundle MCP", async () => {
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: false,
+      mode: "claude-config-file",
+      backend: { command: "claude", args: ["--print"] },
+      workspaceDir: "/tmp/openclaw-cli-web-search-disabled",
+      toolOverrides: { webSearch: false },
+    });
+
+    expect(prepared.backend.args).toEqual(["--print", "--disallowedTools", "WebSearch"]);
+    expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
   it("injects a strict empty --mcp-config overlay for bundle-MCP-enabled backends without servers", async () => {
     const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
       "openclaw-cli-bundle-mcp-empty-",
@@ -62,7 +75,7 @@ describe("prepareCliBundleMcpConfig", () => {
       workspaceDir,
       config: { plugins: { enabled: false } },
       exclusiveConfig: {
-        mcpServers: { openclaw: { command: "node", args: ["crestodian.mjs"] } },
+        mcpServers: { openclaw: { command: "node", args: ["openclaw.mjs"] } },
       },
     });
 
@@ -72,7 +85,7 @@ describe("prepareCliBundleMcpConfig", () => {
       mcpServers?: Record<string, { args?: string[] }>;
     };
     expect(Object.keys(raw.mcpServers ?? {})).toEqual(["openclaw"]);
-    expect(raw.mcpServers?.openclaw?.args).toEqual(["crestodian.mjs"]);
+    expect(raw.mcpServers?.openclaw?.args).toEqual(["openclaw.mjs"]);
     expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
 
     await prepared.cleanup?.();
@@ -92,6 +105,47 @@ describe("prepareCliBundleMcpConfig", () => {
     expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
     expect(prepared.mcpResumeHash).toMatch(/^[0-9a-f]{64}$/);
 
+    await prepared.cleanup?.();
+  });
+
+  it("projects session MCP tool denials into Claude disallowed tools", async () => {
+    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-deny-",
+    );
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "claude",
+        args: ["--disallowedTools", "Bash(rm *)"],
+      },
+      workspaceDir,
+      config: {
+        plugins: { enabled: false },
+        mcp: { servers: { docs: { command: "node", args: ["docs.mjs"] } } },
+      },
+      toolOverrides: { mcpToolsDeny: { docs: ["delete_docs"] }, webSearch: false },
+    });
+
+    expect(prepared.backend.args).toContain("Bash(rm *),WebSearch,mcp__docs__delete_docs");
+    await prepared.cleanup?.();
+  });
+
+  it("applies server disables to exclusive CLI MCP configs", async () => {
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: { command: "claude" },
+      workspaceDir: "/tmp/openclaw-cli-bundle-mcp-exclusive-disable",
+      exclusiveConfig: { mcpServers: { openclaw: { command: "node" } } },
+      toolOverrides: { mcpServers: { openclaw: false } },
+    });
+
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
+      mcpServers?: Record<string, unknown>;
+    };
+    expect(raw.mcpServers).toEqual({});
     await prepared.cleanup?.();
   });
 
@@ -289,7 +343,7 @@ describe("prepareCliBundleMcpConfig", () => {
     const prepared = await prepareBundleProbeCliConfig({
       additionalConfig,
       env: {
-        OPENCLAW_MCP_TOKEN: "loopback-token-123",
+        OPENCLAW_MCP_TOKEN: "lb-tk-123",
         OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
       },
     });
@@ -307,7 +361,7 @@ describe("prepareCliBundleMcpConfig", () => {
     };
     expect(Object.keys(raw.mcpServers ?? {}).toSorted()).toEqual(["bundleProbe", "openclaw"]);
     expect(raw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
-    expect(raw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer loopback-token-123");
+    expect(raw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer lb-tk-123");
     expect(raw.mcpServers?.openclaw?.headers?.["x-openclaw-cli-capture-key"]).toBe("");
     await prepareCliBundleMcpCaptureAttempt({
       mode: "claude-config-file",
@@ -318,9 +372,7 @@ describe("prepareCliBundleMcpConfig", () => {
     const attemptRaw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
       mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
     };
-    expect(attemptRaw.mcpServers?.openclaw?.headers?.Authorization).toBe(
-      "Bearer loopback-token-123",
-    );
+    expect(attemptRaw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer lb-tk-123");
     expect(attemptRaw.mcpServers?.openclaw?.headers?.["x-openclaw-cli-capture-key"]).toBe(
       "attempt-123",
     );
@@ -346,13 +398,13 @@ describe("prepareCliBundleMcpConfig", () => {
       workspaceDir,
       config: { plugins: { enabled: false } },
       env: {
-        OPENCLAW_MCP_TOKEN: "loopback-token-123",
+        OPENCLAW_MCP_TOKEN: "lb-tk-123",
         OPENCLAW_MCP_SESSION_KEY: "agent:main:telegram:group:chat123",
       },
     });
 
     expect(prepared.env).toEqual({
-      OPENCLAW_MCP_TOKEN: "loopback-token-123",
+      OPENCLAW_MCP_TOKEN: "lb-tk-123",
       OPENCLAW_MCP_SESSION_KEY: "agent:main:telegram:group:chat123",
     });
 

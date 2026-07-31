@@ -1,7 +1,7 @@
 ---
 summary: "How OpenClaw presence entries are produced, merged, and displayed"
 read_when:
-  - Debugging the Instances tab
+  - Debugging live status on the Control UI Devices page
   - Investigating duplicate or stale instance rows
   - Changing gateway WS connect or system-event beacons
 title: "Presence"
@@ -10,10 +10,14 @@ title: "Presence"
 OpenClaw "presence" is a lightweight, best-effort view of:
 
 - the **Gateway** itself, and
-- **clients connected to the Gateway** (mac app, WebChat, CLI, etc.)
+- **user-visible clients connected to the Gateway** (mac app, WebChat, nodes, etc.)
 
-Presence is used primarily to render the macOS app's **Instances** tab and to
-provide quick operator visibility.
+Presence renders live connection metadata in the Control UI **Devices** page
+(under **Settings → Devices**) and the macOS app's **Instances** tab.
+
+This page covers the Gateway client roster. To detect the Mac you most recently
+used and route node alerts there, see
+[Active computer presence](/nodes/presence).
 
 ## Presence fields (what shows up)
 
@@ -44,15 +48,24 @@ even before any clients connect.
 Every WS client begins with a `connect` request. On successful handshake the
 Gateway upserts a presence entry for that connection.
 
-#### Why one-off CLI commands do not show up
+#### Why ephemeral control-plane connections do not show up
 
-The CLI often connects for short, one-off commands. To avoid spamming the
-Instances list, `client.mode === "cli"` is **not** turned into a presence entry.
+CLI commands, backend RPC clients, and probes often connect briefly. To avoid
+retaining that churn for the full presence TTL, clients in `cli`, `backend`,
+or `probe` mode are **not** turned into presence entries. Test-mode clients
+stay tracked because test suites use them as stand-ins for real clients.
 
 ### 3) `system-event` beacons
 
 Clients can send richer periodic beacons via the `system-event` method. The mac
-app uses this to report host name, IP, and `lastInputSeconds`.
+app uses this to report host name, IP, version, and liveness metadata. Physical
+input activity is not part of this generic beacon; the purpose-specific native
+node event described in [Active computer presence](/nodes/presence) owns it. The
+Mac tags these beacons with `system-presence-clear-last-input`; current Gateways
+use that backward-compatible marker to remove any input recency retained from an
+older app. The beacon also carries a fixed 30-day value so older Gateways that
+ignore the tag overwrite exact recency instead of retaining it. No new activity
+is sampled for this compatibility value.
 
 ### 4) Node connects (role: node)
 
@@ -65,10 +78,10 @@ Presence entries are stored in a single in-memory map, keyed case-insensitively
 by the first available of, in order: a paired device id, `connect.client.instanceId`,
 or the per-connection id as a last resort.
 
-CLI clients are excluded from tracking entirely (see above), so their
-connection id never becomes a key. For every other client, the connection id
-fallback means a client that reconnects without a stable `instanceId` shows up
-as a **duplicate** row.
+Ephemeral control-plane clients are excluded from tracking entirely (see
+above), so their connection ids never become keys. For every other client, the
+connection id fallback means a client that reconnects without a stable
+`instanceId` shows up as a **duplicate** row.
 
 ## TTL and bounded size
 
@@ -89,6 +102,12 @@ into the entry.
 
 ## Consumers
 
+### Control UI Devices page
+
+The **Devices** page joins `system-presence` with durable pairing and node
+records. It pins the Gateway self beacon first and uses matching device or
+instance ids for live platform, version, model, and input-recency metadata.
+
 ### macOS Instances tab
 
 The macOS app renders the output of `system-presence` and applies a small status
@@ -105,6 +124,9 @@ indicator (Active/Idle/Stale) based on the age of the last update.
 ## Related
 
 <CardGroup cols={2}>
+  <Card title="Active computer presence" href="/nodes/presence" icon="computer-mouse">
+    How physical Mac input selects an active node and routes connection alerts.
+  </Card>
   <Card title="Typing indicators" href="/concepts/typing-indicators" icon="ellipsis">
     When typing indicators are sent and how to tune them.
   </Card>

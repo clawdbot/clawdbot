@@ -1,6 +1,6 @@
 // OC Path tests cover oc path plugin behavior.
 import { describe, expect, it } from "vitest";
-import { OcPathError, formatOcPath, isValidOcPath, parseOcPath } from "../oc-path.js";
+import { OcPathError, formatOcPath, parseOcPath } from "../oc-path.js";
 
 describe("parseOcPath", () => {
   it("parses file-only path", () => {
@@ -146,19 +146,4 @@ describe("round-trip", () => {
       expect(formatOcPath(parseOcPath(input))).toBe(input);
     });
   }
-});
-
-describe("isValidOcPath", () => {
-  it("returns true for valid paths", () => {
-    expect(isValidOcPath("oc://SOUL.md")).toBe(true);
-    expect(isValidOcPath("oc://SOUL.md/Boundaries")).toBe(true);
-  });
-
-  it("returns false for invalid paths", () => {
-    expect(isValidOcPath("SOUL.md")).toBe(false);
-    expect(isValidOcPath("oc://")).toBe(false);
-    expect(isValidOcPath(null)).toBe(false);
-    expect(isValidOcPath(undefined)).toBe(false);
-    expect(isValidOcPath(42)).toBe(false);
-  });
 });

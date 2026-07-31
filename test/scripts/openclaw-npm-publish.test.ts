@@ -41,6 +41,10 @@ function makeReleaseCheckout(root: string, version: string): string {
     "scripts/lib/npm-publish-plan.mjs",
     path.join(checkout, "scripts/lib/npm-publish-plan.mjs"),
   );
+  copyFileSync(
+    "scripts/lib/release-version.mjs",
+    path.join(checkout, "scripts/lib/release-version.mjs"),
+  );
   return checkout;
 }
 

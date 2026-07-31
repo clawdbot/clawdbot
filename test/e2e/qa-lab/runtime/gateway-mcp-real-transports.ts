@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 // QA Lab producer proves Gateway and MCP scenarios across real process and protocol boundaries.
 import { createServer, type Server } from "node:http";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -29,7 +30,9 @@ const FIXTURE_TOOL_NAME = "memory_search";
 const FIXTURE_FACT = "MCP fact: the codename is ORBIT-9.";
 const STARTUP_GATE_TIMEOUT_MS = 30_000;
 const MCP_CONNECT_TIMEOUT_MS = 30_000;
+const MCP_PLUGIN_TOOLS_REQUEST_TIMEOUT_MS = 180_000;
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/gateway-mcp-real-transports.ts";
+const requireFromHere = createRequire(import.meta.url);
 
 type ScenarioId = "gateway-smoke" | "mcp-gateway-connect-startup-retry" | "mcp-plugin-tools-call";
 
@@ -71,15 +74,17 @@ type McpClientHandle = {
   transport: StdioClientTransport;
 };
 
+type PluginToolsMcpInvocation = {
+  args: string[];
+  command: string;
+  cwd: string;
+  env: Record<string, string>;
+};
+
 const SCENARIOS = {
   "gateway-smoke": {
     title: "Gateway smoke evidence",
     sourcePath: "qa/scenarios/runtime/gateway-smoke.yaml",
-    primaryCoverageIds: [
-      "gateway.websocket-transport",
-      "gateway.health-apis",
-      "gateway.hello-ok-snapshot",
-    ],
     docsRefs: ["docs/gateway/index.md", "docs/concepts/qa-e2e-automation.md"],
     codeRefs: [
       SOURCE_PATH,
@@ -90,18 +95,12 @@ const SCENARIOS = {
   "mcp-gateway-connect-startup-retry": {
     title: "MCP Gateway connect startup retry",
     sourcePath: "qa/scenarios/runtime/mcp-gateway-connect-startup-retry.yaml",
-    primaryCoverageIds: [
-      "gateway.connect-request",
-      "gateway.protocol-version-negotiation",
-      "gateway.startup-retry",
-    ],
     docsRefs: ["docs/gateway/protocol.md", "docs/cli/mcp.md"],
     codeRefs: [SOURCE_PATH, "extensions/qa-lab/src/gateway-child.ts", "src/mcp/channel-bridge.ts"],
   },
   "mcp-plugin-tools-call": {
     title: "MCP plugin-tools call",
     sourcePath: "qa/scenarios/plugins/mcp-plugin-tools-call.yaml",
-    primaryCoverageIds: ["plugins.mcp-tools", "tools.invocation"],
     docsRefs: ["docs/cli/mcp.md", "docs/gateway/protocol.md"],
     codeRefs: [SOURCE_PATH, "src/mcp/plugin-tools-serve.ts", "src/mcp/plugin-tools-handlers.ts"],
   },
@@ -273,11 +272,93 @@ function resolveChannelMcpInvocation(params: {
   );
 }
 
+function resolvePluginToolsMcpInvocation(params: {
+  configPath: string;
+  homeDir: string;
+  repoRoot: string;
+  stateDir: string;
+}): PluginToolsMcpInvocation {
+  return {
+    command: process.execPath,
+    args: [
+      "--import",
+      requireFromHere.resolve("tsx"),
+      path.join(params.repoRoot, "src/mcp/plugin-tools-serve.ts"),
+    ],
+    cwd: params.repoRoot,
+    env: {
+      HOME: params.homeDir,
+      OPENCLAW_CONFIG_PATH: params.configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_HOME: params.homeDir,
+      OPENCLAW_STATE_DIR: params.stateDir,
+    },
+  };
+}
+
+async function runMcpPluginToolsPhase<T>(phase: string, run: () => Promise<T>) {
+  const startedAt = Date.now();
+  try {
+    const value = await run();
+    return {
+      durationMs: Math.max(1, Date.now() - startedAt),
+      value,
+    };
+  } catch (error) {
+    throw new Error(
+      `plugin-tools MCP ${phase} failed after ${Math.max(1, Date.now() - startedAt)}ms: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+}
+
+async function runMcpPluginToolsClientProof(params: {
+  client: Client;
+  transport: StdioClientTransport;
+}): Promise<string> {
+  const connected = await runMcpPluginToolsPhase("connect", () =>
+    params.client.connect(params.transport, { timeout: MCP_PLUGIN_TOOLS_REQUEST_TIMEOUT_MS }),
+  );
+  const listed = await runMcpPluginToolsPhase("listTools", () =>
+    params.client.listTools({}, { timeout: MCP_PLUGIN_TOOLS_REQUEST_TIMEOUT_MS }),
+  );
+  if (!listed.value.tools.some((tool) => tool.name === FIXTURE_TOOL_NAME)) {
+    throw new Error(
+      `fixture plugin tool was not listed: ${listed.value.tools.map((tool) => tool.name).join(", ")}`,
+    );
+  }
+  const called = await runMcpPluginToolsPhase("callTool", () =>
+    params.client.callTool(
+      {
+        name: FIXTURE_TOOL_NAME,
+        arguments: { query: "ORBIT-9 codename", maxResults: 3 },
+      },
+      undefined,
+      { timeout: MCP_PLUGIN_TOOLS_REQUEST_TIMEOUT_MS },
+    ),
+  );
+  if (called.value.isError || !JSON.stringify(called.value.content).includes(FIXTURE_FACT)) {
+    throw new Error(
+      `fixture plugin tool returned unexpected payload: ${JSON.stringify(called.value)}`,
+    );
+  }
+  return [
+    `real plugin-tools pid=${params.transport.pid ?? "unknown"}`,
+    `connect=${connected.durationMs}ms`,
+    `listTools=${listed.durationMs}ms`,
+    `callTool=${called.durationMs}ms`,
+    `listed and called ${FIXTURE_TOOL_NAME}`,
+    "received ORBIT-9",
+  ].join("; ");
+}
+
 function parseJsonFrame(data: RawData): Record<string, unknown> | null {
   try {
     const text = Array.isArray(data)
-      ? Buffer.concat(data).toString("utf8")
-      : Buffer.from(data).toString("utf8");
+      ? Buffer.concat(data.map((chunk) => Buffer.from(chunk))).toString("utf8")
+      : Buffer.isBuffer(data)
+        ? data.toString("utf8")
+        : Buffer.from(data).toString("utf8");
     const value = JSON.parse(text);
     return value && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
@@ -636,21 +717,14 @@ async function runMcpPluginToolsProof(options: ProducerOptions): Promise<string>
   ]);
   const configPath = await writePluginToolsConfig(runtimeRoot, fixture.pluginDir);
   const stderrChunks: Buffer[] = [];
+  const invocation = resolvePluginToolsMcpInvocation({
+    configPath,
+    homeDir,
+    repoRoot: options.repoRoot,
+    stateDir,
+  });
   const transport = new StdioClientTransport({
-    command: process.execPath,
-    args: [
-      "--import",
-      "tsx",
-      "--eval",
-      `import(${JSON.stringify(pathToFileURL(path.join(options.repoRoot, "src/mcp/plugin-tools-serve.ts")).href)}).then((module) => module.servePluginToolsMcp())`,
-    ],
-    cwd: options.repoRoot,
-    env: {
-      ...process.env,
-      HOME: homeDir,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_STATE_DIR: stateDir,
-    },
+    ...invocation,
     stderr: "pipe",
   });
   transport.stderr?.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
@@ -658,21 +732,7 @@ async function runMcpPluginToolsProof(options: ProducerOptions): Promise<string>
   let details = "";
   let proofError: Error | undefined;
   try {
-    await client.connect(transport);
-    const listed = await client.listTools();
-    if (!listed.tools.some((tool) => tool.name === FIXTURE_TOOL_NAME)) {
-      throw new Error(
-        `fixture plugin tool was not listed: ${listed.tools.map((tool) => tool.name).join(", ")}`,
-      );
-    }
-    const result = await client.callTool({
-      name: FIXTURE_TOOL_NAME,
-      arguments: { query: "ORBIT-9 codename", maxResults: 3 },
-    });
-    if (result.isError || !JSON.stringify(result.content).includes(FIXTURE_FACT)) {
-      throw new Error(`fixture plugin tool returned unexpected payload: ${JSON.stringify(result)}`);
-    }
-    details = `real plugin-tools pid=${transport.pid ?? "unknown"}; listed and called ${FIXTURE_TOOL_NAME}; received ORBIT-9`;
+    details = await runMcpPluginToolsClientProof({ client, transport });
   } catch (error) {
     const stderr = Buffer.concat(stderrChunks).toString("utf8");
     proofError = new Error(
@@ -720,14 +780,13 @@ async function runGatewayMcpRealTransportProducer(
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: `${options.scenarioId}.log`,
-    primaryModel: "mock-openai/gpt-5.5",
+    primaryModel: "mock-openai/gpt-5.6-luna",
     providerMode: "mock-openai",
     repoRoot: options.repoRoot,
     target: {
       id: options.scenarioId,
       title: scenario.title,
       sourcePath: scenario.sourcePath,
-      primaryCoverageIds: scenario.primaryCoverageIds,
       docsRefs: scenario.docsRefs,
       codeRefs: scenario.codeRefs,
     },
@@ -759,4 +818,6 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 
 export const testing = {
   resolveChannelMcpInvocation,
+  resolvePluginToolsMcpInvocation,
+  runMcpPluginToolsClientProof,
 };

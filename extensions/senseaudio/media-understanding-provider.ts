@@ -8,7 +8,7 @@ import {
 const DEFAULT_SENSEAUDIO_AUDIO_BASE_URL = "https://api.senseaudio.cn/v1";
 const DEFAULT_SENSEAUDIO_AUDIO_MODEL = "senseaudio-asr-pro-1.5-260319";
 
-export async function transcribeSenseAudioAudio(params: AudioTranscriptionRequest) {
+async function transcribeSenseAudioAudio(params: AudioTranscriptionRequest) {
   return await transcribeOpenAiCompatibleAudio({
     ...params,
     provider: "senseaudio",

@@ -20,7 +20,7 @@ struct HoverHUDControllerTests {
             inside: false,
             anchorProvider: { NSRect(x: 10, y: 10, width: 24, height: 24) })
 
-        controller.dismiss(reason: "test")
+        controller.dismiss()
         controller.setSuppressed(true)
     }
 }

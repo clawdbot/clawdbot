@@ -1,14 +1,17 @@
 // Discord tests cover reply delivery plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RequestClient } from "../internal/discord.js";
 
 const sendDurableMessageBatchMock = vi.hoisted(() =>
-  vi.fn(async () => ({
-    status: "sent" as const,
-    results: [{ messageId: "msg-1", channelId: "channel-1" }],
-  })),
+  vi.fn(
+    async (): Promise<unknown> => ({
+      status: "sent" as const,
+      results: [{ messageId: "msg-1", channelId: "channel-1" }],
+    }),
+  ),
 );
 const sendMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendVoiceMessageDiscordMock = vi.hoisted(() => vi.fn());
@@ -133,7 +136,9 @@ describe("deliverDiscordReply", () => {
     expect(params.replyToMode).toBe("all");
 
     const deps = params.deps!;
-    await deps.discord("channel:101", "probe", { verbose: false });
+    await expectDefined(deps.discord, "Discord reply sender")("channel:101", "probe", {
+      verbose: false,
+    });
     expect(firstMockArg(sendMessageDiscordMock, "sendMessageDiscord", 0)).toBe("channel:101");
     expect(firstMockArg(sendMessageDiscordMock, "sendMessageDiscord", 1)).toBe("probe");
     const sendOptions = objectArgAt(sendMessageDiscordMock, 2);
@@ -173,6 +178,39 @@ describe("deliverDiscordReply", () => {
         kind: "final",
       }),
     ).rejects.toThrow("discord final reply produced no delivered message for channel:101");
+  });
+
+  it("returns provider-owned hook suppression without inventing a Discord send", async () => {
+    sendDurableMessageBatchMock.mockResolvedValueOnce({
+      status: "suppressed",
+      reason: "cancelled_by_message_sending_hook",
+      payloadOutcomes: [
+        {
+          status: "suppressed",
+          hookEffect: { cancelReason: "policy", metadata: { source: "test" } },
+        },
+      ],
+    });
+
+    await expect(
+      deliverDiscordReply({
+        replies: [{ text: "cancelled" }],
+        target: "channel:101",
+        token: "token",
+        accountId: "default",
+        runtime,
+        cfg,
+        textLimit: 2000,
+        kind: "final",
+      }),
+    ).resolves.toEqual({
+      visibleReplySent: false,
+      suppression: {
+        reason: "cancelled_by_message_sending_hook",
+        cancelReason: "policy",
+        metadata: { source: "test" },
+      },
+    });
   });
 
   it("preserves explicit tool progress payloads at the tool delivery boundary", async () => {
@@ -515,10 +553,14 @@ describe("deliverDiscordReply", () => {
     });
 
     const deps = firstDeliverParams().deps!;
-    await deps.discordVoice("channel:123", "https://example.com/voice.ogg", {
-      cfg,
-      reply: { messageId: "reply-1", scope: "all" },
-    });
+    await expectDefined(deps.discordVoice, "Discord voice reply sender")(
+      "channel:123",
+      "https://example.com/voice.ogg",
+      {
+        cfg,
+        reply: { messageId: "reply-1", scope: "all" },
+      },
+    );
 
     expect(firstMockArg(sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord", 0)).toBe(
       "channel:123",

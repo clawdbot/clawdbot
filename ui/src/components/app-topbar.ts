@@ -1,87 +1,24 @@
-import { LitElement, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
-import type { NavigationRouteId } from "../app-navigation.ts";
-import "./dashboard-header.ts";
-import "./tooltip.ts";
+import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
+import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
+import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
+import "./tooltip.ts";
 
-// Mirrors the layout.mobile.css breakpoint where the sidebar becomes a
-// slide-over drawer; the one topbar toggle switches behavior there.
-const NAV_DRAWER_MEDIA_QUERY = "(max-width: 1100px)";
-
-class AppTopbar extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
-  @property({ attribute: false }) routeId?: NavigationRouteId;
-  @property({ attribute: false }) basePath = "";
-  @property({ attribute: false }) agentLabel = "";
+/** Narrow-viewport header: drawer toggle, brand, and command-palette search.
+ * Desktop hides it entirely (layout.css) — the sidebar owns navigation there. */
+class AppTopbar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) navDrawerOpen = false;
-  @property({ attribute: false }) navCollapsed = false;
   @property({ attribute: false }) onboarding = false;
+  @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) onToggleDrawer?: (trigger: HTMLElement) => void;
-  @property({ attribute: false }) onToggleCollapse?: () => void;
-  @property({ attribute: false }) onToggleTerminal?: () => void;
-  @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
-  @property({ attribute: false }) overviewHref = "";
-  @property({ attribute: false }) terminalAvailable = false;
-
-  private drawerMedia?: MediaQueryList;
-  private drawerMediaCleanup?: () => void;
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.style.display = "contents";
-    if (typeof globalThis.matchMedia === "function") {
-      const media = globalThis.matchMedia(NAV_DRAWER_MEDIA_QUERY);
-      this.drawerMedia = media;
-      // Older WebViews expose only the legacy addListener API (see the same
-      // pattern in app/bootstrap.ts).
-      if (typeof media.addEventListener === "function") {
-        media.addEventListener("change", this.handleDrawerMediaChange);
-        this.drawerMediaCleanup = () =>
-          media.removeEventListener("change", this.handleDrawerMediaChange);
-      } else if (typeof media.addListener === "function") {
-        media.addListener(this.handleDrawerMediaChange);
-        this.drawerMediaCleanup = () => media.removeListener(this.handleDrawerMediaChange);
-      }
-    }
-  }
-
-  override disconnectedCallback() {
-    this.drawerMediaCleanup?.();
-    this.drawerMediaCleanup = undefined;
-    this.drawerMedia = undefined;
-    super.disconnectedCallback();
-  }
-
-  private readonly handleDrawerMediaChange = () => {
-    this.requestUpdate();
-  };
-
-  private get drawerMode(): boolean {
-    return this.drawerMedia?.matches ?? false;
-  }
-
-  private readonly handleNavigate = (event: CustomEvent<NavigationRouteId>) => {
-    this.onNavigate?.(event.detail);
-  };
-
-  private readonly handleToggleSidebar = (event: MouseEvent) => {
-    if (this.drawerMode) {
-      this.onToggleDrawer?.(event.currentTarget as HTMLElement);
-    } else {
-      this.onToggleCollapse?.();
-    }
-  };
+  @property({ attribute: false }) onOpenPalette?: () => void;
+  @property({ attribute: false }) searchDisabled = false;
 
   override render() {
-    // One toggle, viewport-dependent behavior: it drives the persistent rail
-    // collapse on desktop and the slide-over drawer at drawer breakpoints.
-    const sidebarOpen = this.drawerMode ? this.navDrawerOpen : !this.navCollapsed;
-    const toggleLabel = sidebarOpen ? t("nav.collapse") : t("nav.expand");
+    const drawerLabel = this.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
     return html`
       <header
         class="topbar"
@@ -89,41 +26,42 @@ class AppTopbar extends LitElement {
         aria-hidden=${this.onboarding ? "true" : nothing}
       >
         <div class="topnav-shell">
-          <openclaw-tooltip .content=${toggleLabel}>
+          <openclaw-tooltip .content=${drawerLabel}>
             <button
               type="button"
               class="topbar-icon-btn topbar-nav-toggle"
-              @click=${this.handleToggleSidebar}
-              aria-label=${toggleLabel}
-              aria-expanded=${String(sidebarOpen)}
+              @click=${(event: MouseEvent) =>
+                this.onToggleDrawer?.(event.currentTarget as HTMLElement)}
+              aria-label=${drawerLabel}
+              aria-expanded=${String(this.navDrawerOpen)}
             >
-              ${icons.panelLeft}
+              <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
             </button>
           </openclaw-tooltip>
-          <div class="topnav-shell__content">
-            <dashboard-header
-              .routeId=${this.routeId}
-              .basePath=${this.basePath}
-              .agentLabel=${this.agentLabel}
-              .overviewHref=${this.overviewHref}
-              @navigate=${this.handleNavigate}
-            ></dashboard-header>
+          <!-- The Mac app used to float a native drag strip over this brand
+               row; the web now asks the host to move the window itself. -->
+          <div class="topnav-shell__content" @mousedown=${beginNativeWindowDrag}>
+            <div class="topbar-brand" aria-label="OpenClaw">
+              <img
+                class="topbar-brand__logo"
+                src=${controlUiPublicAssetPath("apple-touch-icon.png", this.basePath)}
+                alt=""
+                aria-hidden="true"
+              />
+              <span class="topbar-brand__title">OpenClaw</span>
+            </div>
           </div>
           <div class="topnav-shell__actions">
-            ${this.terminalAvailable
-              ? html`
-                  <openclaw-tooltip .content=${t("terminal.toggle")}>
-                    <button
-                      class="topbar-icon-btn"
-                      type="button"
-                      @click=${() => this.onToggleTerminal?.()}
-                      aria-label=${t("terminal.toggle")}
-                    >
-                      ${icons.terminal}
-                    </button>
-                  </openclaw-tooltip>
-                `
-              : nothing}
+            <openclaw-tooltip .content=${t("chat.commandPaletteTitle")}>
+              <button
+                class="topbar-search"
+                ?disabled=${this.searchDisabled || !this.onOpenPalette}
+                @click=${() => this.onOpenPalette?.()}
+                aria-label=${t("chat.openCommandPalette")}
+              >
+                ${icons.search}
+              </button>
+            </openclaw-tooltip>
           </div>
         </div>
       </header>

@@ -20,11 +20,14 @@ vi.mock("./update-check.js", async () => {
   const actual = await vi.importActual<typeof import("./update-check.js")>("./update-check.js");
   return {
     ...actual,
-    checkUpdateStatus: vi.fn(async () => ({
-      root: "/opt/openclaw",
-      installKind: "package",
-      packageManager: "npm",
-    }) satisfies UpdateCheckResult),
+    checkUpdateStatus: vi.fn(
+      async () =>
+        ({
+          root: "/opt/openclaw",
+          installKind: "package",
+          packageManager: "npm",
+        }) satisfies UpdateCheckResult,
+    ),
   };
 });
 

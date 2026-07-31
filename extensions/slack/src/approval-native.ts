@@ -17,7 +17,6 @@ import {
   normalizeSlackForwardTarget,
   normalizeSlackOriginTarget,
   resolveSessionSlackOriginTarget,
-  resolveSlackApprovalKind,
   resolveSlackFallbackOriginTarget,
   resolveTurnSourceSlackOriginTarget,
   shouldHandleSlackNativeApprovalRequest,
@@ -72,10 +71,11 @@ function shouldConsiderSlackNativeForwardingSuppression(
 
 const resolveSlackOriginTarget = createChannelNativeOriginTargetResolver({
   channel: "slack",
-  shouldHandleRequest: ({ cfg, accountId, request }) =>
+  shouldHandleRequest: ({ cfg, accountId, approvalKind, request }) =>
     shouldHandleSlackNativeApprovalRequest({
       cfg,
       accountId,
+      approvalKind,
       request,
     }),
   resolveTurnSourceTarget: resolveTurnSourceSlackOriginTarget,
@@ -156,11 +156,11 @@ const baseSlackApprovalCapability = createApproverRestrictedNativeApprovalCapabi
         cfg,
         accountId,
       }),
-    shouldHandle: ({ cfg, accountId, request }) =>
+    shouldHandle: ({ cfg, accountId, approvalKind, request }) =>
       shouldHandleSlackNativeApprovalRequest({
         cfg,
         accountId,
-        approvalKind: resolveSlackApprovalKind(request),
+        approvalKind,
         request,
       }),
     load: async () =>
@@ -224,10 +224,4 @@ export const slackApprovalCapability: ChannelApprovalCapability = {
         },
       }
     : undefined,
-};
-
-export const testing = {
-  resolveSessionSlackOriginTarget,
-  resolveTurnSourceSlackOriginTarget,
-  slackTargetsMatch,
 };

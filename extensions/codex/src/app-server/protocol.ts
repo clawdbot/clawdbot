@@ -1,10 +1,52 @@
-// Codex plugin module implements protocol behavior.
-export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
-export type JsonObject = { [key: string]: JsonValue };
+import type { CodexCommandExecParams, CodexCommandExecResponse } from "./command-exec-protocol.js";
+import type {
+  CodexAppInfo,
+  CodexAppSummary,
+  CodexAppsInstalledParams,
+  CodexAppsInstalledResponse,
+  CodexAppsListParams,
+  CodexAppsListResponse,
+  CodexAppsReadParams,
+  CodexAppsReadResponse,
+  CodexConfigBatchWriteParams,
+  CodexConfigReadResponse,
+  CodexConfigRequirementsReadResponse,
+  CodexConfigValueWriteParams,
+  CodexConfigWriteResponse,
+  CodexHooksListParams,
+  CodexHooksListResponse,
+  CodexInstalledApp,
+  CodexPluginDetail,
+  CodexPluginInstalledParams,
+  CodexPluginInstalledResponse,
+  CodexPluginInstallParams,
+  CodexPluginInstallResponse,
+  CodexPluginListParams,
+  CodexPluginListResponse,
+  CodexPluginMarketplaceEntry,
+  CodexPluginReadParams,
+  CodexPluginReadResponse,
+  CodexPluginSummary,
+  CodexSkillsListParams,
+  CodexSkillsListResponse,
+} from "./protocol-control-plane.js";
+import type { JsonObject, JsonValue } from "./protocol-json.js";
+import type * as CodexMcpProtocol from "./protocol-mcp.js";
+
+export type {
+  CodexConfigEdit,
+  CodexConfigReadResponse,
+  CodexConfigRequirementsReadResponse,
+  CodexPluginDetail,
+  CodexPluginListResponse,
+  CodexPluginReadResponse,
+} from "./protocol-control-plane.js";
+export type { CodexListMcpServerStatusResponse, CodexMcpServerStatus } from "./protocol-mcp.js";
+export type { JsonObject, JsonValue } from "./protocol-json.js";
+
 export type CodexServiceTier = string;
 export type CodexApprovalPolicy =
   | "untrusted"
-  | "on-failure"
   | "on-request"
   | {
       granular: {
@@ -16,9 +58,9 @@ export type CodexApprovalPolicy =
       };
     }
   | "never";
-export type CodexApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
-export type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
-export type CodexPersonality = "none" | "friendly" | "pragmatic";
+type CodexApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
+type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
+type CodexPersonality = "none" | "friendly" | "pragmatic";
 
 export type CodexAppServerRequestMethod = keyof CodexAppServerRequestResultMap | (string & {});
 export type CodexAppServerRequestParams<M extends CodexAppServerRequestMethod> =
@@ -96,13 +138,14 @@ export type CodexDynamicToolFunctionSpec = JsonObject & {
   deferLoading?: boolean;
 };
 
-export type CodexDynamicToolNamespaceTool = CodexDynamicToolFunctionSpec;
+/** Namespace Codex keeps directly model-visible without exposing it to Code Mode guests. */
+export const CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE = "openclaw_direct";
 
-export type CodexDynamicToolNamespaceSpec = JsonObject & {
+type CodexDynamicToolNamespaceSpec = JsonObject & {
   type: "namespace";
   name: string;
   description: string;
-  tools: CodexDynamicToolNamespaceTool[];
+  tools: CodexDynamicToolFunctionSpec[];
 };
 
 export type CodexDynamicToolSpec = CodexDynamicToolFunctionSpec | CodexDynamicToolNamespaceSpec;
@@ -123,6 +166,7 @@ export type CodexThreadStartParams = JsonObject & {
   cwd?: string;
   model?: string;
   modelProvider?: string | null;
+  config?: JsonObject;
   personality?: CodexPersonality | null;
   approvalPolicy?: CodexApprovalPolicy | null;
   approvalsReviewer?: CodexApprovalsReviewer | null;
@@ -132,6 +176,7 @@ export type CodexThreadStartParams = JsonObject & {
   developerInstructions?: string;
   experimentalRawEvents?: boolean;
   environments?: CodexTurnEnvironmentParams[] | null;
+  ephemeral?: boolean;
 };
 
 export type CodexThreadResumeParams = JsonObject & {
@@ -145,6 +190,12 @@ export type CodexThreadResumeParams = JsonObject & {
   serviceTier?: CodexServiceTier | null;
   config?: JsonObject;
   developerInstructions?: string;
+  excludeTurns?: boolean;
+  initialTurnsPage?: {
+    limit?: number | null;
+    sortDirection?: "asc" | "desc" | null;
+    itemsView?: "notLoaded" | "summary" | "full" | null;
+  } | null;
 };
 
 export type CodexThreadStartResponse = {
@@ -153,9 +204,23 @@ export type CodexThreadStartResponse = {
   modelProvider?: string | null;
 };
 
-export type CodexThreadForkParams = CodexThreadStartParams & {
+export type CodexThreadForkParams = JsonObject & {
   threadId: string;
+  lastTurnId?: string | null;
+  beforeTurnId?: string | null;
+  path?: string | null;
+  model?: string | null;
+  modelProvider?: string | null;
+  serviceTier?: CodexServiceTier | null;
+  cwd?: string | null;
+  runtimeWorkspaceRoots?: string[] | null;
+  approvalPolicy?: CodexApprovalPolicy | null;
+  approvalsReviewer?: CodexApprovalsReviewer | null;
+  sandbox?: CodexSandboxMode | null;
+  permissions?: string | null;
+  config?: JsonObject | null;
   baseInstructions?: string;
+  developerInstructions?: string;
   ephemeral?: boolean;
   threadSource?: string | null;
   excludeTurns?: boolean;
@@ -164,8 +229,9 @@ export type CodexThreadForkParams = CodexThreadStartParams & {
 export type CodexThreadForkResponse = CodexThreadStartResponse;
 
 export const CODEX_INTERACTIVE_THREAD_SOURCE_KINDS = ["cli", "vscode"] as const;
+export const CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES = ["atlas", "chatgpt"] as const;
 
-export type CodexThreadSourceKind =
+type CodexThreadSourceKind =
   | (typeof CODEX_INTERACTIVE_THREAD_SOURCE_KINDS)[number]
   | "exec"
   | "appServer"
@@ -183,8 +249,12 @@ export type CodexThreadListParams = JsonObject & {
   sortKey?: "created_at" | "updated_at" | "recency_at" | null;
   sortDirection?: "asc" | "desc" | null;
   archived?: boolean | null;
+  cwd?: string | string[] | null;
+  useStateDbOnly?: boolean;
   searchTerm?: string | null;
   sourceKinds?: CodexThreadSourceKind[] | null;
+  parentThreadId?: string | null;
+  ancestorThreadId?: string | null;
 };
 
 export type CodexThreadListResponse = {
@@ -193,25 +263,49 @@ export type CodexThreadListResponse = {
   backwardsCursor?: string | null;
 };
 
-export type CodexThreadReadParams = JsonObject & {
+type CodexThreadReadParams = JsonObject & {
   threadId: string;
   includeTurns?: boolean;
 };
 
-export type CodexThreadReadResponse = {
+type CodexThreadReadResponse = {
   thread: CodexThread;
 };
 
-export type CodexThreadSetNameParams = JsonObject & {
+export type CodexThreadTurnsListParams = JsonObject & {
+  threadId: string;
+  cursor?: string | null;
+  limit?: number | null;
+  sortDirection?: "asc" | "desc" | null;
+  itemsView?: "notLoaded" | "summary" | "full" | null;
+};
+
+export type CodexThreadTurnsListResponse = {
+  data: CodexTurn[];
+  nextCursor?: string | null;
+  backwardsCursor?: string | null;
+};
+
+type CodexInitialTurnsPage = Omit<CodexThreadTurnsListResponse, "data"> & {
+  data: Pick<CodexTurn, "id" | "status">[];
+};
+
+type CodexThreadSetNameParams = JsonObject & {
   threadId: string;
   name: string;
 };
 
-export type CodexThreadArchiveParams = JsonObject & {
+type CodexThreadArchiveParams = JsonObject & {
   threadId: string;
 };
 
-export type CodexThreadUnarchiveResponse = {
+type CodexThreadDeleteParams = JsonObject & {
+  threadId: string;
+};
+
+type CodexThreadDeleteResponse = Record<string, never>;
+
+type CodexThreadUnarchiveResponse = {
   thread: CodexThread;
 };
 
@@ -219,18 +313,51 @@ export type CodexThreadResumeResponse = {
   thread: CodexThread;
   model: string;
   modelProvider?: string | null;
+  initialTurnsPage?: CodexInitialTurnsPage | null;
 };
 
-export type CodexThreadInjectItemsParams = JsonObject & {
+type CodexThreadGoalStatus =
+  | "active"
+  | "paused"
+  | "blocked"
+  | "usageLimited"
+  | "budgetLimited"
+  | "complete";
+
+type CodexThreadGoal = {
+  threadId: string;
+  objective: string;
+  status: CodexThreadGoalStatus;
+  tokenBudget: number | null;
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+type CodexThreadGoalSetParams = JsonObject & {
+  threadId: string;
+  objective?: string;
+  status?: CodexThreadGoalStatus;
+  tokenBudget?: number | null;
+};
+
+type CodexThreadGoalGetParams = JsonObject & { threadId: string };
+type CodexThreadGoalClearParams = JsonObject & { threadId: string };
+type CodexThreadGoalSetResponse = { goal: CodexThreadGoal };
+type CodexThreadGoalGetResponse = { goal: CodexThreadGoal | null };
+type CodexThreadGoalClearResponse = { cleared: boolean };
+
+type CodexThreadInjectItemsParams = JsonObject & {
   threadId: string;
   items: JsonValue[];
 };
 
-export type CodexThreadUnsubscribeParams = JsonObject & {
+type CodexThreadUnsubscribeParams = JsonObject & {
   threadId: string;
 };
 
-export type CodexTurnInterruptParams = JsonObject & {
+type CodexTurnInterruptParams = JsonObject & {
   threadId: string;
   turnId: string;
 };
@@ -287,11 +414,15 @@ export type CodexTurn = {
 export type CodexThread = {
   id: string;
   sessionId?: string;
+  path?: string | null;
+  historyMode?: "legacy" | "paginated";
+  extra?: JsonObject | null;
   name?: string | null;
   preview?: string | null;
   createdAt?: number | null;
   updatedAt?: number | null;
   status?: CodexThreadStatus | null;
+  modelProvider?: string | null;
   cwd?: string | null;
   source?: CodexSessionSource | null;
   threadSource?: string | null;
@@ -314,7 +445,7 @@ export type CodexSubAgentThreadSpawnSource = {
   agent_role?: string | null;
 };
 
-export type CodexSubAgentSource =
+type CodexSubAgentSource =
   | "review"
   | "compact"
   | "memory_consolidation"
@@ -445,7 +576,7 @@ export type CodexGetAccountResponse = {
   requiresOpenaiAuth?: boolean;
 };
 
-export type CodexModelProviderCapabilitiesReadResponse = {
+type CodexModelProviderCapabilitiesReadResponse = {
   namespaceTools: boolean;
   imageGeneration: boolean;
   webSearch: boolean;
@@ -469,160 +600,18 @@ export type CodexLoginAccountParams =
       chatgptPlanType: string | null;
     };
 
-export type CodexPluginSummary = {
-  id: string;
-  remotePluginId?: string;
-  name: string;
-  source?: JsonObject;
-  installed: boolean;
-  enabled: boolean;
-  installPolicy?: string;
-  authPolicy?: string;
-  availability?: string;
-  interface?: JsonValue;
-};
-
-export type CodexAppSummary = {
-  id: string;
-  name: string;
-  description?: string | null;
-  installUrl?: string | null;
-  needsAuth: boolean;
-};
-
-export type CodexPluginDetail = {
-  marketplaceName?: string;
-  marketplacePath?: string | null;
-  summary: CodexPluginSummary;
-  description?: string | null;
-  skills?: JsonValue[];
-  apps: CodexAppSummary[];
-  mcpServers: string[];
-};
-
-export type CodexPluginMarketplaceEntry = {
-  name: string;
-  path?: string | null;
-  interface?: JsonValue;
-  plugins: CodexPluginSummary[];
-};
-
-export type CodexPluginListResponse = {
-  marketplaces: CodexPluginMarketplaceEntry[];
-  marketplaceLoadErrors?: JsonValue[];
-  featuredPluginIds?: string[];
-};
-
-export type CodexPluginReadResponse = {
-  plugin: CodexPluginDetail;
-};
-
-export type CodexPluginListParams = {
-  cwds: string[];
-};
-
-export type CodexPluginReadParams = {
-  marketplacePath?: string;
-  remoteMarketplaceName?: string;
-  pluginName: string;
-};
-
-export type CodexPluginInstallParams = CodexPluginReadParams;
-
-export type CodexPluginInstallResponse = {
-  authPolicy: string;
-  appsNeedingAuth: CodexAppSummary[];
-};
-
-export type CodexAppInfo = {
-  id: string;
-  name: string;
-  description?: string | null;
-  logoUrl?: string | null;
-  logoUrlDark?: string | null;
-  distributionChannel?: string | null;
-  branding?: JsonValue;
-  appMetadata?: JsonValue;
-  labels?: JsonValue;
-  installUrl?: string | null;
-  isAccessible: boolean;
-  isEnabled: boolean;
-  pluginDisplayNames: string[];
-};
-
-export type CodexAppsListParams = {
-  cursor?: string | null;
-  limit?: number;
-  forceRefetch?: boolean;
-};
-
-export type CodexAppsListResponse = {
-  data: CodexAppInfo[];
-  nextCursor?: string | null;
-};
-
-export type CodexSkillsListParams = {
-  cwds: string[];
-  forceReload?: boolean;
-};
-
-export type CodexSkillScope = "user" | "repo" | "system" | "admin";
-
-export type CodexSkillMetadata = {
-  name: string;
-  description: string;
-  shortDescription?: string;
-  interface?: JsonObject;
-  dependencies?: JsonObject;
-  path: string;
-  scope: CodexSkillScope;
-  enabled: boolean;
-};
-
-export type CodexSkillErrorInfo = {
-  path: string;
-  message: string;
-};
-
-export type CodexSkillsListEntry = {
-  cwd: string;
-  skills: CodexSkillMetadata[];
-  errors: CodexSkillErrorInfo[];
-};
-
-export type CodexSkillsListResponse = {
-  data: CodexSkillsListEntry[];
-};
-
-export type CodexHooksListParams = {
-  cwds: string[];
-};
-
-export type CodexHooksListResponse = {
-  data: JsonValue[];
-  nextCursor?: string | null;
-};
-
-export type CodexMcpServerStatus = {
-  name: string;
-  tools: JsonObject;
-};
-
-export type CodexListMcpServerStatusResponse = {
-  data: CodexMcpServerStatus[];
-  nextCursor?: string | null;
-};
-
 export type CodexRequestObject = Record<string, unknown>;
 
 export declare namespace v2 {
   export type AppInfo = CodexAppInfo;
   export type AppSummary = CodexAppSummary;
-  export type AppsListParams = CodexAppsListParams;
-  export type AppsListResponse = CodexAppsListResponse;
+  export type AppsInstalledResponse = CodexAppsInstalledResponse;
   export type HooksListParams = CodexHooksListParams;
   export type HooksListResponse = CodexHooksListResponse;
+  export type InstalledApp = CodexInstalledApp;
   export type PluginDetail = CodexPluginDetail;
+  export type PluginInstalledParams = CodexPluginInstalledParams;
+  export type PluginInstalledResponse = CodexPluginInstalledResponse;
   export type PluginInstallParams = CodexPluginInstallParams;
   export type PluginInstallResponse = CodexPluginInstallResponse;
   export type PluginListParams = CodexPluginListParams;
@@ -636,35 +625,60 @@ export declare namespace v2 {
 }
 
 type CodexAppServerRequestParamsOverride = {
+  "app/installed": CodexAppsInstalledParams;
+  "app/list": CodexAppsListParams;
+  "app/read": CodexAppsReadParams;
+  "command/exec": CodexCommandExecParams;
+  "config/batchWrite": CodexConfigBatchWriteParams;
+  "config/value/write": CodexConfigValueWriteParams;
   "environment/add": { environmentId: string; execServerUrl: string };
+  "plugin/installed": CodexPluginInstalledParams;
+  "plugin/install": CodexPluginInstallParams;
+  "plugin/list": CodexPluginListParams;
+  "plugin/read": CodexPluginReadParams;
   "thread/fork": CodexThreadForkParams;
   "thread/archive": CodexThreadArchiveParams;
+  "thread/delete": CodexThreadDeleteParams;
   "thread/inject_items": CodexThreadInjectItemsParams;
   "thread/list": CodexThreadListParams;
+  "thread/turns/list": CodexThreadTurnsListParams;
   "thread/name/set": CodexThreadSetNameParams;
   "thread/read": CodexThreadReadParams;
   "thread/start": CodexThreadStartParams;
   "thread/unarchive": CodexThreadArchiveParams;
   "thread/unsubscribe": CodexThreadUnsubscribeParams;
+  "thread/goal/set": CodexThreadGoalSetParams;
+  "thread/goal/get": CodexThreadGoalGetParams;
+  "thread/goal/clear": CodexThreadGoalClearParams;
   "turn/interrupt": CodexTurnInterruptParams;
+  "mcpServer/resource/read": CodexMcpProtocol.ResourceReadParams;
+  "mcpServer/tool/call": CodexMcpProtocol.ToolCallParams;
 };
 
 type CodexAppServerRequestResultMap = {
   initialize: CodexInitializeResponse;
   "account/rateLimits/read": JsonValue;
   "account/read": CodexGetAccountResponse;
+  "app/installed": CodexAppsInstalledResponse;
   "app/list": CodexAppsListResponse;
+  "app/read": CodexAppsReadResponse;
+  "command/exec": CodexCommandExecResponse;
+  "config/batchWrite": CodexConfigWriteResponse;
   "config/mcpServer/reload": JsonValue;
-  "config/read": JsonValue;
-  "config/value/write": JsonValue;
+  "config/read": CodexConfigReadResponse;
+  "configRequirements/read": CodexConfigRequirementsReadResponse;
+  "config/value/write": CodexConfigWriteResponse;
   "environment/add": JsonValue;
   "experimentalFeature/enablement/set": JsonValue;
   "feedback/upload": JsonValue;
   "hooks/list": CodexHooksListResponse;
   "marketplace/add": JsonValue;
-  "mcpServerStatus/list": CodexListMcpServerStatusResponse;
+  "mcpServerStatus/list": CodexMcpProtocol.CodexListMcpServerStatusResponse;
+  "mcpServer/resource/read": CodexMcpProtocol.ResourceReadResult;
+  "mcpServer/tool/call": CodexMcpProtocol.ToolCallResult;
   "model/list": CodexModelListResponse;
   "modelProvider/capabilities/read": CodexModelProviderCapabilitiesReadResponse;
+  "plugin/installed": CodexPluginInstalledResponse;
   "plugin/install": CodexPluginInstallResponse;
   "plugin/list": CodexPluginListResponse;
   "plugin/read": CodexPluginReadResponse;
@@ -672,15 +686,20 @@ type CodexAppServerRequestResultMap = {
   "skills/list": CodexSkillsListResponse;
   "thread/compact/start": JsonValue;
   "thread/archive": JsonValue;
+  "thread/delete": CodexThreadDeleteResponse;
   "thread/fork": CodexThreadForkResponse;
   "thread/inject_items": JsonValue;
   "thread/list": CodexThreadListResponse;
+  "thread/turns/list": CodexThreadTurnsListResponse;
   "thread/name/set": JsonValue;
   "thread/read": CodexThreadReadResponse;
   "thread/resume": CodexThreadResumeResponse;
   "thread/start": CodexThreadStartResponse;
   "thread/unarchive": CodexThreadUnarchiveResponse;
   "thread/unsubscribe": JsonValue;
+  "thread/goal/set": CodexThreadGoalSetResponse;
+  "thread/goal/get": CodexThreadGoalGetResponse;
+  "thread/goal/clear": CodexThreadGoalClearResponse;
   "turn/interrupt": JsonValue;
   "turn/start": CodexTurnStartResponse;
   "turn/steer": JsonValue;

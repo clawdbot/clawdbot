@@ -1,11 +1,11 @@
 // Subagent registry steer-restart tests cover replacing child runs after steer
 // commands while preserving lifecycle hooks and completion delivery.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../context-engine/types.js";
-import {
-  getDetachedTaskLifecycleRuntime,
-  setDetachedTaskLifecycleRuntime,
-} from "../tasks/detached-task-runtime.js";
+import { getDetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime.js";
+import { setDetachedTaskLifecycleRuntime } from "../tasks/task-runtime.test-helpers.js";
 import { findTaskByRunIdForStatus } from "../tasks/task-status-access.js";
 
 const noop = () => {};
@@ -50,6 +50,9 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 vi.mock("../infra/agent-events.js", () => ({
+  getAgentEventLifecycleGeneration: () => "test-generation",
+  isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
+  registerAgentEventLifecycleRotationHandler: vi.fn(),
   onAgentEvent: vi.fn((handler: typeof lifecycleHandler) => {
     lifecycleHandler = handler;
     return noop;
@@ -83,7 +86,7 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
 const announceSpy = vi.fn(async (_params: unknown) => true);
 const runSubagentEndedHookMock = vi.fn(async (_eventValue?: unknown, _ctx?: unknown) => {});
 const emitSessionLifecycleEventMock = vi.fn();
-const removeInternalSessionEffectsTranscriptMock = vi.fn(async (_sessionFile?: string) => {});
+const removeInternalSessionEffectsSessionMock = vi.fn(async (_target?: unknown) => {});
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) {
   let count = 0;
@@ -165,23 +168,18 @@ vi.mock("../sessions/session-lifecycle-events.js", () => ({
   emitSessionLifecycleEvent: emitSessionLifecycleEventMock,
 }));
 
-vi.mock("./subagent-registry.store.js", () => ({
-  loadSubagentRegistryFromDisk: vi.fn(() => new Map()),
-  saveSubagentRegistryToDisk: vi.fn(() => {}),
-}));
-
 vi.mock("./internal-session-effects.js", () => ({
-  removeInternalSessionEffectsTranscript: removeInternalSessionEffectsTranscriptMock,
+  removeInternalSessionEffectsSession: removeInternalSessionEffectsSessionMock,
 }));
 
 describe("subagent registry steer restarts", () => {
-  let mod: typeof import("./subagent-registry.js");
+  let mod: typeof import("./subagent-registry.test-helpers.js");
   type RegisterSubagentRunInput = Parameters<typeof mod.registerSubagentRun>[0];
   const MAIN_REQUESTER_SESSION_KEY = "agent:main:main";
   const MAIN_REQUESTER_DISPLAY_KEY = "main";
 
   beforeAll(async () => {
-    mod = await import("./subagent-registry.js");
+    mod = await import("./subagent-registry.test-helpers.js");
   });
 
   beforeEach(() => {
@@ -197,7 +195,7 @@ describe("subagent registry steer restarts", () => {
     runSubagentEndedHookMock.mockReset();
     runSubagentEndedHookMock.mockImplementation(async () => {});
     emitSessionLifecycleEventMock.mockReset();
-    removeInternalSessionEffectsTranscriptMock.mockClear();
+    removeInternalSessionEffectsSessionMock.mockClear();
     mod.resetSubagentRegistryForTests({ persist: false });
   });
 
@@ -298,21 +296,26 @@ describe("subagent registry steer restarts", () => {
     previousRunId: string;
     nextRunId: string;
     fallback?: ReturnType<typeof listMainRuns>[number];
-    transcriptFile?: string;
+    transcriptTarget?: {
+      agentId: string;
+      sessionId: string;
+      sessionKey: string;
+      storePath: string;
+    };
     task?: string;
   }) => {
     const replaced = mod.replaceSubagentRunAfterSteer({
       previousRunId: params.previousRunId,
       nextRunId: params.nextRunId,
       fallback: params.fallback,
-      transcriptFile: params.transcriptFile,
+      transcriptTarget: params.transcriptTarget,
       task: params.task,
     });
     expect(replaced).toBe(true);
 
     const runs = listMainRuns();
     expect(runs).toHaveLength(1);
-    expect(runs[0].runId).toBe(params.nextRunId);
+    expect(expectDefined(runs[0], "runs[0] test invariant").runId).toBe(params.nextRunId);
     return runs[0];
   };
 
@@ -325,7 +328,7 @@ describe("subagent registry steer restarts", () => {
     runSubagentEndedHookMock.mockImplementation(async () => {});
     emitSessionLifecycleEventMock.mockReset();
     lifecycleHandler = undefined;
-    removeInternalSessionEffectsTranscriptMock.mockClear();
+    removeInternalSessionEffectsSessionMock.mockClear();
     mod.resetSubagentRegistryForTests({ persist: false });
   });
 
@@ -393,7 +396,12 @@ describe("subagent registry steer restarts", () => {
       previous.execution = {
         status: "interrupted",
         startedAt: previous.startedAt,
-        transcriptFile: "/tmp/openclaw-state/internal-agent-runs/run-old.jsonl",
+        transcriptTarget: {
+          agentId: "main",
+          sessionId: "internal-run-old",
+          sessionKey: "agent:main:internal-session-effects:run-old",
+          storePath: "/tmp/test-store",
+        },
       };
 
       replaceRunAfterSteer({
@@ -402,8 +410,8 @@ describe("subagent registry steer restarts", () => {
         fallback: previous,
       });
 
-      expect(removeInternalSessionEffectsTranscriptMock).toHaveBeenCalledWith(
-        "/tmp/openclaw-state/internal-agent-runs/run-old.jsonl",
+      expect(removeInternalSessionEffectsSessionMock).toHaveBeenCalledWith(
+        previous.execution.transcriptTarget,
       );
     }
   });
@@ -477,11 +485,14 @@ describe("subagent registry steer restarts", () => {
         previous.delivery = { status: "pending", attemptCount: 2, lastAttemptAt: Date.now() };
       }
 
-      const run = replaceRunAfterSteer({
-        previousRunId: "run-retry-reset-old",
-        nextRunId: "run-retry-reset-new",
-        fallback: previous,
-      });
+      const run = expectDefined(
+        replaceRunAfterSteer({
+          previousRunId: "run-retry-reset-old",
+          nextRunId: "run-retry-reset-new",
+          fallback: previous,
+        }),
+        'replaceRunAfterSteer({ previousRunId: "run-retry-reset-old", nextRunI... test invariant',
+      );
       expect(run.delivery?.attemptCount).toBeUndefined();
       expect(run.delivery?.lastAttemptAt).toBeUndefined();
     }
@@ -504,11 +515,14 @@ describe("subagent registry steer restarts", () => {
         previous.outcome = { status: "ok" };
       }
 
-      const run = replaceRunAfterSteer({
-        previousRunId: "run-terminal-state-old",
-        nextRunId: "run-terminal-state-new",
-        fallback: previous,
-      });
+      const run = expectDefined(
+        replaceRunAfterSteer({
+          previousRunId: "run-terminal-state-old",
+          nextRunId: "run-terminal-state-new",
+          fallback: previous,
+        }),
+        'replaceRunAfterSteer({ previousRunId: "run-terminal-state-old", nextR... test invariant',
+      );
       expect(run.endedHookEmittedAt).toBeUndefined();
       expect(run.endedReason).toBeUndefined();
 
@@ -544,11 +558,14 @@ describe("subagent registry steer restarts", () => {
       previous.cleanupHandled = true;
     }
 
-    const run = replaceRunAfterSteer({
-      previousRunId: "run-frozen-old",
-      nextRunId: "run-frozen-new",
-      fallback: previous,
-    });
+    const run = expectDefined(
+      replaceRunAfterSteer({
+        previousRunId: "run-frozen-old",
+        nextRunId: "run-frozen-new",
+        fallback: previous,
+      }),
+      'replaceRunAfterSteer({ previousRunId: "run-frozen-old", nextRunId: "r... test invariant',
+    );
 
     expect(run.completion?.resultText).toBeUndefined();
     expect(run.completion?.capturedAt).toBeUndefined();
@@ -575,12 +592,15 @@ describe("subagent registry steer restarts", () => {
     expect(previous?.taskRunId).toBe("run-steer-task-old");
     expect(previous?.generation).toBe(1);
 
-    const run = replaceRunAfterSteer({
-      previousRunId: "run-steer-task-old",
-      nextRunId: "run-steer-task-new",
-      fallback: previous,
-      task: "new steer instruction from user",
-    });
+    const run = expectDefined(
+      replaceRunAfterSteer({
+        previousRunId: "run-steer-task-old",
+        nextRunId: "run-steer-task-new",
+        fallback: previous,
+        task: "new steer instruction from user",
+      }),
+      'replaceRunAfterSteer({ previousRunId: "run-steer-task-old", nextRunId... test invariant',
+    );
 
     expect(run.task).toBe("new steer instruction from user");
     expect(run.taskRunId).toBe("run-steer-task-old");
@@ -601,11 +621,14 @@ describe("subagent registry steer restarts", () => {
     fallback.generation = 2;
     mod.releaseSubagentRun(fallback.runId);
 
-    const run = replaceRunAfterSteer({
-      previousRunId: fallback.runId,
-      nextRunId: "run-fallback-generation-new",
-      fallback,
-    });
+    const run = expectDefined(
+      replaceRunAfterSteer({
+        previousRunId: fallback.runId,
+        nextRunId: "run-fallback-generation-new",
+        fallback,
+      }),
+      'replaceRunAfterSteer({ previousRunId: fallback.runId, nextRunId: "run... test invariant',
+    );
 
     expect(run.generation).toBe(3);
   });
@@ -623,11 +646,14 @@ describe("subagent registry steer restarts", () => {
     const previous = listMainRuns()[0];
     expect(previous?.runId).toBe("run-task-preserve-old");
 
-    const run = replaceRunAfterSteer({
-      previousRunId: "run-task-preserve-old",
-      nextRunId: "run-task-preserve-new",
-      fallback: previous,
-    });
+    const run = expectDefined(
+      replaceRunAfterSteer({
+        previousRunId: "run-task-preserve-old",
+        nextRunId: "run-task-preserve-new",
+        fallback: previous,
+      }),
+      'replaceRunAfterSteer({ previousRunId: "run-task-preserve-old", nextRu... test invariant',
+    );
 
     expect(run.task).toBe("preserve me verbatim");
   });
@@ -638,19 +664,25 @@ describe("subagent registry steer restarts", () => {
       childSessionKey: "agent:main:subagent:legacy-owner",
       task: "legacy owner task",
     });
-    const first = replaceRunAfterSteer({
-      previousRunId: "run-legacy-owner-original",
-      nextRunId: "run-legacy-owner-restored",
-    });
+    const first = expectDefined(
+      replaceRunAfterSteer({
+        previousRunId: "run-legacy-owner-original",
+        nextRunId: "run-legacy-owner-restored",
+      }),
+      'replaceRunAfterSteer({ previousRunId: "run-legacy-owner-original", ne... test invariant',
+    );
     // Pre-change persisted replacement rows did not record taskRunId.
     first.taskRunId = undefined;
     first.sessionStartedAt = first.createdAt - 1;
 
-    const second = replaceRunAfterSteer({
-      previousRunId: "run-legacy-owner-restored",
-      nextRunId: "run-legacy-owner-next",
-      fallback: first,
-    });
+    const second = expectDefined(
+      replaceRunAfterSteer({
+        previousRunId: "run-legacy-owner-restored",
+        nextRunId: "run-legacy-owner-next",
+        fallback: first,
+      }),
+      'replaceRunAfterSteer({ previousRunId: "run-legacy-owner-restored", ne... test invariant',
+    );
     expect(second.taskRunId).toBeUndefined();
     expect(second.generation).toBe(3);
   });
@@ -903,7 +935,12 @@ describe("subagent registry steer restarts", () => {
     activeRun.execution = {
       ...activeRun.execution,
       status: activeRun.execution?.status ?? "running",
-      transcriptFile: "/tmp/recovered-subagent.jsonl",
+      transcriptTarget: {
+        agentId: "main",
+        sessionId: "recovered-subagent",
+        sessionKey: "agent:main:internal-session-effects:recovered-subagent",
+        storePath: "/tmp/test-store",
+      },
     };
 
     expect(mod.isSubagentSessionRunActive(childSessionKey)).toBe(true);
@@ -926,7 +963,7 @@ describe("subagent registry steer restarts", () => {
     expect(typeof run?.cleanupCompletedAt).toBe("number");
     await flushAnnounce();
     expect(runSubagentEndedHookMock).not.toHaveBeenCalled();
-    expect(removeInternalSessionEffectsTranscriptMock).not.toHaveBeenCalled();
+    expect(removeInternalSessionEffectsSessionMock).not.toHaveBeenCalled();
   });
 
   it("treats a child session as inactive when only a stale older row is still unended", () => {
@@ -1121,3 +1158,4 @@ describe("subagent registry steer restarts", () => {
     expect(parent?.cleanupHandled).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

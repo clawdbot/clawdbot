@@ -1,4 +1,6 @@
 // Imessage tests cover targets plugin behavior.
+import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   resolveIMessageGroupRequireMention,
@@ -214,7 +216,7 @@ describe("imessage group policy", () => {
           },
         },
       },
-    } as any;
+    } as OpenClawConfig;
 
     expect(resolveIMessageGroupRequireMention({ cfg, groupId: "chat:family" })).toBe(false);
     expect(resolveIMessageGroupRequireMention({ cfg, groupId: "chat:other" })).toBe(true);
@@ -253,86 +255,20 @@ describe("parseIMessageAllowFromEntries", () => {
     });
   });
 
-  it("reads the named-account DM policy instead of the channel root", () => {
-    expect(
-      imessageDmPolicy.getCurrent(
-        {
-          channels: {
-            imessage: {
-              dmPolicy: "disabled",
-              accounts: {
-                work: {
-                  cliPath: "imsg",
-                  dmPolicy: "allowlist",
-                },
-              },
-            },
-          },
-        },
-        "work",
-      ),
-    ).toBe("allowlist");
-  });
-
-  it("reports account-scoped config keys for named accounts", () => {
-    expect(imessageDmPolicy.resolveConfigKeys?.({ channels: { imessage: {} } }, "work")).toEqual({
-      policyKey: "channels.imessage.accounts.work.dmPolicy",
-      allowFromKey: "channels.imessage.accounts.work.allowFrom",
-    });
-  });
-
-  it('writes open policy state to the named account and stores inherited allowFrom with "*"', () => {
-    const next = imessageDmPolicy.setPolicy(
+  installChannelDmPolicyContractSuite({
+    dmPolicy: imessageDmPolicy,
+    cases: [
       {
-        channels: {
-          imessage: {
-            allowFrom: ["+15555550123"],
-            accounts: {
-              work: {
-                cliPath: "imsg",
-              },
-            },
-          },
+        name: "iMessage named accounts",
+        channel: "imessage",
+        accountId: "work",
+        accountConfig: { cliPath: "imsg" },
+        inheritedAllowFrom: ["+15555550123"],
+        defaultAccount: {
+          rootAllowFrom: ["+15555550123"],
+          accountAllowFrom: ["chat_id:123"],
         },
       },
-      "open",
-      "work",
-    );
-
-    expect(next.channels?.imessage?.dmPolicy).toBeUndefined();
-    expect(next.channels?.imessage?.allowFrom).toEqual(["+15555550123"]);
-    expect(next.channels?.imessage?.accounts?.work?.dmPolicy).toBe("open");
-    expect(next.channels?.imessage?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
-  });
-
-  it("uses the configured default account for omitted-account DM policy reads, keys, and writes", () => {
-    const cfg = {
-      channels: {
-        imessage: {
-          allowFrom: ["+15555550123"],
-          defaultAccount: "work",
-          accounts: {
-            work: {
-              cliPath: "imsg",
-              dmPolicy: "allowlist" as const,
-              allowFrom: ["chat_id:123"],
-            },
-          },
-        },
-      },
-    };
-
-    expect(imessageDmPolicy.getCurrent(cfg)).toBe("allowlist");
-    expect(imessageDmPolicy.resolveConfigKeys?.(cfg)).toEqual({
-      policyKey: "channels.imessage.accounts.work.dmPolicy",
-      allowFromKey: "channels.imessage.accounts.work.allowFrom",
-    });
-
-    const next = imessageDmPolicy.setPolicy(cfg, "open");
-
-    expect(next.channels?.imessage?.dmPolicy).toBeUndefined();
-    expect(next.channels?.imessage?.allowFrom).toEqual(["+15555550123"]);
-    expect(next.channels?.imessage?.accounts?.work?.dmPolicy).toBe("open");
-    expect(next.channels?.imessage?.accounts?.work?.allowFrom).toEqual(["chat_id:123", "*"]);
+    ],
   });
 });

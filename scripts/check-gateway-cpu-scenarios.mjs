@@ -261,7 +261,7 @@ function buildPrivateQaEnv(env, qaState) {
     OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
     OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD ?? "1",
     OPENCLAW_TEST_DISABLE_UPDATE_CHECK: env.OPENCLAW_TEST_DISABLE_UPDATE_CHECK ?? "1",
-    PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: env.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN ?? "false",
+    PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
   };
 }
 
@@ -282,7 +282,7 @@ async function runGatewayCpuScenarios(options, params = {}) {
   const inputEnv = params.env ?? process.env;
   const baseEnv = {
     ...inputEnv,
-    PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: inputEnv.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN ?? "false",
+    PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
   };
   fs.mkdirSync(options.outputDir, { recursive: true });
 

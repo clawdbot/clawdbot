@@ -1,5 +1,5 @@
 // Plugin skill loading tests cover skill discovery from plugin-provided skill bundles.
-import fsSync, { type Dirent } from "node:fs";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +10,6 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { testing } from "./plugin-skills.js";
 
 const hoisted = vi.hoisted(() => {
   const loadManifestRegistry = vi.fn();
@@ -393,7 +392,38 @@ describe("resolvePluginSkillDirs", () => {
 });
 
 describe("publishPluginSkills", () => {
-  const { isGeneratedPluginSkillEntry, publishPluginSkills, resolvePluginSkillLinkType } = testing;
+  beforeAll(async () => {
+    ({ resolvePluginSkillDirs } = await import("./plugin-skills.js"));
+  });
+
+  function publishPluginSkills(skillDirs: string[], opts: { pluginSkillsDir: string }): void {
+    const plugins = skillDirs.map((rootDir, index) => ({
+      id: `publish-test-${index}`,
+      name: `Publish Test ${index}`,
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: ["."],
+      hooks: [],
+      origin: "workspace" as const,
+      rootDir,
+      source: rootDir,
+      manifestPath: path.join(rootDir, "openclaw.plugin.json"),
+    }));
+    hoisted.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      diagnostics: [],
+      plugins,
+    });
+    resolvePluginSkillDirs({
+      workspaceDir: opts.pluginSkillsDir,
+      pluginSkillsDir: opts.pluginSkillsDir,
+      config: {
+        plugins: {
+          entries: Object.fromEntries(plugins.map((plugin) => [plugin.id, { enabled: true }])),
+        },
+      },
+    });
+  }
 
   function withPlatform<T>(platform: NodeJS.Platform, fn: () => T): T {
     const originalPlatform = process.platform;
@@ -434,12 +464,6 @@ describe("publishPluginSkills", () => {
     const linkB = path.join(managedDir, "skill-b");
     expect(fsSync.readlinkSync(linkA)).toBe(dirA);
     expect(fsSync.readlinkSync(linkB)).toBe(dirB);
-  });
-
-  it("uses junction links for plugin skill directories on Windows", () => {
-    expect(resolvePluginSkillLinkType("win32")).toBe("junction");
-    expect(resolvePluginSkillLinkType("linux")).toBe("dir");
-    expect(resolvePluginSkillLinkType("darwin")).toBe("dir");
   });
 
   it("is idempotent: skips symlinks that already point to the same target", async () => {
@@ -536,21 +560,6 @@ describe("publishPluginSkills", () => {
 
     expect(fsSync.existsSync(path.join(managedDir, "current-skill"))).toBe(true);
     expect(fsSync.existsSync(staleDir)).toBe(false);
-  });
-
-  it("treats Windows directory entries as generated plugin skill entries", () => {
-    const directoryEntry = {
-      isDirectory: () => true,
-      isSymbolicLink: () => false,
-    } as Dirent;
-    const regularEntry = {
-      isDirectory: () => false,
-      isSymbolicLink: () => false,
-    } as Dirent;
-
-    expect(withPlatform("win32", () => isGeneratedPluginSkillEntry(directoryEntry))).toBe(true);
-    expect(withPlatform("linux", () => isGeneratedPluginSkillEntry(directoryEntry))).toBe(false);
-    expect(withPlatform("win32", () => isGeneratedPluginSkillEntry(regularEntry))).toBe(false);
   });
 
   it("cleans up broken symlinks (dangling)", async () => {

@@ -14,9 +14,10 @@ export function findDockerArgsCall(calls: unknown[][], command: string): string[
 /** Collects every value passed after a repeated Docker flag. */
 export function collectDockerFlagValues(args: string[], flag: string): string[] {
   const values: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    if (args[i] === flag && typeof args[i + 1] === "string") {
-      values.push(args[i + 1]);
+  for (const [i, arg] of args.entries()) {
+    const value = args.at(i + 1);
+    if (arg === flag && value !== undefined) {
+      values.push(value);
     }
   }
   return values;

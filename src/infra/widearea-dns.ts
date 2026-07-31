@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { CONFIG_DIR, ensureDir } from "../utils.js";
 
@@ -102,7 +103,7 @@ function extractSerial(zoneText: string): number | null {
   if (!match) {
     return null;
   }
-  const parsed = Number.parseInt(match[1], 10);
+  const parsed = Number.parseInt(expectDefined(match[1], "widearea dns regex capture 1"), 10);
   return Number.isFinite(parsed) ? parsed : null;
 }
 

@@ -33,19 +33,21 @@ function resolveFetchRequest(input: RequestInfo | URL, init?: RequestInit) {
     const body = request.body ?? undefined;
     return {
       url: request.url,
+      signal: request.signal,
       init: {
         method: request.method,
         headers: request.headers,
         body,
         redirect: request.redirect,
-        signal: request.signal,
         ...(body ? ({ duplex: "half" } as const) : {}),
       } satisfies RequestInit & { duplex?: "half" },
     };
   }
+  const { signal, ...requestInit } = init ?? {};
   return {
     url: input instanceof URL ? input.toString() : input,
-    init,
+    signal: signal ?? undefined,
+    init: init ? requestInit : undefined,
   };
 }
 
@@ -96,6 +98,7 @@ export function buildMcpHttpFetch(params: {
   clientCert?: string;
   clientKey?: string;
   resourceUrl?: string;
+  timeoutMs?: number;
 }): FetchLike {
   const needsCustomDispatcher =
     params.sslVerify === false || Boolean(params.clientCert || params.clientKey);
@@ -127,6 +130,8 @@ export function buildMcpHttpFetch(params: {
       allowCrossOriginUnsafeRedirectReplay: true,
       auditContext: "mcp-http",
       useEnvProxyForEligibleUrls: true,
+      ...(request.signal ? { signal: request.signal } : {}),
+      ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
       ...(policy ? { policy } : {}),
       ...(needsCustomDispatcher ? { resolveDispatcherPolicy: resolveCustomDispatcherPolicy } : {}),
     };

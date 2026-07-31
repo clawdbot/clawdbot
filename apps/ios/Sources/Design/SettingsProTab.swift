@@ -6,6 +6,12 @@ struct GatewaySetupRequest {
     let link: GatewayConnectDeepLink
 }
 
+enum GatewayConnectionAttempt: Equatable {
+    case gateway(GatewayStableIdentifier.Key)
+    case manual
+    case setupCode
+}
+
 struct SettingsProTab: View {
     @Environment(NodeAppModel.self) var appModel
     @Environment(VoiceWakeManager.self) var voiceWake
@@ -37,10 +43,12 @@ struct SettingsProTab: View {
     @AppStorage("gateway.onboardingComplete") var onboardingComplete: Bool = false
     @AppStorage("gateway.hasConnectedOnce") var hasConnectedOnce: Bool = false
     @AppStorage("onboarding.requestID") var onboardingRequestID: Int = 0
+    @AppStorage(NotificationServingPreference.storageKey) var notificationServingEnabled: Bool =
+        NotificationServingPreference.defaultEnabled
     @State var isReconnectingGateway = false
     @State var isRefreshingGateway = false
     @State var isChangingLocationMode = false
-    @State var connectingGatewayID: String?
+    @State var connectingGateway: GatewayConnectionAttempt?
     @State var gatewayRegistry = GatewaySettingsStore.GatewayRegistry.empty
     @State var pendingForgetGateway: GatewaySettingsStore.GatewayRegistryEntry?
     @State var selectedAgentPickerId = ""
@@ -58,9 +66,12 @@ struct SettingsProTab: View {
     @State var defaultShareInstruction = ""
     @State var showQRScanner = false
     @State var scannerError: String?
+    @State var pendingLocationMode: OpenClawLocationMode?
     @State var showResetOnboardingAlert = false
     @State var suppressCredentialPersist = false
     @State var locationStatusText: String?
+    @State var watchDirectSetupStatusText: String?
+    @State var isSendingWatchDirectSetup = false
     @State var locationPermissionSummary = LocationPermissionSummary(
         desiredMode: .off,
         locationServicesEnabled: true,
@@ -74,14 +85,16 @@ struct SettingsProTab: View {
     @State var diagnosticsLastRunText = "Not run"
     @State var diagnosticsIssueCount: Int?
     @State var showTalkIssueDetails = false
+    @State var systemAgentChatStore = IOSSystemAgentChatStore()
     @State private var navigationPath: [SettingsRoute] = []
     let initialRoute: SettingsRoute?
     let directRoute: SettingsRoute?
     let acceptsGatewaySetupRequests: Bool
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
     let ownsNavigationStack: Bool
     let navigateToRoute: ((SettingsRoute) -> Void)?
     let onRouteChange: ((SettingsRoute?) -> Void)?
+    let onApprovalNotificationsRoute: ((String) -> Void)?
     let gatewaySetupRequest: GatewaySetupRequest?
     let onGatewaySetupRequestHandled: ((Int) -> Void)?
 
@@ -89,20 +102,22 @@ struct SettingsProTab: View {
         initialRoute: SettingsRoute? = nil,
         directRoute: SettingsRoute? = nil,
         acceptsGatewaySetupRequests: Bool = false,
-        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         ownsNavigationStack: Bool = true,
         navigateToRoute: ((SettingsRoute) -> Void)? = nil,
         onRouteChange: ((SettingsRoute?) -> Void)? = nil,
+        onApprovalNotificationsRoute: ((String) -> Void)? = nil,
         gatewaySetupRequest: GatewaySetupRequest? = nil,
         onGatewaySetupRequestHandled: ((Int) -> Void)? = nil)
     {
         self.initialRoute = initialRoute
         self.directRoute = directRoute
         self.acceptsGatewaySetupRequests = acceptsGatewaySetupRequests
-        self.headerLeadingAction = headerLeadingAction
+        self.headerSidebarAction = headerSidebarAction
         self.ownsNavigationStack = ownsNavigationStack
         self.navigateToRoute = navigateToRoute
         self.onRouteChange = onRouteChange
+        self.onApprovalNotificationsRoute = onApprovalNotificationsRoute
         self.gatewaySetupRequest = gatewaySetupRequest
         self.onGatewaySetupRequestHandled = onGatewaySetupRequestHandled
     }
@@ -143,10 +158,10 @@ struct SettingsProTab: View {
             self.destination(for: route)
         }
         .toolbar {
-            if let headerLeadingAction {
-                ToolbarItem(placement: .topBarLeading) {
-                    OpenClawSidebarRevealButton(action: headerLeadingAction)
-                }
+            if let headerSidebarAction {
+                OpenClawSidebarToolbarItem(
+                    action: headerSidebarAction,
+                    placement: .topBarLeading)
             }
         }
     }
@@ -174,8 +189,12 @@ struct SettingsProTab: View {
             .onChange(of: self.scenePhase) { _, phase in
                 if phase == .active {
                     self.syncSettingsState()
+                    self.applyPendingLocationModeIfAvailable()
                     self.refreshNotificationSettings()
                 }
+            }
+            .onChange(of: self.appModel.locationAuthorizationSnapshot) { _, _ in
+                self.refreshLocationPermissionSummary()
             }
             .onChange(of: self.locationModeRaw) { _, newValue in
                 self.handleLocationModeChange(newValue)
@@ -262,7 +281,7 @@ struct SettingsProTab: View {
             .sheet(isPresented: self.$showNotificationRelayDisclosure) {
                 HostedPushRelayDisclosureSheet(
                     message: self.notificationRelayDisclosureMessage,
-                    onContinue: self.requestNotificationAuthorizationFromSettings)
+                    onContinue: self.acceptNotificationRelayDisclosure)
             }
             .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
                 Button(role: .destructive) {
@@ -283,8 +302,11 @@ struct SettingsProTab: View {
                 "QR Scanner Unavailable",
                 isPresented: Binding(
                     get: { self.scannerError != nil },
-                    set: { if !$0 { self.scannerError = nil } }))
-            {
+                    set: {
+                        if !$0 {
+                            self.scannerError = nil
+                        }
+                    })) {
                 Button(role: .cancel) {} label: {
                     Text("OK")
                         .font(OpenClawType.subheadSemiBold)
@@ -294,14 +316,22 @@ struct SettingsProTab: View {
                     .font(OpenClawType.subhead)
             }
             .confirmationDialog(
-                    "Forget \(self.pendingForgetGateway?.name ?? "gateway")?",
-                    isPresented: Binding(
-                        get: { self.pendingForgetGateway != nil },
-                        set: { if !$0 { self.pendingForgetGateway = nil } }),
-                    titleVisibility: .visible)
-            {
+                String(
+                    format: String(localized: "Forget %@?"),
+                    self.pendingForgetGateway?.name ?? String(localized: "gateway")),
+                isPresented: Binding(
+                    get: { self.pendingForgetGateway != nil },
+                    set: {
+                        if !$0 {
+                            self.pendingForgetGateway = nil
+                        }
+                    }),
+                titleVisibility: .visible,
+                // The action only schedules Task; dismissal clears state before that task resumes.
+                presenting: self.pendingForgetGateway)
+            { entry in
                 Button(role: .destructive) {
-                    self.forgetPendingGateway()
+                    Task { await self.forgetGateway(entry) }
                 } label: {
                     Text("Forget Gateway")
                         .font(OpenClawType.subheadSemiBold)
@@ -312,10 +342,14 @@ struct SettingsProTab: View {
                     Text("Cancel")
                         .font(OpenClawType.subheadSemiBold)
                 }
-                } message: {
-                    Text("This removes saved credentials, device access, TLS trust, and cached chats for this gateway.")
-                        .font(OpenClawType.subhead)
-                }
+            } message: { _ in
+                // Keep the extraction key contiguous for the native localization inventory.
+                Text(
+                    String(
+                        localized:
+                        "This removes saved credentials, device access, TLS trust, and cached chats for this gateway."))
+                    .font(OpenClawType.subhead)
+            }
     }
 
     private func applyGatewaySetupRequestIfNeeded() {
@@ -327,6 +361,9 @@ struct SettingsProTab: View {
 
     func openNotificationsRouteFromApprovals() {
         guard self.directRoute == nil else { return }
+        if let approvalID = ExecApprovalIdentifier.exact(self.appModel.pendingExecApprovalPrompt?.id) {
+            self.onApprovalNotificationsRoute?(approvalID)
+        }
         if !self.ownsNavigationStack, let navigateToRoute {
             navigateToRoute(.notifications)
             return

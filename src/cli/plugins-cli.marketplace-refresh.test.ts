@@ -3,6 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHostedMarketplaceFeedFixture } from "./plugins-marketplace-feed.test-support.js";
 
 const mocks = vi.hoisted(() => {
   const defaultRuntime = {
@@ -64,30 +65,15 @@ describe("plugins marketplace refresh", () => {
     vi.unstubAllEnvs();
   });
 
-  it("refreshes the configured marketplace feed and prints JSON", async () => {
-    const config = {
-      marketplaces: {
-        feeds: { acme: { url: "https://packages.acme.example/openclaw/feed" } },
-      },
-    };
+  it("refreshes an explicitly selected marketplace feed and prints JSON", async () => {
+    const config = {};
     mocks.getRuntimeConfig.mockReturnValue(config);
-    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
-      source: "hosted",
-      entries: [{ name: "@acme/calendar" }, { name: "@acme/docs" }],
-      feed: {
-        schemaVersion: 1,
-        id: "acme-marketplace",
-        generatedAt: "2026-06-23T00:00:00.000Z",
-        sequence: 7,
-        entries: [],
-      },
-      metadata: {
-        url: "https://packages.acme.example/openclaw/feed",
-        status: 200,
-        checksum: "feed-sha",
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(
+      createHostedMarketplaceFeedFixture({
+        entries: [{ name: "@acme/calendar" }, { name: "@acme/docs" }],
         etag: '"abc"',
-      },
-    });
+      }),
+    );
 
     const { runPluginMarketplaceRefreshCommand } = await import("./plugins-cli.runtime.js");
     await runPluginMarketplaceRefreshCommand({
@@ -96,10 +82,11 @@ describe("plugins marketplace refresh", () => {
       json: true,
     });
 
-    expect(mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries).toHaveBeenCalledWith(
-      config,
-      { feedProfile: "acme", expectedSha256: "feed-sha", requireSnapshotWrite: true },
-    );
+    expect(mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries).toHaveBeenCalledWith({
+      feedProfile: "acme",
+      expectedSha256: "feed-sha",
+      requireSnapshotWrite: true,
+    });
     expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith({
       source: "hosted",
       entries: 2,
@@ -114,32 +101,43 @@ describe("plugins marketplace refresh", () => {
         checksum: "feed-sha",
         etag: '"abc"',
       },
+      trust: {
+        mode: "signed",
+        signedBy: "acme-root-2026",
+        signatureCount: 1,
+        threshold: 1,
+        verifiedAt: "2026-06-23T00:01:02.000Z",
+      },
     });
   });
 
+  it("prints bounded signed feed trust state in text output", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({});
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(
+      createHostedMarketplaceFeedFixture({ entries: [{ name: "@acme/calendar" }] }),
+    );
+
+    const { runPluginMarketplaceRefreshCommand } = await import("./plugins-cli.runtime.js");
+    await runPluginMarketplaceRefreshCommand({});
+
+    const output = mocks.defaultRuntime.log.mock.calls.map(([value]) => String(value)).join("\n");
+    expect(output).toContain("Trust:");
+    expect(output).toContain("signed by acme-root-2026 (1/1)");
+    expect(output).toContain("2026-06-23T00:01:02.000Z");
+    expect(output).not.toContain("publicKey");
+    expect(output).not.toContain("signature:");
+  });
+
   it("normalizes bare SHA-256 pins before refreshing", async () => {
-    const config = {
-      marketplaces: {
-        feeds: { acme: { url: "https://packages.acme.example/openclaw/feed" } },
-      },
-    };
+    const config = {};
     mocks.getRuntimeConfig.mockReturnValue(config);
-    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
-      source: "hosted",
-      entries: [{ name: "@acme/calendar" }],
-      feed: {
-        schemaVersion: 1,
-        id: "acme-marketplace",
-        generatedAt: "2026-06-23T00:00:00.000Z",
-        sequence: 7,
-        entries: [],
-      },
-      metadata: {
-        url: "https://packages.acme.example/openclaw/feed",
-        status: 200,
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(
+      createHostedMarketplaceFeedFixture({
+        entries: [{ name: "@acme/calendar" }],
         checksum: "sha256:abcdef",
-      },
-    });
+        includeTrust: false,
+      }),
+    );
 
     const { runPluginMarketplaceRefreshCommand } = await import("./plugins-cli.runtime.js");
     await runPluginMarketplaceRefreshCommand({
@@ -148,14 +146,11 @@ describe("plugins marketplace refresh", () => {
       json: true,
     });
 
-    expect(mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries).toHaveBeenCalledWith(
-      config,
-      {
-        feedProfile: "acme",
-        expectedSha256: "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-        requireSnapshotWrite: true,
-      },
-    );
+    expect(mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries).toHaveBeenCalledWith({
+      feedProfile: "acme",
+      expectedSha256: "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      requireSnapshotWrite: true,
+    });
 
     mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockClear();
 
@@ -165,14 +160,11 @@ describe("plugins marketplace refresh", () => {
       json: true,
     });
 
-    expect(mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries).toHaveBeenCalledWith(
-      config,
-      {
-        feedProfile: "acme",
-        expectedSha256: "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-        requireSnapshotWrite: true,
-      },
-    );
+    expect(mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries).toHaveBeenCalledWith({
+      feedProfile: "acme",
+      expectedSha256: "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      requireSnapshotWrite: true,
+    });
   });
 
   it("reports bundled fallback without failing the command", async () => {
@@ -267,28 +259,15 @@ describe("plugins marketplace refresh", () => {
     vi.stubEnv("OPENCLAW_DIAGNOSTICS_TIMELINE_PATH", timelinePath);
     const config = {
       diagnostics: { flags: ["timeline"] },
-      marketplaces: {
-        feeds: { acme: { url: "https://packages.acme.example/openclaw/feed" } },
-      },
     };
     mocks.getRuntimeConfig.mockReturnValue(config);
-    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
-      source: "hosted",
-      entries: [{ name: "@acme/calendar" }, { name: "@acme/docs" }],
-      feed: {
-        schemaVersion: 1,
-        id: "acme-marketplace",
-        generatedAt: "2026-06-23T00:00:00.000Z",
-        sequence: 7,
-        entries: [],
-      },
-      metadata: {
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(
+      createHostedMarketplaceFeedFixture({
+        entries: [{ name: "@acme/calendar" }, { name: "@acme/docs" }],
         url: "https://user:secret@packages.acme.example/openclaw/feed?token=leak#frag",
-        status: 200,
-        checksum: "feed-sha",
         etag: '"abc"',
-      },
-    });
+      }),
+    );
 
     const { runPluginMarketplaceRefreshCommand } = await import("./plugins-cli.runtime.js");
     await runPluginMarketplaceRefreshCommand({
@@ -299,7 +278,6 @@ describe("plugins marketplace refresh", () => {
 
     const [event] = await readTimeline(timelinePath);
     expect(mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries).toHaveBeenCalledWith(
-      config,
       expect.objectContaining({
         feedUrl: "https://override.example/openclaw/feed?token=override-leak",
       }),
@@ -313,6 +291,10 @@ describe("plugins marketplace refresh", () => {
       feedIdPresent: true,
       feedProfileProvided: true,
       feedSequence: 7,
+      feedTrustMode: "signed",
+      feedTrustSignatureCount: 1,
+      feedTrustThreshold: 1,
+      feedTrustVerified: true,
       feedUrlOverride: true,
       hasEtag: true,
       payloadChecksumPresent: true,
@@ -321,6 +303,7 @@ describe("plugins marketplace refresh", () => {
     expect(JSON.stringify(event)).not.toContain("packages.acme.example");
     expect(JSON.stringify(event)).not.toContain("acme-marketplace");
     expect(JSON.stringify(event)).not.toContain("feed-sha");
+    expect(JSON.stringify(event)).not.toContain("acme-root-2026");
     expect(JSON.stringify(event)).not.toContain("secret");
     expect(JSON.stringify(event)).not.toContain("token=leak");
     expect(JSON.stringify(event)).not.toContain("override-leak");

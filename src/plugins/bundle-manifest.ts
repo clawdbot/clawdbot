@@ -24,7 +24,7 @@ export const CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH = ".claude-plugin/plugin.json"
 export const CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH = ".cursor-plugin/plugin.json";
 
 /** Normalized bundle manifest shape consumed by plugin discovery. */
-export type BundlePluginManifest = {
+type BundlePluginManifest = {
   id: string;
   name?: string;
   description?: string;
@@ -38,7 +38,7 @@ export type BundlePluginManifest = {
   capabilities: string[];
 };
 
-export type BundleManifestLoadResult =
+type BundleManifestLoadResult =
   | { ok: true; manifest: BundlePluginManifest; manifestPath: string }
   | { ok: false; error: string; manifestPath: string };
 

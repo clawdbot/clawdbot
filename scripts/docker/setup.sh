@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
+source "$ROOT_DIR/scripts/lib/build-metadata.sh"
 source "$ROOT_DIR/scripts/lib/host-timeout.sh"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
@@ -408,9 +409,16 @@ contains_disallowed_chars() {
   [[ "$value" == *$'\n'* || "$value" == *$'\r'* || "$value" == *$'\t'* ]]
 }
 
-is_valid_timezone() {
+is_valid_timezone_in_image() {
   local value="$1"
-  [[ -e "/usr/share/zoneinfo/$value" && ! -d "/usr/share/zoneinfo/$value" ]]
+  docker run --rm --network none --entrypoint node "$IMAGE_NAME" -e '
+const timezone = process.argv[1];
+try {
+  new Intl.DateTimeFormat("en", { timeZone: timezone }).format(0);
+} catch {
+  process.exit(1);
+}
+' "$value"
 }
 
 validate_mount_path_value() {
@@ -495,9 +503,6 @@ if [[ -n "$TIMEZONE" ]]; then
   fi
   if [[ ! "$TIMEZONE" =~ ^[A-Za-z0-9/_+\-]+$ ]]; then
     fail "OPENCLAW_TZ must be a valid IANA timezone string (e.g. Asia/Shanghai)."
-  fi
-  if ! is_valid_timezone "$TIMEZONE"; then
-    fail "OPENCLAW_TZ must match a timezone in /usr/share/zoneinfo (e.g. Asia/Shanghai)."
   fi
 fi
 
@@ -754,7 +759,14 @@ if [[ -n "$OFFLINE_MODE" ]]; then
   echo "==> Using preloaded Docker image: $IMAGE_NAME"
 elif [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
+  BUILD_GIT_COMMIT="$(openclaw_resolve_git_commit "$ROOT_DIR")"
+  BUILD_TIMESTAMP="$(openclaw_resolve_build_timestamp)"
+  PROVENANCE_BUILD_ARGS=(--build-arg "OPENCLAW_BUILD_TIMESTAMP=${BUILD_TIMESTAMP}")
+  if [[ "$BUILD_GIT_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
+    PROVENANCE_BUILD_ARGS+=(--build-arg "GIT_COMMIT=${BUILD_GIT_COMMIT}")
+  fi
   run_docker_build \
+    "${PROVENANCE_BUILD_ARGS[@]}" \
     --build-arg "OPENCLAW_IMAGE_APT_PACKAGES=${OPENCLAW_IMAGE_APT_PACKAGES}" \
     --build-arg "OPENCLAW_IMAGE_PIP_PACKAGES=${OPENCLAW_IMAGE_PIP_PACKAGES}" \
     --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
@@ -774,6 +786,10 @@ else
   fi
 fi
 
+if [[ -n "$TIMEZONE" ]] && ! is_valid_timezone_in_image "$TIMEZONE"; then
+  fail "OPENCLAW_TZ must be supported by $IMAGE_NAME (e.g. Asia/Shanghai)."
+fi
+
 # Ensure bind-mounted data directories are writable by the container's `node`
 # user (uid 1000). Host-created dirs inherit the host user's uid which may
 # differ, causing EACCES when the container tries to mkdir/write.
@@ -784,13 +800,19 @@ echo "==> Fixing data-directory permissions"
 # Use -xdev to restrict chown to the config-dir mount only — without it,
 # the recursive chown would cross into the workspace bind mount and rewrite
 # ownership of all user project files on Linux hosts.
+# Run a no-dereference chown from each entry's directory. This keeps ownership
+# repair for sockets/FIFOs while preventing a swapped symlink leaf from
+# redirecting the root operation outside the mounted tree.
 # After fixing the config dir, only the OpenClaw metadata subdirectory
 # (.openclaw/) inside the workspace gets chowned, not the user's project files.
 run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
-  'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
-   chown node:node /home/node/.config; \
-   find /home/node/.config/openclaw -xdev -exec chown node:node {} +; \
-   [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
+  'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH; \
+   /usr/bin/find -P /home/node/.openclaw -xdev -execdir /usr/bin/chown -h node:node {} +; \
+   /usr/bin/chown -h node:node /home/node/.config; \
+   /usr/bin/find -P /home/node/.config/openclaw -xdev -execdir /usr/bin/chown -h node:node {} +; \
+   if [ -d /home/node/.openclaw/workspace/.openclaw ] && [ ! -L /home/node/.openclaw/workspace/.openclaw ]; then \
+     /usr/bin/find -P /home/node/.openclaw/workspace/.openclaw -xdev -execdir /usr/bin/chown -h node:node {} +; \
+   fi || true'
 
 echo ""
 if [[ -n "$SKIP_ONBOARDING" ]]; then

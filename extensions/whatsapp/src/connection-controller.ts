@@ -1,23 +1,31 @@
 // Whatsapp plugin module implements connection controller behavior.
 import type { GroupMetadata, WASocket, WAMessageKey, proto } from "baileys";
+import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { info } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
-  registerWhatsAppConnectionController,
-  unregisterWhatsAppConnectionController,
-} from "./connection-controller-registry.js";
+  WHATSAPP_CONNECTION_CONTROLLER_CAPABILITY,
+  WHATSAPP_CONNECTION_OWNER_PENDING_CAPABILITY,
+} from "./connection-controller-runtime-context.js";
+import {
+  acquireWhatsAppGatewayConnectionOwner,
+  type WhatsAppConnectionOwnerLease,
+} from "./connection-owner.js";
 import { resolveComparableIdentity, type WhatsAppSelfIdentity } from "./identity.js";
 import type { ActiveWebListener, WebListenerCloseReason } from "./inbound/types.js";
 import { computeBackoff, sleepWithAbort, type ReconnectPolicy } from "./reconnect.js";
+import { getWhatsAppChannelRuntime } from "./runtime.js";
 import {
   createWaSocket,
   formatError,
   getStatusCode,
   logoutWeb,
   readWebAuthExistsForDecision,
+  waitForCredsSaveQueueWithTimeout,
   waitForWaConnection,
   WhatsAppAuthUnstableError,
 } from "./session.js";
+import { closeWhatsAppSocketAndWait } from "./socket-close.js";
 import {
   DEFAULT_WHATSAPP_SOCKET_TIMING,
   type WhatsAppSocketTimingOptions,
@@ -67,6 +75,21 @@ type WhatsAppLiveConnection = {
   backgroundTasks: Set<Promise<unknown>>;
   closePromise: Promise<WebListenerCloseReason>;
   resolveClose: (reason: WebListenerCloseReason) => void;
+  socketClosed: boolean;
+};
+
+type WhatsAppSocketCleanup = Pick<WhatsAppLiveConnection, "sock" | "socketClosed">;
+
+type WhatsAppOpenConnectionParams = {
+  connectionId: string;
+  createListener: (context: {
+    sock: WASocket;
+    connection: WhatsAppLiveConnection;
+  }) => Promise<ManagedWhatsAppListener>;
+  onHeartbeat?: (snapshot: WhatsAppConnectionSnapshot) => void;
+  onWatchdogTimeout?: (snapshot: WhatsAppConnectionSnapshot) => void;
+  getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>;
+  cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>;
 };
 
 type WhatsAppConnectionSnapshot = {
@@ -164,13 +187,22 @@ function createLiveConnection(params: {
     backgroundTasks: new Set<Promise<unknown>>(),
     closePromise,
     resolveClose: resolveClosePromise,
+    socketClosed: false,
   };
+}
+
+async function closeWebSocketBestEffort(sock: { ws?: { close?: () => void | Promise<void> } }) {
+  try {
+    await sock.ws?.close?.();
+  } catch {
+    // ignore best-effort shutdown failures
+  }
 }
 
 export function closeWaSocket(
   sock:
     | {
-        end?: (error: Error | undefined) => void;
+        end?: (error: Error | undefined) => void | Promise<void>;
         ws?: { close?: () => void };
       }
     | null
@@ -178,13 +210,23 @@ export function closeWaSocket(
 ): void {
   try {
     if (typeof sock?.end === "function") {
-      sock.end(new Error("OpenClaw WhatsApp socket close"));
+      void Promise.resolve(sock.end(new Error("OpenClaw WhatsApp socket close"))).catch(
+        async () => await closeWebSocketBestEffort(sock),
+      );
       return;
     }
-    sock?.ws?.close?.();
+    if (sock) {
+      void closeWebSocketBestEffort(sock);
+    }
   } catch {
-    // ignore best-effort shutdown failures
+    if (sock) {
+      void closeWebSocketBestEffort(sock);
+    }
   }
+}
+
+function stoppedControllerError(): Error {
+  return new Error("WhatsApp connection controller is shutting down");
 }
 
 export function closeWaSocketSoon(
@@ -221,6 +263,37 @@ type WhatsAppLoginWaitResult =
       error: unknown;
     };
 
+type CredentialPersistenceFailure = { error: unknown };
+
+async function waitForLoginSocket(params: {
+  wait: () => Promise<void>;
+  credentialPersistenceFailure?: Promise<CredentialPersistenceFailure>;
+}): Promise<void> {
+  if (!params.credentialPersistenceFailure) {
+    await params.wait();
+    return;
+  }
+  const outcome = await Promise.race([
+    params.wait().then(() => ({ kind: "connected" }) as const),
+    params.credentialPersistenceFailure.then((failure) => ({
+      kind: "credential-persistence-failed" as const,
+      failure,
+    })),
+  ]);
+  if (outcome.kind === "credential-persistence-failed") {
+    throw outcome.failure.error;
+  }
+}
+
+function throwIfCredentialPersistenceFailed(
+  getFailure?: () => CredentialPersistenceFailure | null,
+): void {
+  const failure = getFailure?.();
+  if (failure) {
+    throw failure.error;
+  }
+}
+
 export async function waitForWhatsAppLoginResult(params: {
   sock: WaSocket;
   authDir: string;
@@ -232,6 +305,12 @@ export async function waitForWhatsAppLoginResult(params: {
   socketTiming?: WhatsAppSocketTimingOptions;
   onQr?: (qr: string) => void;
   onSocketReplaced?: (sock: WaSocket) => void;
+  beforeCredentialPersistence?: () => Promise<void>;
+  onCredentialPersistenceError?: (error: unknown) => void;
+  onCredentialPersistenceTask?: (task: Promise<unknown>) => void;
+  waitForCredentialPersistence?: () => Promise<void>;
+  credentialPersistenceFailure?: Promise<CredentialPersistenceFailure>;
+  getCredentialPersistenceFailure?: () => CredentialPersistenceFailure | null;
 }): Promise<WhatsAppLoginWaitResult> {
   const wait = params.waitForConnection ?? waitForWaConnection;
   const createSocket = params.createSocket ?? createWaSocket;
@@ -251,6 +330,9 @@ export async function waitForWhatsAppLoginResult(params: {
         authDir: params.authDir,
         ...params.socketTiming,
         onQr: params.onQr,
+        beforeCredentialPersistence: params.beforeCredentialPersistence,
+        onCredentialPersistenceError: params.onCredentialPersistenceError,
+        onCredentialPersistenceTask: params.onCredentialPersistenceTask,
       });
       params.onSocketReplaced?.(currentSock);
       return null;
@@ -266,9 +348,15 @@ export async function waitForWhatsAppLoginResult(params: {
 
   while (true) {
     try {
-      await wait(currentSock, { timeout: "none" });
+      await waitForLoginSocket({
+        wait: async () => await wait(currentSock, { timeout: "none" }),
+        credentialPersistenceFailure: params.credentialPersistenceFailure,
+      });
+      await params.waitForCredentialPersistence?.();
+      throwIfCredentialPersistenceFailed(params.getCredentialPersistenceFailure);
       // Socket open only proves in-memory auth; require persisted creds before success.
       const persistedAuth = await readWebAuthExistsForDecision(params.authDir);
+      throwIfCredentialPersistenceFailed(params.getCredentialPersistenceFailure);
       if (persistedAuth.outcome === "unstable") {
         return {
           outcome: "failed",
@@ -322,6 +410,7 @@ export async function waitForWhatsAppLoginResult(params: {
           authDir: params.authDir,
           isLegacyAuthDir: params.isLegacyAuthDir,
           runtime: params.runtime,
+          beforeCredentialPersistence: params.beforeCredentialPersistence,
         });
         if (!cleared) {
           const existingAuth = await readWebAuthExistsForDecision(params.authDir);
@@ -379,6 +468,16 @@ export class WhatsAppConnectionController {
   private readonly disconnectRetryController = new AbortController();
 
   private current: WhatsAppLiveConnection | null = null;
+  private runtimeContextLease: { dispose: () => void } | null = null;
+  private pendingOwnerContextLease: { dispose: () => void } | null = null;
+  private connectionOwnerLease: WhatsAppConnectionOwnerLease | null = null;
+  private retainedOwnerReleaseLease: WhatsAppConnectionOwnerLease | null = null;
+  private connectionOwnerLeasePromise: Promise<void> | null = null;
+  private connectionSetupPromise: Promise<WhatsAppLiveConnection> | null = null;
+  private pendingSocketCleanup: WhatsAppSocketCleanup | null = null;
+  private shuttingDown = false;
+  private readonly ownerAcquireAbortController = new AbortController();
+  private readonly setupAbortController = new AbortController();
   private reconnectAttempts = 0;
   private lastHandledInboundAt: number | null = null;
 
@@ -415,17 +514,20 @@ export class WhatsAppConnectionController {
       ...params.socketTiming,
     };
     this.socketRef = { current: null };
-    this.abortPromise =
-      params.abortSignal &&
-      new Promise<"aborted">((resolve) => {
-        params.abortSignal?.addEventListener("abort", () => resolve("aborted"), { once: true });
-      });
-
-    if (params.abortSignal?.aborted) {
-      this.stopDisconnectRetries();
-    } else {
-      params.abortSignal?.addEventListener("abort", () => this.stopDisconnectRetries(), {
-        once: true,
+    const abortSignal = params.abortSignal;
+    if (abortSignal) {
+      this.abortPromise = new Promise<"aborted">((resolve) => {
+        const stop = () => {
+          resolve("aborted");
+          this.stopDisconnectRetries();
+          this.ownerAcquireAbortController.abort(abortSignal.reason);
+          this.setupAbortController.abort(abortSignal.reason);
+        };
+        if (abortSignal.aborted) {
+          stop();
+        } else {
+          abortSignal.addEventListener("abort", stop, { once: true });
+        }
       });
     }
   }
@@ -520,20 +622,35 @@ export class WhatsAppConnectionController {
     this.current.unregisterUnhandled = unregister;
   }
 
-  async openConnection(params: {
-    connectionId: string;
-    createListener: (context: {
-      sock: WASocket;
-      connection: WhatsAppLiveConnection;
-    }) => Promise<ManagedWhatsAppListener>;
-    onHeartbeat?: (snapshot: WhatsAppConnectionSnapshot) => void;
-    onWatchdogTimeout?: (snapshot: WhatsAppConnectionSnapshot) => void;
-    getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>;
-    cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>;
-  }): Promise<WhatsAppLiveConnection> {
+  async openConnection(params: WhatsAppOpenConnectionParams): Promise<WhatsAppLiveConnection> {
+    if (this.shuttingDown) {
+      throw stoppedControllerError();
+    }
+    if (this.connectionSetupPromise) {
+      throw new Error("WhatsApp connection setup is already in progress");
+    }
+    const setupPromise = this.openConnectionOwned(params);
+    this.connectionSetupPromise = setupPromise;
+    try {
+      return await setupPromise;
+    } finally {
+      if (this.connectionSetupPromise === setupPromise) {
+        this.connectionSetupPromise = null;
+      }
+    }
+  }
+
+  private async openConnectionOwned(
+    params: WhatsAppOpenConnectionParams,
+  ): Promise<WhatsAppLiveConnection> {
+    await this.ensureConnectionOwnership();
+    this.throwIfSetupStopped();
+    await this.finishPendingSocketCleanup();
+    this.throwIfSetupStopped();
     if (this.current) {
       await this.closeCurrentConnection();
     }
+    this.throwIfSetupStopped();
 
     let sock: WaSocket | null = null;
     let connection: WhatsAppLiveConnection | null = null;
@@ -544,8 +661,11 @@ export class WhatsAppConnectionController {
         ...(params.getMessage ? { getMessage: params.getMessage } : {}),
         ...(params.cachedGroupMetadata ? { cachedGroupMetadata: params.cachedGroupMetadata } : {}),
       });
-      await waitForWaConnection(sock, { timeoutMs: this.socketTiming.connectTimeoutMs });
-
+      this.throwIfSetupStopped();
+      await this.waitForSetupStep(
+        waitForWaConnection(sock, { timeoutMs: this.socketTiming.connectTimeoutMs }),
+      );
+      this.throwIfSetupStopped();
       this.socketRef.current = sock;
       const placeholderListener = {} as ManagedWhatsAppListener;
       connection = createLiveConnection({
@@ -554,25 +674,72 @@ export class WhatsAppConnectionController {
         listener: placeholderListener,
         openedAfterRecentInbound: this.isOpeningAfterRecentInbound(),
       });
-      const listener = await params.createListener({ sock, connection });
+      const listenerTask = params.createListener({ sock, connection });
+      let listener: ManagedWhatsAppListener;
+      try {
+        listener = await this.waitForSetupStep(listenerTask);
+      } catch (error) {
+        if (this.setupAbortController.signal.aborted) {
+          void listenerTask.then((lateListener) => lateListener.close?.()).catch(() => {});
+        }
+        throw error;
+      }
       connection.listener = listener;
+      this.throwIfSetupStopped();
       this.current = connection;
       connection.unregisterTransportActivity = this.attachTransportActivityListener(sock);
-      registerWhatsAppConnectionController(this.accountId, this);
+      const previousRuntimeContextLease = this.runtimeContextLease;
+      // Publish only after the listener is ready. Lease tokens make disposal of this
+      // controller's previous registration unable to remove a newer replacement.
+      this.runtimeContextLease = registerChannelRuntimeContext({
+        channelRuntime: getWhatsAppChannelRuntime(),
+        channelId: "whatsapp",
+        accountId: this.accountId,
+        capability: WHATSAPP_CONNECTION_CONTROLLER_CAPABILITY,
+        context: this,
+        abortSignal: this.abortSignal,
+      });
+      previousRuntimeContextLease?.dispose();
+      this.pendingOwnerContextLease?.dispose();
+      this.pendingOwnerContextLease = null;
       this.startTimers(connection, {
         onHeartbeat: params.onHeartbeat,
         onWatchdogTimeout: params.onWatchdogTimeout,
       });
       return connection;
     } catch (err) {
-      if (this.socketRef.current === sock) {
-        this.socketRef.current = null;
+      try {
+        if (connection && this.current === connection) {
+          await this.closeCurrentConnection();
+        } else {
+          try {
+            await connection?.listener.close?.();
+          } catch {
+            // Socket closure remains authoritative for ownership release.
+          }
+          if (this.socketRef.current === sock) {
+            this.socketRef.current = null;
+          }
+          if (sock) {
+            const cleanup = connection ?? { sock, socketClosed: false };
+            await this.finishSocketCleanup(cleanup);
+          }
+          if (connection?.unregisterUnhandled) {
+            connection.unregisterUnhandled();
+          }
+          connection?.unregisterTransportActivity?.();
+        }
+      } catch (closeError) {
+        if (sock && (!connection || this.current !== connection)) {
+          this.pendingSocketCleanup = connection ?? { sock, socketClosed: false };
+        }
+        const aggregateError = new AggregateError(
+          [err, closeError],
+          "WhatsApp connection setup and close failed",
+          { cause: err },
+        );
+        throw aggregateError;
       }
-      closeWaSocket(sock);
-      if (connection?.unregisterUnhandled) {
-        connection.unregisterUnhandled();
-      }
-      connection?.unregisterTransportActivity?.();
       throw err;
     }
   }
@@ -712,8 +879,10 @@ export class WhatsAppConnectionController {
     if (!connection) {
       return;
     }
+    // Stop exposing the listener before any fallible teardown. The cleanup record
+    // remains reachable so later reconnect/shutdown attempts can finish safely.
     this.current = null;
-
+    this.pendingSocketCleanup = connection;
     if (this.socketRef.current === connection.sock) {
       this.socketRef.current = null;
     }
@@ -734,7 +903,10 @@ export class WhatsAppConnectionController {
     } catch {
       // best-effort close
     }
-    closeWaSocket(connection.sock);
+    await this.finishSocketCleanup(connection);
+    if (this.pendingSocketCleanup === connection) {
+      this.pendingSocketCleanup = null;
+    }
   }
 
   async waitBeforeRetry(delayMs: number): Promise<void> {
@@ -742,9 +914,130 @@ export class WhatsAppConnectionController {
   }
 
   async shutdown(): Promise<void> {
+    this.shuttingDown = true;
+    const stoppedError = stoppedControllerError();
+    this.ownerAcquireAbortController.abort(stoppedError);
+    this.setupAbortController.abort(stoppedError);
     this.stopDisconnectRetries();
+    await this.connectionSetupPromise?.catch(() => {});
+    await this.connectionOwnerLeasePromise?.catch(() => {});
     await this.closeCurrentConnection();
-    unregisterWhatsAppConnectionController(this.accountId, this);
+    await this.finishPendingSocketCleanup();
+    try {
+      this.runtimeContextLease?.dispose();
+    } finally {
+      this.runtimeContextLease = null;
+      try {
+        this.pendingOwnerContextLease?.dispose();
+      } finally {
+        this.pendingOwnerContextLease = null;
+        // Contexts stay unpublished even when a retryable owner release fails.
+        // Keeping that lease reference preserves fail-closed process ownership.
+        if (this.connectionOwnerLease) {
+          await this.connectionOwnerLease.release();
+          this.connectionOwnerLease = null;
+        }
+        if (this.retainedOwnerReleaseLease) {
+          await this.retainedOwnerReleaseLease.release();
+          this.retainedOwnerReleaseLease = null;
+        }
+      }
+    }
+  }
+
+  private async finishSocketCleanup(cleanup: WhatsAppSocketCleanup): Promise<void> {
+    if (!cleanup.socketClosed) {
+      await closeWhatsAppSocketAndWait(cleanup.sock, "OpenClaw WhatsApp socket close");
+      cleanup.socketClosed = true;
+    }
+    const queueResult = await waitForCredsSaveQueueWithTimeout(this.authDir);
+    if (queueResult === "timed_out") {
+      throw new Error("WhatsApp credential persistence did not drain before owner release");
+    }
+  }
+
+  private async finishPendingSocketCleanup(): Promise<void> {
+    const cleanup = this.pendingSocketCleanup;
+    if (!cleanup) {
+      return;
+    }
+    await this.finishSocketCleanup(cleanup);
+    if (this.pendingSocketCleanup === cleanup) {
+      this.pendingSocketCleanup = null;
+    }
+  }
+
+  private throwIfSetupStopped(): void {
+    if (this.shuttingDown || this.setupAbortController.signal.aborted) {
+      throw stoppedControllerError();
+    }
+  }
+
+  private async waitForSetupStep<T>(task: Promise<T>): Promise<T> {
+    this.throwIfSetupStopped();
+    const signal = this.setupAbortController.signal;
+    let onAbort: (() => void) | undefined;
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(stoppedControllerError());
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      return await Promise.race([task, aborted]);
+    } finally {
+      if (onAbort) {
+        signal.removeEventListener("abort", onAbort);
+      }
+    }
+  }
+
+  private async ensureConnectionOwnership(): Promise<void> {
+    if (this.retainedOwnerReleaseLease) {
+      await this.retainedOwnerReleaseLease.release();
+      this.retainedOwnerReleaseLease = null;
+    }
+    if (this.connectionOwnerLease) {
+      return;
+    }
+    if (!this.connectionOwnerLeasePromise) {
+      this.connectionOwnerLeasePromise = (async () => {
+        const ownerLease = await acquireWhatsAppGatewayConnectionOwner(
+          this.authDir,
+          this.ownerAcquireAbortController.signal,
+        );
+        try {
+          if (this.shuttingDown) {
+            throw stoppedControllerError();
+          }
+          // Keep a pending marker separate from the ready controller capability. This
+          // blocks a second socket without replacing a still-working controller on reload.
+          this.pendingOwnerContextLease = registerChannelRuntimeContext({
+            channelRuntime: getWhatsAppChannelRuntime(),
+            channelId: "whatsapp",
+            accountId: this.accountId,
+            capability: WHATSAPP_CONNECTION_OWNER_PENDING_CAPABILITY,
+            context: true,
+            abortSignal: this.abortSignal,
+          });
+          this.connectionOwnerLease = ownerLease;
+        } catch (error) {
+          try {
+            await ownerLease.release();
+          } catch (releaseError) {
+            this.retainedOwnerReleaseLease = ownerLease;
+            const aggregateError = new AggregateError(
+              [error, releaseError],
+              "WhatsApp connection ownership setup and release failed",
+              { cause: error },
+            );
+            throw aggregateError;
+          }
+          throw error;
+        }
+      })().finally(() => {
+        this.connectionOwnerLeasePromise = null;
+      });
+    }
+    await this.connectionOwnerLeasePromise;
   }
 
   private startTimers(
@@ -821,3 +1114,4 @@ export class WhatsAppConnectionController {
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

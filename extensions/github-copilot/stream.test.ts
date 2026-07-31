@@ -1,12 +1,9 @@
 // Github Copilot tests cover stream plugin behavior.
+import type { Context } from "openclaw/plugin-sdk/llm";
+import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it, vi } from "vitest";
-import { buildCopilotDynamicHeaders } from "./stream.js";
-import {
-  wrapCopilotAnthropicStream,
-  wrapCopilotOpenAICompletionsStream,
-  wrapCopilotOpenAIResponsesStream,
-  wrapCopilotProviderStream,
-} from "./stream.js";
+import { COPILOT_RUNTIME_INTEGRATION_ID } from "./runtime-identity.js";
+import { wrapCopilotAnthropicStream, wrapCopilotProviderStream } from "./stream.js";
 
 function requireStreamFn(streamFn: ReturnType<typeof wrapCopilotProviderStream>) {
   expect(streamFn).toBeTypeOf("function");
@@ -26,6 +23,19 @@ function requireFirstStreamOptions(mock: ReturnType<typeof vi.fn>, label: string
     throw new Error(`expected ${label} options`);
   }
   return options as { headers?: Record<string, unknown>; onPayload?: unknown };
+}
+
+function buildExpectedCopilotHeaders(
+  initiator: "agent" | "user",
+  hasImages: boolean,
+): Record<string, string> {
+  return {
+    ...buildCopilotIdeHeaders(),
+    "Copilot-Integration-Id": COPILOT_RUNTIME_INTEGRATION_ID,
+    "Openai-Organization": "github-copilot",
+    "x-initiator": initiator,
+    ...(hasImages ? { "Copilot-Vision-Request": "true" } : {}),
+  };
 }
 
 describe("wrapCopilotAnthropicStream", () => {
@@ -63,12 +73,9 @@ describe("wrapCopilotAnthropicStream", () => {
           { type: "image", image: "data:image/png;base64,abc" },
         ],
       },
-    ] as Parameters<typeof buildCopilotDynamicHeaders>[0]["messages"];
+    ] as Context["messages"];
     const context = { messages };
-    const expectedCopilotHeaders = buildCopilotDynamicHeaders({
-      messages,
-      hasImages: true,
-    });
+    const expectedCopilotHeaders = buildExpectedCopilotHeaders("user", true);
     expect(expectedCopilotHeaders["Accept-Encoding"]).toBe("identity");
 
     void wrapped(
@@ -192,7 +199,7 @@ describe("wrapCopilotAnthropicStream", () => {
       } as never;
     });
 
-    const wrapped = requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
+    const wrapped = requireStreamFn(wrapCopilotProviderStream({ streamFn: baseStreamFn } as never));
     const messages = [
       {
         role: "toolResult",
@@ -201,11 +208,8 @@ describe("wrapCopilotAnthropicStream", () => {
           { type: "image", image: "data:image/png;base64,abc" },
         ],
       },
-    ] as Parameters<typeof buildCopilotDynamicHeaders>[0]["messages"];
-    const expectedCopilotHeaders = buildCopilotDynamicHeaders({
-      messages,
-      hasImages: true,
-    });
+    ] as Context["messages"];
+    const expectedCopilotHeaders = buildExpectedCopilotHeaders("agent", true);
 
     void wrapped(
       {
@@ -237,6 +241,8 @@ describe("wrapCopilotAnthropicStream", () => {
     ]);
     expect(payloads[0]?.input[1]?.id).toBeUndefined();
     expect(payloads[0]?.input[2]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
+    expect(payloads[0]?.input[0]).not.toHaveProperty("encrypted_content");
+    expect(payloads[0]?.input[1]).not.toHaveProperty("encrypted_content");
   });
 
   it("rewrites Copilot Responses IDs returned by an existing payload hook", async () => {
@@ -249,7 +255,7 @@ describe("wrapCopilotAnthropicStream", () => {
       } as never;
     });
 
-    const wrapped = requireStreamFn(wrapCopilotOpenAIResponsesStream(baseStreamFn));
+    const wrapped = requireStreamFn(wrapCopilotProviderStream({ streamFn: baseStreamFn } as never));
 
     await wrapped(
       {
@@ -270,7 +276,7 @@ describe("wrapCopilotAnthropicStream", () => {
 
   it("adds Copilot headers for Chat Completions models", () => {
     const baseStreamFn = vi.fn(() => ({ async *[Symbol.asyncIterator]() {} }) as never);
-    const wrapped = requireStreamFn(wrapCopilotOpenAICompletionsStream(baseStreamFn));
+    const wrapped = requireStreamFn(wrapCopilotProviderStream({ streamFn: baseStreamFn } as never));
     const messages = [
       {
         role: "user",
@@ -279,11 +285,8 @@ describe("wrapCopilotAnthropicStream", () => {
           { type: "image", data: "abc", mimeType: "image/png" },
         ],
       },
-    ] as Parameters<typeof buildCopilotDynamicHeaders>[0]["messages"];
-    const expectedCopilotHeaders = buildCopilotDynamicHeaders({
-      messages,
-      hasImages: true,
-    });
+    ] as Context["messages"];
+    const expectedCopilotHeaders = buildExpectedCopilotHeaders("user", true);
 
     void wrapped(
       {

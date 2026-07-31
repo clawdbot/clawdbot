@@ -10,14 +10,11 @@ import {
   KILOCODE_DEFAULT_COST,
   KILOCODE_DEFAULT_MODEL_ID,
 } from "./api.js";
-import {
-  applyKilocodeConfig,
-  KILOCODE_BASE_URL,
-  KILOCODE_DEFAULT_MODEL_REF,
-} from "./onboard.js";
+import { applyKilocodeConfig, KILOCODE_DEFAULT_MODEL_REF } from "./onboard.js";
+import { KILOCODE_BASE_URL } from "./provider-models.js";
 
 const emptyCfg: OpenClawConfig = {};
-const KILOCODE_MODEL_IDS = ["kilo/auto"];
+const KILOCODE_MODEL_IDS = ["kilo-auto/balanced"];
 
 function requireKilocodeProvider(cfg: OpenClawConfig) {
   const provider = cfg.models?.providers?.kilocode;
@@ -34,11 +31,11 @@ describe("Kilo Gateway provider config", () => {
     });
 
     it("KILOCODE_DEFAULT_MODEL_REF includes provider prefix", () => {
-      expect(KILOCODE_DEFAULT_MODEL_REF).toBe("kilocode/kilo/auto");
+      expect(KILOCODE_DEFAULT_MODEL_REF).toBe("kilocode/kilo-auto/balanced");
     });
 
-    it("KILOCODE_DEFAULT_MODEL_ID is kilo/auto", () => {
-      expect(KILOCODE_DEFAULT_MODEL_ID).toBe("kilo/auto");
+    it("KILOCODE_DEFAULT_MODEL_ID is kilo-auto/balanced", () => {
+      expect(KILOCODE_DEFAULT_MODEL_ID).toBe("kilo-auto/balanced");
     });
   });
 
@@ -46,7 +43,7 @@ describe("Kilo Gateway provider config", () => {
     it("returns correct model shape", () => {
       const model = buildKilocodeModelDefinition();
       expect(model.id).toBe(KILOCODE_DEFAULT_MODEL_ID);
-      expect(model.name).toBe("Kilo Auto");
+      expect(model.name).toBe("Auto Balanced");
       expect(model.reasoning).toBe(true);
       expect(model.input).toEqual(["text", "image"]);
       expect(model.contextWindow).toBe(KILOCODE_DEFAULT_CONTEXT_WINDOW);

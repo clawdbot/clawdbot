@@ -20,6 +20,7 @@ import { formatHealthCheckFailure } from "../commands/health-format.js";
 import { healthCommand } from "../commands/health.js";
 import {
   detectBrowserOpenSupport,
+  buildOnboardingControlUiUrl,
   formatControlUiSshHint,
   openUrl,
   probeGatewayReachable,
@@ -184,9 +185,7 @@ function getLocalizedGatewayDaemonRuntimeOptions() {
   }));
 }
 
-const loadOnboardSearchModule = createLazyRuntimeModule(
-  () => import("../commands/onboard-search.js"),
-);
+const loadSearchSetupModule = createLazyRuntimeModule(() => import("../flows/search-setup.js"));
 
 /**
  * Ensure the gateway service matches the onboarding decision: prompt/decide
@@ -339,6 +338,15 @@ export async function ensureGatewayServiceForOnboarding(params: {
     ) {
       const progress = prompter.progress(t("wizard.finalize.gatewayService"));
       let installError: string | null = null;
+      const installWarnings: Array<{ message: string; title?: string }> = [];
+      const flushInstallWarnings = async () => {
+        let warning: (typeof installWarnings)[number] | undefined;
+        // Remove before awaiting so a rejected note is not replayed when the
+        // outer catch drains warnings that remain in the planner's queue.
+        while ((warning = installWarnings.shift()) !== undefined) {
+          await prompter.note(warning.message, warning.title);
+        }
+      };
       try {
         progress.update(t("wizard.finalize.gatewayServicePreparing"));
         const tokenResolution = await resolveGatewayInstallToken({
@@ -361,10 +369,11 @@ export async function ensureGatewayServiceForOnboarding(params: {
               port: settings.port,
               runtime: daemonRuntime,
               warn: (message, title) => {
-                void prompter.note(message, title);
+                installWarnings.push({ message, title });
               },
               config: nextConfig,
             });
+          await flushInstallWarnings();
 
           progress.update(t("wizard.finalize.gatewayServiceInstalling"));
           await service.install({
@@ -377,6 +386,7 @@ export async function ensureGatewayServiceForOnboarding(params: {
           });
         }
       } catch (err) {
+        await flushInstallWarnings();
         installError = formatErrorMessage(err);
       } finally {
         progress.stop(
@@ -569,10 +579,12 @@ export async function finalizeSetupWizard(
       basePath: controlUiBasePath,
       tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
-    const authedUrl =
-      settings.authMode === "token" && settings.gatewayToken && !suppressGatewayTokenOutput
-        ? `${displayLinks.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
-        : displayLinks.httpUrl;
+    const authedUrl = buildOnboardingControlUiUrl({
+      httpUrl: displayLinks.httpUrl,
+      authMode: settings.authMode,
+      token: settings.gatewayToken,
+      suppressTokenOutput: suppressGatewayTokenOutput,
+    });
     if (opts.skipHealth || !gatewayProbe.ok) {
       gatewayProbe = await probeGatewayReachable({
         url: probeLinks.wsUrl,
@@ -597,12 +609,30 @@ export async function finalizeSetupWizard(
       .then(() => true)
       .catch(() => false);
     const agentDir = resolveDefaultAgentDir(nextConfig);
-    // Without model credentials the seeded first message is guaranteed to fail
-    // with a provider auth error, so hatch quietly and explain instead.
-    const { resolveDefaultModelAuthStatus } = await import("../commands/auth-choice.js");
-    const modelAuthStatus = resolveDefaultModelAuthStatus(nextConfig, { agentDir });
+    // Seed only when the selected route is proven ready. Unknown or incompatible
+    // route facts must not turn the onboarding greeting into a guaranteed failure.
+    const [
+      { resolveDefaultModelAuthStatus, resolveDefaultModelCatalogFacts },
+      { loadPreparedModelCatalogSnapshot },
+    ] = await Promise.all([
+      import("../commands/auth-choice.js"),
+      import("../agents/prepared-model-catalog.js"),
+    ]);
+    const modelCatalog = await loadPreparedModelCatalogSnapshot({
+      config: nextConfig,
+      readOnly: true,
+    });
+    const modelCatalogFacts = resolveDefaultModelCatalogFacts(nextConfig, modelCatalog.entries, {
+      routeVariants: modelCatalog.routeVariants,
+    });
+    const modelAuthStatus = resolveDefaultModelAuthStatus(nextConfig, {
+      agentDir,
+      ...(modelCatalogFacts.observedRoutes
+        ? { observedRoutes: modelCatalogFacts.observedRoutes }
+        : {}),
+    });
     const shouldSeedBootstrapHatch =
-      hasBootstrap && options.hadExistingConfig !== true && modelAuthStatus.hasAuth;
+      hasBootstrap && options.hadExistingConfig !== true && modelAuthStatus.status === "ready";
 
     await prompter.note(
       [
@@ -636,7 +666,7 @@ export async function finalizeSetupWizard(
           t("wizard.finalize.hatchYourAgent"),
         );
       }
-      if (!modelAuthStatus.hasAuth) {
+      if (modelAuthStatus.status === "missing") {
         await prompter.note(
           [
             t("wizard.finalize.noModelAuth", { provider: modelAuthStatus.provider }),
@@ -702,7 +732,7 @@ export async function finalizeSetupWizard(
     const webSearchEnabled = nextConfig.tools?.web?.search?.enabled;
     const configuredSearchProviders = listConfiguredWebSearchProviders({ config: nextConfig });
     if (webSearchProvider) {
-      const { resolveExistingKey, hasExistingKey, hasKeyInEnv } = await loadOnboardSearchModule();
+      const { resolveExistingKey, hasExistingKey, hasKeyInEnv } = await loadSearchSetupModule();
       const entry = configuredSearchProviders.find((e) => e.id === webSearchProvider);
       const label = entry?.label ?? webSearchProvider;
       const storedKey = entry ? resolveExistingKey(nextConfig, webSearchProvider) : undefined;
@@ -801,7 +831,7 @@ export async function finalizeSetupWizard(
     } else {
       // Legacy configs may have a working key (e.g. apiKey or BRAVE_API_KEY) without
       // an explicit provider. Runtime auto-detects these, so avoid saying "skipped".
-      const { hasExistingKey, hasKeyInEnv } = await loadOnboardSearchModule();
+      const { hasExistingKey, hasKeyInEnv } = await loadSearchSetupModule();
       const legacyDetected = configuredSearchProviders.find(
         (e) => hasExistingKey(nextConfig, e.id) || hasKeyInEnv(e),
       );
@@ -895,3 +925,4 @@ export async function finalizeSetupWizard(
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

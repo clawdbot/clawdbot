@@ -2,7 +2,8 @@
 // MCP runtime retirement after completed nested turns.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../gateway/call.js";
-import { runAgentStep, testing } from "./agent-step.js";
+import { runAgentStep } from "./agent-step.js";
+import { testing } from "./agent-step.test-support.js";
 
 const runWaitMocks = vi.hoisted(() => ({
   waitForAgentRunAndReadUpdatedAssistantReply: vi.fn(),
@@ -131,5 +132,76 @@ describe("runAgentStep", () => {
     expect(ingress?.message).toContain("internal announce step");
     expect(ingress?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(ingress?.transcriptMessage).toBe("");
+  });
+
+  it("does not return failed transcript-mode output as an announce reply", async () => {
+    const agentCommandFromIngress = vi.fn(async () => ({
+      payloads: [
+        {
+          text: "⚠️ Agent couldn't generate a response. Please try again.",
+          mediaUrl: null,
+          isError: true,
+        },
+      ],
+      meta: {
+        durationMs: 1,
+        error: {
+          kind: "incomplete_turn" as const,
+          message: "Agent couldn't generate a response.",
+          fallbackSafe: true,
+          terminalPresentation: false,
+        },
+      },
+    }));
+    testing.setDepsForTest({
+      agentCommandFromIngress,
+      callGateway: async <T = unknown>(): Promise<T> => ({ runId: "unused" }) as T,
+    });
+
+    await expect(
+      runAgentStep({
+        sessionKey: "agent:main:subagent:child",
+        message: "internal announce step",
+        transcriptMessage: "",
+        extraSystemPrompt: "announce only",
+        timeoutMs: 10_000,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalledWith({
+      sessionKey: "agent:main:subagent:child",
+      reason: "nested-agent-step-complete",
+    });
+  });
+
+  it("returns trusted terminal presentations from incomplete transcript turns", async () => {
+    const presentation =
+      "The read-only lookup completed successfully.\n\n⚠️ Agent couldn't generate a response. Please try again.";
+    const agentCommandFromIngress = vi.fn(async () => ({
+      payloads: [{ text: presentation, mediaUrl: null, isError: true }],
+      meta: {
+        durationMs: 1,
+        error: {
+          kind: "incomplete_turn" as const,
+          message: "Agent couldn't generate a response.",
+          fallbackSafe: true,
+          terminalPresentation: true,
+        },
+      },
+    }));
+    testing.setDepsForTest({
+      agentCommandFromIngress,
+      callGateway: async <T = unknown>(): Promise<T> => ({ runId: "unused" }) as T,
+    });
+
+    await expect(
+      runAgentStep({
+        sessionKey: "agent:main:subagent:child",
+        message: "internal announce step",
+        transcriptMessage: "",
+        extraSystemPrompt: "announce only",
+        timeoutMs: 10_000,
+      }),
+    ).resolves.toBe(presentation);
   });
 });

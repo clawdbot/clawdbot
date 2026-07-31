@@ -60,7 +60,7 @@ function addMigrationPluginOption(command: Command): Command {
 function addVerifyPluginAppsOption(command: Command): Command {
   return command.option(
     "--verify-plugin-apps",
-    "Codex only: verify source plugin app accessibility with app/list before planning native plugin activation",
+    "Codex only: verify source plugin app accessibility with app/installed before planning native plugin activation",
     false,
   );
 }

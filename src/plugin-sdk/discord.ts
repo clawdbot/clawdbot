@@ -10,7 +10,7 @@ import type {
 } from "./channel-contract.js";
 import type { ChannelPlugin } from "./channel-core.js";
 import type { MessageReceipt } from "./channel-outbound.js";
-import type { OpenClawConfig } from "./config-types.js";
+import type { OpenClawConfig } from "./config-contracts.js";
 import {
   createLazyFacadeObjectValue,
   loadBundledPluginPublicSurfaceModuleSync,
@@ -23,7 +23,7 @@ import { getRuntimeConfig, getRuntimeConfigSnapshot } from "./runtime-config-sna
  */
 export type { ChannelMessageActionAdapter, ChannelMessageActionName } from "./channel-contract.js";
 export type { ChannelPlugin } from "./channel-core.js";
-export type { OpenClawConfig } from "./config-types.js";
+export type { OpenClawConfig } from "./config-contracts.js";
 export type { OpenClawPluginApi, PluginRuntime } from "./channel-plugin-common.js";
 
 export {
@@ -42,7 +42,6 @@ export {
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
 } from "./channel-status.js";
-export { DiscordConfigSchema } from "./bundled-channel-config-schema.js";
 
 /** Discord channel config shape for one account in OpenClaw config. */
 export type DiscordAccountConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["discord"]>;

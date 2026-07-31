@@ -151,7 +151,7 @@ a restart.
 The refactor absorbed or deprecated: `reply-runtime`, `reply-dispatch-runtime`,
 `reply-reference`, `reply-chunking`, `reply-payload` helpers exposed as public
 API, `inbound-reply-dispatch`, `channel-reply-pipeline`, and most public uses
-of `outbound-runtime`. `src/plugin-sdk/channel-message.ts` is now a
+of the old outbound facade. `src/plugin-sdk/channel-message.ts` is now a
 `@deprecated` re-export barrel pointing at `channel-outbound` /
 `channel-inbound`; `channel.turn` runtime aliases were removed and the old
 `/plugins/sdk-channel-turn` doc page redirects to

@@ -186,6 +186,38 @@ describe("withDurableMessageSendContext", () => {
     });
   });
 
+  it("records portable locations as structured payload data", async () => {
+    deliverOutboundPayloads.mockImplementationOnce(async (params: DeliveryIntentCallbackParams) => {
+      params.onDeliveryIntent?.({
+        id: "intent-location",
+        channel: "telegram",
+        to: "chat-1",
+        queuePolicy: "required",
+      });
+      return [{ channel: "telegram", messageId: "loc-1" }];
+    });
+    let intent: unknown;
+
+    await withDurableMessageSendContext(
+      {
+        cfg,
+        channel: "telegram",
+        to: "chat-1",
+        payloads: [{ location: { latitude: 1, longitude: 2 } }],
+      },
+      async (ctx) => {
+        const rendered = await ctx.render();
+        await ctx.send(rendered);
+        intent = ctx.intent;
+      },
+    );
+
+    expect((intent as DurableMessageSendIntent | undefined)?.renderedBatch?.plan).toMatchObject({
+      channelDataCount: 1,
+      items: [{ kinds: ["channelData"], hasChannelData: true }],
+    });
+  });
+
   it("forwards the durable send context signal to outbound delivery", async () => {
     const abortController = new AbortController();
     deliverOutboundPayloads.mockImplementationOnce(

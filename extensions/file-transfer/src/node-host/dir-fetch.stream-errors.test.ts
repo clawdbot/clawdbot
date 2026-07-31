@@ -1,129 +1,179 @@
-// File Transfer tests cover dir fetch child-output failures.
-import crypto from "node:crypto";
-import { EventEmitter } from "node:events";
+// File Transfer tests cover canonical process-wrapper failures through dir fetch.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-type MockChild = EventEmitter & {
-  kill: ReturnType<typeof vi.fn>;
-  stderr: EventEmitter;
-  stdin: EventEmitter & { end: () => void };
-  stdout: EventEmitter;
-};
+const { runCommandBufferedMock } = vi.hoisted(() => ({ runCommandBufferedMock: vi.fn() }));
 
-function mockSpawn(script: (child: MockChild) => void, startOnStdin = false) {
-  return vi.fn(() => {
-    const child = new EventEmitter() as MockChild;
-    child.kill = vi.fn();
-    child.stderr = new EventEmitter();
-    child.stdin = new EventEmitter() as MockChild["stdin"];
-    child.stdout = new EventEmitter();
-    child.stdin.end = () => {
-      if (startOnStdin) {
-        queueMicrotask(() => script(child));
-      }
-    };
-    if (!startOnStdin) {
-      queueMicrotask(() => script(child));
-    }
-    return child;
-  });
+vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
+  runCommandBuffered: runCommandBufferedMock,
+}));
+
+import { handleDirFetch } from "./dir-fetch.js";
+
+let tmpRoot: string;
+
+function commandResult(overrides: Record<string, unknown> = {}) {
+  return {
+    stdout: Buffer.alloc(0),
+    stderr: Buffer.alloc(0),
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+    ...overrides,
+  };
 }
 
-async function importWithSpawn(spawnMock: ReturnType<typeof vi.fn>) {
-  vi.resetModules();
-  vi.doMock("node:child_process", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("node:child_process")>();
-    return { ...actual, spawn: spawnMock };
-  });
-  return await import("./dir-fetch.js");
-}
-
-afterEach(() => {
-  vi.doUnmock("node:child_process");
-  vi.resetModules();
+beforeEach(async () => {
+  tmpRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "dir-fetch-errors-")));
+  await fs.writeFile(path.join(tmpRoot, "ok.txt"), "ok");
 });
 
-describe("dir.fetch child output lifecycle", () => {
-  it.runIf(process.platform !== "win32")(
-    "returns READ_ERROR when real tar archive stdout fails",
-    async () => {
-      const tempPath = path.join(os.tmpdir(), `dir-fetch-stream-error-${crypto.randomUUID()}`);
-      await fs.mkdir(tempPath);
-      const tmpRoot = await fs.realpath(tempPath);
-      await fs.writeFile(path.join(tmpRoot, "payload.bin"), Buffer.alloc(1024 * 1024, 1));
-      vi.resetModules();
-      vi.doMock("node:child_process", async (importOriginal) => {
-        const actual = await importOriginal<typeof import("node:child_process")>();
-        return {
-          ...actual,
-          spawn: vi.fn(
-            (
-              command: string,
-              args: readonly string[],
-              options: Parameters<typeof actual.spawn>[2],
-            ) => {
-              const child = actual.spawn(command, [...args], options);
-              if (command === "/usr/bin/tar" && args[0] === "-czf") {
-                const stdout = child.stdout;
-                if (!stdout) {
-                  throw new Error("expected piped tar stdout");
-                }
-                queueMicrotask(() => stdout.destroy(new Error("injected archive read failure")));
-              }
-              return child;
-            },
-          ),
-        };
-      });
+afterEach(async () => {
+  runCommandBufferedMock.mockReset();
+  await fs.rm(tmpRoot, { recursive: true, force: true });
+});
 
-      try {
-        const { handleDirFetch } = await import("./dir-fetch.js");
-        await expect(handleDirFetch({ path: tmpRoot })).resolves.toMatchObject({
-          ok: false,
-          code: "READ_ERROR",
-          message: "tar command failed",
-        });
-      } finally {
-        await fs.rm(tmpRoot, { recursive: true, force: true });
-      }
+describe("dir.fetch process wrapper", () => {
+  it("falls back to capped tar when the optional du probe fails", async () => {
+    runCommandBufferedMock
+      .mockRejectedValueOnce(new Error("du failed"))
+      .mockResolvedValueOnce(commandResult({ stdout: Buffer.from("archive") }))
+      .mockResolvedValueOnce(commandResult({ stdout: Buffer.from("./ok.txt\n") }));
+
+    await expect(handleDirFetch({ path: tmpRoot, maxBytes: 1024 })).resolves.toMatchObject({
+      ok: true,
+      entries: ["ok.txt"],
+    });
+    expect(runCommandBufferedMock).toHaveBeenNthCalledWith(
+      1,
+      ["du", "-sk", tmpRoot],
+      expect.objectContaining({ discardOutput: { stderr: true } }),
+    );
+  });
+
+  it("uses capped tar output for preflight-only requests without returning the archive", async () => {
+    runCommandBufferedMock.mockResolvedValueOnce(commandResult({ stdout: Buffer.from("archive") }));
+
+    await expect(
+      handleDirFetch({ path: tmpRoot, maxBytes: 1024, preflightOnly: true }),
+    ).resolves.toMatchObject({
+      ok: true,
+      entries: ["ok.txt"],
+      fileCount: 1,
+      preflightOnly: true,
+    });
+    expect(runCommandBufferedMock).toHaveBeenCalledOnce();
+    expect(runCommandBufferedMock).toHaveBeenCalledWith(
+      [process.platform !== "win32" ? "/usr/bin/tar" : "tar", "-czf", "-", "-C", tmpRoot, "."],
+      expect.objectContaining({
+        discardOutput: { stderr: true },
+        maxOutputBytes: { stdout: 1024, stderr: 64 * 1024 },
+      }),
+    );
+  });
+
+  it("rejects oversized preflight-only requests using the encoded tar limit", async () => {
+    runCommandBufferedMock.mockResolvedValueOnce(
+      commandResult({
+        code: null,
+        termination: "output-limit",
+        outputLimitStream: "stdout",
+      }),
+    );
+
+    await expect(
+      handleDirFetch({ path: tmpRoot, maxBytes: 1024, preflightOnly: true }),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: "TREE_TOO_LARGE",
+      message: "tarball exceeded 1024 byte limit during preflight",
+    });
+    expect(runCommandBufferedMock).toHaveBeenCalledOnce();
+  });
+
+  it("rejects preflight-only requests once filesystem listing crosses the entry cap", async () => {
+    await Promise.all(
+      Array.from({ length: 5001 }, (_, index) =>
+        fs.writeFile(path.join(tmpRoot, `file-${index}.txt`), ""),
+      ),
+    );
+
+    await expect(
+      handleDirFetch({ path: tmpRoot, maxBytes: 1024, preflightOnly: true }),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: "TREE_TOO_LARGE",
+      message: "directory tree exceeds 5000 entries during preflight",
+    });
+    expect(runCommandBufferedMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves filesystem classification when a preflight tar race removes the directory", async () => {
+    runCommandBufferedMock.mockImplementationOnce(async () => {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+      return commandResult({ code: 1 });
+    });
+
+    await expect(
+      handleDirFetch({ path: tmpRoot, maxBytes: 1024, preflightOnly: true }),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: "NOT_FOUND",
+    });
+  });
+
+  it("fails tar entry listing closed on wrapper errors", async () => {
+    runCommandBufferedMock
+      .mockResolvedValueOnce(commandResult({ stdout: Buffer.from("1\tproject\n") }))
+      .mockResolvedValueOnce(commandResult({ stdout: Buffer.from("archive") }))
+      .mockResolvedValueOnce(
+        commandResult({ code: null, termination: "error", error: new Error("listing failed") }),
+      );
+
+    await expect(handleDirFetch({ path: tmpRoot, maxBytes: 1024 })).resolves.toMatchObject({
+      ok: false,
+      code: "READ_ERROR",
+      message: "tar entry listing failed",
+    });
+  });
+
+  it.each([
+    {
+      label: "output cap",
+      result: commandResult({
+        code: null,
+        termination: "output-limit",
+        outputLimitStream: "stdout",
+      }),
+      message: "tarball exceeded 1024 byte limit mid-stream",
     },
-  );
+    {
+      label: "timeout",
+      result: commandResult({ code: null, termination: "timeout" }),
+      message: "tar command exceeded 60s wall-clock timeout",
+    },
+    {
+      label: "launch error",
+      result: new Error("spawn failed"),
+      message: "tar command failed",
+    },
+  ])("classifies $label failures through handleDirFetch", async ({ result, message }) => {
+    runCommandBufferedMock.mockResolvedValueOnce(
+      commandResult({ stdout: Buffer.from("1\tproject\n") }),
+    );
+    if (result instanceof Error) {
+      runCommandBufferedMock.mockRejectedValueOnce(result);
+    } else {
+      runCommandBufferedMock.mockResolvedValueOnce(result);
+    }
 
-  it("stops a broken du read and falls back to capped tar", async () => {
-    const spawnMock = mockSpawn((child) => {
-      child.stdout.emit("error", new Error("du read failed"));
-      child.emit("close", 0);
-    });
-    const { testing } = await importWithSpawn(spawnMock);
-
-    await expect(testing.preflightDu("/tmp/project", 1024)).resolves.toBe(true);
-    expect(spawnMock.mock.results[0]?.value.kill).toHaveBeenCalledOnce();
-  });
-
-  it("fails tar entry listing closed on stdout errors", async () => {
-    const spawnMock = mockSpawn((child) => {
-      child.stdout.emit("data", Buffer.from("partial.txt\n"));
-      child.stdout.emit("error", new Error("listing read failed"));
-      child.emit("close", 0);
-    }, true);
-    const { testing } = await importWithSpawn(spawnMock);
-
-    await expect(testing.listTarEntries(Buffer.from("archive"))).resolves.toBeNull();
-    expect(spawnMock.mock.results[0]?.value.kill).toHaveBeenCalledOnce();
-  });
-
-  it("fails archive creation closed on stdout errors", async () => {
-    const spawnMock = mockSpawn((child) => {
-      child.stdout.emit("data", Buffer.from("partial archive"));
-      child.stdout.emit("error", new Error("archive read failed"));
-      child.emit("close", 0);
-    });
-    const { testing } = await importWithSpawn(spawnMock);
-
-    await expect(testing.createTarArchive("/tmp/project", 1024)).resolves.toBe("ERROR");
-    expect(spawnMock.mock.results[0]?.value.kill).toHaveBeenCalledOnce();
+    const response = await handleDirFetch({ path: tmpRoot, maxBytes: 1024 });
+    expect(response).toMatchObject({ ok: false, code: expect.any(String) });
+    if (!response.ok) {
+      expect(response.message).toContain(message);
+    }
   });
 });

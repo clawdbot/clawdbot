@@ -7,6 +7,7 @@ import {
   getCurrentUser,
   getGuild,
   getGuildMember,
+  getThreadMember,
   type RequestClient,
 } from "./internal/discord.js";
 import type { DiscordPermissionsSummary, DiscordReactOpts } from "./send.types.js";
@@ -184,7 +185,8 @@ export async function canViewDiscordGuildChannel(
   const rest = resolveDiscordRest(opts);
   try {
     const channel = await getChannel(rest, channelId);
-    const channelGuildId = "guild_id" in channel ? channel.guild_id : undefined;
+    const permissionChannel = await resolveChannelPermissionSubject(rest, channel);
+    const channelGuildId = "guild_id" in permissionChannel ? permissionChannel.guild_id : undefined;
     if (channelGuildId !== guildId) {
       return false;
     }
@@ -200,9 +202,18 @@ export async function canViewDiscordGuildChannel(
       userId,
       guild,
       member,
-      channel,
+      channel: permissionChannel,
     });
-    return hasPermissionBit(permissions, PermissionFlagsBits.ViewChannel);
+    if (!hasPermissionBit(permissions, PermissionFlagsBits.ViewChannel)) {
+      return false;
+    }
+    if ("type" in channel && channel.type === ChannelType.GuildPrivateThread) {
+      if (hasPermissionBit(permissions, PermissionFlagsBits.ManageThreads)) {
+        return true;
+      }
+      await getThreadMember(rest, channel.id, userId);
+    }
+    return true;
   } catch {
     return false;
   }

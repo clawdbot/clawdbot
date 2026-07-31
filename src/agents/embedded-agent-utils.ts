@@ -14,29 +14,15 @@ import {
   sanitizeAssistantFinalAnswerText,
   sanitizeAssistantVisibleText,
 } from "../shared/text/assistant-visible-text.js";
-import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 
-export {
-  stripDowngradedToolCallText,
-  stripMinimaxToolCallXml,
-} from "../shared/text/assistant-visible-text.js";
-export { stripModelSpecialTokens } from "../shared/text/model-special-tokens.js";
+export { stripDowngradedToolCallText } from "../shared/text/assistant-visible-text.js";
 
 /** Narrow an agent message to an assistant message. */
 export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantMessage {
   return msg?.role === "assistant";
-}
-
-/**
- * Strip thinking tags and their content from text.
- * This is a safety net for cases where the model outputs <think> tags
- * that slip through other filtering mechanisms.
- */
-export function stripThinkingTagsFromText(text: string): string {
-  return stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 }
 
 function sanitizeAssistantText(text: string, phase?: AssistantPhase): string {
@@ -237,7 +223,7 @@ export const THINKING_TAG_SCAN_RE = new RegExp(
 );
 
 /** Split text that starts with thinking tags into structured thinking/text blocks. */
-export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
+function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   const trimmedStart = text.trimStart();
   // Avoid false positives: only treat it as structured thinking when it begins
   // with a think tag (common for local/OpenAI-compat providers that emulate
@@ -384,8 +370,11 @@ export function extractThinkingFromTaggedStream(text: string): string {
     return "";
   }
   const closeMatches = [...text.matchAll(THINKING_TAG_CLOSE_GLOBAL_RE)];
-  const lastOpen = openMatches[openMatches.length - 1];
-  const lastClose = closeMatches[closeMatches.length - 1];
+  const lastOpen = openMatches.at(-1);
+  const lastClose = closeMatches.at(-1);
+  if (!lastOpen) {
+    return "";
+  }
   if (lastClose && (lastClose.index ?? -1) > (lastOpen.index ?? -1)) {
     return closed;
   }

@@ -7,14 +7,8 @@ import type {
   DetachedTaskFindResult,
   DetachedTaskFinalizeParams,
   DetachedTaskLifecycleRuntime,
-  DetachedTaskLifecycleRuntimeRegistration,
 } from "./detached-task-runtime-contract.js";
-import {
-  clearDetachedTaskLifecycleRuntimeRegistration,
-  getDetachedTaskLifecycleRuntimeRegistration as getDetachedTaskLifecycleRuntimeRegistrationState,
-  getRegisteredDetachedTaskLifecycleRuntime,
-  registerDetachedTaskLifecycleRuntime,
-} from "./detached-task-runtime-state.js";
+import { getRegisteredDetachedTaskLifecycleRuntime } from "./detached-task-runtime-state.js";
 import { cancelTaskById as cancelDetachedTaskRunByIdInCore } from "./runtime-internal.js";
 import {
   completeTaskRunByRunId as completeTaskRunByRunIdFromExecutor,
@@ -58,8 +52,6 @@ function findCoreTaskRun(params: DetachedTaskFindParams): TaskRecord | undefined
   );
 }
 
-export type { DetachedTaskLifecycleRuntime, DetachedTaskLifecycleRuntimeRegistration };
-
 // Default runtime keeps detached task APIs usable before plugins install custom lifecycle hooks.
 const DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME: DetachedTaskLifecycleRuntime = {
   createQueuedTaskRun: createQueuedTaskRunFromExecutor,
@@ -76,27 +68,6 @@ const DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME: DetachedTaskLifecycleRuntime = {
 
 export function getDetachedTaskLifecycleRuntime(): DetachedTaskLifecycleRuntime {
   return getRegisteredDetachedTaskLifecycleRuntime() ?? DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME;
-}
-
-export function getDetachedTaskLifecycleRuntimeRegistration():
-  | DetachedTaskLifecycleRuntimeRegistration
-  | undefined {
-  return getDetachedTaskLifecycleRuntimeRegistrationState();
-}
-
-export function registerDetachedTaskRuntime(
-  pluginId: string,
-  runtime: DetachedTaskLifecycleRuntime,
-): void {
-  registerDetachedTaskLifecycleRuntime(pluginId, runtime);
-}
-
-export function setDetachedTaskLifecycleRuntime(runtime: DetachedTaskLifecycleRuntime): void {
-  registerDetachedTaskRuntime("__test__", runtime);
-}
-
-export function resetDetachedTaskLifecycleRuntimeForTests(): void {
-  clearDetachedTaskLifecycleRuntimeRegistration();
 }
 
 export function createQueuedTaskRun(
@@ -173,12 +144,6 @@ export function findDetachedTaskRun(params: DetachedTaskFindParams): DetachedTas
   // Older custom runtimes may mirror records into core. When they do not, an
   // empty fallback cannot prove that the runtime-owned task is absent.
   return coreTask ? { lookup: "available", task: coreTask } : { lookup: "unavailable" };
-}
-
-export function cancelDetachedTaskRunById(
-  ...args: Parameters<DetachedTaskLifecycleRuntime["cancelDetachedTaskRunById"]>
-): ReturnType<DetachedTaskLifecycleRuntime["cancelDetachedTaskRunById"]> {
-  return getDetachedTaskLifecycleRuntime().cancelDetachedTaskRunById(...args);
 }
 
 export async function tryRecoverTaskBeforeMarkLost(

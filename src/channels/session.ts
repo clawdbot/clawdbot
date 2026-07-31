@@ -6,8 +6,6 @@ import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { InboundLastRouteUpdate } from "./session.types.js";
 
-export type { InboundLastRouteUpdate, RecordInboundSession } from "./session.types.js";
-
 // Keep session persistence lazy so channel SDK type paths do not load disk writers.
 const loadInboundSessionRuntime = createLazyRuntimeModule(
   () => import("../config/sessions/inbound.runtime.js"),
@@ -50,7 +48,13 @@ export async function recordInboundSession(params: {
       groupResolution,
       createIfMissing,
     })
-    .catch(params.onRecordError);
+    .catch(async (err: unknown) => {
+      try {
+        await Promise.resolve(params.onRecordError(err));
+      } catch {
+        // Error reporting must not reject the detached metadata task.
+      }
+    });
   params.trackSessionMetaTask?.(metaTask);
   void metaTask;
 

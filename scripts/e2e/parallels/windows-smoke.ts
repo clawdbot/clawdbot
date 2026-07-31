@@ -11,6 +11,7 @@ import {
   parseMode,
   parseTcpPort,
   parseProvider,
+  readGitCommitEnv,
   readPositiveIntEnv,
   resolveLatestVersion,
   resolveParallelsModelTimeoutSeconds,
@@ -108,9 +109,10 @@ const defaultOptions = (): WindowsOptions => ({
   latestVersion: "",
   mode: "both",
   modelId: undefined,
+  npmRegistry: undefined,
   provider: "openai",
   skipLatestRefCheck: false,
-  snapshotHint: "pre-openclaw-native-e2e-2026-03-12",
+  snapshotHint: "pre-openclaw-native-e2e-",
   targetPackageSpec: "",
   upgradeFromPackedMain: false,
   vmName: "Windows 11",
@@ -126,7 +128,7 @@ function usage(): string {
 Options:
   --vm <name>                Parallels VM name. Default: "Windows 11"
   --snapshot-hint <name>     Snapshot name substring/fuzzy match.
-                             Default: "pre-openclaw-native-e2e-2026-03-12"
+                             Default: newest "pre-openclaw-native-e2e-*" snapshot
   --mode <fresh|upgrade|both>
   --provider <openai|anthropic|minimax>
   --model <provider/model>    Override the model used for the agent-turn smoke.
@@ -142,10 +144,15 @@ Options:
                              then run openclaw update --channel dev.
   --target-package-spec <npm-spec>
                              Install this npm package tarball instead of packing current main.
+  --npm-registry <url>       Registry used for target package installs.
   --skip-latest-ref-check    Skip latest-release ref-mode precheck.
   --keep-server              Leave temp host HTTP server running.
   --json                     Print machine-readable JSON summary.
   -h, --help                 Show help.
+
+Environment:
+  OPENCLAW_PARALLELS_DEV_TARGET_REF
+                             Pin the guest dev update to a full commit SHA.
 `;
 }
 
@@ -174,6 +181,9 @@ export function parseArgs(argv: string[]): WindowsOptions {
     },
     "--model": (value) => {
       options.modelId = value;
+    },
+    "--npm-registry": (value) => {
+      options.npmRegistry = value;
     },
     "--openai-api-key-env": (value) => {
       options.apiKeyEnv = value;
@@ -210,6 +220,9 @@ export function parseArgs(argv: string[]): WindowsOptions {
   };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
+    if (arg === undefined) {
+      die(`missing argument at index ${i}`);
+    }
     if (arg === "--") {
       break;
     }
@@ -249,6 +262,7 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
   );
   private gatewayRecoveryAfterMs =
     readPositiveIntEnv("OPENCLAW_PARALLELS_WINDOWS_GATEWAY_RECOVERY_AFTER_S", 180) * 1000;
+  private devTargetCommit = readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF");
   private artifact: PackageArtifact | null = null;
   private minGitZipPath = "";
   private latestVersion = "";
@@ -567,11 +581,15 @@ Invoke-OpenClaw --version
       die("package artifact/server missing");
     }
     const tgzUrl = this.server.urlFor(this.artifact.path);
+    const registryScript = this.options.npmRegistry
+      ? `$env:NPM_CONFIG_REGISTRY = ${psSingleQuote(this.options.npmRegistry)}`
+      : "";
     return this.guestPowerShellBackground(
       `install-main-${tempName.replaceAll(/[^A-Za-z0-9_-]/g, "-")}`,
       `$ErrorActionPreference = 'Stop'
 $tgz = Join-Path $env:TEMP ${psSingleQuote(tempName)}
 curl.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${psSingleQuote(tgzUrl)} -o $tgz
+${registryScript}
 npm.cmd install -g $tgz --no-fund --no-audit --loglevel=error
 if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE" }
 Invoke-OpenClaw --version
@@ -608,12 +626,15 @@ Invoke-OpenClaw --version
   }
 
   private runRefOnboard(): Promise<void> {
+    const tokenProviderArg = this.auth.tokenProvider
+      ? ` --token-provider ${psSingleQuote(this.auth.tokenProvider)}`
+      : "";
     return this.guestPowerShellBackground(
       "ref-onboard",
       `$ErrorActionPreference = 'Continue'
 $PSNativeCommandUseErrorActionPreference = $false
 Set-Item -Path ('Env:' + ${psSingleQuote(this.auth.apiKeyEnv)}) -Value ${psSingleQuote(this.auth.apiKeyValue)}
-Invoke-OpenClaw onboard --non-interactive --mode local --auth-choice ${psSingleQuote(this.auth.authChoice)} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --skip-health --accept-risk --json
+Invoke-OpenClaw onboard --non-interactive --mode local --auth-choice ${psSingleQuote(this.auth.authChoice)}${tokenProviderArg} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --skip-health --accept-risk --json
 if ($LASTEXITCODE -ne 0) { throw "openclaw onboard failed with exit code $LASTEXITCODE" }
 ${this.windowsPluginIsolationScript()}`,
       720_000,
@@ -647,12 +668,21 @@ ${this.windowsPluginIsolationScript()}`,
     });
   }
 
-  private runDevChannelUpdate(): void {
-    this.guestPowerShell(
+  private async runDevChannelUpdate(): Promise<void> {
+    const devTargetEntry = this.devTargetCommit
+      ? `; OPENCLAW_UPDATE_DEV_TARGET_REF = ${psSingleQuote(this.devTargetCommit)}`
+      : "";
+    await this.guestPowerShellBackground(
+      "update-dev",
       `$ErrorActionPreference = 'Stop'
 ${windowsPortableGitPathScript}
 $configPath = Join-Path $env:USERPROFILE '.openclaw\\openclaw.json'
-$config = Get-Content $configPath -Raw | ConvertFrom-Json
+if (Test-Path $configPath) {
+  $config = Get-Content $configPath -Raw | ConvertFrom-Json
+} else {
+  New-Item -ItemType Directory -Path (Split-Path $configPath -Parent) -Force | Out-Null
+  $config = [pscustomobject]@{}
+}
 if ($null -eq $config.update) {
   $config | Add-Member -MemberType NoteProperty -Name update -Value ([pscustomobject]@{})
 }
@@ -660,14 +690,14 @@ $config.update | Add-Member -Force -MemberType NoteProperty -Name channel -Value
 $config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding utf8
 ${windowsScopedEnvFunction}
 $script:OpenClawUpdateExit = 0
-Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'; OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1' } {
-  Invoke-OpenClaw update --channel dev --yes --json
+Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'; OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'${devTargetEntry} } {
+  Invoke-OpenClaw update --channel dev --yes --json --no-restart --timeout ${this.updateTimeoutSeconds}
   $script:OpenClawUpdateExit = $LASTEXITCODE
 }
 if ($script:OpenClawUpdateExit -ne 0) { throw "openclaw update failed with exit code $script:OpenClawUpdateExit" }
 Invoke-OpenClaw --version
 Invoke-OpenClaw update status --json`,
-      { timeoutMs: this.updateTimeoutSeconds * 1000 },
+      this.updateTimeoutSeconds * 1000,
     );
   }
 
@@ -676,19 +706,48 @@ Invoke-OpenClaw update status --json`,
       `${windowsPortableGitPathScript}
 Invoke-OpenClaw update status --json`,
     );
-    for (const needle of ['"installKind": "git"', '"value": "dev"', '"branch": "main"']) {
+    const expectedBranch = this.devTargetCommit ? "HEAD" : "main";
+    for (const needle of [
+      '"installKind": "git"',
+      '"value": "dev"',
+      `"branch": "${expectedBranch}"`,
+    ]) {
       if (!status.includes(needle)) {
         throw new Error(`dev update status missing ${needle}`);
+      }
+    }
+    if (this.devTargetCommit) {
+      const checkoutHead =
+        this.guestPowerShell(`${windowsPortableGitPathScript}
+$checkoutPath = Join-Path $env:USERPROFILE 'openclaw'
+git.exe -C $checkoutPath rev-parse HEAD`)
+          .replaceAll("\r", "")
+          .trim()
+          .split("\n")
+          .at(-1) ?? "";
+      if (checkoutHead !== this.devTargetCommit) {
+        throw new Error(
+          `dev update checkout head ${checkoutHead || "<empty>"} did not match ${this.devTargetCommit}`,
+        );
       }
     }
   }
 
   private gatewayAction(action: "restart" | "stop"): Promise<void> {
+    const gatewayArgs =
+      action === "stop"
+        ? `$gatewayArgs = @('gateway', 'stop')
+$stopHelp = (Invoke-OpenClaw gateway stop --help 2>&1 | Out-String)
+if ($stopHelp -match '(?m)^\\s+--force(?:\\s|$)') {
+  $gatewayArgs += '--force'
+}`
+        : `$gatewayArgs = @('gateway', 'restart')`;
     return this.guestPowerShellBackground(
       `gateway-${action}`,
       `$ErrorActionPreference = 'Continue'
 $PSNativeCommandUseErrorActionPreference = $false
-Invoke-OpenClaw gateway ${action}
+${gatewayArgs}
+Invoke-OpenClaw @gatewayArgs
 if ($LASTEXITCODE -ne 0) { throw "gateway ${action} failed with exit code $LASTEXITCODE" }`,
       420_000,
     );

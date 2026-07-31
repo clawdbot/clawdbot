@@ -83,7 +83,7 @@ function listConfiguredGuildChannelKeys(
   return [...ids].toSorted((a, b) => a.localeCompare(b));
 }
 
-export function collectDiscordAuditChannelIdsForGuilds(
+function collectDiscordAuditChannelIdsForGuilds(
   guilds: Record<string, DiscordGuildEntry> | undefined,
 ) {
   const keys = listConfiguredGuildChannelKeys(guilds);

@@ -5,10 +5,13 @@ import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   definePluginEntry,
   fetchWithSsrFGuard,
+  readProviderJsonResponse,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   type OpenClawConfig,
   type OpenClawPluginApi,
 } from "./api.js";
+
+const THREAD_OWNERSHIP_CONFLICT_BODY_LIMIT_BYTES = 64 * 1024;
 
 type ThreadOwnershipConfig = {
   forwarderUrl?: string;
@@ -96,7 +99,7 @@ export default definePluginEntry({
         currentConfig,
         forwarderUrl: (
           pluginCfg.forwarderUrl ??
-          process.env.SLACK_FORWARDER_URL ??
+          normalizeOptionalString(process.env.SLACK_FORWARDER_URL) ??
           "http://slack-forwarder:8750"
         ).replace(/\/$/, ""),
         abTestChannels: new Set(
@@ -189,14 +192,34 @@ export default definePluginEntry({
             return undefined;
           }
           if (resp.status === 409) {
-            const body = (await resp.json()) as { owner?: string };
+            let owner = "unknown";
+            try {
+              const body = await readProviderJsonResponse<{ owner?: unknown }>(
+                resp,
+                "thread-ownership forwarder conflict",
+                { maxBytes: THREAD_OWNERSHIP_CONFLICT_BODY_LIMIT_BYTES },
+              );
+              if (typeof body.owner === "string" && body.owner) {
+                owner = body.owner;
+              }
+            } catch (error) {
+              // A 409 is authoritative even when its body is malformed or oversized.
+              api.logger.warn?.(
+                `thread-ownership: conflict body unreadable (${String(error)}), cancelling send`,
+              );
+            }
             api.logger.info?.(
-              `thread-ownership: cancelled send to ${channelId}:${threadTs} — owned by ${body.owner}`,
+              `thread-ownership: cancelled send to ${channelId}:${threadTs} — owned by ${owner}`,
             );
             return { cancel: true };
           }
           api.logger.warn?.(`thread-ownership: unexpected status ${resp.status}, allowing send`);
         } finally {
+          // 200 / unexpected statuses leave the body unread; 409 may already have
+          // consumed it via readProviderJsonResponse. release() does not cancel streams.
+          if (!resp.bodyUsed) {
+            await resp.body?.cancel().catch(() => undefined);
+          }
           await release();
         }
       } catch (err) {

@@ -35,6 +35,31 @@ async function withStatusTempHome(run: (home: string) => Promise<void>): Promise
 }
 
 describe("resolveStatusTtsSnapshot", () => {
+  it("treats null prefs as empty settings", async () => {
+    await withStatusTempHome(async (home) => {
+      const prefsPath = path.join(home, ".openclaw", "settings", "tts.json");
+      fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
+      fs.writeFileSync(prefsPath, "null");
+
+      expect(
+        resolveStatusTtsSnapshot({
+          cfg: {
+            tts: {
+              auto: "always",
+              provider: "edge",
+              prefsPath,
+            },
+          } as OpenClawConfig,
+        }),
+      ).toEqual({
+        autoMode: "always",
+        provider: "microsoft",
+        maxLength: 1500,
+        summarize: true,
+      });
+    });
+  });
+
   it("uses prefs overrides without loading speech providers", async () => {
     await withStatusTempHome(async (home) => {
       const prefsPath = path.join(home, ".openclaw", "settings", "tts.json");
@@ -54,10 +79,8 @@ describe("resolveStatusTtsSnapshot", () => {
       expect(
         resolveStatusTtsSnapshot({
           cfg: {
-            messages: {
-              tts: {
-                prefsPath,
-              },
+            tts: {
+              prefsPath,
             },
           } as OpenClawConfig,
         }),
@@ -75,10 +98,8 @@ describe("resolveStatusTtsSnapshot", () => {
       expect(
         resolveStatusTtsSnapshot({
           cfg: {
-            messages: {
-              tts: {
-                auto: "always",
-              },
+            tts: {
+              auto: "always",
             },
           } as OpenClawConfig,
         }),
@@ -96,11 +117,9 @@ describe("resolveStatusTtsSnapshot", () => {
       expect(
         resolveStatusTtsSnapshot({
           cfg: {
-            messages: {
-              tts: {
-                auto: "off",
-                provider: "openai",
-              },
+            tts: {
+              auto: "off",
+              provider: "openai",
             },
             agents: {
               list: [
@@ -130,14 +149,12 @@ describe("resolveStatusTtsSnapshot", () => {
       expect(
         resolveStatusTtsSnapshot({
           cfg: {
-            messages: {
-              tts: {
-                auto: "always",
-                persona: "alfred",
-                personas: {
-                  alfred: { provider: "google" },
-                  jarvis: { provider: "edge" },
-                },
+            tts: {
+              auto: "always",
+              persona: "alfred",
+              personas: {
+                alfred: { provider: "google" },
+                jarvis: { provider: "edge" },
               },
             },
             agents: {
@@ -168,17 +185,15 @@ describe("resolveStatusTtsSnapshot", () => {
       expect(
         resolveStatusTtsSnapshot({
           cfg: {
-            messages: {
-              tts: {
-                auto: "always",
-                provider: "openai",
-                providers: {
-                  openai: {
-                    displayName: "NeuTTS local",
-                    baseUrl: "http://user:secret@127.0.0.1:18801/v1?token=hidden#fragment",
-                    model: "neutts-nano",
-                    voice: "clara",
-                  },
+            tts: {
+              auto: "always",
+              provider: "openai",
+              providers: {
+                openai: {
+                  displayName: "NeuTTS local",
+                  baseUrl: "http://username@127.0.0.1:18801/v1?token=hidden#fragment",
+                  model: "neutts-nano",
+                  voice: "clara",
                 },
               },
             },
@@ -205,16 +220,14 @@ describe("resolveStatusTtsSnapshot", () => {
       const voice = `${"v".repeat(92)}😀tail`;
       const snapshot = resolveStatusTtsSnapshot({
         cfg: {
-          messages: {
-            tts: {
-              auto: "always",
-              provider: "elevenlabs",
-              providers: {
-                elevenlabs: {
-                  displayName,
-                  model,
-                  voice,
-                },
+          tts: {
+            auto: "always",
+            provider: "elevenlabs",
+            providers: {
+              elevenlabs: {
+                displayName,
+                model,
+                voice,
               },
             },
           },
@@ -232,16 +245,14 @@ describe("resolveStatusTtsSnapshot", () => {
       expect(
         resolveStatusTtsSnapshot({
           cfg: {
-            messages: {
-              tts: {
-                auto: "always",
-                provider: "openai",
-                providers: {
-                  openai: {
-                    baseUrl: "https://api.openai.com/v1/",
-                    model: "gpt-4o-mini-tts",
-                    voice: "coral",
-                  },
+            tts: {
+              auto: "always",
+              provider: "openai",
+              providers: {
+                openai: {
+                  baseUrl: "https://api.openai.com/v1/",
+                  model: "gpt-4o-mini-tts",
+                  voice: "coral",
                 },
               },
             },
@@ -263,14 +274,12 @@ describe("resolveStatusTtsSnapshot", () => {
       expect(
         resolveStatusTtsSnapshot({
           cfg: {
-            messages: {
-              tts: {
-                auto: "always",
-                provider: "elevenlabs",
-                providers: {
-                  elevenlabs: {
-                    speakerVoiceId: "voice-123",
-                  },
+            tts: {
+              auto: "always",
+              provider: "elevenlabs",
+              providers: {
+                elevenlabs: {
+                  speakerVoiceId: "voice-123",
                 },
               },
             },
@@ -291,15 +300,13 @@ describe("resolveStatusTtsSnapshot", () => {
       expect(
         resolveStatusTtsSnapshot({
           cfg: {
-            messages: {
-              tts: {
-                auto: "off",
-                provider: "openai",
-                providers: {
-                  openai: {
-                    model: "gpt-4o-mini-tts",
-                    voice: "coral",
-                  },
+            tts: {
+              auto: "off",
+              provider: "openai",
+              providers: {
+                openai: {
+                  model: "gpt-4o-mini-tts",
+                  voice: "coral",
                 },
               },
             },
@@ -349,18 +356,16 @@ describe("resolveStatusTtsSnapshot", () => {
       expect(
         resolveStatusTtsSnapshot({
           cfg: {
-            messages: {
-              tts: {
-                provider: "openai",
-                prefsPath,
-                providers: {
-                  microsoft: {
-                    voice: "en-US-AvaMultilingualNeural",
-                  },
-                  openai: {
-                    model: "gpt-4o-mini-tts",
-                    voice: "coral",
-                  },
+            tts: {
+              provider: "openai",
+              prefsPath,
+              providers: {
+                microsoft: {
+                  voice: "en-US-AvaMultilingualNeural",
+                },
+                openai: {
+                  model: "gpt-4o-mini-tts",
+                  voice: "coral",
                 },
               },
             },
@@ -400,9 +405,7 @@ describe("resolveStatusTtsSnapshot", () => {
           expect(
             resolveStatusTtsSnapshot({
               cfg: {
-                messages: {
-                  tts: {},
-                },
+                tts: {},
               } as OpenClawConfig,
             }),
           ).toEqual({

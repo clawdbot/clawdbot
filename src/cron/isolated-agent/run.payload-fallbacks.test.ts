@@ -191,9 +191,15 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     const fallbackRequest = requireModelFallbackRequest();
     expect(fallbackRequest.provider).toBe("anthropic");
     expect(fallbackRequest.model).toBe("claude-opus-4-6");
-    expect(runCliAgentMock.mock.calls.map((call) => [call[0].provider, call[0].model])).toEqual([
-      ["claude-cli", "claude-opus-4-6"],
-      ["claude-cli", "claude-sonnet-4-6"],
+    expect(
+      runCliAgentMock.mock.calls.map((call) => [
+        call[0].provider,
+        call[0].modelProvider,
+        call[0].model,
+      ]),
+    ).toEqual([
+      ["claude-cli", "anthropic", "claude-opus-4-6"],
+      ["claude-cli", "anthropic", "claude-sonnet-4-6"],
     ]);
     const firstCliRequest = runCliAgentMock.mock.calls[0]?.[0];
     const secondCliRequest = runCliAgentMock.mock.calls[1]?.[0];

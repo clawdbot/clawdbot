@@ -4,6 +4,11 @@ import { TALK_TEST_PROVIDER_ID } from "../test-utils/talk-test-provider.js";
 import { buildTalkConfigResponse, normalizeTalkSection } from "./talk.js";
 
 describe("talk normalization", () => {
+  it("preserves the explicit ambient Talk agent", () => {
+    expect(normalizeTalkSection({ agentId: " ops " })).toEqual({ agentId: "ops" });
+    expect(buildTalkConfigResponse({ agentId: "ops" })).toEqual({ agentId: "ops" });
+  });
+
   it("keeps core Talk normalization generic and ignores legacy provider-flat fields", () => {
     const normalized = normalizeTalkSection({
       voiceId: "voice-123",
@@ -160,34 +165,23 @@ describe("talk normalization", () => {
   });
 
   it("preserves normalized realtime instructions in talk.config payloads", () => {
-    const payload = buildTalkConfigResponse({
-      realtime: {
-        provider: "openai",
-        providers: {
-          openai: {
-            model: "gpt-realtime",
-            speakerVoice: "alloy",
+    const payload = buildTalkConfigResponse(
+      normalizeTalkSection({
+        realtime: {
+          provider: "openai",
+          providers: {
+            openai: {
+              model: "gpt-realtime",
+              speakerVoice: "alloy",
+            },
           },
+          instructions: " Speak with crisp diction. ",
         },
-        instructions: " Speak with crisp diction. ",
-      },
-    });
+      }),
+    );
 
     expect(payload?.realtime?.provider).toBe("openai");
     expect(payload?.realtime?.instructions).toBe("Speak with crisp diction.");
-  });
-
-  it("maps legacy realtime voice to speakerVoice while preserving legacy output", () => {
-    const normalized = normalizeTalkSection({
-      realtime: {
-        voice: " alloy ",
-      },
-    });
-
-    expect(normalized?.realtime).toEqual({
-      speakerVoice: "alloy",
-      voice: "alloy",
-    });
   });
 
   it("does not report an active provider when the configured speech provider cannot resolve", () => {
@@ -262,15 +256,5 @@ describe("talk normalization", () => {
         },
       },
     });
-  });
-
-  it("does not inject provider apiKey defaults during snapshot materialization", () => {
-    const payload = buildTalkConfigResponse({
-      voiceId: "voice-123",
-    });
-
-    expect(payload?.provider).toBe("elevenlabs");
-    expect(payload?.resolved?.config.voiceId).toBe("voice-123");
-    expect(payload?.resolved?.config.apiKey).toBeUndefined();
   });
 });

@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { describe, expect, it } from "vitest";
 import { loadHostEnvSecurityPolicy } from "./host-env-security-policy.js";
@@ -13,7 +14,10 @@ function parseSwiftStringArray(source: string, marker: string): string[] {
   if (!match) {
     throw new Error(`Failed to parse Swift array for marker: ${marker}`);
   }
-  return Array.from(match[1].matchAll(/"([^"]+)"/g), (m) => m[1]);
+  const arrayBody = expectDefined(match[1], `Swift array body for ${marker}`);
+  return Array.from(arrayBody.matchAll(/"([^"]+)"/g), (entry) =>
+    expectDefined(entry[1], `Swift array entry for ${marker}`),
+  );
 }
 
 function readRepoFile(repoRoot: string, relativePath: string): string {

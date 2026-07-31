@@ -9,8 +9,33 @@ import {
   updateSessionGoalObjective,
   updateSessionGoalStatus,
 } from "./goals.js";
-import { getSessionEntry, upsertSessionEntry } from "./store.js";
+import {
+  loadSessionEntry,
+  upsertSessionEntry as upsertAccessorSessionEntry,
+} from "./session-accessor.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import type { SessionEntry } from "./types.js";
+
+// The goal APIs read/write session entries through the SQLite-backed accessor,
+// so fixtures must seed and assert through the same accessor rather than the
+// file-backed store helpers.
+function getSessionEntry(params: {
+  storePath: string;
+  sessionKey: string;
+}): SessionEntry | undefined {
+  return loadSessionEntry(params);
+}
+
+async function upsertSessionEntry(params: {
+  storePath: string;
+  sessionKey: string;
+  entry: SessionEntry;
+}): Promise<void> {
+  await upsertAccessorSessionEntry(
+    { sessionKey: params.sessionKey, storePath: params.storePath },
+    params.entry,
+  );
+}
 
 describe("session goals", () => {
   const fixture = useTempSessionsFixture("openclaw-session-goals-");

@@ -7,7 +7,7 @@ import {
   installQQBotRuntimeForStateTests,
   resetQQBotStateTestRuntime,
 } from "../../test-support/runtime.js";
-import type { RefIndexEntry } from "./store.js";
+import type { RefIndexEntry } from "./types.js";
 
 const createdDirs: string[] = [];
 

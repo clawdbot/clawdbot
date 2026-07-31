@@ -1,9 +1,6 @@
 // Nvidia provider module implements model/runtime integration.
 import { lookup as dnsLookup } from "node:dns/promises";
-import {
-  clearLiveCatalogCacheForTests,
-  getCachedLiveProviderModelRows,
-} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { getCachedLiveProviderModelRows } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelDefinitionConfig,
@@ -17,7 +14,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const NVIDIA_DEFAULT_MODEL_ID = "nvidia/nemotron-3-ultra-550b-a55b";
-export const NVIDIA_FEATURED_MODELS_URL =
+const NVIDIA_FEATURED_MODELS_URL =
   "https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json";
 
 const FEATURED_MODEL_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -39,6 +36,11 @@ const NVIDIA_ULTRA_DEFAULT_PARAMS = {
     force_nonempty_content: true,
   },
 } as const;
+const DEPRECATED_NVIDIA_MODEL_IDS = new Set<string>(
+  manifest.modelCatalog.providers.nvidia.models
+    .filter((model) => "status" in model && model.status === "deprecated")
+    .map((model) => model.id),
+);
 
 type NvidiaFeaturedModel = {
   model: string;
@@ -79,20 +81,28 @@ export function buildNvidiaProvider(): ModelProviderConfig {
   };
 }
 
-export async function buildLiveNvidiaProvider(): Promise<ModelProviderConfig> {
+export function buildSelectableNvidiaProvider(): ModelProviderConfig {
   const provider = buildNvidiaProvider();
+  return {
+    ...provider,
+    models: filterSelectableNvidiaModels(provider.models ?? []),
+  };
+}
+
+export async function buildLiveNvidiaProvider(): Promise<ModelProviderConfig> {
+  const provider = buildSelectableNvidiaProvider();
   const featuredModels = await loadNvidiaFeaturedModels();
   if (!featuredModels || featuredModels.length === 0) {
     return provider;
   }
   return {
     ...provider,
-    models: applyNvidiaModelDefaults(featuredModels),
+    models: applyNvidiaModelDefaults(filterSelectableNvidiaModels(featuredModels)),
   };
 }
 
 export async function buildSelectableLiveNvidiaProvider(): Promise<ModelProviderConfig> {
-  const provider = buildNvidiaProvider();
+  const provider = buildSelectableNvidiaProvider();
   const featuredModels = await loadNvidiaFeaturedModels();
   if (!featuredModels || featuredModels.length === 0) {
     return {
@@ -102,12 +112,8 @@ export async function buildSelectableLiveNvidiaProvider(): Promise<ModelProvider
   }
   return {
     ...provider,
-    models: applyNvidiaModelDefaults(featuredModels),
+    models: applyNvidiaModelDefaults(filterSelectableNvidiaModels(featuredModels)),
   };
-}
-
-export function clearNvidiaFeaturedModelCacheForTests() {
-  clearLiveCatalogCacheForTests();
 }
 
 async function loadNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | null> {
@@ -164,6 +170,10 @@ function applyNvidiaModelDefaults(models: ModelDefinitionConfig[]): ModelDefinit
         }
       : model,
   );
+}
+
+function filterSelectableNvidiaModels(models: ModelDefinitionConfig[]): ModelDefinitionConfig[] {
+  return models.filter((model) => !DEPRECATED_NVIDIA_MODEL_IDS.has(model.id));
 }
 
 function parseNvidiaFeaturedModel(row: unknown): ModelDefinitionConfig | null {

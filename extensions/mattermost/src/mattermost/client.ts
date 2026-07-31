@@ -1,11 +1,13 @@
 // Mattermost plugin module implements client behavior.
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromPrivateNetworkOptIn,
@@ -17,6 +19,7 @@ import {
 import { z } from "zod";
 
 const MATTERMOST_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const MATTERMOST_REQUEST_TIMEOUT_MS = 30_000;
 // Mattermost REST control-plane JSON (posts, users, channels, file-upload
 // results) stays well under a megabyte; cap successful JSON the same way the
 // shared provider path is capped so an untrusted/self-hosted homeserver cannot
@@ -27,12 +30,15 @@ const MATTERMOST_TEXT_RESPONSE_LIMIT_BYTES = 64 * 1024;
 const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+type MattermostRequestInit = RequestInit & {
+  timeoutMs?: number;
+};
 
 export type MattermostClient = {
   baseUrl: string;
   apiBaseUrl: string;
   token: string;
-  request: <T>(path: string, init?: RequestInit) => Promise<T>;
+  request: <T>(path: string, init?: MattermostRequestInit) => Promise<T>;
   /** Guarded fetch implementation; use in place of raw fetch for outbound requests. */
   fetchImpl: MattermostFetch;
 };
@@ -70,6 +76,15 @@ export const MattermostPostSchema = z
 
 export type MattermostPost = z.infer<typeof MattermostPostSchema>;
 
+const MattermostPostListSchema = z
+  .object({
+    order: z.array(z.string()),
+    posts: z.record(z.string(), MattermostPostSchema),
+    next_post_id: z.string().nullable().optional(),
+    prev_post_id: z.string().nullable().optional(),
+  })
+  .passthrough();
+
 type MattermostFileInfo = {
   id: string;
   name?: string | null;
@@ -86,10 +101,22 @@ export function normalizeMattermostBaseUrl(raw?: string | null): string | undefi
   return withoutTrailing.replace(/\/api\/v4$/i, "");
 }
 
-function buildMattermostApiUrl(baseUrl: string, path: string): string {
+export function buildMattermostApiUrl(baseUrl: string, path: string): string {
   const normalized = normalizeMattermostBaseUrl(baseUrl);
   if (!normalized) {
     throw new Error("Mattermost baseUrl is required");
+  }
+  const pathname = (path.split(/[?#]/, 1)[0] ?? "").replace(/[\t\r\n]/g, "").replace(/\\/g, "/");
+  for (const segment of pathname.split("/")) {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(segment).replace(/[\t\r\n]/g, "");
+    } catch {
+      throw new Error("Mattermost API path must not contain unsafe path segments");
+    }
+    if (decoded.split(/[\\/]/).some((part) => part === "." || part === "..")) {
+      throw new Error("Mattermost API path must not contain unsafe path segments");
+    }
   }
   const suffix = path.startsWith("/") ? path : `/${path}`;
   return `${normalized}/api/v4${suffix}`;
@@ -174,6 +201,8 @@ export function createMattermostClient(params: {
   baseUrl: string;
   botToken: string;
   fetchImpl?: MattermostFetch;
+  /** Timeout for REST requests in milliseconds (default: 30000). */
+  timeoutMs?: number;
   /** Allow requests to private/internal IPs (self-hosted/LAN deployments). */
   allowPrivateNetwork?: boolean;
 }): MattermostClient {
@@ -183,26 +212,64 @@ export function createMattermostClient(params: {
   }
   const apiBaseUrl = `${baseUrl}/api/v4`;
   const token = params.botToken.trim();
+  const requestTimeoutMs = resolveTimerTimeoutMs(params.timeoutMs, MATTERMOST_REQUEST_TIMEOUT_MS);
   // When no custom fetchImpl is provided (production path), use an SSRF-guarded wrapper
   // that validates the target URL before making the request (DNS rebinding protection etc.).
   // A custom fetchImpl is accepted for testing and special cases.
   const externalFetchImpl = params.fetchImpl;
 
-  const guardedFetchImpl: MattermostFetch = async (input, init) => {
+  const guardedFetchImpl = async (
+    input: RequestInfo | URL,
+    init?: MattermostRequestInit,
+  ): Promise<Response> => {
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const { timeoutMs: initTimeoutMs, ...requestInit } = init ?? {};
+    const timeoutMs = resolveTimerTimeoutMs(initTimeoutMs, requestTimeoutMs);
     const { response, release } = await fetchWithSsrFGuard({
       url,
-      init,
+      init: requestInit,
       auditContext: "mattermost-api",
       policy: ssrfPolicyFromPrivateNetworkOptIn(params.allowPrivateNetwork),
+      signal: requestInit.signal ?? undefined,
+      timeoutMs,
     });
     return responseWithRelease(response, release);
   };
 
-  const fetchImpl = externalFetchImpl ?? guardedFetchImpl;
+  const timedExternalFetchImpl:
+    | ((input: RequestInfo | URL, init?: MattermostRequestInit) => Promise<Response>)
+    | undefined = externalFetchImpl
+    ? async (input, init) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        const { timeoutMs: initTimeoutMs, ...requestInit } = init ?? {};
+        const timeoutMs = resolveTimerTimeoutMs(initTimeoutMs, requestTimeoutMs);
+        const { signal: timeoutSignal, cleanup } = buildTimeoutAbortSignal({
+          timeoutMs,
+          operation: "mattermost-api",
+          url,
+        });
+        const callerSignal = requestInit.signal ?? undefined;
+        const signal =
+          callerSignal && timeoutSignal
+            ? AbortSignal.any([callerSignal, timeoutSignal])
+            : (callerSignal ?? timeoutSignal);
+        try {
+          const response = await externalFetchImpl(input, { ...requestInit, signal });
+          // Match guarded production fetches: retain cancellation and the
+          // request deadline until the custom response body is consumed.
+          return responseWithRelease(response, async () => cleanup());
+        } catch (error) {
+          cleanup();
+          throw error;
+        }
+      }
+    : undefined;
 
-  const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
+  const fetchImpl = timedExternalFetchImpl ?? guardedFetchImpl;
+
+  const request = async <T>(path: string, init?: MattermostRequestInit): Promise<T> => {
     const url = buildMattermostApiUrl(baseUrl, path);
     const headers = new Headers(init?.headers);
     headers.set("Authorization", `Bearer ${token}`);
@@ -221,11 +288,19 @@ export function createMattermostClient(params: {
       return undefined as T;
     }
 
-    const contentType = res.headers.get("content-type") ?? "";
-    if (contentType.includes("application/json")) {
-      return await readProviderJsonResponse<T>(res, `Mattermost API ${path}`);
+    try {
+      const contentType = res.headers.get("content-type") ?? "";
+      if (contentType.includes("application/json")) {
+        return await readProviderJsonResponse<T>(res, `Mattermost API ${path}`);
+      }
+      return (await readMattermostSuccessText(res, path)) as T;
+    } catch (error) {
+      if (path === "/posts" && init?.method?.toUpperCase() === "POST") {
+        // POST already succeeded; a lost/unreadable receipt must never schedule another visible post.
+        throw createChannelPartialDeliveryError(error, { messageIds: [], visibleReplySent: true });
+      }
+      throw error;
     }
-    return (await readMattermostSuccessText(res, path)) as T;
   };
 
   return { baseUrl, apiBaseUrl, token, request, fetchImpl };
@@ -253,7 +328,50 @@ export async function fetchMattermostChannel(
   client: MattermostClient,
   channelId: string,
 ): Promise<MattermostChannel> {
-  return await client.request<MattermostChannel>(`/channels/${channelId}`);
+  return await client.request<MattermostChannel>(`/channels/${encodeURIComponent(channelId)}`);
+}
+
+export async function fetchMattermostChannelPosts(
+  client: MattermostClient,
+  channelId: string,
+  options: {
+    limit?: number;
+    before?: string;
+    after?: string;
+  } = {},
+): Promise<{ messages: MattermostPost[]; hasMore: boolean }> {
+  const before = normalizeOptionalString(options.before);
+  const after = normalizeOptionalString(options.after);
+  if (before && after) {
+    throw new Error("Mattermost read accepts either before or after, not both.");
+  }
+
+  if (options.limit !== undefined && (!Number.isSafeInteger(options.limit) || options.limit <= 0)) {
+    throw new Error("Mattermost read limit must be a positive integer.");
+  }
+  const perPage = Math.min(options.limit ?? 60, 200);
+  const query = new URLSearchParams({ per_page: String(perPage) });
+  if (before) {
+    query.set("before", before);
+  }
+  if (after) {
+    query.set("after", after);
+  }
+  const response = await client.request<unknown>(
+    `/channels/${encodeURIComponent(channelId)}/posts?${query.toString()}`,
+  );
+  const parsed = MattermostPostListSchema.safeParse(response);
+  if (!parsed.success || parsed.data.order.some((postId) => !parsed.data.posts[postId])) {
+    throw new Error("Unexpected Mattermost channel posts response.");
+  }
+
+  return {
+    messages: parsed.data.order.map((postId) => parsed.data.posts[postId] as MattermostPost),
+    // Mattermost returns the cursor for the opposite direction as well. For
+    // descending/default and `before` reads, `prev_post_id` points to older
+    // posts; for `after` reads, `next_post_id` points to newer posts.
+    hasMore: Boolean(after ? parsed.data.next_post_id : parsed.data.prev_post_id),
+  };
 }
 
 export async function fetchMattermostChannelByName(
@@ -283,15 +401,17 @@ export async function sendMattermostTyping(
   });
 }
 
-export async function createMattermostDirectChannel(
+async function createMattermostDirectChannel(
   client: MattermostClient,
   userIds: string[],
   signal?: AbortSignal,
+  timeoutMs?: number,
 ): Promise<MattermostChannel> {
   return await client.request<MattermostChannel>("/channels/direct", {
     method: "POST",
     body: JSON.stringify(userIds),
     signal,
+    timeoutMs,
   });
 }
 
@@ -397,50 +517,35 @@ export async function createMattermostDirectChannelWithRetry(
   } = options;
   const timeoutMs = resolveTimerTimeoutMs(rawTimeoutMs, 30000);
 
-  let lastError: Error | undefined;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
+  return await retryAsync(
+    async () => {
       // Use AbortController for per-request timeout
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
       try {
-        const result = await createMattermostDirectChannel(client, userIds, controller.signal);
-        return result;
+        return await createMattermostDirectChannel(client, userIds, controller.signal, timeoutMs);
+      } catch (err) {
+        // Normalize before rethrowing so shouldRetry/onRetry below always see Errors.
+        throw err instanceof Error ? err : new Error(String(err));
       } finally {
         clearTimeout(timeoutId);
       }
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-
-      // Don't retry on the last attempt
-      if (attempt >= maxRetries) {
-        break;
-      }
-
-      // Check if error is retryable
-      if (!isRetryableError(lastError)) {
-        throw lastError;
-      }
-
-      // Calculate exponential backoff delay with full-jitter
-      // Jitter is proportional to the exponential delay, not a fixed 1000ms
-      // This ensures backoff behaves correctly for small delay configurations
-      const exponentialDelay = initialDelayMs * 2 ** attempt;
-      const jitter = Math.random() * exponentialDelay;
-      const delayMs = Math.min(exponentialDelay + jitter, maxDelayMs);
-
-      if (onRetry) {
-        onRetry(attempt + 1, delayMs, lastError);
-      }
-
-      // Wait before retrying
-      await sleep(delayMs);
-    }
-  }
-
-  throw lastError ?? new Error("Failed to create DM channel after retries");
+    },
+    {
+      attempts: maxRetries + 1,
+      // Core retry raises maxDelayMs to the minDelayMs floor, but the schema
+      // allows initialDelayMs above the (defaulted) maxDelayMs cap. The cap is
+      // the documented contract here and the reply-delivery barrier budgets
+      // with it, so clamp the base instead of letting the floor win.
+      minDelayMs: Math.min(initialDelayMs, maxDelayMs),
+      maxDelayMs,
+      // Full jitter (uniform [delay, 2*delay) with maxDelayMs applied after
+      // the draw) preserves the schedule pinned by client.retry.test.ts.
+      jitter: "full",
+      shouldRetry: (err) => isRetryableError(err as Error),
+      onRetry: (info) => onRetry?.(info.attempt, info.delayMs, info.err as Error),
+    },
+  );
 }
 
 function isRetryableError(error: Error): boolean {
@@ -475,7 +580,11 @@ function isRetryableError(error: Error): boolean {
     if (!clientErrorMatch) {
       continue;
     }
-    const statusCode = Number.parseInt(clientErrorMatch[1], 10);
+    const statusCodeText = clientErrorMatch[1];
+    if (!statusCodeText) {
+      continue;
+    }
+    const statusCode = Number.parseInt(statusCodeText, 10);
     if (statusCode >= 400 && statusCode < 500) {
       return false;
     }
@@ -609,10 +718,19 @@ export async function createMattermostPost(
   if (params.props) {
     payload.props = params.props;
   }
-  return await client.request<MattermostPost>("/posts", {
+  const post = await client.request<MattermostPost>("/posts", {
     method: "POST",
     body: JSON.stringify(payload),
   });
+  const postId = post && typeof post === "object" ? normalizeOptionalString(post.id) : undefined;
+  if (!postId) {
+    // Successful POST may already be visible; retrying because its receipt is malformed duplicates it.
+    throw createChannelPartialDeliveryError(
+      new Error("Mattermost post creation response did not include a post id"),
+      { messageIds: [], visibleReplySent: true },
+    );
+  }
+  return postId === post.id ? post : { ...post, id: postId };
 }
 
 type MattermostTeam = {

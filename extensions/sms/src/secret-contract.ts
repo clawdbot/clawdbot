@@ -1,39 +1,20 @@
 // Sms plugin module implements secret contract behavior.
 import {
   collectConditionalChannelFieldAssignments,
+  createChannelSecretTargetRegistryEntries,
   getChannelSurface,
   hasOwnProperty,
   type ResolverContext,
   type SecretDefaults,
-  type SecretTargetRegistryEntry,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
 const DEFAULT_ACCOUNT_ID = "default";
 
-export const secretTargetRegistryEntries = [
-  {
-    id: "channels.sms.accounts.*.authToken",
-    targetType: "channels.sms.accounts.*.authToken",
-    configFile: "openclaw.json",
-    pathPattern: "channels.sms.accounts.*.authToken",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.sms.authToken",
-    targetType: "channels.sms.authToken",
-    configFile: "openclaw.json",
-    pathPattern: "channels.sms.authToken",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-] satisfies SecretTargetRegistryEntry[];
+export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
+  channelKey: "sms",
+  account: ["authToken"],
+  channel: ["authToken"],
+});
 
 function hasTopLevelSmsAccount(channel: Record<string, unknown>): boolean {
   for (const field of ["accountSid", "fromNumber", "messagingServiceSid", "defaultTo"]) {

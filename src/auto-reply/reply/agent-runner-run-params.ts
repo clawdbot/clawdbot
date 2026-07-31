@@ -19,18 +19,21 @@ export function resolveModelFallbackOptions(
   configOverride: FollowupRun["run"]["config"] = run.config,
 ) {
   const config = configOverride;
-  const fallbacksOverride = resolveEffectiveModelFallbacks({
-    cfg: config,
-    agentId: run.agentId,
-    sessionKey: run.sessionKey,
-    hasSessionModelOverride: run.hasSessionModelOverride === true,
-    modelOverrideSource: run.modelOverrideSource,
-    hasAutoFallbackProvenance: run.hasAutoFallbackProvenance === true,
-  });
+  const fallbacksOverride = run.modelSelectionLocked
+    ? []
+    : resolveEffectiveModelFallbacks({
+        cfg: config,
+        agentId: run.agentId,
+        sessionKey: run.sessionKey,
+        hasSessionModelOverride: run.hasSessionModelOverride === true,
+        modelOverrideSource: run.modelOverrideSource,
+        hasAutoFallbackProvenance: run.hasAutoFallbackProvenance === true,
+      });
   return {
     cfg: config,
     provider: run.provider,
     model: run.model,
+    requestedRouteResolution: run.requestedRouteResolution,
     agentDir: run.agentDir,
     agentId: run.agentId,
     sessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
@@ -69,14 +72,16 @@ export function buildEmbeddedRunBaseParams(params: {
   isReasoningTagProvider?: ReasoningTagProviderResolver;
 }) {
   const config = params.run.config;
-  const modelFallbacksOverride = resolveEffectiveModelFallbacks({
-    cfg: config,
-    agentId: params.run.agentId,
-    sessionKey: params.run.sessionKey,
-    hasSessionModelOverride: params.run.hasSessionModelOverride === true,
-    modelOverrideSource: params.run.modelOverrideSource,
-    hasAutoFallbackProvenance: params.run.hasAutoFallbackProvenance === true,
-  });
+  const modelFallbacksOverride = params.run.modelSelectionLocked
+    ? []
+    : resolveEffectiveModelFallbacks({
+        cfg: config,
+        agentId: params.run.agentId,
+        sessionKey: params.run.sessionKey,
+        hasSessionModelOverride: params.run.hasSessionModelOverride === true,
+        modelOverrideSource: params.run.modelOverrideSource,
+        hasAutoFallbackProvenance: params.run.hasAutoFallbackProvenance === true,
+      });
   const enforceFinalTag = resolveEnforceFinalTagWithResolver(
     params.run,
     params.provider,
@@ -90,6 +95,7 @@ export function buildEmbeddedRunBaseParams(params: {
     cwd: params.run.cwd,
     agentDir: params.run.agentDir,
     config,
+    toolOverrides: params.run.toolOverrides,
     skillsSnapshot: params.run.skillsSnapshot,
     ownerNumbers: params.run.ownerNumbers,
     inputProvenance: params.run.inputProvenance,
@@ -101,8 +107,12 @@ export function buildEmbeddedRunBaseParams(params: {
     allowEmptyAssistantReplyAsSilent: params.run.allowEmptyAssistantReplyAsSilent,
     silentReplyPromptMode: params.run.silentReplyPromptMode,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
+    clientCaps: params.run.clientCaps,
+    toolBindings: params.run.toolBindings,
+    taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
     provider: params.provider,
     model: params.model,
+    modelSelectionLocked: params.run.modelSelectionLocked,
     modelFallbacksOverride,
     ...params.authProfile,
     thinkLevel: params.run.thinkLevel,

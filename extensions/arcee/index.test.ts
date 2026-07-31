@@ -68,9 +68,8 @@ describe("arcee provider plugin", () => {
     expect(arceeConfig?.baseUrl).toBe("https://openrouter.ai/api/v1");
     expect(arceeConfig?.api).toBe("openai-completions");
     expect(config?.models?.providers?.arcee?.models?.map((model) => model.id)).toEqual([
-      "arcee/trinity-mini",
-      "arcee/trinity-large-preview",
-      "arcee/trinity-large-thinking",
+      "arcee-ai/trinity-large-preview",
+      "arcee-ai/trinity-large-thinking",
     ]);
   });
 
@@ -116,12 +115,11 @@ describe("arcee provider plugin", () => {
 
     expect(catalogProvider.baseUrl).toBe("https://openrouter.ai/api/v1");
     expect(catalogProvider.models?.map((model) => model.id)).toEqual([
-      "arcee/trinity-mini",
-      "arcee/trinity-large-preview",
-      "arcee/trinity-large-thinking",
+      "arcee-ai/trinity-large-preview",
+      "arcee-ai/trinity-large-thinking",
     ]);
     const thinkingCompat = catalogProvider.models?.find(
-      (model) => model.id === "arcee/trinity-large-thinking",
+      (model) => model.id === "arcee-ai/trinity-large-thinking",
     )?.compat;
     expect(thinkingCompat?.supportsTools).toBe(false);
     expect(thinkingCompat?.supportsReasoningEffort).toBe(false);
@@ -140,7 +138,7 @@ describe("arcee provider plugin", () => {
         baseUrl: "https://openrouter.ai/api/v1",
       },
     } as never);
-    expect(openRouterModel?.id).toBe("arcee/trinity-large-thinking");
+    expect(openRouterModel?.id).toBe("arcee-ai/trinity-large-thinking");
 
     expect(
       provider.normalizeResolvedModel?.({
@@ -179,7 +177,7 @@ describe("arcee provider plugin", () => {
         baseUrl: "https://openrouter.ai/v1",
       },
     } as never);
-    expect(normalizedModel?.id).toBe("arcee/trinity-large-thinking");
+    expect(normalizedModel?.id).toBe("arcee-ai/trinity-large-thinking");
     expect(normalizedModel?.baseUrl).toBe("https://openrouter.ai/api/v1");
 
     expect(

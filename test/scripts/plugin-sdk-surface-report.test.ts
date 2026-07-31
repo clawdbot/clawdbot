@@ -1,5 +1,6 @@
 // Plugin Sdk Surface Report tests cover plugin sdk surface report script behavior.
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   collectPluginSdkSurfaceReport,
@@ -129,7 +130,23 @@ describe("plugin SDK surface report", () => {
     expect(readDefaultPublicSurfaceBudgets()).toEqual(readCurrentPublicSurfaceCounts());
   });
 
-  it("keeps generated package declarations out of source surface counts", () => {
+  it("keeps approval store internals out of the deprecated infra barrel", () => {
+    const source = fs.readFileSync("src/plugin-sdk/infra-runtime.ts", "utf8");
+    expect(source).not.toMatch(/export\s+(?:type\s+)?\*\s+from\s+["'][^"']*exec-approvals/u);
+
+    for (const internalName of [
+      "ensureExecApprovalsSnapshot",
+      "persistAllowAlwaysDecisionLocked",
+      "recordAllowlistMatchesUseLocked",
+      "resolveExecApprovalsLocked",
+      "restoreExecApprovalsSnapshotLocked",
+      "updateExecApprovals",
+    ]) {
+      expect(source).not.toContain(internalName);
+    }
+  });
+
+  it("rejects callable surface growth from the canonical source graph", () => {
     const budget = readDefaultPublicSurfaceBudgets().callableExports;
     const budgetConfig = readPluginSdkSurfaceBudgets({
       OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS: String(budget - 1),

@@ -124,40 +124,24 @@ struct ChatLinkPreviewHostPolicyTests {
 
 struct ChatLinkPreviewFetcherDecisionTests {
     @Test func `redirect decision enforces hop limit and host policy`() throws {
-        let originalURL = try #require(URL(string: "https://example.com/start"))
-        let response = try #require(HTTPURLResponse(
-            url: originalURL,
-            statusCode: 302,
-            httpVersion: nil,
-            headerFields: ["Location": "https://example.org/next"]))
         let publicRequest = try URLRequest(url: #require(URL(string: "https://example.org/next")))
         let privateRequest = try URLRequest(url: #require(URL(string: "http://127.0.0.1/next")))
 
         #expect(chatLinkPreviewRedirectURL(
-            response: response,
             request: publicRequest,
             redirectCount: 2) == publicRequest.url)
         #expect(chatLinkPreviewRedirectURL(
-            response: response,
             request: publicRequest,
             redirectCount: 3) == nil)
         #expect(chatLinkPreviewRedirectURL(
-            response: response,
             request: privateRequest,
             redirectCount: 0) == nil)
     }
 
     @Test func `image redirects use the same hop and host rules`() throws {
-        let originalURL = try #require(URL(string: "https://images.example/start"))
-        let response = try #require(HTTPURLResponse(
-            url: originalURL,
-            statusCode: 302,
-            httpVersion: nil,
-            headerFields: ["Location": "http://127.0.0.1/private.png"]))
         let privateRequest = try URLRequest(url: #require(URL(string: "http://127.0.0.1/private.png")))
 
         #expect(chatLinkPreviewRedirectURL(
-            response: response,
             request: privateRequest,
             redirectCount: 0) == nil)
     }
@@ -253,8 +237,8 @@ struct ChatLinkPreviewNetworkTests {
             let data = try makeChatLinkPreviewPNG(width: 1200, height: 800)
             let thumbnail = try #require(chatDecodeLinkPreviewThumbnail(data, mimeType: "image/png"))
 
-            #expect(max(thumbnail.pixelWidth, thumbnail.pixelHeight) == chatLinkPreviewImageMaxPixelSize)
-            #expect(min(thumbnail.pixelWidth, thumbnail.pixelHeight) <= chatLinkPreviewImageMaxPixelSize)
+            #expect(max(thumbnail.image.width, thumbnail.image.height) == chatLinkPreviewImageMaxPixelSize)
+            #expect(min(thumbnail.image.width, thumbnail.image.height) <= chatLinkPreviewImageMaxPixelSize)
         }
 
         @Test func `source pixel limit rejects oversized dimensions before decode`() throws {

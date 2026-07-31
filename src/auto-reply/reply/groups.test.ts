@@ -1,7 +1,11 @@
 // Tests group prompt helpers and lazy runtime loading for group metadata.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import * as groups from "./groups.js";
 
 describe("group runtime loading", () => {
@@ -75,13 +79,6 @@ describe("group runtime loading", () => {
     expect(channelToolOnlyContext).toContain("posted to this channel");
     expect(channelToolOnlyContext).not.toContain("visible group response");
     expect(channelToolOnlyContext).not.toContain("posted to the group");
-    const telegramContext = isolatedGroups.buildGroupChatContext({
-      sessionCtx: { ChatType: "group", Provider: "telegram" },
-      silentReplyPolicy: "allow",
-      silentToken: "NO_REPLY",
-    });
-    expect(telegramContext).toContain("Write like a human. Minimize empty lines");
-    expect(telegramContext).not.toContain("Avoid Markdown tables");
     expect(
       isolatedGroups.buildGroupIntro({
         defaultActivation: "mention",
@@ -119,6 +116,39 @@ describe("group runtime loading", () => {
     expect(toolOnlyContext).toContain("do not call message(action=send)");
     expect(toolOnlyContext).not.toContain("NO_REPLY");
     expect(toolOnlyContext).not.toContain("Your replies are automatically sent");
+  });
+
+  it("reads markdown table guidance from channel metadata", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "table-chat",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "table-chat" }),
+            messaging: { defaultMarkdownTableMode: "off" },
+          },
+        },
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram" }),
+            messaging: { defaultMarkdownTableMode: "block" },
+          },
+        },
+      ]),
+    );
+
+    expect(groups.buildGroupChatContext({ sessionCtx: { Provider: "table-chat" } })).not.toContain(
+      "Avoid Markdown tables",
+    );
+    expect(groups.buildGroupChatContext({ sessionCtx: { Provider: "telegram" } })).not.toContain(
+      "Avoid Markdown tables",
+    );
+    expect(groups.buildGroupChatContext({ sessionCtx: { Provider: "plain-chat" } })).toContain(
+      "Avoid Markdown tables",
+    );
   });
 
   it("gates group silent-token instructions on the resolved silent reply policy", () => {
@@ -218,7 +248,7 @@ describe("group runtime loading", () => {
     ).toBe(false);
   });
 
-  it("resolves requireMention through runtime and Discord fallback paths", async () => {
+  it("resolves requireMention through runtime and generic fallback paths", async () => {
     vi.resetModules();
     const groupsRuntimeLoads = vi.fn();
     vi.doMock("./groups.runtime.js", () => {
@@ -250,72 +280,6 @@ describe("group runtime loading", () => {
           key: "slack:group:C123",
           channel: "slack",
           id: "C123",
-          chatType: "group",
-        },
-      }),
-    ).resolves.toBe(false);
-    expect(groupsRuntimeLoads).toHaveBeenCalledTimes(1);
-
-    await expect(
-      isolatedGroups.resolveGroupRequireMention({
-        cfg: {
-          channels: {
-            discord: {
-              guilds: {
-                G1: {
-                  requireMention: true,
-                  channels: {
-                    C1: { requireMention: false },
-                  },
-                },
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        ctx: {
-          Provider: "discord",
-          From: "discord:channel:C1",
-          GroupSpace: "G1",
-          GroupChannel: "general",
-        },
-        groupResolution: {
-          key: "discord:channel:C1",
-          channel: "discord",
-          id: "C1",
-          chatType: "group",
-        },
-      }),
-    ).resolves.toBe(false);
-
-    await expect(
-      isolatedGroups.resolveGroupRequireMention({
-        cfg: {
-          channels: {
-            discord: {
-              guilds: {
-                G1: { requireMention: true },
-              },
-              accounts: {
-                work: {
-                  guilds: {
-                    G1: { requireMention: false },
-                  },
-                },
-              },
-            },
-          },
-        } as unknown as OpenClawConfig,
-        ctx: {
-          Provider: "discord",
-          From: "discord:channel:C1",
-          GroupSpace: "G1",
-          GroupChannel: "general",
-          AccountId: "work",
-        },
-        groupResolution: {
-          key: "discord:channel:C1",
-          channel: "discord",
-          id: "C1",
           chatType: "group",
         },
       }),

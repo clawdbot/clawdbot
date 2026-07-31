@@ -31,3 +31,4 @@ export {
   stripTargetKindPrefix,
   tryReadSecretFileSync,
 } from "./core.js";
+export { createChannelConfigUiHints } from "./channel-config-ui-hints.js";

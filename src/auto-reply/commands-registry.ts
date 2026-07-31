@@ -1,4 +1,5 @@
 /** Command-registry facade for native specs, text aliases, argument parsing, and menus. */
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
@@ -205,7 +206,7 @@ function parsePositionalArgs(definitions: CommandArgDefinition[], raw: string): 
       values[definition.name] = tokens.slice(index).join(" ");
       break;
     }
-    values[definition.name] = tokens[index];
+    values[definition.name] = expectDefined(tokens[index], "command argument token");
     index += 1;
   }
   return values;
@@ -310,6 +311,7 @@ export function resolveCommandArgChoices(params: {
   cfg?: OpenClawConfig;
   provider?: string;
   model?: string;
+  agentRuntime?: string;
   catalog?: ThinkingCatalogEntry[];
 }): ResolvedCommandArgChoice[] {
   const { command, arg, cfg } = params;
@@ -325,6 +327,7 @@ export function resolveCommandArgChoices(params: {
           cfg,
           provider: params.provider ?? defaults.provider,
           model: params.model ?? defaults.model,
+          agentRuntime: params.agentRuntime,
           catalog: params.catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined),
           command,
           arg,
@@ -343,9 +346,10 @@ export function resolveCommandArgMenu(params: {
   cfg?: OpenClawConfig;
   provider?: string;
   model?: string;
+  agentRuntime?: string;
   catalog?: ThinkingCatalogEntry[];
 }): { arg: CommandArgDefinition; choices: ResolvedCommandArgChoice[]; title?: string } | null {
-  const { command, args, cfg, provider, model, catalog } = params;
+  const { command, args, cfg, provider, model, agentRuntime, catalog } = params;
   if (!command.args || !command.argsMenu) {
     return null;
   }
@@ -364,6 +368,7 @@ export function resolveCommandArgMenu(params: {
               cfg,
               provider,
               model,
+              agentRuntime,
               catalog: resolvedCatalog,
             }).length > 0,
         )?.name
@@ -387,6 +392,7 @@ export function resolveCommandArgMenu(params: {
     cfg,
     provider,
     model,
+    agentRuntime,
     catalog: resolvedCatalog,
   });
   if (choices.length === 0) {

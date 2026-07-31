@@ -1,4 +1,5 @@
 /** Clears reset-related queues and system events for session keys. */
+import { clearEmbeddedSessionPromptStates } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { drainSystemEventEntries } from "../../infra/system-events.js";
 import { clearSessionQueues, type ClearSessionQueueResult } from "./queue/cleanup.js";
 import { clearReplyRunForResetBySessionId } from "./reply-run-registry.js";
@@ -13,6 +14,7 @@ export function clearSessionResetRuntimeState(
   keys: Array<string | undefined>,
   opts?: { activeReplySessionId?: string },
 ): ClearSessionResetRuntimeStateResult {
+  clearEmbeddedSessionPromptStates(keys);
   const cleared = clearSessionQueues(keys);
   let systemEventsCleared = 0;
 

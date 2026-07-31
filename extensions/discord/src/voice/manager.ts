@@ -1,19 +1,16 @@
-// Discord plugin module implements manager behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+// Discord plugin module implements manager behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { resolveDiscordAccountAllowFrom } from "../accounts.js";
 import {
   type APIVoiceState,
   type Client,
   getGuildVoiceState,
   isUnknownDiscordVoiceStateError,
-  ReadyListener,
-  ResumedListener,
-  VoiceStateUpdateListener,
 } from "../internal/discord.js";
 import type { VoicePlugin } from "../internal/voice.js";
 import { formatMention } from "../mentions.js";
@@ -33,10 +30,12 @@ import { resolveDiscordVoiceEnabled } from "./config.js";
 import {
   type DiscordVoiceIngressContext,
   resolveDiscordVoiceRealtimeBootstrapContext,
-  resolveDiscordVoiceIngressContext,
   runDiscordVoiceAgentTurn,
 } from "./ingress.js";
 import { formatVoiceLogPreview } from "./log-preview.js";
+import { DiscordVoiceMembershipTracker } from "./membership.js";
+import { resolveDiscordVoiceAccess } from "./owner-access.js";
+import { resolveDiscordVoiceIngressContextWithParticipants } from "./participant-context.js";
 import {
   DiscordRealtimeVoiceSession,
   type DiscordVoiceMode,
@@ -81,7 +80,6 @@ const DISCORD_VOICE_FATAL_AUTOJOIN_ERROR_PATTERNS = [
   "permission denied",
   "forbidden",
 ];
-
 function logFollowUserReconcileVerbose(reason: string, message: string): void {
   if (reason === "interval") {
     logger.trace(`discord voice: ${message}`);
@@ -204,14 +202,6 @@ function isFatalAutoJoinFailure(message: string): boolean {
   );
 }
 
-function startAutoJoin(manager: Pick<DiscordVoiceManager, "autoJoin">) {
-  void manager
-    .autoJoin()
-    .catch((err: unknown) =>
-      logger.warn(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`),
-    );
-}
-
 function resolveVoiceConnectionGroup(accountId: string): string {
   return `openclaw:${accountId}`;
 }
@@ -275,8 +265,11 @@ export class DiscordVoiceManager {
     string,
     { message: string; skipLogged: boolean }
   >();
+  private readonly admissionAllowFrom?: string[];
   private readonly ownerAllowFrom?: string[];
+  private readonly ownerAllowAll: boolean;
   private readonly speakerContext: DiscordVoiceSpeakerContextResolver;
+  private readonly membership: DiscordVoiceMembershipTracker;
   private readonly allowedChannels: VoiceChannelResidency[] | null;
   private readonly followUserIds: Set<string>;
   private readonly followedUserChannels = new Map<string, VoiceChannelResidency>();
@@ -300,11 +293,10 @@ export class DiscordVoiceManager {
   ) {
     this.botUserId = params.botUserId;
     this.voiceEnabled = resolveDiscordVoiceEnabled(params.discordConfig.voice);
-    this.ownerAllowFrom =
-      resolveDiscordAccountAllowFrom({ cfg: params.cfg, accountId: params.accountId }) ??
-      params.discordConfig.allowFrom ??
-      params.discordConfig.dm?.allowFrom ??
-      [];
+    const voiceAccess = resolveDiscordVoiceAccess(params);
+    this.admissionAllowFrom = voiceAccess.admissionAllowFrom;
+    this.ownerAllowFrom = voiceAccess.ownerAllowFrom;
+    this.ownerAllowAll = voiceAccess.ownerAllowAll;
     this.allowedChannels =
       params.discordConfig.voice?.allowedChannels === undefined
         ? null
@@ -315,13 +307,27 @@ export class DiscordVoiceManager {
     this.speakerContext = new DiscordVoiceSpeakerContextResolver({
       client: params.client,
       ownerAllowFrom: this.ownerAllowFrom,
+      ownerAllowAll: this.ownerAllowAll,
     });
+    this.membership = new DiscordVoiceMembershipTracker(
+      params.client,
+      this.speakerContext,
+      params.accountId,
+    );
   }
 
   setBotUserId(id?: string) {
     if (id) {
       this.botUserId = id;
     }
+  }
+
+  refreshGuildRoster(guildId: string): void {
+    const entry = this.sessions.get(guildId.trim());
+    if (!entry || entry.isStopped()) {
+      return;
+    }
+    this.membership.activate(entry, this.botUserId);
   }
 
   isEnabled() {
@@ -663,7 +669,7 @@ export class DiscordVoiceManager {
     }
     const { route, voiceRoute, agentSessionMode, agentSessionTarget } = routeInfo;
     logger.info(
-      `discord voice: joining guild=${guildId} channel=${channelId} mode=${voiceMode} agent=${route.agentId} voiceSession=${voiceRoute.sessionKey} supervisorSession=${route.sessionKey} agentSessionMode=${agentSessionMode}${agentSessionTarget ? ` agentSessionTarget=${agentSessionTarget}` : ""} voiceModel=${voiceConfig?.model ?? "route-default"} realtimeProvider=${voiceConfig?.realtime?.provider ?? "auto"} realtimeModel=${voiceConfig?.realtime?.model ?? "provider-default"} realtimeVoice=${voiceConfig?.realtime?.voice ?? "provider-default"}`,
+      `discord voice: joining guild=${guildId} channel=${channelId} mode=${voiceMode} agent=${route.agentId} voiceSession=${voiceRoute.sessionKey} supervisorSession=${route.sessionKey} agentSessionMode=${agentSessionMode}${agentSessionTarget ? ` agentSessionTarget=${agentSessionTarget}` : ""} voiceModel=${voiceConfig?.model ?? "route-default"} realtimeProvider=${voiceConfig?.realtime?.provider ?? "auto"} realtimeModel=${voiceConfig?.realtime?.model ?? "provider-default"} realtimeVoice=${voiceConfig?.realtime?.speakerVoice ?? voiceConfig?.realtime?.speakerVoiceId ?? "provider-default"}`,
     );
 
     const player = voiceSdk.createAudioPlayer();
@@ -683,6 +689,7 @@ export class DiscordVoiceManager {
         return;
       }
       stopped = true;
+      this.membership.deactivate(entry);
       if (speakingHandler) {
         connection.receiver.speaking.off("start", speakingHandler);
       }
@@ -838,6 +845,7 @@ export class DiscordVoiceManager {
     player.on("error", playerErrorHandler);
 
     this.sessions.set(guildId, entry);
+    this.membership.activate(entry, this.botUserId);
     this.fatalAutoJoinFailures.delete(formatAutoJoinFailureKey({ guildId, channelId }));
     logger.info(
       `discord voice: joined guild=${guildId} channel=${channelId} mode=${voiceMode} agent=${route.agentId} voiceSession=${voiceRoute.sessionKey} supervisorSession=${route.sessionKey} voiceModel=${voiceConfig?.model ?? "route-default"}`,
@@ -874,6 +882,7 @@ export class DiscordVoiceManager {
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
       entry,
+      getHumanParticipantCount: () => this.membership.countHumanParticipants(entry, this.botUserId),
       mode: voiceMode,
       runAgentTurn: ({ context, message, toolsAllow, userId }) =>
         this.runDiscordRealtimeAgentTurn({ context, entry, message, toolsAllow, userId }),
@@ -954,7 +963,10 @@ export class DiscordVoiceManager {
     };
   }
 
-  async handleVoiceStateUpdate(data: APIVoiceState): Promise<void> {
+  async handleVoiceStateUpdate(
+    data: APIVoiceState,
+    previousVoiceState?: APIVoiceState | null,
+  ): Promise<void> {
     const guildId = data.guild_id?.trim();
     const userId = data.user_id?.trim();
     const channelId = data.channel_id?.trim();
@@ -966,6 +978,8 @@ export class DiscordVoiceManager {
       await this.handleBotVoiceStateUpdate({ guildId, channelId });
       return;
     }
+
+    this.membership.track(this.sessions.get(guildId), data, previousVoiceState);
 
     if (this.followUserIds.has(userId)) {
       await this.handleFollowedUserVoiceStateUpdate({ guildId, channelId, userId });
@@ -1176,7 +1190,7 @@ export class DiscordVoiceManager {
         ).catch((err: unknown) => {
           if (!isUnknownDiscordVoiceStateError(err)) {
             logger.warn(
-              `discord voice: follow user reconcile skipped transient voice state error guild=${plan.guildId} user=${userId} reason=${reason}: ${formatErrorMessage(err)}`,
+              `follow-user reconcile skipped (transient voice-state error) guild=${plan.guildId} user=${userId} trigger=${reason}: ${formatErrorMessage(err)}`,
             );
             return "transient-error" as const;
           }
@@ -1225,7 +1239,10 @@ export class DiscordVoiceManager {
       if (this.botUserId && remainingLookups === 1) {
         break;
       }
-      const guildId = guildIds[(start + offset) % guildIds.length];
+      const guildId = expectDefined(
+        guildIds[(start + offset) % guildIds.length],
+        "voice reconciliation guild index",
+      );
       const userLimit = this.resolveFollowUserReconcileUserLookupLimit(
         followedUserIds.length,
         remainingLookups,
@@ -1269,7 +1286,10 @@ export class DiscordVoiceManager {
     let scanned = 0;
     let assigned = 0;
     for (; scanned < guildIds.length && assigned < remainingLookups; scanned += 1) {
-      const guildId = guildIds[(start + scanned) % guildIds.length];
+      const guildId = expectDefined(
+        guildIds[(start + scanned) % guildIds.length],
+        "bot voice reconciliation guild index",
+      );
       const plan = plansByGuild.get(guildId);
       if (!plan?.checkedAllUsers) {
         continue;
@@ -1301,10 +1321,15 @@ export class DiscordVoiceManager {
       return { userIds: followedUserIds, completedCycle: true };
     }
     const start = this.followUsersReconcileUserCursors.get(guildId) ?? 0;
-    const selected = Array.from(
-      { length: limit },
-      (_, offset) => followedUserIds[(start + offset) % followedUserIds.length],
-    );
+    const selected: string[] = [];
+    for (let offset = 0; offset < limit; offset += 1) {
+      selected.push(
+        expectDefined(
+          followedUserIds[(start + offset) % followedUserIds.length],
+          "followed user selection index",
+        ),
+      );
+    }
     const completedCycle = start + selected.length >= followedUserIds.length;
     this.followUsersReconcileUserCursors.set(
       guildId,
@@ -1464,7 +1489,9 @@ export class DiscordVoiceManager {
       return null;
     }
     const guildAllowed = this.allowedChannels.filter((entry) => entry.guildId === guildId);
-    return guildAllowed.length === 1 ? guildAllowed[0] : null;
+    return guildAllowed.length === 1
+      ? expectDefined(guildAllowed.at(0), "single allowed guild voice channel")
+      : null;
   }
 
   private enqueueProcessing(entry: VoiceSessionEntry, task: () => Promise<void>) {
@@ -1511,6 +1538,7 @@ export class DiscordVoiceManager {
     if (this.botUserId && userId === this.botUserId) {
       return;
     }
+    this.membership.notePresent(entry, userId);
     if (isVoiceCaptureActive(entry.capture, userId)) {
       const activeCapture = getActiveVoiceCapture(entry.capture, userId);
       const extended = activeCapture
@@ -1676,18 +1704,14 @@ export class DiscordVoiceManager {
     entry: VoiceSessionEntry,
     userId: string,
   ): Promise<DiscordVoiceIngressContext | null> {
-    return await resolveDiscordVoiceIngressContext({
+    return await resolveDiscordVoiceIngressContextWithParticipants({
+      client: this.params.client,
       entry,
       userId,
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
-      ownerAllowFrom: this.ownerAllowFrom,
-      fetchGuildName: async (guildId) => {
-        const guild = await this.params.client.fetchGuild(guildId).catch(() => null);
-        return guild && typeof guild.name === "string" && guild.name.trim()
-          ? guild.name
-          : undefined;
-      },
+      admissionAllowFrom: this.admissionAllowFrom,
+      botUserId: this.botUserId,
       speakerContext: this.speakerContext,
     });
   }
@@ -1716,7 +1740,7 @@ export class DiscordVoiceManager {
       runtime: this.params.runtime,
       context,
       toolsAllow,
-      ownerAllowFrom: this.ownerAllowFrom,
+      admissionAllowFrom: this.admissionAllowFrom,
       fetchGuildName: async (guildId) => {
         const guild = await this.params.client.fetchGuild(guildId).catch(() => null);
         return guild && typeof guild.name === "string" && guild.name.trim()
@@ -1747,9 +1771,11 @@ export class DiscordVoiceManager {
       ...params,
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
-      ownerAllowFrom: this.ownerAllowFrom,
+      admissionAllowFrom: this.admissionAllowFrom,
       runtime: this.params.runtime,
       speakerContext: this.speakerContext,
+      resolveIngressContext: () =>
+        this.resolveDiscordVoiceIngressContext(params.entry, params.userId),
       transcripts: params.entry.transcripts,
       fetchGuildName: async (guildId) => {
         const guild = await this.params.client.fetchGuild(guildId).catch(() => null);
@@ -1872,32 +1898,10 @@ export class DiscordVoiceManager {
   }
 }
 
-export class DiscordVoiceReadyListener extends ReadyListener {
-  constructor(private manager: DiscordVoiceManager) {
-    super();
-  }
-
-  async handle(_data: unknown, _client: Client): Promise<void> {
-    startAutoJoin(this.manager);
-  }
-}
-
-export class DiscordVoiceResumedListener extends ResumedListener {
-  constructor(private manager: DiscordVoiceManager) {
-    super();
-  }
-
-  async handle(_data: unknown, _client: Client): Promise<void> {
-    startAutoJoin(this.manager);
-  }
-}
-
-export class DiscordVoiceStateUpdateListener extends VoiceStateUpdateListener {
-  constructor(private manager: DiscordVoiceManager) {
-    super();
-  }
-
-  async handle(data: APIVoiceState, _client: Client): Promise<void> {
-    await this.manager.handleVoiceStateUpdate(data);
-  }
-}
+export {
+  DiscordVoiceGuildCreateListener,
+  DiscordVoiceReadyListener,
+  DiscordVoiceResumedListener,
+  DiscordVoiceStateUpdateListener,
+} from "./listeners.js";
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

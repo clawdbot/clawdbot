@@ -406,11 +406,3 @@ extension Request: Codable {
         }
     }
 }
-
-/// Shared transport settings
-public let controlSocketPath: String = {
-    let home = FileManager().homeDirectoryForCurrentUser
-    return home
-        .appendingPathComponent("Library/Application Support/OpenClaw/control.sock")
-        .path
-}()

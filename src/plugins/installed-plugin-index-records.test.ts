@@ -2,13 +2,19 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import type { PluginCandidate } from "./discovery.js";
+import {
+  resolvePluginNpmGenerationProjectDir,
+  resolvePluginNpmProjectDir,
+} from "./install-paths.js";
 import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
@@ -213,7 +219,7 @@ describe("plugin index install records store", () => {
     );
 
     const first = loadInstalledPluginIndexInstallRecordsSync({ stateDir });
-    first.cached.spec = "mutated@1.0.0";
+    expectDefined(first.cached, "first.cached test invariant").spec = "mutated@1.0.0";
 
     expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual({
       cached: {
@@ -384,6 +390,7 @@ describe("plugin index install records store", () => {
 
   it("keeps persisted install record metadata over recovered npm records", async () => {
     const stateDir = makeStateDir();
+    const customInstallPath = path.join(stateDir, "custom", "node_modules", "@openclaw", "discord");
     writeManagedNpmPlugin({
       stateDir,
       packageName: "@openclaw/discord",
@@ -396,7 +403,7 @@ describe("plugin index install records store", () => {
         discord: {
           source: "npm",
           spec: "@openclaw/discord@beta",
-          installPath: path.join(stateDir, "custom", "discord"),
+          installPath: customInstallPath,
           integrity: "sha512-persisted",
         },
       },
@@ -407,8 +414,244 @@ describe("plugin index install records store", () => {
     expectRecordFields(loaded.discord, {
       source: "npm",
       spec: "@openclaw/discord@beta",
-      installPath: path.join(stateDir, "custom", "discord"),
+      installPath: customInstallPath,
       integrity: "sha512-persisted",
+    });
+  });
+
+  it.each([
+    {
+      expectedSpec: "@openclaw/discord",
+      label: "bare",
+      persistedVersion: "2026.7.1",
+      recoveredVersion: "2026.7.1",
+      spec: "@openclaw/discord",
+    },
+    {
+      expectedSpec: "@openclaw/discord@latest",
+      label: "latest",
+      persistedVersion: "2026.7.1",
+      recoveredVersion: "2026.7.1",
+      spec: "@openclaw/discord@latest",
+    },
+    {
+      expectedSpec: "@openclaw/discord@beta",
+      label: "dist-tag",
+      persistedVersion: "2026.7.1",
+      recoveredVersion: "2026.7.1",
+      spec: "@openclaw/discord@beta",
+    },
+    {
+      expectedSpec: "@openclaw/discord@2026.7.1",
+      label: "obsolete exact-version",
+      persistedVersion: "2026.6.4",
+      recoveredVersion: "2026.7.1",
+      spec: "@openclaw/discord@2026.6.4",
+    },
+    {
+      expectedSpec: "@openclaw/discord@2027.1.0",
+      label: "unsupported legacy range",
+      persistedVersion: "2026.6.4",
+      recoveredVersion: "2027.1.0",
+      spec: "@openclaw/discord@^2026.6.0",
+    },
+    {
+      expectedSpec: "@openclaw/discord@2026.7.2-beta.1",
+      label: "bare prerelease",
+      persistedVersion: "2026.7.1",
+      recoveredVersion: "2026.7.2-beta.1",
+      spec: "@openclaw/discord",
+    },
+    {
+      expectedSpec: "@openclaw/discord@2026.7.2-beta.1",
+      label: "latest prerelease",
+      persistedVersion: "2026.7.1",
+      recoveredVersion: "2026.7.2-beta.1",
+      spec: "@openclaw/discord@latest",
+    },
+    {
+      expectedSpec: "@openclaw/discord@beta",
+      label: "opted-in prerelease",
+      persistedVersion: "2026.7.1",
+      recoveredVersion: "2026.7.2-beta.1",
+      spec: "@openclaw/discord@beta",
+    },
+  ])(
+    "recovers a valid managed generation with a compatible $label selector",
+    async ({ expectedSpec, persistedVersion, recoveredVersion, spec }) => {
+      const stateDir = makeStateDir();
+      const packageName = "@openclaw/discord";
+      const fixtureProjectRoot = resolvePluginNpmProjectDir({
+        npmDir: path.join(stateDir, "npm"),
+        packageName,
+      });
+      writeManagedNpmPlugin({
+        stateDir,
+        packageName,
+        pluginId: "discord",
+        version: recoveredVersion,
+      });
+      const staleProjectRoot = resolvePluginNpmGenerationProjectDir({
+        npmDir: path.join(stateDir, "npm"),
+        packageName,
+        generationKey: "discord-2026.6.4",
+      });
+      const activeProjectRoot = resolvePluginNpmGenerationProjectDir({
+        npmDir: path.join(stateDir, "npm"),
+        packageName,
+        generationKey: `discord-${recoveredVersion}`,
+      });
+      fs.renameSync(fixtureProjectRoot, activeProjectRoot);
+      const stalePackageDir = path.join(
+        staleProjectRoot,
+        "node_modules",
+        ...packageName.split("/"),
+      );
+      const activePackageDir = path.join(
+        activeProjectRoot,
+        "node_modules",
+        ...packageName.split("/"),
+      );
+
+      await writePersistedInstalledPluginIndexInstallRecords(
+        {
+          discord: {
+            source: "npm",
+            spec,
+            installPath: stalePackageDir,
+            version: persistedVersion,
+            resolvedName: packageName,
+            resolvedVersion: persistedVersion,
+            resolvedSpec: `${packageName}@${persistedVersion}`,
+            integrity: "sha512-stale",
+          },
+        },
+        { stateDir, candidates: [] },
+      );
+
+      const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
+      const record = expectRecordFields(loaded.discord, {
+        source: "npm",
+        spec: expectedSpec,
+        installPath: activePackageDir,
+        version: recoveredVersion,
+        resolvedName: packageName,
+        resolvedVersion: recoveredVersion,
+        resolvedSpec: `${packageName}@${recoveredVersion}`,
+      });
+      expect(record.integrity).toBeUndefined();
+
+      clearLoadInstalledPluginIndexInstallRecordsCache();
+      expectRecordFields(loadInstalledPluginIndexInstallRecordsSync({ stateDir }).discord, {
+        installPath: activePackageDir,
+        resolvedVersion: recoveredVersion,
+      });
+    },
+  );
+
+  it("recovers when an ENOTDIR ancestor blocks the stale managed generation", async () => {
+    const stateDir = makeStateDir();
+    const packageName = "@openclaw/discord";
+    const npmDir = path.join(stateDir, "npm");
+    const fixtureProjectRoot = resolvePluginNpmProjectDir({ npmDir, packageName });
+    writeManagedNpmPlugin({
+      stateDir,
+      packageName,
+      pluginId: "discord",
+      version: "2026.7.1",
+    });
+    const activeProjectRoot = resolvePluginNpmGenerationProjectDir({
+      npmDir,
+      packageName,
+      generationKey: "discord-2026.7.1",
+    });
+    fs.renameSync(fixtureProjectRoot, activeProjectRoot);
+    const staleProjectRoot = resolvePluginNpmGenerationProjectDir({
+      npmDir,
+      packageName,
+      generationKey: "discord-2026.6.4",
+    });
+    fs.writeFileSync(staleProjectRoot, "not a directory", "utf8");
+    const stalePackageDir = path.join(staleProjectRoot, "node_modules", ...packageName.split("/"));
+    const activePackageDir = path.join(
+      activeProjectRoot,
+      "node_modules",
+      ...packageName.split("/"),
+    );
+
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {
+        discord: {
+          source: "npm",
+          spec: "@openclaw/discord@latest",
+          installPath: stalePackageDir,
+          resolvedName: packageName,
+          resolvedVersion: "2026.6.4",
+          integrity: "sha512-stale",
+        },
+      },
+      { stateDir, candidates: [] },
+    );
+
+    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
+    const record = expectRecordFields(loaded.discord, {
+      spec: "@openclaw/discord@latest",
+      installPath: activePackageDir,
+      resolvedVersion: "2026.7.1",
+    });
+    expect(record.integrity).toBeUndefined();
+  });
+
+  it("recovers a Windows managed generation when the persisted root casing differs", async () => {
+    const stateDir = makeStateDir();
+    const packageName = "@openclaw/discord";
+    const npmDir = path.join(stateDir, "npm");
+    const fixtureProjectRoot = resolvePluginNpmProjectDir({ npmDir, packageName });
+    writeManagedNpmPlugin({
+      stateDir,
+      packageName,
+      pluginId: "discord",
+      version: "2026.7.1",
+    });
+    const activeProjectRoot = resolvePluginNpmGenerationProjectDir({
+      npmDir,
+      packageName,
+      generationKey: "discord-2026.7.1",
+    });
+    fs.renameSync(fixtureProjectRoot, activeProjectRoot);
+    const activePackageDir = path.join(
+      activeProjectRoot,
+      "node_modules",
+      ...packageName.split("/"),
+    );
+    const staleProjectRoot = resolvePluginNpmGenerationProjectDir({
+      npmDir,
+      packageName,
+      generationKey: "discord-2026.6.4",
+    });
+    const stalePackageDir = path
+      .join(staleProjectRoot, "node_modules", ...packageName.split("/"))
+      .replace(stateDir, stateDir.toUpperCase());
+
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {
+        discord: {
+          source: "npm",
+          spec: "@openclaw/discord@latest",
+          installPath: stalePackageDir,
+          resolvedName: packageName,
+          resolvedVersion: "2026.6.4",
+        },
+      },
+      { stateDir, candidates: [] },
+    );
+
+    const loaded = await withMockedWindowsPlatform(() =>
+      loadInstalledPluginIndexInstallRecords({ stateDir }),
+    );
+    expectRecordFields(loaded.discord, {
+      installPath: activePackageDir,
+      resolvedVersion: "2026.7.1",
     });
   });
 

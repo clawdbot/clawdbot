@@ -13,8 +13,8 @@ Build and run the OpenClaw macOS application from source.
 
 - **Xcode 26.2+** (Swift 6.2 toolchain), on the latest macOS available in
   Software Update.
-- **Node.js 24 & pnpm** for the gateway, CLI, and packaging scripts. Node
-  22.19+ also works.
+- **Node.js 24.15+ & pnpm** for the gateway, CLI, and packaging scripts. Node
+  22.22.3+ also works.
 
 ## 1. Install dependencies
 

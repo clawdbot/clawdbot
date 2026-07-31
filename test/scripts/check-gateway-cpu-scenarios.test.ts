@@ -153,6 +153,7 @@ describe("gateway CPU scenario guard", () => {
     ]);
 
     const result = await testing.runGatewayCpuScenarios(options, {
+      env: { ...process.env, PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "install" },
       silent: true,
       spawnSync: (command: string, args: string[], opts?: { env?: Record<string, string> }) => {
         calls.push({ args, command, env: opts?.env });
@@ -289,6 +290,7 @@ describe("gateway CPU scenario guard", () => {
 
     const result = await testing.runGatewayCpuScenarios(options, {
       cwd,
+      env: { ...process.env, PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "install" },
       silent: true,
       spawnSync: (_command: string, args: string[], opts?: { env?: Record<string, string> }) => {
         calls.push({ args, env: opts?.env });

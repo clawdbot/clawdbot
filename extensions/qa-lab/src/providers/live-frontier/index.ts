@@ -31,7 +31,7 @@ function isClaudeOpusModel(modelRef: string) {
 export const liveFrontierProviderDefinition: QaProviderDefinition = {
   mode: "live-frontier",
   kind: "live",
-  defaultModel: (options) => options?.preferredLiveModel ?? "openai/gpt-5.5",
+  defaultModel: (options) => options?.preferredLiveModel ?? "openai/gpt-5.6",
   defaultImageGenerationProviderIds: ["openai"],
   defaultImageGenerationModel: ({ modelProviderIds }) =>
     modelProviderIds.includes("openai") ? "openai/gpt-image-1" : null,

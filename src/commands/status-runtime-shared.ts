@@ -203,7 +203,7 @@ export async function resolveStatusGatewayDiagnosticsSafe(params: {
 }
 
 /** Reads the most recent gateway heartbeat only when the gateway probe succeeded. */
-export async function resolveStatusLastHeartbeat(params: {
+async function resolveStatusLastHeartbeat(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
   gatewayReachable: boolean;
@@ -235,13 +235,14 @@ export async function resolveStatusServiceSummaries(timeoutMs?: number) {
 
 type StatusUsageSummary = Awaited<ReturnType<typeof resolveStatusUsageSummary>>;
 type StatusGatewayHealth = Awaited<ReturnType<typeof resolveStatusGatewayHealth>>;
+type StatusGatewayHealthResult = StatusGatewayHealth | { error: string };
 type StatusLastHeartbeat = Awaited<ReturnType<typeof resolveStatusLastHeartbeat>>;
 type StatusGatewayServiceSummary = Awaited<ReturnType<typeof getDaemonStatusSummary>>;
 type StatusNodeServiceSummary = Awaited<ReturnType<typeof getNodeDaemonStatusSummary>>;
 type StatusSecurityAudit = Awaited<ReturnType<typeof resolveStatusSecurityAudit>>;
 
 /** Resolves optional usage/deep runtime details plus service summaries for status output. */
-export async function resolveStatusRuntimeDetails(params: {
+async function resolveStatusRuntimeDetails(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
   usage?: boolean;
@@ -262,12 +263,13 @@ export async function resolveStatusRuntimeDetails(params: {
         config: params.config,
       })
     : undefined;
+  // JSON status remains nonthrowing, but requested probe failures must stay visible.
   const health = params.deep
     ? params.suppressHealthErrors
       ? await resolveGatewayHealthSummary({
           config: params.config,
           timeoutMs: params.timeoutMs,
-        }).catch(() => undefined)
+        }).catch((error: unknown) => ({ error: String(error) }))
       : await resolveGatewayHealthSummary({
           config: params.config,
           timeoutMs: params.timeoutMs,
@@ -291,7 +293,7 @@ export async function resolveStatusRuntimeDetails(params: {
   };
   return result satisfies {
     usage?: StatusUsageSummary;
-    health?: StatusGatewayHealth;
+    health?: StatusGatewayHealthResult;
     lastHeartbeat: StatusLastHeartbeat;
     gatewayService: StatusGatewayServiceSummary;
     nodeService: StatusNodeServiceSummary;
@@ -342,7 +344,7 @@ export async function resolveStatusRuntimeSnapshot(params: {
   } satisfies {
     securityAudit?: StatusSecurityAudit;
     usage?: StatusUsageSummary;
-    health?: StatusGatewayHealth;
+    health?: StatusGatewayHealthResult;
     lastHeartbeat: StatusLastHeartbeat;
     gatewayService: StatusGatewayServiceSummary;
     nodeService: StatusNodeServiceSummary;

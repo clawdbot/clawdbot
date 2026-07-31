@@ -25,6 +25,7 @@ function buildNodeInstallEnvironmentValueSources(): Record<
 > {
   return {
     OPENCLAW_GATEWAY_TOKEN: "file",
+    OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
   };
 }
 
@@ -38,6 +39,7 @@ export async function buildNodeInstallPlan(params: {
   tlsFingerprint?: string;
   nodeId?: string;
   displayName?: string;
+  installedAppsSharing?: boolean;
   runtime: GatewayDaemonRuntime;
   devMode?: boolean;
   nodePath?: string;
@@ -57,6 +59,7 @@ export async function buildNodeInstallPlan(params: {
     tlsFingerprint: params.tlsFingerprint,
     nodeId: params.nodeId,
     displayName: params.displayName,
+    installedAppsSharing: params.installedAppsSharing,
     dev: devMode,
     runtime: params.runtime,
     nodePath,

@@ -38,7 +38,7 @@ describe("runCronIsolatedAgentTurn model provider preflight", () => {
     preflightCronModelProviderMock.mockResolvedValueOnce({
       status: "unavailable",
       reason:
-        "Agent cron job uses ollama/qwen3:32b but the local provider endpoint is not reachable at http://127.0.0.1:11434.",
+        "Agent cron job uses ollama/qwen3:32b but the local provider preflight failed at http://127.0.0.1:11434.",
       provider: "ollama",
       model: "qwen3:32b",
       baseUrl: "http://127.0.0.1:11434",
@@ -88,16 +88,20 @@ describe("runCronIsolatedAgentTurn model provider preflight", () => {
     expect(result.provider).toBe("ollama");
     expect(result.model).toBe("qwen3:32b");
     expect(result.sessionId).toBe("cron-session");
-    expect(result.error).toContain("local provider endpoint is not reachable");
+    expect(result.error).toContain("local provider preflight failed");
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it("continues with configured fallback when the local primary preflight is unavailable", async () => {
     mockRunCronFallbackPassthrough();
+    const unavailableReason =
+      "Agent cron job uses ollama/qwen3:32b but the local provider preflight failed at " +
+      "http://127.0.0.1:11434. The candidate is unavailable for this cron run; OpenClaw " +
+      "will retry its provider preflight on a later scheduled run. Last error: " +
+      "ConnectError: connect ECONNREFUSED (code=ECONNREFUSED)";
     preflightCronModelProviderMock.mockResolvedValueOnce({
       status: "unavailable",
-      reason:
-        "Agent cron job uses ollama/qwen3:32b but the local provider endpoint is not reachable at http://127.0.0.1:11434.",
+      reason: unavailableReason,
       provider: "ollama",
       model: "qwen3:32b",
       baseUrl: "http://127.0.0.1:11434",
@@ -162,17 +166,19 @@ describe("runCronIsolatedAgentTurn model provider preflight", () => {
     expect(runWithModelFallbackMock.mock.calls[0]?.[0]).toMatchObject({
       fallbacksOverride: ["openai/gpt-5.4"],
     });
-    expect(String(logWarnMock.mock.calls[0]?.[0] ?? "")).toContain(
+    const warning = String(logWarnMock.mock.calls[0]?.[0] ?? "");
+    expect(warning).toContain(unavailableReason);
+    expect(warning).toContain(
       "continuing with fallback openrouter/nvidia/nemotron-3-super-120b-a12b:free",
     );
-    expect(String(logWarnMock.mock.calls[0]?.[0] ?? "")).not.toContain("Skipping this cron run");
+    expect(warning).not.toContain("Skipping this cron run");
   });
 
   it("keeps explicit empty payload fallbacks strict when local primary preflight fails", async () => {
     preflightCronModelProviderMock.mockResolvedValueOnce({
       status: "unavailable",
       reason:
-        "Agent cron job uses ollama/qwen3:32b but the local provider endpoint is not reachable at http://127.0.0.1:11434.",
+        "Agent cron job uses ollama/qwen3:32b but the local provider preflight failed at http://127.0.0.1:11434.",
       provider: "ollama",
       model: "qwen3:32b",
       baseUrl: "http://127.0.0.1:11434",

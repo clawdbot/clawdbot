@@ -61,6 +61,9 @@ export function resolveNodeService(): GatewayService {
     uninstall: async (args) => {
       return base.uninstall({ ...args, env: withNodeServiceEnv(args.env) });
     },
+    start: async (args) => {
+      return base.start({ ...args, env: withNodeServiceEnv(args.env ?? {}) });
+    },
     stop: async (args) => {
       return base.stop({ ...args, env: withNodeServiceEnv(args.env ?? {}) });
     },

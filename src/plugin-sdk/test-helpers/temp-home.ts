@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 
@@ -82,7 +83,7 @@ function setTempHome(base: string) {
   if (!match) {
     return;
   }
-  setTestEnvValue("HOMEDRIVE", match[1]);
+  setTestEnvValue("HOMEDRIVE", expectDefined(match[1], "temp home regex capture 1"));
   setTestEnvValue("HOMEPATH", match[2] || "\\");
 }
 

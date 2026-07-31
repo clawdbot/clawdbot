@@ -1,6 +1,7 @@
 // Xai plugin module implements x search shared behavior.
 import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import { postTrustedWebToolsJson, wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
+import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import {
   buildXaiResponsesToolBody,
   requireXaiResponseTextCitationsAndInline,
@@ -13,7 +14,7 @@ import {
 } from "./tool-config-shared.js";
 import type { XaiWebSearchResponse } from "./web-search-shared.js";
 
-export const XAI_DEFAULT_X_SEARCH_MODEL = "grok-4-1-fast-non-reasoning";
+export const XAI_DEFAULT_X_SEARCH_MODEL = XAI_DEFAULT_MODEL_ID;
 
 type XaiXSearchConfig = {
   apiKey?: unknown;
@@ -129,6 +130,7 @@ export async function requestXaiXSearch(params: {
         inputText: params.options.query,
         tools: [buildXSearchTool(params.options)],
         maxTurns: params.maxTurns,
+        reasoningEffort: params.model === XAI_DEFAULT_X_SEARCH_MODEL ? "none" : undefined,
       }),
       errorLabel: "xAI",
     },

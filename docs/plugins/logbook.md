@@ -58,7 +58,7 @@ Configure an explicit vision model for deterministic startup:
       logbook: {
         enabled: true,
         config: {
-          visionModel: "codex/gpt-5.5",
+          visionModel: "codex/gpt-5.6-sol",
         },
       },
     },
@@ -140,7 +140,7 @@ text.
           nodeId: "my-mac",
           screenIndex: 0,
           maxWidth: 1440,
-          visionModel: "codex/gpt-5.5",
+          visionModel: "codex/gpt-5.6-sol",
           retentionDays: 14,
         },
       },
@@ -174,8 +174,7 @@ Gateway restarts; use `captureEnabled: false` for a persistent stop.
 Logbook resolves the observation model in this order:
 
 1. `plugins.entries.logbook.config.visionModel`
-2. the first image-capable Codex entry under `tools.media.image.models`
-3. the first image-capable Codex entry under `tools.media.models`
+2. the first image-capable Codex entry under `tools.media.models`
 
 Other media providers are skipped because they do not currently expose the
 structured extraction contract Logbook requires. Setting
@@ -227,7 +226,7 @@ the derived-text methods directly.
   model when you need a fully local pipeline.
 - Frames, the timeline database, and temporary captures are written with
   owner-only file permissions.
-- Adding `screen.snapshot` to `gateway.nodes.denyCommands` is the
+- Adding `screen.snapshot` to `gateway.nodes.commands.deny` is the
   screen-capture kill switch: it blocks app-node capture and Logbook's own
   `logbook.snapshot` command alike.
 - Setting `tools.media.image.enabled: false` also stops Logbook from borrowing
@@ -259,7 +258,7 @@ openclaw logs --follow
 - Confirm the node exposes `screen.snapshot` or `logbook.snapshot`.
 - Grant Screen Recording permission on the capture Mac.
 - If `nodeId` is configured, confirm it matches the node id or display name.
-- Check that `gateway.nodes.denyCommands` does not contain
+- Check that `gateway.nodes.commands.deny` does not contain
   `screen.snapshot`.
 
 After three consecutive failures, Logbook backs off for ten capture ticks and

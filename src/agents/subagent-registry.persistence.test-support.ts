@@ -1,11 +1,18 @@
 /**
- * Test helpers for subagent registry persistence scenarios. They create
- * minimal session-store files and runtime dependency mocks without loading
+ * Test helpers for subagent registry persistence scenarios. They seed minimal
+ * SQLite-backed session entries and runtime dependency mocks without loading
  * the production embedded-agent stack.
  */
-import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
+import type { SessionEntry } from "../config/sessions.js";
+import {
+  applySessionEntryLifecycleMutation,
+  listSessionEntries,
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SessionStore = Record<string, Record<string, unknown>>;
 
@@ -13,21 +20,40 @@ function resolveSubagentSessionStorePath(stateDir: string, agentId: string): str
   return path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
 }
 
-/** Reads a test session-store JSON file, returning an empty store on missing/invalid input. */
-export async function readSubagentSessionStore(storePath: string): Promise<SessionStore> {
-  try {
-    const raw = await fs.readFile(storePath, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as SessionStore;
-    }
-  } catch {
-    // ignore
-  }
-  return {};
+/** Expands shorthand test records into the canonical nested persistence shape. */
+export function createCanonicalSubagentRunFixture(run: SubagentRunRecord): SubagentRunRecord {
+  const terminal = typeof run.endedAt === "number";
+  return {
+    execution: terminal
+      ? { status: "terminal", startedAt: run.startedAt, endedAt: run.endedAt, outcome: run.outcome }
+      : { status: "running", startedAt: run.startedAt },
+    completion: { required: run.expectsCompletionMessage === true },
+    delivery: {
+      status:
+        run.expectsCompletionMessage === false
+          ? "not_required"
+          : terminal
+            ? "pending"
+            : "not_required",
+    },
+    ...run,
+  };
 }
 
-/** Writes or updates one subagent session-store entry for persistence tests. */
+export function canonicalSubagentRunFixtures(
+  runs: Map<string, SubagentRunRecord>,
+): Map<string, SubagentRunRecord> {
+  return new Map([...runs].map(([runId, run]) => [runId, createCanonicalSubagentRunFixture(run)]));
+}
+
+/** Reads test session entries through the active SQLite accessor. */
+export async function readSubagentSessionStore(storePath: string): Promise<SessionStore> {
+  return Object.fromEntries(
+    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  ) as unknown as SessionStore;
+}
+
+/** Writes or updates one SQLite-backed subagent session entry for persistence tests. */
 export async function writeSubagentSessionEntry(params: {
   stateDir: string;
   sessionKey: string;
@@ -38,31 +64,31 @@ export async function writeSubagentSessionEntry(params: {
   defaultSessionId: string;
 }): Promise<string> {
   const storePath = resolveSubagentSessionStorePath(params.stateDir, params.agentId);
-  const store = await readSubagentSessionStore(storePath);
-  store[params.sessionKey] = {
-    ...store[params.sessionKey],
+  const current = loadSessionEntry({ storePath, sessionKey: params.sessionKey });
+  const entry: SessionEntry = {
+    ...current,
     sessionId: params.sessionId ?? params.defaultSessionId,
     updatedAt: params.updatedAt ?? Date.now(),
     ...(typeof params.abortedLastRun === "boolean"
       ? { abortedLastRun: params.abortedLastRun }
       : {}),
   };
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, "utf8");
+  await replaceSessionEntry({ storePath, sessionKey: params.sessionKey }, entry);
   return storePath;
 }
 
-/** Removes one subagent session-store entry for persistence tests. */
+/** Removes one SQLite-backed subagent session entry for persistence tests. */
 export async function removeSubagentSessionEntry(params: {
   stateDir: string;
   sessionKey: string;
   agentId: string;
 }): Promise<string> {
   const storePath = resolveSubagentSessionStorePath(params.stateDir, params.agentId);
-  const store = await readSubagentSessionStore(storePath);
-  delete store[params.sessionKey];
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, "utf8");
+  await applySessionEntryLifecycleMutation({
+    storePath,
+    removals: [{ sessionKey: params.sessionKey }],
+    skipMaintenance: true,
+  });
   return storePath;
 }
 
@@ -76,6 +102,11 @@ export function createSubagentRegistryTestDeps(
     ensureContextEnginesInitialized: vi.fn(),
     ensureRuntimePluginsLoaded: vi.fn(),
     getRuntimeConfig: vi.fn(() => ({})),
+    getGatewayRecoveryRuntime: vi.fn(() => ({
+      dispatchAgent: vi.fn(),
+      waitForAgent: vi.fn(),
+      sendRecoveryNotice: vi.fn(),
+    })),
     resolveAgentTimeoutMs: vi.fn(() => 100),
     resolveContextEngine: vi.fn(async () => ({
       info: { id: "test", name: "Test", version: "0.0.1" },

@@ -1,26 +1,31 @@
 // Tasks command tests cover task listing, status rendering, cron-store integration, and cancellations.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../config/config.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { saveCronStore } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { resetDetachedTaskLifecycleRuntimeForTests } from "../tasks/detached-task-runtime.js";
-import {
-  createManagedTaskFlow as createManagedTaskFlowOrNull,
-  resetTaskFlowRegistryForTests,
-} from "../tasks/task-flow-registry.js";
+import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "../tasks/task-flow-registry.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
-  resetTaskRegistryDeliveryRuntimeForTests,
-  resetTaskRegistryForTests,
+  getTaskById,
+  reloadTaskRegistryFromStore,
 } from "../tasks/task-registry.js";
 import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
+import {
+  configureTaskFlowRegistryRuntime,
+  resetDetachedTaskLifecycleRuntimeForTests,
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryDeliveryRuntimeForTests,
+  resetTaskRegistryForTests,
+} from "../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { TaskSystemAuditCode, TaskSystemAuditSeverity } from "./tasks-audit-system.js";
 import {
   tasksAuditCommand,
   tasksCancelCommand,
@@ -82,6 +87,15 @@ const zeroTaskAuditCounts = {
   stale_queued: 0,
   stale_running: 0,
 };
+
+async function writeSessionEntries(
+  storePath: string,
+  entries: Record<string, SessionEntry>,
+): Promise<void> {
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    await replaceSessionEntry({ sessionKey, storePath }, entry);
+  }
+}
 
 async function withTaskCommandStateDir(
   run: (state: OpenClawTestState) => Promise<void>,
@@ -198,6 +212,99 @@ describe("tasks commands", () => {
       });
       expect(limitedFinding?.ageMs).toBeGreaterThanOrEqual(45 * 60_000);
       expect(limitedFinding?.ageMs).toBeLessThan(45 * 60_000 + 1_000);
+    });
+  });
+
+  it("keeps task-flow restore failures inspectable in full audit output", async () => {
+    await withTaskCommandStateDir(async () => {
+      const loadSnapshot = vi.fn(() => {
+        throw new Error("SQLITE_IOERR: task-flow command audit restore failed");
+      });
+      configureTaskFlowRegistryRuntime({
+        store: {
+          loadSnapshot,
+          saveSnapshot: () => {},
+        },
+      });
+
+      const jsonRuntime = createRuntime();
+      await tasksAuditCommand({ json: true }, jsonRuntime);
+      expect(readFirstJsonLog(jsonRuntime)).toMatchObject({
+        count: 1,
+        summary: {
+          taskFlows: {
+            total: 1,
+            errors: 1,
+            byCode: {
+              restore_failed: 1,
+            },
+          },
+        },
+        findings: [
+          {
+            kind: "task_flow",
+            severity: "error",
+            code: "restore_failed",
+            detail:
+              "task-flow registry restore failed: SQLITE_IOERR: task-flow command audit restore failed",
+          },
+        ],
+      });
+
+      const textRuntime = createRuntime();
+      await tasksAuditCommand({ json: false }, textRuntime);
+      const output = vi
+        .mocked(textRuntime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(output).toContain("TaskFlow");
+      expect(output).toContain("restore_failed");
+      expect(output).toContain("task-flow registry restore failed");
+      expect(loadSnapshot).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("reports blank list filters as absent in command JSON output", async () => {
+    await withTaskCommandStateDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-cli",
+        status: "running",
+        task: "Inspect issue backlog",
+      });
+
+      const runtime = createRuntime();
+      await tasksListCommand({ json: true, runtime: "   ", status: "\t" }, runtime);
+
+      expect(readFirstJsonLog(runtime)).toStrictEqual({
+        count: 1,
+        runtime: null,
+        status: null,
+        tasks: [jsonRoundTrip(task)],
+      });
+    });
+  });
+
+  it("reports blank audit filters as absent in command JSON output", async () => {
+    await withTaskCommandStateDir(async () => {
+      const runtime = createRuntime();
+      await tasksAuditCommand(
+        {
+          json: true,
+          severity: "  " as TaskSystemAuditSeverity,
+          code: "\t" as TaskSystemAuditCode,
+        },
+        runtime,
+      );
+
+      expect(readFirstJsonLog(runtime)).toMatchObject({
+        filters: {
+          severity: null,
+          code: null,
+        },
+      });
     });
   });
 
@@ -332,21 +439,13 @@ describe("tasks commands", () => {
       });
 
       const sessionsDir = state.sessionsDir("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(
-        path.join(sessionsDir, "sessions.json"),
-        JSON.stringify(
-          {
-            [childSessionKey]: {
-              sessionId: "child-retained",
-              updatedAt: now,
-            },
-          },
-          null,
-          2,
-        ),
-        "utf8",
-      );
+      const storePath = path.join(sessionsDir, "sessions.json");
+      await writeSessionEntries(storePath, {
+        [childSessionKey]: {
+          sessionId: "child-retained",
+          updatedAt: now,
+        },
+      });
 
       const runtime = createRuntime();
       await tasksMaintenanceCommand({ json: true, apply: false }, runtime);
@@ -390,25 +489,16 @@ describe("tasks commands", () => {
 
       const sessionsDir = state.sessionsDir("main");
       const storePath = path.join(sessionsDir, "sessions.json");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            [childSessionKey]: {
-              sessionId: "old-run",
-              updatedAt: now - 8 * 24 * 60 * 60_000,
-            },
-            "agent:main:telegram:dm:recent": {
-              sessionId: "recent-session",
-              updatedAt: now - 60_000,
-            },
-          },
-          null,
-          2,
-        ),
-        "utf8",
-      );
+      await writeSessionEntries(storePath, {
+        [childSessionKey]: {
+          sessionId: "old-run",
+          updatedAt: now - 8 * 24 * 60 * 60_000,
+        },
+        "agent:main:telegram:dm:recent": {
+          sessionId: "recent-session",
+          updatedAt: now - 60_000,
+        },
+      });
 
       const runtime = createRuntime();
       await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
@@ -439,9 +529,10 @@ describe("tasks commands", () => {
         }),
       );
 
-      const updated = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
-      expect(updated[childSessionKey]).toBeUndefined();
-      expect(updated["agent:main:telegram:dm:recent"]).toBeDefined();
+      expect(loadSessionEntry({ sessionKey: childSessionKey, storePath })).toBeUndefined();
+      expect(
+        loadSessionEntry({ sessionKey: "agent:main:telegram:dm:recent", storePath }),
+      ).toBeDefined();
     });
   });
 
@@ -471,25 +562,16 @@ describe("tasks commands", () => {
 
       const sessionsDir = state.sessionsDir("main");
       const storePath = path.join(sessionsDir, "sessions.json");
-      await fs.mkdir(sessionsDir, { recursive: true });
       // A running job can be retargeted after its session is created, so maintenance must preserve
       // both the raw and slugged historical shapes.
       const slugKey = "agent:main:cron:daily-report:run:old-run";
       const rawKey = "agent:main:cron:daily report:run:old-run";
       const retiredKey = "agent:main:cron:retired-job:run:old-run";
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            [slugKey]: { sessionId: "slug-run", updatedAt: old },
-            [rawKey]: { sessionId: "raw-run", updatedAt: old },
-            [retiredKey]: { sessionId: "retired-run", updatedAt: old },
-          },
-          null,
-          2,
-        ),
-        "utf8",
-      );
+      await writeSessionEntries(storePath, {
+        [slugKey]: { sessionId: "slug-run", updatedAt: old },
+        [rawKey]: { sessionId: "raw-run", updatedAt: old },
+        [retiredKey]: { sessionId: "retired-run", updatedAt: old },
+      });
 
       const runtime = createRuntime();
       await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
@@ -498,10 +580,9 @@ describe("tasks commands", () => {
         maintenance: { sessions: { runningCronJobs: number } };
       };
       expect(payload.maintenance.sessions.runningCronJobs).toBe(1);
-      const updated = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
-      expect(updated[slugKey]).toBeDefined();
-      expect(updated[rawKey]).toBeDefined();
-      expect(updated[retiredKey]).toBeUndefined();
+      expect(loadSessionEntry({ sessionKey: slugKey, storePath })).toBeDefined();
+      expect(loadSessionEntry({ sessionKey: rawKey, storePath })).toBeDefined();
+      expect(loadSessionEntry({ sessionKey: retiredKey, storePath })).toBeUndefined();
     });
   });
 
@@ -531,36 +612,33 @@ describe("tasks commands", () => {
 
       const sessionsDir = state.sessionsDir("main");
       const storePath = path.join(sessionsDir, "sessions.json");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            "agent:main:cron:daily-monitor:run:old-run": {
-              sessionId: "explicit-run",
-              updatedAt: old,
-            },
-            "agent:main:cron:job-uuid:run:old-run": {
-              sessionId: "job-id-run",
-              updatedAt: old,
-            },
-            "agent:main:cron:retired-job:run:old-run": {
-              sessionId: "retired-run",
-              updatedAt: old,
-            },
-          },
-          null,
-          2,
-        ),
-        "utf8",
-      );
+      await writeSessionEntries(storePath, {
+        "agent:main:cron:daily-monitor:run:old-run": {
+          sessionId: "explicit-run",
+          updatedAt: old,
+        },
+        "agent:main:cron:job-uuid:run:old-run": {
+          sessionId: "job-id-run",
+          updatedAt: old,
+        },
+        "agent:main:cron:retired-job:run:old-run": {
+          sessionId: "retired-run",
+          updatedAt: old,
+        },
+      });
 
       const runtime = createRuntime();
       await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
 
-      const updated = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
-      expect(updated["agent:main:cron:daily-monitor:run:old-run"]).toBeDefined();
-      expect(updated["agent:main:cron:retired-job:run:old-run"]).toBeUndefined();
+      expect(
+        loadSessionEntry({
+          sessionKey: "agent:main:cron:daily-monitor:run:old-run",
+          storePath,
+        }),
+      ).toBeDefined();
+      expect(
+        loadSessionEntry({ sessionKey: "agent:main:cron:retired-job:run:old-run", storePath }),
+      ).toBeUndefined();
     });
   });
 
@@ -690,39 +768,87 @@ describe("tasks commands", () => {
     });
   });
 
+  it.each([false, true])(
+    "refuses all maintenance when task-flow restore fails (apply=%s)",
+    async (apply) => {
+      await withTaskCommandStateDir(async (state) => {
+        const now = Date.now();
+        vi.useFakeTimers();
+        vi.setSystemTime(now - 8 * 24 * 60 * 60_000);
+        const staleTask = createTaskRecord({
+          runtime: "cli",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          runId: `stale-task-${String(apply)}`,
+          task: "Task that maintenance would prune",
+          status: "succeeded",
+          deliveryStatus: "not_applicable",
+        });
+        vi.setSystemTime(now);
+        const storePath = path.join(state.sessionsDir("main"), "sessions.json");
+        const staleSessionKey = "agent:main:cron:done-job:run:old-run";
+        await writeSessionEntries(storePath, {
+          [staleSessionKey]: {
+            sessionId: "old-run",
+            updatedAt: Date.now() - 8 * 24 * 60 * 60_000,
+          },
+        });
+        const loadSnapshot = vi.fn(() => {
+          throw new Error("SQLITE_CORRUPT: task-flow maintenance restore failed");
+        });
+        const saveSnapshot = vi.fn();
+        const upsertFlow = vi.fn();
+        const deleteFlow = vi.fn();
+        configureTaskFlowRegistryRuntime({
+          store: {
+            loadSnapshot,
+            saveSnapshot,
+            upsertFlow,
+            deleteFlow,
+          },
+        });
+        const runtime = createRuntime();
+
+        await expect(tasksMaintenanceCommand({ json: true, apply }, runtime)).rejects.toThrow(
+          "Task-flow registry restore failed: SQLITE_CORRUPT: task-flow maintenance restore failed. Refusing task maintenance.",
+        );
+
+        expect(loadSnapshot).toHaveBeenCalledTimes(1);
+        expect(saveSnapshot).not.toHaveBeenCalled();
+        expect(upsertFlow).not.toHaveBeenCalled();
+        expect(deleteFlow).not.toHaveBeenCalled();
+        expect(runtime.log).not.toHaveBeenCalled();
+        expect(loadSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeDefined();
+        reloadTaskRegistryFromStore();
+        expect(getTaskById(staleTask.taskId)?.taskId).toBe(staleTask.taskId);
+      });
+    },
+  );
+
   it("applies a conservative session registry sweep for stale cron run sessions", async () => {
     await withTaskCommandStateDir(async (state) => {
       const now = Date.now();
       const sessionsDir = state.sessionsDir("main");
       const storePath = path.join(sessionsDir, "sessions.json");
       const old = now - 8 * 24 * 60 * 60_000;
-      await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            "agent:main:cron:done-job:run:old-run": {
-              sessionId: "done-run",
-              updatedAt: old,
-            },
-            "agent:main:cron:running-job:run:old-run": {
-              sessionId: "running-run",
-              updatedAt: old,
-            },
-            "agent:main:cron:done-job:run:recent-run": {
-              sessionId: "recent-run",
-              updatedAt: now - 60_000,
-            },
-            "agent:main:telegram:dm:old": {
-              sessionId: "ordinary-old-session",
-              updatedAt: old,
-            },
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
+      await writeSessionEntries(storePath, {
+        "agent:main:cron:done-job:run:old-run": {
+          sessionId: "done-run",
+          updatedAt: old,
+        },
+        "agent:main:cron:running-job:run:old-run": {
+          sessionId: "running-run",
+          updatedAt: old,
+        },
+        "agent:main:cron:done-job:run:recent-run": {
+          sessionId: "recent-run",
+          updatedAt: now - 60_000,
+        },
+        "agent:main:telegram:dm:old": {
+          sessionId: "ordinary-old-session",
+          updatedAt: old,
+        },
+      });
       await saveCronStore(state.statePath("cron", "jobs.json"), {
         version: 1,
         jobs: [
@@ -773,14 +899,15 @@ describe("tasks commands", () => {
       expect(payload.maintenance.sessions.stores[0]?.pruned).toBe(1);
       expect(payload.maintenance.sessions.stores[0]?.preservedRunning).toBe(1);
 
-      const updated = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
-      expect(updated["agent:main:cron:done-job:run:old-run"]).toBeUndefined();
+      expect(
+        loadSessionEntry({ sessionKey: "agent:main:cron:done-job:run:old-run", storePath }),
+      ).toBeUndefined();
       for (const key of [
         "agent:main:cron:running-job:run:old-run",
         "agent:main:cron:done-job:run:recent-run",
         "agent:main:telegram:dm:old",
       ]) {
-        if (updated[key] === undefined) {
+        if (loadSessionEntry({ sessionKey: key, storePath }) === undefined) {
           throw new Error(`Expected preserved session ${key}`);
         }
       }

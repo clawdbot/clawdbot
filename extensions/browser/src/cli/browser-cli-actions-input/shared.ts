@@ -3,6 +3,8 @@
  */
 import fs from "node:fs/promises";
 import type { Command } from "commander";
+import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
+import { BROWSER_ACTION_TRANSPORT_SLACK_MS } from "../../browser/act-policy.js";
 import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
 import {
   danger,
@@ -17,14 +19,15 @@ type BrowserActionContext = {
   profile: string | undefined;
 };
 
-const BROWSER_ACTION_TIMEOUT_SLACK_MS = 5000;
 const DEFAULT_BROWSER_ACTION_TIMEOUT_MS = 20000;
 
 /** Adds gateway slack to a Browser action timeout so route work can finish cleanly. */
 export function withBrowserActionTimeoutSlack(timeoutMs: number | undefined): number {
   return (
-    Math.max(1, Math.floor(timeoutMs ?? DEFAULT_BROWSER_ACTION_TIMEOUT_MS)) +
-    BROWSER_ACTION_TIMEOUT_SLACK_MS
+    addTimerTimeoutGraceMs(
+      timeoutMs ?? DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
+      BROWSER_ACTION_TRANSPORT_SLACK_MS,
+    ) ?? 1
   );
 }
 
@@ -90,6 +93,9 @@ export async function readFields(opts: {
   fields?: string;
   fieldsFile?: string;
 }): Promise<BrowserFormField[]> {
+  if (opts.fields !== undefined && opts.fieldsFile !== undefined) {
+    throw new Error("Specify only one of --fields or --fields-file");
+  }
   const payload = opts.fieldsFile ? await readFile(opts.fieldsFile) : (opts.fields ?? "");
   if (!payload.trim()) {
     throw new Error("fields are required");
@@ -121,4 +127,39 @@ export async function readFields(opts: {
     }
     throw new Error(`fields[${index}].value must be string, number, boolean, or null`);
   });
+}
+
+/** Cap on batch action JSON read from stdin; keeps a runaway pipe from filling memory. */
+const ACTIONS_STDIN_MAX_BYTES = 1_000_000;
+
+/** Reads stdin to a UTF-8 string, throwing once the byte cap is exceeded. */
+async function readStdinText(
+  stream: NodeJS.ReadableStream = process.stdin,
+  maxBytes = ACTIONS_STDIN_MAX_BYTES,
+): Promise<string> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of stream) {
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buf.length;
+    if (total > maxBytes) {
+      throw new Error(`actions stdin exceeds ${maxBytes} bytes.`);
+    }
+    chunks.push(buf);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/** Reads raw batch actions JSON from inline text, a file path, or stdin (`-`). */
+export async function readActionsPayload(opts: {
+  actions?: string;
+  actionsFile?: string;
+}): Promise<string> {
+  if (opts.actions !== undefined && opts.actionsFile !== undefined) {
+    throw new Error("Specify only one of --actions or --actions-file");
+  }
+  if (opts.actionsFile) {
+    return opts.actionsFile === "-" ? await readStdinText() : await readFile(opts.actionsFile);
+  }
+  return opts.actions ?? "";
 }

@@ -1,5 +1,5 @@
+import type { Model } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
-import type { Model } from "../../llm-core/src/index.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 
 function makeModel(

@@ -42,4 +42,5 @@ export type GeminiCliOAuthContext = {
   note: (message: string, title?: string) => Promise<void>;
   prompt: (message: string) => Promise<string>;
   progress: { update: (msg: string) => void; stop: (msg?: string) => void };
+  signal?: AbortSignal;
 };

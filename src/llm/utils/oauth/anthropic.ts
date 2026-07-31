@@ -42,8 +42,7 @@ type NodeApis = {
 let nodeApis: NodeApis | null = null;
 let nodeApisPromise: Promise<NodeApis> | null = null;
 
-const decode = (s: string) => atob(s);
-const CLIENT_ID = decode("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl");
+const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
 const DEFAULT_CALLBACK_HOST = "127.0.0.1";
@@ -302,7 +301,7 @@ async function exchangeAuthorizationCode(
 /**
  * Login with Anthropic OAuth (authorization code + PKCE)
  */
-export async function loginAnthropic(options: {
+async function loginAnthropic(options: {
   onAuth: (info: { url: string; instructions?: string }) => void;
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
   onProgress?: (message: string) => void;
@@ -434,7 +433,7 @@ export async function loginAnthropic(options: {
 /**
  * Refresh Anthropic OAuth token
  */
-export async function refreshAnthropicToken(refreshToken: string): Promise<OAuthCredentials> {
+async function refreshAnthropicToken(refreshToken: string): Promise<OAuthCredentials> {
   let responseBody: string;
   try {
     responseBody = await postJson(TOKEN_URL, {
@@ -477,9 +476,4 @@ export const anthropicOAuthProvider: OAuthProviderInterface = {
   getApiKey(credentials: OAuthCredentials): string {
     return credentials.access;
   },
-};
-
-export const testing = {
-  resolveCallbackHost,
-  redirectUri: REDIRECT_URI,
 };

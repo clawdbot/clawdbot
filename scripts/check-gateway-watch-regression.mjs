@@ -50,9 +50,14 @@ const WATCH_GATEWAY_SKIP_ENV = {
  * Maximum retained stdout/stderr text for gateway watch diagnostics.
  */
 export const WATCH_LOG_CAPTURE_MAX_CHARS = 2 * 1024 * 1024;
+export const WATCH_LOG_FAILURE_TAIL_CHARS = 12_000;
 const WATCH_BUILD_DETECTION_MAX_CHARS = 4096;
 const NON_NEGATIVE_INTEGER_PATTERN = /^(0|[1-9]\d*)$/u;
 const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
 
 /**
  * Appends watch output while preserving only the diagnostic tail.
@@ -69,6 +74,28 @@ function formatCapturedWatchLog(text, truncated) {
   return truncated
     ? `[openclaw] log truncated to last ${WATCH_LOG_CAPTURE_MAX_CHARS} chars\n${text}`
     : text;
+}
+
+function formatWatchExit(exit) {
+  if (!exit) {
+    return "unknown exit";
+  }
+  const parts = [];
+  if (exit.code !== undefined) {
+    parts.push(`code ${exit.code === null ? "null" : exit.code}`);
+  }
+  if (exit.signal !== undefined) {
+    parts.push(`signal ${exit.signal === null ? "null" : exit.signal}`);
+  }
+  if (exit.error) {
+    parts.push(`error ${exit.error}`);
+  }
+  return parts.length > 0 ? parts.join(", ") : "unknown exit";
+}
+
+function readTextTail(filePath, maxChars = WATCH_LOG_FAILURE_TAIL_CHARS) {
+  const text = fs.readFileSync(filePath, "utf8");
+  return text.length <= maxChars ? text : text.slice(-maxChars);
 }
 
 /**
@@ -449,21 +476,43 @@ async function allocateLoopbackPort() {
   });
 }
 
-function buildTimedWatchCommand(pidFilePath, timeFilePath, isolatedHomeDir, port) {
+export function resolveTimedWatchShell(deps = {}) {
+  const existsSync = deps.existsSync ?? fs.existsSync;
+  for (const shellPath of ["/bin/bash", "/usr/bin/bash", "/bin/sh"]) {
+    if (existsSync(shellPath)) {
+      return shellPath;
+    }
+  }
+  return "/bin/sh";
+}
+
+export function buildTimedWatchCommand(
+  pidFilePath,
+  timeFilePath,
+  isolatedHomeDir,
+  port,
+  deps = {},
+) {
   const isolatedStateDir = path.join(isolatedHomeDir, ".openclaw");
   const isolatedConfigPath = path.join(isolatedStateDir, "openclaw.json");
+  // CI env hooks can contain bash-only `declare` lines; running the watch shell
+  // under sh delays gateway readiness behind stderr noise before the idle window.
+  const shellPath = deps.shellPath ?? resolveTimedWatchShell(deps);
+  const nodeExecPath = deps.nodeExecPath ?? process.execPath;
   const shellSource = [
     'echo "$$" > "$OPENCLAW_WATCH_PID_FILE"',
     'mkdir -p "$OPENCLAW_STATE_DIR"',
     `printf '%s\n' '{"gateway":{"controlUi":{"enabled":false}},"plugins":{"enabled":false}}' > "$OPENCLAW_CONFIG_PATH"`,
-    `exec node scripts/watch-node.mjs gateway --force --allow-unconfigured --port ${String(port)} --token watch-regression-token`,
+    `exec ${shellQuote(nodeExecPath)} scripts/watch-node.mjs gateway --force --allow-unconfigured --port ${String(port)} --token watch-regression-token`,
   ].join("\n");
+  const nodeBinDir = path.dirname(nodeExecPath);
   const env = {
     OPENCLAW_WATCH_PID_FILE: pidFilePath,
     HOME: isolatedHomeDir,
     OPENCLAW_HOME: isolatedHomeDir,
     OPENCLAW_CONFIG_PATH: isolatedConfigPath,
     OPENCLAW_STATE_DIR: isolatedStateDir,
+    PATH: `${nodeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
     XDG_CONFIG_HOME: path.join(isolatedHomeDir, ".config"),
     ...WATCH_GATEWAY_SKIP_ENV,
   };
@@ -471,14 +520,14 @@ function buildTimedWatchCommand(pidFilePath, timeFilePath, isolatedHomeDir, port
   if (process.platform === "darwin") {
     return {
       command: "/usr/bin/time",
-      args: ["-lp", "-o", timeFilePath, "/bin/sh", "-lc", shellSource],
+      args: ["-lp", "-o", timeFilePath, shellPath, "-lc", shellSource],
       env,
     };
   }
 
   if (!fs.existsSync("/usr/bin/time")) {
     return {
-      command: "/bin/sh",
+      command: shellPath,
       args: ["-lc", shellSource],
       env,
     };
@@ -491,7 +540,7 @@ function buildTimedWatchCommand(pidFilePath, timeFilePath, isolatedHomeDir, port
       "__TIMING__ user=%U sys=%S elapsed=%e",
       "-o",
       timeFilePath,
-      "/bin/sh",
+      shellPath,
       "-lc",
       shellSource,
     ],
@@ -580,22 +629,34 @@ export async function runTimedWatch(options, outputDir, deps = {}) {
         resolve({ code: null, signal: null, error: error.message });
       });
     });
-    const raceSpawnError = async (operation) =>
+    const childExit = new Promise((resolve) => {
+      child.once("exit", (code, signal) => resolve({ code, signal }));
+    });
+    const raceChildLifecycle = async (operation) =>
       await Promise.race([
         Promise.resolve(operation).then((value) => ({ type: "value", value })),
         spawnErrorExit.then((value) => ({ type: "spawn-error", value })),
+        childExit.then((value) => ({ type: "child-exit", value })),
       ]);
 
     let watchPid = null;
     let exit = null;
+    let exitedBeforeReady = false;
+    let exitedBeforeStop = false;
     for (let attempt = 0; attempt < 50; attempt += 1) {
       if (fs.existsSync(pidFilePath)) {
         watchPid = Number(fs.readFileSync(pidFilePath, "utf8").trim());
         break;
       }
-      const waitResult = await raceSpawnError(sleepMs(100));
+      const waitResult = await raceChildLifecycle(sleepMs(100));
       if (waitResult.type === "spawn-error") {
         exit = waitResult.value;
+        break;
+      }
+      if (waitResult.type === "child-exit") {
+        exit = waitResult.value;
+        exitedBeforeReady = true;
+        exitedBeforeStop = true;
         break;
       }
     }
@@ -604,32 +665,42 @@ export async function runTimedWatch(options, outputDir, deps = {}) {
     let idleCpuStartMs = null;
     let idleCpuEndMs = null;
     if (!exit) {
-      const readyResult = await raceSpawnError(
+      const readyResult = await raceChildLifecycle(
         waitReady(() => `${stdout}\n${stderr}`, options.readyTimeoutMs),
       );
       if (readyResult.type === "spawn-error") {
         exit = readyResult.value;
+      } else if (readyResult.type === "child-exit") {
+        exit = readyResult.value;
+        exitedBeforeReady = true;
+        exitedBeforeStop = true;
       } else {
         readyBeforeWindow = readyResult.value;
       }
     }
     if (!exit && readyBeforeWindow && options.readySettleMs > 0) {
-      const settleResult = await raceSpawnError(sleepMs(options.readySettleMs));
+      const settleResult = await raceChildLifecycle(sleepMs(options.readySettleMs));
       if (settleResult.type === "spawn-error") {
         exit = settleResult.value;
+      } else if (settleResult.type === "child-exit") {
+        exit = settleResult.value;
+        exitedBeforeStop = true;
       }
     }
     if (!exit) {
       idleCpuStartMs = watchPid ? readCpuMs(watchPid) : null;
-      const windowResult = await raceSpawnError(sleepMs(options.windowMs));
+      const windowResult = await raceChildLifecycle(sleepMs(options.windowMs));
       if (windowResult.type === "spawn-error") {
         exit = windowResult.value;
+      } else if (windowResult.type === "child-exit") {
+        exit = windowResult.value;
+        exitedBeforeStop = true;
       } else {
         idleCpuEndMs = watchPid ? readCpuMs(watchPid) : null;
       }
     }
     if (!exit) {
-      const stopResult = await raceSpawnError(stopChild(child, watchPid, options));
+      const stopResult = await raceChildLifecycle(stopChild(child, watchPid, options));
       exit = stopResult.value;
     }
 
@@ -646,6 +717,8 @@ export async function runTimedWatch(options, outputDir, deps = {}) {
       timingFileMissing,
       timing,
       readyBeforeWindow,
+      exitedBeforeReady,
+      exitedBeforeStop,
       idleCpuMs:
         idleCpuStartMs == null || idleCpuEndMs == null
           ? null
@@ -809,8 +882,15 @@ export function collectGatewayWatchFindings(params) {
   if (watchResult.spawnError) {
     failures.push(`gateway:watch failed to start: ${watchResult.spawnError}`);
   }
-  if (!watchResult.readyBeforeWindow) {
+  if (!watchResult.readyBeforeWindow && watchResult.exitedBeforeReady) {
+    failures.push(`gateway:watch exited before ready (${formatWatchExit(watchResult.exit)})`);
+  } else if (!watchResult.readyBeforeWindow) {
     failures.push("gateway:watch did not report ready before the idle CPU window");
+  }
+  if (watchResult.readyBeforeWindow && watchResult.exitedBeforeStop) {
+    failures.push(
+      `gateway:watch exited before the idle CPU window completed (${formatWatchExit(watchResult.exit)})`,
+    );
   }
   if (watchResult.timingFileMissing && !Number.isFinite(watchResult.idleCpuMs)) {
     failures.push(
@@ -848,6 +928,32 @@ export function collectGatewayWatchFindings(params) {
     );
   }
   return { failures, warnings };
+}
+
+export function shouldReportDuplicateDistRuntimeRegression(failures) {
+  return failures.some((message) => message.startsWith("dist-runtime "));
+}
+
+function printWatchLogDiagnostics(watchResult) {
+  const artifacts = [
+    ["stderr", watchResult.stderrPath],
+    ["stdout", watchResult.stdoutPath],
+  ];
+  for (const [label, filePath] of artifacts) {
+    if (!filePath || !fs.existsSync(filePath)) {
+      continue;
+    }
+    const tail = readTextTail(filePath).trimEnd();
+    if (!tail) {
+      warn(`gateway:watch ${label} artifact is empty (${filePath})`);
+      continue;
+    }
+    console.error(
+      `--- gateway:watch ${label} tail (${filePath}, last ${WATCH_LOG_FAILURE_TAIL_CHARS} chars) ---`,
+    );
+    console.error(tail);
+    console.error(`--- end gateway:watch ${label} tail ---`);
+  }
 }
 
 async function main() {
@@ -933,6 +1039,8 @@ async function main() {
     cpuMs,
     totalCpuMs,
     readyBeforeWindow: watchResult.readyBeforeWindow,
+    exitedBeforeReady: watchResult.exitedBeforeReady,
+    exitedBeforeStop: watchResult.exitedBeforeStop,
     cpuWarnMs: options.cpuWarnMs,
     cpuFailMs: options.cpuFailMs,
     distRuntimeFileGrowth,
@@ -944,6 +1052,8 @@ async function main() {
     removedPaths: diff.removed.length,
     watchExit: watchResult.exit,
     spawnError: watchResult.spawnError,
+    stdoutPath: watchResult.stdoutPath,
+    stderrPath: watchResult.stderrPath,
     timingFileMissing: watchResult.timingFileMissing,
     timing: watchResult.timing,
   };
@@ -972,7 +1082,8 @@ async function main() {
     for (const message of failures) {
       fail(message);
     }
-    if (!failures.every((message) => message.includes("dirty watched source tree"))) {
+    printWatchLogDiagnostics(watchResult);
+    if (shouldReportDuplicateDistRuntimeRegression(failures)) {
       fail(
         "Possible duplicate dist-runtime graph regression: this can reintroduce split runtime personalities where plugins and core observe different global state, including Telegram missing /voice, /phone, or /pair.",
       );

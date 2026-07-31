@@ -26,4 +26,15 @@ struct WatchDeferredPayloadOrderingTests {
     @Test func `replays missing timestamps first in receipt order`() {
         #expect(WatchDeferredPayloadOrdering.indicesOldestFirst(for: [nil, 200, nil, 100]) == [0, 2, 3, 1])
     }
+
+    @Test func `epoch values preserve ordering above 32 bit range`() {
+        let earlier: Int64 = 1_700_000_000_000
+        let later = earlier + 1
+
+        #expect(WatchDeferredPayloadOrdering.isExpired(expiresAtMs: earlier, nowMs: later))
+        #expect(WatchDeferredPayloadOrdering.isNewerThanSnapshot(
+            payloadSentAtMs: later,
+            snapshotSentAtMs: earlier))
+        #expect(WatchDeferredPayloadOrdering.indicesOldestFirst(for: [later, earlier]) == [1, 0])
+    }
 }

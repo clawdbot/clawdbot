@@ -1,19 +1,18 @@
 // Raft channel configuration schema.
-import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import {
+  buildChannelConfigSchema,
+  buildMultiAccountChannelSchema,
+} from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
 
-const RaftAccountSchema = z.object({
-  name: z.string().optional(),
-  enabled: z.boolean().optional(),
-  profile: z.string().min(1).optional(),
-}).strict();
+const RaftAccountSchema = z
+  .object({
+    name: z.string().optional(),
+    enabled: z.boolean().optional(),
+    profile: z.string().min(1).optional(),
+  })
+  .strict();
 
-export const RaftConfigSchema = z.object({
-  name: z.string().optional(),
-  enabled: z.boolean().optional(),
-  profile: z.string().min(1).optional(),
-  defaultAccount: z.string().optional(),
-  accounts: z.record(z.string(), RaftAccountSchema).optional(),
-}).strict();
+const RaftConfigSchema = buildMultiAccountChannelSchema(RaftAccountSchema);
 
 export const raftChannelConfigSchema = buildChannelConfigSchema(RaftConfigSchema);

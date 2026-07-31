@@ -13,10 +13,10 @@ import type {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  buildApprovalPendingReplyPayload,
   buildApprovalResolvedReplyPayload,
-  buildPluginApprovalPendingReplyPayload,
   buildPluginApprovalResolvedReplyPayload,
+  buildTypedApprovalPendingReplyPayload,
+  buildTypedPluginApprovalPendingReplyPayload,
 } from "../plugin-sdk/approval-renderers.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -34,11 +34,11 @@ import {
   type ExecApprovalRequest,
   type ExecApprovalResolved,
 } from "./exec-approvals.js";
+import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "./plugin-approval-canonical-decisions.js";
 import {
   approvalDecisionLabel,
   buildPluginApprovalExpiredMessage,
   buildPluginApprovalRequestMessage,
-  resolvePluginApprovalRequestAllowedDecisions,
   type PluginApprovalRequest,
   type PluginApprovalResolved,
 } from "./plugin-approvals.js";
@@ -227,7 +227,7 @@ function formatApprovalCommand(command: string): { inline: boolean; text: string
   return { inline: false, text: formatFencedCodeBlock(command) };
 }
 
-export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, nowMs: number) {
+function buildExecApprovalRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(request.request);
   const decisionText = allowedDecisions.join("|");
   const lines: string[] = ["🔒 Exec approval required", `ID: ${request.id}`];
@@ -283,9 +283,7 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
   );
   lines.push(`Reply with: /approve ${request.id} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "Allow Always is unavailable because the effective policy requires approval every time.",
-    );
+    lines.push("Allow Always is unavailable for this command.");
   }
   return lines.join("\n");
 }
@@ -434,7 +432,8 @@ function buildExecPendingPayload(params: {
     renderParams: params,
     resolveRenderer: (adapter) => adapter?.render?.exec?.buildPendingPayload,
     buildFallback: () =>
-      buildApprovalPendingReplyPayload({
+      buildTypedApprovalPendingReplyPayload({
+        approvalKind: "exec",
         approvalId: params.request.id,
         approvalSlug: params.request.id.slice(0, 8),
         text: buildExecApprovalRequestMessage(params.request, params.nowMs),
@@ -474,11 +473,13 @@ function buildPluginPendingPayload(params: {
     renderParams: params,
     resolveRenderer: (adapter) => adapter?.render?.plugin?.buildPendingPayload,
     buildFallback: () =>
-      buildPluginApprovalPendingReplyPayload({
+      buildTypedPluginApprovalPendingReplyPayload({
         request: params.request,
         nowMs: params.nowMs,
         text: buildPluginApprovalRequestMessage(params.request, params.nowMs),
-        allowedDecisions: resolvePluginApprovalRequestAllowedDecisions(params.request.request),
+        allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions(
+          params.request.request,
+        ),
       }),
   });
 }
@@ -834,3 +835,4 @@ export function createExecApprovalForwarder(
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

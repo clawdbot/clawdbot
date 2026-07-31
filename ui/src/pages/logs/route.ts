@@ -1,9 +1,9 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 
 export const page = definePage({
-  id: "logs",
-  path: "/logs",
+  ...routePageSpec("logs"),
   component: () =>
     import("./logs-page.ts").then(() => ({
       header: true,

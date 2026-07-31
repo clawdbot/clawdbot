@@ -1,23 +1,45 @@
+import OpenClawKit
 import SwiftUI
+import UserNotifications
+
+private final class WatchNotificationPresentationDelegate: NSObject, UNUserNotificationCenterDelegate,
+    @unchecked Sendable
+{
+    func userNotificationCenter(
+        _: UNUserNotificationCenter,
+        willPresent _: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void)
+    {
+        completionHandler([.banner, .list, .sound])
+    }
+}
+
+enum WatchScreenshotMode {
+    private static let defaultsKey = "openclaw.watch.screenshotMode"
+    static let approvals = ProcessInfo.processInfo.arguments.contains(
+        "--openclaw-watch-approval-screenshot-mode")
+        || ProcessInfo.processInfo.environment["OPENCLAW_WATCH_APPROVAL_SCREENSHOT_MODE"] == "1"
+    static let enabled = ProcessInfo.processInfo.arguments.contains("--openclaw-watch-screenshot-mode")
+        || ProcessInfo.processInfo.environment["OPENCLAW_WATCH_SCREENSHOT_MODE"] == "1"
+        || UserDefaults.standard.bool(forKey: WatchScreenshotMode.defaultsKey)
+        || WatchScreenshotMode.approvals
+}
 
 @main
 struct OpenClawWatchApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var inboxStore = WatchInboxStore(
-        requestNotificationAuthorization: !OpenClawWatchApp.isScreenshotMode)
+        requestNotificationAuthorization: !WatchScreenshotMode.enabled)
+    @State private var directNode = WatchDirectNode()
+    @State private var notificationDelegate = WatchNotificationPresentationDelegate()
     @State private var receiver: WatchConnectivityReceiver?
     @State private var execApprovalRefreshTask: Task<Void, Never>?
-
-    private static let screenshotModeDefaultsKey = "openclaw.watch.screenshotMode"
-    private static let isScreenshotMode = ProcessInfo.processInfo.arguments.contains(
-        "--openclaw-watch-screenshot-mode")
-        || ProcessInfo.processInfo.environment["OPENCLAW_WATCH_SCREENSHOT_MODE"] == "1"
-        || UserDefaults.standard.bool(forKey: OpenClawWatchApp.screenshotModeDefaultsKey)
 
     var body: some Scene {
         WindowGroup {
             WatchInboxView(
                 store: self.inboxStore,
+                directNode: self.directNode,
                 onAction: { action in
                     guard let receiver = self.receiver else { return }
                     let draft = self.inboxStore.makeReplyDraft(action: action)
@@ -29,16 +51,28 @@ struct OpenClawWatchApp: App {
                 },
                 onExecApprovalDecision: { approvalId, gatewayStableID, decision in
                     guard let receiver = self.receiver else { return }
-                    self.inboxStore.markExecApprovalSending(approvalId: approvalId, decision: decision)
+                    guard let attemptID = self.inboxStore.beginExecApprovalDecision(
+                        approvalId: approvalId,
+                        gatewayStableID: gatewayStableID,
+                        decision: decision)
+                    else { return }
                     Task { @MainActor in
                         let result = await receiver.sendExecApprovalResolve(
                             approvalId: approvalId,
                             gatewayStableID: gatewayStableID,
+                            attemptID: attemptID,
                             decision: decision)
-                        self.inboxStore.markExecApprovalSendResult(
+                        self.inboxStore.completeExecApprovalDecision(
                             approvalId: approvalId,
+                            gatewayStableID: gatewayStableID,
+                            attemptID: attemptID,
                             decision: decision,
                             result: result)
+                        if result.requiresCanonicalReadback {
+                            // WatchConnectivity errors can race successful delivery. Keep
+                            // actions frozen while the iPhone reads canonical gateway state.
+                            self.refreshExecApprovalReview(force: true)
+                        }
                     }
                 },
                 onRefreshExecApprovalReview: {
@@ -54,22 +88,38 @@ struct OpenClawWatchApp: App {
                     self.sendChatMessage(text)
                 })
                 .task {
-                    if OpenClawWatchApp.isScreenshotMode {
-                        self.inboxStore.configureScreenshotFixture()
+                    UNUserNotificationCenter.current().delegate = self.notificationDelegate
+                    if WatchScreenshotMode.enabled {
+                        self.inboxStore.configureScreenshotFixture(
+                            includeApproval: WatchScreenshotMode.approvals)
                         return
                     }
                     if self.receiver == nil {
-                        let receiver = WatchConnectivityReceiver(store: self.inboxStore)
+                        let receiver = WatchConnectivityReceiver(
+                            store: self.inboxStore,
+                            directNodeSetupHandler: { [weak directNode] setupCode, sentAtMs in
+                                directNode?.configure(setupCode: setupCode, sentAtMs: sentAtMs)
+                            })
                         receiver.activate()
                         self.receiver = receiver
+                    }
+                    if self.scenePhase == .active {
+                        self.directNode.connectForForeground()
                     }
                     self.refreshAppSnapshot()
                     self.refreshExecApprovalReview()
                 }
                 .onChange(of: self.scenePhase) { _, newPhase in
-                    guard newPhase == .active else { return }
-                    self.refreshAppSnapshot()
-                    self.refreshExecApprovalReview()
+                    switch newPhase {
+                    case .active:
+                        self.directNode.connectForForeground()
+                        self.refreshAppSnapshot()
+                        self.refreshExecApprovalReview()
+                    case .inactive, .background:
+                        self.directNode.disconnectForBackground()
+                    @unknown default:
+                        break
+                    }
                 }
         }
     }
@@ -98,7 +148,9 @@ struct OpenClawWatchApp: App {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         guard self.inboxStore.hasGatewayTaggedAppSnapshot else {
-            self.inboxStore.markAppCommandBlocked(.sendChat, reason: "refreshing iPhone state")
+            self.inboxStore.markAppCommandBlocked(
+                .sendChat,
+                reason: String(localized: "Refreshing iPhone state"))
             self.refreshAppSnapshot()
             return nil
         }
@@ -119,12 +171,52 @@ struct OpenClawWatchApp: App {
 
         self.execApprovalRefreshTask?.cancel()
         self.execApprovalRefreshTask = Task { @MainActor in
+            var requestTokens: [WatchExecApprovalSnapshotRequestToken] = []
+            func consumeCurrentOwnerAcknowledgment(gatewayStableID: String?) -> Bool {
+                var received = false
+                var retainedTokens: [WatchExecApprovalSnapshotRequestToken] = []
+                for token in requestTokens where token.matchesGatewayStableID(gatewayStableID) {
+                    if receiver.consumeExecApprovalSnapshotAcknowledgment(for: token) {
+                        received = true
+                    } else {
+                        retainedTokens.append(token)
+                    }
+                }
+                requestTokens = retainedTokens
+                return received
+            }
+
             self.inboxStore.beginExecApprovalReviewLoading()
             for attempt in 0..<5 {
-                if Task.isCancelled { return }
-                await receiver.requestExecApprovalSnapshot()
-                if !self.inboxStore.execApprovals.isEmpty
-                    || self.inboxStore.hasCompletedExecApprovalSnapshotRefresh
+                if Task.isCancelled {
+                    return
+                }
+                let gatewayStableID = self.inboxStore.execApprovalReviewGatewayStableID
+                receiver.discardExecApprovalSnapshotAcknowledgments(
+                    exceptGatewayStableID: gatewayStableID)
+                let receivedBeforeRequest = consumeCurrentOwnerAcknowledgment(
+                    gatewayStableID: gatewayStableID)
+                let reviewAlreadyAvailable = !force
+                    && !self.inboxStore.execApprovals.contains(where: \.isResolving)
+                    && (!self.inboxStore.execApprovals.isEmpty
+                        || self.inboxStore.hasCompletedExecApprovalSnapshotRefresh)
+                if receivedBeforeRequest || reviewAlreadyAvailable {
+                    self.inboxStore.markExecApprovalReviewLoaded()
+                    return
+                }
+
+                if let token = await receiver.requestExecApprovalSnapshot(
+                    gatewayStableID: gatewayStableID,
+                    heldApprovals: self.inboxStore.execApprovalSnapshotRequestItems(
+                        gatewayStableID: gatewayStableID))
+                {
+                    let currentGatewayStableID = self.inboxStore.execApprovalReviewGatewayStableID
+                    if token.matchesGatewayStableID(currentGatewayStableID) {
+                        requestTokens.append(token)
+                    }
+                }
+                if consumeCurrentOwnerAcknowledgment(
+                    gatewayStableID: self.inboxStore.execApprovalReviewGatewayStableID)
                 {
                     self.inboxStore.markExecApprovalReviewLoaded()
                     return
@@ -143,30 +235,48 @@ struct OpenClawWatchApp: App {
 
 @MainActor
 extension WatchInboxStore {
-    fileprivate func configureScreenshotFixture() {
-        let sentAtMs = Int(Date().timeIntervalSince1970 * 1000)
+    fileprivate func configureScreenshotFixture(includeApproval: Bool = false) {
+        let sentAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let approvals: [WatchExecApprovalItem] = if includeApproval {
+            [
+                WatchExecApprovalItem(
+                    id: "watch-screenshot-approval",
+                    gatewayStableID: "watch-screenshot-gateway",
+                    commandText: "curl --request POST https://deploy.example.invalid/releases",
+                    commandPreview: "Deploy the latest release",
+                    warningText: "This command can change a production service.",
+                    host: "deploy-runner",
+                    nodeId: "release-node",
+                    agentId: "main",
+                    expiresAtMs: sentAtMs + 10 * 60 * 1000,
+                    allowedDecisions: [.allowOnce, .deny],
+                    risk: .high),
+            ]
+        } else {
+            []
+        }
         greetingTextOverride = "Good morning"
         self.consume(
             execApprovalSnapshot: WatchExecApprovalSnapshotMessage(
-                approvals: [],
+                approvals: approvals,
                 gatewayStableID: "watch-screenshot-gateway",
                 sentAtMs: sentAtMs,
-                snapshotId: nil),
+                snapshotId: includeApproval ? "watch-screenshot-approval-face" : nil),
             transport: "screenshot")
         self.consume(
             appSnapshot: WatchAppSnapshotMessage(
-                gatewayStatusText: "Connected",
+                gatewayStatus: OpenClawWatchAppStatus(code: .gatewayConnected),
                 gatewayConnected: true,
                 agentName: "Molty",
                 agentAvatarURL: nil,
                 agentAvatarText: "M",
                 sessionKey: "watch-screenshot-session",
                 gatewayStableID: "watch-screenshot-gateway",
-                talkStatusText: "Ready",
+                talkStatus: OpenClawWatchAppStatus(code: .talkReady),
                 talkEnabled: true,
                 talkListening: false,
                 talkSpeaking: false,
-                pendingApprovalCount: 0,
+                pendingApprovalCount: approvals.count,
                 chatItems: [
                     WatchChatItem(
                         id: "watch-screenshot-user-chat",
@@ -179,7 +289,7 @@ extension WatchInboxStore {
                         text: "Gateway is online and ready.",
                         timestampMs: sentAtMs - 30000),
                 ],
-                chatStatusText: "Live gateway conversation",
+                chatStatus: nil,
                 sentAtMs: sentAtMs,
                 snapshotId: "watch-screenshot-now-face"))
     }

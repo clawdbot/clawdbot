@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.ui.isWorkspaceDirectoryRequestInFlight
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -8,6 +9,14 @@ import org.junit.Test
 
 class WorkspaceFilesTest {
   private val json = Json { ignoreUnknownKeys = true }
+
+  @Test
+  fun tracksDirectoryRequestInFlightAcrossRefreshAndPagination() {
+    assertEquals(false, isWorkspaceDirectoryRequestInFlight(loading = false, loadingMore = false))
+    assertEquals(true, isWorkspaceDirectoryRequestInFlight(loading = true, loadingMore = false))
+    assertEquals(true, isWorkspaceDirectoryRequestInFlight(loading = false, loadingMore = true))
+    assertEquals(true, isWorkspaceDirectoryRequestInFlight(loading = true, loadingMore = true))
+  }
 
   @Test
   fun parsesListingEntriesAndPagination() {

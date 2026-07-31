@@ -1,9 +1,13 @@
 // Control UI chat module implements message extract behavior.
 import { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import {
+  isMeaningfulMediaFact,
+  readPersistedMediaFacts,
+} from "../../../../src/media/media-facts.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantVisibleText as extractSharedAssistantVisibleText } from "../../../../src/shared/chat-message-content.js";
-import { normalizeLowercaseStringOrEmpty, normalizeStringEntries } from "../string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { stripThinkingTags } from "../strip-thinking-tags.ts";
 
 const textCache = new WeakMap<object, string | null>();
@@ -29,6 +33,11 @@ function processMessageText(text: string, role: string): string {
 }
 
 export function extractText(message: unknown): string | null {
+  // Chat events may carry no message at all (tool-only or heartbeat finals);
+  // a nullish message means "no text", never a crash.
+  if (message == null) {
+    return null;
+  }
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";
   const raw =
@@ -52,7 +61,10 @@ export function extractTextCached(message: unknown): string | null {
   return value;
 }
 
-export function extractThinking(message: unknown): string | null {
+function extractThinking(message: unknown): string | null {
+  if (message == null) {
+    return null;
+  }
   const m = message as Record<string, unknown>;
   const content = m.content;
   const parts: string[] = [];
@@ -67,20 +79,7 @@ export function extractThinking(message: unknown): string | null {
       }
     }
   }
-  if (parts.length > 0) {
-    return parts.join("\n");
-  }
-
-  // Back-compat: older logs may still have <think> tags inside text blocks.
-  const rawText = extractRawText(message);
-  if (!rawText) {
-    return null;
-  }
-  const matches = [
-    ...rawText.matchAll(/<\s*think(?:ing)?\s*>([\s\S]*?)<\s*\/\s*think(?:ing)?\s*>/gi),
-  ];
-  const extracted = normalizeStringEntries(matches.map((mLocal) => mLocal[1] ?? ""));
-  return extracted.length > 0 ? extracted.join("\n") : null;
+  return parts.length > 0 ? parts.join("\n") : null;
 }
 
 export function extractThinkingCached(message: unknown): string | null {
@@ -97,6 +96,9 @@ export function extractThinkingCached(message: unknown): string | null {
 }
 
 export function extractRawText(message: unknown): string | null {
+  if (message == null) {
+    return null;
+  }
   const m = message as Record<string, unknown>;
   const role = normalizeLowercaseStringOrEmpty(m.role);
   const content = m.content;
@@ -123,6 +125,25 @@ export function extractRawText(message: unknown): string | null {
   return null;
 }
 
+function hasTranscriptMediaFacts(message: unknown): boolean {
+  return message != null && typeof message === "object"
+    ? (readPersistedMediaFacts(message) ?? []).some(isMeaningfulMediaFact)
+    : false;
+}
+
+export function readTranscriptMediaEntries(message: unknown): Array<{
+  path: string;
+  mediaType: string | undefined;
+}> {
+  if (!message || typeof message !== "object") {
+    return [];
+  }
+  return (readPersistedMediaFacts(message) ?? []).flatMap((fact) => {
+    const path = fact.path ?? fact.url;
+    return path ? [{ path, mediaType: fact.contentType ?? fact.kind }] : [];
+  });
+}
+
 export function formatReasoningMarkdown(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -134,4 +155,49 @@ export function formatReasoningMarkdown(text: string): string {
     .filter(Boolean)
     .map((line) => `_${line}_`);
   return lines.length ? ["_Reasoning:_", ...lines].join("\n") : "";
+}
+
+function isTextOnlyContent(content: unknown): boolean {
+  if (typeof content === "string") {
+    return true;
+  }
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  if (content.length === 0) {
+    return true;
+  }
+  let sawText = false;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const entry = block as { type?: unknown; text?: unknown };
+    if (entry.type !== "text") {
+      return false;
+    }
+    sawText = true;
+    if (typeof entry.text !== "string") {
+      return false;
+    }
+  }
+  return sawText;
+}
+
+/** True for user rows with no text and no media facts; such rows hide from history. */
+export function isEmptyUserTextOnlyMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  if (normalizeLowercaseStringOrEmpty(entry.role) !== "user") {
+    return false;
+  }
+  if (hasTranscriptMediaFacts(entry)) {
+    return false;
+  }
+  if (!isTextOnlyContent(entry.content ?? entry.text)) {
+    return false;
+  }
+  return (extractText(message)?.trim() ?? "") === "";
 }

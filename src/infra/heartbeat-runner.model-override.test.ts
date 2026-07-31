@@ -100,7 +100,6 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     every?: string;
     defaultTimeoutSeconds?: number;
     model?: string;
-    suppressToolErrorWarnings?: boolean;
     timeoutSeconds?: number;
     lightContext?: boolean;
     isolatedSession?: boolean;
@@ -115,7 +114,6 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
               every: params.every ?? "5m",
               target: "whatsapp",
               model: params.model,
-              suppressToolErrorWarnings: params.suppressToolErrorWarnings,
               timeoutSeconds: params.timeoutSeconds,
               lightContext: params.lightContext,
               isolatedSession: params.isolatedSession,
@@ -197,11 +195,11 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     });
   });
 
-  it("passes suppressToolErrorWarnings when configured", async () => {
-    const replyOpts = await runDefaultsHeartbeat({ suppressToolErrorWarnings: true });
+  it("keeps heartbeat tool-error warnings enabled", async () => {
+    const replyOpts = await runDefaultsHeartbeat({});
     expectReplyOptions(replyOpts, {
       isHeartbeat: true,
-      suppressToolErrorWarnings: true,
+      suppressToolErrorWarnings: false,
     });
   });
 

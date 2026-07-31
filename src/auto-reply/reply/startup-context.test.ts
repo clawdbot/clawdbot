@@ -472,6 +472,32 @@ describe("buildSessionStartupContextPrelude", () => {
     const firstBlock = prelude?.slice(prelude.indexOf("[Untrusted daily memory:"));
     expect(firstBlock?.length).toBeLessThanOrEqual(180);
   });
+
+  it("does not split a surrogate pair at the per-file character limit", async () => {
+    const workspaceDir = await makeWorkspace();
+    const safePrefix = "x".repeat(79);
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-11.md"),
+      `${safePrefix}🚀tail`,
+      "utf-8",
+    );
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: {
+          defaults: {
+            userTimezone: "America/Chicago",
+            startupContext: { maxFileChars: 80 },
+          },
+        },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 3, 11, 18, 0, 0),
+    });
+
+    expect(prelude).toContain(`${safePrefix}\n...[truncated]...`);
+    expect(prelude).not.toContain("🚀tail");
+  });
 });
 
 describe("shouldApplyStartupContext", () => {

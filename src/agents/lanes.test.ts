@@ -1,12 +1,13 @@
 // Documents nested-agent command lane resolution and session scoping.
 import { describe, expect, it } from "vitest";
 import {
-  AGENT_LANE_CRON_NESTED,
-  AGENT_LANE_NESTED,
   isNestedAgentLane,
   resolveCronAgentLane,
   resolveNestedAgentLaneForSession,
 } from "./lanes.js";
+
+const AGENT_LANE_CRON_NESTED = "cron-nested";
+const AGENT_LANE_NESTED = "nested";
 
 describe("resolveCronAgentLane", () => {
   it("defaults cron-owned runs to the cron-nested lane", () => {

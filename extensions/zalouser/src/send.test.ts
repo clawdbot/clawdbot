@@ -296,6 +296,42 @@ describe("zalouser send helpers", () => {
     expectResultFields(result, { ok: true, messageId: "mid-2d-4" });
   });
 
+  it.each([
+    {
+      name: "fenced code with hard limits",
+      text: "```ts\nconst alpha = 1;\nconst beta = 2;\n```",
+      textChunkLimit: 16,
+      textChunkMode: "length" as const,
+      expected: ["const alpha = 1;", "\nconst beta = 2;"],
+    },
+    {
+      name: "tables with newline-preferred limits",
+      text: "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |",
+      textChunkLimit: 24,
+      textChunkMode: "newline" as const,
+      expected: ["| A | B |\n| --- | --- |\n", "| 1 | 2 |\n| 3 | 4 |"],
+    },
+    {
+      name: "repeated whitespace around paragraph boundaries",
+      text: "alpha  beta\n\ngamma delta",
+      textChunkLimit: 12,
+      textChunkMode: "newline" as const,
+      expected: ["alpha  beta\n", "\ngamma delta"],
+    },
+  ])("preserves exact rendered chunks for $name", async (fixture) => {
+    mockSendText.mockResolvedValue(sendResult("mid-parity", "thread-parity"));
+
+    await sendMessageZalouser("thread-parity", fixture.text, {
+      textMode: "markdown",
+      textChunkLimit: fixture.textChunkLimit,
+      textChunkMode: fixture.textChunkMode,
+    });
+
+    const renderedChunks = mockSendText.mock.calls.map((call) => call[1]);
+    expect(renderedChunks).toEqual(fixture.expected);
+    expect(renderedChunks.join("")).toBe(parseZalouserTextStyles(fixture.text).text);
+  });
+
   it("respects an explicit text chunk limit when splitting formatted markdown", async () => {
     const text = `**${"a".repeat(1501)}**`;
     mockSendText

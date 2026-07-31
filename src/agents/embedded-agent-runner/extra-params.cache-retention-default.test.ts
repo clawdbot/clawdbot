@@ -1,8 +1,9 @@
 // Coverage for cache-retention defaults and overrides in extra params.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
-import { testing as extraParamsTesting, applyExtraParamsToAgent } from "./extra-params.js";
+import { applyExtraParamsToAgent } from "./extra-params.js";
+import { testing as extraParamsTesting } from "./extra-params.test-support.js";
+import { log } from "./logger.js";
 import { resolveCacheRetention } from "./prompt-cache-retention.js";
 
 function applyAndExpectWrapped(params: {
@@ -14,7 +15,7 @@ function applyAndExpectWrapped(params: {
 }) {
   // Wrapping is the observable signal that cache-retention handling was enabled
   // without requiring a real provider stream call.
-  const agent: { streamFn?: StreamFn } = {};
+  const agent: { streamFn?: StreamFn } = { streamFn: vi.fn() as StreamFn };
 
   applyExtraParamsToAgent(
     agent,
@@ -41,9 +42,8 @@ vi.mock("./logger.js", () => ({
   },
 }));
 
-vi.mock("../../llm/stream.js", () => createLlmStreamSimpleMock());
-
 beforeEach(() => {
+  vi.mocked(log.warn).mockClear();
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: () => undefined,
     resolveProviderExtraParamsForTransport: () => undefined,
@@ -255,6 +255,30 @@ describe("cacheRetention default behavior", () => {
         "us.anthropic.claude-sonnet-4-6",
       ),
     ).toBe("long");
+  });
+
+  it("warns instead of creating an undocumented cacheRetention alias", () => {
+    applyAndExpectWrapped({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "amazon-bedrock/us.anthropic.claude-sonnet-4-6": {
+                params: { cacheRetention: "standard" },
+              },
+            },
+          },
+        },
+      },
+      modelId: "us.anthropic.claude-sonnet-4-6",
+      model: { api: "openai-completions" } as Parameters<typeof applyExtraParamsToAgent>[8],
+      provider: "amazon-bedrock",
+    });
+
+    expect(log.warn).toHaveBeenCalledOnce();
+    expect(log.warn).toHaveBeenCalledWith(
+      'ignoring invalid cacheRetention param; expected "none", "short", or "long"',
+    );
   });
 
   it("defaults to 'short' for anthropic-vertex without explicit config", () => {

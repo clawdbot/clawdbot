@@ -6,6 +6,7 @@
  * back to the normal consult flow.
  */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getActiveMemorySearchManager } from "../plugins/memory-runtime.js";
@@ -69,7 +70,7 @@ function normalizeSnippet(text: string): string {
   }
   // Keep individual memory snippets bounded so several hits still fit in a
   // short realtime response prompt.
-  return `${normalized.slice(0, MAX_SNIPPET_CHARS - 1).trimEnd()}...`;
+  return `${truncateUtf16Safe(normalized, MAX_SNIPPET_CHARS - 1).trimEnd()}...`;
 }
 
 function buildSearchQuery(args: unknown): string {

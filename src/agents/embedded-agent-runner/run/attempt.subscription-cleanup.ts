@@ -7,7 +7,7 @@ import { log } from "../logger.js";
 import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
 
 /** Shared timeout for waiting on aborted model/prompt cleanup before releasing resources. */
-export const EMBEDDED_ABORT_SETTLE_TIMEOUT_MS = resolveEmbeddedAbortSettleTimeoutMs();
+const EMBEDDED_ABORT_SETTLE_TIMEOUT_MS = resolveEmbeddedAbortSettleTimeoutMs();
 
 type IdleAwareAgent = {
   waitForIdle?: (() => Promise<void>) | undefined;

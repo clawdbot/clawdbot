@@ -1,5 +1,4 @@
 // Googlechat plugin module implements channel behavior.
-import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
@@ -28,9 +27,7 @@ import {
   GoogleChatConfigSchema,
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,
-  listGoogleChatAccountIds,
   normalizeGoogleChatTarget,
-  resolveGoogleChatAccount,
   resolveGoogleChatOutboundSessionRoute,
   type ChannelMessageActionAdapter,
   type ChannelStatusIssue,
@@ -42,6 +39,7 @@ import {
 } from "./doctor-contract.js";
 import { collectGoogleChatMutableAllowlistWarnings } from "./doctor.js";
 import { startGoogleChatGatewayAccount } from "./gateway.js";
+import { describeGoogleChatMessageTool } from "./message-tool-api.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 
 const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
@@ -50,24 +48,8 @@ const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
 );
 
 const googlechatActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg, accountId }) => {
-    const accounts = accountId
-      ? [resolveGoogleChatAccount({ cfg, accountId })].filter(
-          (account) => account.enabled && account.credentialSource !== "none",
-        )
-      : listGoogleChatAccountIds(cfg)
-          .map((id) => resolveGoogleChatAccount({ cfg, accountId: id }))
-          .filter((account) => account.enabled && account.credentialSource !== "none");
-    if (accounts.length === 0) {
-      return null;
-    }
-    const actions = new Set<ChannelMessageActionName>(["send", "upload-file"]);
-    if (accounts.some((account) => account.config.actions?.reactions !== false)) {
-      actions.add("react");
-      actions.add("reactions");
-    }
-    return { actions: Array.from(actions) };
-  },
+  describeMessageTool: describeGoogleChatMessageTool,
+  supportsAction: ({ action }) => action === "send",
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
   handleAction: async (ctx) => {
     const { googlechatMessageActions } = await import("./actions.js");
@@ -91,6 +73,7 @@ export const googlechatPlugin = createChatChannelPlugin({
     groups: googlechatGroupsAdapter,
     messaging: {
       targetPrefixes: ["googlechat", "google-chat", "gchat"],
+      targetIdComparison: "case-sensitive",
       normalizeTarget: normalizeGoogleChatTarget,
       resolveOutboundSessionRoute: (params) => resolveGoogleChatOutboundSessionRoute(params),
       targetResolver: {
@@ -127,7 +110,7 @@ export const googlechatPlugin = createChatChannelPlugin({
     },
     actions: googlechatActions,
     doctor: {
-      dmAllowFromMode: "nestedOnly",
+      dmAllowFromMode: "topOnly",
       groupModel: "route",
       groupAllowFromFallbackToAllowFrom: false,
       warnOnEmptyGroupSenderAllowlist: false,
@@ -183,11 +166,12 @@ export const googlechatPlugin = createChatChannelPlugin({
         configured: account.credentialSource !== "none",
         extra: {
           credentialSource: account.credentialSource,
+          tokenStatus: account.tokenStatus,
           audienceType: account.config.audienceType,
           audience: account.config.audience,
           webhookPath: account.config.webhookPath,
           webhookUrl: account.config.webhookUrl,
-          dmPolicy: account.config.dm?.policy ?? "pairing",
+          dmPolicy: account.config.dmPolicy ?? "pairing",
         },
       }),
     }),

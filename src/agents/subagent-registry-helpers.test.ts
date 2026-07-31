@@ -1,13 +1,19 @@
 // Subagent registry helper tests cover orphan reconciliation and compact logging
 // for announce delivery give-up paths.
+import { promises as fs } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../runtime.js";
 import {
+  backfillCollectorArchiveAtMs,
   capFrozenResultText,
   logAnnounceGiveUp,
+  reconcileOrphanedRestoredRuns,
   reconcileOrphanedRun,
+  resolveSubagentArchiveAtMs,
+  safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { updateSwarmCollectorCompletion } from "./swarm-collector.js";
 
 function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
   return {
@@ -31,6 +37,143 @@ describe("capFrozenResultText", () => {
     expect(Buffer.byteLength(result, "utf8")).toBeLessThanOrEqual(100 * 1024);
     expect(result).not.toContain("�");
     expect(result).toContain("[truncated: frozen completion output exceeded 100KB");
+  });
+});
+
+describe("resolveSubagentArchiveAtMs", () => {
+  const cfg = { agents: { defaults: { subagents: { archiveAfterMinutes: 5 } } } };
+
+  it("defers collector retention until terminal completion", () => {
+    for (const cleanup of ["keep", "delete"] as const) {
+      expect(
+        resolveSubagentArchiveAtMs({
+          cfg,
+          now: 1_000,
+          spawnMode: "run",
+          cleanup,
+          collect: true,
+        }),
+      ).toBeUndefined();
+    }
+  });
+
+  it("starts collector retention when terminal completion is frozen", () => {
+    const entry = createRunEntry({
+      collect: true,
+      endedAt: 2_000,
+      outcome: { status: "ok" },
+      completion: { required: false, resultText: "done", capturedAt: 2_000 },
+    });
+
+    expect(updateSwarmCollectorCompletion(entry, cfg)).toBe(true);
+    expect(entry.collectorCompletion).toEqual({ status: "done" });
+    expect(entry.archiveAtMs).toBe(302_000);
+  });
+
+  it("starts retention when a delayed result first becomes waitable", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const entry = createRunEntry({
+      collect: true,
+      endedAt: 2_000,
+      outcome: { status: "ok" },
+      completion: { required: false, resultText: "done" },
+    });
+
+    expect(updateSwarmCollectorCompletion(entry, cfg)).toBe(true);
+    expect(entry.completion?.capturedAt).toBe(10_000);
+    expect(entry.archiveAtMs).toBe(310_000);
+    vi.useRealTimers();
+  });
+
+  it("backfills legacy collectors from their terminal time", () => {
+    const entry = createRunEntry({
+      collect: true,
+      endedAt: 2_000,
+      archiveAtMs: 10_000,
+    });
+
+    expect(backfillCollectorArchiveAtMs(entry, cfg)).toBe(true);
+    expect(entry.archiveAtMs).toBe(302_000);
+    expect(backfillCollectorArchiveAtMs(entry, cfg)).toBe(false);
+  });
+
+  it("clears stale deadlines from active, persistent, or retention-disabled collectors", () => {
+    const active = createRunEntry({ collect: true, archiveAtMs: 10_000 });
+    expect(backfillCollectorArchiveAtMs(active, cfg)).toBe(true);
+    expect(active.archiveAtMs).toBeUndefined();
+
+    const persistent = createRunEntry({
+      collect: true,
+      spawnMode: "session",
+      endedAt: 2_000,
+      archiveAtMs: 10_000,
+    });
+    expect(backfillCollectorArchiveAtMs(persistent, cfg)).toBe(true);
+    expect(persistent.archiveAtMs).toBeUndefined();
+
+    const completed = createRunEntry({ collect: true, endedAt: 2_000, archiveAtMs: 10_000 });
+    expect(
+      backfillCollectorArchiveAtMs(completed, {
+        agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+      }),
+    ).toBe(true);
+    expect(completed.archiveAtMs).toBeUndefined();
+  });
+
+  it("preserves ordinary keep and persistent session semantics", () => {
+    expect(
+      resolveSubagentArchiveAtMs({
+        cfg,
+        now: 1_000,
+        spawnMode: "run",
+        cleanup: "keep",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveSubagentArchiveAtMs({
+        cfg,
+        now: 1_000,
+        spawnMode: "session",
+        cleanup: "delete",
+        collect: true,
+      }),
+    ).toBeUndefined();
+  });
+});
+
+describe("reconcileOrphanedRestoredRuns", () => {
+  it("keeps waitable collector tombstones after delete-mode sessions disappear", () => {
+    const entry = createRunEntry({
+      collect: true,
+      cleanup: "delete",
+      endedAt: 2_000,
+      completion: { required: false, resultText: "done", capturedAt: 2_000 },
+      collectorCompletion: { status: "done" },
+    });
+    const runs = new Map([[entry.runId, entry]]);
+
+    expect(reconcileOrphanedRestoredRuns({ runs, resumedRuns: new Set() })).toBe(false);
+    expect(runs.get(entry.runId)).toBe(entry);
+  });
+});
+
+describe("safeRemoveAttachmentsDir", () => {
+  it("reports non-ENOENT realpath failures instead of treating cleanup as complete", async () => {
+    const realpathSpy = vi
+      .spyOn(fs, "realpath")
+      .mockRejectedValue(Object.assign(new Error("permission denied"), { code: "EACCES" }));
+
+    await expect(
+      safeRemoveAttachmentsDir(
+        createRunEntry({
+          attachmentsDir: "/tmp/openclaw-child-attachments",
+          attachmentsRootDir: "/tmp/openclaw-attachments",
+        }),
+      ),
+    ).resolves.toBe(false);
+
+    realpathSpy.mockRestore();
   });
 });
 

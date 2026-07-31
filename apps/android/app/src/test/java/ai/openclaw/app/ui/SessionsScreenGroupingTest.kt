@@ -6,6 +6,60 @@ import org.junit.Test
 
 class SessionsScreenGroupingTest {
   @Test
+  fun relativeTimeUsesCatalogBackedCompactLabels() {
+    val now = 10_000_000L
+
+    assertEquals("now", relativeSessionTime(updatedAtMs = now, nowMs = now))
+    assertEquals("5m", relativeSessionTime(updatedAtMs = now - 5 * 60_000L, nowMs = now))
+    assertEquals("3h", relativeSessionTime(updatedAtMs = now - 3 * 60 * 60_000L, nowMs = now))
+    assertEquals("2d", relativeSessionTime(updatedAtMs = now - 2 * 24 * 60 * 60_000L, nowMs = now))
+  }
+
+  @Test
+  fun sessionActionTargetKeepsTheOwnerCapturedWhenTheDialogOpened() {
+    val target =
+      ChatSessionEntry(
+        key = "custom",
+        updatedAtMs = null,
+        ownerAgentId = "agent-a",
+        label = "Original",
+      ).toActionTarget("gateway-a")
+    val refreshed =
+      ChatSessionEntry(
+        key = "custom",
+        updatedAtMs = null,
+        ownerAgentId = "agent-b",
+        label = "Replacement",
+      )
+
+    assertEquals("gateway-a", target.gatewayStableId)
+    assertEquals("agent-a", target.ownerAgentId)
+    assertEquals("Original", target.label)
+    assertEquals("gateway-a:agent-a:custom", target.stateKey)
+    assertEquals(true, target.matchesGateway("gateway-a"))
+    assertEquals(false, target.matchesGateway("gateway-b"))
+    assertEquals("agent-b", refreshed.ownerAgentId)
+  }
+
+  @Test
+  fun sessionActionTargetSavedStatePreservesOwnerAndNullableLabels() {
+    val full = SessionActionTarget("gateway-a", "custom", "agent-a", "", "Display")
+    val sparse = SessionActionTarget(null, "agent:main:device", null, null, null)
+
+    assertEquals(full, sessionActionTargetFromSavedState(full.toSavedState()))
+    assertEquals(sparse, sessionActionTargetFromSavedState(sparse.toSavedState()))
+  }
+
+  @Test
+  fun sessionActionTargetSavedStateRejectsMissingIdentity() {
+    assertEquals(null, sessionActionTargetFromSavedState(emptyList()))
+    assertEquals(
+      null,
+      sessionActionTargetFromSavedState(listOf("1", "gateway-a", "", "0", "", "0", "", "0", "")),
+    )
+  }
+
+  @Test
   fun groupsPinnedThenAlphabeticalCategoriesThenUngrouped() {
     val sections =
       groupSessionEntries(

@@ -9,7 +9,6 @@ public struct OpenClawChatHaptics: Sendable {
         case messageSent
         case runCompleted
         case runFailed
-        case actionConfirmed
     }
 
     private let performer: @Sendable (Event) -> Void
@@ -18,6 +17,7 @@ public struct OpenClawChatHaptics: Sendable {
         self.performer = Self.defaultPerformer
     }
 
+    // periphery:ignore - package tests inject a recorder; app consumers use the live performer.
     public init(performer: @escaping @Sendable (Event) -> Void) {
         self.performer = performer
     }
@@ -36,8 +36,6 @@ public struct OpenClawChatHaptics: Sendable {
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
             case .runFailed:
                 UINotificationFeedbackGenerator().notificationOccurred(.error)
-            case .actionConfirmed:
-                UISelectionFeedbackGenerator().selectionChanged()
             }
         }
         #else

@@ -2,7 +2,8 @@
  * Shared assertions for channel account startup lifecycle behavior.
  */
 import { expect, vi } from "vitest";
-import type { ChannelAccountSnapshot, ChannelGatewayContext } from "../testing.js";
+import type { ChannelGatewayContext } from "../../channels/plugins/types.adapters.js";
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { createStartAccountContext } from "./start-account-context.js";
 
 export function startAccountAndTrackLifecycle<TAccount extends { accountId: string }>(params: {

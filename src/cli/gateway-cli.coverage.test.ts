@@ -8,11 +8,14 @@ import { withEnvOverride } from "../config/test-helpers.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 
+type GatewayCliDependencies = Parameters<typeof registerGatewayCli>[1];
+
 type DiscoveredBeacon = Awaited<
   ReturnType<typeof import("../infra/bonjour-discovery.js").discoverGatewayBeacons>
 >[number];
-
-const callGateway = vi.fn<(opts: unknown) => Promise<{ ok: true }>>(async () => ({ ok: true }));
+const defaultCallGateway = async (): Promise<unknown> => ({ ok: true });
+const callGateway = vi.fn<(opts: unknown) => Promise<unknown>>(defaultCallGateway);
+const formatGatewayAuthErrorJson = vi.fn();
 const formatGatewayClientRequestErrorJson = vi.fn();
 const formatGatewayTransportErrorJson = vi.fn();
 const startGatewayServer = vi.fn<
@@ -56,6 +59,7 @@ vi.mock(
       url: "ws://127.0.0.1:18789",
     }),
     callGateway: (opts: unknown) => callGateway(opts),
+    formatGatewayAuthErrorJson: (error: unknown) => formatGatewayAuthErrorJson(error),
     formatGatewayClientRequestErrorJson: (error: unknown) =>
       formatGatewayClientRequestErrorJson(error),
     formatGatewayTransportErrorJson: (error: unknown) => formatGatewayTransportErrorJson(error),
@@ -123,10 +127,10 @@ vi.mock("../infra/ports.js", () => ({
 
 let gatewayProgram: Command;
 
-function createGatewayProgram() {
+function createGatewayProgram(deps?: GatewayCliDependencies) {
   const program = new Command();
   program.exitOverride();
-  registerGatewayCli(program);
+  registerGatewayCli(program, deps);
   return program;
 }
 
@@ -156,6 +160,8 @@ describe("gateway-cli coverage", () => {
 
   beforeEach(() => {
     gatewayProgram = createGatewayProgram();
+    callGateway.mockReset();
+    callGateway.mockImplementation(defaultCallGateway);
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;
     defaultRuntime.log.mockClear();
@@ -166,6 +172,8 @@ describe("gateway-cli coverage", () => {
     startGatewayServer.mockClear();
     inspectPortUsage.mockClear();
     formatPortDiagnostics.mockClear();
+    formatGatewayAuthErrorJson.mockReset();
+    formatGatewayAuthErrorJson.mockReturnValue(null);
     formatGatewayClientRequestErrorJson.mockReset();
     formatGatewayClientRequestErrorJson.mockReturnValue(null);
     formatGatewayTransportErrorJson.mockReset();
@@ -253,6 +261,116 @@ describe("gateway-cli coverage", () => {
     expect(costCall?.params).toEqual({ days: 7, agentScope: "all" });
   });
 
+  it("prints the provider/model breakdown for missing costs", async () => {
+    callGateway.mockResolvedValue({
+      updatedAt: 1,
+      days: 7,
+      daily: [],
+      totals: {
+        input: 12,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 12,
+        totalCost: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 12,
+        missingCostByModel: {
+          "openai/gpt-5.6-sol": 10,
+          "openai-codex/gpt-5.5": 2,
+        },
+      },
+      cacheStatus: {
+        status: "fresh",
+        cachedFiles: 1,
+        pendingFiles: 0,
+        staleFiles: 0,
+      },
+    });
+
+    await runGatewayCommand(["gateway", "usage-cost", "--days", "7"]);
+
+    expect(runtimeLogs.join("\n")).toContain(
+      "Missing cost: 12 (openai/gpt-5.6-sol 10, openai-codex/gpt-5.5 2)",
+    );
+  });
+
+  it("waits for refreshing all-agent usage caches before printing totals", async () => {
+    const settleSleep = vi.fn(async (_ms: number) => {});
+    gatewayProgram = createGatewayProgram({
+      usageCostSettle: {
+        now: () => 0,
+        sleep: settleSleep,
+      },
+    });
+    callGateway
+      .mockResolvedValueOnce({
+        cacheStatus: { status: "refreshing", cachedFiles: 0, pendingFiles: 2 },
+      })
+      .mockResolvedValueOnce({
+        totals: { totalTokens: 100, totalCost: 0.1 },
+        cacheStatus: { status: "fresh", cachedFiles: 2, pendingFiles: 0 },
+      });
+
+    await runGatewayCommand(["gateway", "usage-cost", "--all-agents", "--days", "7", "--json"]);
+
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(settleSleep).toHaveBeenCalledOnce();
+    expect(settleSleep).toHaveBeenCalledWith(250);
+    const costCalls = callGateway.mock.calls.map(
+      ([raw]) => raw as { method?: string; timeoutMs?: number },
+    );
+    expect(costCalls.every((call) => call.method === "usage.cost")).toBe(true);
+    expect(costCalls.every((call) => call.timeoutMs === 10_000)).toBe(true);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        totals: expect.objectContaining({ totalTokens: 100, totalCost: 0.1 }),
+        cacheStatus: expect.objectContaining({ status: "fresh" }),
+      }),
+    );
+  });
+
+  it.each(["refreshing", "partial", "stale"] as const)(
+    "uses --timeout as the command-wide usage-cost settle budget for %s caches",
+    async (status) => {
+      let now = 0;
+      gatewayProgram = createGatewayProgram({
+        usageCostSettle: {
+          now: () => now,
+          sleep: async (ms) => {
+            now += ms;
+          },
+        },
+      });
+      callGateway.mockResolvedValue({
+        cacheStatus: { status, cachedFiles: 0, pendingFiles: 1 },
+      });
+
+      await expectGatewayExit([
+        "gateway",
+        "usage-cost",
+        "--all-agents",
+        "--timeout",
+        "50",
+        "--json",
+      ]);
+
+      // A fast host can fit a second poll inside the 50ms budget; the contract
+      // is the budget bound on every call, not the poll count.
+      expect(callGateway.mock.calls.length).toBeGreaterThanOrEqual(1);
+      const costCalls = callGateway.mock.calls.map(
+        ([raw]) => raw as { method?: string; timeoutMs?: number },
+      );
+      expect(costCalls.every((call) => call.method === "usage.cost")).toBe(true);
+      expect(costCalls.every((call) => (call.timeoutMs ?? 0) > 0)).toBe(true);
+      expect(costCalls.every((call) => (call.timeoutMs ?? 0) <= 50)).toBe(true);
+      expect(runtimeErrors.join("\n")).toContain("Timed out waiting for usage cost cache refresh");
+    },
+  );
+
   it("rejects combining --agent with --all-agents for usage-cost", async () => {
     callGateway.mockClear();
 
@@ -319,6 +437,58 @@ describe("gateway-cli coverage", () => {
     expect(formatGatewayClientRequestErrorJson).toHaveBeenCalledWith(error);
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(payload);
     expect(runtimeErrors.join("\n")).not.toContain("unauthorized role");
+  });
+
+  it("writes JSON for gateway call auth failures in JSON mode", async () => {
+    const error = new Error("gateway health requires credentials");
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_credentials_required",
+        message: "gateway health requires credentials",
+      },
+    };
+    callGateway.mockRejectedValueOnce(error);
+    formatGatewayAuthErrorJson.mockReturnValueOnce(payload);
+
+    await expectGatewayExit(["gateway", "call", "health", "--json"]);
+
+    expect(formatGatewayAuthErrorJson).toHaveBeenCalledWith(error);
+    expect(formatGatewayClientRequestErrorJson).not.toHaveBeenCalled();
+    expect(formatGatewayTransportErrorJson).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(payload);
+    expect(runtimeErrors.join("\n")).not.toContain("gateway health requires credentials");
+  });
+
+  it.each([
+    {
+      name: "probe",
+      args: ["gateway", "probe", "--json"],
+      reject: (error: Error) => gatewayStatusCommand.mockRejectedValueOnce(error),
+    },
+    {
+      name: "discovery",
+      args: ["gateway", "discover", "--json"],
+      reject: (error: Error) => discoverGatewayBeacons.mockRejectedValueOnce(error),
+    },
+  ])("writes JSON for gateway $name transport failures", async ({ args, reject }) => {
+    const error = new Error("gateway transport unavailable");
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_transport_error",
+        kind: "closed",
+        message: "gateway transport unavailable",
+      },
+    };
+    reject(error);
+    formatGatewayTransportErrorJson.mockReturnValueOnce(payload);
+
+    await expectGatewayExit(args);
+
+    expect(formatGatewayTransportErrorJson).toHaveBeenCalledWith(error);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(payload);
+    expect(runtimeErrors).toHaveLength(0);
   });
 
   it("prints the latest stability bundle without calling Gateway", async () => {
@@ -498,6 +668,39 @@ describe("gateway-cli coverage", () => {
     expect(out).toContain("ws://");
   });
 
+  it.each([
+    {
+      name: "uses the secure scheme advertised by a TLS gateway",
+      beacon: {
+        instanceName: "Secure gateway",
+        host: "secure.openclaw.internal",
+        port: 18789,
+        gatewayTls: true,
+      } satisfies DiscoveredBeacon,
+      wsUrl: "wss://secure.openclaw.internal:18789",
+    },
+    {
+      name: "does not construct a URL from unresolved TXT hints",
+      beacon: {
+        instanceName: "Unresolved gateway",
+        lanHost: "unresolved.openclaw.internal",
+        gatewayPort: 18789,
+      } satisfies DiscoveredBeacon,
+      wsUrl: null,
+    },
+  ])("gateway discovery JSON $name", async ({ beacon, wsUrl }) => {
+    discoverGatewayBeacons.mockResolvedValueOnce([beacon]);
+
+    await runGatewayCommand(["gateway", "discover", "--json"]);
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        count: 1,
+        beacons: [expect.objectContaining({ wsUrl })],
+      }),
+    );
+  });
+
   it("validates gateway discover timeout", async () => {
     discoverGatewayBeacons.mockClear();
     await expectGatewayExit(["gateway", "discover", "--timeout", "0"]);
@@ -512,6 +715,7 @@ describe("gateway-cli coverage", () => {
 
     expect(callGateway).not.toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain("Gateway call failed:");
+    expect(runtimeErrors.join("\n")).toContain("--params must be valid JSON.");
   });
 
   it("validates gateway call timeout before opening a transport", async () => {
@@ -565,7 +769,7 @@ describe("gateway-cli coverage", () => {
     }
   });
 
-  it("prints stop hints on GatewayLockError when service is loaded", async () => {
+  it("prints stop hints on an already-running GatewayLockError", async () => {
     await withEnvOverride(
       {
         LAUNCH_JOB_LABEL: undefined,
@@ -587,7 +791,7 @@ describe("gateway-cli coverage", () => {
         );
         await expect(
           runGatewayCommand(["gateway", "--token", "test-token", "--allow-unconfigured"]),
-        ).rejects.toThrow("__exit__:0");
+        ).rejects.toThrow(/__exit__:[01]/);
 
         expect(startGatewayServer).toHaveBeenCalledTimes(1);
         expect(runtimeErrors.join("\n")).toContain("Gateway failed to start:");

@@ -460,7 +460,10 @@ export async function continueCall(
   const turnToken = provider.name === "twilio" ? crypto.randomUUID() : undefined;
 
   try {
-    await speak(ctx, callId, prompt);
+    const speakResult = await speak(ctx, callId, prompt);
+    if (!speakResult.success) {
+      return speakResult;
+    }
 
     transitionState(call, "listening");
     persistCallRecord(ctx.storePath, call);

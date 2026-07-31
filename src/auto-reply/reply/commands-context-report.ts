@@ -7,14 +7,19 @@ import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "../../agents/embedded-agent-helpers/bootstrap.js";
+import {
+  createMessageCharEstimateCache,
+  estimateMessageCharsCached,
+} from "../../agents/embedded-agent-runner/tool-result-char-estimator.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import {
   resolveFreshSessionTotalTokens,
   type SessionEntry,
   type SessionSystemPromptReport,
 } from "../../config/sessions/types.js";
-import { readSessionMessages } from "../../gateway/session-utils.fs.js";
+import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -74,20 +79,39 @@ type TranscriptCompactabilityReport =
       reason: string;
     };
 
-function resolveTranscriptCompactabilityReport(
+async function readContextTranscriptMessages(
   params: HandleCommandsParams,
   targetSessionEntry: SessionEntry | undefined,
-): TranscriptCompactabilityReport {
+): Promise<AgentMessage[]> {
   const sessionId = targetSessionEntry?.sessionId?.trim();
   if (!sessionId) {
+    return [];
+  }
+  const agentId = resolveContextReportAgentId(params);
+  return (await readSessionMessagesAsync(
+    {
+      agentId,
+      sessionId,
+      sessionKey: params.sessionKey,
+      storePath: resolveSessionStorePathForScope({
+        agentId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      }),
+    },
+    { mode: "full", reason: "context-report" },
+  )) as AgentMessage[];
+}
+
+async function resolveTranscriptCompactabilityReport(
+  params: HandleCommandsParams,
+  targetSessionEntry: SessionEntry | undefined,
+): Promise<TranscriptCompactabilityReport> {
+  if (!targetSessionEntry?.sessionId?.trim()) {
     return { available: false, reason: "no active transcript session" };
   }
 
-  const messages = readSessionMessages(
-    sessionId,
-    params.storePath,
-    targetSessionEntry?.sessionFile,
-  ) as AgentMessage[];
+  const messages = await readContextTranscriptMessages(params, targetSessionEntry);
   if (!messages.length) {
     return { available: false, reason: "no transcript messages found" };
   }
@@ -182,12 +206,48 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         ].join("\n"),
       };
     }
+    const messages = await readContextTranscriptMessages(params, targetSessionEntry);
+    const estimateCache = createMessageCharEstimateCache();
+    const conversationTotals = messages.reduce(
+      (totals, message) => {
+        const chars = estimateMessageCharsCached(message, estimateCache);
+        if (chars === 0) {
+          return totals;
+        }
+        if (message.role === "user") {
+          totals.user += chars;
+        } else if (message.role === "assistant") {
+          totals.assistant += chars;
+        } else if (message.role === "toolResult") {
+          totals.toolResults += chars;
+        } else if (message.role === "branchSummary" || message.role === "compactionSummary") {
+          totals.summaries += chars;
+        } else {
+          totals.other += chars;
+        }
+        return totals;
+      },
+      { user: 0, assistant: 0, toolResults: 0, summaries: 0, other: 0 },
+    );
+    const conversation = [
+      { name: "User", value: conversationTotals.user },
+      { name: "Assistant", value: conversationTotals.assistant },
+      { name: "Tool results", value: conversationTotals.toolResults },
+      { name: "Summaries", value: conversationTotals.summaries },
+      { name: "Other", value: conversationTotals.other },
+      // Runtime context and hook prompt additions reach only the model, never
+      // the transcript; without these leaves the map undercounts model-visible
+      // context. The persisted turn prompt is already counted above.
+      { name: "Runtime context", value: report.currentTurn?.runtimeContextChars ?? 0 },
+      { name: "Model-only prompt", value: report.currentTurn?.modelOnlyPromptChars ?? 0 },
+    ].filter((leaf) => leaf.value > 0);
     const treemap = await renderContextTreemapPng({
       report,
       session: {
         cachedContextTokens: cachedContextUsageTokens ?? null,
         contextWindowTokens: session.contextTokens,
       },
+      conversation,
     });
     return {
       text: treemap.caption,
@@ -283,7 +343,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       ? [
           `⚠ Bootstrap context is over configured limits: ${truncatedBootstrapFiles.length} file(s) truncated (${formatInt(bootstrapAnalysis.totals.rawChars)} raw chars -> ${formatInt(bootstrapAnalysis.totals.injectedChars)} injected chars).`,
           ...(truncationCauseParts.length ? [`Causes: ${truncationCauseParts.join("; ")}.`] : []),
-          "Tip: increase this agent's `agents.list[].bootstrapMaxChars` / `agents.list[].bootstrapTotalMaxChars` override, or the matching `agents.defaults.*` fallback, if this truncation is not intentional.",
+          "Tip: increase this agent's `agents.entries.*.bootstrapMaxChars` / `agents.entries.*.bootstrapTotalMaxChars` override, or the matching `agents.defaults.*` fallback, if this truncation is not intentional.",
         ]
       : [];
 
@@ -348,7 +408,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         : overheadTokens > 0
           ? `Untracked provider/runtime overhead: ~${formatInt(overheadTokens)} tok`
           : "Untracked provider/runtime overhead: not observed in cached usage";
-    const transcriptCompactability = resolveTranscriptCompactabilityReport(
+    const transcriptCompactability = await resolveTranscriptCompactabilityReport(
       params,
       targetSessionEntry,
     );

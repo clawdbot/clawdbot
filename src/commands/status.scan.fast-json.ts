@@ -4,14 +4,18 @@
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { isRecord } from "../utils.js";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
-import {
-  resolveDefaultMemoryDatabasePath,
-  resolveStatusMemoryStatusSnapshot,
-} from "./status.scan-memory.ts";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
 import type { StatusScanResult } from "./status.scan-result.ts";
+
+const statusScanMemoryModuleLoader = createLazyImportLoader(
+  () => import("./status.scan-memory.js"),
+);
+const statusScanPluginStatusModuleLoader = createLazyImportLoader(
+  () => import("../plugins/status.js"),
+);
 
 const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 const STATUS_JSON_CHANNEL_ENV_PREFIXES = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter(
@@ -26,7 +30,6 @@ const STATUS_JSON_CHANNEL_ENV_VARS = new Set(
 type StatusJsonScanPolicy = {
   commandName: string;
   allowMissingConfigFastPath?: boolean;
-  includeChannelSummary?: boolean;
   fetchGitUpdate?: boolean;
   includeRegistryUpdate?: boolean;
   includeLocalStatusRpcFallback?: boolean;
@@ -105,16 +108,20 @@ export async function scanStatusJsonWithPolicy(
     includeLocalStatusRpcFallback: policy.includeLocalStatusRpcFallback,
     gatewayProbeTimeoutMs: policy.gatewayProbeTimeoutMs,
   });
+  const pluginCompatibility = opts.all
+    ? await statusScanPluginStatusModuleLoader
+        .load()
+        .then(({ buildPluginCompatibilitySnapshotNotices }) =>
+          buildPluginCompatibilitySnapshotNotices({ config: overview.cfg }),
+        )
+    : [];
   return await executeStatusScanFromOverview({
     overview,
     runtime,
-    summary: {
-      includeChannelSummary: policy.includeChannelSummary,
-    },
     resolveMemory: policy.resolveMemory,
     channelIssues: [],
     channels: { rows: [], details: [] },
-    pluginCompatibility: [],
+    pluginCompatibility,
   });
 }
 
@@ -129,23 +136,23 @@ export async function scanStatusJsonFast(
   return await scanStatusJsonWithPolicy(opts, runtime, {
     commandName: "status --json",
     allowMissingConfigFastPath: true,
-    includeChannelSummary: false,
     fetchGitUpdate: opts.all === true,
     includeRegistryUpdate: opts.all === true,
     includeLocalStatusRpcFallback: opts.all === true,
-    gatewayProbeTimeoutMs:
-      opts.all === true
-        ? undefined
-        : (cfg) => opts.timeoutMs ?? Math.max(1000, cfg.gateway?.handshakeTimeoutMs ?? 0),
+    gatewayProbeTimeoutMs: opts.all === true ? undefined : () => opts.timeoutMs ?? 1000,
     resolveHasConfiguredChannels: (cfg) => hasPotentialConfiguredChannelsForStatusJson(cfg),
-    resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
-      opts.all
-        ? await resolveStatusMemoryStatusSnapshot({
-            cfg,
-            agentStatus,
-            memoryPlugin,
-            requireDefaultDatabasePath: resolveDefaultMemoryDatabasePath,
-          })
-        : null,
+    resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) => {
+      if (!opts.all) {
+        return null;
+      }
+      const { resolveDefaultMemoryDatabasePath, resolveStatusMemoryStatusSnapshot } =
+        await statusScanMemoryModuleLoader.load();
+      return await resolveStatusMemoryStatusSnapshot({
+        cfg,
+        agentStatus,
+        memoryPlugin,
+        requireDefaultDatabasePath: resolveDefaultMemoryDatabasePath,
+      });
+    },
   });
 }

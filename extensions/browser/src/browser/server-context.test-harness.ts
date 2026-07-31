@@ -65,7 +65,7 @@ export function makeBrowserServerState(params?: {
     },
   };
   return {
-    server: null as any,
+    server: null as unknown as BrowserServerState["server"],
     port: 0,
     resolved: {
       ...resolvedBase,

@@ -20,7 +20,7 @@ export function splitArgsPreservingQuotes(
   const quoteStart = options?.quoteStart ?? "anywhere";
 
   for (let i = 0; i < value.length; i++) {
-    const char = value[i];
+    const char = value.charAt(i);
     if (escapeMode === "backslash" && char === "\\") {
       // POSIX-style service parsers consume any escaped next byte.
       if (i + 1 < value.length) {

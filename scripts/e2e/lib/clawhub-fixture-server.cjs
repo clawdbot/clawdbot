@@ -297,7 +297,7 @@ export default definePluginEntry({
   name: "OpenClaw Kitchen Sink",
   description: "Docker E2E kitchen-sink plugin fixture",
   register(api) {
-    api.on("before_agent_start", async (event, context) => ({
+    api.on("before_prompt_build", async (event, context) => ({
       kitchenSink: true,
       observedEventKeys: Object.keys(event || {}),
       observedContextKeys: Object.keys(context || {}),

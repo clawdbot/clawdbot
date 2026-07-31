@@ -1,14 +1,18 @@
 // Vitest scoped config helper builds test configs for scoped file patterns.
 import path from "node:path";
 import { defineConfig } from "vitest/config";
-import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
+import {
+  intersectIncludePatterns,
+  loadPatternListFromEnv,
+  narrowIncludePatternsForCli,
+} from "./vitest.pattern-file.ts";
 import {
   nonIsolatedRunnerPath,
   repoRoot,
   resolveRepoRootPath,
   sharedVitestConfig,
 } from "./vitest.shared.config.ts";
-import { getUnitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
+import { getUnitFastTestFilesForIncludePatterns } from "./vitest.unit-fast-paths.mjs";
 
 function normalizePathPattern(value: string): string {
   return value.replaceAll("\\", "/");
@@ -94,6 +98,9 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "agents",
     "agents-core",
     "agents-embedded-agent",
+    "agents-embedded-agent-incomplete-turn",
+    "agents-embedded-agent-overflow-compaction",
+    "agents-embedded-agent-run",
     "agents-support",
     "agents-tools",
     "auto-reply",
@@ -103,6 +110,7 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "boundary",
     "bundled",
     "channels",
+    "cli-process",
     "cli",
     "commands",
     "commands-light",
@@ -203,6 +211,8 @@ export function createScopedVitestConfig(
     isolate?: boolean;
     name?: string;
     fileParallelism?: boolean;
+    hookTimeout?: number;
+    intersectIncludeFile?: boolean;
     pool?: "forks" | "threads";
     passWithNoTests?: boolean;
     excludeUnitFastTests?: boolean;
@@ -212,19 +222,30 @@ export function createScopedVitestConfig(
 ) {
   const base = sharedVitestConfig as Record<string, unknown>;
   const baseTest = sharedVitestConfig.test ?? {};
+  const baseSequence = (baseTest as { sequence?: { groupOrder?: number } }).sequence;
   const scopedDir = options?.dir;
   const resolvedScopedDir = scopedDir ? path.join(repoRoot, scopedDir) : undefined;
   const env = options?.env;
-  const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
+  const externalIncludePatterns = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
+  const includeFromEnv = options?.intersectIncludeFile
+    ? intersectIncludePatterns(include, externalIncludePatterns)
+    : externalIncludePatterns;
   const cliInclude = narrowIncludePatternsForCli(include, options?.argv, {
     scopedDir,
   });
+  const effectiveInclude = includeFromEnv ?? cliInclude ?? include;
+  const scopedInclude = relativizeScopedPatterns(effectiveInclude, scopedDir);
   const unitFastExcludePatterns =
-    options?.excludeUnitFastTests === false ? [] : getUnitFastTestFiles();
+    options?.excludeUnitFastTests === false
+      ? []
+      : getUnitFastTestFilesForIncludePatterns(effectiveInclude, { dir: scopedDir });
   const exclude = relativizeScopedPatterns(
     [...(baseTest.exclude ?? []), ...unitFastExcludePatterns, ...(options?.exclude ?? [])],
     scopedDir,
   );
+  const scopedEnvInclude = includeFromEnv
+    ? relativizeScopedPatterns(includeFromEnv, scopedDir)
+    : includeFromEnv;
   const scopedCliInclude = cliInclude ? relativizeScopedPatterns(cliInclude, scopedDir) : null;
   const isolate = options?.isolate ?? resolveVitestIsolation(options?.env);
   const setupFiles = [
@@ -249,25 +270,29 @@ export function createScopedVitestConfig(
       ...(runner ? { runner } : { runner: undefined }),
       setupFiles,
       ...(resolvedScopedDir ? { dir: resolvedScopedDir } : {}),
-      include: relativizeScopedPatterns(includeFromEnv ?? cliInclude ?? include, scopedDir),
+      include: scopedInclude,
       exclude,
       ...(options?.pool ? { pool: options.pool } : {}),
       ...(options?.fileParallelism === undefined
         ? {}
         : { fileParallelism: options.fileParallelism }),
+      ...(options?.hookTimeout === undefined ? {} : { hookTimeout: options.hookTimeout }),
       ...(scopedGroupOrder === undefined
         ? {}
         : {
             sequence: {
-              ...baseTest.sequence,
+              ...baseSequence,
               groupOrder: scopedGroupOrder,
             },
           }),
       ...(options?.passWithNoTests !== undefined
         ? { passWithNoTests: options.passWithNoTests }
-        : shouldPassWithNoTestsForCliIncludes(scopedCliInclude, exclude)
+        : externalIncludePatterns !== null &&
+            shouldPassWithNoTestsForCliIncludes(scopedEnvInclude, exclude)
           ? { passWithNoTests: true }
-          : {}),
+          : shouldPassWithNoTestsForCliIncludes(scopedCliInclude, exclude)
+            ? { passWithNoTests: true }
+            : {}),
     },
   });
 }

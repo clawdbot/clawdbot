@@ -114,7 +114,7 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
   });
 }
 
-export class AgentComponentButton extends Button {
+class AgentComponentButton extends Button {
   override label = AGENT_BUTTON_KEY;
   customId = `${AGENT_BUTTON_KEY}:seed=1`;
   override style = ButtonStyle.Primary;
@@ -142,7 +142,7 @@ export class AgentComponentButton extends Button {
   }
 }
 
-export class AgentSelectMenu extends StringSelectMenu {
+class AgentSelectMenu extends StringSelectMenu {
   customId = `${AGENT_SELECT_KEY}:seed=1`;
   options: APIStringSelectComponent["options"] = [];
   private ctx: AgentComponentContext;

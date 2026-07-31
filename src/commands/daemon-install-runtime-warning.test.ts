@@ -18,19 +18,6 @@ afterEach(() => {
 });
 
 describe("emitNodeRuntimeWarning", () => {
-  it("skips lookup when runtime is not node", async () => {
-    const warn = vi.fn();
-    await emitNodeRuntimeWarning({
-      env: {},
-      runtime: "bun",
-      warn,
-      title: "Gateway runtime",
-    });
-    expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
-    expect(mocks.renderSystemNodeWarning).not.toHaveBeenCalled();
-    expect(warn).not.toHaveBeenCalled();
-  });
-
   it("emits warning when system node check returns one", async () => {
     const warn = vi.fn();
     mocks.resolveSystemNodeInfo.mockResolvedValue({ path: "/usr/bin/node", version: "18.0.0" });

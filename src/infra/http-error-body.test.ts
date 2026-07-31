@@ -1,4 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { mockWarn } = vi.hoisted(() => ({
+  mockWarn: vi.fn(),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({ warn: mockWarn }),
+}));
+
 import { readResponseBodySnippet } from "./http-error-body.js";
 
 function bodyLessResponse(text: string): Response {
@@ -71,6 +80,16 @@ describe("readResponseBodySnippet", () => {
     expect(byteLen).toBeLessThanOrEqual(100);
   });
 
+  it("stream path drops partial UTF-8 characters at the byte boundary", async () => {
+    const response = new Response(new Blob([new TextEncoder().encode("ab😀cd")]).stream());
+    const result = await readResponseBodySnippet(response, {
+      maxBytes: 3,
+      maxChars: 100,
+    });
+
+    expect(result).toBe("ab");
+  });
+
   it("stream path still enforces maxChars", async () => {
     const data = new Uint8Array(500).fill(97);
     const response = new Response(new Blob([data]).stream());
@@ -122,4 +141,50 @@ describe("readResponseBodySnippet", () => {
 
     expect(result).toBe("a" + "🦞".repeat(4));
   });
+});
+
+describe("readResponseBodySnippet error visibility", () => {
+  beforeEach(() => {
+    mockWarn.mockClear();
+  });
+
+  it.each([
+    {
+      name: "response.text() rejection",
+      response: () =>
+        ({
+          body: null,
+          text: async () => {
+            throw new Error("body already consumed");
+          },
+        }) as unknown as Response,
+      expectedError: "body already consumed",
+    },
+    {
+      name: "body stream failure",
+      response: () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("partial"));
+              controller.error(new Error("stream aborted"));
+            },
+          }),
+        ),
+      expectedError: "stream aborted",
+    },
+  ])(
+    "logs the read error and preserves the empty fallback for $name",
+    async ({ response, expectedError }) => {
+      const result = await readResponseBodySnippet(response(), {
+        maxBytes: 1024,
+        maxChars: 50,
+      });
+
+      expect(result).toBe("");
+      expect(mockWarn).toHaveBeenCalledExactlyOnceWith(
+        `Failed to read response body snippet: ${expectedError}`,
+      );
+    },
+  );
 });

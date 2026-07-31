@@ -1,7 +1,7 @@
 // Mattermost plugin module implements directory behavior.
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { listMattermostAccountIds, resolveMattermostAccount } from "./accounts.js";
+import { inspectMattermostAccount, listMattermostAccountIds } from "./accounts.js";
 import {
   createMattermostClient,
   fetchMattermostMe,
@@ -9,6 +9,7 @@ import {
   type MattermostClient,
   type MattermostUser,
 } from "./client.js";
+import { resolveMattermostTrustedChatKind } from "./monitor-auth.js";
 import type { ChannelDirectoryEntry, OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
 
 type MattermostDirectoryParams = {
@@ -23,7 +24,7 @@ function buildClient(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): MattermostClient | null {
-  const account = resolveMattermostAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = inspectMattermostAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.enabled || !account.botToken || !account.baseUrl) {
     return null;
   }
@@ -97,7 +98,15 @@ export async function listMattermostDirectoryGroups(
         }
         seenIds.add(ch.id);
         entries.push({
-          kind: "group" as const,
+          // Authoritative per-channel kind: a public `O` channel is a `channel`;
+          // only private `P` / group `G` map to `group`. Emitting a blanket
+          // `group` here mislabels public channels, so a name-resolved public
+          // channel would fork a phantom `group:<id>` session on outbound
+          // routing (#95646).
+          kind:
+            resolveMattermostTrustedChatKind({ channelType: ch.type }) === "group"
+              ? ("group" as const)
+              : ("channel" as const),
           id: `channel:${ch.id}`,
           name: ch.name ?? undefined,
           handle: ch.display_name ?? undefined,
@@ -134,6 +143,9 @@ export async function listMattermostDirectoryPeers(
   // All bots see the same user list, so one client suffices (unlike channels
   // where private channel membership varies per bot).
   const client = clients[0];
+  if (!client) {
+    return [];
+  }
   try {
     const me = await fetchMattermostMe(client);
     const teams = await client.request<{ id: string }[]>("/users/me/teams");
@@ -141,7 +153,11 @@ export async function listMattermostDirectoryPeers(
       return [];
     }
     // Uses first team — multi-team setups may need iteration in the future
-    const teamId = teams[0].id;
+    const team = teams[0];
+    if (!team) {
+      return [];
+    }
+    const teamId = team.id;
     const q = normalizeLowercaseStringOrEmpty(params.query);
 
     let users: MattermostUser[];

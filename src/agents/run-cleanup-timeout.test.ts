@@ -4,6 +4,7 @@ import { runAgentCleanupStep } from "./run-cleanup-timeout.js";
 
 const AGENT_CLEANUP_STEP_TIMEOUT_MS = 10_000;
 const CLEANUP_TIMEOUT_DETAILS_MAX_CHARS = 512;
+const CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX = "...[truncated]";
 
 describe("agent cleanup timeout", () => {
   const log = {
@@ -113,6 +114,33 @@ describe("agent cleanup timeout", () => {
         CLEANUP_TIMEOUT_DETAILS_MAX_CHARS +
         1,
     );
+  });
+
+  it("keeps truncated cleanup timeout details UTF-16 safe", async () => {
+    const cleanup = vi.fn(async () => new Promise<never>(() => {}));
+    const prefixLength =
+      CLEANUP_TIMEOUT_DETAILS_MAX_CHARS - CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX.length;
+    const detailsPrefix = "a".repeat(prefixLength - 1);
+    const oversizedDetails = `${detailsPrefix}😀${"b".repeat(CLEANUP_TIMEOUT_DETAILS_MAX_CHARS)}`;
+
+    const result = runAgentCleanupStep({
+      runId: "run-trajectory",
+      sessionId: "session-trajectory",
+      step: "agent-trajectory-flush",
+      cleanup,
+      log,
+      timeoutMs: 5,
+      getTimeoutDetails: () => oversizedDetails,
+    });
+
+    await vi.advanceTimersByTimeAsync(5);
+    await expect(result).resolves.toBeUndefined();
+
+    const message = String(log.warn.mock.calls.at(-1)?.[0] ?? "");
+    expect(message).toContain(
+      ` details=${detailsPrefix}${CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX}`,
+    );
+    expect(message).not.toContain("�");
   });
 
   it("does not fail cleanup when timeout details throw", async () => {
@@ -257,31 +285,28 @@ describe("agent cleanup timeout", () => {
         OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS: "0x10",
       },
     },
-  ])(
-    "ignores invalid cleanup timeout environment values",
-    async ({ runId, sessionId, env }) => {
-      const cleanup = vi.fn(async () => new Promise<never>(() => {}));
+  ])("ignores invalid cleanup timeout environment values", async ({ runId, sessionId, env }) => {
+    const cleanup = vi.fn(async () => new Promise<never>(() => {}));
 
-      const result = runAgentCleanupStep({
-        runId,
-        sessionId,
-        step: "openclaw-trajectory-flush",
-        cleanup,
-        log,
-        env,
-      });
+    const result = runAgentCleanupStep({
+      runId,
+      sessionId,
+      step: "openclaw-trajectory-flush",
+      cleanup,
+      log,
+      env,
+    });
 
-      await vi.advanceTimersByTimeAsync(AGENT_CLEANUP_STEP_TIMEOUT_MS - 1);
-      expect(log.warn).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(AGENT_CLEANUP_STEP_TIMEOUT_MS - 1);
+    expect(log.warn).not.toHaveBeenCalled();
 
-      await vi.advanceTimersByTimeAsync(1);
-      await expect(result).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(result).resolves.toBeUndefined();
 
-      expect(log.warn).toHaveBeenCalledWith(
-        `agent cleanup timed out: runId=${runId} sessionId=${sessionId} step=openclaw-trajectory-flush timeoutMs=10000`,
-      );
-    },
-  );
+    expect(log.warn).toHaveBeenCalledWith(
+      `agent cleanup timed out: runId=${runId} sessionId=${sessionId} step=openclaw-trajectory-flush timeoutMs=10000`,
+    );
+  });
 
   it("logs cleanup rejection without throwing", async () => {
     await expect(

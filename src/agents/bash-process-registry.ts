@@ -15,9 +15,11 @@ const DEFAULT_JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const MIN_JOB_TTL_MS = 60 * 1000; // 1 minute
 const MAX_JOB_TTL_MS = 3 * 60 * 60 * 1000; // 3 hours
 const DEFAULT_PENDING_OUTPUT_CHARS = 30_000;
+const MAX_FINISHED_SESSION_COUNT = 50;
+const MAX_FINISHED_SESSION_OUTPUT_CHARS = 2_000_000;
 
 function clampTtl(value: number | undefined) {
-  if (!value || Number.isNaN(value)) {
+  if (value === undefined || Number.isNaN(value)) {
     return DEFAULT_JOB_TTL_MS;
   }
   return Math.min(Math.max(value, MIN_JOB_TTL_MS), MAX_JOB_TTL_MS);
@@ -82,6 +84,8 @@ export interface ProcessSession {
   exitReason?: TerminationReason;
   noOutputTimedOut?: boolean;
   exited: boolean;
+  /** Process exit observed; backend cleanup still owns the terminal transition. */
+  finalizing?: boolean;
   truncated: boolean;
   backgrounded: boolean;
   /** PTY cursor key mode: unknown until a PTY reports smkx/rmkx. */
@@ -109,11 +113,15 @@ interface FinishedSession {
 
 const runningSessions = new Map<string, ProcessSession>();
 const finishedSessions = new Map<string, FinishedSession>();
+const activeBackgroundExecSessionIds = new Set<string>();
+let finishedSessionOutputChars = 0;
 
 let sweeper: NodeJS.Timeout | null = null;
 
 function isSessionIdTaken(id: string) {
-  return runningSessions.has(id) || finishedSessions.has(id);
+  return (
+    runningSessions.has(id) || finishedSessions.has(id) || activeBackgroundExecSessionIds.has(id)
+  );
 }
 
 /** Creates a unique short session id that avoids running and retained sessions. */
@@ -137,10 +145,39 @@ export function getFinishedSession(id: string) {
   return finishedSessions.get(id);
 }
 
-/** Removes a session from both running and finished registries. */
+function deleteFinishedSession(id: string): boolean {
+  const session = finishedSessions.get(id);
+  if (!session) {
+    return false;
+  }
+  finishedSessions.delete(id);
+  finishedSessionOutputChars -= session.aggregated.length;
+  return true;
+}
+
+/** Removes visible session records without changing live-process activity. */
 export function deleteSession(id: string) {
   runningSessions.delete(id);
-  finishedSessions.delete(id);
+  deleteFinishedSession(id);
+}
+
+/** Removes completed process records belonging to retired session identities. */
+export function clearFinishedSessionsForScopes(scopeKeys: Iterable<string>): void {
+  const retiredScopes = new Set<string>();
+  for (const scopeKey of scopeKeys) {
+    const normalizedScope = scopeKey.trim();
+    if (normalizedScope) {
+      retiredScopes.add(normalizedScope);
+    }
+  }
+  if (retiredScopes.size === 0) {
+    return;
+  }
+  for (const [id, session] of finishedSessions) {
+    if (session.scopeKey && retiredScopes.has(session.scopeKey)) {
+      deleteFinishedSession(id);
+    }
+  }
 }
 
 /** Appends process output while enforcing aggregate and pending-output caps. */
@@ -194,6 +231,9 @@ export function markExited(
   exitReason?: TerminationReason,
   noOutputTimedOut?: boolean,
 ) {
+  // Visibility can be cleared before process termination. Keep suspension
+  // blocked until the process owner reports the actual terminal transition.
+  activeBackgroundExecSessionIds.delete(session.id);
   session.exited = true;
   session.exitCode = exitCode;
   session.exitSignal = exitSignal;
@@ -206,6 +246,14 @@ export function markExited(
 /** Marks a running session as reconnectable after the exec call returns. */
 export function markBackgrounded(session: ProcessSession) {
   session.backgrounded = true;
+  if (!session.exited) {
+    activeBackgroundExecSessionIds.add(session.id);
+  }
+}
+
+/** Returns the number of live background exec sessions without exposing process details. */
+export function getActiveBackgroundExecSessionCount(): number {
+  return activeBackgroundExecSessionIds.size;
 }
 
 function moveToFinished(session: ProcessSession, status: ProcessStatus) {
@@ -245,6 +293,9 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
   if (!session.backgrounded) {
     return;
   }
+  // Keep full completed logs; evict older records rather than silently
+  // truncating the process poll/log contract or dropping the newest result.
+  deleteFinishedSession(session.id);
   finishedSessions.set(session.id, {
     id: session.id,
     command: session.command,
@@ -264,6 +315,17 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     truncated: session.truncated,
     totalOutputChars: session.totalOutputChars,
   });
+  finishedSessionOutputChars += session.aggregated.length;
+  while (
+    finishedSessions.size > MAX_FINISHED_SESSION_COUNT ||
+    (finishedSessions.size > 1 && finishedSessionOutputChars > MAX_FINISHED_SESSION_OUTPUT_CHARS)
+  ) {
+    const oldestSessionId = finishedSessions.keys().next().value;
+    if (oldestSessionId === undefined) {
+      break;
+    }
+    deleteFinishedSession(oldestSessionId);
+  }
 }
 
 /** Returns the last `max` characters of text without adding ellipses. */
@@ -308,9 +370,12 @@ function capPendingBuffer(buffer: string[], pendingCharsInput: number, cap: numb
   }
   if (buffer.length && pendingChars > cap) {
     const overflow = pendingChars - cap;
-    const previousLength = buffer[0].length;
-    buffer[0] = sliceUtf16Safe(buffer[0], overflow);
-    pendingChars -= previousLength - buffer[0].length;
+    const firstChunk = buffer.at(0);
+    if (firstChunk !== undefined) {
+      const trimmedChunk = sliceUtf16Safe(firstChunk, overflow);
+      buffer[0] = trimmedChunk;
+      pendingChars -= firstChunk.length - trimmedChunk.length;
+    }
   }
   return pendingChars;
 }
@@ -331,10 +396,17 @@ export function listFinishedSessions() {
 }
 
 /** Test-only reset for in-memory registry state and retention timers. */
-export function resetProcessRegistryForTests() {
+function resetProcessRegistryForTests() {
   runningSessions.clear();
   finishedSessions.clear();
+  finishedSessionOutputChars = 0;
+  activeBackgroundExecSessionIds.clear();
   stopSweeper();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.bashProcessRegistryTestApi")] =
+    { resetProcessRegistryForTests };
 }
 
 /** Overrides finished-session retention TTL, clamped to supported bounds. */
@@ -351,7 +423,7 @@ function pruneFinishedSessions() {
   const cutoff = Date.now() - jobTtlMs;
   for (const [id, session] of finishedSessions.entries()) {
     if (session.endedAt < cutoff) {
-      finishedSessions.delete(id);
+      deleteFinishedSession(id);
     }
   }
 }

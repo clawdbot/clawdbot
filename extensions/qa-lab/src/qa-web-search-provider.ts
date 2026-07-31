@@ -12,10 +12,7 @@ import {
   QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY,
 } from "./qa-web-search-provider.shared.js";
 
-export {
-  QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY,
-  QA_LAB_WEB_SEARCH_PROVIDER_ID,
-} from "./qa-web-search-provider.shared.js";
+export { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "./qa-web-search-provider.shared.js";
 
 const QaLabWebSearchSchema = {
   type: "object",

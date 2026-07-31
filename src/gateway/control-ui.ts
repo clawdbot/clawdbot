@@ -1,6 +1,4 @@
-// Gateway Control UI HTTP handler.
-// Serves bundled UI assets, bootstrap config, avatars, assistant media, and auth checks.
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
@@ -9,29 +7,43 @@ import {
   asDateTimestampMs,
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
-import { resolveAgentAvatar, resolvePublicAgentAvatarSource } from "../agents/identity-avatar.js";
+import {
+  type AgentAvatarResolution,
+  resolvePublicAgentAvatarSource,
+} from "../agents/identity-avatar.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
+import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import {
   isPackageProvenControlUiRootSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
+import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
 import { listDevicePairing, verifyDeviceToken } from "../infra/device-pairing.js";
-import { openLocalFileSafely, FsSafeError, readSecureFile } from "../infra/fs-safe.js";
+import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
+import { probePlaybackMediaFileDescriptor, type MediaProbeResult } from "../media/media-probe.js";
 import {
   resolveMediaReferenceLocalPath,
   resolveMediaReferenceLocalPathInfo,
 } from "../media/media-reference.js";
+import {
+  replacePlaybackFileExtension,
+  resolvePlaybackModeForSource,
+  resolvePlaybackTranscode,
+} from "../media/playback-transcode.js";
 import { extractOriginalFilename } from "../media/store.js";
-import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
+import { safeEqualSecret } from "../security/secret-equal.js";
+import { AVATAR_MAX_BYTES, resolveAvatarMime } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { openGatewayAssistantAvatar, resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -43,6 +55,7 @@ import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   type ControlUiBootstrapConfig,
+  type ControlUiPluginFrameGrantAck,
 } from "./control-ui-contract.js";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
 import {
@@ -50,22 +63,40 @@ import {
   respondNotFound as respondControlUiNotFound,
   respondPlainText,
 } from "./control-ui-http-utils.js";
-import { classifyControlUiRequest } from "./control-ui-routing.js";
+import { classifyControlUiRequest, isControlUiApprovalDocumentPath } from "./control-ui-routing.js";
 import {
   buildControlUiAvatarUrl,
   CONTROL_UI_AVATAR_PREFIX,
   normalizeControlUiBasePath,
-  resolveAssistantAvatarUrl,
 } from "./control-ui-shared.js";
+import {
+  isControlUiPrecompressedAssetExtension,
+  isControlUiStaticAssetExtension,
+  readAndCloseControlUiFile,
+  readAndCloseControlUiFileText,
+  resolveControlUiHtmlEncoding,
+  resolveOpenedControlUiRepresentation,
+  respondControlUiNotAcceptable,
+  respondHeadForControlUiFile,
+  sendControlUiHtmlBody,
+  serveControlUiAsset,
+} from "./control-ui-static.js";
+import {
+  createGatewayByteStream,
+  resolveByteResponse,
+  writeByteHeaders,
+} from "./http-byte-range.js";
 import { buildMissingScopeForbiddenBody, sendGatewayAuthFailure } from "./http-common.js";
 import {
   getBearerToken,
   resolveHttpBrowserOriginPolicy,
   resolveTrustedHttpOperatorScopes,
+  setControlUiPluginAuthCookieForRequest as setPluginAuthCookie,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveRequestClientIp } from "./net.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
+import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
 const ROOT_PREFIX = "/";
 const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
@@ -76,18 +107,6 @@ const CONTROL_UI_ASSETS_MISSING_MESSAGE =
 const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
 const controlUiAssistantMediaTicketSecret = randomBytes(32);
-
-function buildAssistantMediaContentDisposition(filename: string, mime?: string): string {
-  // Keep the RFC 6266 fallback ASCII; filename* carries the exact UTF-8 name.
-  const fallback = filename.replace(/[^\x20-\x7e]|[%"\\]/g, "_") || "download";
-  const extended = encodeURIComponent(filename).replace(
-    /[\x27()*]/g,
-    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
-  );
-  const kind = kindFromMime(mime);
-  const inline = kind === "image" || kind === "audio" || kind === "video";
-  return `${inline ? "inline" : "attachment"}; filename="${fallback}"; filename*=UTF-8''${extended}`;
-}
 
 type ControlUiRequestOptions = {
   basePath?: string;
@@ -107,62 +126,6 @@ export type ControlUiRootState =
   | { kind: "invalid"; path: string }
   | { kind: "missing" };
 
-function contentTypeForExt(ext: string): string {
-  switch (ext) {
-    case ".html":
-      return "text/html; charset=utf-8";
-    case ".js":
-      return "application/javascript; charset=utf-8";
-    case ".css":
-      return "text/css; charset=utf-8";
-    case ".json":
-    case ".map":
-      return "application/json; charset=utf-8";
-    case ".svg":
-      return "image/svg+xml";
-    case ".png":
-      return "image/png";
-    case ".jpg":
-    case ".jpeg":
-      return "image/jpeg";
-    case ".gif":
-      return "image/gif";
-    case ".webp":
-      return "image/webp";
-    case ".ico":
-      return "image/x-icon";
-    case ".txt":
-      return "text/plain; charset=utf-8";
-    case ".webmanifest":
-      return "application/manifest+json; charset=utf-8";
-    default:
-      return "application/octet-stream";
-  }
-}
-
-/**
- * Extensions recognised as static assets.  Missing files with these extensions
- * return 404 instead of the SPA index.html fallback.  `.html` is intentionally
- * excluded — actual HTML files on disk are served earlier, and missing `.html`
- * paths should fall through to the SPA router (client-side routers may use
- * `.html`-suffixed routes).
- */
-const STATIC_ASSET_EXTENSIONS = new Set([
-  ".js",
-  ".css",
-  ".json",
-  ".map",
-  ".svg",
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".gif",
-  ".webp",
-  ".ico",
-  ".txt",
-  ".webmanifest",
-]);
-
 const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
 const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
   "apple-touch-icon.png",
@@ -173,17 +136,18 @@ const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
   "sw.js",
 ]);
 
-/** Rewrites root-absolute Control UI public asset hrefs for configured base paths. */
+/** Anchors bundled public assets before deep-linked documents begin preloading. */
 function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath: string): string {
   const normalized = normalizeControlUiBasePath(basePath);
-  if (!normalized) {
-    return html;
-  }
   let next = html;
   for (const asset of CONTROL_UI_ROOT_PUBLIC_ASSETS) {
-    const rootHref = `href="/${asset}"`;
-    const baseHref = `href="${normalized}/${asset}"`;
-    next = next.split(rootHref).join(baseHref);
+    const assetHref = `href="${normalized}/${asset}"`;
+    // Vite's portable ./ base emits relative hrefs, which the browser starts
+    // resolving against a nested route before the UI can correct them.
+    next = next.replaceAll(`href="./${asset}"`, assetHref);
+    if (normalized) {
+      next = next.replaceAll(`href="/${asset}"`, assetHref);
+    }
   }
   return next;
 }
@@ -197,22 +161,16 @@ function escapeHtmlAttribute(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
-type ControlUiAvatarResolution =
-  | { kind: "none"; reason: string; source?: string | null }
-  | { kind: "local"; filePath: string; source?: string | null }
-  | { kind: "remote"; url: string; source?: string | null }
-  | { kind: "data"; url: string; source?: string | null };
-
 type ControlUiAvatarMeta = {
   avatarUrl: string | null;
   avatarSource: string | null;
-  avatarStatus: ControlUiAvatarResolution["kind"];
+  avatarStatus: AgentAvatarResolution["kind"] | null;
   avatarReason: string | null;
 };
 
-function controlUiAvatarResolutionMeta(resolved: ControlUiAvatarResolution | null): {
+function controlUiAvatarResolutionMeta(resolved: AgentAvatarResolution | null): {
   avatarSource: string | null;
-  avatarStatus: ControlUiAvatarResolution["kind"] | null;
+  avatarStatus: AgentAvatarResolution["kind"] | null;
   avatarReason: string | null;
 } {
   if (!resolved) {
@@ -230,6 +188,12 @@ function applyControlUiSecurityHeaders(res: ServerResponse) {
   res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
+  // Browser Talk is owned by this same-origin Control UI document. Keep camera
+  // access here; the Gateway's default policy continues to deny it elsewhere.
+  res.setHeader(
+    "Permissions-Policy",
+    "camera=(self), microphone=*, geolocation=*, clipboard-write=*",
+  );
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
@@ -252,16 +216,6 @@ function respondControlUiAssetsUnavailable(
     return;
   }
   respondPlainText(res, 503, CONTROL_UI_ASSETS_MISSING_MESSAGE);
-}
-
-function respondHeadForFile(req: IncomingMessage, res: ServerResponse, filePath: string): boolean {
-  if (req.method !== "HEAD") {
-    return false;
-  }
-  res.statusCode = 200;
-  setStaticFileHeaders(res, filePath);
-  res.end();
-  return true;
 }
 
 function isValidAgentId(agentId: string): boolean {
@@ -334,9 +288,11 @@ async function authorizeControlUiReadRequest(
     rateLimiter?: AuthRateLimiter;
     allowQueryToken?: boolean;
     requiredOperatorMethod?: string;
+    onPluginFrameGrants?: (grants: readonly ControlUiPluginFrameGrantAck[]) => void;
   },
 ): Promise<boolean> {
   if (!opts?.auth) {
+    opts?.onPluginFrameGrants?.([]);
     return true;
   }
 
@@ -357,7 +313,12 @@ async function authorizeControlUiReadRequest(
     clientIp,
     rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   });
+  const sharedAuthGeneration = resolveSharedGatewaySessionGeneration(
+    opts.auth,
+    opts.trustedProxies,
+  );
   let resolvedAuthResult = authResult;
+  let verifiedDeviceScopes: string[] | undefined;
   if (
     !resolvedAuthResult.ok &&
     token &&
@@ -373,18 +334,17 @@ async function authorizeControlUiReadRequest(
         retryAfterMs: deviceRateCheck.retryAfterMs,
       };
     } else {
-      const deviceTokenOk = await authorizeControlUiDeviceReadToken(token, {
-        requiredSharedGatewaySessionGeneration: resolveSharedGatewaySessionGeneration(
-          opts.auth,
-          opts.trustedProxies,
-        ),
-      });
-      if (deviceTokenOk) {
+      const deviceTokenOk = await authorizeControlUiDeviceReadToken(token, sharedAuthGeneration);
+      const deviceScopes = deviceTokenOk
+        ? await resolveControlUiDeviceReadTokenScopes(token)
+        : null;
+      if (deviceScopes) {
+        verifiedDeviceScopes = deviceScopes;
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
         resolvedAuthResult = { ok: true, method: "device-token" };
       } else {
-        opts.rateLimiter?.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+        await opts.rateLimiter?.recordFailureAndDelay(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
       }
     }
   }
@@ -393,7 +353,20 @@ async function authorizeControlUiReadRequest(
     return false;
   }
 
-  const trustDeclaredOperatorScopes = resolvedAuthResult.method === "trusted-proxy";
+  const authMethod = resolvedAuthResult.method;
+  const trustDeclaredOperatorScopes = authMethod === "trusted-proxy" || authMethod === "tailscale";
+  if (opts.onPluginFrameGrants) {
+    opts.onPluginFrameGrants(
+      setPluginAuthCookie(
+        req,
+        res,
+        authMethod,
+        trustDeclaredOperatorScopes,
+        sharedAuthGeneration,
+        verifiedDeviceScopes,
+      ),
+    );
+  }
   if (!trustDeclaredOperatorScopes) {
     return true;
   }
@@ -415,7 +388,7 @@ async function authorizeControlUiReadRequest(
 
 async function authorizeControlUiDeviceReadToken(
   token: string,
-  opts: { requiredSharedGatewaySessionGeneration?: string },
+  requiredSharedGatewaySessionGeneration: string | undefined,
 ): Promise<boolean> {
   const pairing = await listDevicePairing();
   for (const device of pairing.paired) {
@@ -431,7 +404,7 @@ async function authorizeControlUiDeviceReadToken(
       token,
       role: CONTROL_UI_OPERATOR_ROLE,
       scopes: [CONTROL_UI_OPERATOR_READ_SCOPE],
-      requiredSharedGatewaySessionGeneration: opts.requiredSharedGatewaySessionGeneration,
+      requiredSharedGatewaySessionGeneration,
     });
     if (verified.ok) {
       return true;
@@ -440,8 +413,28 @@ async function authorizeControlUiDeviceReadToken(
   return false;
 }
 
+async function resolveControlUiDeviceReadTokenScopes(token: string): Promise<string[] | null> {
+  const pairing = await listDevicePairing();
+  for (const device of pairing.paired) {
+    const operatorBearer = device.tokens?.[CONTROL_UI_OPERATOR_ROLE];
+    if (
+      operatorBearer &&
+      !operatorBearer.revokedAtMs &&
+      verifyPairingToken(token, operatorBearer.token)
+    ) {
+      return operatorBearer.scopes;
+    }
+  }
+  return null;
+}
+
 type AssistantMediaAvailability =
-  | { available: true }
+  | ({
+      available: true;
+      mimeType?: string;
+      playback?: "native" | "transcode";
+      sizeBytes?: number;
+    } & MediaProbeResult)
   | { available: false; reason: string; code: string };
 
 type AssistantMediaTicketPayload = {
@@ -492,9 +485,7 @@ function verifyAssistantMediaTicket(ticket: string | null, source: string, nowMs
     return false;
   }
   const expectedSig = signAssistantMediaTicketPayload(encodedPayload);
-  const sigBuffer = Buffer.from(sig, "base64url");
-  const expectedBuffer = Buffer.from(expectedSig, "base64url");
-  if (sigBuffer.length !== expectedBuffer.length || !timingSafeEqual(sigBuffer, expectedBuffer)) {
+  if (!safeEqualSecret(sig, expectedSig)) {
     return false;
   }
   try {
@@ -566,8 +557,56 @@ async function resolveAssistantMediaAvailability(
     const localPath = await resolveMediaReferenceLocalPath(source);
     await assertLocalMediaAllowed(localPath, localRoots);
     const opened = await openLocalFileSafely({ filePath: localPath });
-    await opened.handle.close();
-    return { available: true };
+    try {
+      const sizeBytes = opened.stat.size;
+      let mimeType: string | undefined;
+      try {
+        const sniffLength = Math.min(sizeBytes, 8192);
+        const sniffBuffer = sniffLength > 0 ? Buffer.allocUnsafe(sniffLength) : undefined;
+        const bytesRead = sniffBuffer
+          ? (await opened.handle.read(sniffBuffer, 0, sniffLength, 0)).bytesRead
+          : 0;
+        mimeType =
+          (await detectMime({
+            buffer: sniffBuffer?.subarray(0, bytesRead),
+            filePath: localPath,
+          })) ?? undefined;
+      } catch {
+        // Availability is authoritative; optional metadata remains best-effort.
+      }
+      const mediaKind = kindFromMime(mimeType);
+      const playbackProbe =
+        mediaKind === "audio" || mediaKind === "video"
+          ? await probePlaybackMediaFileDescriptor(opened.handle.fd, mediaKind)
+          : null;
+      const probe: MediaProbeResult = playbackProbe
+        ? {
+            ...(playbackProbe.durationMs ? { durationMs: playbackProbe.durationMs } : {}),
+            ...(playbackProbe.width && playbackProbe.height
+              ? { width: playbackProbe.width, height: playbackProbe.height }
+              : {}),
+          }
+        : {};
+      const playback =
+        mimeType && (mediaKind === "audio" || mediaKind === "video")
+          ? await resolvePlaybackModeForSource({
+              sourcePath: opened.realPath,
+              sourceStat: opened.stat,
+              mimeType,
+              kind: mediaKind,
+              probe: playbackProbe,
+            })
+          : undefined;
+      return {
+        available: true,
+        ...(mimeType ? { mimeType } : {}),
+        ...(playback ? { playback } : {}),
+        sizeBytes,
+        ...probe,
+      };
+    } finally {
+      await opened.handle.close().catch(() => {});
+    }
   } catch (err) {
     return classifyAssistantMediaError(err);
   }
@@ -632,21 +671,13 @@ export async function handleControlUiAssistantMediaRequest(
     return true;
   }
 
-  let opened: Awaited<ReturnType<typeof openLocalFileSafely>> | null = null;
-  let localPath;
-  let handleClosed = false;
-  const closeOpenedHandle = async () => {
-    if (!opened || handleClosed) {
-      return;
-    }
-    handleClosed = true;
-    await opened.handle.close().catch(() => {});
-  };
+  let byteStream: ReturnType<typeof createGatewayByteStream> | undefined;
   try {
     const resolvedReference = await resolveMediaReferenceLocalPathInfo(source);
-    localPath = resolvedReference.path;
+    const localPath = resolvedReference.path;
     await assertLocalMediaAllowed(localPath, localRoots);
-    opened = await openLocalFileSafely({ filePath: localPath });
+    let opened = await openLocalFileSafely({ filePath: localPath });
+    byteStream = createGatewayByteStream(res, opened.handle, () => respondControlUiNotFound(res));
     const sniffLength = Math.min(opened.stat.size, 8192);
     const sniffBuffer = sniffLength > 0 ? Buffer.allocUnsafe(sniffLength) : undefined;
     const bytesRead =
@@ -657,37 +688,58 @@ export async function handleControlUiAssistantMediaRequest(
       buffer: sniffBuffer?.subarray(0, bytesRead),
       filePath: localPath,
     });
-    const contentType = mime ?? "application/octet-stream";
-    const filename =
+    let contentType = mime ?? "application/octet-stream";
+    let filename =
       resolvedReference.kind === "inbound"
         ? extractOriginalFilename(localPath)
         : path.basename(localPath);
+    const mediaKind = kindFromMime(contentType);
+    if (
+      url.searchParams.get("playback") === "1" &&
+      (mediaKind === "audio" || mediaKind === "video")
+    ) {
+      const playback = await resolvePlaybackTranscode({
+        sourcePath: opened.realPath,
+        sourceStat: opened.stat,
+        mimeType: contentType,
+        kind: mediaKind,
+      });
+      if (playback.kind === "preparing") {
+        await byteStream.close();
+        sendJson(res, 202, { status: "preparing" });
+        return true;
+      }
+      if (playback.kind === "transcoded") {
+        const transcoded = await openLocalFileSafely({ filePath: playback.path }).catch(() => null);
+        if (transcoded) {
+          await byteStream.close();
+          opened = transcoded;
+          byteStream = createGatewayByteStream(res, opened.handle, () =>
+            respondControlUiNotFound(res),
+          );
+          contentType = playback.contentType;
+          filename = replacePlaybackFileExtension(filename, playback.extension);
+        }
+      }
+    }
     res.setHeader("Content-Type", contentType);
     res.setHeader(
       "Content-Disposition",
       buildAssistantMediaContentDisposition(filename, contentType),
     );
     res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Content-Length", String(opened.stat.size));
-    const stream = opened.handle.createReadStream({ start: 0, autoClose: false });
-    const finishClose = () => {
-      void closeOpenedHandle();
-    };
-    stream.once("end", finishClose);
-    stream.once("close", finishClose);
-    stream.once("error", () => {
-      void closeOpenedHandle();
-      if (!res.headersSent) {
-        respondControlUiNotFound(res);
-      } else {
-        res.destroy();
-      }
+    const byteResponse = resolveByteResponse({
+      file: opened.stat,
+      method: req.method,
+      rangeHeader: req.headers.range,
+      ifRangeHeader: req.headers["if-range"],
+      ifNoneMatchHeader: req.headers["if-none-match"],
     });
-    res.once("close", finishClose);
-    stream.pipe(res);
+    writeByteHeaders(res, byteResponse);
+    await byteStream.pipe(byteResponse, req.method);
     return true;
   } catch {
-    await closeOpenedHandle();
+    await byteStream?.close();
     respondControlUiNotFound(res);
     return true;
   }
@@ -698,7 +750,7 @@ export async function handleControlUiAvatarRequest(
   res: ServerResponse,
   opts: {
     basePath?: string;
-    resolveAvatar: (agentId: string) => ControlUiAvatarResolution;
+    config: OpenClawConfig;
     auth?: ResolvedGatewayAuth;
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
@@ -742,57 +794,59 @@ export async function handleControlUiAvatarRequest(
     return true;
   }
 
+  const identity = resolveAssistantIdentity({ cfg: opts.config, agentId });
+  const projection = openGatewayAssistantAvatar({ cfg: opts.config, identity });
+  const resolved = projection.resolution;
+
   if (url.searchParams.get("meta") === "1") {
-    const resolved = opts.resolveAvatar(agentId);
-    const meta = controlUiAvatarResolutionMeta(resolved);
-    const avatarUrl =
-      resolved.kind === "local"
-        ? buildControlUiAvatarUrl(basePath, agentId)
-        : resolved.kind === "remote" || resolved.kind === "data"
-          ? resolved.url
-          : null;
-    sendJson(res, 200, {
-      avatarUrl,
-      avatarSource: meta.avatarSource,
-      avatarStatus: meta.avatarStatus ?? resolved.kind,
-      avatarReason: meta.avatarReason,
-    } satisfies ControlUiAvatarMeta);
+    try {
+      const meta = controlUiAvatarResolutionMeta(resolved);
+      const avatarUrl =
+        resolved?.kind === "local"
+          ? buildControlUiAvatarUrl(basePath, agentId)
+          : resolved?.kind === "remote" || resolved?.kind === "data"
+            ? resolved.url
+            : null;
+      sendJson(res, 200, {
+        avatarUrl,
+        avatarSource: meta.avatarSource,
+        avatarStatus: meta.avatarStatus,
+        avatarReason: meta.avatarReason,
+      } satisfies ControlUiAvatarMeta);
+    } finally {
+      if (projection.openedFile) {
+        fs.closeSync(projection.openedFile.fd);
+      }
+    }
     return true;
   }
 
-  const resolved = opts.resolveAvatar(agentId);
-  if (resolved.kind !== "local") {
+  if (resolved?.kind !== "local" || !projection.openedFile) {
     respondControlUiNotFound(res);
     return true;
   }
 
-  const safeAvatar = await resolveSafeAvatarFile(resolved.filePath);
-  if (!safeAvatar) {
+  try {
+    res.setHeader("Content-Type", resolveAvatarMime(projection.openedFile.path));
+    res.setHeader("Cache-Control", "no-cache");
+    if (req.method === "HEAD") {
+      res.statusCode = 200;
+      res.end();
+      return true;
+    }
+    const body = await readFileDescriptorBounded(projection.openedFile.fd, AVATAR_MAX_BYTES);
+    res.end(body);
+    return true;
+  } catch {
     respondControlUiNotFound(res);
     return true;
+  } finally {
+    fs.closeSync(projection.openedFile.fd);
   }
-  if (respondHeadForFile(req, res, safeAvatar.path)) {
-    return true;
-  }
-
-  serveResolvedFile(res, safeAvatar.path, safeAvatar.buffer);
-  return true;
 }
 
-function setStaticFileHeaders(res: ServerResponse, filePath: string) {
-  const ext = path.extname(filePath).toLowerCase();
-  res.setHeader("Content-Type", contentTypeForExt(ext));
-  // Static UI should never be cached aggressively while iterating; allow the
-  // browser to revalidate.
-  res.setHeader("Cache-Control", "no-cache");
-}
-
-function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) {
-  setStaticFileHeaders(res, filePath);
-  res.end(body);
-}
-
-function serveResolvedIndexHtml(
+async function serveResolvedIndexHtml(
+  req: IncomingMessage,
   res: ServerResponse,
   body: string,
   basePath?: string,
@@ -818,23 +872,7 @@ function serveResolvedIndexHtml(
   );
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  res.end(prepared);
-}
-
-function readOpenedFile(fd: number): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    fs.readFile(fd, (error, data) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(data);
-    });
-  });
-}
-
-async function readOpenedFileText(fd: number): Promise<string> {
-  return (await readOpenedFile(fd)).toString("utf8");
+  await sendControlUiHtmlBody(req, res, prepared);
 }
 
 function isExpectedSafePathError(error: unknown): boolean {
@@ -843,27 +881,11 @@ function isExpectedSafePathError(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP";
 }
 
-async function resolveSafeAvatarFile(
-  filePath: string,
-): Promise<{ path: string; buffer: Buffer } | null> {
-  try {
-    const read = await readSecureFile({
-      filePath,
-      label: "Control UI avatar",
-      permissions: { allowInsecure: true, allowReadableByOthers: true },
-      io: { maxBytes: AVATAR_MAX_BYTES },
-    });
-    return { path: read.realPath, buffer: read.buffer };
-  } catch {
-    return null;
-  }
-}
-
 function resolveSafeControlUiFile(
   rootReal: string,
   filePath: string,
   rejectHardlinks: boolean,
-): { path: string; fd: number } | null {
+): { path: string; fd: number; size: number } | null {
   const opened = openRootFileSync({
     absolutePath: filePath,
     rootPath: rootReal,
@@ -880,7 +902,7 @@ function resolveSafeControlUiFile(
       fallback: () => null,
     });
   }
-  return { path: opened.path, fd: opened.fd };
+  return { path: opened.path, fd: opened.fd, size: opened.stat.size };
 }
 
 function isSafeRelativePath(relPath: string) {
@@ -970,10 +992,10 @@ export async function handleControlUiHttpRequest(
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts?.basePath);
   const pathname = url.pathname;
-  // The embedded terminal ships ghostty-web (WASM); relax the index CSP only
-  // for an explicitly enabled terminal so the default policy stays strict.
-  const terminalEnabled =
-    opts?.terminalEnabled ?? opts?.config?.gateway?.terminal?.enabled === true;
+  // The embedded terminal ships ghostty-web (WASM); the index CSP carries the
+  // WASM relaxation whenever the terminal is enabled (the default) and stays
+  // strict once operators opt out with gateway.terminal.enabled: false.
+  const terminalEnabled = opts?.terminalEnabled ?? isTerminalConfigEnabled(opts?.config);
   const route = classifyControlUiRequest({
     basePath,
     pathname,
@@ -999,30 +1021,20 @@ export async function handleControlUiHttpRequest(
   applyControlUiSecurityHeaders(res);
 
   if (matchesControlUiBootstrapConfigPath(pathname, basePath)) {
+    let pluginFrameGrants: readonly ControlUiPluginFrameGrantAck[] = [];
     if (
       !(await authorizeControlUiReadRequest(req, res, {
         auth: opts?.auth,
         trustedProxies: opts?.trustedProxies,
         allowRealIpFallback: opts?.allowRealIpFallback,
         rateLimiter: opts?.rateLimiter,
+        onPluginFrameGrants: (grants) => {
+          pluginFrameGrants = grants;
+        },
       }))
     ) {
       return true;
     }
-    const config = opts?.config;
-    const identity = config
-      ? resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
-      : DEFAULT_ASSISTANT_IDENTITY;
-    const avatarValue = resolveAssistantAvatarUrl({
-      avatar: identity.avatar,
-      agentId: identity.agentId,
-      basePath,
-    });
-    const avatarMeta = config
-      ? controlUiAvatarResolutionMeta(
-          resolveAgentAvatar(config, identity.agentId, { includeUiOverride: true }),
-        )
-      : controlUiAvatarResolutionMeta(null);
     if (req.method === "HEAD") {
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -1030,16 +1042,28 @@ export async function handleControlUiHttpRequest(
       res.end();
       return true;
     }
+    const config = opts?.config;
+    const resolvedIdentity = config
+      ? resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
+      : undefined;
+    const identity = resolvedIdentity ?? DEFAULT_ASSISTANT_IDENTITY;
+    const assistantAgentId = resolvedIdentity?.agentId;
+    const avatarProjection =
+      config && resolvedIdentity
+        ? resolveGatewayAssistantAvatar({ cfg: config, identity: resolvedIdentity })
+        : { avatar: identity.avatar, resolution: null };
+    const avatarMeta = controlUiAvatarResolutionMeta(avatarProjection.resolution);
     sendJson(res, 200, {
       basePath,
       assistantName: identity.name,
-      assistantAvatar: avatarValue ?? identity.avatar,
+      assistantAvatar: avatarProjection.avatar,
       assistantAvatarSource: avatarMeta.avatarSource,
       assistantAvatarStatus: avatarMeta.avatarStatus,
       assistantAvatarReason: avatarMeta.avatarReason,
-      assistantAgentId: identity.agentId,
+      ...(assistantAgentId ? { assistantAgentId } : {}),
       serverVersion: resolveRuntimeServiceVersion(process.env),
-      localMediaPreviewRoots: [...getAgentScopedMediaLocalRoots(config ?? {}, identity.agentId)],
+      devGitBranch: (await resolveDevInstallGitBranch()) ?? undefined,
+      localMediaPreviewRoots: [...getAgentScopedMediaLocalRoots(config ?? {}, assistantAgentId)],
       embedSandbox:
         config?.gateway?.controlUi?.embedSandbox === "trusted"
           ? "trusted"
@@ -1047,10 +1071,13 @@ export async function handleControlUiHttpRequest(
             ? "strict"
             : "scripts",
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
-      chatMessageMaxWidth: config?.gateway?.controlUi?.chatMessageMaxWidth,
       seamColor: config?.ui?.seamColor,
-      timeFormat: config?.agents?.defaults?.timeFormat,
       terminalEnabled,
+      pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
+        pluginId,
+        path: grantPath,
+        match,
+      })),
     } satisfies ControlUiBootstrapConfig);
     return true;
   }
@@ -1095,6 +1122,7 @@ export async function handleControlUiHttpRequest(
 
   const uiPath =
     basePath && pathname.startsWith(`${basePath}/`) ? pathname.slice(basePath.length) : pathname;
+  const approvalDocument = isControlUiApprovalDocumentPath({ basePath, pathname });
   const rel = (() => {
     if (uiPath === ROOT_PREFIX) {
       return "";
@@ -1111,13 +1139,16 @@ export async function handleControlUiHttpRequest(
     }
     return uiPath.slice(1);
   })();
-  const requested = rel && !rel.endsWith("/") ? rel : `${rel}index.html`;
+  const requested = approvalDocument
+    ? "index.html"
+    : rel && !rel.endsWith("/")
+      ? rel
+      : `${rel}index.html`;
   const fileRel = requested || "index.html";
   if (!isSafeRelativePath(fileRel)) {
     respondControlUiNotFound(res);
     return true;
   }
-
   const filePath = path.resolve(root, fileRel);
   if (!isWithinDir(root, filePath)) {
     respondControlUiNotFound(res);
@@ -1132,35 +1163,78 @@ export async function handleControlUiHttpRequest(
         argv1: process.argv[1],
         cwd: process.cwd(),
       }));
+  // Bundled sidecars are implementation artifacts selected through
+  // Accept-Encoding. Configured roots retain ordinary .br/.gz resources.
+  if (
+    isBundledRoot &&
+    isControlUiPrecompressedAssetExtension(path.extname(fileRel).toLowerCase())
+  ) {
+    respondControlUiNotFound(res);
+    return true;
+  }
   const rejectHardlinks = !isBundledRoot;
+  // Vite fingerprints every file emitted under the bundled assets directory.
+  // Configured roots remain revalidated because their naming is not our contract.
+  const immutableAsset = isBundledRoot && fileRel.startsWith("assets/");
   const safeFile = resolveSafeControlUiFile(rootReal, filePath, rejectHardlinks);
   if (safeFile) {
-    try {
-      if (respondHeadForFile(req, res, safeFile.path)) {
-        return true;
+    if (path.basename(safeFile.path) === "index.html") {
+      if (req.method === "HEAD") {
+        try {
+          const encoding = resolveControlUiHtmlEncoding(req);
+          if (encoding === "not-acceptable") {
+            respondControlUiNotAcceptable(res);
+            return true;
+          }
+          respondHeadForControlUiFile(res, safeFile.path, {
+            encoding: encoding === "identity" ? undefined : encoding,
+          });
+          return true;
+        } finally {
+          fs.closeSync(safeFile.fd);
+        }
       }
-      if (path.basename(safeFile.path) === "index.html") {
-        serveResolvedIndexHtml(
-          res,
-          await readOpenedFileText(safeFile.fd),
-          basePath,
-          terminalEnabled,
-        );
-        return true;
-      }
-      serveResolvedFile(res, safeFile.path, await readOpenedFile(safeFile.fd));
+      const body = await readAndCloseControlUiFileText(safeFile.fd);
+      await serveResolvedIndexHtml(req, res, body, basePath, terminalEnabled);
       return true;
-    } finally {
-      fs.closeSync(safeFile.fd);
     }
+    const representation = resolveOpenedControlUiRepresentation({
+      req,
+      sourceFile: safeFile,
+      precompressed: immutableAsset,
+      openPrecompressedFile: (compressedPath) =>
+        resolveSafeControlUiFile(rootReal, compressedPath, false),
+    });
+    if (!representation) {
+      respondControlUiNotAcceptable(res);
+      return true;
+    }
+    if (req.method === "HEAD") {
+      try {
+        respondHeadForControlUiFile(res, representation.contentPath, {
+          immutable: immutableAsset,
+          encoding: representation.encoding,
+          contentLength: representation.bodyFile.size,
+        });
+        return true;
+      } finally {
+        fs.closeSync(representation.bodyFile.fd);
+      }
+    }
+    const body = await readAndCloseControlUiFile(representation.bodyFile.fd);
+    await serveControlUiAsset(res, representation.contentPath, body, {
+      immutable: immutableAsset,
+      encoding: representation.encoding,
+    });
+    return true;
   }
 
   // If the requested path looks like a static asset (known extension), return
   // 404 rather than falling through to the SPA index.html fallback.  We check
-  // against the same set of extensions that contentTypeForExt() recognises so
+  // against the same extension set used by the static response helper so
   // that dotted SPA routes (e.g. /user/jane.doe, /v2.0) still get the
   // client-side router fallback.
-  if (STATIC_ASSET_EXTENSIONS.has(path.extname(fileRel).toLowerCase())) {
+  if (isControlUiStaticAssetExtension(path.extname(fileRel).toLowerCase())) {
     respondControlUiNotFound(res);
     return true;
   }
@@ -1169,22 +1243,27 @@ export async function handleControlUiHttpRequest(
   const indexPath = path.join(root, "index.html");
   const safeIndex = resolveSafeControlUiFile(rootReal, indexPath, rejectHardlinks);
   if (safeIndex) {
-    try {
-      if (respondHeadForFile(req, res, safeIndex.path)) {
+    if (req.method === "HEAD") {
+      try {
+        const encoding = resolveControlUiHtmlEncoding(req);
+        if (encoding === "not-acceptable") {
+          respondControlUiNotAcceptable(res);
+          return true;
+        }
+        respondHeadForControlUiFile(res, safeIndex.path, {
+          encoding: encoding === "identity" ? undefined : encoding,
+        });
         return true;
+      } finally {
+        fs.closeSync(safeIndex.fd);
       }
-      serveResolvedIndexHtml(
-        res,
-        await readOpenedFileText(safeIndex.fd),
-        basePath,
-        terminalEnabled,
-      );
-      return true;
-    } finally {
-      fs.closeSync(safeIndex.fd);
     }
+    const body = await readAndCloseControlUiFileText(safeIndex.fd);
+    await serveResolvedIndexHtml(req, res, body, basePath, terminalEnabled);
+    return true;
   }
 
   respondControlUiNotFound(res);
   return true;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

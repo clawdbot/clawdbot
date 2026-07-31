@@ -1,15 +1,23 @@
 // Run meta error tests cover status reporting when cron run metadata fails.
 import { describe, expect, it } from "vitest";
-import { CommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   cleanupDirectCronSessionMock,
+  dispatchCronDeliveryMock,
   loadRunCronIsolatedAgentTurn,
+  resolveCronDeliveryPlanMock,
+  resolveCronPayloadOutcomeMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+
+function makeCommandLaneTaskTimeoutError(lane: string, timeoutMs: number): Error {
+  const error = new Error(`Command lane "${lane}" task timed out after ${timeoutMs}ms`);
+  error.name = "CommandLaneTaskTimeoutError";
+  return error;
+}
 
 describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
   setupRunCronIsolatedAgentTurnSuite();
@@ -89,9 +97,280 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     });
   });
 
+  it("marks a completed embedded run with no final payload as a cron error", async () => {
+    runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
+        payloads: [],
+        meta: {
+          agentMeta: { usage: { input: 10, output: 0 } },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      attempts: [],
+    });
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "test-target",
+    });
+    resolveCronPayloadOutcomeMock.mockReturnValue({
+      summary: undefined,
+      outputText: undefined,
+      synthesizedText: undefined,
+      deliveryPayload: undefined,
+      deliveryPayloads: [],
+      deliveryPayloadHasStructuredContent: false,
+      hasFatalErrorPayload: false,
+      hasFatalStructuredErrorPayload: false,
+      embeddedRunError: undefined,
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+
+    expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("cron isolated run completed without a final assistant payload");
+    expect(result.delivered).toBe(false);
+  });
+
+  it("marks empty message-tool attempts without source delivery as cron errors", async () => {
+    runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
+        payloads: [],
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [],
+        meta: {
+          agentMeta: { usage: { input: 10, output: 0 } },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      attempts: [],
+    });
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "test-target",
+    });
+    resolveCronPayloadOutcomeMock.mockReturnValue({
+      summary: undefined,
+      outputText: undefined,
+      synthesizedText: undefined,
+      deliveryPayload: undefined,
+      deliveryPayloads: [],
+      deliveryPayloadHasStructuredContent: false,
+      hasFatalErrorPayload: false,
+      hasFatalStructuredErrorPayload: false,
+      embeddedRunError: undefined,
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+
+    expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("cron isolated run completed without a final assistant payload");
+    expect(result.delivered).toBe(false);
+  });
+
+  it("keeps explicit silent replies as successful cron completions", async () => {
+    runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
+        payloads: [],
+        meta: {
+          finalAssistantRawText: "NO_REPLY",
+          finalAssistantVisibleText: "NO_REPLY",
+          agentMeta: { usage: { input: 10, output: 1 } },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      attempts: [],
+    });
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "test-target",
+    });
+    resolveCronPayloadOutcomeMock.mockReturnValue({
+      summary: undefined,
+      outputText: undefined,
+      synthesizedText: undefined,
+      deliveryPayload: undefined,
+      deliveryPayloads: [],
+      deliveryPayloadHasStructuredContent: false,
+      hasFatalErrorPayload: false,
+      hasFatalStructuredErrorPayload: false,
+      embeddedRunError: undefined,
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+
+    expect(dispatchCronDeliveryMock).toHaveBeenCalled();
+    expect(result.status).toBe("ok");
+    expect(result.error).toBeUndefined();
+  });
+
+  it("keeps committed message-tool deliveries as successful cron completions", async () => {
+    runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
+        payloads: [],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["Delivered to an intentional recipient"],
+        messagingToolSentTargets: [],
+        meta: {
+          agentMeta: { usage: { input: 10, output: 0 } },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      attempts: [],
+    });
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "test-target",
+    });
+    resolveCronPayloadOutcomeMock.mockReturnValue({
+      summary: undefined,
+      outputText: undefined,
+      synthesizedText: undefined,
+      deliveryPayload: undefined,
+      deliveryPayloads: [],
+      deliveryPayloadHasStructuredContent: false,
+      hasFatalErrorPayload: false,
+      hasFatalStructuredErrorPayload: false,
+      embeddedRunError: undefined,
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+
+    expect(dispatchCronDeliveryMock).toHaveBeenCalled();
+    expect(result.status).toBe("ok");
+    expect(result.error).toBeUndefined();
+  });
+
+  it("does not mark empty deterministic approval prompts as cron errors", async () => {
+    runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
+        payloads: [],
+        didSendDeterministicApprovalPrompt: true,
+        meta: {
+          agentMeta: { usage: { input: 10, output: 0 } },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      attempts: [],
+    });
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "test-target",
+    });
+    resolveCronPayloadOutcomeMock.mockReturnValue({
+      summary: undefined,
+      outputText: undefined,
+      synthesizedText: undefined,
+      deliveryPayload: undefined,
+      deliveryPayloads: [],
+      deliveryPayloadHasStructuredContent: false,
+      hasFatalErrorPayload: false,
+      hasFatalStructuredErrorPayload: false,
+      embeddedRunError: undefined,
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+
+    expect(dispatchCronDeliveryMock).toHaveBeenCalled();
+    expect(result.status).toBe("ok");
+    expect(result.error).toBeUndefined();
+  });
+
+  it("does not mark empty accepted child-session handoffs as cron errors", async () => {
+    runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
+        payloads: [],
+        acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:default:child" }],
+        meta: {
+          agentMeta: { usage: { input: 10, output: 0 } },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      attempts: [],
+    });
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "test-target",
+    });
+    resolveCronPayloadOutcomeMock.mockReturnValue({
+      summary: undefined,
+      outputText: undefined,
+      synthesizedText: undefined,
+      deliveryPayload: undefined,
+      deliveryPayloads: [],
+      deliveryPayloadHasStructuredContent: false,
+      hasFatalErrorPayload: false,
+      hasFatalStructuredErrorPayload: false,
+      embeddedRunError: undefined,
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+
+    expect(dispatchCronDeliveryMock).toHaveBeenCalled();
+    expect(result.status).toBe("ok");
+    expect(result.error).toBeUndefined();
+  });
+
+  it("does not mark empty successful cron-add completions as cron errors", async () => {
+    runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
+        payloads: [],
+        successfulCronAdds: 1,
+        meta: {
+          agentMeta: { usage: { input: 10, output: 0 } },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      attempts: [],
+    });
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "test-target",
+    });
+    resolveCronPayloadOutcomeMock.mockReturnValue({
+      summary: undefined,
+      outputText: undefined,
+      synthesizedText: undefined,
+      deliveryPayload: undefined,
+      deliveryPayloads: [],
+      deliveryPayloadHasStructuredContent: false,
+      hasFatalErrorPayload: false,
+      hasFatalStructuredErrorPayload: false,
+      embeddedRunError: undefined,
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+
+    expect(dispatchCronDeliveryMock).toHaveBeenCalled();
+    expect(result.status).toBe("ok");
+    expect(result.error).toBeUndefined();
+  });
+
   it("surfaces cron timeout result when the cron-nested lane watchdog fires", async () => {
     runWithModelFallbackMock.mockRejectedValueOnce(
-      new CommandLaneTaskTimeoutError("cron-nested", 330_000),
+      makeCommandLaneTaskTimeoutError("cron-nested", 330_000),
     );
 
     const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
@@ -101,7 +380,7 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expect(result.error).not.toContain("CommandLaneTaskTimeoutError");
     expect(result.error).not.toContain("cron-nested");
     // The timeout row must keep the already-resolved run attribution so
-    // cron_run_logs does not show an un-attributed cron timeout (#95873).
+    // Task-run history does not show an un-attributed cron timeout (#95873).
     expect(result.provider).toBe("openai");
     expect(result.model).toBe("gpt-5.4");
     expect(result.sessionId).toBe("test-session-id");

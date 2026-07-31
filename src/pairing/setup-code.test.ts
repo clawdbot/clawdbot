@@ -1,6 +1,10 @@
 // Tests setup code generation and environment-derived defaults.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SecretInput } from "../config/types.secrets.js";
+import {
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+} from "../shared/device-bootstrap-profile.js";
 import { captureEnv } from "../test-utils/env.js";
 
 vi.mock("../infra/device-bootstrap.js", () => ({
@@ -26,6 +30,11 @@ describe("pairing setup code", () => {
       },
     },
   } as const;
+  const limitedPlaintextAccess = {
+    bootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    access: "limited" as const,
+    accessDowngraded: true,
+  };
   const gatewayPasswordSecretRef: SecretInput = {
     source: "env",
     provider: "default",
@@ -113,6 +122,9 @@ describe("pairing setup code", () => {
       url?: string;
       urls?: string[];
       urlSource?: string;
+      bootstrapProfile?: { roles: string[]; scopes: string[]; purpose?: string };
+      access?: "full" | "limited" | "node";
+      accessDowngraded?: boolean;
     },
   ) {
     expect(resolved.ok).toBe(true);
@@ -123,9 +135,17 @@ describe("pairing setup code", () => {
     expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
     expect(issueDeviceBootstrapTokenMock).toHaveBeenCalledWith({
       baseDir: undefined,
-      profile: {
+      profile: params.bootstrapProfile ?? {
         roles: ["node", "operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: [
+          "operator.admin",
+          "operator.approvals",
+          "operator.questions",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
+        purpose: "mobile-full",
       },
     });
     if (params.url) {
@@ -137,6 +157,8 @@ describe("pairing setup code", () => {
     if (params.urlSource) {
       expect(resolved.urlSource).toBe(params.urlSource);
     }
+    expect(resolved.access).toBe(params.access ?? "full");
+    expect(resolved.accessDowngraded).toBe(params.accessDowngraded ?? false);
   }
 
   function expectResolvedSetupError(resolved: ResolvedSetup, snippet: string) {
@@ -155,6 +177,9 @@ describe("pairing setup code", () => {
       url: string;
       urls?: string[];
       urlSource: string;
+      bootstrapProfile?: { roles: string[]; scopes: string[]; purpose?: string };
+      access?: "full" | "limited" | "node";
+      accessDowngraded?: boolean;
     };
     runCommandWithTimeout?: ReturnType<typeof vi.fn>;
     expectedRunCommandCalls?: number;
@@ -261,6 +286,42 @@ describe("pairing setup code", () => {
     });
   });
 
+  it("issues a node-only bootstrap profile for companion setup", async () => {
+    await expectResolvedSetupSuccessCase({
+      config: createCustomGatewayConfig({ mode: "token", token: "tok_123" }),
+      options: {
+        forceSecure: true,
+        publicUrl: "gateway.example.test:18789/setup",
+        bootstrapProfile: { roles: ["node"], scopes: [] },
+      },
+      expected: {
+        authLabel: "token",
+        url: "wss://gateway.example.test:18789",
+        urlSource: "plugins.entries.device-pair.config.publicUrl",
+        bootstrapProfile: { roles: ["node"], scopes: [] },
+        access: "node",
+      },
+    });
+  });
+
+  it("issues a least-privilege voice-node bootstrap profile", async () => {
+    await expectResolvedSetupSuccessCase({
+      config: createCustomGatewayConfig({ mode: "token", token: "tok_123" }),
+      options: {
+        forceSecure: true,
+        publicUrl: "gateway.example.test:18789/setup",
+        bootstrapProfile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      },
+      expected: {
+        authLabel: "token",
+        url: "wss://gateway.example.test:18789",
+        urlSource: "plugins.entries.device-pair.config.publicUrl",
+        bootstrapProfile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+        access: "limited",
+      },
+    });
+  });
+
   it("rejects invalid gateway.remote.url before falling back to bind-derived setup urls", async () => {
     await expectResolvedSetupFailureCase({
       config: {
@@ -326,17 +387,6 @@ describe("pairing setup code", () => {
       expectedAuthLabel: "password",
     },
     {
-      name: "uses OPENCLAW_GATEWAY_PASSWORD without resolving configured password SecretRef",
-      auth: {
-        mode: "password",
-        password: { source: "env", provider: "default", id: "MISSING_GW_PASSWORD" },
-      } as const,
-      env: {
-        OPENCLAW_GATEWAY_PASSWORD: "password-from-env", // pragma: allowlist secret
-      },
-      expectedAuthLabel: "password",
-    },
-    {
       name: "does not resolve gateway.auth.password SecretRef in token mode",
       auth: {
         mode: "token",
@@ -378,6 +428,20 @@ describe("pairing setup code", () => {
       ),
       options: { env: {} },
       expectedError: "MISSING_GW_TOKEN",
+    },
+    {
+      name: "does not let OPENCLAW_GATEWAY_PASSWORD mask a configured password SecretRef",
+      config: createCustomGatewayConfig(
+        {
+          mode: "password",
+          password: { source: "env", provider: "default", id: "MISSING_GW_PASSWORD" },
+        },
+        defaultEnvSecretProviderConfig,
+      ),
+      options: {
+        env: { OPENCLAW_GATEWAY_PASSWORD: "password-from-env" },
+      },
+      expectedError: "MISSING_GW_PASSWORD",
     },
   ] as const)("$name", async ({ config, options, expectedError }) => {
     await expectResolvedSetupFailureCase({ config, options, expectedError });
@@ -504,6 +568,7 @@ describe("pairing setup code", () => {
         authLabel: "token",
         url: "ws://10.0.2.2:18789",
         urlSource: "gateway.bind=custom",
+        ...limitedPlaintextAccess,
       },
     },
     {
@@ -519,6 +584,7 @@ describe("pairing setup code", () => {
         authLabel: "token",
         url: "ws://gateway.local:18789",
         urlSource: "gateway.bind=custom",
+        ...limitedPlaintextAccess,
       },
     },
     {
@@ -534,6 +600,7 @@ describe("pairing setup code", () => {
         authLabel: "token",
         url: "ws://192.168.1.20:18789",
         urlSource: "gateway.bind=custom",
+        ...limitedPlaintextAccess,
       },
     },
   ] as const)("$name", async ({ config, options, expected }) => {
@@ -594,6 +661,7 @@ describe("pairing setup code", () => {
         authLabel: "password",
         url: "ws://192.168.1.20:18789",
         urlSource: "gateway.bind=lan",
+        ...limitedPlaintextAccess,
       },
       runCommandWithTimeout,
       expectedRunCommandCalls: 3,
@@ -639,6 +707,7 @@ describe("pairing setup code", () => {
         authLabel: "password",
         url: "ws://10.211.55.3:18789",
         urlSource: "gateway.bind=lan",
+        ...limitedPlaintextAccess,
       },
       runCommandWithTimeout,
       expectedRunCommandCalls: 3,
@@ -681,6 +750,7 @@ describe("pairing setup code", () => {
         url: "ws://192.168.139.3:18789",
         urls: ["ws://192.168.139.3:18789", "wss://clawmac.tail.ts.net:8443"],
         urlSource: "gateway.bind=lan",
+        ...limitedPlaintextAccess,
       },
       runCommandWithTimeout,
       expectedRunCommandCalls: 2,
@@ -705,6 +775,7 @@ describe("pairing setup code", () => {
         authLabel: "token",
         url: "ws://192.168.139.3:18789",
         urlSource: "gateway.bind=custom",
+        ...limitedPlaintextAccess,
       },
       runCommandWithTimeout,
       expectedRunCommandCalls: 0,

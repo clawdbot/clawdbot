@@ -10,7 +10,7 @@ read_when:
 
 This threat model documents adversarial threats to the OpenClaw AI agent platform and ClawHub skill marketplace. It is a living document maintained by the OpenClaw community. See [Contributing to the threat model](/security/CONTRIBUTING-THREAT-MODEL) for how to report new threats, propose attack chains, or suggest mitigations.
 
-**Key ATLAS resources:** [Techniques](https://atlas.mitre.org/techniques/) | [Tactics](https://atlas.mitre.org/tactics/) | [Case studies](https://atlas.mitre.org/studies/) | [ATLAS GitHub](https://github.com/mitre-atlas/atlas-data) | [Contributing to ATLAS](https://atlas.mitre.org/resources/contribute)
+**Key ATLAS resources:** [ATLAS website](https://atlas.mitre.org/) | [ATLAS data and contribution guide](https://github.com/mitre-atlas/atlas-data)
 
 ---
 

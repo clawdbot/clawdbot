@@ -41,7 +41,7 @@ function createRenderedMessageBatchPlanItem(
   if (payload.interactive) {
     kinds.push("interactive");
   }
-  if (payload.channelData) {
+  if (payload.channelData || payload.location) {
     kinds.push("channelData");
   }
   return {
@@ -52,7 +52,7 @@ function createRenderedMessageBatchPlanItem(
     ...(payload.audioAsVoice && mediaUrls.length > 0 ? { audioAsVoice: true } : {}),
     ...(presentationBlockCount > 0 ? { presentationBlockCount } : {}),
     ...(payload.interactive ? { hasInteractive: true } : {}),
-    ...(payload.channelData ? { hasChannelData: true } : {}),
+    ...(payload.channelData || payload.location ? { hasChannelData: true } : {}),
   };
 }
 
@@ -72,7 +72,7 @@ export function createRenderedMessageBatchPlan(
         voiceCount: plan.voiceCount + (payload.audioAsVoice && mediaCount > 0 ? 1 : 0),
         presentationCount: plan.presentationCount + (payload.presentation?.blocks?.length ? 1 : 0),
         interactiveCount: plan.interactiveCount + (payload.interactive ? 1 : 0),
-        channelDataCount: plan.channelDataCount + (payload.channelData ? 1 : 0),
+        channelDataCount: plan.channelDataCount + (payload.channelData || payload.location ? 1 : 0),
         items: plan.items,
       };
     },

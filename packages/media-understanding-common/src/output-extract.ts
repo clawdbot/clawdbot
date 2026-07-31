@@ -15,7 +15,7 @@ function extractLastJsonObject(raw: string): unknown {
   let candidateHasContent = false;
 
   for (let index = 0; index < trimmed.length; index += 1) {
-    const character = trimmed[index];
+    const character = trimmed.charAt(index);
     if (inString) {
       if (character === "\n" || character === "\r") {
         starts.length = 0;
@@ -106,8 +106,7 @@ function extractLastJsonObject(raw: string): unknown {
     }
   }
 
-  for (let index = ranges.length - 1; index >= 0; index -= 1) {
-    const range = ranges[index];
+  for (const range of ranges.toReversed()) {
     try {
       return JSON.parse(trimmed.slice(range.start, range.end + 1));
     } catch {

@@ -53,6 +53,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
     filePath: string;
     cwd?: string;
     signal?: AbortSignal;
+    maxBytes?: number;
   }): Promise<Buffer> {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);
@@ -65,6 +66,14 @@ class OpenShellFsBridge implements SandboxFsBridge {
         allowFinalSymlinkForUnlink: false,
       });
       const root = await fsRoot(target.mountHostRoot);
+      if (params.maxBytes !== undefined) {
+        return (
+          await root.read(path.relative(target.mountHostRoot, hostPath), {
+            hardlinks: "reject",
+            maxBytes: params.maxBytes,
+          })
+        ).buffer;
+      }
       opened = await root.open(path.relative(target.mountHostRoot, hostPath), {
         hardlinks: "reject",
       });
@@ -106,6 +115,43 @@ class OpenShellFsBridge implements SandboxFsBridge {
       mkdir: params.mkdir,
     });
     await this.backend.syncLocalPathToRemote(hostPath, target.containerPath);
+  }
+
+  async createFileExclusive(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<"created" | "exists"> {
+    const target = this.resolveTarget(params);
+    const hostPath = this.requireHostPath(target);
+    this.ensureWritable(target, "create files");
+    await assertLocalPathSafety({
+      target,
+      root: target.mountHostRoot,
+      allowMissingLeaf: true,
+      allowFinalSymlinkForUnlink: false,
+    });
+    const buffer = Buffer.isBuffer(params.data)
+      ? params.data
+      : Buffer.from(params.data, params.encoding ?? "utf8");
+    const root = await fsRoot(target.mountHostRoot);
+    try {
+      await root.create(path.relative(target.mountHostRoot, hostPath), buffer, {
+        mkdir: params.mkdir !== false,
+      });
+    } catch (error) {
+      if (error instanceof FsSafeError && error.code === "already-exists") {
+        return "exists";
+      }
+      throw error;
+    }
+    // Mirror mode treats local state as canonical. Syncing may fail, but must
+    // never downgrade the exclusive local create to an overwriting write.
+    await this.backend.syncLocalPathToRemote(hostPath, target.containerPath);
+    return "created";
   }
 
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
@@ -601,13 +647,10 @@ async function assertLocalPathSafety(params: {
   }
 
   const relative = path.relative(params.root, params.target.hostPath);
-  const segments = relative
-    .split(path.sep)
-    .filter(Boolean)
-    .slice(0, Math.max(0, relative.split(path.sep).filter(Boolean).length));
+  const segments = relative.split(path.sep).filter(Boolean);
   let cursor = params.root;
-  for (let index = 0; index < segments.length; index += 1) {
-    cursor = path.join(cursor, segments[index]);
+  for (const [index, segment] of segments.entries()) {
+    cursor = path.join(cursor, segment);
     const stats = await fsPromises.lstat(cursor).catch(() => null);
     if (!stats) {
       if (index === segments.length - 1 && params.allowMissingLeaf) {

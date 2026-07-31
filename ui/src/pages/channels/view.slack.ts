@@ -5,7 +5,9 @@ import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelConfigSection } from "./view.config.ts";
 import {
+  boolStatusKind,
   formatNullableBoolean,
+  renderChannelProbeRow,
   renderSingleAccountChannelCard,
   resolveChannelConfigured,
 } from "./view.shared.ts";
@@ -14,18 +16,26 @@ import type { ChannelsProps } from "./view.types.ts";
 export function renderSlackCard(params: {
   props: ChannelsProps;
   slack?: SlackStatus | null;
-  accountCountLabel: unknown;
+  accountCount?: number;
 }) {
-  const { props, slack, accountCountLabel } = params;
+  const { props, slack, accountCount } = params;
   const configured = resolveChannelConfigured("slack", props);
 
   return renderSingleAccountChannelCard({
-    title: "Slack",
-    subtitle: "Socket mode status and channel configuration.",
-    accountCountLabel,
+    title: t("channels.slack.title"),
+    subtitle: t("channels.slack.subtitle"),
+    accountCount,
     statusRows: [
-      { label: t("common.configured"), value: formatNullableBoolean(configured) },
-      { label: t("common.running"), value: slack?.running ? t("common.yes") : t("common.no") },
+      {
+        label: t("common.configured"),
+        value: formatNullableBoolean(configured),
+        kind: boolStatusKind(configured),
+      },
+      {
+        label: t("common.running"),
+        value: slack?.running ? t("common.yes") : t("common.no"),
+        kind: boolStatusKind(slack?.running),
+      },
       {
         label: t("common.lastStart"),
         value: slack?.lastStartAt ? formatRelativeTimestamp(slack.lastStartAt) : t("common.na"),
@@ -36,15 +46,10 @@ export function renderSlackCard(params: {
       },
     ],
     lastError: slack?.lastError,
-    secondaryCallout: slack?.probe
-      ? html`<div class="callout" style="margin-top: 12px;">
-          ${slack.probe.ok ? t("common.probeOk") : t("common.probeFailed")} ·
-          ${slack.probe.status ?? ""} ${slack.probe.error ?? ""}
-        </div>`
-      : nothing,
+    secondaryCallout: slack?.probe ? renderChannelProbeRow(slack.probe) : nothing,
     configSection: renderChannelConfigSection({ channelId: "slack", props }),
-    footer: html`<div class="row" style="margin-top: 12px;">
-      <button class="btn" @click=${() => props.onRefresh(true)}>${t("common.probe")}</button>
-    </div>`,
+    footer: html`<button class="btn" @click=${() => props.onRefresh(true)}>
+      ${t("common.probe")}
+    </button>`,
   });
 }

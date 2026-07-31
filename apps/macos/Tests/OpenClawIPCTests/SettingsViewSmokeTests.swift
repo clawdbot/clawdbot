@@ -155,6 +155,14 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
+    @Test func `general settings renders the keyboard shortcut recorder`() {
+        let state = AppState(preview: true)
+        let hosting = NSHostingView(rootView: GeneralSettings(state: state))
+        hosting.frame = NSRect(x: 0, y: 0, width: 760, height: 640)
+        hosting.layoutSubtreeIfNeeded()
+        _ = hosting.fittingSize
+    }
+
     @Test func `general settings exercises branches`() {
         GeneralSettings.exerciseForTesting()
     }
@@ -186,10 +194,12 @@ struct SettingsViewSmokeTests {
     }
 
     @Test func `permissions settings builds body`() {
+        let state = AppState(preview: true)
         let view = PermissionsSettings(
+            state: state,
             status: [
-                .notifications: true,
-                .screenRecording: false,
+                .notifications: .granted,
+                .screenRecording: .notGranted,
             ],
             refresh: {},
             showOnboarding: {})
@@ -200,6 +210,96 @@ struct SettingsViewSmokeTests {
         let state = AppState(preview: true)
         let view = SettingsRootView(state: state, updater: nil, initialTab: .general)
         _ = view.body
+    }
+
+    @Test func `Gateway settings is visible and builds body`() throws {
+        let tabs = SettingsTabGroup.defaultGroups(showDebug: false, showSystemAgent: false)
+            .flatMap(\.tabs)
+        #expect(tabs.contains(.gateways))
+
+        let profile = try MacGatewayProfile(
+            id: "studio",
+            name: "Studio",
+            url: #require(URL(string: "wss://studio.example")))
+        let view = GatewaySettings(profiles: [profile], isPreview: true)
+        _ = view.body
+    }
+
+    @Test func `OpenClaw settings require configured inference`() {
+        #expect(!SystemAgentAvailability.shouldShow(configuredModel: nil))
+        #expect(!SystemAgentAvailability.shouldShow(configuredModel: "   "))
+        #expect(SystemAgentAvailability.shouldShow(configuredModel: "openai/gpt-5.5"))
+
+        let hiddenTabs = SettingsTabGroup.defaultGroups(showDebug: false, showSystemAgent: false)
+            .flatMap(\.tabs)
+        let visibleTabs = SettingsTabGroup.defaultGroups(showDebug: false, showSystemAgent: true)
+            .flatMap(\.tabs)
+        #expect(!hiddenTabs.contains(.systemAgent))
+        #expect(visibleTabs.contains(.systemAgent))
+        #expect(SettingsRootView.normalizedTab(
+            .systemAgent,
+            showDebug: false,
+            showSystemAgent: false) == .general)
+        #expect(SettingsRootView.normalizedTab(
+            .systemAgent,
+            showDebug: false,
+            showSystemAgent: true) == .systemAgent)
+        let loadingSelection = SettingsRootView.tabSelection(
+            requested: .systemAgent,
+            showDebug: false,
+            inferenceConfiguration: .loading)
+        #expect(loadingSelection.selected == .general)
+        #expect(loadingSelection.deferred == .systemAgent)
+        let configuredSelection = SettingsRootView.tabSelection(
+            requested: loadingSelection.deferred ?? .general,
+            showDebug: false,
+            inferenceConfiguration: .loaded("openai/gpt-5.5"))
+        #expect(configuredSelection.selected == .systemAgent)
+        #expect(configuredSelection.deferred == nil)
+        let unconfiguredSelection = SettingsRootView.tabSelection(
+            requested: .systemAgent,
+            showDebug: false,
+            inferenceConfiguration: .loaded(nil))
+        #expect(unconfiguredSelection.selected == .general)
+        #expect(unconfiguredSelection.deferred == nil)
+        #expect(SettingsRootView.configurationAfterInferenceRefresh(
+            current: .loaded("openai/gpt-5.5"),
+            result: .failed) == .loaded("openai/gpt-5.5"))
+        #expect(SettingsRootView.configurationAfterInferenceRefresh(
+            current: .loaded("openai/gpt-5.5"),
+            result: .confirmed(nil)) == .loaded(nil))
+    }
+
+    @Test func `OpenClaw preserves same route and resets for gateway changes`() {
+        let stateDir = URL(fileURLWithPath: "/Users/tester/.openclaw")
+        let directA = MacChatTranscriptCache.gatewayID(
+            mode: .remote,
+            localStateDir: stateDir,
+            remoteTransport: .direct,
+            directURL: URL(string: "wss://gateway.example.com/team-a"),
+            sshTarget: "",
+            sshRemotePort: 18789)
+        let directB = MacChatTranscriptCache.gatewayID(
+            mode: .remote,
+            localStateDir: stateDir,
+            remoteTransport: .direct,
+            directURL: URL(string: "wss://gateway.example.com/team-b"),
+            sshTarget: "",
+            sshRemotePort: 18789)
+
+        #expect(directA != directB)
+        #expect(SettingsRootView.configRefreshPlan(
+            selectedTab: .systemAgent,
+            previousGatewayID: directA,
+            currentGatewayID: directA) == .init(clearsPrevious: false, resetsSystemAgent: false))
+        #expect(SettingsRootView.configRefreshPlan(
+            selectedTab: .general,
+            previousGatewayID: directA,
+            currentGatewayID: directA) == .init(clearsPrevious: true, resetsSystemAgent: false))
+        #expect(SettingsRootView.configRefreshPlan(
+            selectedTab: .systemAgent,
+            previousGatewayID: directA,
+            currentGatewayID: directB) == .init(clearsPrevious: true, resetsSystemAgent: true))
     }
 
     @Test func `about settings builds body`() {

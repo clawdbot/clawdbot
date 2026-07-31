@@ -125,56 +125,6 @@ class ChatCommandControlsTest {
   }
 
   @Test
-  fun sheetSelectedNewSlashCommandCompletesGatewayCommandText() {
-    val newCommand =
-      ChatCommandEntry(
-        name = "new",
-        description = "Start fresh",
-        textAliases = listOf("/new"),
-      )
-    val modelCommand =
-      ChatCommandEntry(
-        name = "model",
-        description = "Switch model",
-        textAliases = listOf("/model"),
-        acceptsArgs = true,
-      )
-
-    assertEquals(
-      SheetSlashCommandSelection(input = "/new"),
-      resolveSheetSlashCommandSelection(newCommand),
-    )
-    assertEquals(
-      SheetSlashCommandSelection(input = "/model "),
-      resolveSheetSlashCommandSelection(modelCommand),
-    )
-  }
-
-  @Test
-  fun sheetTypedNewSlashCommandSendsThroughGateway() {
-    assertEquals(
-      SheetComposerSendAction(sendMessage = true),
-      resolveSheetComposerSendAction("/new"),
-    )
-    assertEquals(
-      SheetComposerSendAction(sendMessage = true),
-      resolveSheetComposerSendAction("  /new"),
-    )
-    assertEquals(
-      SheetComposerSendAction(sendMessage = true),
-      resolveSheetComposerSendAction("/new gpt-5.5 continue"),
-    )
-    assertEquals(
-      SheetComposerSendAction(sendMessage = true),
-      resolveSheetComposerSendAction("hello"),
-    )
-    assertEquals(
-      SheetComposerSendAction(sendMessage = false),
-      resolveSheetComposerSendAction("   "),
-    )
-  }
-
-  @Test
   fun canStartNewChatRequiresIdleRunAndQueue() {
     assertEquals(true, canStartNewChat(pendingRunCount = 0, hasQueuedMessage = false, gatewayReady = true))
     assertEquals(false, canStartNewChat(pendingRunCount = 1, hasQueuedMessage = false, gatewayReady = true))

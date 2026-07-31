@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   interruptCodexTurnBestEffort,
+  retireCodexAppServerClientAfterTimedOutTurn,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 
@@ -39,5 +40,29 @@ describe("Codex app-server attempt client cleanup", () => {
       { threadId: "thread-1" },
       { timeoutMs: 123 },
     );
+  });
+
+  it("closes only the isolated client after timed-out turn cleanup", async () => {
+    const request = vi.fn(async () => ({}));
+    const close = vi.fn();
+
+    await retireCodexAppServerClientAfterTimedOutTurn({ request, close } as never, {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      reason: "turn_terminal_idle_timeout",
+      suspectPhysicalClient: true,
+    });
+
+    expect(request).toHaveBeenCalledWith(
+      "turn/interrupt",
+      { threadId: "thread-1", turnId: "turn-1" },
+      { timeoutMs: 5_000 },
+    );
+    expect(request).toHaveBeenCalledWith(
+      "thread/unsubscribe",
+      { threadId: "thread-1" },
+      { timeoutMs: 5_000 },
+    );
+    expect(close).toHaveBeenCalledTimes(1);
   });
 });

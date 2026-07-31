@@ -45,7 +45,11 @@ function splitModelRef(modelRef?: string | null): { provider: string; model: str
   if (!match) {
     return null;
   }
-  const provider = normalizeProviderId(match[1]);
+  const rawProvider = match[1];
+  if (!rawProvider) {
+    return null;
+  }
+  const provider = normalizeProviderId(rawProvider);
   // Mattermost copy should normalize accidental whitespace around the model.
   const model = normalizeOptionalString(match[2]);
   if (!provider || !model) {

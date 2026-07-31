@@ -16,4 +16,4 @@ Generic JSON-only LLM tool for structured tasks callable from workflows.
 
 ## Surface
 
-contracts: tools
+contracts: `tools`

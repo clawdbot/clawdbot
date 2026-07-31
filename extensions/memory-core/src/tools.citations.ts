@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export function resolveMemoryCitationsMode(cfg: OpenClawConfig): MemoryCitationsMode {
   const mode = cfg.memory?.citations;
@@ -55,7 +56,7 @@ export function clampResultsByInjectedChars(
       clamped.push(entry);
       remaining -= snippet.length;
     } else {
-      const trimmed = snippet.slice(0, Math.max(0, remaining));
+      const trimmed = truncateUtf16Safe(snippet, remaining);
       clamped.push({ ...entry, snippet: trimmed });
       break;
     }

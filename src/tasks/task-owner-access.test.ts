@@ -8,11 +8,9 @@ import {
   getTaskByIdForOwner,
   resolveTaskForLookupTokenForOwner,
 } from "./task-owner-access.js";
-import {
-  createTaskRecord as createTaskRecordOrNull,
-  resetTaskRegistryForTests,
-} from "./task-registry.js";
+import { createTaskRecord as createTaskRecordOrNull } from "./task-registry.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import { resetTaskRegistryForTests } from "./task-runtime.test-helpers.js";
 
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 

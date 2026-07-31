@@ -1,5 +1,7 @@
 // Defines browser profile configuration types.
 export type BrowserProfileConfig = {
+  /** @deprecated Doctor-only legacy input; canonical schema rejects this field. */
+  color?: string;
   /** CDP port for this profile. Allocated once at creation, persisted permanently. */
   cdpPort?: number;
   /** CDP/DevTools endpoint URL for this profile (remote CDP or existing-session endpoint attach). */
@@ -21,8 +23,6 @@ export type BrowserProfileConfig = {
   executablePath?: string;
   /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
   attachOnly?: boolean;
-  /** Profile color (hex). Auto-assigned at creation. */
-  color: string;
 };
 export type BrowserSnapshotDefaults = {
   /** Default snapshot mode (applies when mode is not provided). */
@@ -31,45 +31,26 @@ export type BrowserSnapshotDefaults = {
 export type BrowserTabCleanupConfig = {
   /** Enable best-effort cleanup for tracked primary-agent browser tabs. Default: true */
   enabled?: boolean;
-  /** Close tracked tabs after this many idle minutes. Set 0 to disable idle cleanup. Default: 120 */
-  idleMinutes?: number;
-  /** Keep at most this many tracked tabs per primary session. Set 0 to disable the cap. Default: 8 */
-  maxTabsPerSession?: number;
-  /** Cleanup sweep interval in minutes. Default: 5 */
-  sweepMinutes?: number;
 };
 export type BrowserSsrFPolicyConfig = {
-  /** If true, permit browser navigation to private/internal networks. Default: true */
+  /** If true, permit browser navigation to private/internal networks. Default: false */
   dangerouslyAllowPrivateNetwork?: boolean;
   /**
-   * Explicitly allowed hostnames (exact-match), including blocked names like localhost.
-   * Example: ["localhost", "metadata.internal"]
-   */
-  allowedHostnames?: string[];
-  /**
-   * Hostname allowlist patterns for browser navigation.
+   * Explicitly allowed hostname patterns, including blocked names like localhost.
    * Supports exact hosts and "*.example.com" wildcard subdomains.
    */
-  hostnameAllowlist?: string[];
+  allowedHostnames?: string[];
 };
 export type BrowserConfig = {
+  /** @deprecated Doctor-only legacy input; canonical schema rejects this field. */
+  color?: string;
   enabled?: boolean;
+  /** Allow importing cookies from the user's real Chrome-family profile into a managed profile (macOS). Default: true. */
+  allowSystemProfileImport?: boolean;
   /** If false, disable browser act:evaluate (arbitrary JS). Default: true */
   evaluateEnabled?: boolean;
   /** Base URL of the CDP endpoint (for remote browsers). Default: loopback CDP on the derived port. */
   cdpUrl?: string;
-  /** Remote CDP HTTP timeout and persistent tab-enumeration budget input (ms). Default: 1500. */
-  remoteCdpTimeoutMs?: number;
-  /** Remote CDP handshake timeout and tab-enumeration budget input (ms). Default: max(remoteCdpTimeoutMs * 2, 2000). */
-  remoteCdpHandshakeTimeoutMs?: number;
-  /** Local managed browser launch discovery timeout (ms). Default: 15000. */
-  localLaunchTimeoutMs?: number;
-  /** Local managed browser post-launch CDP readiness timeout (ms). Default: 8000. */
-  localCdpReadyTimeoutMs?: number;
-  /** Default browser act timeout (ms). Default: 60000. */
-  actionTimeoutMs?: number;
-  /** Accent color for the openclaw browser profile (hex). Default: #FF4500 */
-  color?: string;
   /** Override the browser executable path (all platforms). */
   executablePath?: string;
   /** Start Chrome headless (best-effort). Default: false */
@@ -78,8 +59,6 @@ export type BrowserConfig = {
   noSandbox?: boolean;
   /** If true: never launch; only attach to an existing browser. Default: false */
   attachOnly?: boolean;
-  /** Starting local CDP port for auto-assigned browser profiles. Default derives from gateway port. */
-  cdpPortRangeStart?: number;
   /** Default profile to use when profile param is omitted. Default: "chrome" */
   defaultProfile?: string;
   /** Named browser profiles with explicit CDP ports or URLs. */

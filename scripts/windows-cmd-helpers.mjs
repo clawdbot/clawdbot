@@ -43,7 +43,7 @@ export function resolvePathEnvKey(env) {
   return Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH";
 }
 
-export function resolveWindowsSystemRoot(env = process.env) {
+function resolveWindowsSystemRoot(env = process.env) {
   return (
     normalizeWindowsSystemRoot(getEnvValueCaseInsensitive(env, "SystemRoot")) ??
     normalizeWindowsSystemRoot(getEnvValueCaseInsensitive(env, "WINDIR")) ??
@@ -51,6 +51,7 @@ export function resolveWindowsSystemRoot(env = process.env) {
   );
 }
 
+/** @internal Shared repository-script contract. */
 export function resolveWindowsSystem32Path(executableName, env = process.env) {
   if (
     path.win32.basename(executableName) !== executableName ||
@@ -65,6 +66,7 @@ export function resolveWindowsCmdExePath(env = process.env) {
   return resolveWindowsSystem32Path("cmd.exe", env);
 }
 
+/** @internal Shared repository-script contract. */
 export function resolveWindowsPowerShellPath(env = process.env) {
   return path.win32.join(
     resolveWindowsSystemRoot(env),

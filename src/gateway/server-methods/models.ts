@@ -3,11 +3,11 @@
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateModelsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { buildModelsListResult } from "./models-list-result.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 export { buildModelsListResult };
 
@@ -16,15 +16,7 @@ export { buildModelsListResult };
 // extra runtime discovery on each request.
 export const modelsHandlers: GatewayRequestHandlers = {
   "models.list": async ({ params, respond, context }) => {
-    if (!validateModelsListParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid models.list params: ${formatValidationErrors(validateModelsListParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateModelsListParams, "models.list", respond)) {
       return;
     }
     try {

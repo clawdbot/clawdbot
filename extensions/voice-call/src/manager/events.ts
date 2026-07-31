@@ -1,7 +1,9 @@
 // Voice Call plugin module implements events behavior.
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
 import { resolveVoiceCallEffectiveConfig, resolveVoiceCallSessionKey } from "../config.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
@@ -16,6 +18,8 @@ import {
   resolveTranscriptWaiter,
   startMaxDurationTimer,
 } from "./timers.js";
+
+const log = createSubsystemLogger("voice-call/events");
 
 type EventContext = Pick<
   CallManagerContext,
@@ -47,25 +51,23 @@ function shouldAcceptInbound(config: EventContext["config"], from: string | unde
 
   switch (policy) {
     case "disabled":
-      console.log("[voice-call] Inbound call rejected: policy is disabled");
+      log.info("Inbound call rejected: policy is disabled");
       return false;
 
     case "open":
-      console.log("[voice-call] Inbound call accepted: policy is open");
+      log.info("Inbound call accepted: policy is open");
       return true;
 
     case "allowlist":
     case "pairing": {
       const normalized = normalizePhoneNumber(from);
       if (!normalized) {
-        console.log("[voice-call] Inbound call rejected: missing caller ID");
+        log.info("Inbound call rejected: missing caller ID");
         return false;
       }
       const allowed = isAllowlistedCaller(normalized, allowFrom);
       const status = allowed ? "accepted" : "rejected";
-      console.log(
-        `[voice-call] Inbound call ${status}: ${from} ${allowed ? "is in" : "not in"} allowlist`,
-      );
+      log.info(`Inbound call ${status}: caller=${redactIdentifier(from)} allowlisted=${allowed}`);
       return allowed;
     }
 
@@ -118,8 +120,8 @@ function createWebhookCall(params: {
   params.ctx.providerCallIdMap.set(params.providerCallId, callId);
   persistCallRecord(params.ctx.storePath, callRecord);
 
-  console.log(
-    `[voice-call] Created ${params.direction} call record: ${callId} from ${params.from}`,
+  log.info(
+    `Created ${params.direction} call record: ${callId} caller=${redactIdentifier(params.from)}`,
   );
   return callRecord;
 }
@@ -175,8 +177,8 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
     if (eventDirection === "inbound" && !shouldAcceptInbound(ctx.config, event.from)) {
       const pid = providerCallId;
       if (!ctx.provider) {
-        console.warn(
-          `[voice-call] Inbound call rejected by policy but no provider to hang up (providerCallId: ${pid}, from: ${event.from}); call will time out on provider side.`,
+        log.warn(
+          `Inbound call rejected by policy but no provider to hang up (providerCallId: ${pid}, caller=${redactIdentifier(event.from)}); call will time out on provider side.`,
         );
         return { kind: "ignored" };
       }
@@ -187,7 +189,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
       ctx.rejectedProviderCallIds.add(pid);
       const callId = event.callId ?? pid;
       persistRejectedInboundCall({ ctx, event, dedupeKey, providerCallId: pid });
-      console.log(`[voice-call] Rejecting inbound call by policy: ${pid}`);
+      log.info(`Rejecting inbound call by policy: ${pid}`);
       void ctx.provider
         .hangupCall({
           callId,
@@ -197,7 +199,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
         .catch((err: unknown) => {
           ctx.rejectedProviderCallIds.delete(pid);
           const message = formatErrorMessage(err);
-          console.warn(`[voice-call] Failed to reject inbound call ${pid}:`, message);
+          log.warn(`Failed to reject inbound call ${pid}: ${message}`);
         });
       return { kind: "processed" };
     }
@@ -264,10 +266,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
           })
           .catch((err: unknown) => {
             const message = formatErrorMessage(err);
-            console.warn(
-              `[voice-call] Failed to answer inbound call ${call.providerCallId}:`,
-              message,
-            );
+            log.warn(`Failed to answer inbound call ${call.providerCallId}: ${message}`);
           });
       }
       break;
@@ -319,9 +318,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
           event.turnToken,
         );
         if (hadWaiter && !resolved) {
-          console.warn(
-            `[voice-call] Ignoring speech event with mismatched turn token for ${call.callId}`,
-          );
+          log.warn(`Ignoring speech event with mismatched turn token for ${call.callId}`);
           result = { kind: "ignored" };
           break;
         }

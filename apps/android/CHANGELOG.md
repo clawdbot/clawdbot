@@ -2,47 +2,47 @@
 
 ## Unreleased
 
-Adds multi-gateway support: the app remembers every paired gateway, lists them in Settings with a quick switcher on the Connect tab, and switches between them without pairing again. Credentials, device tokens, TLS trust, notification routing, chat history, and queued offline messages stay scoped to their gateway, and forgetting a gateway removes all of its stored state.
+## 2026.7.4 - 2026-07-30
 
-Stable GitHub Releases now include a signed standalone Android APK with checksums and verifiable GitHub Actions provenance. (#9443)
+Adds inline audio/video playback and uploads, session dashboards, run telemetry, chat rewind/fork, a Settings repair assistant, and Wear instant Talk.
 
-Android notification forwarding now excludes native WhatsApp, Telegram, Telegram X, Discord, and Signal channel apps to prevent duplicate cross-session replies. (#48516)
+Improves the working claw, collapsible details, Skill Workshop flows, and generated images.
 
-Assistant messages now offer a long-press Listen action with gateway TTS playback, on-device fallback, and tap-to-stop status.
+Fixes reconnect/session state, Talk transcripts, manual gateway ports, large-text onboarding, reduced motion, and Wear pairing/reply reliability.
 
-Android command-palette rows now align icon and navigation affordances consistently and truncate long session details cleanly. Thanks @IWhatsskill.
+Thanks @IWhatsskill, @NianJiuZst, @masatohoshino, @cygnostik, @licheer-zte, and @metaforismo.
 
-Android screenshot-mode voice and screen proof scenes now scale cleanly on compact capture widths. Thanks @IWhatsskill.
+## 2026.7.3 - 2026-07-20
 
-The Settings About screen now shows the animated mascot with the app tagline plus Website, Docs, GitHub, and Discord links.
+Adds a Wear OS companion for sessions, transcripts, text and voice replies, realtime Talk, Gateway controls, notifications, settings, and a launch Tile.
 
-Adds a read-only Files browser for agent workspaces with directory navigation, text and image previews, and system share export.
+Adds foreground, on-device Voice Wake with editable Gateway-synced wake words, plus copy and save-as-PNG actions for rendered chat widgets.
 
-Android onboarding now completes after permission-triggered node approval and keeps Back navigation from cycling between permissions and approval.
+Fixes composer media leaking across chats and malformed agent or profile initials when display names begin with emoji.
 
-Third-party Android builds can now opt into Always location through Android settings, with requested background checks disclosed in the persistent node notification while Play builds remain foreground-only. (#68581) Thanks @ioridev.
+Thanks @sibbl, @IWhatsskill, and @Leon-SK668.
 
-Android SMS permission guidance now explains the separate Gateway `allowCommands` opt-in required for SMS search and sending. (#91781) Thanks @narcissus0702.
+## 2026.7.2 - 2026-07-13
 
-Android system notifications now open OpenClaw when tapped without accepting arbitrary external deeplinks.
+Adds Automations and Skills management with search, filters, editing, run tracking, install safety, and ClawHub risk review.
 
-Android chat history now excludes internal, reasoning, and tool-result rows from rendered messages and the offline transcript cache.
+Improves chat with per-device history, durable approval status, session search, sharing, and agent avatars.
 
-Android chat messages now expose long-press actions for whole-message copy, selective text copy, sharing, and quoted replies.
+Adds provider model details, build identity, safer permission recovery, fresh Installed Apps consent, and Gateway protocol v3/v4 support.
 
-The OpenClaw mascot now comes alive across onboarding and the app headers with the same float, blink, antenna-wiggle, and claw-snap animation as openclaw.ai.
+Thanks @snowzlmbot, @IWhatsskill, @NianJiuZst, and @guarismo.
 
-Adds read-only Cron Job details in Settings, including schedule, payload and delivery state, job ID copy, refresh, and nested back navigation.
+## 2026.7.1 - 2026-07-08
 
-Gateway sessions now retry immediately when Android regains a validated network, without waiting for the current reconnect backoff.
+Adds multi-gateway switching with isolated credentials, history, queues, and notification routing.
 
-Canvas main-frame navigation now blocks device-local loopback and unspecified web targets while preserving remote, LAN, emulator-host, and bundled canvases.
+Upgrades chat with offline recovery, session search and groups, model and agent pickers, voice notes, actions, link previews, code and math rendering.
 
-Voice settings now stay within their intended width instead of overflowing or clipping on constrained screens.
+Adds workspace files, Cron details, terminal access, and Listen playback.
 
-Camera clip capture no longer emits release-path diagnostics containing temporary file details.
+Improves onboarding, reconnects, keyboards, notification filtering, location, canvas safety, and voice reliability.
 
-Push-to-talk now waits for realtime input and output to stop, keeps finishing turns serialized, and safely resumes the matching relay capture.
+Thanks @IWhatsskill, @ioridev, and @narcissus0702.
 
 ## 2026.6.11 - 2026-07-01
 

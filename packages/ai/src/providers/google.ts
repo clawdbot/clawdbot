@@ -1,13 +1,13 @@
 // Google provider adapts Gemini streams and tools to the agent runtime.
 import { type GenerateContentParameters, GoogleGenAI } from "@google/genai";
 import { getEnvApiKey } from "../env-api-keys.js";
+import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
   buildGoogleGenerateContentParams,
   buildGoogleSimpleThinking,
   createGoogleAssistantOutput,
-  getDisabledGoogleThinkingConfig,
   type GoogleProviderOptions,
   runGoogleGenerateContentLifecycle,
 } from "./google-shared.js";
@@ -74,11 +74,16 @@ function createClient(
     httpOptions.apiVersion = ""; // baseUrl already includes version path, don't append
   }
   if (model.headers || optionsHeaders) {
-    httpOptions.headers = { ...model.headers, ...optionsHeaders };
+    httpOptions.headers = resolveAiTransportHeaderSentinels({
+      ...model.headers,
+      ...optionsHeaders,
+    });
   }
 
+  // @google/genai exposes RequestInit options but no custom fetch; unwrap at construction.
+  const resolvedApiKey = apiKey ? getAiTransportHost().resolveSecretSentinel(apiKey) : undefined;
   return new GoogleGenAI({
-    apiKey,
+    apiKey: resolvedApiKey,
     httpOptions: Object.keys(httpOptions).length > 0 ? httpOptions : undefined,
   });
 }
@@ -88,8 +93,5 @@ function buildParams(
   context: Context,
   options: GoogleOptions = {},
 ): GenerateContentParameters {
-  return buildGoogleGenerateContentParams(model, context, options, {
-    getDisabledThinkingConfig: (modelLocal) =>
-      getDisabledGoogleThinkingConfig(modelLocal, { includeGemma4: true }),
-  });
+  return buildGoogleGenerateContentParams(model, context, options);
 }

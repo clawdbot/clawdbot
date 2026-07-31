@@ -71,7 +71,9 @@ function makeMediaSender() {
     sendVideoMsg: vi.fn(async () => ({ channel: "qqbot", messageId: "video-1" })),
     sendDocument: vi.fn(async () => ({ channel: "qqbot", messageId: "file-1" })),
     sendMedia: vi.fn(
-      async (): Promise<
+      async (_opts: {
+        mediaUrl: string;
+      }): Promise<
         { channel: "qqbot"; messageId: string } | { channel: "qqbot"; error: string }
       > => ({ channel: "qqbot", messageId: "media-1" }),
     ),
@@ -144,5 +146,50 @@ describe("outbound deliver sandbox media", () => {
       }),
     );
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([DEFAULT_MEDIA_SEND_ERROR]);
+  });
+
+  it("continues text chunk delivery after a failed chunk", async () => {
+    const actx = makeActx();
+    sendTextMock.mockRejectedValueOnce(new Error("first failed"));
+
+    await sendPlainReply(
+      {},
+      "first second",
+      event,
+      actx,
+      sendWithRetry,
+      vi.fn(() => undefined),
+      [],
+      { mediaSender: makeMediaSender(), chunkText: () => ["first", "second"] },
+    );
+
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["first", "second"]);
+    expect(actx.log.error).toHaveBeenCalledWith("Send failed: first failed");
+  });
+
+  it("continues automatic media delivery after returned and thrown errors", async () => {
+    const mediaSender = makeMediaSender();
+    mediaSender.sendMedia
+      .mockResolvedValueOnce({ channel: "qqbot", error: "rejected" })
+      .mockRejectedValueOnce(new Error("network failed"))
+      .mockResolvedValueOnce({ channel: "qqbot", messageId: "media-3" });
+
+    await sendPlainReply(
+      { mediaUrls: ["first.pdf", "second.pdf", "third.pdf"] },
+      "",
+      event,
+      makeActx(),
+      sendWithRetry,
+      vi.fn(() => undefined),
+      [],
+      { mediaSender, chunkText },
+    );
+
+    expect(mediaSender.sendMedia.mock.calls.map((call) => call[0].mediaUrl)).toEqual([
+      "first.pdf",
+      "second.pdf",
+      "third.pdf",
+    ]);
+    expect(sendTextMock).not.toHaveBeenCalled();
   });
 });

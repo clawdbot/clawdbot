@@ -1,28 +1,31 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
+import { initialState, Task, TaskStatus } from "@lit/task";
+import { html } from "lit";
 import { state } from "lit/decorators.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { HealthSnapshot, StatusSummary } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { titleForRoute } from "../../app-navigation.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationGatewaySnapshot,
+} from "../../app/context.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { loadGatewayDiagnostics } from "../../lib/gateway-diagnostics.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { PollController } from "../../lit/poll-controller.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderDebug } from "./view.ts";
 
 const DEBUG_POLL_INTERVAL_MS = 3000;
 
-class DebugPage extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
-  @consume({ context: applicationContext, subscribe: false })
+class DebugPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @state() private client: GatewayBrowserClient | null = null;
   @state() private connected = false;
-  @state() private debugLoading = false;
   @state() private debugStatus: StatusSummary | null = null;
   @state() private debugHealth: HealthSnapshot | null = null;
   @state() private debugModels: unknown[] = [];
@@ -33,47 +36,86 @@ class DebugPage extends LitElement {
   @state() private debugCallError: string | null = null;
   @state() private eventLog: readonly EventLogEntry[] = [];
 
-  private debugPollInterval: ReturnType<typeof globalThis.setInterval> | null = null;
-  private stopGatewaySubscription?: () => void;
-  private stopEventLogSubscription?: () => void;
+  private readonly polling = new PollController(
+    this,
+    DEBUG_POLL_INTERVAL_MS,
+    () => {
+      void this.loadDiagnostics();
+    },
+    false,
+  );
+  private hasBoundGatewaySource = false;
+  private gatewaySource: ApplicationContext["gateway"] | null = null;
+  private callEpoch = 0;
+  private diagnosticsTaskActiveClient: GatewayBrowserClient | null = null;
+  private readonly diagnosticsTask = new Task(this, {
+    autoRun: false,
+    args: () => [this.connected ? this.client : null] as const,
+    task: ([client], { signal }) =>
+      client ? loadGatewayDiagnostics(client, signal) : initialState,
+    onComplete: (result) => {
+      this.diagnosticsTaskActiveClient = null;
+      this.debugStatus = result.status;
+      this.debugHealth = result.health;
+      this.debugModels = result.models;
+      this.debugHeartbeat = result.heartbeat;
+    },
+    onError: (error) => {
+      this.diagnosticsTaskActiveClient = null;
+      this.debugCallError = String(error);
+    },
+  });
+  private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => {
+        const resetForSourceBind = this.hasBoundGatewaySource;
+        this.hasBoundGatewaySource = true;
+        this.gatewaySource = gateway;
+        const cleanup = gateway.subscribe((snapshot) => {
+          if (this.gatewaySource === gateway && this.context.gateway === gateway) {
+            this.applyGatewaySnapshot(snapshot);
+          }
+        });
+        this.applyGatewaySnapshot(gateway.snapshot, resetForSourceBind);
+        return cleanup;
+      },
+    )
+    .watch(
+      () => this.context?.gateway,
+      (gateway, notify) => gateway.subscribeEventLog(notify),
+      (gateway) => {
+        this.eventLog = gateway.eventLog;
+      },
+    );
 
-  override connectedCallback() {
-    super.connectedCallback();
-    this.eventLog = this.context.gateway.eventLog;
-    this.syncGatewayState();
-    this.stopGatewaySubscription = this.context.gateway.subscribe((snapshot) => {
-      const previousClient = this.client;
-      this.syncGatewayState();
-      if (previousClient !== snapshot.client) {
-        this.resetServerState();
-      }
-      this.syncPolling();
-      this.ensureInitialDebug();
-    });
-    this.stopEventLogSubscription = this.context.gateway.subscribeEventLog((events) => {
-      this.eventLog = events;
-    });
+  override disconnectedCallback() {
+    this.subscriptions.clear();
+    void this.diagnosticsTask.run([null]);
+    this.diagnosticsTaskActiveClient = null;
+    this.callEpoch += 1;
+    this.gatewaySource = null;
+    super.disconnectedCallback();
+  }
+
+  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, resetForSourceBind = false) {
+    const connectionChanged = (snapshot.phase === "connected") !== this.connected;
+    const clientChanged = resetForSourceBind || snapshot.client !== this.client;
+    if (clientChanged || connectionChanged) {
+      void this.diagnosticsTask.run([null]);
+      this.diagnosticsTaskActiveClient = null;
+      this.callEpoch += 1;
+    }
+    this.client = snapshot.client;
+    this.connected = snapshot.phase === "connected";
+    if (clientChanged) {
+      this.resetServerState();
+    }
     this.syncPolling();
     this.ensureInitialDebug();
   }
 
-  override disconnectedCallback() {
-    this.stopPolling();
-    this.stopGatewaySubscription?.();
-    this.stopGatewaySubscription = undefined;
-    this.stopEventLogSubscription?.();
-    this.stopEventLogSubscription = undefined;
-    super.disconnectedCallback();
-  }
-
-  private syncGatewayState() {
-    const gateway = this.context.gateway.snapshot;
-    this.client = gateway.client;
-    this.connected = gateway.connected;
-  }
-
   private resetServerState() {
-    this.debugLoading = false;
     this.debugStatus = null;
     this.debugHealth = null;
     this.debugModels = [];
@@ -84,75 +126,53 @@ class DebugPage extends LitElement {
 
   private syncPolling() {
     if (!this.connected || !this.client) {
-      this.stopPolling();
+      this.polling.stop();
       return;
     }
-    if (this.debugPollInterval !== null) {
-      return;
-    }
-    this.debugPollInterval = globalThis.setInterval(() => {
-      void this.loadDiagnostics();
-    }, DEBUG_POLL_INTERVAL_MS);
-  }
-
-  private stopPolling() {
-    if (this.debugPollInterval === null) {
-      return;
-    }
-    globalThis.clearInterval(this.debugPollInterval);
-    this.debugPollInterval = null;
+    this.polling.start();
   }
 
   private ensureInitialDebug() {
-    if (!this.connected || !this.client || this.debugStatus || this.debugLoading) {
+    if (!this.connected || !this.client || this.debugStatus || this.diagnosticsTaskActiveClient) {
       return;
     }
     void this.loadDiagnostics();
   }
 
-  private async loadDiagnostics() {
-    const client = this.client;
-    if (!client || !this.connected || this.debugLoading) {
-      return;
+  private loadDiagnostics(): Promise<void> {
+    const client = this.connected ? this.client : null;
+    if (!client || this.diagnosticsTaskActiveClient) {
+      return Promise.resolve();
     }
-    this.debugLoading = true;
-    try {
-      const result = await loadGatewayDiagnostics(client);
-      if (this.client !== client || !this.connected) {
-        return;
-      }
-      this.debugStatus = result.status;
-      this.debugHealth = result.health;
-      this.debugModels = result.models;
-      this.debugHeartbeat = result.heartbeat;
-    } catch (err) {
-      if (this.client === client && this.connected) {
-        this.debugCallError = String(err);
-      }
-    } finally {
-      if (this.client === client) {
-        this.debugLoading = false;
-      }
-    }
+    this.diagnosticsTaskActiveClient = client;
+    return this.diagnosticsTask.run([client]);
   }
 
   private async callDebugMethod() {
-    const client = this.client;
-    if (!client || !this.connected) {
+    const client = this.connected ? this.client : null;
+    if (!client) {
       return;
     }
     this.debugCallError = null;
     this.debugCallResult = null;
+    const gateway = this.gatewaySource;
+    const epoch = this.callEpoch;
+    const isCurrent = () =>
+      this.connected &&
+      this.client === client &&
+      this.gatewaySource === gateway &&
+      this.context.gateway === gateway &&
+      this.callEpoch === epoch;
     try {
       const params = this.debugCallParams.trim()
         ? (JSON.parse(this.debugCallParams) as unknown)
         : {};
       const res = await client.request(this.debugCallMethod.trim(), params);
-      if (this.client === client) {
+      if (isCurrent()) {
         this.debugCallResult = JSON.stringify(res, null, 2);
       }
     } catch (err) {
-      if (this.client === client) {
+      if (isCurrent()) {
         this.debugCallError = String(err);
       }
     }
@@ -160,7 +180,7 @@ class DebugPage extends LitElement {
 
   override render() {
     const body = renderDebug({
-      loading: this.debugLoading,
+      loading: this.diagnosticsTask.status === TaskStatus.PENDING,
       status: this.debugStatus,
       health: this.debugHealth,
       models: this.debugModels,
@@ -180,18 +200,13 @@ class DebugPage extends LitElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("debug")}</div>
-          <div class="page-sub">${subtitleForRoute("debug")}</div>
         </div>
       </section>
-      ${renderSettingsWorkspace(
-        this.context.basePath,
-        body,
-        "debug",
-        (routeId) => this.context.navigate(routeId),
-        (routeId) => this.context.preload(routeId),
-      )}
+      ${renderSettingsWorkspace(body)}
     `;
   }
 }
 
-customElements.define("openclaw-debug-page", DebugPage);
+if (!customElements.get("openclaw-debug-page")) {
+  customElements.define("openclaw-debug-page", DebugPage);
+}

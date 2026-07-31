@@ -1,3 +1,8 @@
+import {
+  asSafeIntegerInRange,
+  expectDefined,
+  parseStrictInteger,
+} from "@openclaw/normalization-core";
 export type UsageBarTemplate = Record<string, unknown>;
 export type UsageContract = Record<string, unknown>;
 type Vocab = Record<string, unknown>;
@@ -38,7 +43,7 @@ function fixed(value: unknown, digits: number): string {
   if (!Number.isFinite(n)) {
     return "";
   }
-  return n.toFixed(Math.max(0, digits));
+  return n.toFixed(digits);
 }
 
 function dur(value: unknown): string {
@@ -92,8 +97,8 @@ function meter(value: unknown, width: number, scale: unknown): string {
   if (glyphs.length < 2 || width < 1) {
     return "";
   }
-  const empty = glyphs[0];
-  const full = glyphs[glyphs.length - 1];
+  const empty = expectDefined(glyphs[0], "glyphs entry at 0");
+  const full = expectDefined(glyphs[glyphs.length - 1], "glyphs entry at glyphs.length 1");
   const total = norm(value) * width;
   const fullc = Math.trunc(total);
   const cells: string[] = [];
@@ -101,7 +106,12 @@ function meter(value: unknown, width: number, scale: unknown): string {
     cells.push(full);
   }
   if (cells.length < width) {
-    cells.push(glyphs[Math.round((total - fullc) * (glyphs.length - 1))]);
+    cells.push(
+      expectDefined(
+        glyphs[Math.round((total - fullc) * (glyphs.length - 1))],
+        "glyphs entry at math.round((total fullc) * (glyphs.length 1))",
+      ),
+    );
   }
   while (cells.length < width) {
     cells.push(empty);
@@ -111,13 +121,21 @@ function meter(value: unknown, width: number, scale: unknown): string {
 
 const VERB_NAMES = new Set(["num", "fixed", "dur", "pct", "inv", "alias", "meter"]);
 
+function parseBoundedIntegerArg(
+  raw: string | undefined,
+  options: { defaultValue: number; min: number; max: number },
+): number | undefined {
+  const value = raw === undefined ? options.defaultValue : parseStrictInteger(raw);
+  return asSafeIntegerInRange(value, options);
+}
+
 function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): unknown {
   switch (name) {
     case "num":
       return num(value);
     case "fixed": {
-      const digits = args[0] ? Number.parseInt(args[0], 10) || 0 : 2;
-      return fixed(value, digits);
+      const digits = parseBoundedIntegerArg(args[0], { defaultValue: 2, min: 0, max: 100 });
+      return digits === undefined ? "" : fixed(value, digits);
     }
     case "dur":
       return dur(value);
@@ -137,9 +155,10 @@ function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): 
       return Object.hasOwn(table, lower) ? table[lower] : value;
     }
     case "meter": {
-      const width = args[0] ? Number.parseInt(args[0], 10) || 5 : 5;
-      const scale = args.length > 1 ? vocab[args[1]] : undefined;
-      return meter(value, width, scale);
+      const rawWidth = args[0]?.trim() ? args[0] : undefined;
+      const width = parseBoundedIntegerArg(rawWidth, { defaultValue: 5, min: 1, max: 100 });
+      const scale = args.length > 1 ? vocab[expectDefined(args[1], "args entry at 1")] : undefined;
+      return width === undefined ? "" : meter(value, width, scale);
     }
     default:
       return String(value);
@@ -170,7 +189,7 @@ function interp(text: string, ctx: unknown, vocab: Vocab): string {
     let fallback: string | undefined;
     for (const segRaw of parts.slice(1)) {
       const seg = segRaw.trim();
-      const name = seg.split(":")[0];
+      const name = expectDefined(seg.split(":")[0], 'seg.split(":") entry at 0');
       if (VERB_NAMES.has(name)) {
         ops.push({ name, args: seg.split(":").slice(1) });
       } else {
@@ -212,7 +231,15 @@ function renderSegment(seg: Segment, ctx: unknown, vocab: Vocab): string | null 
     items.forEach((el, i) => {
       let iv = vocab;
       if (names && names.length > 0) {
-        iv = { ...vocab, "*": vocab[names[Math.min(i, names.length - 1)]] };
+        iv = {
+          ...vocab,
+          "*": vocab[
+            expectDefined(
+              names[Math.min(i, names.length - 1)],
+              "names entry at math.min(i, names.length 1)",
+            )
+          ],
+        };
       }
       const r = interp(itemTpl, el, iv);
       if (r) {

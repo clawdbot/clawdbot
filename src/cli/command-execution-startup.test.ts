@@ -9,9 +9,13 @@ vi.mock("./banner.js", () => ({
   emitCliBanner: emitCliBannerMock,
 }));
 
-vi.mock("../logging/console.js", () => ({
-  routeLogsToStderr: routeLogsToStderrMock,
-}));
+vi.mock("../logging/console.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/console.js")>();
+  return {
+    ...actual,
+    routeLogsToStderr: routeLogsToStderrMock,
+  };
+});
 
 vi.mock("./command-bootstrap.js", () => ({
   ensureCliCommandBootstrap: ensureCliCommandBootstrapMock,
@@ -24,6 +28,14 @@ describe("command-execution-startup", () => {
     vi.clearAllMocks();
     vi.resetModules();
     mod = await import("./command-execution-startup.js");
+  });
+
+  it("preserves console exports for a co-sharded subsystem logger", async () => {
+    const { createSubsystemLogger } = await import("../logging/subsystem.js");
+
+    expect(() =>
+      createSubsystemLogger("test/cli-startup").isEnabled("info", "console"),
+    ).not.toThrow();
   });
 
   it("resolves startup context from argv and mode", () => {
@@ -217,6 +229,8 @@ describe("command-execution-startup", () => {
       },
       allowInvalid: true,
       loadPlugins: true,
+      skipPristineCoreStateMigrations: true,
+      skipPristineStartupStateMigrations: true,
     });
 
     expect(ensureCliCommandBootstrapMock).toHaveBeenLastCalledWith({
@@ -227,6 +241,8 @@ describe("command-execution-startup", () => {
       loadPlugins: true,
       pluginRegistry: { scope: "all" },
       skipConfigGuard: false,
+      skipPristineCoreStateMigrations: true,
+      skipPristineStartupStateMigrations: true,
     });
   });
 });

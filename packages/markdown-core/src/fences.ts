@@ -45,9 +45,15 @@ export function scanFenceSpans(
 
     const match = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/);
     if (match && (offset > 0 || startsAtLineStart)) {
-      const indent = match[1];
-      const marker = match[2];
-      const markerChar = marker[0];
+      const [, indent, marker, trailing] = match;
+      if (indent === undefined || marker === undefined || trailing === undefined) {
+        if (nextNewline === -1) {
+          break;
+        }
+        offset = nextNewline + 1;
+        continue;
+      }
+      const markerChar = marker.charAt(0);
       const markerLen = marker.length;
       if (!open) {
         open = {
@@ -61,7 +67,7 @@ export function scanFenceSpans(
       } else if (
         open.markerChar === markerChar &&
         markerLen >= open.markerLen &&
-        /^[ \t]*$/.test(match[3])
+        /^[ \t]*$/.test(trailing)
       ) {
         // CommonMark permits only spaces or tabs after a closing fence. A marker line carrying
         // other trailing text is code content, not a close, so it must not end the block.

@@ -3,8 +3,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { createHookRunner } from "../plugins/hooks.js";
-import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "../plugins/hooks.test-helpers.js";
-import { handleAgentEnd, handleAgentStart } from "./embedded-agent-subscribe.handlers.lifecycle.js";
+import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "../plugins/hooks.test-fixtures.js";
+import {
+  __testing,
+  handleAgentEnd,
+  handleAgentStart,
+} from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 
 const { emitAgentEventMock } = vi.hoisted(() => ({
@@ -23,15 +27,19 @@ const BEFORE_AGENT_FINALIZE_EVENT = {
   stopHookActive: false,
   lastAssistantMessage: "done",
 };
+const { resolveTerminalToolMediaTrust } = __testing;
 
 vi.mock("../infra/agent-events.js", () => ({
   emitAgentEvent: emitAgentEventMock,
+  getAgentEventLifecycleGeneration: () => "test-generation",
+  isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
+  registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
 
 function createContext(
   lastAssistant: unknown,
   overrides?: {
-    onAgentEvent?: (event: unknown) => void;
+    onAgentEvent?: (event: unknown) => void | Promise<void>;
     onBeforeLifecycleTerminal?: () => void | Promise<void>;
     onBeforeTerminalDelivery?: () => void | Promise<void>;
     onBlockReply?: ((payload: unknown) => void) | undefined;
@@ -60,8 +68,8 @@ function createContext(
       lastAssistant: lastAssistant as EmbeddedAgentSubscribeContext["state"]["lastAssistant"],
       pendingCompactionRetry: 0,
       pendingToolMediaUrls: [],
+      pendingToolMediaTrustByUrl: new Map(),
       pendingToolAudioAsVoice: false,
-      pendingToolTrustedLocalMedia: false,
       deferredBlockReplies: [],
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
       blockState: {
@@ -116,7 +124,66 @@ function firstWarnMeta(ctx: EmbeddedAgentSubscribeContext): Record<string, unkno
   return readRecord(firstMockCall(vi.mocked(ctx.log.warn))[1]);
 }
 
+describe("resolveTerminalToolMediaTrust", () => {
+  it.each([
+    {
+      name: "mixed pending batch",
+      pendingMediaUrls: ["/tmp/trusted.mp3", "/tmp/untrusted.mp3"],
+      pendingTrustByUrl: new Map([
+        ["/tmp/trusted.mp3", true],
+        ["/tmp/untrusted.mp3", false],
+      ]),
+      deferredReplies: [],
+      expected: false,
+    },
+    {
+      name: "all-trusted pending batch",
+      pendingMediaUrls: ["/tmp/first.mp3", "/tmp/second.mp3"],
+      pendingTrustByUrl: new Map([
+        ["/tmp/first.mp3", true],
+        ["/tmp/second.mp3", true],
+      ]),
+      deferredReplies: [],
+      expected: true,
+    },
+    {
+      name: "mixed deferred batch",
+      pendingMediaUrls: [],
+      pendingTrustByUrl: new Map<string, boolean>(),
+      deferredReplies: [
+        { mediaUrls: ["/tmp/trusted.mp3"], trustedLocalMedia: true },
+        { mediaUrls: ["/tmp/untrusted.mp3"] },
+      ],
+      expected: false,
+    },
+    {
+      name: "all-trusted deferred batch",
+      pendingMediaUrls: [],
+      pendingTrustByUrl: new Map<string, boolean>(),
+      deferredReplies: [
+        { mediaUrls: ["/tmp/first.mp3"], trustedLocalMedia: true },
+        { mediaUrls: ["/tmp/second.mp3"], trustedLocalMedia: true },
+      ],
+      expected: true,
+    },
+  ])("returns $expected for $name", ({ expected, ...params }) => {
+    expect(resolveTerminalToolMediaTrust(params)).toBe(expected);
+  });
+});
+
 describe("handleAgentEnd", () => {
+  it("contains rejected lifecycle start event callbacks", async () => {
+    const onAgentEvent = vi.fn().mockRejectedValue(new Error("progress failed"));
+    const ctx = createContext(undefined, { onAgentEvent });
+
+    handleAgentStart(ctx);
+    await Promise.resolve();
+
+    expect(ctx.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("lifecycle agent event callback failed"),
+    );
+  });
+
   it("keeps explicit session and agent identity on lifecycle start events", () => {
     emitAgentEventMock.mockClear();
     const ctx = createContext(undefined);
@@ -1158,3 +1225,4 @@ describe("handleAgentEnd", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,10 +1,13 @@
 // Covers CLI session transcript loading and reseeding boundaries.
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "../harness/hook-history.js";
 import { cliBackendLog } from "./log.js";
 import {
   buildCliSessionHistoryPrompt,
@@ -12,12 +15,14 @@ import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
   loadCliSessionReseedMessages,
-  MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS,
-  MAX_CLI_SESSION_HISTORY_FILE_BYTES,
-  MAX_CLI_SESSION_HISTORY_MESSAGES,
-  MAX_CLI_SESSION_RESEED_HISTORY_CHARS,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
+
+const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
+const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 12 * 1024;
+const MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS = 256 * 1024;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createSessionTranscript(params: {
   rootDir: string;
@@ -67,6 +72,14 @@ function createSessionTranscript(params: {
     );
   }
   return sessionFile;
+}
+
+function createOversizedSessionTranscript(rootDir: string, sessionId: string): string {
+  return createSessionTranscript({
+    rootDir,
+    sessionId,
+    messages: ["x".repeat(MAX_CLI_SESSION_HISTORY_FILE_BYTES), "tail history"],
+  });
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -423,46 +436,8 @@ describe("loadCliSessionHistoryMessages", () => {
 
   it("loads a bounded tail from oversized transcript files", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
-    const sessionFile = path.join(
-      stateDir,
-      "agents",
-      "main",
-      "sessions",
-      "session-oversized.jsonl",
-    );
+    const sessionFile = createOversizedSessionTranscript(stateDir, "session-oversized");
     const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
-    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-    fs.writeFileSync(
-      sessionFile,
-      [
-        JSON.stringify({
-          type: "session",
-          version: CURRENT_SESSION_VERSION,
-          id: "session-oversized",
-          timestamp: new Date(0).toISOString(),
-          cwd: stateDir,
-        }),
-        JSON.stringify({
-          type: "message",
-          id: "old",
-          parentId: null,
-          timestamp: new Date(1).toISOString(),
-          message: {
-            role: "user",
-            content: "x".repeat(MAX_CLI_SESSION_HISTORY_FILE_BYTES),
-            timestamp: 1,
-          },
-        }),
-        JSON.stringify({
-          type: "message",
-          id: "tail",
-          parentId: "old",
-          timestamp: new Date(2).toISOString(),
-          message: { role: "user", content: "tail history", timestamp: 2 },
-        }),
-      ].join("\n") + "\n",
-      "utf-8",
-    );
 
     try {
       await withCliSessionState(stateDir, async () => {
@@ -481,6 +456,48 @@ describe("loadCliSessionHistoryMessages", () => {
     } finally {
       warnSpy.mockRestore();
       fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the opened file size when the transcript shrinks after stat", async () => {
+    const stateDir = tempDirs.make("openclaw-cli-state-");
+    const sessionFile = createOversizedSessionTranscript(stateDir, "session-oversized-shrink");
+    const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
+    // Report a stale size whose bounded-read offset is beyond the real EOF,
+    // as when the CLI compacts the transcript between the path stat and open.
+    const realFspStat = fsp.stat;
+    const statSpy = vi.spyOn(fsp, "stat").mockImplementation(async (target, ...rest) => {
+      if (String(target).endsWith("session-oversized-shrink.jsonl")) {
+        const stats = await realFspStat(target as Parameters<typeof realFspStat>[0]);
+        // Proxy keeps the Stats prototype (isFile etc.) and only inflates the
+        // reported size past EOF; spreading a Stats instance would drop both.
+        return new Proxy(stats, {
+          get: (obj, prop, receiver) =>
+            prop === "size"
+              ? obj.size + MAX_CLI_SESSION_HISTORY_FILE_BYTES + 4096
+              : Reflect.get(obj, prop, receiver),
+        });
+      }
+      return realFspStat(target as Parameters<typeof realFspStat>[0], ...rest);
+    });
+
+    try {
+      await withCliSessionState(stateDir, async () => {
+        const history = await loadCliSessionHistoryMessages({
+          sessionId: "session-oversized-shrink",
+          sessionFile,
+          sessionKey: "agent:main:main",
+          agentId: "main",
+        });
+        expect(history).toHaveLength(1);
+        expectMessageFields(history[0], { role: "user", content: "tail history" });
+        expect(warnSpy).not.toHaveBeenCalledWith(
+          expect.stringContaining("cli session history parse failed"),
+        );
+      });
+    } finally {
+      statSpy.mockRestore();
+      warnSpy.mockRestore();
     }
   });
 
@@ -864,6 +881,18 @@ describe("buildCliSessionHistoryPrompt", () => {
     expect(prompt).not.toContain("x".repeat(80));
   });
 
+  it("keeps a whole code point when the retained history tail starts inside an emoji", () => {
+    const prompt = buildCliSessionHistoryPrompt({
+      messages: [{ role: "user", content: "prefix😀tail" }],
+      prompt: "next",
+      maxHistoryChars: 5,
+    });
+
+    expect(prompt).toContain(
+      "<conversation_history>\n[OpenClaw reseed history truncated; older turns dropped]\ntail\n</conversation_history>",
+    );
+  });
+
   it("scales automatic reseed history caps from Claude context tiers", () => {
     expect(resolveAutoCliSessionReseedHistoryChars(0)).toBe(MAX_CLI_SESSION_RESEED_HISTORY_CHARS);
     expect(resolveAutoCliSessionReseedHistoryChars(32_000)).toBe(
@@ -978,6 +1007,18 @@ describe("buildCliSessionHistoryPrompt", () => {
     expect(prompt).toContain("POST_SUMMARY_USER_DROPPED");
     expect(prompt).toContain("POST_SUMMARY_ASSISTANT_DROPPED");
     expect(prompt).toContain("<next_user_message>\nnext ask\n</next_user_message>");
+  });
+
+  it("keeps a whole code point at an oversize compaction-summary boundary", () => {
+    const prompt = buildCliSessionHistoryPrompt({
+      messages: [{ role: "compactionSummary", summary: `aa😀${"z".repeat(100)}` }],
+      prompt: "next",
+      maxHistoryChars: 80,
+    });
+
+    expect(prompt).toContain(
+      "<conversation_history>\n[OpenClaw reseed history truncated; older turns dropped]\nCompaction summary: aa\n</conversation_history>",
+    );
   });
 
   it("honors the cap when the summary block plus marker crosses it", () => {

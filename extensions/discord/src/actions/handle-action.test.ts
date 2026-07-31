@@ -1,4 +1,5 @@
 // Discord tests cover handle action plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -7,6 +8,11 @@ const handleDiscordActionMock = vi
   .spyOn(runtimeModule, "handleDiscordAction")
   .mockResolvedValue({ content: [], details: { ok: true } });
 const { handleDiscordMessageAction } = await import("./handle-action.js");
+const {
+  beginDiscordActiveTurnThreadRoute,
+  notifyDiscordActiveTurnThreadCreated,
+  notifyDiscordActiveTurnThreadReplyDelivered,
+} = await import("../active-turn-thread-route.js");
 const { beginDiscordInboundEventDeliveryCorrelation } =
   await import("../inbound-event-delivery.js");
 
@@ -95,6 +101,23 @@ describe("handleDiscordMessageAction", () => {
         toolContext: { currentChannelProvider: "discord" },
       }),
     ).rejects.toThrow("durationMin must be a non-negative integer");
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid autoArchiveMin before Discord thread-create runtime", async () => {
+    const cfg = discordConfig({ threads: true });
+    await expect(
+      handleDiscordMessageAction({
+        action: "thread-create",
+        params: {
+          channelId: "channel-1",
+          threadName: "proof-thread",
+          autoArchiveMin: 999,
+        },
+        cfg,
+        toolContext: { currentChannelProvider: "discord" },
+      }),
+    ).rejects.toThrow("autoArchiveMin must be one of 60, 1440, 4320, or 10080 minutes");
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
@@ -299,6 +322,81 @@ describe("handleDiscordMessageAction", () => {
       },
       cfg,
       options: defaultActionOptions(),
+    });
+  });
+
+  it("forwards attested current-conversation context to Discord reads", async () => {
+    const cfg = discordConfig();
+    await handleDiscordMessageAction({
+      action: "read",
+      params: {
+        channelId: "channel:123",
+      },
+      cfg,
+      accountId: "ops",
+      requesterAccountId: "ops",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "channel:123",
+      },
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "readMessages",
+        accountId: "ops",
+        channelId: "123",
+        limit: undefined,
+        before: undefined,
+        after: undefined,
+        around: undefined,
+      },
+      cfg,
+      options: {
+        ...defaultActionOptions(),
+        conversationReadOrigin: "delegated",
+        readContext: {
+          requesterAccountId: "ops",
+          currentChannelProvider: "discord",
+          currentChannelId: "channel:123",
+        },
+      },
+    });
+  });
+
+  it("forwards attested current-conversation context to Discord channel info", async () => {
+    const cfg = discordConfig({ channelInfo: true });
+    await handleDiscordMessageAction({
+      action: "channel-info",
+      params: {
+        channelId: "123",
+      },
+      cfg,
+      accountId: "ops",
+      requesterAccountId: "ops",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "channel:123",
+      },
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "channelInfo",
+        accountId: "ops",
+        channelId: "123",
+      },
+      cfg,
+      options: {
+        conversationReadOrigin: "delegated",
+        readContext: {
+          requesterAccountId: "ops",
+          currentChannelProvider: "discord",
+          currentChannelId: "channel:123",
+        },
+      },
     });
   });
 
@@ -525,6 +623,171 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
+  it("adopts a thread created from the active source message and confirms replies there", async () => {
+    const sessionKey = "agent:main:discord:channel:channel-1";
+    const onThreadAdopted = vi.fn();
+    const onThreadReplyDelivered = vi.fn();
+    const endRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
+      accountId: "account-1",
+      sourceChannelId: "channel-1",
+      sourceMessageId: "message-1",
+      onThreadAdopted,
+      onThreadReplyDelivered,
+    });
+    try {
+      expect(
+        notifyDiscordActiveTurnThreadReplyDelivered({
+          sessionKey,
+          accountId: "account-1",
+        }),
+      ).toBe(false);
+
+      handleDiscordActionMock.mockResolvedValueOnce({
+        content: [],
+        details: { thread: { id: "thread-1" } },
+      });
+      await handleDiscordMessageAction({
+        action: "thread-create",
+        params: {
+          channelId: "channel-1",
+          messageId: "message-1",
+          threadName: "investigation",
+        },
+        cfg: discordConfig({ threads: true }),
+        accountId: "account-1",
+        sessionKey,
+      });
+
+      expect(onThreadAdopted).toHaveBeenCalledWith("thread-1");
+
+      handleDiscordActionMock.mockResolvedValueOnce({
+        content: [],
+        details: { ok: true },
+      });
+      const mismatchedResult = await handleDiscordMessageAction({
+        action: "thread-reply",
+        params: {
+          threadId: "thread-2",
+          message: "unrelated",
+        },
+        cfg: discordConfig({ threads: true }),
+        accountId: "account-1",
+        sessionKey,
+      });
+
+      expect(mismatchedResult.details).toEqual({ ok: true });
+      expect(onThreadReplyDelivered).not.toHaveBeenCalled();
+
+      handleDiscordActionMock.mockResolvedValueOnce({
+        content: [],
+        details: { ok: true },
+      });
+      const result = await handleDiscordMessageAction({
+        action: "thread-reply",
+        params: {
+          threadId: "thread-1",
+          message: "done",
+        },
+        cfg: discordConfig({ threads: true }),
+        accountId: "account-1",
+        sessionKey,
+      });
+
+      expect(result.details).toEqual({
+        ok: true,
+        sourceReplyRoute: "current-source",
+      });
+      expect(onThreadReplyDelivered).toHaveBeenCalledWith("thread-1");
+    } finally {
+      endRoute();
+    }
+  });
+
+  it("confirms only the matching adopted thread across concurrent routes", async () => {
+    const sessionKey = "agent:main:discord:channel:channel-1";
+    const firstReplyDelivered = vi.fn();
+    const secondReplyDelivered = vi.fn();
+    const endFirstRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
+      accountId: "account-1",
+      sourceChannelId: "channel-1",
+      sourceMessageId: "message-1",
+      onThreadAdopted: vi.fn(),
+      onThreadReplyDelivered: firstReplyDelivered,
+    });
+    const endSecondRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
+      accountId: "account-1",
+      sourceChannelId: "channel-1",
+      sourceMessageId: "message-2",
+      onThreadAdopted: vi.fn(),
+      onThreadReplyDelivered: secondReplyDelivered,
+    });
+    try {
+      await notifyDiscordActiveTurnThreadCreated({
+        sessionKey,
+        accountId: "account-1",
+        sourceChannelId: "channel-1",
+        sourceMessageId: "message-1",
+        threadId: "thread-1",
+      });
+      await notifyDiscordActiveTurnThreadCreated({
+        sessionKey,
+        accountId: "account-1",
+        sourceChannelId: "channel-1",
+        sourceMessageId: "message-2",
+        threadId: "thread-2",
+      });
+
+      expect(
+        notifyDiscordActiveTurnThreadReplyDelivered({
+          sessionKey,
+          accountId: "account-1",
+          threadId: "thread-2",
+        }),
+      ).toBe(true);
+      expect(firstReplyDelivered).not.toHaveBeenCalled();
+      expect(secondReplyDelivered).toHaveBeenCalledWith("thread-2");
+    } finally {
+      endFirstRoute();
+      endSecondRoute();
+    }
+  });
+
+  it("keeps a successful thread-create result when progress migration fails", async () => {
+    const sessionKey = "agent:main:discord:channel:channel-1";
+    const onThreadAdoptionError = vi.fn();
+    const endRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
+      sourceChannelId: "channel-1",
+      sourceMessageId: "message-1",
+      onThreadAdopted: async () => {
+        throw new Error("preview move failed");
+      },
+      onThreadAdoptionError,
+    });
+    try {
+      const expectedResult = {
+        content: [],
+        details: { thread: { id: "thread-1" } },
+      };
+      handleDiscordActionMock.mockResolvedValueOnce(expectedResult);
+
+      const result = await handleDiscordMessageAction({
+        action: "thread-create",
+        params: {
+          channelId: "channel-1",
+          messageId: "message-1",
+          threadName: "investigation",
+        },
+        cfg: discordConfig({ threads: true }),
+        sessionKey,
+      });
+
+      expect(result).toBe(expectedResult);
+      expect(onThreadAdoptionError).toHaveBeenCalledWith(expect.any(Error));
+    } finally {
+      endRoute();
+    }
+  });
+
   it("forwards top-level components on sends", async () => {
     const components = { blocks: [{ type: "text", text: "Pick one" }] };
     const cfg = discordConfig();
@@ -561,6 +824,87 @@ describe("handleDiscordMessageAction", () => {
       cfg,
       options: defaultActionOptions(),
     });
+  });
+
+  it("downgrades chart-only presentations to Discord component text", async () => {
+    const cfg = discordConfig();
+
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        to: "channel:123",
+        presentation: {
+          blocks: [
+            {
+              type: "chart",
+              chartType: "bar",
+              title: "Revenue",
+              categories: ["Q1", "Q2"],
+              series: [{ name: "USD", values: [12, 18] }],
+            },
+          ],
+        },
+      },
+      cfg,
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "sendMessage",
+        accountId: undefined,
+        to: "channel:123",
+        content: "",
+        mediaUrl: undefined,
+        filename: undefined,
+        replyTo: undefined,
+        components: {
+          blocks: [
+            {
+              type: "text",
+              text: "-# Revenue (bar chart)\n- USD: Q1: 12; Q2: 18",
+            },
+          ],
+        },
+        embeds: undefined,
+        asVoice: false,
+        silent: false,
+        __sessionKey: undefined,
+        __agentId: undefined,
+      },
+      cfg,
+      options: defaultActionOptions(),
+    });
+  });
+
+  it("downgrades oversized table presentations to complete text", async () => {
+    const cfg = discordConfig();
+
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        to: "channel:123",
+        presentation: {
+          blocks: [
+            {
+              type: "table",
+              caption: "Large pipeline",
+              headers: ["Account", "Stage"],
+              rows: Array.from({ length: 900 }, (_entry, index) => [
+                `account-${String(index)}-${"x".repeat(80)}`,
+                "Review",
+              ]),
+            },
+          ],
+        },
+      },
+      cfg,
+    });
+
+    const [call] = handleDiscordActionMock.mock.calls;
+    const payload = call?.[0] as Record<string, unknown> | undefined;
+    expect(payload?.components).toBeUndefined();
+    expect(payload?.content).toEqual(expect.stringContaining("account-0-"));
+    expect(payload?.content).toEqual(expect.stringContaining("account-899-"));
   });
 
   it("does not use another provider's current target for Discord sends", async () => {
@@ -632,7 +976,10 @@ describe("handleDiscordMessageAction", () => {
     });
 
     expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
-    const payload = handleDiscordActionMock.mock.calls[0]?.[0];
+    const payload = expectDefined(
+      handleDiscordActionMock.mock.calls[0]?.[0],
+      "Discord search action payload",
+    );
     expect(payload).toMatchObject({
       action: "searchMessages",
       content: "test query",
@@ -659,7 +1006,10 @@ describe("handleDiscordMessageAction", () => {
     });
 
     expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
-    const payload = handleDiscordActionMock.mock.calls[0]?.[0];
+    const payload = expectDefined(
+      handleDiscordActionMock.mock.calls[0]?.[0],
+      "Discord guild search action payload",
+    );
     expect(payload).toMatchObject({
       action: "searchMessages",
       content: "guild-wide query",

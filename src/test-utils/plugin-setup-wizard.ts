@@ -1,7 +1,7 @@
 // Mocks plugin setup wizard flows for command and installer tests.
 import { vi, type Mock } from "vitest";
 import { buildChannelSetupWizardAdapterFromSetupWizard } from "../channels/plugins/setup-wizard.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createRuntimeEnv } from "./plugin-runtime-env.js";
 

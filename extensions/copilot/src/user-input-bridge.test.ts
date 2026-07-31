@@ -1,75 +1,129 @@
-// Copilot tests cover SDK ask_user bridge behavior.
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+// Copilot tests cover SDK ask_user gateway behavior.
+import {
+  claimPendingAgentQuestionAnswer,
+  type AgentHarnessQuestionGatewayCall,
+  type EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createCopilotUserInputBridge } from "./user-input-bridge.js";
+
+type GatewayCallRecord = { method: string; opts: unknown; params: unknown };
 
 function createParams(): EmbeddedRunAttemptParams {
   return {
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
+    agentId: "main",
+    timeoutMs: 75_000,
     onBlockReply: vi.fn(),
   } as unknown as EmbeddedRunAttemptParams;
 }
 
-function expectFirstBlockReplyText(params: EmbeddedRunAttemptParams): string {
-  const onBlockReply = params.onBlockReply;
-  if (!onBlockReply) {
-    throw new Error("Expected onBlockReply callback");
-  }
-  const payload = vi.mocked(onBlockReply).mock.calls[0]?.[0];
-  if (typeof payload?.text !== "string") {
-    throw new Error("Expected first block reply text");
-  }
-  return payload.text;
+function createGatewayStub() {
+  const calls: GatewayCallRecord[] = [];
+  let settleWait: ((value: unknown) => void) | undefined;
+  const wait = new Promise<unknown>((resolve) => {
+    settleWait = resolve;
+  });
+  const call: AgentHarnessQuestionGatewayCall = async (method, opts, params) => {
+    calls.push({ method, opts, params });
+    if (method === "question.request") {
+      return { id: (params as { id: string }).id, expiresAtMs: Date.now() + 75_000 };
+    }
+    if (method === "question.waitAnswer") {
+      return await wait;
+    }
+    if (method === "question.resolve") {
+      const resolved = params as {
+        answers?: { answers: Record<string, string[]> };
+        cancel?: boolean;
+      };
+      const result = resolved.cancel
+        ? { status: "cancelled" as const }
+        : { status: "answered" as const, answers: resolved.answers! };
+      settleWait?.(result);
+      return result;
+    }
+    throw new Error(`unexpected gateway method: ${method}`);
+  };
+  return { call, calls };
 }
 
 describe("Copilot user input bridge", () => {
-  it("prompts through OpenClaw and resolves the SDK request from the next queued message", async () => {
+  it("registers, presents, claims, and returns a selected option", async () => {
     const params = createParams();
-    const bridge = createCopilotUserInputBridge({ paramsForRun: params });
-
+    const gateway = createGatewayStub();
+    const bridge = createCopilotUserInputBridge({
+      paramsForRun: params,
+      gatewayCall: gateway.call,
+    });
     const response = bridge.onUserInputRequest(
-      {
-        question: "Pick a mode",
-        choices: ["Fast", "Deep"],
-        allowFreeform: false,
-      },
+      { question: "Pick a mode", choices: ["Fast", "Deep"], allowFreeform: false },
       { sessionId: "sdk-session-1" },
     );
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    const request = gateway.calls[0];
+    if (!request) {
+      throw new Error("expected question.request");
+    }
 
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1));
-    expect(expectFirstBlockReplyText(params)).toContain("Pick a mode");
-    expect(bridge.handleQueuedMessage("2")).toBe(true);
+    expect(request.params).toMatchObject({
+      sessionKey: "agent:main:session-1",
+      agentId: "main",
+      timeoutMs: 75_000,
+      questions: [
+        expect.objectContaining({
+          questionId: "answer",
+          options: [{ label: "Fast" }, { label: "Deep" }],
+        }),
+      ],
+    });
+    const payload = vi.mocked(params.onBlockReply!).mock.calls[0]![0];
+    expect(payload.channelData).toEqual({
+      askUser: { questionId: (request.params as { id: string }).id },
+    });
+    expect(payload.presentationTextMode).toBe("fallback");
+    expect(payload.text).toContain("Reply with the number or option text.");
+    expect(payload.text).not.toContain("your own answer");
 
+    await expect(
+      claimPendingAgentQuestionAnswer({ sessionKey: params.sessionKey, text: "2" }),
+    ).resolves.toBe(true);
     await expect(response).resolves.toEqual({ answer: "Deep", wasFreeform: false });
   });
 
-  it("returns free-form answers when Copilot allows them", async () => {
+  it("supports option-less free-form questions", async () => {
     const params = createParams();
-    const bridge = createCopilotUserInputBridge({ paramsForRun: params });
-
+    const gateway = createGatewayStub();
+    const bridge = createCopilotUserInputBridge({
+      paramsForRun: params,
+      gatewayCall: gateway.call,
+    });
     const response = bridge.onUserInputRequest(
-      {
-        question: "Which branch?",
-        allowFreeform: true,
-      },
+      { question: "Which branch?", allowFreeform: true },
       { sessionId: "sdk-session-1" },
     );
-
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1));
-    expect(bridge.handleQueuedMessage("fix/harness-parity")).toBe(true);
-
-    await expect(response).resolves.toEqual({
-      answer: "fix/harness-parity",
-      wasFreeform: true,
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    expect(gateway.calls[0]?.params).toMatchObject({
+      questions: [expect.objectContaining({ options: [] })],
     });
+    expect(vi.mocked(params.onBlockReply!).mock.calls[0]![0].presentation).toBeUndefined();
+
+    await claimPendingAgentQuestionAnswer({
+      sessionKey: params.sessionKey,
+      text: "fix/harness-parity",
+    });
+    await expect(response).resolves.toEqual({ answer: "fix/harness-parity", wasFreeform: true });
   });
 
-  it("escapes SDK-controlled prompt text before channel delivery", async () => {
+  it("escapes SDK-controlled prompt text before delivery", async () => {
     const params = createParams();
-    const bridge = createCopilotUserInputBridge({ paramsForRun: params });
-
-    void bridge.onUserInputRequest(
+    const gateway = createGatewayStub();
+    const bridge = createCopilotUserInputBridge({
+      paramsForRun: params,
+      gatewayCall: gateway.call,
+    });
+    const response = bridge.onUserInputRequest(
       {
         question: "Pick [trusted](https://evil) <@U123> @here\u202e",
         choices: ["One @everyone", "Two `code`"],
@@ -77,9 +131,8 @@ describe("Copilot user input bridge", () => {
       },
       { sessionId: "sdk-session-1" },
     );
-
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1));
-    const text = expectFirstBlockReplyText(params);
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    const text = vi.mocked(params.onBlockReply!).mock.calls[0]![0].text ?? "";
     expect(text).not.toContain("@here");
     expect(text).not.toContain("@everyone");
     expect(text).not.toContain("<@U123>");
@@ -87,35 +140,65 @@ describe("Copilot user input bridge", () => {
     expect(text).not.toContain("`code`");
     expect(text).toContain("\uff20here");
     expect(text).toContain("\uff3btrusted\uff3d");
+    const presentation = vi.mocked(params.onBlockReply!).mock.calls[0]![0].presentation;
+    const visiblePresentation = presentation?.blocks.map((block) =>
+      block.type === "text"
+        ? block.text
+        : block.type === "buttons"
+          ? block.buttons.map((button) => button.label).join(" ")
+          : "",
+    );
+    expect(JSON.stringify(visiblePresentation)).not.toContain("@here");
+    expect(JSON.stringify(visiblePresentation)).not.toContain("@everyone");
+    expect(JSON.stringify(visiblePresentation)).not.toContain("<@U123>");
+    expect(JSON.stringify(visiblePresentation)).not.toContain("[trusted](https://evil)");
+    bridge.cancelPending();
+    await response;
   });
 
-  it("rejects queued messages when no ask_user request is pending", () => {
-    const bridge = createCopilotUserInputBridge({ paramsForRun: createParams() });
-
-    expect(bridge.handleQueuedMessage("late")).toBe(false);
-  });
-
-  it("resolves pending requests with an empty answer when aborted", async () => {
+  it("cancels the gateway record and returns an empty answer on abort", async () => {
     const params = createParams();
     const controller = new AbortController();
+    const gateway = createGatewayStub();
     const bridge = createCopilotUserInputBridge({
       paramsForRun: params,
       signal: controller.signal,
+      gatewayCall: gateway.call,
     });
-
     const response = bridge.onUserInputRequest(
-      {
-        question: "Continue?",
-        choices: ["Yes", "No"],
-        allowFreeform: false,
-      },
+      { question: "Continue?", choices: ["Yes", "No"], allowFreeform: false },
       { sessionId: "sdk-session-1" },
     );
-
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
     controller.abort();
 
     await expect(response).resolves.toEqual({ answer: "", wasFreeform: true });
-    expect(bridge.handleQueuedMessage("1")).toBe(false);
+    expect(gateway.calls).toContainEqual(
+      expect.objectContaining({
+        method: "question.resolve",
+        params: expect.objectContaining({ cancel: true, resolvedBy: "run-abort" }),
+      }),
+    );
+  });
+
+  it("does not register a gateway question after the run already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const params = createParams();
+    const gateway = createGatewayStub();
+    const bridge = createCopilotUserInputBridge({
+      paramsForRun: params,
+      signal: controller.signal,
+      gatewayCall: gateway.call,
+    });
+
+    await expect(
+      bridge.onUserInputRequest(
+        { question: "Continue?", choices: ["Yes", "No"], allowFreeform: false },
+        { sessionId: "sdk-session-1" },
+      ),
+    ).resolves.toEqual({ answer: "", wasFreeform: true });
+    expect(gateway.calls).toEqual([]);
+    expect(params.onBlockReply).not.toHaveBeenCalled();
   });
 });

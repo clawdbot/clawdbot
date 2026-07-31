@@ -13,6 +13,8 @@ struct CritterStatusLabel: View {
     var voiceWakeMeterActive: Bool = false
 
     @State var blinkAmount: CGFloat = 0
+    @State var celebrating = false
+    @State var celebrationGeneration = 0
     @State var nextBlink = Date().addingTimeInterval(Double.random(in: 3.5...8.5))
     @State var wiggleAngle: Double = 0
     @State var wiggleOffset: CGFloat = 0
@@ -21,4 +23,8 @@ struct CritterStatusLabel: View {
     @State var nextLegWiggle = Date().addingTimeInterval(Double.random(in: 5.0...11.0))
     @State var earWiggle: CGFloat = 0
     @State var nextEarWiggle = Date().addingTimeInterval(Double.random(in: 7.0...14.0))
+    @State var workStartedAt: Date?
+    /// Last non-`.starting` gateway status; recovery beats are judged against
+    /// this so failed -> starting -> running still reads as a comeback.
+    @State var lastSettledGatewayStatus: GatewayProcessManager.Status?
 }

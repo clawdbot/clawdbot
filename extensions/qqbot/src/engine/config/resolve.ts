@@ -121,8 +121,9 @@ export function resolveDefaultAccountId(cfg: Record<string, unknown>): string {
   }
   if (qqbot?.accounts) {
     const ids = Object.keys(qqbot.accounts);
-    if (ids.length > 0) {
-      return ids[0];
+    const firstId = ids.at(0);
+    if (firstId !== undefined) {
+      return firstId;
     }
   }
   return DEFAULT_ACCOUNT_ID;

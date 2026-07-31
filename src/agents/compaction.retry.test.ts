@@ -1,20 +1,13 @@
 // Covers retry behavior around compaction summary generation.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
-import * as agentSessions from "openclaw/plugin-sdk/agent-sessions";
+import { generateSummary, type ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { retryAsync } from "../infra/retry.js";
 
-vi.mock("openclaw/plugin-sdk/agent-sessions", async () => {
-  const actual = await vi.importActual<typeof agentSessions>("openclaw/plugin-sdk/agent-sessions");
-  return {
-    ...actual,
-    generateSummary: vi.fn(),
-  };
-});
+vi.mock("openclaw/plugin-sdk/agent-sessions", { spy: true });
 
-const mockGenerateSummary = vi.mocked(agentSessions.generateSummary);
+const mockGenerateSummary = vi.mocked(generateSummary);
 type MockGenerateSummaryCompat = (
   currentMessages: AgentMessage[],
   model: NonNullable<ExtensionContext["model"]>,

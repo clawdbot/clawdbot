@@ -2,6 +2,7 @@
 
 included:
   - ../apps/macos/Sources
+  - ../apps/macos-mlx-tts/Sources
 
 excluded:
   - ../.build

@@ -3,6 +3,7 @@
  * This bypasses shared model runtime's content type system which does not have a "document" type.
  */
 
+import { resolveAnthropicMessagesUrl } from "@openclaw/ai/transports";
 import { readResponseBodySnippet } from "../../infra/http-error-body.js";
 import {
   postJsonRequest,
@@ -12,8 +13,8 @@ import {
 import { normalizeProviderTransportWithPlugin } from "../../plugins/provider-runtime.js";
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import { resolveAnthropicMessagesUrl } from "../anthropic-transport-stream.js";
 import type { ModelProviderRequestTransportOverrides } from "../provider-request-config.js";
+import { unwrapSecretSentinelsForProviderEgress } from "../provider-secret-egress.js";
 import { resolveProviderTransportSsrFPolicy } from "../provider-transport-fetch.js";
 
 type PdfInput = {
@@ -40,14 +41,23 @@ type NativePdfJsonRequest = {
   failureLabel: string;
   responseLabel: string;
   nonJsonMessage: string;
+  signal?: AbortSignal;
 };
 
 async function postNativePdfJson(params: NativePdfJsonRequest): Promise<Record<string, unknown>> {
+  const headers = new Headers(params.headers);
+  for (const [name, value] of headers.entries()) {
+    headers.set(
+      name,
+      unwrapSecretSentinelsForProviderEgress(value, `${params.failureLabel} header handoff`),
+    );
+  }
   const { response, release } = await postJsonRequest({
     url: params.url,
-    headers: params.headers,
+    headers,
     body: params.body,
     timeoutMs: NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn: fetch,
     allowPrivateNetwork: params.allowPrivateNetwork,
     ssrfPolicy: params.ssrfPolicy,
@@ -105,6 +115,7 @@ export async function anthropicAnalyzePdf(params: {
   maxTokens?: number;
   baseUrl?: string;
   requestConfig?: NativePdfProviderRequestConfig;
+  signal?: AbortSignal;
 }): Promise<string> {
   const apiKey = normalizeSecretInput(params.apiKey);
   if (!apiKey) {
@@ -162,6 +173,7 @@ export async function anthropicAnalyzePdf(params: {
     failureLabel: "Anthropic PDF request failed",
     responseLabel: "Anthropic PDF response",
     nonJsonMessage: "Anthropic PDF response was not JSON.",
+    signal: params.signal,
   });
 
   const responseContent = json.content as AnthropicResponseContent | undefined;
@@ -198,6 +210,7 @@ export async function geminiAnalyzePdf(params: {
   pdfs: PdfInput[];
   baseUrl?: string;
   requestConfig?: NativePdfProviderRequestConfig;
+  signal?: AbortSignal;
 }): Promise<string> {
   const apiKey = normalizeSecretInput(params.apiKey);
   if (!apiKey) {
@@ -258,6 +271,7 @@ export async function geminiAnalyzePdf(params: {
     failureLabel: "Gemini PDF request failed",
     responseLabel: "Gemini PDF response",
     nonJsonMessage: "Gemini PDF response was not JSON.",
+    signal: params.signal,
   });
 
   const candidates = json.candidates as GeminiCandidate[] | undefined;
@@ -265,8 +279,12 @@ export async function geminiAnalyzePdf(params: {
     throw new Error("Gemini PDF returned no candidates.");
   }
 
-  const textParts = candidates[0].content?.parts?.filter((p) => typeof p.text === "string") ?? [];
-  const text = textParts.map((p) => p.text!).join("");
+  const candidate = candidates.at(0);
+  if (!candidate) {
+    throw new Error("Gemini PDF returned no candidates.");
+  }
+  const textParts = candidate.content?.parts?.filter((part) => typeof part.text === "string") ?? [];
+  const text = textParts.map((part) => part.text).join("");
 
   if (!text.trim()) {
     throw new Error("Gemini PDF returned no text.");

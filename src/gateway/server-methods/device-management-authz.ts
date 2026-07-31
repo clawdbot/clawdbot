@@ -5,6 +5,8 @@ export type DeviceSessionAuthz = {
   callerDeviceId: string | null;
   callerScopes: string[];
   isAdminCaller: boolean;
+  isDeviceAuthMigrationCaller: boolean;
+  isDeviceAuthMigrationSession: boolean;
 };
 
 export type DeviceManagementAuthz = DeviceSessionAuthz & {
@@ -14,16 +16,25 @@ export type DeviceManagementAuthz = DeviceSessionAuthz & {
 export function resolveDeviceSessionAuthz(client: GatewayClient | null): DeviceSessionAuthz {
   const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   const rawCallerDeviceId = client?.connect?.device?.id;
+  const isDeviceAuthMigrationCaller = client?.isControlUiDeviceAuthMigration === true;
+  const isDeviceAuthMigrationSession = client?.isControlUiDeviceAuthMigrationSession === true;
   const callerDeviceId =
-    // Plain shared-auth connections may report device metadata, but only
-    // device-token auth proves ownership for self-service pairing actions.
-    client?.isDeviceTokenAuth && typeof rawCallerDeviceId === "string" && rawCallerDeviceId.trim()
+    // Migration admission verifies this exact signed device before marking the
+    // session. It gets self-service ownership, never cross-device admin power.
+    (client?.isDeviceTokenAuth || isDeviceAuthMigrationCaller) &&
+    typeof rawCallerDeviceId === "string" &&
+    rawCallerDeviceId.trim()
       ? rawCallerDeviceId.trim()
       : null;
   return {
     callerDeviceId,
     callerScopes,
-    isAdminCaller: callerScopes.includes("operator.admin"),
+    isAdminCaller:
+      !isDeviceAuthMigrationSession &&
+      !isDeviceAuthMigrationCaller &&
+      callerScopes.includes("operator.admin"),
+    isDeviceAuthMigrationCaller,
+    isDeviceAuthMigrationSession,
   };
 }
 
@@ -38,6 +49,9 @@ export function resolveDeviceManagementAuthz(
 }
 
 export function deniesCrossDeviceManagement(authz: DeviceManagementAuthz): boolean {
+  if (authz.isDeviceAuthMigrationSession && !authz.callerDeviceId) {
+    return true;
+  }
   return Boolean(
     authz.callerDeviceId &&
     authz.callerDeviceId !== authz.normalizedTargetDeviceId &&

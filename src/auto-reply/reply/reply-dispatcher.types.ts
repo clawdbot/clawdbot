@@ -20,11 +20,20 @@ export type ReplyDispatchBeforeDeliver = (
   info: ReplyDispatchRuntimeInfo,
 ) => Promise<ReplyPayload | null> | ReplyPayload | null;
 
+/** An owner-declared settlement budget for one before-delivery callback. */
+export type ReplyDispatchBeforeDeliverOptions = {
+  /** Positive finite per-callback deadline in milliseconds; omit for the dispatcher default. */
+  timeoutMs?: number;
+};
+
 export type ReplyDispatcher = {
   sendToolResult: (payload: ReplyPayload) => boolean;
   sendBlockReply: (payload: ReplyPayload) => boolean;
   sendFinalReply: (payload: ReplyPayload) => boolean;
-  appendBeforeDeliver?: (hook: ReplyDispatchBeforeDeliver) => void;
+  appendBeforeDeliver?: (
+    hook: ReplyDispatchBeforeDeliver,
+    options?: ReplyDispatchBeforeDeliverOptions,
+  ) => void;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
   getCancelledCounts?: () => Record<ReplyDispatchKind, number>;

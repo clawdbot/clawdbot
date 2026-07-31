@@ -1,4 +1,3 @@
-// Shared skill Gateway operations and state helpers.
 import {
   ClawHubTrustErrorCodes,
   readClawHubTrustErrorDetails,
@@ -10,12 +9,19 @@ import type {
   SkillStatusEntry,
   SkillStatusReport,
 } from "../../api/types.ts";
+import {
+  normalizeSkillApiKeyReplacement,
+  runSkillConfigMutation,
+  skillConfigMutationSuccess,
+  type SkillConfigMutationOwner,
+} from "./config-mutations.ts";
 
 export type ClawHubSearchResult = {
   score: number;
   slug: string;
   displayName: string;
   summary?: string;
+  icon?: string | null;
   version?: string;
   updatedAt?: number;
 };
@@ -25,6 +31,7 @@ export type ClawHubSkillDetail = {
     slug: string;
     displayName: string;
     summary?: string;
+    icon?: string | null;
     tags?: Record<string, string>;
     channel?: string | null;
     isOfficial?: boolean | null;
@@ -74,15 +81,16 @@ export type ClawHubSkillSecurityVerdict = {
   };
 };
 
-export type SkillsState = {
+type SkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  runtimeConfig: SkillConfigMutationOwner;
   skillsAgentId: string | null;
   skillsAgentRevision: number;
   skillsLoading: boolean;
   skillsReport: SkillStatusReport | null;
   skillsError: string | null;
-  skillsBusyKey: string | null;
+  skillOperation: SkillOperation;
   skillEdits: Record<string, string>;
   skillMessages: SkillMessageMap;
   clawhubSearchQuery: string;
@@ -93,7 +101,6 @@ export type SkillsState = {
   clawhubDetailSlug: string | null;
   clawhubDetailLoading: boolean;
   clawhubDetailError: string | null;
-  clawhubInstallSlug: string | null;
   clawhubInstallMessage: {
     kind: "success" | "error";
     text: string;
@@ -109,6 +116,30 @@ export type SkillsState = {
   skillCardLoadingKey: string | null;
   skillCardErrors: Record<string, string>;
 };
+
+export type SkillOperation =
+  | { kind: "refresh" }
+  | { kind: "skill"; skillKey: string }
+  | { kind: "clawhub"; slug: string }
+  | null;
+
+type ActiveSkillOperation = Exclude<SkillOperation, null>;
+
+function ownsSkillOperation(
+  state: SkillsState,
+  client: GatewayBrowserClient,
+  operation: ActiveSkillOperation,
+): boolean {
+  return state.connected && state.client === client && state.skillOperation === operation;
+}
+
+function releaseSkillOperation(state: SkillsState, operation: ActiveSkillOperation) {
+  // Agent/source changes can outlive an owner request; identity keeps stale
+  // cleanup from releasing a newer connection's operation.
+  if (state.skillOperation === operation) {
+    state.skillOperation = null;
+  }
+}
 
 type SkillMessage = {
   kind: "success" | "error";
@@ -133,9 +164,8 @@ function getClawHubTrustDetailsFromError(err: unknown) {
   return readClawHubTrustErrorDetails((err as { details?: unknown }).details);
 }
 
-function formatClawHubInstallMessage(message: string, warning?: string): string {
-  return warning ? `${message}\n\n${warning}` : message;
-}
+const formatClawHubInstallMessage = (message: string, warning?: string): string =>
+  warning ? `${message}\n\n${warning}` : message;
 
 function formatClawHubAcknowledgementMessage(warning?: string): string {
   return formatClawHubInstallMessage(
@@ -236,14 +266,6 @@ async function runStaleAwareRequest<T>(
   onFinally();
 }
 
-export function setClawHubSearchQuery(state: SkillsState, query: string) {
-  state.clawhubSearchQuery = query;
-  state.clawhubInstallMessage = null;
-  state.clawhubSearchResults = null;
-  state.clawhubSearchError = null;
-  state.clawhubSearchLoading = false;
-}
-
 export function setSkillsAgentId(state: SkillsState, agentId: string | null) {
   const nextAgentId = agentId?.trim() || null;
   if (state.skillsAgentId === nextAgentId) {
@@ -254,10 +276,8 @@ export function setSkillsAgentId(state: SkillsState, agentId: string | null) {
   state.skillsLoading = false;
   state.skillsReport = null;
   state.skillsError = null;
-  state.skillsBusyKey = null;
   state.skillEdits = {};
   state.skillMessages = {};
-  state.clawhubInstallSlug = null;
   state.clawhubInstallMessage = null;
   state.clawhubVerdicts = {};
   state.clawhubVerdictsLoading = false;
@@ -281,19 +301,36 @@ export function reconcileSkillsAgentId(
   }
 }
 
-export async function loadSkills(state: SkillsState, options?: { clearMessages?: boolean }) {
+export async function loadSkills(
+  state: SkillsState,
+  options?: {
+    clearMessages?: boolean;
+    operation?: Exclude<SkillOperation, null>;
+  },
+) {
+  const client = state.client;
+  if (
+    !client ||
+    !state.connected ||
+    state.skillsLoading ||
+    (state.skillOperation && state.skillOperation !== options?.operation)
+  ) {
+    return;
+  }
   if (options?.clearMessages && Object.keys(state.skillMessages).length > 0) {
     state.skillMessages = {};
   }
-  if (!state.client || !state.connected || state.skillsLoading) {
-    return;
-  }
   const agentScope = captureSkillsAgentScope(state);
+  const ownsLoad = () =>
+    state.client === client &&
+    isSkillsAgentScopeCurrent(state, agentScope) &&
+    (!options?.operation || state.skillOperation === options.operation);
+  const isCurrent = () => state.connected && ownsLoad();
   state.skillsLoading = true;
   state.skillsError = null;
   try {
-    const res = await loadSkillStatusReport(state.client, state.skillsAgentId);
-    if (!isSkillsAgentScopeCurrent(state, agentScope)) {
+    const res = await loadSkillStatusReport(client, state.skillsAgentId);
+    if (!isCurrent()) {
       return;
     }
     if (res && Array.isArray(res.skills)) {
@@ -302,14 +339,55 @@ export async function loadSkills(state: SkillsState, options?: { clearMessages?:
       void loadClawHubSecurityVerdicts(state, res);
     }
   } catch (err) {
-    if (!isSkillsAgentScopeCurrent(state, agentScope)) {
+    if (!isCurrent()) {
       return;
     }
     state.skillsError = getErrorMessage(err);
   } finally {
-    if (isSkillsAgentScopeCurrent(state, agentScope)) {
+    // A transient disconnect invalidates the result, not this invocation's
+    // loading ownership. Source/scope identity still protects newer loads.
+    if (ownsLoad()) {
       state.skillsLoading = false;
     }
+  }
+}
+
+async function loadCurrentSkillsForOperation(
+  state: SkillsState,
+  client: GatewayBrowserClient,
+  operation: ActiveSkillOperation,
+  clearMessages = false,
+) {
+  let shouldClearMessages = clearMessages;
+  // Reconciliation can change scope while a status request is pending. Keep
+  // the operation owner until one response belongs to the current scope.
+  while (ownsSkillOperation(state, client, operation)) {
+    const scope = captureSkillsAgentScope(state);
+    await loadSkills(state, { clearMessages: shouldClearMessages, operation });
+    shouldClearMessages = false;
+    if (!ownsSkillOperation(state, client, operation) || isSkillsAgentScopeCurrent(state, scope)) {
+      return;
+    }
+  }
+}
+
+export async function refreshSkills(state: SkillsState, loadAgents: () => Promise<void>) {
+  const client = state.client;
+  if (!client || !state.connected || state.skillsLoading || state.skillOperation) {
+    return;
+  }
+  const operation = { kind: "refresh" } as const;
+  // Reserve one operation across both awaits so a second refresh or write
+  // cannot enter while agent discovery is still pending.
+  state.skillOperation = operation;
+  try {
+    await loadAgents();
+    if (!ownsSkillOperation(state, client, operation)) {
+      return;
+    }
+    await loadCurrentSkillsForOperation(state, client, operation, true);
+  } finally {
+    releaseSkillOperation(state, operation);
   }
 }
 
@@ -427,6 +505,9 @@ async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStat
 }
 
 export function updateSkillEdit(state: SkillsState, skillKey: string, value: string) {
+  if (state.skillOperation || state.skillsLoading) {
+    return;
+  }
   state.skillEdits = { ...state.skillEdits, [skillKey]: value };
 }
 
@@ -434,30 +515,38 @@ async function runSkillMutation(
   state: SkillsState,
   skillKey: string,
   run: (client: GatewayBrowserClient) => Promise<SkillMessage>,
-  options?: { refreshCurrentScopeOnStaleSuccess?: boolean },
 ) {
   const client = state.client;
-  if (!client || !state.connected) {
+  if (!client || !state.connected || state.skillsLoading || state.skillOperation) {
     return;
   }
   const agentScope = captureSkillsAgentScope(state);
-  state.skillsBusyKey = skillKey;
+  const operation = { kind: "skill", skillKey } as const;
+  // All writes share one owner: overlapping refreshes can otherwise publish
+  // a stale snapshot after both Gateway mutations have already succeeded.
+  state.skillOperation = operation;
   state.skillsError = null;
   try {
     const message = await run(client);
-    if (!isSkillsAgentScopeCurrent(state, agentScope)) {
-      if (options?.refreshCurrentScopeOnStaleSuccess) {
-        await loadSkills(state);
-      }
+    if (!ownsSkillOperation(state, client, operation)) {
       return;
     }
-    await loadSkills(state);
     if (!isSkillsAgentScopeCurrent(state, agentScope)) {
+      return;
+    }
+    await loadSkills(state, { operation });
+    if (
+      !ownsSkillOperation(state, client, operation) ||
+      !isSkillsAgentScopeCurrent(state, agentScope)
+    ) {
       return;
     }
     setSkillMessage(state, skillKey, message);
   } catch (err) {
-    if (!isSkillsAgentScopeCurrent(state, agentScope)) {
+    if (
+      !ownsSkillOperation(state, client, operation) ||
+      !isSkillsAgentScopeCurrent(state, agentScope)
+    ) {
       return;
     }
     const message = getErrorMessage(err);
@@ -467,41 +556,41 @@ async function runSkillMutation(
       message,
     });
   } finally {
-    if (isSkillsAgentScopeCurrent(state, agentScope) && state.skillsBusyKey === skillKey) {
-      state.skillsBusyKey = null;
+    if (
+      ownsSkillOperation(state, client, operation) &&
+      !isSkillsAgentScopeCurrent(state, agentScope)
+    ) {
+      await loadCurrentSkillsForOperation(state, client, operation);
     }
+    releaseSkillOperation(state, operation);
   }
 }
 
 export async function updateSkillEnabled(state: SkillsState, skillKey: string, enabled: boolean) {
-  await runSkillMutation(
-    state,
-    skillKey,
-    async (client) => {
-      await client.request("skills.update", { skillKey, enabled });
-      return {
-        kind: "success",
-        message: enabled ? "Skill enabled" : "Skill disabled",
-      };
-    },
-    { refreshCurrentScopeOnStaleSuccess: true },
-  );
+  await runSkillMutation(state, skillKey, async (client) => {
+    const refreshError = await runSkillConfigMutation(state.runtimeConfig, client, {
+      skillKey,
+      enabled,
+    });
+    return skillConfigMutationSuccess(enabled ? "Skill enabled" : "Skill disabled", refreshError);
+  });
 }
 
 export async function saveSkillApiKey(state: SkillsState, skillKey: string) {
-  await runSkillMutation(
-    state,
-    skillKey,
-    async (client) => {
-      const apiKey = state.skillEdits[skillKey] ?? "";
-      await client.request("skills.update", { skillKey, apiKey });
-      return {
-        kind: "success",
-        message: `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
-      };
-    },
-    { refreshCurrentScopeOnStaleSuccess: true },
-  );
+  const apiKey = normalizeSkillApiKeyReplacement(state.skillEdits[skillKey]);
+  if (!apiKey) {
+    return;
+  }
+  await runSkillMutation(state, skillKey, async (client) => {
+    const refreshError = await runSkillConfigMutation(state.runtimeConfig, client, {
+      skillKey,
+      apiKey,
+    });
+    return skillConfigMutationSuccess(
+      `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
+      refreshError,
+    );
+  });
 }
 
 export async function installSkill(
@@ -526,39 +615,20 @@ export async function installSkill(
   });
 }
 
-export async function searchClawHub(state: SkillsState, query: string) {
-  if (!state.client || !state.connected) {
-    return;
-  }
+export async function searchClawHub(
+  client: GatewayBrowserClient,
+  query: string,
+  signal?: AbortSignal,
+): Promise<ClawHubSearchResult[]> {
   if (!query.trim()) {
-    state.clawhubSearchResults = null;
-    state.clawhubSearchError = null;
-    state.clawhubSearchLoading = false;
-    return;
+    return [];
   }
-  const client = state.client;
-  // Clear stale entries as soon as a new search begins so the UI cannot act on
-  // results that no longer match the current query while the next request is in flight.
-  state.clawhubSearchResults = null;
-  state.clawhubSearchLoading = true;
-  state.clawhubSearchError = null;
-  await runStaleAwareRequest(
-    () => query === state.clawhubSearchQuery,
-    () =>
-      client.request<{ results: ClawHubSearchResult[] }>("skills.search", {
-        query,
-        limit: 20,
-      }),
-    (res) => {
-      state.clawhubSearchResults = res?.results ?? [];
-    },
-    (err) => {
-      state.clawhubSearchError = getErrorMessage(err);
-    },
-    () => {
-      state.clawhubSearchLoading = false;
-    },
+  const response = await client.request<{ results: ClawHubSearchResult[] }>(
+    "skills.search",
+    { query, limit: 20 },
+    { signal },
   );
+  return response?.results ?? [];
 }
 
 export async function loadClawHubDetail(state: SkillsState, slug: string) {
@@ -566,12 +636,17 @@ export async function loadClawHubDetail(state: SkillsState, slug: string) {
     return;
   }
   const client = state.client;
+  const agentScope = captureSkillsAgentScope(state);
   state.clawhubDetailSlug = slug;
   state.clawhubDetailLoading = true;
   state.clawhubDetailError = null;
   state.clawhubDetail = null;
   await runStaleAwareRequest(
-    () => slug === state.clawhubDetailSlug,
+    () =>
+      state.connected &&
+      state.client === client &&
+      slug === state.clawhubDetailSlug &&
+      isSkillsAgentScopeCurrent(state, agentScope),
     () => client.request<ClawHubSkillDetail>("skills.detail", { slug }),
     (res) => {
       state.clawhubDetail = res ?? null;
@@ -598,28 +673,33 @@ export async function installFromClawHub(
   acknowledgeClawHubRisk = false,
   version?: string,
 ) {
-  if (!state.client || !state.connected) {
+  const client = state.client;
+  if (!client || !state.connected || state.skillsLoading || state.skillOperation) {
     return;
   }
   const agentScope = captureSkillsAgentScope(state);
-  state.clawhubInstallSlug = slug;
+  const operation = { kind: "clawhub", slug } as const;
+  state.skillOperation = operation;
   state.clawhubInstallMessage = null;
   try {
-    const result = await state.client.request<{ message?: string; warning?: string }>(
-      "skills.install",
-      {
-        ...stateSkillsAgentParams(state),
-        source: "clawhub",
-        slug,
-        ...(version ? { version } : {}),
-        ...(acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-      },
-    );
+    const result = await client.request<{ message?: string; warning?: string }>("skills.install", {
+      ...stateSkillsAgentParams(state),
+      source: "clawhub",
+      slug,
+      ...(version ? { version } : {}),
+      ...(acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
+    });
+    if (!ownsSkillOperation(state, client, operation)) {
+      return;
+    }
     if (!isSkillsAgentScopeCurrent(state, agentScope)) {
       return;
     }
-    await loadSkills(state);
-    if (!isSkillsAgentScopeCurrent(state, agentScope)) {
+    await loadSkills(state, { operation });
+    if (
+      !ownsSkillOperation(state, client, operation) ||
+      !isSkillsAgentScopeCurrent(state, agentScope)
+    ) {
       return;
     }
     state.clawhubInstallMessage = {
@@ -627,7 +707,10 @@ export async function installFromClawHub(
       text: formatClawHubInstallMessage(result?.message ?? `Installed ${slug}`, result?.warning),
     };
   } catch (err) {
-    if (isSkillsAgentScopeCurrent(state, agentScope)) {
+    if (
+      ownsSkillOperation(state, client, operation) &&
+      isSkillsAgentScopeCurrent(state, agentScope)
+    ) {
       const trustDetails = getClawHubTrustDetailsFromError(err);
       const needsAcknowledgement =
         trustDetails?.clawhubTrustCode === ClawHubTrustErrorCodes.RISK_ACKNOWLEDGEMENT_REQUIRED;
@@ -644,8 +727,12 @@ export async function installFromClawHub(
       };
     }
   } finally {
-    if (isSkillsAgentScopeCurrent(state, agentScope) && state.clawhubInstallSlug === slug) {
-      state.clawhubInstallSlug = null;
+    if (
+      ownsSkillOperation(state, client, operation) &&
+      !isSkillsAgentScopeCurrent(state, agentScope)
+    ) {
+      await loadCurrentSkillsForOperation(state, client, operation);
     }
+    releaseSkillOperation(state, operation);
   }
 }

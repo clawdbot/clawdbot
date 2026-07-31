@@ -16,7 +16,7 @@ Adds ClawRouter model provider support to OpenClaw.
 
 ## Surface
 
-providers: clawrouter; contracts: usageProviders
+providers: `clawrouter`; contracts: `usageProviders`
 
 ## Related docs
 

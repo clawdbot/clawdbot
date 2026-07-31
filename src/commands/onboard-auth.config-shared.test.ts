@@ -101,6 +101,34 @@ describe("onboard auth provider config merges", () => {
     expect(next.models?.providers?.other?.timeoutSeconds).toBe(300);
   });
 
+  it("omits empty provider request settings", () => {
+    const next = applyOnboardAuthAgentModelsAndProviders(
+      {
+        models: {
+          providers: {
+            custom: {
+              api: "openai-completions",
+              baseUrl: "https://old.example.com/v1",
+              models: [makeModel("model-a")],
+            },
+          },
+        },
+      },
+      {
+        agentModels,
+        providers: {
+          custom: {
+            api: "openai-completions",
+            baseUrl: "https://new.example.com/v1",
+            models: [makeModel("model-b")],
+          },
+        },
+      },
+    );
+
+    expect(next.models?.providers?.custom).not.toHaveProperty("request");
+  });
+
   it("preserves settings without resurrecting a non-canonical provider key", () => {
     const next = applyOnboardAuthAgentModelsAndProviders(
       {

@@ -4,7 +4,7 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import { issuePairingChallenge } from "./pairing-challenge.js";
 
 describe("issuePairingChallenge", () => {

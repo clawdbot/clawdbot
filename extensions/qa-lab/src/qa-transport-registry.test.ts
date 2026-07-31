@@ -3,14 +3,16 @@ import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import {
   createQaTransportAdapter,
-  createQaTransportAdapterFactoryRegistry,
   normalizeQaTransportId,
   type QaTransportAdapterFactory,
   type QaTransportFactoryContext,
 } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 
-function createAdapterDefinition(cleanup?: () => Promise<void>) {
+function createAdapterDefinition(
+  cleanup?: () => Promise<void>,
+  cleanupAfterGatewayStop?: () => Promise<void>,
+) {
   const state = createQaBusState();
   return {
     id: "selected",
@@ -32,6 +34,7 @@ function createAdapterDefinition(cleanup?: () => Promise<void>) {
     async handleAction() {},
     createReportNotes: () => [],
     ...(cleanup ? { cleanup } : {}),
+    ...(cleanupAfterGatewayStop ? { cleanupAfterGatewayStop } : {}),
   };
 }
 
@@ -47,6 +50,38 @@ function createFactoryContext(
   };
 }
 
+async function createCleanupAdapter(
+  cleanup?: () => Promise<void>,
+  cleanupAfterGatewayStop?: () => Promise<void>,
+) {
+  const definition = createAdapterDefinition(cleanup, cleanupAfterGatewayStop);
+  return await createQaTransportAdapter(
+    createFactoryContext({ channelId: "cleanup", driver: "live" }),
+    [
+      {
+        id: "cleanup",
+        matches: () => true,
+        async create() {
+          return definition;
+        },
+      },
+    ],
+  );
+}
+
+function createPendingCleanup() {
+  let finish = () => {};
+  const pending = new Promise<void>((resolve) => {
+    finish = () => resolve();
+  });
+  return {
+    cleanup: vi.fn(async () => {
+      await pending;
+    }),
+    finish,
+  };
+}
+
 describe("qa transport registry", () => {
   it("rejects inherited prototype keys as unsupported transport ids", () => {
     expect(() => normalizeQaTransportId("toString")).toThrow("unsupported QA transport: toString");
@@ -59,7 +94,7 @@ describe("qa transport registry", () => {
     const created = await createQaTransportAdapter(createFactoryContext());
 
     expect(created.adapter.id).toBe("qa-channel");
-    await created.cleanup();
+    await created.cleanupWithoutGateway();
   });
 
   it("selects an injected matching factory", async () => {
@@ -70,10 +105,9 @@ describe("qa transport registry", () => {
       { id: "skipped", matches: () => false, create: skippedCreate },
       { id: "selected", matches: () => true, create: selectedCreate },
     ];
-    const registry = createQaTransportAdapterFactoryRegistry(factories);
-
-    const created = await registry.create(
+    const created = await createQaTransportAdapter(
       createFactoryContext({ channelId: "selected", driver: "live" }),
+      factories,
     );
 
     expect(created.adapter).toMatchObject({
@@ -87,7 +121,8 @@ describe("qa transport registry", () => {
 
   it("returns cleanup owned by the selected adapter", async () => {
     const cleanup = vi.fn(async () => undefined);
-    const definition = createAdapterDefinition(cleanup);
+    const cleanupAfterGatewayStop = vi.fn(async () => undefined);
+    const definition = createAdapterDefinition(cleanup, cleanupAfterGatewayStop);
     const factory: QaTransportAdapterFactory = {
       id: "cleanup",
       matches: () => true,
@@ -95,34 +130,162 @@ describe("qa transport registry", () => {
         return definition;
       },
     };
-    const registry = createQaTransportAdapterFactoryRegistry([factory]);
-    const created = await registry.create(
+    const created = await createQaTransportAdapter(
       createFactoryContext({ channelId: "cleanup", driver: "live" }),
+      [factory],
     );
 
-    await created.cleanup();
+    await created.cleanupBeforeGatewayStop();
 
     expect(cleanup).toHaveBeenCalledOnce();
+    expect(cleanupAfterGatewayStop).not.toHaveBeenCalled();
+
+    await created.cleanupAfterGatewayStop();
+    await created.cleanupWithoutGateway();
+
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(cleanupAfterGatewayStop).toHaveBeenCalledOnce();
+  });
+
+  it.each(["before", "after"] as const)(
+    "shares concurrent %s-gateway cleanup for the selected adapter",
+    async (phase) => {
+      const pendingCleanup = createPendingCleanup();
+      const created =
+        phase === "before"
+          ? await createCleanupAdapter(pendingCleanup.cleanup)
+          : await createCleanupAdapter(undefined, pendingCleanup.cleanup);
+      const cleanup =
+        phase === "before" ? created.cleanupBeforeGatewayStop : created.cleanupAfterGatewayStop;
+      const attempts = [cleanup(), cleanup(), cleanup()];
+
+      await Promise.resolve();
+      try {
+        expect(pendingCleanup.cleanup).toHaveBeenCalledOnce();
+      } finally {
+        pendingCleanup.finish();
+        await Promise.allSettled(attempts);
+      }
+
+      await cleanup();
+      expect(pendingCleanup.cleanup).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("shares cleanup between concurrent gateway-less and phase-specific callers", async () => {
+    const pendingCleanup = createPendingCleanup();
+    const cleanupAfterGatewayStop = vi.fn(async () => undefined);
+    const created = await createCleanupAdapter(pendingCleanup.cleanup, cleanupAfterGatewayStop);
+    const attempts = [
+      created.cleanupWithoutGateway(),
+      created.cleanupWithoutGateway(),
+      created.cleanupBeforeGatewayStop(),
+    ];
+
+    await Promise.resolve();
+    try {
+      expect(pendingCleanup.cleanup).toHaveBeenCalledOnce();
+    } finally {
+      pendingCleanup.finish();
+      await Promise.allSettled(attempts);
+    }
+
+    expect(cleanupAfterGatewayStop).toHaveBeenCalledOnce();
+    await created.cleanupWithoutGateway();
+    expect(pendingCleanup.cleanup).toHaveBeenCalledOnce();
+    expect(cleanupAfterGatewayStop).toHaveBeenCalledOnce();
+  });
+
+  it("shares a failed cleanup and permits one subsequent retry", async () => {
+    const failure = new Error("pre-cleanup failed");
+    const cleanup = vi.fn().mockRejectedValueOnce(failure).mockResolvedValue(undefined);
+    const created = await createCleanupAdapter(cleanup);
+
+    const attempts = await Promise.allSettled([
+      created.cleanupBeforeGatewayStop(),
+      created.cleanupBeforeGatewayStop(),
+    ]);
+
+    expect(attempts).toEqual([
+      { status: "rejected", reason: failure },
+      { status: "rejected", reason: failure },
+    ]);
+    expect(cleanup).toHaveBeenCalledOnce();
+
+    await created.cleanupBeforeGatewayStop();
+    await created.cleanupBeforeGatewayStop();
+    expect(cleanup).toHaveBeenCalledTimes(2);
+  });
+
+  it("runs post-gateway cleanup when gateway-less pre-cleanup fails", async () => {
+    const cleanup = vi.fn(async () => {
+      throw new Error("pre-cleanup failed");
+    });
+    const cleanupAfterGatewayStop = vi.fn(async () => undefined);
+    const definition = createAdapterDefinition(cleanup, cleanupAfterGatewayStop);
+    const created = await createQaTransportAdapter(
+      createFactoryContext({ channelId: "cleanup", driver: "live" }),
+      [
+        {
+          id: "cleanup",
+          matches: () => true,
+          async create() {
+            return definition;
+          },
+        },
+      ],
+    );
+
+    await expect(created.cleanupWithoutGateway()).rejects.toThrow("pre-cleanup failed");
+    expect(cleanupAfterGatewayStop).toHaveBeenCalledOnce();
+  });
+
+  it("aggregates failures from both gateway-less cleanup phases", async () => {
+    const definition = createAdapterDefinition(
+      async () => {
+        throw new Error("pre-cleanup failed");
+      },
+      async () => {
+        throw new Error("post-cleanup failed");
+      },
+    );
+    const created = await createQaTransportAdapter(
+      createFactoryContext({ channelId: "cleanup", driver: "live" }),
+      [
+        {
+          id: "cleanup",
+          matches: () => true,
+          async create() {
+            return definition;
+          },
+        },
+      ],
+    );
+
+    const cleanupError = await created.cleanupWithoutGateway().catch((error: unknown) => error);
+    expect(cleanupError).toBeInstanceOf(AggregateError);
+    expect((cleanupError as AggregateError).errors).toEqual([
+      expect.objectContaining({ message: "pre-cleanup failed" }),
+      expect.objectContaining({ message: "post-cleanup failed" }),
+    ]);
   });
 
   it("reports no-match and startup failures with transport context", async () => {
     const context = createFactoryContext({ channelId: "missing", driver: "live" });
-    const emptyRegistry = createQaTransportAdapterFactoryRegistry([]);
-    await expect(emptyRegistry.create(context)).rejects.toThrow(
+    await expect(createQaTransportAdapter(context, [])).rejects.toThrow(
       "no QA transport factory for live:missing",
     );
 
-    const brokenRegistry = createQaTransportAdapterFactoryRegistry([
-      {
-        id: "broken",
-        matches: () => true,
-        async create() {
-          throw new Error("provider boot failed");
+    await expect(
+      createQaTransportAdapter(context, [
+        {
+          id: "broken",
+          matches: () => true,
+          async create() {
+            throw new Error("provider boot failed");
+          },
         },
-      },
-    ]);
-    await expect(brokenRegistry.create(context)).rejects.toThrow(
-      "failed to create QA transport live:missing: provider boot failed",
-    );
+      ]),
+    ).rejects.toThrow("failed to create QA transport live:missing: provider boot failed");
   });
 });

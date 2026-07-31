@@ -79,6 +79,17 @@ describe("parsePageRange", () => {
     expect(() => parsePageRange("1,2.5", 20)).toThrow('Invalid page number: "2.5"');
   });
 
+  it("throws on unsafe integer page numbers and ranges", () => {
+    const unsafePage = String(Number.MAX_SAFE_INTEGER + 1);
+    const maxPages = 20;
+    expect(() => parsePageRange(unsafePage, maxPages)).toThrow(
+      `Invalid page number: "${unsafePage}"`,
+    );
+    expect(() => parsePageRange(`1-${unsafePage}`, maxPages)).toThrow(
+      `Invalid page range: "${unsafePage}"`,
+    );
+  });
+
   it("throws on invalid range (start > end)", () => {
     expect(() => parsePageRange("5-3", 20)).toThrow("Invalid page range");
   });

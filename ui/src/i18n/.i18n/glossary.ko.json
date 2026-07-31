@@ -16,6 +16,10 @@
     "target": "Skills"
   },
   {
+    "source": "Discard",
+    "target": "변경 사항 버리기"
+  },
+  {
     "source": "Tailscale",
     "target": "Tailscale"
   },

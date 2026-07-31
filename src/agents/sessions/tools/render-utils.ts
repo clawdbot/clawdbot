@@ -5,7 +5,6 @@
  */
 import * as os from "node:os";
 import { getCapabilities, getImageDimensions, imageFallback } from "@earendil-works/pi-tui";
-import { stripAnsiSequences } from "../../../../packages/terminal-core/src/ansi.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import { sanitizeBinaryOutput } from "../../shell-utils.js";
@@ -63,7 +62,7 @@ export function getTextOutput(
   const imageBlocks = result.content.filter((c) => c.type === "image");
 
   let output = textBlocks
-    .map((c) => sanitizeBinaryOutput(stripAnsiSequences(c.text || "")).replace(/\r/g, ""))
+    .map((c) => sanitizeBinaryOutput(c.text || "", { ansiMode: "compat" }).replace(/\r/g, ""))
     .join("\n");
 
   const caps = getCapabilities();

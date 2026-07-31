@@ -52,6 +52,11 @@ function buildRuntime(
   resolve: GatewayPluginRuntime["channel"]["routing"]["resolveAgentRoute"],
 ): GatewayPluginRuntime {
   return {
+    state: {
+      openChannelIngressQueue: () => {
+        throw new Error("unexpected durable ingress access");
+      },
+    },
     channel: {
       activity: { record: vi.fn() },
       routing: { resolveAgentRoute: resolve },
@@ -80,13 +85,13 @@ function buildAllowAccess(): QQBotInboundAccess {
 }
 
 function buildDeps(
-  cfg: unknown,
+  cfg: StubCfg,
   runtime: GatewayPluginRuntime,
   account: GatewayAccount,
 ): InboundPipelineDeps {
   return {
     account,
-    cfg,
+    cfg: cfg as InboundPipelineDeps["cfg"],
     runtime,
     startTyping: vi.fn(),
     adapters: {
@@ -166,4 +171,41 @@ describe("runAccessStage — dynamic cfg routing (#69546)", () => {
     expect(seenCfgs.has(cfgB)).toBe(true);
     expect(seenCfgs.has(cfgC)).toBe(true);
   });
+
+  it.each([
+    ["group", true, "group", "GROUP_OPENID", "qqbot:group:GROUP_OPENID"],
+    ["guild", true, "group", "CHANNEL_ID", "qqbot:channel:CHANNEL_ID"],
+    ["c2c", false, "direct", "user-openid", "qqbot:c2c:user-openid"],
+    ["dm", false, "direct", "user-openid", "qqbot:dm:DM_GUILD_ID"],
+  ] as const)(
+    "classifies %s route persistence facts",
+    async (type, isGroupChat, peerKind, peerId, qualifiedTarget) => {
+      const account = buildAccount();
+      let routedPeer: { kind: string; id: string } | undefined;
+      const runtime = buildRuntime((params) => {
+        routedPeer = params.peer;
+        return { sessionKey: `s:${params.peer.id}`, accountId: params.accountId };
+      });
+      const event = {
+        type,
+        senderId: "user-openid",
+        content: "hi",
+        messageId: `m-${type}`,
+        timestamp: "0",
+        ...(type === "group" ? { groupOpenid: "GROUP_OPENID" } : {}),
+        ...(type === "guild" ? { channelId: "CHANNEL_ID", guildId: "GUILD_ID" } : {}),
+        ...(type === "dm" ? { guildId: "DM_GUILD_ID" } : {}),
+      } as QueuedMessage;
+
+      const result = await runAccessStage(event, buildDeps({ bindings: [] }, runtime, account));
+
+      expect(result.kind).toBe("allow");
+      if (result.kind === "allow") {
+        expect(result.isGroupChat).toBe(isGroupChat);
+        expect(result.peerId).toBe(peerId);
+        expect(result.qualifiedTarget).toBe(qualifiedTarget);
+      }
+      expect(routedPeer).toEqual({ kind: peerKind, id: peerId });
+    },
+  );
 });

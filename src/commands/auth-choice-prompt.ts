@@ -1,10 +1,15 @@
 // Interactive grouped auth-choice prompt used by onboarding and agent setup.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
-import { buildAuthChoiceGroups, compareAuthChoiceGroups } from "./auth-choice-options.js";
+import {
+  buildAuthChoiceGroups,
+  compareAuthChoiceGroups,
+  isFeaturedAuthChoiceGroup,
+} from "./auth-choice-options.js";
 import type { AuthChoiceGroup } from "./auth-choice-options.static.js";
 import type { AuthChoice } from "./onboard-types.js";
 
@@ -19,15 +24,14 @@ type PromptAuthChoiceGroupedParams = {
   prompter: WizardPrompter;
   store: AuthProfileStore;
   includeSkip: boolean;
+  assistantVisibleOnly?: boolean;
+  allowedChoices?: ReadonlySet<string>;
+  additionalGroups?: readonly AuthChoiceGroup[];
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   allowKeepCurrentProvider?: boolean;
 };
-
-function isGroupFeatured(group: AuthChoiceGroup): boolean {
-  return group.options.some((option) => option.onboardingFeatured);
-}
 
 function resolveConfiguredModelRef(config?: OpenClawConfig): string | undefined {
   return resolveAgentModelPrimaryValue(config?.agents?.defaults?.model);
@@ -72,10 +76,27 @@ export async function promptAuthChoiceGrouped(
   params: PromptAuthChoiceGroupedParams,
 ): Promise<PromptAuthChoiceResult> {
   const { groups, skipOption } = buildAuthChoiceGroups(params);
-  const availableGroups = groups.filter((group) => group.options.length > 0);
+  const filteredGroups = params.allowedChoices
+    ? groups.map((group) => ({
+        ...group,
+        options: group.options.filter((option) => params.allowedChoices?.has(option.value)),
+      }))
+    : groups;
+  const availableBuiltInGroups = filteredGroups.filter((group) => group.options.length > 0);
+  const additionalGroups = (params.additionalGroups ?? []).filter(
+    (group) => group.options.length > 0,
+  );
+  const availableGroups = [...availableBuiltInGroups, ...additionalGroups];
   const groupById = new Map(availableGroups.map((group) => [group.value, group] as const));
-  const featuredGroups = availableGroups.filter(isGroupFeatured).toSorted(compareAuthChoiceGroups);
-  const moreGroups = [...availableGroups].toSorted(compareAuthChoiceGroups);
+  // Caller-supplied groups carry pre-vetted context such as detected onboarding routes.
+  // Keep them ahead of the generic catalog instead of demoting them under More.
+  const featuredGroups = [
+    ...additionalGroups,
+    ...availableBuiltInGroups.filter(isFeaturedAuthChoiceGroup).toSorted(compareAuthChoiceGroups),
+  ];
+  const moreGroups = availableBuiltInGroups
+    .filter((group) => !isFeaturedAuthChoiceGroup(group))
+    .toSorted(compareAuthChoiceGroups);
   const configuredModelRef = resolveConfiguredModelRef(params.config);
   const configuredProvider = params.allowKeepCurrentProvider
     ? resolveConfiguredProvider(params.config)
@@ -90,10 +111,10 @@ export async function promptAuthChoiceGrouped(
         } satisfies WizardSelectOption<KeepCurrentAuthChoice>)
       : undefined;
     if (group.options.length === 1 && !keepCurrentOption) {
-      return group.options[0].value;
+      return expectDefined(group.options[0], "options entry at 0").value;
     }
     return (await params.prompter.select({
-      message: `${group.label} auth method`,
+      message: group.methodMessage ?? `${group.label} auth method`,
       options: [
         ...(keepCurrentOption ? [keepCurrentOption] : []),
         ...group.options,
@@ -170,7 +191,9 @@ export async function promptAuthChoiceGrouped(
     const topTier: WizardSelectOption[] = featuredGroups.map((group) =>
       groupToOption(group, configuredProvider),
     );
-    topTier.push({ value: MORE_VALUE, label: "More…" });
+    if (moreGroups.length > 0) {
+      topTier.push({ value: MORE_VALUE, label: "More…" });
+    }
     if (skipOption) {
       topTier.push({ value: skipOption.value, label: skipOption.label });
     }

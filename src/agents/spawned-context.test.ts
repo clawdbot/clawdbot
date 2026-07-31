@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,
-  resolveIngressWorkspaceOverrideForSpawnedRun,
+  resolveIngressWorkspaceOverrideForSessionRun,
   resolveSpawnedWorkspaceInheritance,
 } from "./spawned-context.js";
 
@@ -93,19 +93,22 @@ describe("resolveSpawnedWorkspaceInheritance", () => {
   });
 });
 
-describe("resolveIngressWorkspaceOverrideForSpawnedRun", () => {
-  it("forwards workspace only for spawned runs", () => {
+describe("resolveIngressWorkspaceOverrideForSessionRun", () => {
+  it("uses inherited workspaces for spawned runs and managed cwd for dashboard worktrees", () => {
     expect(
-      resolveIngressWorkspaceOverrideForSpawnedRun({
+      resolveIngressWorkspaceOverrideForSessionRun({
         spawnedBy: "agent:main:subagent:parent",
         workspaceDir: "/tmp/ws",
+        cwd: "/tmp/task",
       }),
     ).toBe("/tmp/ws");
     expect(
-      resolveIngressWorkspaceOverrideForSpawnedRun({
+      resolveIngressWorkspaceOverrideForSessionRun({
         spawnedBy: "",
         workspaceDir: "/tmp/ws",
+        cwd: "/tmp/worktree",
       }),
-    ).toBeUndefined();
+    ).toBe("/tmp/worktree");
+    expect(resolveIngressWorkspaceOverrideForSessionRun()).toBeUndefined();
   });
 });

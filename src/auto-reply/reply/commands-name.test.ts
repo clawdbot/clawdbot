@@ -2,12 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getSessionEntry, updateSessionStore, upsertSessionEntry } from "../../config/sessions.js";
+import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildBuiltinChatCommands } from "../commands-registry.shared.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
-import { loadCommandHandlers } from "./commands-handlers.runtime.js";
-import { handleNameCommand, parseNameCommand } from "./commands-name.js";
+import { handleNameCommand } from "./commands-name.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const sessionKey = "agent:main:web:main";
@@ -66,14 +65,6 @@ function buildNameParams(
 }
 
 describe("name command", () => {
-  it("parses the captured title and ignores other commands", () => {
-    expect(parseNameCommand("/name Quarterly planning")).toEqual({
-      title: "Quarterly planning",
-    });
-    expect(parseNameCommand("/name")).toEqual({ title: "" });
-    expect(parseNameCommand("/goal status")).toBeNull();
-  });
-
   it("registers and loads the command on text and native surfaces", () => {
     const command = buildBuiltinChatCommands().find((entry) => entry.key === "name");
 
@@ -90,23 +81,21 @@ describe("name command", () => {
         captureRemaining: true,
       }),
     ]);
-    expect(loadCommandHandlers()).toContain(handleNameCommand);
   });
 
   it("renames the current session and persists the label", async () => {
     const storePath = await createStorePath();
-    await upsertSessionEntry({
-      storePath,
-      sessionKey,
-      entry: { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
-    });
+    await upsertSessionEntry(
+      { storePath, sessionKey },
+      { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    );
 
     const params = buildNameParams("/name Billing rework", storePath);
     const result = await handleNameCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Billing rework");
-    expect(getSessionEntry({ storePath, sessionKey })?.label).toBe("Billing rework");
+    expect(loadSessionEntry({ storePath, sessionKey })?.label).toBe("Billing rework");
     expect(params.sessionEntry?.label).toBe("Billing rework");
     expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
       { sessionKey, reason: "command-metadata" },
@@ -115,56 +104,52 @@ describe("name command", () => {
 
   it("suggests a name without mutating when no argument is given", async () => {
     const storePath = await createStorePath();
-    await upsertSessionEntry({
-      storePath,
-      sessionKey,
-      entry: { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
-    });
+    await upsertSessionEntry(
+      { storePath, sessionKey },
+      { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    );
 
     const params = buildNameParams("/name", storePath);
-    params.sessionEntry = getSessionEntry({ storePath, sessionKey });
+    params.sessionEntry = loadSessionEntry({ storePath, sessionKey });
     const result = await handleNameCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Use /name <title>");
-    expect(getSessionEntry({ storePath, sessionKey })?.label).toBeUndefined();
+    expect(loadSessionEntry({ storePath, sessionKey })?.label).toBeUndefined();
     expect(takeCommandSessionMetadataChanges(params.ctx)).toBeUndefined();
   });
 
   it("rejects a label already used by another session", async () => {
     const storePath = await createStorePath();
     const now = Date.now();
-    await updateSessionStore(storePath, (store) => {
-      store[sessionKey] = {
-        sessionId: "sess-main",
-        updatedAt: now,
-        totalTokens: 0,
-        totalTokensFresh: true,
-      };
-      store["agent:main:web:other"] = {
+    await upsertSessionEntry(
+      { storePath, sessionKey },
+      { sessionId: "sess-main", updatedAt: now, totalTokens: 0, totalTokensFresh: true },
+    );
+    await upsertSessionEntry(
+      { storePath, sessionKey: "agent:main:web:other" },
+      {
         sessionId: "sess-other",
         updatedAt: now,
         totalTokens: 0,
         totalTokensFresh: true,
         label: "Taken",
-      };
-      return null;
-    });
+      },
+    );
 
     const params = buildNameParams("/name Taken", storePath);
     const result = await handleNameCommand(params, true);
 
     expect(result?.reply?.text).toContain("label already in use");
-    expect(getSessionEntry({ storePath, sessionKey })?.label).toBeUndefined();
+    expect(loadSessionEntry({ storePath, sessionKey })?.label).toBeUndefined();
     expect(takeCommandSessionMetadataChanges(params.ctx)).toBeUndefined();
   });
 
   it("reads the persisted name when params.sessionEntry is absent", async () => {
     const storePath = await createStorePath();
-    await upsertSessionEntry({
-      storePath,
-      sessionKey,
-      entry: {
+    await upsertSessionEntry(
+      { storePath, sessionKey },
+      {
         sessionId: "sess-main",
         updatedAt: 1,
         totalTokens: 0,
@@ -172,7 +157,7 @@ describe("name command", () => {
         label: "Billing rework",
         displayName: "Dashboard session",
       },
-    });
+    );
 
     const params = buildNameParams("/name", storePath);
     const result = await handleNameCommand(params, true);
@@ -198,38 +183,8 @@ describe("name command", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("First native");
-    expect(getSessionEntry({ storePath, sessionKey })?.label).toBe("First native");
+    expect(loadSessionEntry({ storePath, sessionKey })?.label).toBe("First native");
     expect(params.sessionEntry?.label).toBe("First native");
-    expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
-      { sessionKey, reason: "command-metadata" },
-    ]);
-  });
-
-  it("persists the rename under the canonical key when stored under a legacy alias", async () => {
-    const storePath = await createStorePath();
-    const legacyKey = "agent:main:web:Main";
-    const now = Date.now();
-    await updateSessionStore(storePath, (store) => {
-      store[legacyKey] = {
-        sessionId: "sess-main",
-        updatedAt: now,
-        totalTokens: 0,
-        totalTokensFresh: true,
-      };
-      return null;
-    });
-
-    const params = buildNameParams("/name Canonical", storePath);
-    const result = await handleNameCommand(params, true);
-
-    expect(result?.reply?.text).toContain("Canonical");
-    expect(getSessionEntry({ storePath, sessionKey })?.label).toBe("Canonical");
-
-    const keys = await updateSessionStore(storePath, (store) => Object.keys(store), {
-      skipSaveWhenResult: () => true,
-    });
-    expect(keys).toContain(sessionKey);
-    expect(keys).not.toContain(legacyKey);
     expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
       { sessionKey, reason: "command-metadata" },
     ]);
@@ -237,23 +192,23 @@ describe("name command", () => {
 
   it("does not rename for an unauthorized sender", async () => {
     const storePath = await createStorePath();
-    await upsertSessionEntry({
-      storePath,
-      sessionKey,
-      entry: { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
-    });
+    await upsertSessionEntry(
+      { storePath, sessionKey },
+      { sessionId: "sess-main", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    );
 
     const params = buildNameParams("/name Secret", storePath, { isAuthorizedSender: false });
     const result = await handleNameCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
-    expect(getSessionEntry({ storePath, sessionKey })?.label).toBeUndefined();
+    expect(loadSessionEntry({ storePath, sessionKey })?.label).toBeUndefined();
     expect(takeCommandSessionMetadataChanges(params.ctx)).toBeUndefined();
   });
 
-  it("returns null when text commands are disabled", async () => {
+  it("ignores other commands and disabled text commands", async () => {
     const storePath = await createStorePath();
     const params = buildNameParams("/name Anything", storePath);
     expect(await handleNameCommand(params, false)).toBeNull();
+    expect(await handleNameCommand(buildNameParams("/goal status", storePath), true)).toBeNull();
   });
 });

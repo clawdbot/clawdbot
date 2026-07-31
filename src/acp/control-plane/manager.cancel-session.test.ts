@@ -1,4 +1,5 @@
 /** Tests ACP manager cancellation of active turns and idle sessions. */
+import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import { describe, expect, it, vi } from "vitest";
 import {
   requireTaskByRunId,
@@ -45,12 +46,17 @@ describe("AcpSessionManager cancelSession", () => {
       });
 
       const manager = new AcpSessionManager();
+      const events: AcpRuntimeEvent[] = [];
       const runPromise = manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "long task",
         mode: "prompt",
         requestId: "run-1",
+        onEvent: (event) => {
+          events.push(event);
+        },
       });
       await vi.waitFor(
         () => {
@@ -74,6 +80,11 @@ describe("AcpSessionManager cancelSession", () => {
         ownerKey: "agent:main:main",
         childSessionKey: "agent:codex:acp:child-1",
         status: "cancelled",
+      });
+      expect(events.at(-1)).toEqual({
+        type: "done",
+        status: "cancelled",
+        stopReason: "cancel",
       });
       const states = extractStatesFromUpserts();
       expect(states).toContain("running");

@@ -6,6 +6,8 @@ require "tmpdir"
 require "tempfile"
 require "cgi"
 require "digest/md5"
+require "time"
+require "rubygems/version"
 
 default_platform(:ios)
 
@@ -37,6 +39,21 @@ REQUIRED_SCREENSHOT_FAMILIES = {
   "iPhone" => /iPhone/,
   "13-inch iPad" => /iPad (Air|Pro) 13-inch/
 }.freeze
+RELEASE_IOS_SCREENSHOT_TESTS = [
+  { test: "testReleaseControlScreenshot", name: "01-control-connected" },
+  { test: "testReleaseChatScreenshot", name: "02-chat-connected" },
+  { test: "testReleaseAgentScreenshot", name: "03-agent-connected" },
+  { test: "testReleaseSettingsScreenshot", name: "04-settings-connected" }
+].freeze
+REQUIRED_IOS_SCREENSHOT_NAMES = RELEASE_IOS_SCREENSHOT_TESTS.map { |entry| entry.fetch(:name) }.freeze
+IOS_SCREENSHOT_TEST_TIMEOUT_SECONDS = 180
+IOS_SCREENSHOT_XCARGS = [
+  "-allowProvisioningUpdates",
+  "-test-timeouts-enabled YES",
+  "-default-test-execution-time-allowance #{IOS_SCREENSHOT_TEST_TIMEOUT_SECONDS}",
+  "-maximum-test-execution-time-allowance #{IOS_SCREENSHOT_TEST_TIMEOUT_SECONDS}"
+].join(" ").freeze
+PNG_SIGNATURE = "\x89PNG\r\n\x1A\n".b.freeze
 PUBLIC_METADATA_FILENAMES = [
   "description.txt",
   "keywords.txt",
@@ -56,6 +73,28 @@ APP_STORE_SCREENSHOT_LIMIT_PER_SET = 10
 APP_STORE_SCREENSHOT_SET_DELETE_TIMEOUT_SECONDS = 120
 APP_STORE_SCREENSHOT_PROCESSING_TIMEOUT_SECONDS = 3600
 APP_STORE_SCREENSHOT_PROCESSING_POLL_SECONDS = 5
+APP_STORE_BUILD_PROCESSING_TIMEOUT_SECONDS = 3600
+IOS_BUILD_UPLOAD_STATES = [
+  "AWAITING_UPLOAD",
+  "PROCESSING",
+  "FAILED",
+  "COMPLETE"
+].freeze
+EDITABLE_APP_STORE_VERSION_STATES = [
+  "PREPARE_FOR_SUBMISSION",
+  "DEVELOPER_REJECTED",
+  "REJECTED",
+  "METADATA_REJECTED",
+  "INVALID_BINARY",
+  "READY_FOR_REVIEW"
+].freeze
+RELEASED_APP_STORE_VERSION_STATES = [
+  "READY_FOR_DISTRIBUTION",
+  "REPLACED_WITH_NEW_VERSION",
+  "READY_FOR_SALE",
+  "REMOVED_FROM_SALE",
+  "DEVELOPER_REMOVED_FROM_SALE"
+].freeze
 
 def load_env_file(path)
   return unless File.exist?(path)
@@ -95,6 +134,31 @@ def validate_required_screenshots!(paths)
   return if missing_families.empty?
 
   UI.user_error!("DELIVER_SCREENSHOTS=1 but screenshots are missing for: #{missing_families.join(', ')}.")
+end
+
+def verify_release_ios_screenshot_manifest!(output_directory:, devices:)
+  locale_directory = File.join(output_directory, "en-US")
+  expected_names = devices.flat_map do |device|
+    REQUIRED_IOS_SCREENSHOT_NAMES.map { |name| "#{device}-#{name}.png" }
+  end.sort
+  actual_names = Dir[File.join(locale_directory, "*.png")].map { |path| File.basename(path) }.sort
+  missing = expected_names - actual_names
+  unexpected = actual_names - expected_names
+  unless missing.empty? && unexpected.empty?
+    UI.test_failure!(
+      "iOS release screenshot manifest mismatch. " \
+        "Missing: #{missing.empty? ? "none" : missing.join(', ')}. " \
+        "Unexpected: #{unexpected.empty? ? "none" : unexpected.join(', ')}."
+    )
+  end
+
+  invalid = expected_names.reject do |name|
+    path = File.join(locale_directory, name)
+    File.size?(path) && File.binread(path, PNG_SIGNATURE.bytesize) == PNG_SIGNATURE
+  end
+  return if invalid.empty?
+
+  UI.test_failure!("Invalid iOS release screenshot PNGs: #{invalid.join(', ')}.")
 end
 
 def snapshot_devices
@@ -600,6 +664,9 @@ def produce_services_for_target(target)
   if target.fetch("capabilities").include?("APP_ATTEST")
     services[:app_attest] = "on"
   end
+  if target.fetch("capabilities").include?("HEALTH_KIT")
+    services[:health_kit] = "on"
+  end
   services
 end
 
@@ -719,6 +786,15 @@ def validate_match_profile_capabilities!(target)
       )
     end
   end
+
+  if capabilities.include?("HEALTH_KIT")
+    health_kit = profile_plist_value(profile_path, "Entitlements:com.apple.developer.healthkit")
+    if health_kit != "true"
+      UI.user_error!(
+        "Provisioning profile #{target.fetch("profileName")} for #{target.fetch("bundleId")} is missing HealthKit entitlement."
+      )
+    end
+  end
 end
 
 def sync_app_store_signing!(readonly:)
@@ -734,7 +810,7 @@ def release_signing_check!
   sync_app_store_signing!(readonly: true)
 end
 
-def render_ios_release_notes(release_version:)
+def render_ios_release_notes(release_version:, app_store_revision:)
   script_path = File.join(repo_root, "scripts", "ios-version.ts")
   args = [
     "node",
@@ -745,6 +821,7 @@ def render_ios_release_notes(release_version:)
     "releaseNotes"
   ]
   args.push("--version", release_version) if env_present?(release_version)
+  args.push("--revision", app_store_revision) if env_present?(app_store_revision)
   stdout, stderr, status = Open3.capture3(
     *args,
     chdir: repo_root
@@ -756,11 +833,14 @@ def render_ios_release_notes(release_version:)
   UI.user_error!("Failed to render iOS release notes: #{detail}")
 end
 
-def release_notes_metadata_path(release_version:)
+def release_notes_metadata_path(release_version:, app_store_revision:)
   temp_root = Dir.mktmpdir("openclaw-release-notes")
   target_dir = File.join(temp_root, "en-US")
   FileUtils.mkdir_p(target_dir)
-  File.write(File.join(target_dir, "release_notes.txt"), render_ios_release_notes(release_version: release_version))
+  File.write(
+    File.join(target_dir, "release_notes.txt"),
+    render_ios_release_notes(release_version: release_version, app_store_revision: app_store_revision)
+  )
   temp_root
 end
 
@@ -795,7 +875,7 @@ def assert_no_app_review_notes_field_metadata!(metadata_path)
   end
 end
 
-def public_metadata_path(release_version: nil)
+def public_metadata_path(release_version: nil, app_store_revision: nil)
   source = File.join(__dir__, "metadata")
   temp_root = Dir.mktmpdir("openclaw-app-store-metadata")
   Dir.children(source).each do |entry|
@@ -809,7 +889,10 @@ def public_metadata_path(release_version: nil)
   if release_notes_upload_requested?
     target_dir = File.join(temp_root, "en-US")
     FileUtils.mkdir_p(target_dir)
-    File.write(File.join(target_dir, "release_notes.txt"), render_ios_release_notes(release_version: release_version))
+    File.write(
+      File.join(target_dir, "release_notes.txt"),
+      render_ios_release_notes(release_version: release_version, app_store_revision: app_store_revision)
+    )
   end
   temp_root
 end
@@ -834,6 +917,62 @@ def resolve_app_store_connect_app(app_identifier:, app_id:)
         end
   UI.user_error!("Could not find App Store Connect app #{app_identifier || app_id || APP_STORE_APP_IDENTIFIER}.") unless app
   app
+end
+
+def app_store_version_state(version)
+  version.app_version_state.to_s.strip.empty? ? version.app_store_state.to_s : version.app_version_state.to_s
+end
+
+def preflight_app_store_version!(short_version:)
+  app_identifier = ENV["APP_STORE_CONNECT_APP_IDENTIFIER"]
+  app_id = ENV["APP_STORE_CONNECT_APP_ID"]
+  app_identifier = nil unless env_present?(app_identifier)
+  app_id = nil unless env_present?(app_id)
+  app = resolve_app_store_connect_app(app_identifier: app_identifier, app_id: app_id)
+  versions = app.get_app_store_versions(
+    filter: { platform: Spaceship::ConnectAPI::Platform::IOS },
+    includes: nil
+  )
+  target = versions.find { |candidate| candidate.version_string == short_version }
+
+  if target
+    state = app_store_version_state(target)
+    if EDITABLE_APP_STORE_VERSION_STATES.include?(state)
+      UI.message("App Store version #{short_version} is reusable in state #{state}.")
+      return target
+    end
+    if RELEASED_APP_STORE_VERSION_STATES.include?(state)
+      UI.user_error!(
+        "App Store version #{short_version} is already released in state #{state}; choose the next iOS revision."
+      )
+    end
+    UI.user_error!(
+      "App Store version #{short_version} is locked in state #{state.empty? ? "UNKNOWN" : state}; wait for it to become editable or reject the submission before uploading another build."
+    )
+  end
+
+  target_version = Gem::Version.new(short_version)
+  higher_version = versions
+    .select { |candidate| Gem::Version.new(candidate.version_string) > target_version }
+    .max_by { |candidate| Gem::Version.new(candidate.version_string) }
+  if higher_version
+    UI.user_error!(
+      "App Store version #{short_version} cannot be created because higher version #{higher_version.version_string} already exists. Revisions are never reused."
+    )
+  end
+
+  active_version = versions.find do |candidate|
+    !RELEASED_APP_STORE_VERSION_STATES.include?(app_store_version_state(candidate))
+  end
+  if active_version
+    state = app_store_version_state(active_version)
+    UI.user_error!(
+      "App Store version #{short_version} cannot be created while #{active_version.version_string} is active in state #{state.empty? ? "UNKNOWN" : state}."
+    )
+  end
+
+  UI.message("App Store version #{short_version} is available and will be created during metadata staging.")
+  nil
 end
 
 def resolve_app_store_connect_version(app:, short_version:)
@@ -1067,7 +1206,7 @@ def upload_app_store_screenshots_deterministically!(app_identifier:, app_id:, sh
   UI.success("Uploaded and verified #{screenshots.length} App Store screenshots for #{short_version}.")
 end
 
-def read_ios_version_metadata(release_version: nil)
+def read_ios_version_metadata(release_version: nil, app_store_revision: nil)
   script_path = File.join(repo_root, "scripts", "ios-version.ts")
   args = [
     "node",
@@ -1077,6 +1216,7 @@ def read_ios_version_metadata(release_version: nil)
     "--json",
   ]
   args.push("--version", release_version) if env_present?(release_version)
+  args.push("--revision", app_store_revision) if env_present?(app_store_revision)
   stdout, stderr, status = Open3.capture3(
     *args,
     chdir: repo_root
@@ -1091,11 +1231,13 @@ def read_ios_version_metadata(release_version: nil)
   parsed = JSON.parse(stdout)
   version = parsed["canonicalVersion"].to_s.strip
   short_version = parsed["marketingVersion"].to_s.strip
+  revision = parsed["appStoreRevision"].to_s.strip
   if !env_present?(version) || !env_present?(short_version)
     UI.user_error!("iOS version helper returned incomplete metadata.")
   end
 
   {
+    app_store_revision: revision,
     short_version: short_version,
     version: version
   }
@@ -1103,7 +1245,113 @@ rescue JSON::ParserError => e
   UI.user_error!("Invalid JSON from iOS version helper: #{e.message}")
 end
 
-def sync_ios_versioning!(release_version: nil)
+def app_store_connect_target_app
+  app_identifier = ENV["APP_STORE_CONNECT_APP_IDENTIFIER"]
+  app_id = ENV["APP_STORE_CONNECT_APP_ID"]
+  app_identifier = nil unless env_present?(app_identifier)
+  app_id = nil unless env_present?(app_id)
+  resolve_app_store_connect_app(app_identifier: app_identifier, app_id: app_id)
+end
+
+def app_store_build_uploads(app_id:, short_version: nil)
+  # Build uploads include failed and still-processing attempts before they
+  # materialize as TestFlight builds, so they own build-number allocation.
+  filter = { platform: Spaceship::ConnectAPI::Platform::IOS }
+  filter[:cfBundleShortVersionString] = short_version if env_present?(short_version)
+  Spaceship::ConnectAPI
+    .get_build_uploads(app_id: app_id, filter: filter, includes: nil, limit: 200, sort: nil)
+    .all_pages
+    .flat_map(&:to_models)
+end
+
+def app_store_build_upload_state(upload)
+  # Apple's buildUploads API wraps the scalar state in a StateDetail object
+  # alongside diagnostics; normalize that owner contract at the adapter edge.
+  detail = upload.state
+  UI.user_error!("Invalid App Store build upload state payload: expected a StateDetail object.") unless detail.is_a?(Hash)
+
+  state = detail["state"].to_s.strip
+  UI.user_error!("Invalid App Store build upload state payload: missing state.") unless env_present?(state)
+  state
+end
+
+def release_source_clean?
+  stdout, _stderr, status = Open3.capture3(
+    "git",
+    "status",
+    "--porcelain=v1",
+    "--untracked-files=all",
+    chdir: repo_root
+  )
+  status.success? && stdout.strip.empty?
+end
+
+def resolve_ios_release_plan!(release_version: nil, app_store_revision: nil, build_number: nil)
+  gateway_metadata = read_ios_version_metadata
+  if env_present?(release_version.to_s)
+    explicit_gateway = read_ios_version_metadata(release_version: release_version)[:version]
+    if explicit_gateway != gateway_metadata[:version]
+      UI.user_error!(
+        "Explicit iOS gateway version #{explicit_gateway} does not match canonical root version #{gateway_metadata[:version]}."
+      )
+    end
+  end
+  app = app_store_connect_target_app
+  versions = app.get_app_store_versions(
+    filter: { platform: Spaceship::ConnectAPI::Platform::IOS },
+    includes: nil
+  )
+  uploads = app_store_build_uploads(app_id: app.id)
+  input = {
+    appStoreVersions: versions.map do |version|
+      {
+        id: version.id.to_s,
+        state: app_store_version_state(version),
+        versionString: version.version_string.to_s
+      }
+    end,
+    buildUploads: uploads.map do |upload|
+      {
+        buildNumber: upload.cf_build_version.to_s,
+        shortVersion: upload.cf_build_short_version_string.to_s,
+        state: app_store_build_upload_state(upload)
+      }
+    end,
+    explicitBuildNumber: env_present?(build_number.to_s) ? build_number.to_s : nil,
+    explicitRevision: env_present?(app_store_revision.to_s) ? app_store_revision.to_s : nil,
+    gatewayVersion: gateway_metadata[:version],
+    rootDir: repo_root,
+    sourceClean: release_source_clean?,
+    sourceSha: release_git_sha
+  }
+
+  stdout = ""
+  stderr = ""
+  status = nil
+  Tempfile.create(["openclaw-ios-release-plan", ".json"]) do |file|
+    file.write(JSON.generate(input))
+    file.flush
+    stdout, stderr, status = Open3.capture3(
+      "node",
+      "--import",
+      "tsx",
+      File.join(repo_root, "scripts", "ios-release-plan.ts"),
+      "--input",
+      file.path,
+      chdir: repo_root
+    )
+  end
+  unless status&.success?
+    detail = stderr.to_s.strip
+    detail = stdout.to_s.strip if detail.empty?
+    UI.user_error!("Unable to resolve deterministic iOS release plan: #{detail}")
+  end
+  JSON.parse(stdout)
+rescue JSON::ParserError => e
+  UI.user_error!("Invalid JSON from iOS release planner: #{e.message}")
+end
+
+def sync_ios_versioning!(release_version: nil, app_store_revision: nil)
   script_path = File.join(repo_root, "scripts", "ios-sync-versioning.ts")
   args = [
     "node",
@@ -1113,6 +1361,7 @@ def sync_ios_versioning!(release_version: nil)
     "--check",
   ]
   args.push("--version", release_version) if env_present?(release_version)
+  args.push("--revision", app_store_revision) if env_present?(app_store_revision)
   stdout, stderr, status = Open3.capture3(
     *args,
     chdir: repo_root
@@ -1121,7 +1370,11 @@ def sync_ios_versioning!(release_version: nil)
 
   detail = stderr.to_s.strip
   detail = stdout.to_s.strip if detail.empty?
-  check_command = env_present?(release_version) ? "pnpm ios:version:check -- --version #{release_version}" : "pnpm ios:version:check"
+  check_command = if env_present?(release_version) && env_present?(app_store_revision)
+                    "pnpm ios:version:check -- --version #{release_version} --revision #{app_store_revision}"
+                  else
+                    "pnpm ios:version:check"
+                  end
   UI.user_error!("iOS versioning inputs are invalid. Run `#{check_command}`.\n#{detail}")
 end
 
@@ -1129,26 +1382,53 @@ def shell_join(parts)
   Shellwords.join(parts.compact)
 end
 
-def xcodebuild_shell_join(parts)
-  xcode_path = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
+def xcodebuild_shell_join(parts, system_tools_first: false)
+  caller_path = ENV.fetch("PATH", "").split(File::PATH_SEPARATOR)
+  system_path = [
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+  ]
+  # Archive build phases need caller-pinned Swift tools ahead of Homebrew.
+  # Export needs Apple's rsync ahead of incompatible Homebrew rsync helpers.
+  preferred_path = system_tools_first ? [*system_path, *caller_path] : [*caller_path, *system_path]
+  xcode_path = [
+    *preferred_path,
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+  ].reject(&:empty?).uniq.join(File::PATH_SEPARATOR)
   shell_join(["env", "PATH=#{xcode_path}", *parts])
 end
 
 def resolve_release_build_number(api_key:, short_version:, explicit_build_number: nil)
   explicit = explicit_build_number.to_s.strip
   if env_present?(explicit)
-    UI.user_error!("Invalid iOS release build number '#{explicit}'. Expected digits only.") unless explicit.match?(/\A\d+\z/)
-    UI.message("Using explicit iOS release build number #{explicit}.")
-    return explicit
+    UI.user_error!("Invalid iOS release build number '#{explicit}'. Expected a positive integer.") unless explicit.match?(/\A[1-9]\d*\z/)
+    if api_key.nil?
+      UI.message("Using explicit iOS release build number #{explicit} without remote validation.")
+      return explicit
+    end
   end
 
-  latest_build = latest_testflight_build_number(
-    api_key: api_key,
-    app_identifier: APP_STORE_APP_IDENTIFIER,
-    version: short_version,
-    initial_build_number: 0
-  )
-  next_build = latest_build.to_i + 1
+  app = app_store_connect_target_app
+  uploads = app_store_build_uploads(app_id: app.id, short_version: short_version)
+  unknown_states = uploads.map { |upload| app_store_build_upload_state(upload) }.uniq - IOS_BUILD_UPLOAD_STATES
+  unless unknown_states.empty?
+    UI.user_error!("Unknown App Store build upload states for #{short_version}: #{unknown_states.join(', ')}.")
+  end
+  uploaded_builds = uploads.map do |upload|
+    value = upload.cf_build_version.to_s.strip
+    UI.user_error!("Invalid App Store build number '#{value}' for #{short_version}.") unless value.match?(/\A[1-9]\d*\z/)
+    value.to_i
+  end
+  latest_build = uploaded_builds.max || 0
+  next_build = latest_build + 1
+  if env_present?(explicit) && explicit.to_i != next_build
+    UI.user_error!(
+      "Invalid iOS release build number #{explicit} for #{short_version}; expected #{next_build} after App Store Connect build #{latest_build}."
+    )
+  end
   UI.message("Resolved iOS release build number #{next_build} for #{short_version} (latest App Store Connect build: #{latest_build}).")
   next_build.to_s
 end
@@ -1158,10 +1438,23 @@ def release_build_number_needs_app_store_connect_auth?(explicit_build_number: ni
   !env_present?(explicit)
 end
 
-def prepare_app_store_release!(version:, build_number:)
+def prepare_app_store_release!(version:, app_store_revision:, build_number:)
   script_path = File.join(repo_root, "scripts", "ios-release-prepare.sh")
-  UI.message("Preparing iOS App Store release #{version} (build #{build_number}).")
-  sh(shell_join(["bash", script_path, "--version", version, "--build-number", build_number]))
+  UI.message("Preparing iOS App Store release for gateway #{version} revision #{app_store_revision} (build #{build_number}).")
+  sh(
+    shell_join(
+      [
+        "bash",
+        script_path,
+        "--version",
+        version,
+        "--revision",
+        app_store_revision,
+        "--build-number",
+        build_number
+      ]
+    )
+  )
 
   release_xcconfig = File.join(ios_root, "build", "AppStoreRelease.xcconfig")
   UI.user_error!("Missing App Store release xcconfig at #{release_xcconfig}.") unless File.exist?(release_xcconfig)
@@ -1178,6 +1471,54 @@ def release_git_sha
   stdout, stderr, status = Open3.capture3("git", "rev-parse", "HEAD", chdir: repo_root)
   UI.user_error!("Unable to resolve release Git SHA: #{stderr.strip}") unless status.success?
   stdout.strip
+end
+
+def normalize_release_git_sha(value)
+  commit = value.to_s.strip.downcase
+  UI.user_error!("Release build commit must be a full 40-character hexadecimal SHA.") unless commit.match?(/\A[0-9a-f]{40}\z/)
+  commit
+end
+
+def normalize_release_build_timestamp(value)
+  timestamp = value.to_s.strip
+  unless timestamp.match?(/\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z\z/)
+    UI.user_error!("Release build timestamp must be an ISO-8601 UTC timestamp ending in Z.")
+  end
+  begin
+    parsed = Time.iso8601(timestamp)
+  rescue ArgumentError
+    UI.user_error!("Release build timestamp must be a valid ISO-8601 UTC timestamp.")
+  end
+  fraction = timestamp[/\.(\d{1,3})Z\z/, 1].to_s.ljust(3, "0")
+  canonical_input = timestamp.sub(/(?:\.\d{1,3})?Z\z/, ".#{fraction}Z")
+  normalized = parsed.utc.iso8601(3)
+  UI.user_error!("Release build timestamp must be a valid ISO-8601 UTC timestamp.") unless normalized == canonical_input
+  normalized
+end
+
+def verify_apple_release_source!(expected_commit)
+  script_path = File.join(repo_root, "scripts", "apple-release-source-check.sh")
+  sh(shell_join([
+    "bash",
+    script_path,
+    "--root",
+    repo_root,
+    "--expected-commit",
+    expected_commit
+  ]))
+end
+
+def pin_release_build_provenance!
+  commit = [ENV["GIT_COMMIT"], ENV["GIT_SHA"]].find { |value| env_present?(value) } || release_git_sha
+  timestamp = env_present?(ENV["OPENCLAW_BUILD_TIMESTAMP"]) ? ENV["OPENCLAW_BUILD_TIMESTAMP"] : Time.now.utc.iso8601(3)
+  normalized_commit = normalize_release_git_sha(commit)
+  verify_apple_release_source!(normalized_commit)
+  ENV["GIT_COMMIT"] = normalized_commit
+  ENV["OPENCLAW_BUILD_TIMESTAMP"] = normalize_release_build_timestamp(timestamp)
+  {
+    git_commit: ENV.fetch("GIT_COMMIT"),
+    build_timestamp: ENV.fetch("OPENCLAW_BUILD_TIMESTAMP")
+  }
 end
 
 def mobile_release_ref_command(command, platform:, version:, build: nil, version_code: nil, sha: nil)
@@ -1222,9 +1563,129 @@ def record_mobile_release_ref!(platform:, version:, build: nil, version_code: ni
   )
 end
 
-def validate_app_store_ipa!(ipa_path)
+def validate_app_store_ipa!(ipa_path, expected_commit:, expected_build_timestamp:)
   script_path = File.join(repo_root, "scripts", "ios-validate-app-store-ipa.sh")
-  sh(shell_join(["bash", script_path, "--ipa", ipa_path]))
+  sh(shell_join([
+    "bash",
+    script_path,
+    "--ipa",
+    ipa_path,
+    "--expected-commit",
+    expected_commit,
+    "--expected-build-timestamp",
+    expected_build_timestamp
+  ]))
+end
+
+def verify_snapshot_test_result!(result_bundle_path, device)
+  UI.user_error!("Screenshot test result bundle is missing for #{device}: #{result_bundle_path}") unless File.directory?(result_bundle_path)
+
+  stdout, stderr, status = Open3.capture3(
+    "xcrun",
+    "xcresulttool",
+    "get",
+    "test-results",
+    "summary",
+    "--path",
+    result_bundle_path,
+    "--compact"
+  )
+  unless status.success?
+    detail = stderr.to_s.strip
+    detail = stdout.to_s.strip if detail.empty?
+    UI.user_error!("Failed to inspect screenshot test results for #{device}: #{detail}")
+  end
+
+  summary = JSON.parse(stdout)
+  failed_tests = summary.fetch("failedTests")
+  result = summary.fetch("result")
+  return if result == "Passed" && failed_tests.zero?
+
+  UI.test_failure!("Screenshot UI tests failed on #{device}: result=#{result}, failedTests=#{failed_tests}.")
+rescue JSON::ParserError, KeyError => e
+  UI.user_error!("Invalid screenshot test result summary for #{device}: #{e.message}")
+end
+
+def archive_snapshot_test_result!(result_bundle_path:, archive_directory:, device:, screenshot_name:, attempt:)
+  return unless File.directory?(result_bundle_path)
+
+  archive_path = File.join(
+    archive_directory,
+    "#{device}-#{screenshot_name}-attempt-#{attempt}.xcresult"
+  )
+  FileUtils.rm_rf(archive_path)
+  FileUtils.mv(result_bundle_path, archive_path)
+end
+
+def capture_release_ios_screenshot!(
+  project:,
+  device:,
+  screenshot:,
+  output_directory:,
+  result_bundle_path:,
+  result_bundle_archive_directory:,
+  derived_data_path:,
+  clear_previous_screenshots:
+)
+  test_name = screenshot.fetch(:test)
+  screenshot_name = screenshot.fetch(:name)
+  expected_screenshot_path = File.join(output_directory, "en-US", "#{device}-#{screenshot_name}.png")
+
+  1.upto(2) do |attempt|
+    FileUtils.rm_f(expected_screenshot_path)
+    FileUtils.rm_rf(result_bundle_path)
+    begin
+      # Keep retry ownership outside Snapshot. Every action call creates a new
+      # xcodebuild/TestManager session and reboots the selected simulator.
+      capture_ios_screenshots(
+        project: project,
+        scheme: "OpenClawUITests",
+        configuration: "Debug",
+        devices: [device],
+        languages: ["en-US"],
+        only_testing: ["OpenClawUITests/OpenClawSnapshotUITests/#{test_name}"],
+        launch_arguments: ["--openclaw-screenshot-mode"],
+        output_directory: output_directory,
+        clear_previous_screenshots: clear_previous_screenshots && attempt == 1,
+        derived_data_path: derived_data_path,
+        test_without_building: true,
+        result_bundle: true,
+        number_of_retries: 0,
+        stop_after_first_error: true,
+        reinstall_app: true,
+        concurrent_simulators: false,
+        override_status_bar: true,
+        override_status_bar_arguments: SNAPSHOT_STATUS_BAR_ARGUMENTS,
+        skip_open_summary: true,
+        xcargs: IOS_SCREENSHOT_XCARGS
+      )
+      verify_snapshot_test_result!(result_bundle_path, "#{device} #{screenshot_name} attempt #{attempt}")
+    rescue StandardError => error
+      archive_snapshot_test_result!(
+        result_bundle_path: result_bundle_path,
+        archive_directory: result_bundle_archive_directory,
+        device: device,
+        screenshot_name: screenshot_name,
+        attempt: attempt
+      )
+      raise if attempt == 2
+
+      UI.important(
+        "Screenshot #{screenshot_name} failed on #{device}; " \
+          "retrying once in a fresh simulator session (#{error.message})."
+      )
+      next
+    end
+
+    archive_snapshot_test_result!(
+      result_bundle_path: result_bundle_path,
+      archive_directory: result_bundle_archive_directory,
+      device: device,
+      screenshot_name: screenshot_name,
+      attempt: attempt
+    )
+    return
+  end
 end
 
 def build_app_store_release(context)
@@ -1236,6 +1697,7 @@ def build_app_store_release(context)
   output_name = "OpenClaw-#{version}.ipa"
   expected_ipa_path = File.join(output_directory, output_name)
 
+  verify_apple_release_source!(context[:git_commit])
   FileUtils.mkdir_p(output_directory)
   FileUtils.rm_rf(archive_path)
   Dir[File.join(output_directory, "*.ipa")].each { |path| FileUtils.rm_f(path) }
@@ -1260,16 +1722,19 @@ def build_app_store_release(context)
   )
 
   sh(
-    xcodebuild_shell_join([
-      "xcodebuild",
-      "-exportArchive",
-      "-archivePath",
-      archive_path,
-      "-exportPath",
-      output_directory,
-      "-exportOptionsPlist",
-      export_options_path,
-    ])
+    xcodebuild_shell_join(
+      [
+        "xcodebuild",
+        "-exportArchive",
+        "-archivePath",
+        archive_path,
+        "-exportPath",
+        output_directory,
+        "-exportOptionsPlist",
+        export_options_path,
+      ],
+      system_tools_first: true,
+    )
   )
 
   exported_ipas = Dir[File.join(output_directory, "*.ipa")]
@@ -1277,7 +1742,11 @@ def build_app_store_release(context)
   UI.user_error!("xcodebuild export produced multiple IPAs in #{output_directory}: #{exported_ipas.join(", ")}") if exported_ipas.length > 1
   exported_ipa = exported_ipas.first
   FileUtils.mv(exported_ipa, expected_ipa_path) unless exported_ipa == expected_ipa_path
-  validate_app_store_ipa!(expected_ipa_path)
+  validate_app_store_ipa!(
+    expected_ipa_path,
+    expected_commit: context[:git_commit],
+    expected_build_timestamp: context[:build_timestamp]
+  )
 
   {
     archive_path: archive_path,
@@ -1339,30 +1808,89 @@ platform :ios do
   private_lane :prepare_app_store_context do |options|
     require_api_key = options[:require_api_key] == true
     release_version = options[:release_version].to_s.strip
+    app_store_revision = options[:app_store_revision].to_s.strip
     explicit_build_number = options[:build_number].to_s.strip
     needs_api_key = require_api_key || release_build_number_needs_app_store_connect_auth?(explicit_build_number: explicit_build_number)
     api_key = needs_api_key ? app_store_connect_api_key_config : nil
-    if release_version.empty?
-      UI.user_error!("Missing iOS release version. Use `pnpm ios:release:upload -- --version YYYY.M.D` or pass `release_version:YYYY.M.D` to the Fastlane lane.")
+    release_plan = nil
+    if require_api_key
+      release_plan = resolve_ios_release_plan!(
+        release_version: release_version,
+        app_store_revision: app_store_revision,
+        build_number: explicit_build_number
+      )
+      release_version = release_plan.fetch("gatewayVersion")
+      app_store_revision = release_plan.fetch("appStoreRevision").to_s
+      explicit_build_number = release_plan.fetch("buildNumber").to_s
+      if release_plan.fetch("changelogStatus") != "ready"
+        UI.user_error!(
+          "iOS release notes are not cut for #{release_plan.fetch("appStoreVersion")}. " \
+          "Run `pnpm ios:release:cut`, commit apps/ios/CHANGELOG.md, then rerun the upload."
+        )
+      end
+    else
+      if release_version.empty?
+        UI.user_error!("Missing iOS gateway version. Use explicit --version and --revision for local archive validation.")
+      end
+      if app_store_revision.empty?
+        UI.user_error!("Missing iOS App Store revision. Use explicit --version and --revision for local archive validation.")
+      end
     end
-    sync_ios_versioning!(release_version: release_version)
-    version_metadata = read_ios_version_metadata(release_version: release_version)
+    sync_ios_versioning!(
+      release_version: release_version,
+      app_store_revision: app_store_revision
+    )
+    version_metadata = read_ios_version_metadata(
+      release_version: release_version,
+      app_store_revision: app_store_revision
+    )
     version = version_metadata[:version]
     short_version = version_metadata[:short_version]
-    build_number = resolve_release_build_number(
-      api_key: api_key,
-      short_version: short_version,
-      explicit_build_number: explicit_build_number
+    provenance = pin_release_build_provenance!
+    build_number = if release_plan
+                     explicit_build_number
+                   else
+                     resolve_release_build_number(
+                       api_key: api_key,
+                       short_version: short_version,
+                       explicit_build_number: explicit_build_number
+                     )
+                   end
+    release_xcconfig = prepare_app_store_release!(
+      version: version,
+      app_store_revision: version_metadata[:app_store_revision],
+      build_number: build_number
     )
-    release_xcconfig = prepare_app_store_release!(version: version, build_number: build_number)
 
     {
       api_key: api_key,
+      app_store_revision: version_metadata[:app_store_revision],
+      build_timestamp: provenance[:build_timestamp],
       build_number: build_number,
+      git_commit: provenance[:git_commit],
       release_xcconfig: release_xcconfig,
+      release_plan: release_plan,
       short_version: short_version,
       version: version
     }
+  end
+
+  desc "Print the deterministic App Store release plan without mutating remote state"
+  lane :release_plan do |options|
+    app_store_connect_api_key_config
+    plan = resolve_ios_release_plan!(
+      release_version: options[:release_version],
+      app_store_revision: options[:app_store_revision],
+      build_number: options[:build_number]
+    )
+    output_path = options[:output_path].to_s.strip
+    UI.user_error!("Missing release plan output_path.") if output_path.empty?
+    File.write(output_path, "#{JSON.pretty_generate(plan)}\n")
+    UI.success(
+      "Planned iOS App Store release: gateway=#{plan.fetch("gatewayVersion")} " \
+      "revision=#{plan.fetch("appStoreRevision")} short=#{plan.fetch("appStoreVersion")} " \
+      "build=#{plan.fetch("buildNumber")} decision=#{plan.fetch("decision")}"
+    )
   end
 
   desc "Print the App Store signing plan"
@@ -1401,6 +1929,7 @@ platform :ios do
     context = prepare_app_store_context(
       require_api_key: false,
       release_version: options[:release_version],
+      app_store_revision: options[:app_store_revision],
       build_number: options[:build_number]
     )
     build = build_app_store_release(context)
@@ -1416,13 +1945,15 @@ platform :ios do
       UI.user_error!("Use `pnpm ios:release:upload`; direct Fastlane upload is disabled.")
     end
 
-    release_sha = release_git_sha
     release_signing_check!
     context = prepare_app_store_context(
       require_api_key: true,
       release_version: options[:release_version],
+      app_store_revision: options[:app_store_revision],
       build_number: options[:build_number]
     )
+    release_sha = context[:git_commit]
+    preflight_app_store_version!(short_version: context[:short_version])
     ensure_mobile_release_ref_available!(
       platform: "ios",
       version: context[:short_version],
@@ -1431,19 +1962,37 @@ platform :ios do
     )
     without_xcode_xcconfig_file do
       preserve_local_signing do
-        screenshots(release_version: context[:version], build_number: context[:build_number])
+        screenshots(
+          release_version: context[:version],
+          app_store_revision: context[:app_store_revision],
+          build_number: context[:build_number]
+        )
       end
     end
+    verify_apple_release_source!(release_sha)
+    build = build_app_store_release(context)
+    # Release operations have one active uploader by policy. This final read
+    # catches human state changes before the first App Store mutation; it is
+    # not a cross-uploader lock.
+    resolve_ios_release_plan!(
+      release_version: context[:version],
+      app_store_revision: context[:app_store_revision],
+      build_number: context[:build_number]
+    )
+
     ENV["DELIVER_SCREENSHOTS"] = "1"
     ENV["DELIVER_RELEASE_NOTES"] = "1"
-    metadata(release_version: context[:short_version])
-
-    build = build_app_store_release(context)
+    metadata(
+      release_version: context[:version],
+      app_store_revision: context[:app_store_revision]
+    )
 
     upload_to_testflight(
       api_key: context[:api_key],
       ipa: build[:ipa_path],
-      skip_waiting_for_build_processing: true,
+      skip_submission: true,
+      skip_waiting_for_build_processing: false,
+      wait_processing_timeout_duration: APP_STORE_BUILD_PROCESSING_TIMEOUT_SECONDS,
       uses_non_exempt_encryption: false
     )
     record_mobile_release_ref!(
@@ -1463,12 +2012,23 @@ platform :ios do
   lane :metadata do |options|
     install_ready_for_review_edit_state_lookup!
     release_version = options[:release_version].to_s.strip
+    app_store_revision = options[:app_store_revision].to_s.strip
     if release_version.empty?
-      UI.user_error!("Missing iOS release version. Use `pnpm ios:release:upload -- --version YYYY.M.D` or `fastlane ios metadata release_version:YYYY.M.D`.")
+      UI.user_error!("Missing iOS gateway version. Use `pnpm ios:release:upload -- --version YYYY.M.D --revision N`.")
     end
-    sync_ios_versioning!(release_version: release_version)
-    version_metadata = read_ios_version_metadata(release_version: release_version)
+    if app_store_revision.empty?
+      UI.user_error!("Missing iOS App Store revision. Use `pnpm ios:release:upload -- --version YYYY.M.D --revision N`.")
+    end
+    sync_ios_versioning!(
+      release_version: release_version,
+      app_store_revision: app_store_revision
+    )
+    version_metadata = read_ios_version_metadata(
+      release_version: release_version,
+      app_store_revision: app_store_revision
+    )
     api_key = app_store_connect_api_key_config
+    preflight_app_store_version!(short_version: version_metadata[:short_version])
     clear_empty_env_var("APP_STORE_CONNECT_API_KEY_PATH")
     app_identifier = ENV["APP_STORE_CONNECT_APP_IDENTIFIER"]
     app_id = ENV["APP_STORE_CONNECT_APP_ID"]
@@ -1484,10 +2044,16 @@ platform :ios do
     end
 
     assert_no_app_review_notes_field_metadata!(File.join(__dir__, "metadata"))
-    metadata_path = public_metadata_path(release_version: release_version)
+    metadata_path = public_metadata_path(
+      release_version: release_version,
+      app_store_revision: app_store_revision
+    )
     skip_metadata = ENV["DELIVER_METADATA"] != "1"
     if release_notes_upload_requested? && skip_metadata
-      metadata_path = release_notes_metadata_path(release_version: release_version)
+      metadata_path = release_notes_metadata_path(
+        release_version: release_version,
+        app_store_revision: app_store_revision
+      )
       skip_metadata = false
     end
     assert_no_app_review_notes_field_metadata!(metadata_path) unless skip_metadata
@@ -1532,8 +2098,10 @@ platform :ios do
   lane :screenshots do |options|
     version_args = []
     release_version = options[:release_version].to_s.strip
+    app_store_revision = options[:app_store_revision].to_s.strip
     build_number = options[:build_number].to_s.strip
     version_args += ["--version", release_version] unless release_version.empty?
+    version_args += ["--revision", app_store_revision] unless app_store_revision.empty?
     version_args += ["--build-number", build_number] unless build_number.empty?
 
     sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-configure-signing.sh")]))
@@ -1541,32 +2109,67 @@ platform :ios do
     sh(shell_join(["node", File.join(repo_root, "scripts", "ios-write-swift-filelist.mjs")]))
     sh(shell_join(["xcodegen", "generate", "--spec", File.join(ios_root, "project.yml"), "--project", ios_root]))
 
-    capture_ios_screenshots(
-      project: File.join(ios_root, "OpenClaw.xcodeproj"),
+    output_directory = File.join(ios_root, "fastlane", "screenshots")
+    result_bundle_path = File.join(output_directory, "test_output", "en-US", "OpenClawUITests.xcresult")
+    result_bundle_archive_directory = File.join(ios_root, "build", "SnapshotTestResults")
+    derived_data_path = File.join(ios_root, "build", "SnapshotDerivedData")
+    FileUtils.rm_rf(result_bundle_archive_directory)
+    FileUtils.mkdir_p(result_bundle_archive_directory)
+    FileUtils.rm_rf(derived_data_path)
+    devices = snapshot_devices
+    project = File.join(ios_root, "OpenClaw.xcodeproj")
+    run_tests(
+      project: project,
       scheme: "OpenClawUITests",
       configuration: "Debug",
-      devices: snapshot_devices,
-      languages: ["en-US"],
-      launch_arguments: ["--openclaw-screenshot-mode"],
-      output_directory: File.join(ios_root, "fastlane", "screenshots"),
-      clear_previous_screenshots: true,
-      reinstall_app: true,
-      concurrent_simulators: false,
-      override_status_bar: true,
-      override_status_bar_arguments: SNAPSHOT_STATUS_BAR_ARGUMENTS,
-      skip_open_summary: true,
+      devices: [devices.first],
+      derived_data_path: derived_data_path,
+      build_for_testing: true,
+      clean: true,
+      number_of_retries: 0,
       xcargs: "-allowProvisioningUpdates"
     )
 
-    watch_screenshot(release_version: release_version, build_number: build_number)
+    capture_index = 0
+    devices.each do |device|
+      RELEASE_IOS_SCREENSHOT_TESTS.each do |screenshot|
+        capture_release_ios_screenshot!(
+          project: project,
+          device: device,
+          screenshot: screenshot,
+          output_directory: output_directory,
+          result_bundle_path: result_bundle_path,
+          result_bundle_archive_directory: result_bundle_archive_directory,
+          derived_data_path: derived_data_path,
+          clear_previous_screenshots: capture_index.zero?
+        )
+        capture_index += 1
+      end
+    end
+    verify_release_ios_screenshot_manifest!(
+      output_directory: output_directory,
+      devices: devices
+    )
+
+    # Snapshot fixes its result bundles under the screenshot root. Keep successful
+    # evidence in build/ so Deliver sees only locale directories during validation.
+    FileUtils.rm_rf(File.join(output_directory, "test_output"))
+
+    watch_screenshot(
+      release_version: release_version,
+      app_store_revision: app_store_revision,
+      build_number: build_number
+    )
   end
 
   desc "Generate deterministic Apple Watch screenshot for App Store metadata"
   lane :watch_screenshot do |options|
     version_args = []
     release_version = options[:release_version].to_s.strip
+    app_store_revision = options[:app_store_revision].to_s.strip
     build_number = options[:build_number].to_s.strip
     version_args += ["--version", release_version] unless release_version.empty?
+    version_args += ["--revision", app_store_revision] unless app_store_revision.empty?
     version_args += ["--build-number", build_number] unless build_number.empty?
 
     sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-configure-signing.sh")]))

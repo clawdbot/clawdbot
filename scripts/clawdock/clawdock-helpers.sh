@@ -23,11 +23,6 @@ _CLR_MAGENTA='\033[0;35m'
 _CLR_CYAN='\033[0;36m'
 _CLR_RED='\033[0;31m'
 
-# Styled command output (green + bold)
-_clr_cmd() {
-  echo -e "${_CLR_GREEN}${_CLR_BOLD}$1${_CLR_RESET}"
-}
-
 # Inline command for use in sentences
 _cmd() {
   echo "${_CLR_GREEN}${_CLR_BOLD}$1${_CLR_RESET}"
@@ -122,10 +117,10 @@ _clawdock_ensure_dir() {
   fi
 
   # Auto-detect from common paths
-  local found_path=""
-  for path in "${CLAWDOCK_COMMON_PATHS[@]}"; do
-    if [[ -f "${path}/docker-compose.yml" ]]; then
-      found_path="$path"
+  local candidate found_path="" response
+  for candidate in "${CLAWDOCK_COMMON_PATHS[@]}"; do
+    if [[ -f "${candidate}/docker-compose.yml" ]]; then
+      found_path="$candidate"
       break
     fi
   done

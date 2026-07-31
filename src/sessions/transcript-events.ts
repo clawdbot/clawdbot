@@ -4,10 +4,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { parseAgentSessionKey } from "../routing/session-key.js";
 
 /** Storage-neutral identity for the session transcript that changed. */
-export type SessionTranscriptUpdateTarget = {
+type SessionTranscriptUpdateTarget = {
   agentId: string;
   sessionId: string;
   sessionKey: string;
+  storePath?: string;
 };
 
 type SessionTranscriptUpdateFields = {
@@ -15,17 +16,20 @@ type SessionTranscriptUpdateFields = {
   target?: SessionTranscriptUpdateTarget;
   sessionKey?: string;
   agentId?: string;
-  /** @deprecated Pre-SQLite compatibility mirror. Prefer `target.sessionId`. */
   sessionId?: string;
+  /** Committed lifecycle owner; internal delivery must not expose it publicly. */
+  lifecycleRevision?: string;
   message?: unknown;
   messageId?: string;
   messageSeq?: number;
 };
 
 /** Normalized transcript update emitted after a session transcript changes. */
-export type SessionTranscriptUpdate = SessionTranscriptUpdateFields & {
-  /** @deprecated File-backed compatibility hint. Prefer `target` for identity. */
-  sessionFile: string;
+export type SessionTranscriptUpdate = Omit<
+  SessionTranscriptUpdateFields,
+  "sessionFile" | "lifecycleRevision" | "target"
+> & {
+  target: Omit<SessionTranscriptUpdateTarget, "storePath">;
 };
 
 /** Internal transcript update that may identify a transcript without a file path. */
@@ -56,43 +60,33 @@ export function onInternalSessionTranscriptUpdate(
 }
 
 /** Emits a normalized transcript update to all registered listeners. */
-export function emitSessionTranscriptUpdate(update: string | SessionTranscriptUpdate): void {
-  const nextUpdate = normalizeSessionTranscriptUpdate(update, { allowIdentityOnly: false });
-  if (!nextUpdate?.sessionFile) {
-    return;
-  }
-  emitPublicSessionTranscriptUpdate(nextUpdate as SessionTranscriptUpdate);
-  emitInternalTranscriptUpdate(nextUpdate);
-}
-
-/** Emits an internal transcript update, including identity-only updates. */
-export function emitInternalSessionTranscriptUpdate(update: InternalSessionTranscriptUpdate): void {
+export function emitSessionTranscriptUpdate(update: InternalSessionTranscriptUpdate): void {
   const nextUpdate = normalizeSessionTranscriptUpdate(update, { allowIdentityOnly: true });
   if (!nextUpdate) {
     return;
+  }
+  const publicUpdate = projectPublicSessionTranscriptUpdate(nextUpdate);
+  if (publicUpdate) {
+    emitPublicSessionTranscriptUpdate(publicUpdate);
   }
   emitInternalTranscriptUpdate(nextUpdate);
 }
 
 function normalizeSessionTranscriptUpdate(
-  update: string | InternalSessionTranscriptUpdate,
+  update: InternalSessionTranscriptUpdate,
   options: { allowIdentityOnly: boolean },
 ): InternalSessionTranscriptUpdate | undefined {
-  // Public callers still need a file-backed update, while internal callers can
-  // carry identity-only updates during the pre-SQLite transition.
-  const normalized =
-    typeof update === "string"
-      ? { sessionFile: update }
-      : {
-          sessionFile: update.sessionFile,
-          target: update.target,
-          sessionKey: update.sessionKey,
-          agentId: update.agentId,
-          sessionId: update.sessionId,
-          message: update.message,
-          messageId: update.messageId,
-          messageSeq: update.messageSeq,
-        };
+  const normalized = {
+    sessionFile: update.sessionFile,
+    target: update.target,
+    sessionKey: update.sessionKey,
+    agentId: update.agentId,
+    sessionId: update.sessionId,
+    lifecycleRevision: update.lifecycleRevision,
+    message: update.message,
+    messageId: update.messageId,
+    messageSeq: update.messageSeq,
+  };
   const trimmed = normalizeOptionalString(normalized.sessionFile);
   const target = normalizeUpdateTarget(normalized);
   if (!trimmed && (!options.allowIdentityOnly || !target)) {
@@ -102,12 +96,14 @@ function normalizeSessionTranscriptUpdate(
   const sessionKey = normalizeOptionalString(normalized.sessionKey) ?? target?.sessionKey;
   const agentId = normalizeOptionalString(normalized.agentId) ?? target?.agentId;
   const sessionId = normalizeOptionalString(normalized.sessionId) ?? target?.sessionId;
+  const lifecycleRevision = normalizeOptionalString(normalized.lifecycleRevision);
   return {
     ...(trimmed ? { sessionFile: trimmed } : {}),
     ...(target ? { target } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(agentId ? { agentId } : {}),
     ...(sessionId ? { sessionId } : {}),
+    ...(lifecycleRevision ? { lifecycleRevision } : {}),
     ...(normalized.message !== undefined ? { message: normalized.message } : {}),
     ...(normalizeOptionalString(normalized.messageId)
       ? { messageId: normalizeOptionalString(normalized.messageId) }
@@ -136,11 +132,33 @@ function emitInternalTranscriptUpdate(nextUpdate: InternalSessionTranscriptUpdat
   }
 }
 
+function projectPublicSessionTranscriptUpdate(
+  update: InternalSessionTranscriptUpdate,
+): SessionTranscriptUpdate | undefined {
+  const target = update.target;
+  if (!target) {
+    return undefined;
+  }
+  return {
+    target: {
+      agentId: target.agentId,
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+    },
+    ...(update.sessionKey ? { sessionKey: update.sessionKey } : {}),
+    ...(update.agentId ? { agentId: update.agentId } : {}),
+    ...(update.sessionId ? { sessionId: update.sessionId } : {}),
+    ...(update.message !== undefined ? { message: update.message } : {}),
+    ...(update.messageId ? { messageId: update.messageId } : {}),
+    ...(update.messageSeq !== undefined ? { messageSeq: update.messageSeq } : {}),
+  };
+}
+
 function normalizeUpdateTarget(update: {
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
-  target?: SessionTranscriptUpdate["target"];
+  target?: InternalSessionTranscriptUpdate["target"];
 }): SessionTranscriptUpdateTarget | undefined {
   const sessionKey =
     normalizeOptionalString(update.target?.sessionKey) ??
@@ -151,6 +169,7 @@ function normalizeUpdateTarget(update: {
     (sessionKey ? parseAgentSessionKey(sessionKey)?.agentId : undefined);
   const sessionId =
     normalizeOptionalString(update.target?.sessionId) ?? normalizeOptionalString(update.sessionId);
+  const storePath = normalizeOptionalString(update.target?.storePath);
   if (!agentId || !sessionId || !sessionKey) {
     return undefined;
   }
@@ -158,5 +177,6 @@ function normalizeUpdateTarget(update: {
     agentId,
     sessionId,
     sessionKey,
+    ...(storePath ? { storePath } : {}),
   };
 }

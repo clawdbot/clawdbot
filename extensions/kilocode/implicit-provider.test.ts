@@ -10,13 +10,13 @@ describe("Kilo Gateway implicit provider", () => {
     expect(provider.api).toBe("openai-completions");
     expect(provider.models).toStrictEqual([
       {
-        id: "kilo/auto",
-        name: "Kilo Auto",
+        id: "kilo-auto/balanced",
+        name: "Auto Balanced",
         reasoning: true,
         input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        cost: { input: 0.325, output: 1.95, cacheRead: 0.0325, cacheWrite: 0.40625 },
         contextWindow: 1000000,
-        maxTokens: 128000,
+        maxTokens: 65536,
       },
     ]);
   });

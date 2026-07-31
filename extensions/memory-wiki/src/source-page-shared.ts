@@ -36,6 +36,7 @@ export async function writeImportedSourcePage(params: {
   vaultRoot: string;
   syncKey: string;
   sourcePath: string;
+  sourceContent?: string;
   sourceUpdatedAtMs: number;
   sourceSize: number;
   renderFingerprint: string;
@@ -44,6 +45,20 @@ export async function writeImportedSourcePage(params: {
   state: ImportedSourceState;
   buildRendered: (raw: string, updatedAt: string) => string;
 }): Promise<{ pagePath: string; changed: boolean; created: boolean }> {
+  const shouldSkip = await shouldSkipImportedSourceWrite({
+    vaultRoot: params.vaultRoot,
+    syncKey: params.syncKey,
+    expectedPagePath: params.pagePath,
+    expectedSourcePath: params.sourcePath,
+    sourceUpdatedAtMs: params.sourceUpdatedAtMs,
+    sourceSize: params.sourceSize,
+    renderFingerprint: params.renderFingerprint,
+    state: params.state,
+  });
+  if (shouldSkip) {
+    return { pagePath: params.pagePath, changed: false, created: false };
+  }
+
   const vault = await fsRoot(params.vaultRoot);
   const pageStat = await vault.stat(params.pagePath).catch((error: unknown) => {
     if (
@@ -56,21 +71,7 @@ export async function writeImportedSourcePage(params: {
   });
   const created = !pageStat;
   const updatedAt = timestampMsToIsoString(params.sourceUpdatedAtMs) ?? new Date().toISOString();
-  const shouldSkip = await shouldSkipImportedSourceWrite({
-    vaultRoot: params.vaultRoot,
-    syncKey: params.syncKey,
-    expectedPagePath: params.pagePath,
-    expectedSourcePath: params.sourcePath,
-    sourceUpdatedAtMs: params.sourceUpdatedAtMs,
-    sourceSize: params.sourceSize,
-    renderFingerprint: params.renderFingerprint,
-    state: params.state,
-  });
-  if (shouldSkip) {
-    return { pagePath: params.pagePath, changed: false, created };
-  }
-
-  const raw = await fs.readFile(params.sourcePath, "utf8");
+  const raw = params.sourceContent ?? (await fs.readFile(params.sourcePath, "utf8"));
   const rendered = params.buildRendered(raw, updatedAt);
   const existing = pageStat ? await readExistingImportedSourcePage(vault, params.pagePath) : "";
   const nextRendered = existing ? preserveHumanNotesBlock(rendered, existing) : rendered;

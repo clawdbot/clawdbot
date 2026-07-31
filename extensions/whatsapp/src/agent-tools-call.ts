@@ -13,9 +13,10 @@ import { mulawToPcm } from "openclaw/plugin-sdk/realtime-voice";
 import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import { resolveWhatsAppAccount } from "./accounts.js";
-import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
+import { getWhatsAppConnectionController } from "./connection-controller-runtime-context.js";
 import { resolveJidToE164 } from "./targets-runtime.js";
 
 const MEOWCALLER_COMMAND = "meowcaller";
@@ -66,13 +67,6 @@ const defaultDependencies: WhatsAppCallToolDependencies = {
   resolveStateDir: (accountId) =>
     path.join(resolveOAuthDir(), "whatsapp-calls", normalizeAccountId(accountId)),
 };
-
-function jsonResult(payload: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
-    details: payload,
-  };
-}
 
 async function isRegularFile(filePath: string): Promise<boolean> {
   try {
@@ -162,7 +156,7 @@ async function resolveRequesterE164(params: {
   }
 
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
-  const lidLookup = getRegisteredWhatsAppConnectionController(params.accountId)?.getCurrentSock()
+  const lidLookup = getWhatsAppConnectionController(params.accountId)?.getCurrentSock()
     ?.signalRepository.lidMapping;
   return await resolveJidToE164(senderId, { authDir: account.authDir, lidLookup });
 }
@@ -171,7 +165,7 @@ async function resolveLinkedWhatsAppSelfE164(params: {
   accountId: string;
   cfg: NonNullable<OpenClawPluginToolContext["config"]>;
 }): Promise<string | null> {
-  const controller = getRegisteredWhatsAppConnectionController(params.accountId);
+  const controller = getWhatsAppConnectionController(params.accountId);
   if (!controller) {
     return null;
   }
@@ -338,7 +332,7 @@ function createWhatsAppCallToolWithDependencies(
   };
 }
 
-export function createWhatsAppCallTool(
+function createWhatsAppCallTool(
   api: OpenClawPluginApi,
   context: OpenClawPluginToolContext,
 ): AnyAgentTool | null {
@@ -350,13 +344,3 @@ export function registerWhatsAppCallTool(api: OpenClawPluginApi): void {
     name: "whatsapp_call",
   });
 }
-
-export const testing = {
-  createWhatsAppCallToolWithDependencies,
-  normalizeTelephonyPcm,
-  resolveCallWindowMs,
-  resolveLinkedWhatsAppSelfE164,
-  resolveRequesterE164,
-  resolveSetupCommand,
-  wrapPcm16MonoInWav,
-};

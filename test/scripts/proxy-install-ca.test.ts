@@ -1,7 +1,7 @@
+import { spawnSync } from "node:child_process";
 // Proxy CA installer tests keep macOS trust changes behind explicit CLI args.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 

@@ -13,7 +13,7 @@ For most users, the upgrade is in place:
 - the plugin stays `@openclaw/matrix`
 - the channel stays `matrix`
 - your config stays under `channels.matrix`
-- cached credentials stay under `~/.openclaw/credentials/matrix/`
+- cached credentials move into the shared `state/openclaw.sqlite` plugin state
 - runtime state stays under `~/.openclaw/matrix/`
 
 You do not need to rename config keys or reinstall the plugin under a new name.
@@ -25,66 +25,37 @@ into the root OpenClaw package.
 
 ## What the migration does automatically
 
-Matrix migration runs when the gateway starts (through the loaded Matrix plugin), when you run [`openclaw doctor --fix`](/gateway/doctor), and as a fallback when the Matrix client starts and still finds old on-disk state. Before any actionable migration step mutates on-disk state, OpenClaw creates or reuses a focused recovery snapshot.
+Matrix migration runs when you run [`openclaw doctor --fix`](/gateway/doctor). File-based sidecars next to the dedicated Matrix store retain their client-start fallback, but credential-file import is Doctor-only; runtime reads only canonical SQLite credential state.
 
-When you use `openclaw update`, the exact trigger depends on how OpenClaw is installed:
+Doctor migration covers:
 
-- source installs run a non-interactive `openclaw doctor --fix` pass during the update flow, then restart the gateway by default
-- package-manager installs update the package, run `openclaw doctor --non-interactive --fix`, then rely on the default gateway restart so startup can finish Matrix migration
-- if you use `openclaw update --no-restart`, startup-backed Matrix migration is deferred until you later run `openclaw doctor --fix` and restart the gateway
-
-Automatic migration covers:
-
-- creating or reusing a pre-migration snapshot under `~/Backups/openclaw-migrations/`
-- reusing your cached Matrix credentials
+- importing and verifying retired `~/.openclaw/credentials/matrix/credentials*.json` files before archiving them
 - keeping the same account selection and `channels.matrix` config
-- moving the old flat Matrix sync store and crypto store into the current account-scoped location when the target account can be resolved safely
 - importing file-based sidecar state (`bot-storage.json` sync cache, `recovery-key.json`, `legacy-crypto-migration.json`, IndexedDB snapshots) into Matrix SQLite state; migrated files are archived with a `.migrated` suffix
-- extracting a previously saved Matrix room-key backup decryption key from the old rust crypto store, when that key exists locally
 - reusing the most complete existing token-hash storage root for the same Matrix account, homeserver, user, and device when the access token changes later
-- scanning sibling token-hash storage roots for pending encrypted-state restore metadata when the Matrix access token changed but the account/device identity stayed the same
-- restoring backed-up room keys into the new crypto store on the next Matrix startup
 
-Snapshot details:
+## Upgrading from OpenClaw releases older than 2026.4
 
-- OpenClaw writes a marker file at `~/.openclaw/matrix/migration-snapshot.json` after a successful snapshot so later startup and repair passes can reuse the same archive.
-- These automatic Matrix migration snapshots back up config + state only (`includeWorkspace: false`).
-- If Matrix only has warning-only migration state, for example because `userId` or `accessToken` is still missing, OpenClaw does not create the snapshot yet because no Matrix mutation is actionable.
-- If the snapshot step fails, OpenClaw skips Matrix migration for that run instead of mutating state without a recovery point.
+Releases through the 2026.6 train also migrated the original flat single-store
+Matrix layout (`~/.openclaw/matrix/bot-storage.json` plus
+`~/.openclaw/matrix/crypto/`) and prepared encrypted-state recovery from the
+old rust crypto store. Current releases no longer carry that migration.
 
-About multi-account upgrades:
+If you are upgrading an installation that still uses the flat layout, first
+upgrade to a 2026.6 release, run `openclaw doctor --fix`, and start the gateway
+once so the flat store and any recoverable room keys are migrated. Then update
+to the latest release.
 
-- the flat Matrix store (`~/.openclaw/matrix/bot-storage.json` and `~/.openclaw/matrix/crypto/`) came from a single-store layout, so OpenClaw can only migrate it into one resolved Matrix account target
-- already account-scoped legacy Matrix stores are detected and prepared per configured Matrix account
-
-## What the migration cannot do automatically
-
-The previous public Matrix plugin did **not** automatically create Matrix room-key backups. It persisted local crypto state and requested device verification, but it did not guarantee that your room keys were backed up to the homeserver.
-
-That means some encrypted installs can only be migrated partially.
-
-OpenClaw cannot automatically recover:
-
-- local-only room keys that were never backed up
-- encrypted state when the target Matrix account cannot be resolved yet because `homeserver`, `userId`, or `accessToken` are still unavailable
-- encrypted state when the old crypto store has no recorded device ID for the account
-- automatic migration of one shared flat Matrix store when multiple Matrix accounts are configured but `channels.matrix.defaultAccount` is not set
-- custom plugin path installs that are pinned to a repo path instead of the standard Matrix package (surfaced by `openclaw doctor`)
-- a missing recovery key when the old store had backed-up keys but did not keep the decryption key locally
-
-If your old installation had local-only encrypted history that was never backed up, some older encrypted messages may remain unreadable after the upgrade.
+The previous public Matrix plugin did **not** automatically create Matrix room-key backups. If your old installation had local-only encrypted history that was never backed up, some older encrypted messages may remain unreadable after the upgrade regardless of the migration path.
 
 ## Recommended upgrade flow
 
 1. Update OpenClaw and the Matrix plugin normally.
-   Prefer plain `openclaw update` without `--no-restart` so startup can finish the Matrix migration immediately.
 2. Run:
 
    ```bash
    openclaw doctor --fix
    ```
-
-   If Matrix has actionable migration work, doctor will create or reuse the pre-migration snapshot first and print the archive path.
 
 3. Start or restart the gateway.
 4. Check current verification and backup state:
@@ -135,77 +106,11 @@ If your old installation had local-only encrypted history that was never backed 
    openclaw matrix verify bootstrap
    ```
 
-## How encrypted migration works
-
-Encrypted migration is a two-stage process:
-
-1. Startup or `openclaw doctor --fix` creates or reuses the pre-migration snapshot if encrypted migration is actionable, then inspects the old Matrix rust crypto store through the crypto inspector bundled with the Matrix plugin.
-2. If a backup decryption key is found, OpenClaw imports it into Matrix SQLite state and marks room-key restore as pending.
-3. On the next Matrix startup, OpenClaw restores backed-up room keys into the new crypto store automatically. Pending restore state is also picked up from sibling token-hash storage roots when the access token rotated in between.
-
-If the old store reports room keys that were never backed up, OpenClaw warns instead of pretending recovery succeeded.
-
 ## Common messages and what they mean
-
-### Upgrade and detection messages
-
-`Matrix plugin upgraded in place.` (doctor) or `matrix: plugin upgraded in place for account "..."` (startup)
-
-- Meaning: the old on-disk Matrix state was detected and migrated into the current layout.
-- What to do: nothing unless the same output also includes warnings.
-
-`Matrix migration snapshot created before applying Matrix upgrades.` / `Matrix migration snapshot reused before applying Matrix upgrades.`
-
-- Meaning: doctor created a recovery archive before mutating Matrix state, or found an existing snapshot marker and reused that archive instead of creating a duplicate backup. Startup logs the same as `matrix: created pre-migration backup snapshot: ...` / `matrix: reusing existing pre-migration backup snapshot: ...`.
-- What to do: keep the printed archive path until you confirm migration succeeded.
-
-`Legacy Matrix state detected at ... but channels.matrix is not configured yet.`
-
-- Meaning: old Matrix state exists, but OpenClaw cannot map it to a current Matrix account because Matrix is not configured.
-- What to do: configure `channels.matrix`, then rerun `openclaw doctor --fix` or restart the gateway.
-
-`Legacy Matrix state detected at ... but the new account-scoped target could not be resolved yet (need homeserver, userId, and access token for channels.matrix...).`
-
-- Meaning: OpenClaw found old state, but it still cannot determine the exact current account/device root.
-- What to do: start the gateway once with a working Matrix login, or rerun `openclaw doctor --fix` after cached credentials exist.
-
-`Legacy Matrix state detected at ... but multiple Matrix accounts are configured and channels.matrix.defaultAccount is not set.`
-
-- Meaning: OpenClaw found one shared flat Matrix store, but it refuses to guess which named Matrix account should receive it.
-- What to do: set `channels.matrix.defaultAccount` to the intended account, then rerun `openclaw doctor --fix` or restart the gateway.
-
-The same three warnings also appear with the prefix `Legacy Matrix encrypted state detected at ...` when the blocked store is the old encrypted crypto store.
-
-`Matrix legacy sync store not migrated because the target already exists (...)` / `Matrix legacy crypto store not migrated because the target already exists (...)`
-
-- Meaning: the new account-scoped location already has a sync or crypto store, so OpenClaw did not overwrite it automatically.
-- What to do: verify that the current account is the correct one before manually removing or moving the conflicting target.
-
-`Failed migrating Matrix legacy sync store (...)` or `Failed migrating Matrix legacy crypto store (...)`
-
-- Meaning: OpenClaw tried to move old Matrix state but the filesystem operation failed.
-- What to do: inspect filesystem permissions and disk state, then rerun `openclaw doctor --fix`.
-
-`Matrix migration warnings are present, but no on-disk Matrix mutation is actionable yet. No pre-migration snapshot was needed.`
-
-- Meaning: OpenClaw detected old Matrix state, but the migration is still blocked on missing identity or credential data. Startup logs this as `matrix: migration remains in a warning-only state; no pre-migration snapshot was needed yet`.
-- What to do: finish Matrix login or config setup, then rerun `openclaw doctor --fix` or restart the gateway.
-
-`Legacy Matrix encrypted state was detected, but the Matrix crypto inspector is unavailable.`
-
-- Meaning: OpenClaw found old encrypted Matrix state, but the Matrix plugin build is missing the crypto inspector module that inspects the old rust crypto store.
-- What to do: reinstall or repair the Matrix plugin (`openclaw plugins install @openclaw/matrix`, or `openclaw plugins install ./path/to/local/matrix-plugin` for a repo checkout), then rerun `openclaw doctor --fix` or restart the gateway.
-
-`- Failed creating a Matrix migration snapshot before repair: ...`
-
-`- Skipping Matrix migration changes for now. Resolve the snapshot failure, then rerun "openclaw doctor --fix".`
-
-- Meaning: OpenClaw refused to mutate Matrix state because it could not create the recovery snapshot first.
-- What to do: resolve the backup error, then rerun `openclaw doctor --fix` or restart the gateway.
 
 `Failed migrating legacy Matrix client storage: ...`
 
-- Meaning: the Matrix client-side fallback found old storage, but the migration failed. OpenClaw rolls back completed moves and aborts that fallback instead of silently starting with a fresh store. This error also appears when the flat store targets a different account than the one currently starting.
+- Meaning: the Matrix client-side fallback found file-based sidecar state, but the import into SQLite failed. OpenClaw rolls back completed moves and aborts that fallback instead of silently starting with a fresh store.
 - What to do: inspect filesystem permissions or conflicts, keep the old state intact, and retry after fixing the error.
 
 `Matrix is installed from a custom path: ...`
@@ -213,47 +118,10 @@ The same three warnings also appear with the prefix `Legacy Matrix encrypted sta
 - Meaning: Matrix is pinned to a path install, so mainline updates do not automatically replace it with the default Matrix package.
 - What to do: reinstall with `openclaw plugins install @openclaw/matrix` when you want to return to the default Matrix plugin.
 
-### Encrypted-state recovery messages
+`Matrix is installed from a custom path that no longer exists: ...`
 
-`matrix: restored X/Y room key(s) from legacy encrypted-state backup`
-
-- Meaning: backed-up room keys were restored successfully into the new crypto store.
-- What to do: usually nothing.
-
-`matrix: N legacy local-only room key(s) were never backed up and could not be restored automatically`
-
-- Meaning: some old room keys existed only in the old local store and had never been uploaded to Matrix backup. During preparation the same limit is reported as `Legacy Matrix encrypted state for account "..." contains N room key(s) that were never backed up.`
-- What to do: expect some old encrypted history to remain unavailable unless you can recover those keys manually from another verified client.
-
-`Legacy Matrix encrypted state detected at ... but no device ID was found for account "..."`
-
-- Meaning: the old crypto store does not record which Matrix device it belonged to, so OpenClaw cannot inspect it safely.
-- What to do: old encrypted history cannot be recovered automatically; OpenClaw continues without it.
-
-`Legacy Matrix encrypted state for account "..." has backed-up room keys, but no local backup decryption key was found. Ask the operator to run "openclaw matrix verify backup restore --recovery-key <key>" after upgrade if they have the recovery key.`
-
-- Meaning: backup exists, but OpenClaw could not recover the recovery key automatically.
-- What to do: run `printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix verify backup restore --recovery-key-stdin` (preferred over passing the key as an argument).
-
-`Failed inspecting legacy Matrix encrypted state for account "..." (...): ...`
-
-- Meaning: OpenClaw found the old encrypted store, but it could not inspect it safely enough to prepare recovery.
-- What to do: rerun `openclaw doctor --fix`. If it repeats, keep the old state directory intact and recover using another verified Matrix client plus `printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix verify backup restore --recovery-key-stdin`.
-
-`Legacy Matrix backup key was found for account "...", but Matrix SQLite state already contains a different recovery key. Leaving the existing state unchanged.`
-
-- Meaning: OpenClaw detected a backup key conflict and refused to overwrite the current recovery-key state automatically.
-- What to do: verify which recovery key is correct before retrying any restore command.
-
-`Legacy Matrix encrypted state for account "..." cannot be fully converted automatically because the old rust crypto store does not expose all local room keys for export.`
-
-- Meaning: this is the hard limit of the old storage format.
-- What to do: backed-up keys can still be restored, but local-only encrypted history may remain unavailable.
-
-`matrix: failed restoring room keys from legacy encrypted-state backup: ...`
-
-- Meaning: the new plugin attempted restore but Matrix returned an error.
-- What to do: run `openclaw matrix verify backup status`, then retry with `printf '%s\n' "$MATRIX_RECOVERY_KEY" | openclaw matrix verify backup restore --recovery-key-stdin` if needed.
+- Meaning: your plugin install record points at a local path that is gone.
+- What to do: reinstall with `openclaw plugins install @openclaw/matrix`, or if you are running from a repo checkout, `openclaw plugins install ./path/to/local/matrix-plugin`. `openclaw doctor --fix` can also remove the stale Matrix plugin references for you.
 
 ### Manual recovery messages
 
@@ -290,13 +158,6 @@ If you accept losing unrecoverable old encrypted history, you can instead reset 
 current backup baseline with `openclaw matrix verify backup reset --yes`. When the
 stored backup secret is broken, that reset also repairs secret storage so the
 new backup key can load correctly after restart.
-
-### Custom plugin install messages
-
-`Matrix is installed from a custom path that no longer exists: ...`
-
-- Meaning: your plugin install record points at a local path that is gone.
-- What to do: reinstall with `openclaw plugins install @openclaw/matrix`, or if you are running from a repo checkout, `openclaw plugins install ./path/to/local/matrix-plugin`. `openclaw doctor --fix` can also remove the stale Matrix plugin references for you.
 
 ## If encrypted history still does not come back
 

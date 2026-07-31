@@ -25,11 +25,51 @@ describe("toRelativeWorkspacePath (windows semantics)", () => {
     });
   });
 
+  it("preserves filename case so callers create the file the agent asked for", () => {
+    withMockedWindowsPlatform(() => {
+      const root = "C:\\Users\\User\\OpenClaw";
+      const candidate = "C:\\Users\\User\\OpenClaw\\src\\Components\\MyComponent.tsx";
+      expect(toRelativeWorkspacePath(root, candidate)).toBe("src\\Components\\MyComponent.tsx");
+    });
+  });
+
+  it("preserves candidate case when the root itself is spelled with different case", () => {
+    withMockedWindowsPlatform(() => {
+      const root = "C:\\Users\\User\\OpenClaw";
+      const candidate = "c:/users/user/openclaw/Memory/Log.txt";
+      expect(toRelativeWorkspacePath(root, candidate)).toBe("Memory\\Log.txt");
+    });
+  });
+
+  it("accepts extended-length prefixed windows paths", () => {
+    withMockedWindowsPlatform(() => {
+      const root = "C:\\Users\\User\\OpenClaw";
+      const candidate = "\\\\?\\C:\\Users\\User\\OpenClaw\\Memory\\Log.txt";
+      expect(toRelativeWorkspacePath(root, candidate)).toBe("Memory\\Log.txt");
+    });
+  });
+
   it("rejects windows paths outside workspace root", () => {
     withMockedWindowsPlatform(() => {
       const root = "C:\\Users\\User\\OpenClaw";
       const candidate = "C:\\Users\\User\\Other\\log.txt";
       expect(() => toRelativeWorkspacePath(root, candidate)).toThrow("Path escapes workspace root");
+    });
+  });
+
+  it("rejects windows escapes that differ from the root only by case", () => {
+    withMockedWindowsPlatform(() => {
+      const root = "C:\\Users\\User\\OpenClaw";
+      const candidate = "c:\\users\\USER\\openclaw\\..\\Other\\log.txt";
+      expect(() => toRelativeWorkspacePath(root, candidate)).toThrow("Path escapes workspace root");
+    });
+  });
+
+  it("treats a differently-cased root as the root itself", () => {
+    withMockedWindowsPlatform(() => {
+      const root = "C:\\Users\\User\\OpenClaw";
+      const candidate = "c:\\users\\USER\\openclaw";
+      expect(toRelativeWorkspacePath(root, candidate, { allowRoot: true })).toBe("");
     });
   });
 });

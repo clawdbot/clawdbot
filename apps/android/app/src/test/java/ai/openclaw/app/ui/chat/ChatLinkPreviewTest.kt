@@ -1,8 +1,25 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.ui.image.PublicOnlyDns
+import ai.openclaw.app.ui.image.REMOTE_IMAGE_BODY_MAX_BYTES
+import ai.openclaw.app.ui.image.REMOTE_IMAGE_MAX_DIMENSION
+import ai.openclaw.app.ui.image.RemoteImageResult
+import ai.openclaw.app.ui.image.SafeRemoteImageFetcher
+import ai.openclaw.app.ui.image.SafeRemoteImageStore
+import ai.openclaw.app.ui.image.SafeWebFetcher
+import ai.openclaw.app.ui.image.decodeRemoteImageBitmap
+import ai.openclaw.app.ui.image.isPubliclyRoutableHost
+import ai.openclaw.app.ui.image.resolveRedirect
 import android.graphics.Bitmap
 import android.graphics.Color
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import okhttp3.Dns
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
@@ -158,6 +175,21 @@ class ChatLinkPreviewTest {
   }
 
   @Test
+  fun metadataTruncationPreservesUtf16Boundaries() {
+    val titlePrefix = "t".repeat(LINK_PREVIEW_TITLE_MAX_CHARS - 1)
+    val descriptionPrefix = "d".repeat(LINK_PREVIEW_DESCRIPTION_MAX_CHARS - 2)
+    val result =
+      parseOpenGraph(
+        "<meta property='og:title' content='$titlePrefix\uD83D\uDE80 trailing'>" +
+          "<meta property='og:description' content='$descriptionPrefix\uD83D\uDE80 trailing'>",
+        "https://example.com",
+      ) as LinkPreviewResult.Loaded
+
+    assertEquals(titlePrefix, result.metadata.title)
+    assertEquals("$descriptionPrefix\uD83D\uDE80", result.metadata.description)
+  }
+
+  @Test
   fun fetchesHtmlWithoutAmbientHeaders() =
     withServer { server ->
       server.enqueue(
@@ -250,6 +282,49 @@ class ChatLinkPreviewTest {
     }
 
   @Test
+  fun cancellationCancelsActiveMetadataAndImageCalls() {
+    withServer { server ->
+      coroutineScope {
+        server.enqueue(
+          MockResponse()
+            // Cancel before OkHttp produces a Response.
+            .setHeader("Content-Type", "text/html")
+            .setHeadersDelay(30, TimeUnit.SECONDS)
+            .setBody("<title>Never delivered</title>"),
+        )
+
+        val metadataFetch = async { fetcher(timeoutMillis = 60_000).fetch(server.url("/slow-page").toString()) }
+        assertTrue(withContext(Dispatchers.IO) { server.takeRequest(1, TimeUnit.SECONDS) } != null)
+        delay(100)
+
+        withTimeout(1_000) {
+          metadataFetch.cancelAndJoin()
+        }
+      }
+    }
+
+    withServer { server ->
+      coroutineScope {
+        server.enqueue(
+          MockResponse()
+            // Cancel while OkHttp is reading the response body.
+            .setHeader("Content-Type", "image/png")
+            .setBodyDelay(30, TimeUnit.SECONDS)
+            .setBody(Buffer().write(pngBytes(width = 10, height = 10))),
+        )
+
+        val imageFetch = async { imageFetcher(timeoutMillis = 60_000).fetch(server.url("/slow-image.png").toString()) }
+        assertTrue(withContext(Dispatchers.IO) { server.takeRequest(1, TimeUnit.SECONDS) } != null)
+        delay(100)
+
+        withTimeout(1_000) {
+          imageFetch.cancelAndJoin()
+        }
+      }
+    }
+  }
+
+  @Test
   fun allowsHttpToHttpsRedirectAndRejectsFileRedirect() {
     withServer { server ->
       server.enqueue(redirect("https://secure.example/target"))
@@ -308,12 +383,12 @@ class ChatLinkPreviewTest {
   fun imageFetchStartsOnlyWhenStoreIsRequestedAndCacheHitAvoidsSecondRequest() =
     withServer { server ->
       server.enqueue(imageResponse(pngBytes(width = 120, height = 80)))
-      val store = LinkPreviewImageStore(fetcher = fetcher()::fetchImage)
+      val store = SafeRemoteImageStore(fetcher = imageFetcher()::fetch)
       val imageUrl = server.url("/card.png").toString()
 
       assertEquals(0, server.requestCount)
-      assertTrue(store.get(imageUrl) is LinkPreviewImageResult.Loaded)
-      assertTrue(store.get(imageUrl) is LinkPreviewImageResult.Loaded)
+      assertTrue(store.get(imageUrl) is RemoteImageResult.Raster)
+      assertTrue(store.get(imageUrl) is RemoteImageResult.Raster)
       assertEquals(1, server.requestCount)
       assertEquals("image/*", server.takeRequest().getHeader("Accept"))
     }
@@ -325,18 +400,18 @@ class ChatLinkPreviewTest {
       val second = Bitmap.createBitmap(20, 20, Bitmap.Config.ARGB_8888)
       val fetchCounts = mutableMapOf<String, Int>()
       val store =
-        LinkPreviewImageStore(
+        SafeRemoteImageStore(
           fetcher = { url ->
             fetchCounts[url] = fetchCounts.getOrDefault(url, 0) + 1
-            LinkPreviewImageResult.Loaded(if (url == "first") first else second)
+            RemoteImageResult.Raster(if (url == "first") first else second)
           },
           maxBytes = first.allocationByteCount,
         )
 
       try {
-        assertTrue(store.get("first") is LinkPreviewImageResult.Loaded)
-        assertTrue(store.get("second") is LinkPreviewImageResult.Loaded)
-        assertTrue(store.get("first") is LinkPreviewImageResult.Loaded)
+        assertTrue(store.get("first") is RemoteImageResult.Raster)
+        assertTrue(store.get("second") is RemoteImageResult.Raster)
+        assertTrue(store.get("first") is RemoteImageResult.Raster)
 
         assertEquals(2, fetchCounts["first"])
         assertEquals(1, fetchCounts["second"])
@@ -351,18 +426,18 @@ class ChatLinkPreviewTest {
     runBlocking {
       val fetchCounts = mutableMapOf<String, Int>()
       val store =
-        LinkPreviewImageStore(
+        SafeRemoteImageStore(
           fetcher = { url ->
             fetchCounts[url] = fetchCounts.getOrDefault(url, 0) + 1
-            LinkPreviewImageResult.Failed
+            RemoteImageResult.Failed
           },
           maxBytes = 2,
         )
 
-      assertSame(LinkPreviewImageResult.Failed, store.get("first"))
-      assertSame(LinkPreviewImageResult.Failed, store.get("second"))
-      assertSame(LinkPreviewImageResult.Failed, store.get("third"))
-      assertSame(LinkPreviewImageResult.Failed, store.get("first"))
+      assertSame(RemoteImageResult.Failed, store.get("first"))
+      assertSame(RemoteImageResult.Failed, store.get("second"))
+      assertSame(RemoteImageResult.Failed, store.get("third"))
+      assertSame(RemoteImageResult.Failed, store.get("first"))
 
       assertEquals(2, fetchCounts["first"])
       assertEquals(1, fetchCounts["second"])
@@ -376,19 +451,19 @@ class ChatLinkPreviewTest {
       val maxEntries = 32
       val fetchCounts = mutableMapOf<String, Int>()
       val store =
-        LinkPreviewImageStore(
+        SafeRemoteImageStore(
           fetcher = { url ->
             fetchCounts[url] = fetchCounts.getOrDefault(url, 0) + 1
-            LinkPreviewImageResult.Loaded(tiny)
+            RemoteImageResult.Raster(tiny)
           },
           maxBytes = tiny.allocationByteCount * maxEntries * 2,
         )
 
       try {
         repeat(maxEntries + 1) { index ->
-          assertTrue(store.get("image-$index") is LinkPreviewImageResult.Loaded)
+          assertTrue(store.get("image-$index") is RemoteImageResult.Raster)
         }
-        assertTrue(store.get("image-0") is LinkPreviewImageResult.Loaded)
+        assertTrue(store.get("image-0") is RemoteImageResult.Raster)
 
         assertEquals(2, fetchCounts["image-0"])
       } finally {
@@ -405,13 +480,13 @@ class ChatLinkPreviewTest {
       server.enqueue(
         MockResponse()
           .setHeader("Content-Type", "image/png")
-          .setBody(Buffer().write(ByteArray(LINK_PREVIEW_IMAGE_BODY_MAX_BYTES + 1))),
+          .setBody(Buffer().write(ByteArray(REMOTE_IMAGE_BODY_MAX_BYTES + 1))),
       )
 
-      assertSame(LinkPreviewImageResult.Failed, fetcher().fetchImage(server.url("/animated.gif").toString()))
-      assertSame(LinkPreviewImageResult.Failed, fetcher().fetchImage(server.url("/vector.svg").toString()))
-      assertSame(LinkPreviewImageResult.Failed, fetcher().fetchImage(server.url("/spoofed.png").toString()))
-      assertSame(LinkPreviewImageResult.Failed, fetcher().fetchImage(server.url("/oversized.png").toString()))
+      assertSame(RemoteImageResult.Failed, imageFetcher().fetch(server.url("/animated.gif").toString()))
+      assertTrue(imageFetcher().fetch(server.url("/vector.svg").toString()) is RemoteImageResult.Svg)
+      assertSame(RemoteImageResult.Failed, imageFetcher().fetch(server.url("/spoofed.png").toString()))
+      assertSame(RemoteImageResult.Failed, imageFetcher().fetch(server.url("/oversized.png").toString()))
       assertEquals(4, server.requestCount)
     }
 
@@ -420,7 +495,7 @@ class ChatLinkPreviewTest {
     withServer { server ->
       server.enqueue(imageResponse(pngBytes(width = 10, height = 10)))
 
-      assertSame(LinkPreviewImageResult.Failed, realPolicyFetcher().fetchImage(server.url("/private.png").toString()))
+      assertSame(RemoteImageResult.Failed, realPolicyImageFetcher().fetch(server.url("/private.png").toString()))
       assertEquals(0, server.requestCount)
     }
 
@@ -430,7 +505,7 @@ class ChatLinkPreviewTest {
       repeat(3) { index -> server.enqueue(redirect("/image-hop${index + 1}")) }
       server.enqueue(imageResponse(pngBytes(width = 12, height = 8)))
 
-      assertTrue(fetcher().fetchImage(server.url("/image-start").toString()) is LinkPreviewImageResult.Loaded)
+      assertTrue(imageFetcher().fetch(server.url("/image-start").toString()) is RemoteImageResult.Raster)
       assertEquals(4, server.requestCount)
     }
 
@@ -438,42 +513,46 @@ class ChatLinkPreviewTest {
       repeat(4) { index -> server.enqueue(redirect("/image-hop${index + 1}")) }
       server.enqueue(imageResponse(pngBytes(width = 12, height = 8)))
 
-      assertSame(LinkPreviewImageResult.Failed, fetcher().fetchImage(server.url("/image-start").toString()))
+      assertSame(RemoteImageResult.Failed, imageFetcher().fetch(server.url("/image-start").toString()))
       assertEquals(4, server.requestCount)
     }
 
     withServer { server ->
       server.enqueue(redirect("file:///tmp/private.png"))
 
-      assertSame(LinkPreviewImageResult.Failed, fetcher().fetchImage(server.url("/image-start").toString()))
+      assertSame(RemoteImageResult.Failed, imageFetcher().fetch(server.url("/image-start").toString()))
       assertEquals(1, server.requestCount)
     }
   }
 
   @Test
   fun imageDecodeDownsamplesLargeSource() {
-    val decoded = decodeLinkPreviewBitmap(pngBytes(width = 2_400, height = 1_200))
+    val decoded = decodeRemoteImageBitmap(pngBytes(width = 2_400, height = 1_200))
 
     assertTrue(decoded != null)
-    assertTrue(checkNotNull(decoded).width <= LINK_PREVIEW_IMAGE_MAX_DIMENSION)
-    assertTrue(decoded.height <= LINK_PREVIEW_IMAGE_MAX_DIMENSION)
+    assertTrue(checkNotNull(decoded).width <= REMOTE_IMAGE_MAX_DIMENSION)
+    assertTrue(decoded.height <= REMOTE_IMAGE_MAX_DIMENSION)
   }
 
   @Test
   fun corruptImageIsNegativeCachedWithoutRefetch() =
     withServer { server ->
       server.enqueue(MockResponse().setHeader("Content-Type", "image/webp").setBody("not an image"))
-      val store = LinkPreviewImageStore(fetcher = fetcher()::fetchImage)
+      val store = SafeRemoteImageStore(fetcher = imageFetcher()::fetch)
       val imageUrl = server.url("/corrupt.webp").toString()
 
-      assertSame(LinkPreviewImageResult.Failed, store.get(imageUrl))
-      assertSame(LinkPreviewImageResult.Failed, store.get(imageUrl))
+      assertSame(RemoteImageResult.Failed, store.get(imageUrl))
+      assertSame(RemoteImageResult.Failed, store.get(imageUrl))
       assertEquals(1, server.requestCount)
     }
 
   private fun fetcher(timeoutMillis: Long = 6_000): LinkPreviewFetcher = LinkPreviewFetcher(baseClient().build(), timeoutMillis, permissiveHostPolicy)
 
   private fun realPolicyFetcher(): LinkPreviewFetcher = LinkPreviewFetcher(baseClient().build())
+
+  private fun imageFetcher(timeoutMillis: Long = 6_000): SafeRemoteImageFetcher = SafeRemoteImageFetcher(SafeWebFetcher(baseClient().build(), timeoutMillis, permissiveHostPolicy))
+
+  private fun realPolicyImageFetcher(): SafeRemoteImageFetcher = SafeRemoteImageFetcher(SafeWebFetcher(baseClient().build()))
 
   private fun baseClient(): OkHttpClient.Builder =
     OkHttpClient

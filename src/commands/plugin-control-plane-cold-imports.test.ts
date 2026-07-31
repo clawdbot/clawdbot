@@ -1,6 +1,5 @@
 // Plugin control-plane cold-import tests guard setup and plugin metadata paths against runtime-heavy imports.
 import { afterEach, describe, expect, it } from "vitest";
-import { refreshPluginRegistry } from "../plugins/plugin-registry.js";
 import {
   createColdPluginConfig,
   createColdPluginFixture,
@@ -8,9 +7,8 @@ import {
   isColdPluginRuntimeLoaded,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
-import { buildAuthChoiceOptions, formatAuthChoiceChoicesForCli } from "./auth-choice-options.js";
+import { buildAuthChoiceGroups, formatAuthChoiceChoicesForCli } from "./auth-choice-options.js";
 import { listManifestInstalledChannelIds } from "./channel-setup/discovery.js";
-import { resolveProviderCatalogPluginIdsForFilter } from "./models/list.provider-catalog.js";
 
 const tempDirs: string[] = [];
 
@@ -45,13 +43,15 @@ describe("command control-plane plugin discovery", () => {
     const cfg = createColdPluginConfig(plugin.rootDir, plugin.pluginId);
     const env = createColdPluginHermeticEnv(workspaceDir);
 
-    const authChoice = buildAuthChoiceOptions({
+    const authChoice = buildAuthChoiceGroups({
       store: {} as never,
       includeSkip: false,
       config: cfg,
       workspaceDir,
       env,
-    }).find((choice) => choice.value === plugin.authChoiceId);
+    })
+      .groups.flatMap((group) => group.options)
+      .find((choice) => choice.value === plugin.authChoiceId);
     expect(authChoice?.label).toBe("Cold Provider API key");
     expect(authChoice?.groupId).toBe(plugin.providerId);
     expect(
@@ -61,30 +61,6 @@ describe("command control-plane plugin discovery", () => {
         env,
       }).split("|"),
     ).toContain(plugin.authChoiceId);
-    expect(isColdPluginRuntimeLoaded(plugin)).toBe(false);
-  });
-
-  it("resolves models-list provider ownership without importing plugin runtime", async () => {
-    const plugin = createColdPluginFixture({ rootDir: makeTempDir() });
-    const workspaceDir = makeTempDir();
-    const cfg = createColdPluginConfig(plugin.rootDir, plugin.pluginId);
-    const env = createColdPluginHermeticEnv(workspaceDir, { disablePersistedRegistry: false });
-
-    await refreshPluginRegistry({
-      config: cfg,
-      workspaceDir,
-      env,
-      reason: "manual",
-    });
-    expect(isColdPluginRuntimeLoaded(plugin)).toBe(false);
-
-    await expect(
-      resolveProviderCatalogPluginIdsForFilter({
-        cfg,
-        env,
-        providerFilter: plugin.providerId,
-      }),
-    ).resolves.toEqual([plugin.pluginId]);
     expect(isColdPluginRuntimeLoaded(plugin)).toBe(false);
   });
 });

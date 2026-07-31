@@ -9,15 +9,24 @@ title: "OpenCode Go"
 OpenCode Go is the Go catalog inside [OpenCode](/providers/opencode). It shares
 the `OPENCODE_API_KEY` credential with the Zen catalog, but keeps its own
 runtime provider id (`opencode-go`) so upstream per-model routing stays
-correct.
+correct. OpenClaw provides it as the official external
+`@openclaw/opencode-go-provider` plugin.
 
 | Property         | Value                                              |
 | ---------------- | -------------------------------------------------- |
 | Runtime provider | `opencode-go`                                      |
+| Plugin           | `@openclaw/opencode-go-provider`                   |
 | Auth             | `OPENCODE_API_KEY` (alias: `OPENCODE_ZEN_API_KEY`) |
 | Parent setup     | [OpenCode](/providers/opencode)                    |
 
 ## Getting started
+
+Install the official plugin and restart the Gateway:
+
+```bash
+openclaw plugins install @openclaw/opencode-go-provider
+openclaw gateway restart
+```
 
 <Tabs>
   <Tab title="Interactive">
@@ -65,10 +74,10 @@ correct.
 }
 ```
 
-## Built-in catalog
+## Catalog
 
 Run `openclaw models list --provider opencode-go` for the current model list.
-Bundled rows:
+Current rows:
 
 | Model ref                       | Name              | Context   | Max output | Image input |
 | ------------------------------- | ----------------- | --------- | ---------- | ----------- |
@@ -81,9 +90,7 @@ Bundled rows:
 | `opencode-go/kimi-k2.5`         | Kimi K2.5         | 262,144   | 65,536     | Yes         |
 | `opencode-go/kimi-k2.6`         | Kimi K2.6         | 262,144   | 65,536     | Yes         |
 | `opencode-go/kimi-k2.7-code`    | Kimi K2.7 Code    | 262,144   | 262,144    | Yes         |
-| `opencode-go/mimo-v2-omni`      | MiMo V2 Omni      | 262,144   | 32,000     | Yes         |
 | `opencode-go/mimo-v2.5`         | MiMo V2.5         | 1M        | 128,000    | Yes         |
-| `opencode-go/mimo-v2-pro`       | MiMo V2 Pro       | 1,048,576 | 32,000     | No          |
 | `opencode-go/mimo-v2.5-pro`     | MiMo V2.5 Pro     | 1,048,576 | 128,000    | No          |
 | `opencode-go/minimax-m2.5`      | MiniMax M2.5      | 204,800   | 65,536     | No          |
 | `opencode-go/minimax-m2.7`      | MiniMax M2.7      | 204,800   | 131,072    | No          |

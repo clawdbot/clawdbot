@@ -68,6 +68,7 @@ function readRefValue(argv, index, optionName) {
   return value;
 }
 
+/** @internal Directly tested script implementation detail. */
 export function parseArgs(argv) {
   const args = {
     base: "",

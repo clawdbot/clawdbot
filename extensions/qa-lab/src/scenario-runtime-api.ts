@@ -25,15 +25,13 @@ export type QaScenarioRuntimeEnv<
   transport: TTransport;
 };
 
-export type QaScenarioRuntimeDeps = {
+type QaScenarioRuntimeDeps = {
   fs: typeof NodeFs;
   path: typeof NodePath;
   sleep: (ms?: number) => Promise<unknown>;
   randomUUID: () => string;
   runScenario: QaScenarioRuntimeFunction;
   waitForOutboundMessage: QaScenarioRuntimeFunction;
-  waitForTransportOutboundMessage: QaScenarioRuntimeFunction;
-  waitForChannelOutboundMessage: QaScenarioRuntimeFunction;
   waitForNoOutbound: QaScenarioRuntimeFunction;
   waitForNoTransportOutbound: QaScenarioRuntimeFunction;
   recentOutboundSummary: QaScenarioRuntimeFunction;
@@ -58,10 +56,12 @@ export type QaScenarioRuntimeDeps = {
   patchConfig: QaScenarioRuntimeFunction;
   applyConfig: QaScenarioRuntimeFunction;
   readConfigSnapshot: QaScenarioRuntimeFunction;
+  restartGatewayWithConfigPatch: QaScenarioRuntimeFunction;
   createSession: QaScenarioRuntimeFunction;
   readEffectiveTools: QaScenarioRuntimeFunction;
   readSkillStatus: QaScenarioRuntimeFunction;
   readRawQaSessionStore: QaScenarioRuntimeFunction;
+  seedQaSessionTranscript: QaScenarioRuntimeFunction;
   readGatewayLogs: QaScenarioRuntimeFunction;
   markGatewayLogCursor: QaScenarioRuntimeFunction;
   scanGatewayLogSentinels: QaScenarioRuntimeFunction;
@@ -96,14 +96,13 @@ export type QaScenarioRuntimeDeps = {
   liveTurnTimeoutMs: QaScenarioRuntimeFunction;
   resolveQaLiveTurnTimeoutMs: QaScenarioRuntimeFunction;
   splitModelRef: QaScenarioRuntimeFunction;
-  qaChannelPlugin: unknown;
   hasDiscoveryLabels: QaScenarioRuntimeFunction;
   reportsDiscoveryScopeLeak: QaScenarioRuntimeFunction;
   reportsMissingDiscoveryFiles: QaScenarioRuntimeFunction;
   hasModelSwitchContinuitySignal: QaScenarioRuntimeFunction;
 };
 
-export type QaScenarioRuntimeConstants = {
+type QaScenarioRuntimeConstants = {
   imageUnderstandingPngBase64: string;
   imageUnderstandingLargePngBase64: string;
   imageUnderstandingValidPngBase64: string;
@@ -126,8 +125,6 @@ type QaScenarioRuntimeApi<
   runScenario: TDeps["runScenario"];
   waitForCondition: TEnv["transport"]["waitForCondition"];
   waitForOutboundMessage: TDeps["waitForOutboundMessage"];
-  waitForTransportOutboundMessage: TDeps["waitForTransportOutboundMessage"];
-  waitForChannelOutboundMessage: TDeps["waitForChannelOutboundMessage"];
   waitForNoOutbound: TDeps["waitForNoOutbound"];
   waitForNoTransportOutbound: TDeps["waitForNoTransportOutbound"];
   recentOutboundSummary: TDeps["recentOutboundSummary"];
@@ -153,10 +150,12 @@ type QaScenarioRuntimeApi<
   patchConfig: TDeps["patchConfig"];
   applyConfig: TDeps["applyConfig"];
   readConfigSnapshot: TDeps["readConfigSnapshot"];
+  restartGatewayWithConfigPatch: TDeps["restartGatewayWithConfigPatch"];
   createSession: TDeps["createSession"];
   readEffectiveTools: TDeps["readEffectiveTools"];
   readSkillStatus: TDeps["readSkillStatus"];
   readRawQaSessionStore: TDeps["readRawQaSessionStore"];
+  seedQaSessionTranscript: TDeps["seedQaSessionTranscript"];
   readGatewayLogs: TDeps["readGatewayLogs"];
   markGatewayLogCursor: TDeps["markGatewayLogCursor"];
   scanGatewayLogSentinels: TDeps["scanGatewayLogSentinels"];
@@ -191,7 +190,6 @@ type QaScenarioRuntimeApi<
   liveTurnTimeoutMs: TDeps["liveTurnTimeoutMs"];
   resolveQaLiveTurnTimeoutMs: TDeps["resolveQaLiveTurnTimeoutMs"];
   splitModelRef: TDeps["splitModelRef"];
-  qaChannelPlugin: unknown;
   hasDiscoveryLabels: TDeps["hasDiscoveryLabels"];
   reportsDiscoveryScopeLeak: TDeps["reportsDiscoveryScopeLeak"];
   reportsMissingDiscoveryFiles: TDeps["reportsMissingDiscoveryFiles"];
@@ -238,8 +236,6 @@ export function createQaScenarioRuntimeApi<
     runScenario: params.deps.runScenario,
     waitForCondition: transport.waitForCondition,
     waitForOutboundMessage: params.deps.waitForOutboundMessage,
-    waitForTransportOutboundMessage: params.deps.waitForTransportOutboundMessage,
-    waitForChannelOutboundMessage: params.deps.waitForChannelOutboundMessage,
     waitForNoOutbound: params.deps.waitForNoOutbound,
     waitForNoTransportOutbound: params.deps.waitForNoTransportOutbound,
     recentOutboundSummary: params.deps.recentOutboundSummary,
@@ -265,10 +261,12 @@ export function createQaScenarioRuntimeApi<
     patchConfig: params.deps.patchConfig,
     applyConfig: params.deps.applyConfig,
     readConfigSnapshot: params.deps.readConfigSnapshot,
+    restartGatewayWithConfigPatch: params.deps.restartGatewayWithConfigPatch,
     createSession: params.deps.createSession,
     readEffectiveTools: params.deps.readEffectiveTools,
     readSkillStatus: params.deps.readSkillStatus,
     readRawQaSessionStore: params.deps.readRawQaSessionStore,
+    seedQaSessionTranscript: params.deps.seedQaSessionTranscript,
     readGatewayLogs: params.deps.readGatewayLogs,
     markGatewayLogCursor: params.deps.markGatewayLogCursor,
     scanGatewayLogSentinels: params.deps.scanGatewayLogSentinels,
@@ -303,7 +301,6 @@ export function createQaScenarioRuntimeApi<
     liveTurnTimeoutMs: params.deps.liveTurnTimeoutMs,
     resolveQaLiveTurnTimeoutMs: params.deps.resolveQaLiveTurnTimeoutMs,
     splitModelRef: params.deps.splitModelRef,
-    qaChannelPlugin: params.deps.qaChannelPlugin,
     hasDiscoveryLabels: params.deps.hasDiscoveryLabels,
     reportsDiscoveryScopeLeak: params.deps.reportsDiscoveryScopeLeak,
     reportsMissingDiscoveryFiles: params.deps.reportsMissingDiscoveryFiles,

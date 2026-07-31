@@ -118,7 +118,7 @@ export async function main(
 
 function isMainModule() {
   const entry = process.argv[1];
-  return Boolean(entry) && import.meta.url === pathToFileURL(entry).href;
+  return entry !== undefined && import.meta.url === pathToFileURL(entry).href;
 }
 
 if (isMainModule()) {

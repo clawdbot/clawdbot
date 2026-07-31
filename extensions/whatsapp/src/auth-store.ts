@@ -76,8 +76,17 @@ function isValidJson(raw: string): boolean {
   }
 }
 
-export async function restoreCredsFromBackupIfNeeded(authDir: string): Promise<boolean> {
+export async function restoreCredsFromBackupIfNeeded(
+  authDir: string,
+  options?: { beforeCredentialPersistence?: () => Promise<void> },
+): Promise<boolean> {
   const logger = getChildLogger({ module: "web-session" });
+  let restore:
+    | {
+        content: string;
+        credsPath: string;
+      }
+    | undefined;
   try {
     const credsPath = resolveWebCredsPath(authDir);
     const backupPath = resolveWebCredsBackupPath(authDir);
@@ -95,12 +104,22 @@ export async function restoreCredsFromBackupIfNeeded(authDir: string): Promise<b
     if (!backupRaw || !isValidJson(backupRaw)) {
       return false;
     }
+    restore = { content: backupRaw, credsPath };
+  } catch {
+    return false;
+  }
+
+  await options?.beforeCredentialPersistence?.();
+  try {
     await writeWebCredsRawAtomically({
-      filePath: credsPath,
-      content: backupRaw,
+      filePath: restore.credsPath,
+      content: restore.content,
       tempPrefix: ".creds.restore",
     });
-    logger.warn({ credsPath }, "restored corrupted WhatsApp creds.json from backup");
+    logger.warn(
+      { credsPath: restore.credsPath },
+      "restored corrupted WhatsApp creds.json from backup",
+    );
     return true;
   } catch {
     // ignore
@@ -219,20 +238,24 @@ function isBaileysAuthFileName(name: string): boolean {
   return /^(app-state-sync|session|sender-key|pre-key)-/.test(name);
 }
 
-async function clearBaileysAuthFiles(authDir: string) {
+async function clearBaileysAuthFiles(
+  authDir: string,
+  beforeCredentialPersistence?: () => Promise<void>,
+) {
   const rootStats = await fs.lstat(authDir).catch(() => null);
   if (!rootStats?.isDirectory() || rootStats.isSymbolicLink()) {
     return;
   }
   const entries = await fs.readdir(authDir, { withFileTypes: true });
+  const credentialFiles = entries.filter(
+    (entry) => entry.isFile() && isBaileysAuthFileName(entry.name),
+  );
+  if (credentialFiles.length === 0) {
+    return;
+  }
+  await beforeCredentialPersistence?.();
   await Promise.all(
-    entries.map(async (entry) => {
-      if (!entry.isFile()) {
-        return;
-      }
-      if (!isBaileysAuthFileName(entry.name)) {
-        return;
-      }
+    credentialFiles.map(async (entry) => {
       await fs.rm(path.join(authDir, entry.name), { force: true });
     }),
   );
@@ -329,6 +352,7 @@ export async function logoutWeb(params: {
   authDir?: string;
   isLegacyAuthDir?: boolean;
   runtime?: RuntimeEnv;
+  beforeCredentialPersistence?: () => Promise<void>;
 }) {
   const runtime = params.runtime ?? defaultRuntime;
   const resolvedAuthDir = resolveUserPath(params.authDir ?? resolveDefaultWebAuthDir());
@@ -349,10 +373,11 @@ export async function logoutWeb(params: {
       );
       return false;
     }
-    await clearBaileysAuthFiles(resolvedAuthDir);
+    await clearBaileysAuthFiles(resolvedAuthDir, params.beforeCredentialPersistence);
   } else {
     const ownership = await classifyWebAuthDirOwnership(resolvedAuthDir);
     if (ownership.kind === "owned") {
+      await params.beforeCredentialPersistence?.();
       await fs.rm(ownership.authDir, { recursive: true, force: true });
     } else if (ownership.kind === "unsafe-owned") {
       runtime.log(

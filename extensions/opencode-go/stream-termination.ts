@@ -63,48 +63,6 @@ function isProviderProgressEvent(event: AssistantMessageEvent): boolean {
   );
 }
 
-function combineAbortSignals(signals: (AbortSignal | undefined)[]): {
-  signal: AbortSignal;
-  cleanup(): void;
-} {
-  const present = signals.filter((signal): signal is AbortSignal => Boolean(signal));
-  if (present.length === 0) {
-    return { signal: new AbortController().signal, cleanup: () => undefined };
-  }
-  if (present.length === 1) {
-    return { signal: present[0], cleanup: () => undefined };
-  }
-  const anyFn = (
-    AbortSignal as unknown as {
-      any?: (signals: AbortSignal[]) => AbortSignal;
-    }
-  ).any;
-  if (typeof anyFn === "function") {
-    return { signal: anyFn(present), cleanup: () => undefined };
-  }
-  const controller = new AbortController();
-  const alreadyAborted = present.find((signal) => signal.aborted);
-  if (alreadyAborted) {
-    controller.abort((alreadyAborted as { reason?: unknown }).reason);
-    return { signal: controller.signal, cleanup: () => undefined };
-  }
-  const unsubscribe: Array<() => void> = [];
-  for (const signal of present) {
-    const onAbort = () => controller.abort((signal as { reason?: unknown }).reason);
-    signal.addEventListener("abort", onAbort, { once: true });
-    unsubscribe.push(() => signal.removeEventListener("abort", onAbort));
-  }
-  return {
-    signal: controller.signal,
-    cleanup() {
-      for (const remove of unsubscribe) {
-        remove();
-      }
-      unsubscribe.length = 0;
-    },
-  };
-}
-
 const STALLED_STREAM_ERROR_MESSAGE =
   "opencode-go stream timed out after provider-owned SSE boundary stalled";
 
@@ -239,17 +197,17 @@ export function createOpencodeGoStalledStreamWrapper(
     const idleTimeoutMs = resolveTimeoutMs(model, idleTimeoutMsDefault);
     const firstEventTimeoutMs = resolveTimeoutMs(model, firstEventTimeoutMsDefault);
     const controller = new AbortController();
-    const combinedSignal = combineAbortSignals([
-      (callOptions as { signal?: AbortSignal } | undefined)?.signal,
-      controller.signal,
-    ]);
+    const callerSignal = (callOptions as { signal?: AbortSignal } | undefined)?.signal;
+    const signal = callerSignal
+      ? AbortSignal.any([callerSignal, controller.signal])
+      : controller.signal;
     const wrappedOptions = {
       ...callOptions,
       // This provider owns the raw SSE stall policy. Preserve that longer first
       // event window when delegating to OpenAI-compatible streams so the generic
       // embedded-runner default cannot shorten opencode-go prompt evaluation.
       firstEventTimeoutMs,
-      signal: combinedSignal.signal,
+      signal,
     };
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
     let lastSeenPartial: AssistantMessage | undefined;
@@ -265,7 +223,6 @@ export function createOpencodeGoStalledStreamWrapper(
 
     const cleanup = () => {
       clearIdleTimer();
-      combinedSignal.cleanup();
     };
 
     const releaseBaseStream = () => {
@@ -293,7 +250,6 @@ export function createOpencodeGoStalledStreamWrapper(
       settled = true;
       clearIdleTimer();
       controller.abort(new Error("opencode-go stream stalled"));
-      combinedSignal.cleanup();
       releaseBaseStream();
       output.push(buildStalledErrorEvent(lastSeenPartial));
       output.end();

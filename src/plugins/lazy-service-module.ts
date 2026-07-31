@@ -19,7 +19,7 @@ function resolveExport<T>(mod: LazyServiceModule, names: string[]): T | null {
   return null;
 }
 
-export async function defaultLoadOverrideModule(
+async function defaultLoadOverrideModule(
   specifier: string,
   importModule: (specifier: string) => Promise<LazyServiceModule> = async (source: string) =>
     await import(source),

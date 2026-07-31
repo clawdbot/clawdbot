@@ -6,7 +6,7 @@ import type { TypingKeepAlive } from "../typing-keepalive.js";
 
 interface BaseStubFields {
   event: QueuedMessage;
-  route: { sessionKey: string; accountId: string; agentId?: string };
+  route: InboundContext["route"];
   isGroupChat: boolean;
   peerId: string;
   qualifiedTarget: string;

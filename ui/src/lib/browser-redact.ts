@@ -1,4 +1,6 @@
 // Browser-safe redaction for tool details rendered by the Control UI.
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+
 const PAYMENT_CREDENTIAL_KEYS =
   "card[-_]?number|card[-_]?cvc|card[-_]?cvv|cvc|cvv|security[-_]?code|securityCode|payment[-_]?credential|paymentCredential|shared[-_]?payment[-_]?token|sharedPaymentToken";
 
@@ -52,7 +54,9 @@ function redactToken(value: string): string {
   if (value.length <= 10) {
     return "***";
   }
-  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+  // A 6/4-shaped hint is intentionally idempotent: every non-separator
+  // character is already inside the visible prefix or suffix budget.
+  return `${sliceUtf16Safe(value, 0, 6)}...${sliceUtf16Safe(value, -4)}`;
 }
 
 function redactPemBlock(block: string): string {
@@ -63,18 +67,28 @@ function redactPemBlock(block: string): string {
   return `${lines[0]}\n...redacted...\n${lines[lines.length - 1]}`;
 }
 
+function redactMatch(match: string, groups: Array<string | undefined>): string {
+  if (match.includes("PRIVATE KEY-----")) {
+    return redactPemBlock(match);
+  }
+  const token = groups.findLast((group) => typeof group === "string" && group.length > 0) ?? match;
+  const masked = redactToken(token);
+  if (token === match) {
+    return masked;
+  }
+  const tokenOffset = match.lastIndexOf(token);
+  if (tokenOffset < 0) {
+    return "***";
+  }
+  return `${match.slice(0, tokenOffset)}${masked}${match.slice(tokenOffset + token.length)}`;
+}
+
 export function redactToolDetail(detail: string): string {
   let redacted = detail;
   for (const pattern of SECRET_DETAIL_PATTERNS) {
-    redacted = redacted.replace(pattern, (...args: string[]) => {
-      const match = args[0] ?? "";
-      if (match.includes("PRIVATE KEY-----")) {
-        return redactPemBlock(match);
-      }
-      const groups = args.slice(1, -2);
-      const token = groups.findLast((group) => typeof group === "string" && group.length > 0);
-      return token ? match.replace(token, redactToken(token)) : "***";
-    });
+    redacted = redacted.replace(pattern, (...args: string[]) =>
+      redactMatch(args[0] ?? "", args.slice(1, -2)),
+    );
   }
   return redacted;
 }

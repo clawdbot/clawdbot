@@ -26,6 +26,25 @@ const discordConfig = {
   },
 } satisfies OpenClawConfig;
 
+const updatedDiscordConfig = {
+  channels: {
+    discord: { enabled: true },
+  },
+} satisfies OpenClawConfig;
+
+function pinDiscordSetupShell(): void {
+  const registry = createEmptyPluginRegistry();
+  registry.channels = [
+    {
+      pluginId: "discord",
+      plugin: { id: "discord", meta: {} },
+      source: "setup",
+    },
+  ] as never;
+  setActivePluginRegistry(registry);
+  pinActivePluginChannelRegistry(registry);
+}
+
 describe("bootstrapOutboundChannelPlugin", () => {
   afterEach(() => {
     loaderMocks.resolveRuntimePluginRegistry.mockReset();
@@ -34,16 +53,7 @@ describe("bootstrapOutboundChannelPlugin", () => {
   });
 
   it("bootstraps when the selected channel registry has only a setup shell", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.channels = [
-      {
-        pluginId: "discord",
-        plugin: { id: "discord", meta: {} },
-        source: "setup",
-      },
-    ] as never;
-    setActivePluginRegistry(registry);
-    pinActivePluginChannelRegistry(registry);
+    pinDiscordSetupShell();
 
     bootstrapOutboundChannelPlugin({
       channel: "discord",
@@ -143,17 +153,11 @@ describe("bootstrapOutboundChannelPlugin", () => {
     expect(loaderMocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
   });
 
-  it("retries when bootstrap returns without making the channel send-capable", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.channels = [
-      {
-        pluginId: "discord",
-        plugin: { id: "discord", meta: {} },
-        source: "setup",
-      },
-    ] as never;
-    setActivePluginRegistry(registry);
-    pinActivePluginChannelRegistry(registry);
+  it("does not retry an unusable replacement registry in the same generation", () => {
+    pinDiscordSetupShell();
+    loaderMocks.resolveRuntimePluginRegistry.mockImplementation(() => {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+    });
 
     bootstrapOutboundChannelPlugin({
       channel: "discord",
@@ -163,6 +167,39 @@ describe("bootstrapOutboundChannelPlugin", () => {
       channel: "discord",
       cfg: discordConfig,
     });
+
+    expect(loaderMocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a thrown bootstrap in the same generation", () => {
+    pinDiscordSetupShell();
+    loaderMocks.resolveRuntimePluginRegistry.mockImplementation(() => {
+      throw new Error("load failed");
+    });
+
+    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
+    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
+
+    expect(loaderMocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries after the runtime config changes", () => {
+    pinDiscordSetupShell();
+    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
+    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: updatedDiscordConfig });
+
+    expect(loaderMocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains failed attempts when distinct runtime configs interleave", () => {
+    pinDiscordSetupShell();
+    loaderMocks.resolveRuntimePluginRegistry.mockImplementation(() => {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+    });
+
+    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
+    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: updatedDiscordConfig });
+    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
 
     expect(loaderMocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(2);
   });

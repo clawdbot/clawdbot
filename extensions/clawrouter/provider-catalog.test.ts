@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   clearLiveCatalogCacheForTests,
@@ -235,10 +236,13 @@ describe("ClawRouter provider catalog", () => {
 
   it("does not advertise Gemini without a streaming route", async () => {
     const catalog = structuredClone(CATALOG);
-    catalog.providers[3].routes = catalog.providers[3].routes.filter(
+    const geminiProvider = expectDefined(catalog.providers[3], "Gemini ClawRouter provider");
+    geminiProvider.routes = geminiProvider.routes.filter(
       (route) => !route.path.includes(":streamGenerateContent"),
     );
-    catalog.providers[3].models[0].capabilities = ["llm.generate"];
+    expectDefined(geminiProvider.models[0], "Gemini ClawRouter model").capabilities = [
+      "llm.generate",
+    ];
     const provider = await buildClawRouterProviderConfig({
       apiKey: "clawrouter-test-key",
       fetchGuard: buildFetchGuard(catalog).fetchGuard,

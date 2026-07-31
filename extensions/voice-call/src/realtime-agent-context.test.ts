@@ -2,9 +2,9 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { CoreAgentDeps } from "./core-bridge.js";
 import { buildRealtimeVoiceInstructions } from "./realtime-agent-context.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
@@ -81,6 +81,7 @@ describe("buildRealtimeVoiceInstructions", () => {
       }),
       coreConfig,
       agentRuntime: createAgentRuntime(workspaceDir),
+      agentId: "voice",
     });
 
     expect(instructions).toContain("OpenClaw agent voice context:");
@@ -114,6 +115,7 @@ describe("buildRealtimeVoiceInstructions", () => {
       config,
       coreConfig: { agents: { list: [{ id: agentId }] } } as OpenClawConfig,
       agentRuntime: createAgentRuntime("/unused"),
+      agentId,
     });
 
     expect(instructions).toBe(`Base voice instructions.\n\n${expectedContext}\n[truncated]`);

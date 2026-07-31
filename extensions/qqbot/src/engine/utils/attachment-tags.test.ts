@@ -1,11 +1,7 @@
 // Qqbot tests cover attachment tags plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  formatAttachmentTags,
-  renderAttachmentTags,
-  TRANSCRIPT_SOURCE_LABELS,
-  type AttachmentSummary,
-} from "./attachment-tags.js";
+import type { RefAttachmentSummary as AttachmentSummary } from "../ref/types.js";
+import { formatAttachmentTags, renderAttachmentTags } from "./attachment-tags.js";
 
 describe("engine/utils/attachment-tags", () => {
   // ────────────────────────── shared body (mode-agnostic) ──────────────────────────
@@ -130,11 +126,27 @@ describe("engine/utils/attachment-tags", () => {
   // ────────────────────────── Prompt-contract regression guards ──────────────────────────
 
   describe("prompt contract", () => {
-    it("exposes the transcript-source labels table", () => {
-      expect(TRANSCRIPT_SOURCE_LABELS.stt).toBe("local STT");
-      expect(TRANSCRIPT_SOURCE_LABELS.asr).toBe("platform ASR");
-      expect(TRANSCRIPT_SOURCE_LABELS.tts).toBe("TTS source");
-      expect(TRANSCRIPT_SOURCE_LABELS.fallback).toBe("fallback text");
+    it("renders each transcript-source label", () => {
+      const expected = {
+        stt: "local STT",
+        asr: "platform ASR",
+        tts: "TTS source",
+        fallback: "fallback text",
+      } as const;
+      for (const [transcriptSource, label] of Object.entries(expected)) {
+        expect(
+          renderAttachmentTags(
+            [
+              {
+                type: "voice",
+                transcript: "hello",
+                transcriptSource: transcriptSource as AttachmentSummary["transcriptSource"],
+              },
+            ],
+            { mode: "ref" },
+          ),
+        ).toContain(`[source: ${label}]`);
+      }
     });
 
     it("uses the single canonical keyword 'transcript:' (never 'content:')", () => {

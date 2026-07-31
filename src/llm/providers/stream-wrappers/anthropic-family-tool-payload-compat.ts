@@ -1,4 +1,4 @@
-import { projectRuntimeToolInputSchema } from "@openclaw/ai/internal/openai";
+import { isOpenAIGpt56Model, projectRuntimeToolInputSchema } from "@openclaw/ai/internal/openai";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Anthropic-family tool payload compatibility wraps provider tool payload shapes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -526,6 +526,14 @@ export function createAnthropicToolPayloadCompatibilityWrapper(
             } else {
               payloadObj.tool_choice = toolChoice;
             }
+          }
+          if (
+            isOpenAIGpt56Model(model) &&
+            toolProjection?.tools.some((tool) => tool.type === "function")
+          ) {
+            // GPT-5.6 Chat Completions rejects function tools while reasoning
+            // is enabled and defaults reasoning on when the field is omitted.
+            payloadObj.reasoning_effort = "none";
           }
         }
         return originalOnPayload?.(payload, model);

@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  posixAgentWorkspaceScript,
+  windowsAgentWorkspaceScript,
+} from "../../scripts/e2e/parallels/agent-workspace.ts";
 import { runWindowsBackgroundPowerShell } from "../../scripts/e2e/parallels/guest-transports.ts";
 import { run as hostCommandRun } from "../../scripts/e2e/parallels/host-command.ts";
 import {
@@ -55,7 +59,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
       return;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 20);
+      setTimeout(resolve, 5);
     });
   }
   throw new Error(`timeout waiting for pid ${pid} to exit`);
@@ -68,7 +72,7 @@ async function waitFor(predicate: () => boolean, label: string, timeoutMs = 2_00
       return;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 20);
+      setTimeout(resolve, 5);
     });
   }
   throw new Error(`timeout waiting for ${label}`);
@@ -106,7 +110,18 @@ afterEach(() => {
 
 describe("parallels npm update smoke", () => {
   it("accepts one prepared tarball target for update and fresh install", () => {
-    expect(parseArgs(["--target-tarball", "/tmp/openclaw-candidate.tgz"])).toMatchObject({
+    expect(
+      parseArgs([
+        "--target-tarball",
+        "/tmp/openclaw-candidate.tgz",
+        "--dependency-tarball",
+        "/tmp/openclaw-ai-candidate.tgz",
+        "--registry-package-tarball",
+        "/tmp/openclaw-codex-candidate.tgz",
+      ]),
+    ).toMatchObject({
+      dependencyTarballs: ["/tmp/openclaw-ai-candidate.tgz"],
+      registryPackageTarballs: ["/tmp/openclaw-codex-candidate.tgz"],
       targetTarball: "/tmp/openclaw-candidate.tgz",
       updateTarget: "",
       freshTargetSpec: undefined,
@@ -114,6 +129,21 @@ describe("parallels npm update smoke", () => {
     expect(() =>
       parseArgs(["--target-tarball", "/tmp/openclaw-candidate.tgz", "--update-target", "beta"]),
     ).toThrow("--target-tarball cannot be combined");
+    expect(() => parseArgs(["--dependency-tarball", "/tmp/openclaw-ai-candidate.tgz"])).toThrow(
+      "--dependency-tarball requires --target-tarball",
+    );
+    expect(() =>
+      parseArgs(["--registry-package-tarball", "/tmp/openclaw-codex-candidate.tgz"]),
+    ).toThrow("--registry-package-tarball requires --target-tarball");
+  });
+
+  it("passes an explicit macOS snapshot hint through fresh lanes", () => {
+    expect(
+      parseArgs(["--platform", "macos", "--macos-snapshot-hint", "macOS 26.5 Node 24"]),
+    ).toMatchObject({
+      macosSnapshotHint: "macOS 26.5 Node 24",
+      platforms: new Set(["macos"]),
+    });
   });
 
   it("stops the host artifact server when the wrapper fails mid-run", async () => {
@@ -142,6 +172,8 @@ describe("parallels npm update smoke", () => {
     await withEnvAsync({ OPENAI_API_KEY: "test-key" }, async () => {
       const smoke = new FailingNpmUpdateSmoke({
         ...TEST_AUTH,
+        dependencyTarballs: [],
+        registryPackageTarballs: [],
         json: false,
         packageSpec: "openclaw@latest",
         platforms: new Set<Platform>(["linux"]),
@@ -191,6 +223,8 @@ exit 1
       () => {
         const smoke = new NpmUpdateSmoke({
           ...TEST_AUTH,
+          dependencyTarballs: [],
+          registryPackageTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["linux"]),
@@ -220,6 +254,88 @@ exit 1
     expect(log.match(/^cleanup$/gm)).toHaveLength(1);
   });
 
+  it("uses one macOS guest identity to write and execute update scripts", async () => {
+    const root = makeTempDir();
+    const logPath = path.join(root, "prlctl.log");
+    const prlctlPath = path.join(root, "prlctl");
+    writeFileSync(
+      prlctlPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+log_path=${JSON.stringify(logPath)}
+printf '%s\\n' "$*" >>"$log_path"
+args=" $* "
+if [[ "$args" == *" --current-user whoami "* ]]; then
+  printf 'desktop-user\\n'
+  exit 0
+fi
+if [[ "$args" == *" /usr/bin/tee /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
+  cat >/dev/null
+  exit 0
+fi
+if [[ "$args" == *" /bin/chmod 700 /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
+  exit 0
+fi
+if [[ "$args" == *" /usr/sbin/chown desktop-user /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
+  exit 0
+fi
+if [[ "$args" == *" /bin/rm -f /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(prlctlPath, 0o755);
+
+    await withEnvAsync(
+      {
+        OPENAI_API_KEY: "test-key",
+        PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+      async () => {
+        const smoke = new NpmUpdateSmoke({
+          ...TEST_AUTH,
+          dependencyTarballs: [],
+          registryPackageTarballs: [],
+          json: false,
+          packageSpec: "openclaw@latest",
+          platforms: new Set<Platform>(["macos"]),
+          provider: "openai",
+          updateTarget: "local-main",
+        });
+        const stream = vi.fn().mockResolvedValue(0);
+        Reflect.set(smoke, "runStreamingToJobLog", stream);
+        const guestMacos = Reflect.get(smoke, "guestMacos") as (
+          script: string,
+          timeoutMs: number,
+          ctx: { append: (chunk: string) => void },
+        ) => Promise<void>;
+        const ctx = { append: vi.fn() };
+
+        await guestMacos.call(smoke, "echo update", 30_000, ctx);
+
+        const call = stream.mock.calls.at(0);
+        expect(call?.[0]).toBe("prlctl");
+        expect(call?.[1]).toEqual([
+          "exec",
+          "macOS Tahoe",
+          "--current-user",
+          "/usr/bin/env",
+          expect.stringMatching(/^PATH=/),
+          "/bin/bash",
+          expect.stringMatching(/^\/tmp\/openclaw-parallels-npm-update-macos-/),
+        ]);
+      },
+    );
+
+    const log = readFileSync(logPath, "utf8");
+    expect(log).toContain("--current-user whoami");
+    expect(log).toContain("--current-user /usr/bin/env PATH=");
+    expect(log).toContain("/usr/bin/tee /tmp/openclaw-parallels-npm-update-macos-");
+    expect(log).toContain("/bin/chmod 700 /tmp/openclaw-parallels-npm-update-macos-");
+    expect(log).toContain("/usr/sbin/chown desktop-user");
+  });
+
   it("has a one-command beta validation mode with fresh target coverage", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
@@ -231,16 +347,67 @@ exit 1
     expect(script).toContain("freshTargetStatus");
   });
 
-  it("host-serves a prepared candidate tarball for both proof phases", () => {
+  it("serves a prepared package set for both proof phases", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
     expect(script).toContain("--target-tarball <path>");
+    expect(script).toContain("--dependency-tarball <path>");
+    expect(script).toContain("--registry-package-tarball <path>");
     expect(script).toContain('label: "prepared candidate tgz"');
     expect(script).toContain("await copyFile(this.targetTarballPath, hostedTarballPath)");
-    expect(script).toContain("dir: this.tgzDir");
-    expect(script).toContain("this.updateTargetEffective = targetUrl");
-    expect(script).toContain("this.freshTargetSpec = targetUrl");
+    expect(script).toContain("startNpmRegistryServer");
+    expect(script).toContain("...this.targetRegistryPackages");
+    expect(script).toContain("this.updateTargetEffective = this.targetTarballVersion");
+    expect(script).toContain("this.freshTargetSpec = `openclaw@${this.targetTarballVersion}`");
+    expect(script).toContain("NPM_CONFIG_REGISTRY: this.targetRegistryHostUrl");
+    expect(script).toContain("npm_config_registry: this.targetRegistryHostUrl");
     expect(script).toContain("this.updateExpectedNeedle = this.targetTarballVersion");
+    expect(script).toContain('readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S", 2700)');
+  });
+
+  it("routes update installs through the prepared package registry", () => {
+    const registry = "http://192.0.2.2:48123";
+    const input = {
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.7.1-beta.3",
+      npmRegistry: registry,
+      updateTarget: "2026.7.1-beta.3",
+    };
+
+    expect(macosUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY='${registry}'`);
+    expect(linuxUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY='${registry}'`);
+    expect(windowsUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY = '${registry}'`);
+  });
+
+  it("relaunches POSIX gateways after a transient post-update startup failure", () => {
+    const input = {
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.7.2-beta.5",
+      updateTarget: "2026.7.2-beta.5",
+    };
+
+    for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
+      expect(script).toContain("attempt=$((attempt + 1))");
+      expect(script).toContain('if [ "$attempt" -eq 4 ]; then\n      start_openclaw_gateway');
+    }
+  });
+
+  it("does not recreate retired workspace setup state in release smoke scripts", () => {
+    const input = {
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.7.2-beta.2",
+      updateTarget: "2026.7.2-beta.2",
+    };
+
+    for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
+      expect(script).toContain("IDENTITY.md");
+      expect(script).not.toContain("workspace-state.json");
+    }
+    expect(windowsUpdateScript(input)).toContain("IDENTITY.md");
+    expect(windowsUpdateScript(input)).not.toContain("workspace-state.json");
+
+    expect(posixAgentWorkspaceScript("test")).not.toContain("workspace-state.json");
+    expect(windowsAgentWorkspaceScript("test")).not.toContain("workspace-state.json");
   });
 
   it("accepts keyed and nested npm metadata for published update targets", () => {
@@ -514,6 +681,8 @@ exit 1
       () =>
         new NpmUpdateSmoke({
           ...TEST_AUTH,
+          dependencyTarballs: [],
+          registryPackageTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["linux"]),
@@ -554,6 +723,8 @@ exit 1
         () =>
           new NpmUpdateSmoke({
             ...TEST_AUTH,
+            dependencyTarballs: [],
+            registryPackageTarballs: [],
             json: false,
             packageSpec: "openclaw@latest",
             platforms: new Set<Platform>(["linux"]),
@@ -623,7 +794,7 @@ exit 1
       const decoded = decodePowerShellFromArgs(args);
       decodedCommands.push(decoded);
       if (options?.input) {
-        inputs.push(String(options.input));
+        inputs.push(options.input);
       }
       if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
         return { status: 0, stderr: "", stdout: "started\n" };
@@ -752,8 +923,9 @@ exit 1
   it("keeps macOS sudo fallback update scripts readable by the desktop user", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
-    expect(script).toContain('macosExecArgs.indexOf("-u")');
-    expect(script).toContain('"/usr/sbin/chown", sudoUser, scriptPath');
+    expect(script).toContain('"/usr/sbin/chown"');
+    expect(script).toContain("macosUpdateExec.ownerUser");
+    expect(script).toContain("ownerUser: fallbackUser");
   });
 
   it("selects macOS desktop users with homes on spaced mounted volumes", () => {
@@ -786,6 +958,8 @@ exit 7
       () => {
         const smoke = new NpmUpdateSmoke({
           ...TEST_AUTH,
+          dependencyTarballs: [],
+          registryPackageTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["macos"]),
@@ -827,6 +1001,8 @@ exit 7
       () => {
         const smoke = new NpmUpdateSmoke({
           ...TEST_AUTH,
+          dependencyTarballs: [],
+          registryPackageTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["macos"]),
@@ -842,6 +1018,16 @@ exit 7
         );
       },
     );
+  });
+
+  it("writes macOS update scripts through the desktop user transport", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("const macosUpdateExec = this.resolveMacosUpdateExec(ctx)");
+    expect(script).toContain('{ execArgs: macosUpdateExec.execArgs, mode: "700" }');
+    expect(script).toContain('["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath]');
+    expect(script).toContain('["exec", vm, ...execArgs, "/bin/chmod", mode, scriptPath]');
+    expect(script).toContain("ownerUser: user");
   });
 
   it("scrubs future plugin entries before invoking old same-guest updaters", () => {

@@ -2,6 +2,7 @@
 import fsNode from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createConfigIO, resetConfigRuntimeState, writeConfigFile } from "./io.js";
@@ -45,9 +46,15 @@ describe("config io EACCES handling", () => {
     const snapshot = await io.readConfigFileSnapshot();
     expect(snapshot.valid).toBe(false);
     expect(snapshot.issues).toHaveLength(1);
-    expect(snapshot.issues[0].message).toContain("EACCES");
-    expect(snapshot.issues[0].message).toContain("chown");
-    expect(snapshot.issues[0].message).toContain(configPath);
+    expect(
+      expectDefined(snapshot.issues[0], "snapshot.issues[0] test invariant").message,
+    ).toContain("EACCES");
+    expect(
+      expectDefined(snapshot.issues[0], "snapshot.issues[0] test invariant").message,
+    ).toContain("chown");
+    expect(
+      expectDefined(snapshot.issues[0], "snapshot.issues[0] test invariant").message,
+    ).toContain(configPath);
     expect(errors.join("\n")).toContain("chown");
   });
 
@@ -60,8 +67,12 @@ describe("config io EACCES handling", () => {
     });
 
     const snapshot = await io.readConfigFileSnapshot();
-    expect(snapshot.issues[0].message).toContain(configPath);
-    expect(snapshot.issues[0].message).toContain("container");
+    expect(
+      expectDefined(snapshot.issues[0], "snapshot.issues[0] test invariant").message,
+    ).toContain(configPath);
+    expect(
+      expectDefined(snapshot.issues[0], "snapshot.issues[0] test invariant").message,
+    ).toContain("container");
   });
 
   it("marks the snapshot with the underlying read error code", async () => {

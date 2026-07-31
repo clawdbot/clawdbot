@@ -2,11 +2,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import type { PluginCandidate } from "./discovery.js";
+import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 import {
   inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndex,
@@ -44,6 +46,7 @@ function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPl
         manifestHash: "manifest-hash",
         rootDir: "/plugins/demo",
         origin: "global",
+        packageBuild: { bundledDist: false },
         enabled: true,
         syntheticAuthRefs: ["demo"],
         startup: {
@@ -224,6 +227,44 @@ describe("installed plugin index persistence", () => {
     expect(persisted.warning).toContain("DO NOT EDIT.");
     expect(persisted.policyHash).toBe(index.policyHash);
     expectPluginIds(persisted, ["demo"]);
+    expectPluginFields(persisted, "demo", { packageBuild: { bundledDist: false } });
+  });
+
+  it("does not repair shared state schema while reading the index", async () => {
+    const stateDir = makeTempDir();
+    const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
+    await writePersistedInstalledPluginIndex(createIndex(), { stateDir });
+    closeOpenClawStateDatabaseForTest();
+
+    const sqlite = requireNodeSqlite();
+    const mutate = new sqlite.DatabaseSync(filePath);
+    mutate.exec("DROP INDEX idx_operator_approvals_resolution_ref;");
+    mutate.close();
+
+    const expectCanonicalIndexMissing = () => {
+      const verify = new sqlite.DatabaseSync(filePath, { readOnly: true });
+      try {
+        expect(
+          verify
+            .prepare(
+              "SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = 'idx_operator_approvals_resolution_ref'",
+            )
+            .get(),
+        ).toBeUndefined();
+      } finally {
+        verify.close();
+      }
+    };
+
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
+      version: 1,
+    });
+    expectCanonicalIndexMissing();
+
+    await expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).resolves.toEqual(
+      {},
+    );
+    expectCanonicalIndexMissing();
   });
 
   it("preserves startup config paths across persisted index roundtrips", async () => {

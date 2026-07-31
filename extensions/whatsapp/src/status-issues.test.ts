@@ -32,6 +32,28 @@ describe("collectWhatsAppStatusIssues", () => {
     ]);
   });
 
+  it("reports revoked cached credentials as logged out with relink guidance", () => {
+    const issues = collectWhatsAppStatusIssues([
+      {
+        accountId: "default",
+        enabled: true,
+        linked: false,
+        healthState: "logged-out",
+        lastError: "status=401",
+      },
+    ]);
+
+    expect(issues).toEqual([
+      {
+        channel: "whatsapp",
+        accountId: "default",
+        kind: "auth",
+        message: "Session logged out: status=401",
+        fix: "Run: openclaw channels login (scan QR on the gateway host).",
+      },
+    ]);
+  });
+
   it("reports auth reads that are still stabilizing", () => {
     const issues = collectWhatsAppStatusIssues([
       {

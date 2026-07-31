@@ -3,9 +3,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { buildSystemPromptParams } from "./system-prompt-params.js";
+import { setActiveNodeContext } from "../infra/active-node-context.js";
+import { buildSystemPromptParams, resolveSystemPromptRepoRoot } from "./system-prompt-params.js";
 
 async function makeTempDir(label: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${label}-`));
@@ -16,10 +17,12 @@ async function makeRepoRoot(root: string): Promise<void> {
 }
 
 function buildParams(params: { config?: OpenClawConfig; workspaceDir?: string; cwd?: string }) {
+  const preparedRepoRoot = resolveSystemPromptRepoRoot(params);
   return buildSystemPromptParams({
     config: params.config,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
+    preparedRepoRoot,
     runtime: {
       host: "host",
       os: "os",
@@ -31,6 +34,45 @@ function buildParams(params: { config?: OpenClawConfig; workspaceDir?: string; c
 }
 
 describe("buildSystemPromptParams", () => {
+  afterEach(() => {
+    setActiveNodeContext(null);
+    vi.useRealTimers();
+  });
+
+  it("formats the current date in the configured user timezone", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-05T23:30:00.000Z"));
+
+    const utc = buildParams({
+      config: { agents: { defaults: { userTimezone: "UTC" } } },
+    });
+    const tokyo = buildParams({
+      config: { agents: { defaults: { userTimezone: "Asia/Tokyo" } } },
+    });
+
+    expect(utc.userDate).toBe("2026-01-05");
+    expect(tokyo.userDate).toBe("2026-01-06");
+  });
+
+  it("projects only the stable active-node identity", () => {
+    setActiveNodeContext({ nodeId: "mac-123" });
+
+    const { runtimeInfo } = buildParams({});
+
+    expect(runtimeInfo.activeNode).toBe("mac-123");
+  });
+
+  it("omits an active node that fails current-generation validation", () => {
+    setActiveNodeContext(
+      { nodeId: "mac-123", pairingGeneration: "generation-a" },
+      { isCurrent: () => false },
+    );
+
+    const { runtimeInfo } = buildParams({});
+
+    expect(runtimeInfo.activeNode).toBeUndefined();
+  });
+
   it("detects repo root from workspaceDir", async () => {
     const temp = await makeTempDir("workspace");
     const repoRoot = path.join(temp, "repo");
@@ -102,6 +144,28 @@ describe("buildSystemPromptParams", () => {
     const workspaceDir = await makeTempDir("norepo");
 
     const { runtimeInfo } = buildParams({ workspaceDir });
+
+    expect(runtimeInfo.repoRoot).toBeUndefined();
+  });
+
+  it("does not rediscover the repository after preparation", async () => {
+    const workspaceDir = await makeTempDir("prepared-norepo");
+    const repoRoot = await makeTempDir("late-repo");
+    const preparedRepoRoot = resolveSystemPromptRepoRoot({ workspaceDir });
+    await makeRepoRoot(repoRoot);
+
+    const { runtimeInfo } = buildSystemPromptParams({
+      preparedRepoRoot,
+      workspaceDir,
+      cwd: repoRoot,
+      runtime: {
+        host: "host",
+        os: "os",
+        arch: "arch",
+        node: "node",
+        model: "model",
+      },
+    });
 
     expect(runtimeInfo.repoRoot).toBeUndefined();
   });

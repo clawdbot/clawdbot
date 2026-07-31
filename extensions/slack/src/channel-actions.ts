@@ -1,12 +1,19 @@
 // Slack plugin module implements channel actions behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionContext,
+} from "openclaw/plugin-sdk/channel-contract";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { SlackActionContext } from "./action-runtime.js";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
 import { extractSlackToolSend } from "./message-actions.js";
 import { describeSlackMessageTool } from "./message-tool-api.js";
 import { resolveSlackChannelId } from "./targets.js";
+
+type ConversationReadInvocationOrigin = NonNullable<
+  ChannelMessageActionContext["conversationReadOrigin"]
+>;
 
 type SlackActionInvoke = (
   action: Record<string, unknown>,
@@ -30,14 +37,29 @@ function resolveSlackActionContext(params: {
   toolContext: unknown;
   mediaLocalRoots: readonly string[] | undefined;
   mediaReadFile: ((filePath: string) => Promise<Buffer>) | undefined;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
+  requesterAccountId?: string | null;
+  requesterSenderId?: string | null;
 }): SlackActionContext | undefined {
-  if (!params.toolContext && !params.mediaLocalRoots && !params.mediaReadFile) {
+  if (
+    !params.toolContext &&
+    !params.mediaLocalRoots &&
+    !params.mediaReadFile &&
+    !params.conversationReadOrigin &&
+    !params.requesterAccountId &&
+    !params.requesterSenderId
+  ) {
     return undefined;
   }
   return {
     ...(params.toolContext as SlackActionContext | undefined),
     ...(params.mediaLocalRoots ? { mediaLocalRoots: params.mediaLocalRoots } : {}),
     ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
+    // Authority comes only from the host-owned action context. Overwrite any
+    // structurally compatible fields carried by generic tool context.
+    conversationReadOrigin: params.conversationReadOrigin,
+    requesterAccountId: params.requesterAccountId ?? undefined,
+    requesterSenderId: params.requesterSenderId ?? undefined,
   };
 }
 
@@ -62,6 +84,9 @@ export function createSlackActions(
             toolContext,
             mediaLocalRoots: ctx.mediaLocalRoots,
             mediaReadFile: ctx.mediaReadFile,
+            conversationReadOrigin: ctx.conversationReadOrigin,
+            requesterAccountId: ctx.requesterAccountId,
+            requesterSenderId: ctx.requesterSenderId,
           });
           return await (options?.invoke
             ? options.invoke(action, cfg, actionContext)

@@ -1,7 +1,7 @@
 /**
  * Tests agent harness runtime helpers and task dispatch behavior.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   attachModelProviderRequestTransport,
   buildAgentHarnessUserInputAnswers,
@@ -9,8 +9,13 @@ import {
   deliverAgentHarnessUserInputPrompt,
   formatAgentHarnessUserInputPrompt,
   getModelProviderRequestTransport,
+  type AgentHarnessSupportContext,
   type AgentHarnessTerminalOutcomeClassification,
 } from "./agent-harness-runtime.js";
+import type {
+  ProviderModelRouteRuntimePolicy,
+  ProviderRouteOverridePresence,
+} from "./provider-model-types.js";
 
 const { loadResearchAutocapture } = vi.hoisted(() => ({
   loadResearchAutocapture: vi.fn(),
@@ -166,6 +171,15 @@ describe("agent harness runtime SDK facade", () => {
     expect(getModelProviderRequestTransport(model)).toEqual({
       auth: { mode: "header", headerName: "x-api-key", value: "secret" },
     });
+  });
+
+  it("locks the request-transport support contract", () => {
+    expectTypeOf<
+      NonNullable<AgentHarnessSupportContext["modelProvider"]>["requestTransportOverrides"]
+    >().toEqualTypeOf<ProviderRouteOverridePresence | undefined>();
+    expectTypeOf<
+      NonNullable<AgentHarnessSupportContext["modelProvider"]>["runtimePolicy"]
+    >().toEqualTypeOf<ProviderModelRouteRuntimePolicy | undefined>();
   });
 });
 

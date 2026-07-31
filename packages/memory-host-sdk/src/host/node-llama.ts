@@ -13,6 +13,10 @@ export type LlamaEmbeddingContext = {
 
 /** Loaded llama model capable of creating embedding contexts. */
 export type LlamaModel = {
+  fileInsights: {
+    totalLayers: number;
+  };
+  gpuLayers: number;
   createEmbeddingContext: (options?: {
     contextSize?: number | "auto";
     createSignal?: AbortSignal;
@@ -28,7 +32,32 @@ type ResolveModelFileOptions = {
 
 /** Root llama runtime object exposed by node-llama-cpp. */
 export type Llama = {
-  loadModel: (params: { modelPath: string; loadSignal?: AbortSignal }) => Promise<LlamaModel>;
+  gpu: "metal" | "cuda" | "vulkan" | false;
+  buildType: "localBuild" | "prebuilt";
+  supportsGpuOffloading: boolean;
+  getGpuDeviceNames: () => Promise<string[]>;
+  getVramState: () => Promise<{
+    total: number;
+    used: number;
+    free: number;
+    unifiedSize: number;
+  }>;
+  loadModel: (params: {
+    modelPath: string;
+    loadSignal?: AbortSignal;
+    gpuLayers?:
+      | "auto"
+      | "max"
+      | number
+      | {
+          min?: number;
+          max?: number;
+          fitContext?: {
+            contextSize?: number;
+            embeddingContext?: boolean;
+          };
+        };
+  }) => Promise<LlamaModel>;
   dispose?: () => Promise<void> | void;
 };
 

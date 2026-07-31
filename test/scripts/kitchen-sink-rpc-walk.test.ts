@@ -13,6 +13,7 @@ import fs, {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendBoundedOutput,
@@ -922,7 +923,7 @@ setInterval(() => {}, 1000);
     expect(samples[0]).toMatchObject({
       aggregateRssMiB: 640,
       label: "plugins install",
-      processId: seenPids[0] + 1,
+      processId: expectDefined(seenPids[0], "sampled kitchen sink process id") + 1,
       rssMiB: 512,
     });
     expect(samples[0]?.elapsedMs).toBeGreaterThanOrEqual(0);

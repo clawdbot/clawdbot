@@ -29,7 +29,7 @@ export function resolveSubagentRunDurationMs(timeoutSeconds: unknown): number | 
 
 /** Resolve the absolute timeout deadline for a subagent run. */
 export function resolveSubagentRunDeadlineMs(
-  entry: Pick<SubagentRunRecord, "createdAt" | "startedAt" | "runTimeoutSeconds">,
+  entry: Pick<SubagentRunRecord, "collect" | "createdAt" | "startedAt" | "runTimeoutSeconds">,
   observedStartedAt?: number,
 ): number | undefined {
   const durationMs = resolveSubagentRunDurationMs(entry.runTimeoutSeconds);
@@ -41,7 +41,9 @@ export function resolveSubagentRunDeadlineMs(
       ? observedStartedAt
       : typeof entry.startedAt === "number" && Number.isFinite(entry.startedAt)
         ? entry.startedAt
-        : entry.createdAt;
+        : entry.collect
+          ? undefined
+          : entry.createdAt;
   const safeStartedAt = asDateTimestampMs(startedAt);
   if (safeStartedAt === undefined) {
     return undefined;
@@ -54,7 +56,7 @@ export function resolveSubagentRunDeadlineMs(
 
 /** Clamp a reported terminal time to the run's explicit timeout deadline. */
 export function resolveSubagentRunEffectiveEndedAt(
-  entry: Pick<SubagentRunRecord, "createdAt" | "startedAt" | "runTimeoutSeconds">,
+  entry: Pick<SubagentRunRecord, "collect" | "createdAt" | "startedAt" | "runTimeoutSeconds">,
   endedAt: number,
   observedStartedAt?: number,
 ): number {

@@ -12,6 +12,7 @@ import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
   type AgentWaitResult,
   type AssistantReplySnapshot,
+  hasUpdatedAssistantReplySnapshot,
   isRecoverableAgentWaitError,
   readLatestAssistantReplySnapshot,
   waitForAgentRun,
@@ -107,14 +108,12 @@ export async function runSessionsSendA2AFlow(params: {
       if (wait.status === "ok") {
         const latestSnapshot = await readLatestAssistantReplySnapshot({
           sessionKey: params.targetSessionKey,
+          stopAtTranscriptArtifact: true,
           callGateway: sessionsSendA2ADeps.callGateway,
         });
-        const baselineFingerprint = params.baseline?.fingerprint;
-        primaryReply =
-          latestSnapshot.text &&
-          (!baselineFingerprint || latestSnapshot.fingerprint !== baselineFingerprint)
-            ? latestSnapshot.text
-            : undefined;
+        primaryReply = hasUpdatedAssistantReplySnapshot(latestSnapshot, params.baseline)
+          ? latestSnapshot.text
+          : undefined;
         latestReply = primaryReply;
       } else {
         if (
@@ -155,14 +154,13 @@ export async function runSessionsSendA2AFlow(params: {
 
     // A same-session send is a human-facing source-channel reply, not a true
     // agent-to-agent announcement. Asking the same session to decide whether to
-    // announce can learn stale ANNOUNCE_SKIP patterns from its own history and
-    // silently drop a normal channel response.
-    if (
+    // announce can re-run the same prompt and duplicate source-reply side effects.
+    const sameSessionSourceReply =
+      params.requesterSessionKey && params.requesterSessionKey === params.targetSessionKey;
+    const canDirectDeliverSameSessionReply =
       announceTarget &&
-      params.requesterSessionKey &&
-      params.requesterSessionKey === params.targetSessionKey &&
-      params.requesterChannel === announceTarget.channel
-    ) {
+      (!params.requesterChannel || params.requesterChannel === announceTarget.channel);
+    if (sameSessionSourceReply && canDirectDeliverSameSessionReply) {
       if (params.waitRunId && !params.roundOneReply && !params.baseline) {
         return;
       }
@@ -171,6 +169,9 @@ export async function runSessionsSendA2AFlow(params: {
         message: latestReply,
         runContextId,
       });
+      return;
+    }
+    if (sameSessionSourceReply && !announceTarget) {
       return;
     }
 
@@ -257,7 +258,7 @@ export async function runSessionsSendA2AFlow(params: {
   }
 }
 
-export const testing = {
+const testing = {
   setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
     sessionsSendA2ADeps = overrides
       ? {
@@ -267,4 +268,9 @@ export const testing = {
       : defaultSessionsSendA2ADeps;
   },
 };
-export { testing as __testing };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionsSendA2ATestApi")] = {
+    testing,
+  };
+}

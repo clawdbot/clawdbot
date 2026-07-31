@@ -10,6 +10,7 @@ import {
   installCompletion,
   isCompletionInstalled,
   resolveCompletionCachePath,
+  resolveCompletionProfileHint,
   resolveCompletionProfilePath,
   resolveShellFromEnv,
   usesSlowDynamicCompletion,
@@ -23,7 +24,7 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
 
-export type ShellCompletionStatusOptions = {
+type ShellCompletionStatusOptions = {
   shell?: CompletionShell;
 };
 
@@ -40,21 +41,6 @@ function findProfileWriteError(err: unknown): NodeJS.ErrnoException | undefined 
   return err instanceof Error ? findProfileWriteError(err.cause) : undefined;
 }
 
-function resolveCompletionReloadPath(shell: CompletionShell): string {
-  if (shell === "powershell") {
-    return resolveCompletionProfilePath("powershell");
-  }
-  return `~/.${shell === "zsh" ? "zshrc" : shell === "bash" ? "bashrc" : "config/fish/config.fish"}`;
-}
-
-function formatCompletionReloadNote(
-  shell: CompletionShell,
-  action: "installed" | "upgraded",
-): string {
-  const profilePath = resolveCompletionReloadPath(shell);
-  return `Shell completion ${action}. Restart your shell or run: ${formatCompletionReloadCommand(shell, profilePath)}`;
-}
-
 async function installCompletionForDoctor(
   shell: CompletionShell,
   cliName: string,
@@ -62,7 +48,11 @@ async function installCompletionForDoctor(
 ): Promise<void> {
   try {
     await installCompletion(shell, true, cliName);
-    note(formatCompletionReloadNote(shell, action), "Shell completion");
+    const reloadCommand = formatCompletionReloadCommand(shell, resolveCompletionProfileHint(shell));
+    note(
+      `Shell completion ${action}. Restart your shell or run: ${reloadCommand}`,
+      "Shell completion",
+    );
   } catch (err) {
     // Completion is optional, but only profile permission failures are safe to downgrade.
     const writeError = findProfileWriteError(err);
@@ -203,7 +193,7 @@ export function shellCompletionStatusToRepairEffects(
   return effects;
 }
 
-export type DoctorCompletionOptions = {
+type DoctorCompletionOptions = {
   nonInteractive?: boolean;
 };
 

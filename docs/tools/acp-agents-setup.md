@@ -29,26 +29,26 @@ Prefer the native route unless you explicitly need ACP/acpx behavior.
 
 Built-in acpx harness aliases (from the pinned `acpx` dependency):
 
-| Alias        | Wraps                                                                                                           |
-| ------------ | --------------------------------------------------------------------------------------------------------------- |
-| `claude`     | [Claude Code](https://claude.ai/code)                                                                           |
-| `codex`      | [Codex CLI](https://codex.openai.com)                                                                           |
-| `copilot`    | [GitHub Copilot CLI](https://docs.github.com/copilot/how-tos/copilot-chat/use-copilot-chat-in-the-command-line) |
-| `cursor`     | [Cursor CLI](https://cursor.com/docs/cli/acp) (`cursor-agent acp`)                                              |
-| `droid`      | [Factory Droid](https://www.factory.ai)                                                                         |
-| `fast-agent` | [fast-agent](https://fast-agent.ai)                                                                             |
-| `gemini`     | [Gemini CLI](https://github.com/google/gemini-cli)                                                              |
-| `iflow`      | [iFlow CLI](https://github.com/iflow-ai/iflow-cli)                                                              |
-| `kilocode`   | [Kilocode](https://kilocode.ai)                                                                                 |
-| `kimi`       | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli)                                                              |
-| `kiro`       | [Kiro CLI](https://kiro.dev)                                                                                    |
-| `mux`        | [Mux](https://mux.coder.com)                                                                                    |
-| `opencode`   | [OpenCode](https://opencode.ai)                                                                                 |
-| `openclaw`   | OpenClaw ACP bridge (native `openclaw acp`)                                                                     |
-| `pi`         | [Pi Coding Agent](https://github.com/mariozechner/pi)                                                           |
-| `qoder`      | [Qoder CLI](https://docs.qoder.com/cli/acp)                                                                     |
-| `qwen`       | [Qwen Code](https://github.com/QwenLM/qwen-code)                                                                |
-| `trae`       | [Trae CLI](https://docs.trae.cn/cli)                                                                            |
+| Alias        | Wraps                                                                                                  |
+| ------------ | ------------------------------------------------------------------------------------------------------ |
+| `claude`     | [Claude Code](https://claude.ai/code)                                                                  |
+| `codex`      | [Codex CLI](https://developers.openai.com/codex/cli)                                                   |
+| `copilot`    | [GitHub Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/copilot-cli/about-copilot-cli) |
+| `cursor`     | [Cursor CLI](https://cursor.com/docs/cli/acp) (`cursor-agent acp`)                                     |
+| `droid`      | [Factory Droid](https://www.factory.ai)                                                                |
+| `fast-agent` | [fast-agent](https://fast-agent.ai)                                                                    |
+| `gemini`     | [Gemini CLI](https://github.com/google-gemini/gemini-cli)                                              |
+| `iflow`      | [iFlow CLI](https://github.com/iflow-ai/iflow-cli)                                                     |
+| `kilocode`   | [Kilocode](https://kilocode.ai)                                                                        |
+| `kimi`       | [Kimi CLI](https://github.com/MoonshotAI/kimi-cli)                                                     |
+| `kiro`       | [Kiro CLI](https://kiro.dev)                                                                           |
+| `mux`        | [Mux](https://mux.coder.com)                                                                           |
+| `opencode`   | [OpenCode](https://opencode.ai)                                                                        |
+| `openclaw`   | OpenClaw ACP bridge (native `openclaw acp`)                                                            |
+| `pi`         | [Pi Coding Agent](https://github.com/earendil-works/pi)                                                |
+| `qoder`      | [Qoder CLI](https://docs.qoder.com/cli/acp)                                                            |
+| `qwen`       | [Qwen Code](https://github.com/QwenLM/qwen-code)                                                       |
+| `trae`       | [Trae CLI](https://docs.trae.cn/cli)                                                                   |
 
 `factory-droid` and `factorydroid` also resolve to the built-in `droid` adapter.
 
@@ -89,20 +89,14 @@ Core ACP baseline:
       "opencode",
       "qwen",
     ],
-    maxConcurrentSessions: 8,
     stream: {
-      // Defaults are coalesceIdleMs: 350, maxChunkChars: 1800; shown explicitly here.
-      coalesceIdleMs: 350,
-      maxChunkChars: 1800,
-    },
-    runtime: {
-      ttlMinutes: 120,
+      deliveryMode: "live",
     },
   },
 }
 ```
 
-Thread binding config is channel-adapter specific. Example for Discord:
+Thread binding config is shared across supported channel adapters:
 
 ```json5
 {
@@ -111,15 +105,7 @@ Thread binding config is channel-adapter specific. Example for Discord:
       enabled: true,
       idleHours: 24,
       maxAgeHours: 0,
-    },
-  },
-  channels: {
-    discord: {
-      threadBindings: {
-        enabled: true,
-        // Default is already true; shown explicitly here.
-        spawnSessions: true,
-      },
+      spawnSessions: true,
     },
   },
 }
@@ -127,7 +113,7 @@ Thread binding config is channel-adapter specific. Example for Discord:
 
 If thread-bound ACP spawn does not work, verify the adapter feature flag first:
 
-- Discord: `channels.discord.threadBindings.spawnSessions=true`
+- Discord: `session.threadBindings.spawnSessions=true`
 
 Current-conversation binds do not require child-thread creation. They require an active conversation context and a channel adapter that exposes ACP conversation bindings.
 
@@ -234,6 +220,8 @@ What this does:
   bootstrap.
 - Exposes plugin tools already registered by installed and enabled OpenClaw
   plugins.
+- Passes the active ACP session identity to plugin tool factories, so
+  agent-scoped tools stay in that agent's namespace.
 - Keeps the feature explicit and default-off.
 
 Security and trust notes:

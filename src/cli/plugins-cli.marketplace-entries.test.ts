@@ -3,6 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHostedMarketplaceFeedFixture } from "./plugins-marketplace-feed.test-support.js";
 
 const mocks = vi.hoisted(() => {
   const defaultRuntime = {
@@ -69,66 +70,48 @@ describe("plugins marketplace entries", () => {
     vi.unstubAllEnvs();
   });
 
-  it("lists entries from the configured marketplace feed as JSON", async () => {
-    const config = {
-      marketplaces: {
-        feeds: { acme: { url: "https://packages.acme.example/openclaw/feed" } },
-        sources: { "acme-npm": { type: "npm" as const } },
-      },
-    };
+  it("lists entries from an explicitly selected marketplace feed as JSON", async () => {
+    const config = {};
     mocks.getRuntimeConfig.mockReturnValue(config);
-    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
-      source: "hosted-snapshot",
-      entries: [
-        {
-          name: "@acme/calendar",
-          version: "1.2.3",
-          kind: "plugin",
-          state: "available",
-          publisher: { trust: "official" },
-          install: {
-            candidates: [{ sourceRef: "acme-npm", package: "@acme/calendar", version: "1.2.3" }],
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(
+      createHostedMarketplaceFeedFixture({
+        source: "hosted-snapshot",
+        entries: [
+          {
+            name: "@acme/calendar",
+            version: "1.2.3",
+            kind: "plugin",
+            state: "available",
+            publisher: { trust: "official" },
+            install: {
+              candidates: [
+                { sourceRef: "public-npm", package: "@acme/calendar", version: "1.2.3" },
+              ],
+            },
+            openclaw: { plugin: { id: "acme-calendar", label: "Acme Calendar" } },
           },
-          openclaw: {
-            plugin: { id: "acme-calendar", label: "Acme Calendar" },
-          },
-        },
-      ],
-      feed: {
-        schemaVersion: 1,
-        id: "acme-marketplace",
-        generatedAt: "2026-06-23T00:00:00.000Z",
-        sequence: 7,
-        entries: [],
-      },
-      metadata: {
-        url: "https://packages.acme.example/openclaw/feed",
-        status: 200,
-        checksum: "feed-sha",
-      },
-      snapshot: {
-        body: "{}",
-        metadata: {
-          url: "https://packages.acme.example/openclaw/feed",
-          status: 200,
-          checksum: "feed-sha",
-        },
-        savedAt: "2026-06-23T01:02:03.000Z",
-      },
-      error: "hosted catalog feed offline mode",
-    });
+        ],
+      }),
+    );
 
     const { runPluginMarketplaceEntriesCommand } = await import("./plugins-cli.runtime.js");
     await runPluginMarketplaceEntriesCommand({ feedProfile: "acme", offline: true, json: true });
 
-    expect(mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries).toHaveBeenCalledWith(
-      config,
-      { feedProfile: "acme", offline: true },
-    );
+    expect(mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries).toHaveBeenCalledWith({
+      feedProfile: "acme",
+      offline: true,
+    });
     expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         source: "hosted-snapshot",
         entryCount: 1,
+        trust: {
+          mode: "signed",
+          signedBy: "acme-root-2026",
+          signatureCount: 1,
+          threshold: 1,
+          verifiedAt: "2026-06-23T01:02:03.000Z",
+        },
         entries: [
           expect.objectContaining({
             id: "acme-calendar",
@@ -181,6 +164,30 @@ describe("plugins marketplace entries", () => {
     expect(output).not.toContain("#frag");
   });
 
+  it("keeps replacement metacharacters literal while redacting feed URLs", async () => {
+    const publicUrl = ["https://", "feed.example.invalid", "/$&"].join("");
+    const privateQuery = ["marker=", ["test", "-", "secret"].join("")].join("");
+    const rawUrl = [publicUrl, "?", privateQuery].join("");
+    mocks.getRuntimeConfig.mockReturnValue({});
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
+      source: "bundled-fallback",
+      entries: [],
+      error: `hosted catalog feed fetch failed for ${rawUrl}`,
+      metadata: { url: rawUrl, status: 503 },
+    });
+
+    const { runPluginMarketplaceEntriesCommand } = await import("./plugins-cli.runtime.js");
+    await runPluginMarketplaceEntriesCommand({ feedUrl: rawUrl, json: true });
+
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ url: publicUrl }),
+        error: `hosted catalog feed fetch failed for ${publicUrl}`,
+      }),
+    );
+    expect(JSON.stringify(mocks.defaultRuntime.writeJson.mock.calls)).not.toContain(privateQuery);
+  });
+
   it("prints bundled fallback entries without failing", async () => {
     mocks.getRuntimeConfig.mockReturnValue({});
     mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
@@ -211,6 +218,23 @@ describe("plugins marketplace entries", () => {
     expect(output).not.toContain("clawhub:@openclaw/acpx");
     expect(output).toContain("hosted catalog feed offline mode");
     expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it("prints bounded signed feed trust state in text output", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({});
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(
+      createHostedMarketplaceFeedFixture({ source: "hosted-snapshot" }),
+    );
+
+    const { runPluginMarketplaceEntriesCommand } = await import("./plugins-cli.runtime.js");
+    await runPluginMarketplaceEntriesCommand({ offline: true });
+
+    const output = mocks.defaultRuntime.log.mock.calls.map(([value]) => String(value)).join("\n");
+    expect(output).toContain("Trust:");
+    expect(output).toContain("signed by acme-root-2026 (1/1)");
+    expect(output).toContain("2026-06-23T01:02:03.000Z");
+    expect(output).not.toContain("publicKey");
+    expect(output).not.toContain("signature:");
   });
 
   it("emits bounded diagnostics for feed entry listing", async () => {
@@ -247,6 +271,13 @@ describe("plugins marketplace entries", () => {
         },
         savedAt: "2026-06-23T01:02:03.000Z",
       },
+      trust: {
+        mode: "signed",
+        signedBy: "acme-root-2026",
+        signatureCount: 1,
+        threshold: 1,
+        verifiedAt: "2026-06-23T01:02:03.000Z",
+      },
       error: "hosted catalog feed offline mode",
     });
 
@@ -263,6 +294,10 @@ describe("plugins marketplace entries", () => {
       feedIdPresent: true,
       feedProfileProvided: true,
       feedSequence: 7,
+      feedTrustMode: "signed",
+      feedTrustSignatureCount: 1,
+      feedTrustThreshold: 1,
+      feedTrustVerified: true,
       offline: true,
       payloadChecksumPresent: true,
       snapshotUsed: true,
@@ -271,6 +306,7 @@ describe("plugins marketplace entries", () => {
     expect(JSON.stringify(event)).not.toContain("packages.acme.example");
     expect(JSON.stringify(event)).not.toContain("acme-marketplace");
     expect(JSON.stringify(event)).not.toContain("feed-sha");
+    expect(JSON.stringify(event)).not.toContain("acme-root-2026");
     expect(JSON.stringify(event)).not.toContain("secret");
     expect(JSON.stringify(event)).not.toContain("token=leak");
   });

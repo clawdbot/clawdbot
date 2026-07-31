@@ -6,7 +6,7 @@ import {
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
 import { createOpenClawCodingTools } from "../../../agents/agent-tools.js";
-import { resolveModel } from "../../../agents/embedded-agent-runner/model.js";
+import { resolveModelAsync } from "../../../agents/embedded-agent-runner/model.js";
 import { normalizeAgentRuntimeTools } from "../../../agents/runtime-plan/tools.js";
 import {
   filterRuntimeCompatibleTools,
@@ -22,21 +22,34 @@ import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-mod
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
 
-function resolveRuntimeModelContext(params: {
-  cfg: OpenClawConfig;
-  agentDir: string;
-  workspaceDir: string;
-  provider: string;
-  modelId: string;
-}): {
+type RuntimeModelContext = {
   modelApi?: string;
   model?: ProviderRuntimeModel;
   modelCompat?: ReturnType<typeof extractModelCompat>;
   modelContextWindowTokens?: number;
-} {
-  const model = resolveModel(params.provider, params.modelId, params.agentDir, params.cfg, {
-    workspaceDir: params.workspaceDir,
-  }).model as ProviderRuntimeModel | undefined;
+};
+
+async function resolveRuntimeModelContext(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  agentDir: string;
+  workspaceDir: string;
+  provider: string;
+  modelId: string;
+}): Promise<RuntimeModelContext> {
+  // Doctor runs before agent lifecycle publication; async resolution prepares discovery instead
+  // of reporting an unpublished synchronous runtime as a broken provider.
+  const resolution = await resolveModelAsync(
+    params.provider,
+    params.modelId,
+    params.agentDir,
+    params.cfg,
+    {
+      agentId: params.agentId,
+      workspaceDir: params.workspaceDir,
+    },
+  );
+  const model = resolution.model as ProviderRuntimeModel | undefined;
   if (!model) {
     return {};
   }
@@ -78,10 +91,10 @@ function readPluginId(tool: AnyAgentTool | undefined): string | undefined {
 }
 
 /** Collect per-agent warnings for active plugin tools rejected by runtime schema projection. */
-export function collectActiveToolSchemaProjectionWarnings(params: {
+export async function collectActiveToolSchemaProjectionWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-}): string[] {
+}): Promise<string[]> {
   if (params.cfg.plugins?.enabled === false) {
     return [];
   }
@@ -93,10 +106,11 @@ export function collectActiveToolSchemaProjectionWarnings(params: {
     const modelRef = resolveDoctorPrimaryModelRef(params.cfg, agentConfig?.model);
     const agentDir = resolveAgentDir(params.cfg, agentId, env);
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId, env);
-    let runtimeModelContext: ReturnType<typeof resolveRuntimeModelContext> = {};
+    let runtimeModelContext: RuntimeModelContext = {};
     try {
-      runtimeModelContext = resolveRuntimeModelContext({
+      runtimeModelContext = await resolveRuntimeModelContext({
         cfg: params.cfg,
+        agentId,
         agentDir,
         workspaceDir,
         provider: modelRef.provider,

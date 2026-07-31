@@ -1,5 +1,5 @@
 // Control UI module implements public assets behavior.
-import { normalizeBasePath } from "../app-route-paths.ts";
+import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
 import { resolveControlUiBasePath } from "./browser.ts";
 
 type ControlUiPublicAsset =
@@ -9,7 +9,9 @@ type ControlUiPublicAsset =
   | "favicon.svg"
   | "manifest.webmanifest"
   | "sw.js"
-  | `provider-icons/ProviderIcon-${string}.svg`;
+  | `provider-icons/ProviderIcon-${string}.svg`
+  | `plugin-art/${string}.webp`
+  | `app-art/${string}.webp`;
 
 export function controlUiPublicAssetPath(
   asset: ControlUiPublicAsset,
@@ -27,7 +29,10 @@ export function inferControlUiPublicAssetPath(
   },
 ): string {
   const basePath =
-    params?.basePath ?? resolveControlUiBasePath(params?.pathname ?? currentPathname());
+    params?.basePath ??
+    (params?.pathname === undefined
+      ? resolveControlUiBasePath(currentPathname())
+      : inferBasePathFromPathname(params.pathname));
   return controlUiPublicAssetPath(asset, basePath);
 }
 

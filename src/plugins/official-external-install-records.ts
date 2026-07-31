@@ -16,6 +16,11 @@ function resolveClawHubSpecPackageName(spec: string | undefined): string | undef
   return spec ? parseClawHubPluginSpec(spec)?.name : undefined;
 }
 
+function resolveExactNpmPackageName(value: string): string | undefined {
+  const packageName = resolveNpmSpecPackageName(value);
+  return packageName && value.trim() === packageName ? packageName : undefined;
+}
+
 function resolveOfficialPackageNames(params: {
   entry: OfficialExternalPluginCatalogEntry;
   npmSpec?: string;
@@ -28,17 +33,85 @@ function resolveOfficialPackageNames(params: {
   ].filter((value): value is string => Boolean(value));
 }
 
-function resolveRecordedClawHubPackageNames(record: PluginInstallRecord): string[] {
-  return [record.clawhubPackage, resolveClawHubSpecPackageName(record.spec)].filter(
-    (value): value is string => Boolean(value),
-  );
+function resolveRecordedClawHubPackageNames(record: PluginInstallRecord): string[] | undefined {
+  // Source switches can leave legacy resolution fields in durable records. Treat every
+  // populated identity as corroborating evidence so one conflicting field fails closed.
+  const packageNames: string[] = [];
+  if (record.clawhubPackage !== undefined) {
+    const packageName = resolveExactNpmPackageName(record.clawhubPackage);
+    if (!packageName) {
+      return undefined;
+    }
+    packageNames.push(packageName);
+  }
+  if (record.spec !== undefined) {
+    const packageName = resolveClawHubSpecPackageName(record.spec);
+    if (!packageName) {
+      return undefined;
+    }
+    packageNames.push(packageName);
+  }
+  if (record.resolvedSpec !== undefined) {
+    const packageName =
+      resolveClawHubSpecPackageName(record.resolvedSpec) ??
+      resolveNpmSpecPackageName(record.resolvedSpec);
+    if (!packageName) {
+      return undefined;
+    }
+    packageNames.push(packageName);
+  }
+  if (record.resolvedName !== undefined) {
+    const packageName = resolveExactNpmPackageName(record.resolvedName);
+    if (!packageName) {
+      return undefined;
+    }
+    packageNames.push(packageName);
+  }
+  return packageNames;
 }
 
 function isOfficialClawHubInstallRecord(record: PluginInstallRecord): boolean {
   if (record.source !== "clawhub" || record.clawhubChannel !== "official") {
     return false;
   }
-  return (record.clawhubUrl ?? "").replace(/\/+$/, "") === "https://clawhub.ai";
+  return (record.clawhubUrl ?? "").trim().replace(/\/+$/, "") === "https://clawhub.ai";
+}
+
+/** Resolves one package identity from a current trusted official ClawHub install record. */
+export function resolveTrustedOfficialClawHubPackageName(
+  record: PluginInstallRecord,
+): string | undefined {
+  if (
+    record.source !== "clawhub" ||
+    record.clawhubChannel !== "official" ||
+    (record.clawhubUrl ?? "").trim().replace(/\/+$/, "") !== "https://clawhub.ai"
+  ) {
+    return undefined;
+  }
+  const packageNames = resolveRecordedClawHubPackageNames(record);
+  if (!packageNames || packageNames.length === 0 || new Set(packageNames).size !== 1) {
+    return undefined;
+  }
+  return packageNames[0];
+}
+
+function hasTrustedClawHubSourceAuthority(
+  record: PluginInstallRecord,
+  officialClawHubSpec: string | undefined,
+): boolean {
+  const hasAuthorityMetadata =
+    record.clawhubUrl !== undefined || record.clawhubChannel !== undefined;
+  if (hasAuthorityMetadata) {
+    return isOfficialClawHubInstallRecord(record);
+  }
+  // Older official installs persisted only their catalog-backed ClawHub spec.
+  // Preserve that shipped shape, but do not let package-only records claim it.
+  return Boolean(
+    officialClawHubSpec &&
+    record.spec &&
+    resolveClawHubSpecPackageName(record.spec) ===
+      resolveClawHubSpecPackageName(officialClawHubSpec),
+  );
 }
 
 /** Resolves the official npm spec when an install record matches the trusted catalog package. */
@@ -89,6 +162,9 @@ export function resolveTrustedSourceLinkedOfficialClawHubInstall(params: {
   const install = resolveOfficialExternalPluginInstall(entry);
   const officialClawHubSpec = install?.clawhubSpec;
   const officialNpmSpec = install?.npmSpec;
+  if (!officialClawHubSpec && !officialNpmSpec) {
+    return undefined;
+  }
   const officialNames = resolveOfficialPackageNames({
     entry,
     npmSpec: officialNpmSpec,
@@ -97,16 +173,22 @@ export function resolveTrustedSourceLinkedOfficialClawHubInstall(params: {
   if (officialNames.length === 0) {
     return undefined;
   }
-  const recordedPackageNames = resolveRecordedClawHubPackageNames(params.record);
-  const matchesOfficialPackage = recordedPackageNames.some((name) => officialNames.includes(name));
-  if (!matchesOfficialPackage) {
+  // resolvedSpec can survive a source switch, so it may corroborate but cannot establish
+  // ClawHub provenance without either the requested spec or resolved package identity.
+  if (params.record.clawhubPackage === undefined && params.record.spec === undefined) {
     return undefined;
   }
-  if (officialClawHubSpec || isOfficialClawHubInstallRecord(params.record)) {
-    return {
-      ...(officialClawHubSpec ? { clawhubSpec: officialClawHubSpec } : {}),
-      ...(officialNpmSpec ? { npmSpec: officialNpmSpec } : {}),
-    };
+  const recordedPackageNames = resolveRecordedClawHubPackageNames(params.record);
+  if (
+    !hasTrustedClawHubSourceAuthority(params.record, officialClawHubSpec) ||
+    !recordedPackageNames ||
+    recordedPackageNames.length === 0 ||
+    !recordedPackageNames.every((name) => officialNames.includes(name))
+  ) {
+    return undefined;
   }
-  return undefined;
+  return {
+    ...(officialClawHubSpec ? { clawhubSpec: officialClawHubSpec } : {}),
+    ...(officialNpmSpec ? { npmSpec: officialNpmSpec } : {}),
+  };
 }

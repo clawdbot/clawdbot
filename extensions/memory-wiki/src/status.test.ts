@@ -1,6 +1,7 @@
 // Memory Wiki tests cover status plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { MemoryPluginPublicArtifact } from "openclaw/plugin-sdk/memory-host-core";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { resolveMemoryWikiConfig } from "./config.js";
@@ -55,6 +56,8 @@ describe("resolveMemoryWikiStatus", () => {
     });
 
     expect(status.vaultExists).toBe(false);
+    expect(status.vaultScope).toBe("global");
+    expect(status.agentId).toBeNull();
     expect(status.obsidianCli.requested).toBe(true);
     expect(status.warnings.map((warning) => warning.code)).toEqual([
       "vault-missing",
@@ -124,6 +127,140 @@ describe("resolveMemoryWikiStatus", () => {
     expect(status.warnings.map((warning) => warning.code)).not.toContain(
       "bridge-artifacts-missing",
     );
+  });
+
+  it("counts only artifacts owned by the resolved agent in agent scope", async () => {
+    const unresolvedConfig = resolveMemoryWikiConfig(
+      {
+        vaultMode: "bridge",
+        vault: { scope: "agent", path: "/tmp/wiki/support" },
+        bridge: { enabled: true, readMemoryArtifacts: true },
+      },
+      { homedir: "/Users/tester" },
+    );
+    const config = { ...unresolvedConfig, agentId: "support" };
+    const artifacts: MemoryPluginPublicArtifact[] = [
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/support",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/support/MEMORY.md",
+        agentIds: [" SUPPORT "],
+        contentType: "markdown",
+      },
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/marketing",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/marketing/MEMORY.md",
+        agentIds: ["marketing"],
+        contentType: "markdown",
+      },
+      {
+        kind: "daily-note",
+        workspaceDir: "/tmp/shared",
+        relativePath: "memory/2026-07-09.md",
+        absolutePath: "/tmp/shared/memory/2026-07-09.md",
+        agentIds: ["support", "marketing"],
+        contentType: "markdown",
+      },
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/unknown",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/unknown/MEMORY.md",
+        agentIds: [],
+        contentType: "markdown",
+      },
+    ];
+
+    const status = await resolveMemoryWikiStatus(config, {
+      appConfig: {
+        agents: { list: [{ id: "support", default: true, workspace: "/tmp/support" }] },
+      },
+      listPublicArtifacts: async () => artifacts,
+      pathExists: async () => true,
+      resolveCommand: async () => null,
+    });
+
+    expect(status.vaultScope).toBe("agent");
+    expect(status.agentId).toBe("support");
+    expect(status.bridgePublicArtifactCount).toBe(2);
+  });
+
+  it("scopes global-vault status metadata when called by an agent tool", async () => {
+    const config = resolveMemoryWikiConfig(
+      {
+        vaultMode: "bridge",
+        bridge: { enabled: true, readMemoryArtifacts: true },
+      },
+      { homedir: "/Users/tester" },
+    );
+    const artifacts: MemoryPluginPublicArtifact[] = [
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/support",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/support/MEMORY.md",
+        agentIds: ["support"],
+        contentType: "markdown",
+      },
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/marketing",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/marketing/MEMORY.md",
+        agentIds: ["marketing"],
+        contentType: "markdown",
+      },
+      {
+        kind: "daily-note",
+        workspaceDir: "/tmp/shared",
+        relativePath: "memory/2026-07-09.md",
+        absolutePath: "/tmp/shared/memory/2026-07-09.md",
+        agentIds: ["support", "marketing"],
+        contentType: "markdown",
+      },
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/legacy",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/legacy/MEMORY.md",
+        agentIds: [],
+        contentType: "markdown",
+      },
+    ];
+    const deps = {
+      appConfig: {} as OpenClawConfig,
+      listPublicArtifacts: async () => artifacts,
+      pathExists: async () => true,
+      resolveCommand: async () => null,
+    };
+
+    const agentStatus = await resolveMemoryWikiStatus(config, {
+      ...deps,
+      callerAgentId: " SUPPORT ",
+    });
+    const operatorStatus = await resolveMemoryWikiStatus(config, deps);
+
+    expect(agentStatus.vaultScope).toBe("global");
+    expect(agentStatus.agentId).toBeNull();
+    expect(agentStatus.bridgePublicArtifactCount).toBe(2);
+    expect(operatorStatus.bridgePublicArtifactCount).toBe(4);
+  });
+
+  it("rejects status for an unresolved agent-scoped config", async () => {
+    const config = resolveMemoryWikiConfig(
+      { vault: { scope: "agent", path: "/tmp/wiki/support" } },
+      { homedir: "/Users/tester" },
+    );
+
+    await expect(
+      resolveMemoryWikiStatus(config, {
+        pathExists: async () => true,
+        resolveCommand: async () => null,
+      }),
+    ).rejects.toThrow("Memory Wiki agent-scoped vault requires a resolved agent id");
   });
 
   it("discovers pages in nested subdirectories", async () => {
@@ -269,6 +406,8 @@ describe("resolveMemoryWikiStatus", () => {
 describe("renderMemoryWikiStatus", () => {
   it("includes warnings in the text output", () => {
     const rendered = renderMemoryWikiStatus({
+      vaultScope: "global",
+      agentId: null,
       vaultMode: "isolated",
       renderMode: "native",
       vaultPath: "/tmp/wiki",
@@ -310,6 +449,7 @@ describe("renderMemoryWikiStatus", () => {
     });
 
     expect(rendered).toContain("Wiki vault mode: isolated");
+    expect(rendered).toContain("Vault scope: global");
     expect(rendered).toContain("Pages: 0 sources, 0 entities, 0 concepts, 0 syntheses, 0 reports");
     expect(rendered).toContain(
       "Source provenance: 0 native, 0 bridge, 0 bridge-events, 0 unsafe-local, 0 other",

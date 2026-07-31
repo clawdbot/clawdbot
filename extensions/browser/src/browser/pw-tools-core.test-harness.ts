@@ -74,7 +74,6 @@ const sessionMocks = vi.hoisted(() => ({
     }
     return err.name === "SsrFBlockedError" || err.name === "InvalidBrowserNavigationUrlError";
   }),
-  quarantineBlockedNavigationTarget: vi.fn(async () => {}),
   restoreRoleRefsForTarget: vi.fn(() => {}),
   respondToObservedDialogOnPage: vi.fn(async () => {
     throw new Error("No dialog is pending.");
@@ -85,6 +84,7 @@ const sessionMocks = vi.hoisted(() => ({
     cleanup: vi.fn(() => {}),
   })),
   isBrowserObservedDialogBlockedError: vi.fn(() => false),
+  quarantineBlockedNavigationTarget: vi.fn(async (_opts: unknown) => {}),
   storeRoleRefsForTarget: vi.fn(() => {}),
   refLocator: vi.fn(() => {
     if (!currentRefLocator) {
@@ -93,6 +93,16 @@ const sessionMocks = vi.hoisted(() => ({
     return currentRefLocator;
   }),
   rememberRoleRefsForTarget: vi.fn(() => {}),
+  wasBrowserNavigationSourcePreservedAfterPolicyDenial: vi.fn(() => false),
+  withPageNavigationRequestGuard: vi.fn(
+    async ({
+      action,
+      page,
+    }: {
+      action: (url: string) => Promise<unknown>;
+      page: { url: () => string };
+    }) => await action(page.url()),
+  ),
 }));
 
 const downloadCaptureMocks = vi.hoisted(() => ({
@@ -156,6 +166,7 @@ export function setPwToolsCoreCurrentPage(page: Record<string, unknown> | null) 
   if (page) {
     page.on ??= vi.fn();
     page.off ??= vi.fn();
+    page.url ??= vi.fn(() => "about:blank");
   }
   currentPage = page;
 }

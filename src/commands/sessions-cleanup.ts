@@ -15,6 +15,7 @@ import {
   type SessionsCleanupOptions,
   type SessionsCleanupResult,
 } from "../config/sessions.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, isGatewayTransportError } from "../gateway/call.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -32,7 +33,7 @@ import {
   toSessionDisplayRows,
 } from "./sessions-table.js";
 
-const ACTION_PAD = "repair-session-file".length;
+const ACTION_PAD = "prune-model-run".length;
 
 type SessionCleanupActionRow = ReturnType<typeof toSessionDisplayRows>[number] & {
   action: ReturnType<typeof resolveSessionCleanupAction>;
@@ -56,9 +57,6 @@ function formatCleanupActionCell(
   if (action === "keep") {
     return theme.muted(label);
   }
-  if (action === "repair-session-file") {
-    return theme.accentBright(label);
-  }
   if (action === "prune-missing") {
     return theme.error(label);
   }
@@ -79,7 +77,6 @@ function formatCleanupActionCell(
 
 function buildActionRows(params: {
   beforeStore: Parameters<typeof toSessionDisplayRows>[0];
-  repairedKeys?: Set<string>;
   missingKeys: Set<string>;
   modelRunPrunedKeys: Set<string>;
   staleKeys: Set<string>;
@@ -94,7 +91,6 @@ function buildActionRows(params: {
       label: params.beforeStore[row.key]?.label,
       action: resolveSessionCleanupAction({
         key: row.key,
-        repairedKeys: params.repairedKeys ?? new Set<string>(),
         missingKeys: params.missingKeys,
         modelRunPrunedKeys: params.modelRunPrunedKeys,
         staleKeys: params.staleKeys,
@@ -116,7 +112,7 @@ function buildLabelSummaries(actionRows: SessionCleanupActionRow[]): SessionClea
       summary = { label, kept: 0, pruned: 0 };
       summaryByLabel.set(label, summary);
     }
-    if (actionRow.action === "keep" || actionRow.action === "repair-session-file") {
+    if (actionRow.action === "keep") {
       summary.kept += 1;
     } else {
       summary.pruned += 1;
@@ -146,6 +142,15 @@ function renderLabelSummaries(params: {
   params.runtime.log(`Total: ${totalKept} kept, ${totalPruned} pruned`);
 }
 
+function toDisplayedCleanupSummary(summary: SessionCleanupSummary): SessionCleanupSummary {
+  return {
+    ...summary,
+    storePath: resolveSqliteTargetFromSessionStorePath(summary.storePath, {
+      agentId: summary.agentId,
+    }).path,
+  };
+}
+
 function renderStoreDryRunPlan(params: {
   cfg: OpenClawConfig;
   summary: SessionCleanupSummary;
@@ -154,15 +159,15 @@ function renderStoreDryRunPlan(params: {
   showAgentHeader: boolean;
 }) {
   const rich = isRich();
+  const displaySummary = toDisplayedCleanupSummary(params.summary);
   if (params.showAgentHeader) {
     params.runtime.log(`Agent: ${params.summary.agentId}`);
   }
-  params.runtime.log(`Session store: ${params.summary.storePath}`);
+  params.runtime.log(`Session store: ${displaySummary.storePath}`);
   params.runtime.log(`Maintenance mode: ${params.summary.mode}`);
   params.runtime.log(
     `Entries: ${params.summary.beforeCount} -> ${params.summary.afterCount} (remove ${params.summary.beforeCount - params.summary.afterCount})`,
   );
-  params.runtime.log(`Would repair sessionFile metadata: ${params.summary.repaired}`);
   params.runtime.log(`Would prune missing transcripts: ${params.summary.missing}`);
   params.runtime.log(`Would retire stale direct DM sessions: ${params.summary.dmScopeRetired}`);
   params.runtime.log(`Would prune stale model-run probes: ${params.summary.modelRunPruned}`);
@@ -208,6 +213,7 @@ function renderStoreDryRunPlan(params: {
 function renderAppliedSummaries(params: {
   summaries: SessionCleanupSummary[];
   runtime: RuntimeEnv;
+  locallyOwned: boolean;
 }) {
   for (let i = 0; i < params.summaries.length; i += 1) {
     const summary = params.summaries[i];
@@ -220,7 +226,10 @@ function renderAppliedSummaries(params: {
     if (params.summaries.length > 1) {
       params.runtime.log(`Agent: ${summary.agentId}`);
     }
-    params.runtime.log(`Session store: ${summary.storePath}`);
+    const storePath = params.locallyOwned
+      ? toDisplayedCleanupSummary(summary).storePath
+      : summary.storePath;
+    params.runtime.log(`Session store: ${storePath}`);
     params.runtime.log(`Applied maintenance. Current entries: ${summary.appliedCount ?? 0}`);
     if (summary.unreferencedArtifacts?.removedFiles) {
       params.runtime.log(
@@ -232,14 +241,14 @@ function renderAppliedSummaries(params: {
 
 async function maybeRunGatewayCleanup(
   opts: SessionsCleanupOptions,
-): Promise<SessionsCleanupResult | null> {
+): Promise<{ delegated: true; result: SessionsCleanupResult } | { delegated: false }> {
   if (opts.store || opts.dryRun) {
     // Explicit store paths and dry-runs must stay local; the gateway only owns
     // live in-process cleanup for default stores.
-    return null;
+    return { delegated: false };
   }
   try {
-    return await callGateway<SessionsCleanupResult>({
+    const result = await callGateway<SessionsCleanupResult>({
       method: "sessions.cleanup",
       params: {
         agent: opts.agent,
@@ -253,11 +262,12 @@ async function maybeRunGatewayCleanup(
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       requiredMethods: ["sessions.cleanup"],
     });
+    return { delegated: true, result };
   } catch (error) {
     if (isGatewayTransportError(error)) {
       // A stopped gateway should not block local maintenance; fall back to the
       // on-disk session stores when transport is unavailable.
-      return null;
+      return { delegated: false };
     }
     throw error;
   }
@@ -265,15 +275,19 @@ async function maybeRunGatewayCleanup(
 
 /** Runs session cleanup, optionally using the live gateway for active stores. */
 export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runtime: RuntimeEnv) {
-  const gatewayResult = await maybeRunGatewayCleanup(opts);
-  if (gatewayResult) {
+  const gatewayCleanup = await maybeRunGatewayCleanup(opts);
+  if (gatewayCleanup.delegated) {
+    // The Gateway owns this path. Preserve its syntax because resolving a remote
+    // Windows path on a POSIX client (or vice versa) would fabricate a local path.
     if (opts.json) {
-      writeRuntimeJson(runtime, gatewayResult);
+      writeRuntimeJson(runtime, gatewayCleanup.result);
       return;
     }
     renderAppliedSummaries({
-      summaries: "stores" in gatewayResult ? gatewayResult.stores : [gatewayResult],
+      summaries:
+        "stores" in gatewayCleanup.result ? gatewayCleanup.result.stores : [gatewayCleanup.result],
       runtime,
+      locallyOwned: false,
     });
     return;
   }
@@ -304,14 +318,13 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
         serializeSessionCleanupResult({
           mode,
           dryRun: true,
-          summaries: previewResults.map((result) => result.summary),
+          summaries: previewResults.map((result) => toDisplayedCleanupSummary(result.summary)),
         }),
       );
       return;
     }
 
-    for (let i = 0; i < previewResults.length; i += 1) {
-      const result = previewResults[i];
+    for (const [i, result] of previewResults.entries()) {
       if (i > 0) {
         runtime.log("");
       }
@@ -332,11 +345,11 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
       serializeSessionCleanupResult({
         mode,
         dryRun: false,
-        summaries: appliedSummaries,
+        summaries: appliedSummaries.map(toDisplayedCleanupSummary),
       }),
     );
     return;
   }
 
-  renderAppliedSummaries({ summaries: appliedSummaries, runtime });
+  renderAppliedSummaries({ summaries: appliedSummaries, runtime, locallyOwned: true });
 }

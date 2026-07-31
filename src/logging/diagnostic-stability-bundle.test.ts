@@ -163,6 +163,21 @@ describe("diagnostic stability bundles", () => {
     expect(raw).not.toContain("stack");
   });
 
+  it("keeps bounded failure messages UTF-16 safe", () => {
+    const prefix = "a".repeat(499);
+    const result = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.restart_startup_failed",
+      new Error(`${prefix}😀${"b".repeat(500)}`),
+      { stateDir: tempDir },
+    );
+
+    expect(result.status).toBe("written");
+    if (result.status !== "written") {
+      return;
+    }
+    expect(readBundle(result.path).error?.message).toBe(`${prefix}...`);
+  });
+
   it("registers a fatal hook only while installed", () => {
     startDiagnosticStabilityRecorder();
     emitDiagnosticEvent({ type: "webhook.received", channel: "telegram" });

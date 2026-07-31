@@ -1,11 +1,5 @@
-// Channel MCP server wires channel bridge tools into an MCP server instance.
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { VERSION } from "../version.js";
-import { OpenClawChannelBridge } from "./channel-bridge.js";
-import { ClaudePermissionRequestSchema, type ClaudeChannelMode } from "./channel-shared.js";
-import { getChannelMcpCapabilities, registerChannelMcpTools } from "./channel-tools.js";
+import { createChannelMcpRuntime } from "./channel-server-runtime.js";
 
 /**
  * MCP stdio server assembly for OpenClaw channel conversations.
@@ -13,75 +7,11 @@ import { getChannelMcpCapabilities, registerChannelMcpTools } from "./channel-to
  * This module wires config, the Gateway bridge, protocol notifications, and
  * registered tools into a lifecycle that callers can either embed or serve.
  */
-export { OpenClawChannelBridge } from "./channel-bridge.js";
-
-/** Options accepted by the channel MCP server factory and stdio entry point. */
-type OpenClawMcpServeOptions = {
-  gatewayUrl?: string;
-  gatewayToken?: string;
-  gatewayPassword?: string;
-  config?: OpenClawConfig;
-  claudeChannelMode?: ClaudeChannelMode;
-  verbose?: boolean;
-};
-
-async function resolveMcpConfig(config: OpenClawConfig | undefined): Promise<OpenClawConfig> {
-  if (config) {
-    return config;
-  }
-  const { getRuntimeConfig } = await import("../config/config.js");
-  return getRuntimeConfig();
-}
-
-/** Create an in-process channel MCP server plus explicit start and close hooks. */
-export async function createOpenClawChannelMcpServer(opts: OpenClawMcpServeOptions = {}): Promise<{
-  server: McpServer;
-  bridge: OpenClawChannelBridge;
-  start: () => Promise<void>;
-  close: () => Promise<void>;
-}> {
-  const cfg = await resolveMcpConfig(opts.config);
-  const claudeChannelMode = opts.claudeChannelMode ?? "auto";
-  const capabilities = getChannelMcpCapabilities(claudeChannelMode);
-  const server = new McpServer(
-    { name: "openclaw", version: VERSION },
-    capabilities ? { capabilities } : undefined,
-  );
-  const bridge = new OpenClawChannelBridge(cfg, {
-    gatewayUrl: opts.gatewayUrl,
-    gatewayToken: opts.gatewayToken,
-    gatewayPassword: opts.gatewayPassword,
-    claudeChannelMode,
-    verbose: opts.verbose ?? false,
-  });
-  bridge.setServer(server);
-
-  server.server.setNotificationHandler(ClaudePermissionRequestSchema, async ({ params }) => {
-    await bridge.handleClaudePermissionRequest({
-      requestId: params.request_id,
-      toolName: params.tool_name,
-      description: params.description,
-      inputPreview: params.input_preview,
-    });
-  });
-  registerChannelMcpTools(server, bridge);
-
-  return {
-    server,
-    bridge,
-    start: async () => {
-      await bridge.start();
-    },
-    close: async () => {
-      await bridge.close();
-      await server.close();
-    },
-  };
-}
+type OpenClawMcpServeOptions = NonNullable<Parameters<typeof createChannelMcpRuntime>[0]>;
 
 /** Serve the channel MCP server over stdio until transport or process shutdown. */
 export async function serveOpenClawChannelMcp(opts: OpenClawMcpServeOptions = {}): Promise<void> {
-  const { server, start, close } = await createOpenClawChannelMcpServer(opts);
+  const { server, start, close } = await createChannelMcpRuntime(opts);
   const transport = new StdioServerTransport();
 
   let shuttingDown = false;

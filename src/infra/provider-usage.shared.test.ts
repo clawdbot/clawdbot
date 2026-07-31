@@ -18,6 +18,8 @@ describe("provider-usage.shared", () => {
     { value: "minimax-portal", expected: "minimax" },
     { value: "minimax-cn", expected: "minimax" },
     { value: "minimax-portal-cn", expected: "minimax" },
+    { value: "claude-cli", expected: "anthropic" },
+    { value: " CLAUDE-CLI ", expected: "anthropic" },
     { value: " XIAOMI-TOKEN-PLAN ", expected: "xiaomi-token-plan" },
     { value: "unknown-provider", expected: "unknown-provider" },
     { value: undefined, expected: undefined },

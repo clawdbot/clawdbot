@@ -1,11 +1,11 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Xai plugin entrypoint registers its OpenClaw integration.
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { OPENAI_COMPATIBLE_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { defaultToolStreamExtraParams } from "openclaw/plugin-sdk/provider-stream-shared";
 import { jsonResult } from "openclaw/plugin-sdk/provider-web-search";
 import {
-  applyXaiRuntimeModelCompat,
   buildXaiImageGenerationProvider,
   normalizeXaiModelId,
   resolveXaiTransport,
@@ -20,9 +20,15 @@ import {
   buildLiveXaiProvider,
   buildXaiProvider,
 } from "./provider-catalog.js";
-import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
+import { isXaiProviderId } from "./provider-id.js";
+import {
+  isModernXaiModel,
+  normalizeXaiResolvedModel,
+  resolveXaiForwardCompatModel,
+} from "./provider-models.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { buildXaiRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
+import { buildXaiRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 import { buildXaiSpeechProvider } from "./speech-provider.js";
 import {
   readPluginCodeExecutionConfig,
@@ -92,13 +98,30 @@ function isXSearchEnabled(config: unknown, auth?: XaiToolAuthContext): boolean {
   return hasResolvableXaiApiKey(config, auth);
 }
 
-function createLazyCodeExecutionTool(ctx: {
-  config?: Record<string, unknown>;
-  runtimeConfig?: Record<string, unknown>;
-  hasAuthForProvider?: XaiToolAuthContext["hasAuthForProvider"];
-  resolveApiKeyForProvider?: XaiToolAuthContext["resolveApiKeyForProvider"];
-}) {
+function shouldExposeXaiBilledTool(params: {
+  activeProvider?: string;
+  enabled?: unknown;
+}): boolean {
+  const activeProvider = params.activeProvider?.trim();
+  if (!activeProvider || params.enabled === false) {
+    return false;
+  }
+  // Cross-provider billing requires explicit consent; xAI models retain the
+  // credential-backed default. Unknown providers fail closed.
+  return isXaiProviderId(activeProvider) || params.enabled === true;
+}
+
+function createLazyCodeExecutionTool(ctx: OpenClawPluginToolContext) {
   const effectiveConfig = ctx.runtimeConfig ?? ctx.config;
+  const codeExecutionConfig = readPluginCodeExecutionConfig(effectiveConfig);
+  if (
+    !shouldExposeXaiBilledTool({
+      activeProvider: ctx.activeModel?.provider,
+      enabled: codeExecutionConfig?.enabled,
+    })
+  ) {
+    return null;
+  }
   if (!isCodeExecutionEnabled(effectiveConfig, ctx)) {
     return null;
   }
@@ -119,13 +142,17 @@ function createLazyCodeExecutionTool(ctx: {
   );
 }
 
-function createLazyXSearchTool(ctx: {
-  config?: Record<string, unknown>;
-  runtimeConfig?: Record<string, unknown>;
-  hasAuthForProvider?: XaiToolAuthContext["hasAuthForProvider"];
-  resolveApiKeyForProvider?: XaiToolAuthContext["resolveApiKeyForProvider"];
-}) {
+function createLazyXSearchTool(ctx: OpenClawPluginToolContext) {
   const effectiveConfig = ctx.runtimeConfig ?? ctx.config;
+  const xSearchConfig = resolveEffectiveXSearchConfig(effectiveConfig);
+  if (
+    !shouldExposeXaiBilledTool({
+      activeProvider: ctx.activeModel?.provider,
+      enabled: xSearchConfig?.enabled,
+    })
+  ) {
+    return null;
+  }
   if (!isXSearchEnabled(effectiveConfig, ctx)) {
     return null;
   }
@@ -148,7 +175,7 @@ export default defineSingleProviderPluginEntry({
   id: "xai",
   name: "xAI Plugin",
   description: "Bundled xAI plugin",
-  provider: {
+  provider: (pluginApi) => ({
     label: "xAI",
     aliases: ["x-ai"],
     docsPath: "/providers/xai",
@@ -225,9 +252,12 @@ export default defineSingleProviderPluginEntry({
         provider: buildXaiProvider(),
       }),
     },
-    ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
+    ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
     prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
-    wrapStreamFn: wrapXaiProviderStream,
+    wrapStreamFn: (ctx) =>
+      wrapXaiProviderStream(ctx, {
+        clientVersion: pluginApi.runtime.version,
+      }),
     // Provider-specific fallback auth stays owned by the xAI plugin so core
     // auth/discovery code can consume it generically without parsing xAI's
     // private config layout. Callers may receive a real key from the active
@@ -243,7 +273,7 @@ export default defineSingleProviderPluginEntry({
         mode: "api-key" as const,
       };
     },
-    normalizeResolvedModel: ({ model }) => applyXaiRuntimeModelCompat(model),
+    normalizeResolvedModel: ({ model }) => normalizeXaiResolvedModel(model),
     normalizeTransport: ({ provider, api, baseUrl }) =>
       resolveXaiTransport({ provider, api, baseUrl }),
     normalizeModelId: ({ modelId }) => normalizeXaiModelId(modelId),
@@ -252,7 +282,7 @@ export default defineSingleProviderPluginEntry({
     resolveThinkingProfile,
     isModernModelRef: ({ modelId }) => isModernXaiModel(modelId),
     classifyFailoverReason: ({ errorMessage }) => classifyXaiFailoverReason(errorMessage),
-  },
+  }),
   register(api) {
     api.registerWebSearchProvider(createXaiWebSearchProvider());
     api.registerMediaUnderstandingProvider(buildXaiMediaUnderstandingProvider());
@@ -260,6 +290,7 @@ export default defineSingleProviderPluginEntry({
     api.registerImageGenerationProvider(buildXaiImageGenerationProvider());
     api.registerSpeechProvider(buildXaiSpeechProvider());
     api.registerRealtimeTranscriptionProvider(buildXaiRealtimeTranscriptionProvider());
+    api.registerRealtimeVoiceProvider(buildXaiRealtimeVoiceProvider());
     api.registerTool((ctx) => createLazyCodeExecutionTool(ctx), { name: "code_execution" });
     api.registerTool((ctx) => createLazyXSearchTool(ctx), { name: "x_search" });
   },

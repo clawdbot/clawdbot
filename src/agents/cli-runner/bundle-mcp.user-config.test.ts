@@ -1,7 +1,7 @@
 /** Tests merging user OpenClaw MCP server config into Claude bundle-MCP overlays. */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { writeClaudeBundleManifest } from "../../plugins/bundle-mcp.test-support.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
@@ -11,9 +11,21 @@ import {
   setupCliBundleMcpTestHarness,
 } from "./bundle-mcp.test-support.js";
 
+const authMocks = vi.hoisted(() => ({
+  resolveMcpOAuthAccessToken: vi.fn(),
+}));
+
+vi.mock("../mcp-oauth.js", () => ({
+  resolveMcpOAuthAccessToken: authMocks.resolveMcpOAuthAccessToken,
+}));
+
 setupCliBundleMcpTestHarness();
 
 describe("prepareCliBundleMcpConfig user mcp.servers", () => {
+  beforeEach(() => {
+    authMocks.resolveMcpOAuthAccessToken.mockReset();
+  });
+
   it("merges user-configured mcp.servers from OpenClaw config", async () => {
     const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
       "openclaw-cli-bundle-mcp-user-servers-",
@@ -131,6 +143,56 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
 
     expect(raw.mcpServers?.mixed?.type).toBe("http");
     expect(raw.mcpServers?.mixed?.transport).toBeUndefined();
+
+    await prepared.cleanup?.();
+  });
+
+  it("omits unavailable OAuth servers without blocking the CLI agent", async () => {
+    authMocks.resolveMcpOAuthAccessToken.mockRejectedValueOnce(
+      new Error('MCP server "gbrain" requires OAuth authorization.'),
+    );
+    const warn = vi.fn();
+    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-user-servers-oauth-",
+    );
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs"],
+      },
+      workspaceDir,
+      config: {
+        plugins: { enabled: false },
+        mcp: {
+          servers: {
+            gbrain: {
+              transport: "streamable-http",
+              url: "https://gbrain.example.com/mcp",
+              auth: "oauth",
+            },
+            localTools: {
+              transport: "stdio",
+              command: "local-tools",
+            },
+          },
+        },
+      },
+      warn,
+    });
+
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
+      mcpServers?: Record<string, unknown>;
+    };
+    expect(raw.mcpServers).toStrictEqual({
+      localTools: { type: "stdio", command: "local-tools" },
+    });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("skipped unavailable OAuth server gbrain"),
+    );
 
     await prepared.cleanup?.();
   });

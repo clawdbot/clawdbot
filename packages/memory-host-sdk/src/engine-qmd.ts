@@ -12,16 +12,21 @@ export {
   resolveSessionIdentityForTranscriptFile,
   resolveSessionFileForSyncTarget,
   sessionPathForFile,
+  sessionPathForSessionIdentity,
+  statSessionEntrySync,
   type BuildSessionEntryOptions,
   type ResolvedMemorySessionSyncTarget,
   type ResolvedSessionTranscriptIdentity,
   type SessionFileEntry,
+  type SessionFileState,
   type SessionTranscriptClassification,
   type SessionTranscriptCorpusEntry,
+  type SessionTranscriptCorpusOptions,
 } from "./host/session-files.js";
 export {
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
+  parseSqliteSessionFileMarker,
   parseUsageCountedSessionIdFromFileName,
 } from "./host/openclaw-runtime-session.js";
 export { parseQmdQueryJson, type QmdQueryResult } from "./host/qmd-query-parser.js";

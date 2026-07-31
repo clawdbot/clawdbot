@@ -1,11 +1,18 @@
 // Discord plugin module implements model picker preferences migrations behavior.
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
 import type { BundledChannelLegacyStateMigrationDetector } from "openclaw/plugin-sdk/channel-entry-contract";
 import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  DISCORD_COMMAND_DEPLOY_HASH_MAX_ENTRIES,
+  DISCORD_COMMAND_DEPLOY_HASH_NAMESPACE,
+} from "../command-deploy-store.js";
+import {
+  buildPreferenceModelKey,
+  sanitizeRecentModels,
+  timestampMs,
+} from "./model-picker-preference-primitives.js";
 import {
   normalizePersistedBinding,
   THREAD_BINDINGS_MAX_ENTRIES,
@@ -66,53 +73,6 @@ function normalizeLegacyPreferenceKey(key: string): string | undefined {
   return trimmed;
 }
 
-function normalizeModelRef(raw?: string): string | null {
-  const value = raw?.trim();
-  if (!value) {
-    return null;
-  }
-  const slashIndex = value.indexOf("/");
-  if (slashIndex <= 0 || slashIndex >= value.length - 1) {
-    return null;
-  }
-  const provider = normalizeProviderId(value.slice(0, slashIndex));
-  const model = value.slice(slashIndex + 1).trim();
-  return provider && model ? `${provider}/${model}` : null;
-}
-
-function sanitizeRecentModels(models: unknown, limit: number): string[] {
-  const deduped: string[] = [];
-  const seen = new Set<string>();
-  if (!Array.isArray(models)) {
-    return deduped;
-  }
-  for (const item of models) {
-    const normalized = normalizeModelRef(typeof item === "string" ? item : undefined);
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    deduped.push(normalized);
-    if (deduped.length >= limit) {
-      break;
-    }
-  }
-  return deduped;
-}
-
-function hashSegment(value: string, length: number): string {
-  return createHash("sha256").update(value, "utf8").digest("hex").slice(0, length);
-}
-
-function buildPreferenceModelKey(scopeKey: string, modelRef: string): string {
-  return `v1:${hashSegment(scopeKey, 32)}:${hashSegment(modelRef, 24)}`;
-}
-
-function timestampMs(value: unknown): number {
-  const parsed = typeof value === "string" ? Date.parse(value) : Number.NaN;
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
 function legacyUpdatedAtForIndex(updatedAt: unknown, index: number, total: number): string {
   const baseMs = timestampMs(updatedAt);
   const anchorMs = Math.min(baseMs + Math.max(0, total), MAX_DATE_TIMESTAMP_MS);
@@ -125,10 +85,65 @@ function legacyUpdatedAtForIndex(updatedAt: unknown, index: number, total: numbe
   );
 }
 
+function readFiniteNumberField(entry: Record<string, unknown>, key: string): number | undefined {
+  const value = entry[key];
+  return typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : undefined;
+}
+
+// Doctor-owned legacy-shape repair: pre-account-scoped stores carried a flat
+// `sessionKey` alias and an absolute `expiresAt`. Runtime normalization reads
+// canonical fields only, so the one-time JSON import maps them here.
+function upgradeLegacyThreadBindingShape(rawEntry: unknown): unknown {
+  if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+    return rawEntry;
+  }
+  const entry = { ...(rawEntry as Record<string, unknown>) };
+  if (entry.targetSessionKey === undefined && typeof entry.sessionKey === "string") {
+    entry.targetSessionKey = entry.sessionKey;
+  }
+  delete entry.sessionKey;
+  const expiresAt = readFiniteNumberField(entry, "expiresAt");
+  delete entry.expiresAt;
+  if (
+    entry.idleTimeoutMs === undefined &&
+    entry.maxAgeMs === undefined &&
+    expiresAt !== undefined
+  ) {
+    // Legacy expiresAt was an absolute timestamp; map it to max-age and disable idle timeout.
+    entry.idleTimeoutMs = 0;
+    if (expiresAt <= 0) {
+      entry.maxAgeMs = 0;
+    } else {
+      const boundAt = readFiniteNumberField(entry, "boundAt") ?? 0;
+      const lastActivityAt = readFiniteNumberField(entry, "lastActivityAt") ?? 0;
+      const base = boundAt > 0 ? boundAt : lastActivityAt;
+      entry.maxAgeMs = Math.max(1, expiresAt - Math.max(0, base));
+    }
+  }
+  return entry;
+}
+
 export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrationDetector = ({
   stateDir,
 }) => {
   const plans: ChannelLegacyStateMigrationPlan[] = [];
+  const commandDeployCacheSourcePath = path.join(stateDir, "discord", "command-deploy-cache.json");
+  if (fileExists(commandDeployCacheSourcePath)) {
+    plans.push({
+      kind: "plugin-state-import",
+      label: "Discord command deployment cache",
+      sourcePath: commandDeployCacheSourcePath,
+      targetPath: `plugin state:${DISCORD_COMMAND_DEPLOY_HASH_NAMESPACE}`,
+      pluginId: "discord",
+      namespace: DISCORD_COMMAND_DEPLOY_HASH_NAMESPACE,
+      maxEntries: DISCORD_COMMAND_DEPLOY_HASH_MAX_ENTRIES,
+      scopeKey: "",
+      cleanupSource: "remove",
+      cleanupWhenEmpty: true,
+      // Rebuildable cache: discard file-era hashes and reconcile once against Discord.
+      readEntries: () => [],
+    });
+  }
   const modelPickerSourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
   if (fileExists(modelPickerSourcePath)) {
     plans.push({
@@ -193,7 +208,10 @@ export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrat
         for (const [rawKey, rawEntry] of Object.entries(
           store.bindings as Record<string, unknown>,
         )) {
-          const normalized = normalizePersistedBinding(rawKey, rawEntry);
+          const normalized = normalizePersistedBinding(
+            rawKey,
+            upgradeLegacyThreadBindingShape(rawEntry),
+          );
           if (normalized) {
             out.push({
               key: toBindingRecordKey(normalized),

@@ -7,15 +7,32 @@ import {
   seedSessionStore,
   withTempHeartbeatSandbox,
 } from "../infra/heartbeat-runner.test-utils.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { enqueueCommitmentExtraction } from "./runtime.js";
 import {
   configureCommitmentExtractionRuntime,
   drainCommitmentExtractionQueue,
-  enqueueCommitmentExtraction,
   resetCommitmentExtractionRuntimeForTests,
-} from "./runtime.js";
-import { loadCommitmentStore } from "./store.js";
+} from "./runtime.test-support.js";
+import { readCommitmentsForTest } from "./store.test-utils.js";
 import type { CommitmentExtractionBatchResult, CommitmentExtractionItem } from "./types.js";
+
+vi.mock("./config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./config.js")>()),
+  resolveCommitmentsConfig: () => ({
+    enabled: true,
+    maxPerDay: 3,
+    extraction: {
+      debounceMs: 15_000,
+      batchMaxItems: 8,
+      queueMaxItems: 64,
+      confidenceThreshold: 0.72,
+      careConfidenceThreshold: 0.86,
+      timeoutSeconds: 45,
+    },
+  }),
+}));
 
 installHeartbeatRunnerTestRuntime();
 
@@ -24,6 +41,7 @@ describe("commitments full-chain integration", () => {
   const dueMs = writeMs + 10 * 60_000;
 
   afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
     resetCommitmentExtractionRuntimeForTests();
     vi.useRealTimers();
     vi.unstubAllEnvs();
@@ -48,7 +66,6 @@ describe("commitments full-chain integration", () => {
           },
           channels: { telegram: { allowFrom: ["*"] } },
           session: { store: storePath },
-          commitments: { enabled: true },
         };
         await seedSessionStore(storePath, sessionKey, {
           lastChannel: "telegram",
@@ -108,9 +125,9 @@ describe("commitments full-chain integration", () => {
         ).toBe(true);
         await expect(drainCommitmentExtractionQueue()).resolves.toBe(1);
 
-        const pendingStore = await loadCommitmentStore();
-        expect(pendingStore.commitments).toHaveLength(1);
-        const [pendingCommitment] = pendingStore.commitments;
+        const pendingCommitments = readCommitmentsForTest();
+        expect(pendingCommitments).toHaveLength(1);
+        const [pendingCommitment] = pendingCommitments;
         if (!pendingCommitment) {
           throw new Error("Expected pending commitment");
         }
@@ -169,8 +186,7 @@ describe("commitments full-chain integration", () => {
         expect(sendCall[0]).toBe("155462274");
         expect(sendCall[1]).toBe("How did the interview go?");
         expect(sendCall[2]?.accountId).toBe("primary");
-        const deliveredStore = await loadCommitmentStore();
-        const [deliveredCommitment] = deliveredStore.commitments;
+        const [deliveredCommitment] = readCommitmentsForTest();
         if (!deliveredCommitment) {
           throw new Error("Expected delivered commitment");
         }

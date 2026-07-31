@@ -24,6 +24,7 @@ export type BundledPluginContractSnapshot = {
   cliBackendIds: string[];
   providerIds: string[];
   providerEnvVars: Record<string, string[]>;
+  workerProviderIds: string[];
   embeddingProviderIds: string[];
   speechProviderIds: string[];
   realtimeTranscriptionProviderIds: string[];
@@ -51,7 +52,7 @@ const RUNNING_FROM_BUILT_ARTIFACT =
   CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`) ||
   CURRENT_MODULE_PATH.includes(`${path.sep}dist-runtime${path.sep}`);
 
-export type BundledCapabilityManifest = Pick<
+type BundledCapabilityManifest = Pick<
   PluginManifest,
   | "id"
   | "autoEnableWhenConfiguredProviders"
@@ -120,7 +121,7 @@ function normalizeSetupProviderEnvVars(setup: PluginManifest["setup"]): Record<s
   );
 }
 
-export function buildBundledPluginContractSnapshot(
+function buildBundledPluginContractSnapshot(
   manifest: BundledCapabilityManifest,
 ): BundledPluginContractSnapshot {
   return {
@@ -128,6 +129,7 @@ export function buildBundledPluginContractSnapshot(
     cliBackendIds: uniqueStrings(manifest.cliBackends, (value) => value.trim()),
     providerIds: uniqueStrings(manifest.providers, (value) => value.trim()),
     providerEnvVars: normalizeSetupProviderEnvVars(manifest.setup),
+    workerProviderIds: uniqueStrings(manifest.contracts?.workerProviders, (value) => value.trim()),
     embeddingProviderIds: uniqueStrings(manifest.contracts?.embeddingProviders, (value) =>
       value.trim(),
     ),
@@ -178,12 +180,13 @@ export function buildBundledPluginContractSnapshot(
   };
 }
 
-export function hasBundledPluginContractSnapshotCapabilities(
+function hasBundledPluginContractSnapshotCapabilities(
   entry: BundledPluginContractSnapshot,
 ): boolean {
   return (
     entry.cliBackendIds.length > 0 ||
     entry.providerIds.length > 0 ||
+    entry.workerProviderIds.length > 0 ||
     entry.embeddingProviderIds.length > 0 ||
     entry.speechProviderIds.length > 0 ||
     entry.realtimeTranscriptionProviderIds.length > 0 ||
@@ -206,33 +209,3 @@ export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSn
   BUNDLED_CAPABILITY_MANIFESTS.map(buildBundledPluginContractSnapshot)
     .filter(hasBundledPluginContractSnapshotCapabilities)
     .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
-
-export const BUNDLED_LEGACY_PLUGIN_ID_ALIASES = Object.fromEntries(
-  BUNDLED_CAPABILITY_MANIFESTS.flatMap((manifest) =>
-    (manifest.legacyPluginIds ?? []).map(
-      (legacyPluginId) => [legacyPluginId, manifest.id] as const,
-    ),
-  ).toSorted(([left], [right]) => left.localeCompare(right)),
-) as Readonly<Record<string, string>>;
-
-export const BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS = Object.fromEntries(
-  BUNDLED_CAPABILITY_MANIFESTS.flatMap((manifest) =>
-    (manifest.autoEnableWhenConfiguredProviders ?? []).map((providerId) => [
-      providerId,
-      manifest.id,
-    ]),
-  ).toSorted(([left], [right]) => left.localeCompare(right)),
-) as Readonly<Record<string, string>>;
-
-type BundledContractIdSnapshotKey = Exclude<
-  keyof Omit<BundledPluginContractSnapshot, "pluginId">,
-  "providerEnvVars"
->;
-
-export function resolveBundledContractSnapshotPluginIds(
-  key: BundledContractIdSnapshotKey,
-): string[] {
-  return BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter((entry) => entry[key].length > 0)
-    .map((entry) => entry.pluginId)
-    .toSorted((left, right) => left.localeCompare(right));
-}

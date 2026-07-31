@@ -16,12 +16,21 @@ import {
 } from "./embedded-agent-helpers/errors.js";
 import { isTimeoutErrorMessage } from "./embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "./embedded-agent-helpers/types.js";
+import { AgentHarnessSessionSupersededError } from "./harness/errors.js";
 import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 const MAX_FAILOVER_CAUSE_DEPTH = 25;
 const MISSING_TOOL_RESULT_REASON = "missing_tool_result";
 const MISSING_TOOL_RESULT_TEXT_RE = /native Codex tool\.call without a matching tool\.result/i;
+
+export type CliTimeoutContext = {
+  mode: "overall" | "no-output";
+  timeoutSeconds: number;
+  observedActivity: boolean;
+  activeToolCount: number;
+  backgroundTaskCount: number;
+};
 
 /** Structured error used to carry model fallback/failover metadata across layers. */
 export class FailoverError extends Error {
@@ -41,6 +50,7 @@ export class FailoverError extends Error {
   readonly sessionId?: string;
   readonly lane?: string;
   readonly suspend?: boolean;
+  readonly cliTimeout?: CliTimeoutContext;
 
   constructor(
     message: string,
@@ -58,6 +68,7 @@ export class FailoverError extends Error {
       lane?: string;
       cause?: unknown;
       suspend?: boolean;
+      cliTimeout?: CliTimeoutContext;
     },
   ) {
     super(message, { cause: params.cause });
@@ -74,6 +85,7 @@ export class FailoverError extends Error {
     this.sessionId = params.sessionId;
     this.lane = params.lane;
     this.suspend = params.suspend;
+    this.cliTimeout = params.cliTimeout;
   }
 }
 
@@ -88,6 +100,78 @@ export function isFailoverError(err: unknown): err is FailoverError {
     (err as { name?: unknown }).name === "FailoverError" &&
     typeof (err as { reason?: unknown }).reason === "string",
   );
+}
+
+export function findCliMaxTurnsError(
+  err: unknown,
+  seen: Set<object> = new Set(),
+): FailoverError | undefined {
+  if (isFailoverError(err) && err.code === "cli_max_turns") {
+    return err;
+  }
+  if (!err || typeof err !== "object" || seen.has(err)) {
+    return undefined;
+  }
+  // Fork persistence can aggregate a terminal run error with its own failure.
+  // Keep max-turn replay protection intact across those wrapper boundaries.
+  seen.add(err);
+  const candidate = err as { error?: unknown; cause?: unknown; errors?: unknown };
+  const nested = [
+    candidate.error,
+    candidate.cause,
+    ...(Array.isArray(candidate.errors) ? candidate.errors : []),
+  ];
+  for (const value of nested) {
+    const found = findCliMaxTurnsError(value, seen);
+    if (found) {
+      return found;
+    }
+  }
+  return undefined;
+}
+
+function hasCliTimeoutContext(error: FailoverError): error is FailoverError & {
+  cliTimeout: CliTimeoutContext;
+} {
+  const context = error.cliTimeout;
+  return Boolean(
+    context &&
+    (context.mode === "overall" || context.mode === "no-output") &&
+    Number.isFinite(context.timeoutSeconds) &&
+    context.timeoutSeconds >= 0 &&
+    typeof context.observedActivity === "boolean" &&
+    Number.isInteger(context.activeToolCount) &&
+    context.activeToolCount >= 0 &&
+    Number.isInteger(context.backgroundTaskCount) &&
+    context.backgroundTaskCount >= 0,
+  );
+}
+
+export function findCliTimeoutError(
+  err: unknown,
+  seen: Set<object> = new Set(),
+): (FailoverError & { cliTimeout: CliTimeoutContext }) | undefined {
+  if (isFailoverError(err) && hasCliTimeoutContext(err)) {
+    return err;
+  }
+  if (!err || typeof err !== "object" || seen.has(err)) {
+    return undefined;
+  }
+  // Failover summaries and persistence failures can wrap the terminal CLI error.
+  seen.add(err);
+  const candidate = err as { error?: unknown; cause?: unknown; errors?: unknown };
+  const nested = [
+    candidate.error,
+    candidate.cause,
+    ...(Array.isArray(candidate.errors) ? candidate.errors : []),
+  ];
+  for (const value of nested) {
+    const found = findCliTimeoutError(value, seen);
+    if (found) {
+      return found;
+    }
+  }
+  return undefined;
 }
 
 /** Map a failover reason to the closest HTTP-like status code. */
@@ -107,6 +191,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 403;
     case "timeout":
       return 408;
+    case "tls_certificate":
+      return 502;
     case "context_overflow":
       return 413;
     case "format":
@@ -329,6 +415,21 @@ function isEmbeddedAttemptSessionTakeover(err: unknown): boolean {
   );
 }
 
+function hasPreservedTakeoverPromptError(err: unknown): err is Record<"promptError", unknown> {
+  return Boolean(
+    isEmbeddedAttemptSessionTakeover(err) &&
+    err &&
+    typeof err === "object" &&
+    Object.hasOwn(err, "promptError"),
+  );
+}
+
+function resolveFailoverSourceError(err: unknown): unknown {
+  // Cleanup takeover is a secondary failure when the wrapper preserves the
+  // prompt error. Classify and report that provider-facing source instead.
+  return hasPreservedTakeoverPromptError(err) ? err.promptError : err;
+}
+
 function hasEmbeddedAttemptSessionTakeover(err: unknown, seen: Set<object> = new Set()): boolean {
   if (isEmbeddedAttemptSessionTakeover(err)) {
     return true;
@@ -402,20 +503,7 @@ function hasMissingToolResultFailure(err: unknown): boolean {
  * same local condition. See #83510 and #95474.
  */
 export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
-  if (
-    !hasSessionWriteLockContention(err) &&
-    !hasEmbeddedAttemptSessionTakeover(err) &&
-    !hasMissingToolResultFailure(err)
-  ) {
-    return false;
-  }
-  if (isFailoverError(err)) {
-    return false;
-  }
-  if (isEmbeddedAttemptSessionTakeover(err)) {
-    return true;
-  }
-  return resolveFailoverClassificationFromError(err) === null;
+  return resolveModelFallbackError(err).kind === "coordination";
 }
 
 function hasTimeoutHint(err: unknown): boolean {
@@ -731,46 +819,55 @@ export function describeFailoverError(err: unknown): {
   };
 }
 
+type FailoverErrorContext = {
+  provider?: string;
+  model?: string;
+  profileId?: string;
+  authMode?: string;
+  sessionId?: string;
+  lane?: string;
+};
+
+type ModelFallbackErrorResolution =
+  | { kind: "failover"; error: FailoverError }
+  | { kind: "coordination"; error: unknown }
+  | { kind: "unknown"; error: unknown };
+
 /** Convert a classified raw error into a FailoverError with optional request context. */
 export function coerceToFailoverError(
   err: unknown,
-  context?: {
-    provider?: string;
-    model?: string;
-    profileId?: string;
-    authMode?: string;
-    sessionId?: string;
-    lane?: string;
-  },
+  context?: FailoverErrorContext,
 ): FailoverError | null {
-  if (isFailoverError(err)) {
-    if (context?.authMode && !err.authMode) {
-      const message = typeof err.message === "string" ? err.message : String(err);
+  const sourceError = resolveFailoverSourceError(err);
+  if (isFailoverError(sourceError)) {
+    if (context?.authMode && !sourceError.authMode) {
+      const message =
+        typeof sourceError.message === "string" ? sourceError.message : String(sourceError);
       return new FailoverError(message, {
-        reason: err.reason,
-        provider: err.provider,
-        model: err.model,
-        profileId: err.profileId,
+        reason: sourceError.reason,
+        provider: sourceError.provider,
+        model: sourceError.model,
+        profileId: sourceError.profileId,
         authMode: context.authMode,
-        status: err.status,
-        code: err.code,
-        rawError: err.rawError,
-        authProfileFailure: err.authProfileFailure,
-        sessionId: err.sessionId,
-        lane: err.lane,
-        cause: err.cause,
-        suspend: err.suspend,
+        status: sourceError.status,
+        code: sourceError.code,
+        rawError: sourceError.rawError,
+        authProfileFailure: sourceError.authProfileFailure,
+        sessionId: sourceError.sessionId,
+        lane: sourceError.lane,
+        cause: sourceError.cause,
+        suspend: sourceError.suspend,
       });
     }
-    return err;
+    return sourceError;
   }
-  const reason = resolveFailoverReasonFromError(err, context?.provider);
+  const reason = resolveFailoverReasonFromError(sourceError, context?.provider);
   if (!reason) {
     return null;
   }
 
-  const signal = normalizeErrorSignal(err);
-  const message = signal.message ?? String(err);
+  const signal = normalizeErrorSignal(sourceError);
+  const message = signal.message ?? String(sourceError);
   const status = signal.status ?? resolveFailoverStatus(reason);
   const code = signal.code;
 
@@ -793,3 +890,32 @@ export function coerceToFailoverError(
     suspend: shouldSuspend,
   });
 }
+
+/** Classify one candidate failure once so fallback routing and diagnostics share it. */
+export function resolveModelFallbackError(
+  err: unknown,
+  context?: FailoverErrorContext,
+): ModelFallbackErrorResolution {
+  if (err instanceof AgentHarnessSessionSupersededError) {
+    return { kind: "coordination", error: err };
+  }
+  // A direct takeover remains a coordination failure unless the dedicated
+  // cleanup wrapper owns a preserved prompt error. Its message alone must not
+  // reclassify session-state loss as a provider failure.
+  if (isEmbeddedAttemptSessionTakeover(err) && !hasPreservedTakeoverPromptError(err)) {
+    return { kind: "coordination", error: err };
+  }
+  const failoverError = coerceToFailoverError(err, context);
+  if (failoverError) {
+    return { kind: "failover", error: failoverError };
+  }
+  if (
+    hasSessionWriteLockContention(err) ||
+    hasEmbeddedAttemptSessionTakeover(err) ||
+    hasMissingToolResultFailure(err)
+  ) {
+    return { kind: "coordination", error: err };
+  }
+  return { kind: "unknown", error: err };
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

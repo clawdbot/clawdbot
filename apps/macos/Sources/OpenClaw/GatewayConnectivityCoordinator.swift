@@ -1,15 +1,14 @@
 import Foundation
 import Observation
-import OSLog
 
 @MainActor
 @Observable
 final class GatewayConnectivityCoordinator {
     static let shared = GatewayConnectivityCoordinator()
 
-    private let logger = Logger(subsystem: "ai.openclaw", category: "gateway.connectivity")
     private var endpointTask: Task<Void, Never>?
     private var lastResolvedURL: URL?
+    private var lastRouteRevision: UInt64?
 
     private(set) var endpointState: GatewayEndpointState?
     private(set) var resolvedURL: URL?
@@ -39,13 +38,15 @@ final class GatewayConnectivityCoordinator {
     private func handleEndpointState(_ state: GatewayEndpointState) {
         self.endpointState = state
         switch state {
-        case let .ready(mode, url, _, _):
+        case let .ready(mode, url, _, _, routeRevision):
             self.resolvedMode = mode
             self.resolvedURL = url
             self.resolvedHostLabel = Self.hostLabel(for: url)
-            let urlChanged = self.lastResolvedURL?.absoluteString != url.absoluteString
-            if urlChanged {
+            let routeChanged = self.lastResolvedURL?.absoluteString != url.absoluteString ||
+                self.lastRouteRevision != routeRevision
+            if routeChanged {
                 self.lastResolvedURL = url
+                self.lastRouteRevision = routeRevision
                 Task { await ControlChannel.shared.refreshEndpoint(reason: "endpoint changed") }
             }
         case let .connecting(mode, _):

@@ -154,14 +154,14 @@ export async function startGatewayDiscovery(params: {
     });
     if (!wideAreaDomain) {
       params.logDiscovery.warn(
-        "discovery.wideArea.enabled is true, but no domain was configured; set discovery.wideArea.domain to enable unicast DNS-SD",
+        "wide-area discovery was requested without a domain; set discovery.wideArea.domain to enable unicast DNS-SD",
       );
       return { bonjourStop };
     }
     const tailnetIPv4 = pickPrimaryTailnetIPv4();
     if (!tailnetIPv4) {
       params.logDiscovery.warn(
-        "discovery.wideArea.enabled is true, but no Tailscale IPv4 address was found; skipping unicast DNS-SD zone update",
+        "discovery.wideArea.domain is set, but no Tailscale IPv4 address was found; skipping unicast DNS-SD zone update",
       );
     } else {
       try {

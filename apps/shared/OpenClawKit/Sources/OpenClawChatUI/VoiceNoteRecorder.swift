@@ -1,6 +1,10 @@
 import AVFAudio
+#if os(macOS)
+import AVFoundation
+#endif
 import Foundation
 import Observation
+import OpenClawKit
 
 private let voiceNoteMaximumDurationSeconds: TimeInterval = 180
 
@@ -21,6 +25,16 @@ public protocol VoiceNoteAudioCapture: AnyObject {
 
     /// Reports capture loss after a recording has started.
     func setFailureHandler(_ handler: @escaping @MainActor () -> Void)
+
+    /// Latest capture level in 0...1 for the live waveform, when supported.
+    func currentLevel() -> Double?
+}
+
+extension VoiceNoteAudioCapture {
+    /// Metering is a UI nicety; test captures may skip it.
+    public func currentLevel() -> Double? {
+        nil
+    }
 }
 
 /// A completed voice-note recording ready to stage as a chat attachment.
@@ -51,6 +65,8 @@ public final class OpenClawVoiceNoteRecorder {
 
     public private(set) var state: State = .idle
     public private(set) var elapsedSeconds: TimeInterval = 0
+    /// Live capture level in 0...1 while recording; drives the recording waveform.
+    public private(set) var level: Double = 0
 
     @ObservationIgnored public var onRecordingActiveChanged: (@MainActor (Bool) -> Void)?
 
@@ -140,7 +156,7 @@ public final class OpenClawVoiceNoteRecorder {
     public func start() async -> Bool {
         guard self.state == .idle || self.errorMessage != nil else { return false }
         guard self.captureAdmissionHandler() else {
-            self.fail(message: String(localized: "Push-to-talk is using the microphone."))
+            self.fail(message: String(localized: "Another feature is using the microphone."))
             return false
         }
 
@@ -160,7 +176,9 @@ public final class OpenClawVoiceNoteRecorder {
             try? FileManager.default.removeItem(at: fileURL)
             self.capture.cancel()
             self.onRecordingActiveChanged?(false)
-            self.fail(message: String(localized: "Could not start recording: \(error.localizedDescription)"))
+            self.fail(message: String(
+                format: String(localized: "Could not start recording: %@"),
+                error.localizedDescription))
             return false
         }
 
@@ -179,6 +197,7 @@ public final class OpenClawVoiceNoteRecorder {
         let duration = max(0, self.capture.stop())
         let recording = OpenClawVoiceNoteRecording(fileURL: fileURL, durationSeconds: duration)
         self.elapsedSeconds = duration
+        self.level = 0
         self.state = .finished(recording: recording)
         self.onRecordingActiveChanged?(false)
         return recording
@@ -205,6 +224,7 @@ public final class OpenClawVoiceNoteRecorder {
         }
         let wasRecording = self.isRecording
         self.elapsedSeconds = 0
+        self.level = 0
         self.state = .idle
         if wasRecording {
             self.onRecordingActiveChanged?(false)
@@ -220,6 +240,10 @@ public final class OpenClawVoiceNoteRecorder {
                 guard !Task.isCancelled else { return }
                 guard case let .recording(startedAt, _) = self.state else { return }
                 self.elapsedSeconds = max(0, self.now().timeIntervalSince(startedAt))
+                if let captureLevel = self.capture.currentLevel() {
+                    // Light smoothing keeps the 10 Hz meter poll from stepping visibly.
+                    self.level = (self.level * 0.55) + (captureLevel * 0.45)
+                }
                 if self.elapsedSeconds >= self.durationLimit {
                     self.finish()
                     return
@@ -233,6 +257,7 @@ public final class OpenClawVoiceNoteRecorder {
         self.timerTask = nil
         let wasRecording = self.isRecording
         self.elapsedSeconds = 0
+        self.level = 0
         self.state = .failed(message: message)
         if wasRecording {
             self.onRecordingActiveChanged?(false)
@@ -294,6 +319,17 @@ public final class OpenClawVoiceNoteAudioCapture: NSObject, VoiceNoteAudioCaptur
         @unknown default:
             return false
         }
+        #elseif os(macOS)
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            return true
+        case .denied, .restricted:
+            return false
+        case .notDetermined:
+            return await AVCaptureDevice.requestAccess(for: .audio)
+        @unknown default:
+            return false
+        }
         #else
         return false
         #endif
@@ -317,6 +353,7 @@ public final class OpenClawVoiceNoteAudioCapture: NSObject, VoiceNoteAudioCaptur
             ]
             let recorder = try AVAudioRecorder(url: url, settings: settings)
             recorder.delegate = self
+            recorder.isMeteringEnabled = true
             guard recorder.record() else {
                 throw NSError(
                     domain: "OpenClawVoiceNoteAudioCapture",
@@ -343,6 +380,12 @@ public final class OpenClawVoiceNoteAudioCapture: NSObject, VoiceNoteAudioCaptur
         self.recorder?.stop()
         self.recorder = nil
         self.deactivateAudioSession()
+    }
+
+    public func currentLevel() -> Double? {
+        guard let recorder, recorder.isRecording else { return nil }
+        recorder.updateMeters()
+        return TalkAudioLevel.normalized(decibels: Double(recorder.averagePower(forChannel: 0)))
     }
 
     public nonisolated func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: (any Error)?) {

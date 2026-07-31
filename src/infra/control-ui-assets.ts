@@ -38,9 +38,7 @@ export async function resolveControlUiDistIndexHealth(
   };
 }
 
-export function resolveControlUiRepoRoot(
-  argv1: string | undefined = process.argv[1],
-): string | null {
+function resolveControlUiRepoRoot(argv1: string | undefined = process.argv[1]): string | null {
   if (!argv1) {
     return null;
   }
@@ -72,7 +70,7 @@ export function resolveControlUiRepoRoot(
   return null;
 }
 
-export async function resolveControlUiDistIndexPath(
+async function resolveControlUiDistIndexPath(
   argv1OrOpts?: string | { argv1?: string; moduleUrl?: string },
 ): Promise<string | null> {
   const argv1 =
@@ -325,7 +323,9 @@ export async function ensureControlUiAssetsBuilt(
     };
   }
 
-  runtime.log("Control UI assets missing; building (ui:build, auto-installs UI deps)…");
+  runtime.log(
+    "Control UI assets missing; building them now (rerun `pnpm ui:build` after UI changes, or use `pnpm ui:dev` while developing the Control UI)…",
+  );
 
   const build = await runCommandWithTimeout([process.execPath, uiScript, "build"], {
     cwd: repoRoot,

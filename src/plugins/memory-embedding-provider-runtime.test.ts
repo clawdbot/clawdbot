@@ -109,21 +109,25 @@ describe("memory embedding provider runtime resolution", () => {
   it("uses registered adapters through a configured provider api", () => {
     const ollamaAdapter = createCapabilityAdapter("ollama");
     registerMemoryEmbeddingProvider(ollamaAdapter);
-
-    expect(
-      runtimeModule.getMemoryEmbeddingProvider("ollama-gpu1", {
-        models: {
-          providers: {
-            "ollama-gpu1": {
-              api: "ollama",
-              baseUrl: "http://ollama-host:11435",
-              models: [],
-            },
+    const config = {
+      models: {
+        providers: {
+          "ollama-gpu1": {
+            api: "ollama",
+            baseUrl: "http://ollama-host:11435",
+            models: [],
           },
         },
-      } as never),
-    ).toBe(ollamaAdapter);
-    expect(mocks.resolvePluginCapabilityProvider).not.toHaveBeenCalled();
+      },
+    } as never;
+
+    expect(runtimeModule.getMemoryEmbeddingProvider("ollama-gpu1", config)).toBe(ollamaAdapter);
+    expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledTimes(1);
+    expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
+      key: "memoryEmbeddingProviders",
+      providerId: "ollama-gpu1",
+      cfg: config,
+    });
   });
 
   it("prefers registered adapters over declared capability fallback adapters with the same id", () => {

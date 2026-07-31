@@ -3,9 +3,22 @@ import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import {
   releaseLeasedSharedCodexAppServerClient,
+  type CodexAppServerClientOptions,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
+
+function resolveOverriddenProviderWebSearchSupport(
+  modelProviderOverride: string | undefined,
+): CodexNativeWebSearchSupport | undefined {
+  const provider = modelProviderOverride?.trim().toLowerCase();
+  if (!provider) {
+    return undefined;
+  }
+  // The capability RPC describes the configured provider, not a thread
+  // override. OpenAI's hosted support is known; other overrides stay managed.
+  return provider === "openai" ? "supported" : "unsupported";
+}
 
 async function readConfiguredProviderWebSearchSupport(params: {
   client: CodexAppServerClient;
@@ -29,15 +42,9 @@ export async function resolveCodexProviderWebSearchSupportForClient(params: {
   modelProviderOverride: string | undefined;
   signal: AbortSignal;
 }): Promise<CodexNativeWebSearchSupport> {
-  const modelProviderOverride = params.modelProviderOverride?.trim().toLowerCase();
-  if (modelProviderOverride === "openai") {
-    return "supported";
-  }
-  if (modelProviderOverride) {
-    // Codex's capability RPC only reports the configured provider, not a
-    // thread-scoped override. Keep managed search for overrides whose hosted
-    // capability cannot be proven from the configured-provider response.
-    return "unsupported";
+  const overrideSupport = resolveOverriddenProviderWebSearchSupport(params.modelProviderOverride);
+  if (overrideSupport) {
+    return overrideSupport;
   }
   try {
     return await readConfiguredProviderWebSearchSupport(params);
@@ -49,17 +56,26 @@ export async function resolveCodexProviderWebSearchSupportForClient(params: {
 export async function resolveCodexProviderWebSearchSupport(params: {
   clientFactory: CodexAppServerClientFactory;
   appServer: CodexAppServerRuntimeOptions;
-  authProfileId: string | undefined;
+  authProfileId: string | null | undefined;
+  preparedAuth?: CodexAppServerClientOptions["preparedAuth"];
   agentDir: string;
   config: EmbeddedRunAttemptParams["config"] | undefined;
   modelProviderOverride: string | undefined;
   signal: AbortSignal;
 }): Promise<CodexNativeWebSearchSupport> {
+  const overrideSupport = resolveOverriddenProviderWebSearchSupport(params.modelProviderOverride);
+  if (overrideSupport) {
+    // Never serialize the prewarmed app-server startup behind a capability
+    // probe whose answer is already fixed by the selected thread provider.
+    return overrideSupport;
+  }
   let client: CodexAppServerClient | undefined;
   try {
     client = await params.clientFactory({
       startOptions: params.appServer.start,
-      authProfileId: params.authProfileId,
+      ...(params.preparedAuth
+        ? { preparedAuth: params.preparedAuth }
+        : { authProfileId: params.authProfileId }),
       agentDir: params.agentDir,
       config: params.config,
       timeoutMs: params.appServer.requestTimeoutMs,

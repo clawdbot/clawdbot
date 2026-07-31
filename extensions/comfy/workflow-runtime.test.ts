@@ -1,6 +1,7 @@
 // Comfy tests cover workflow-runtime bounded-read delegation.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readJsonResponseForTest, setComfyFetchGuardForTesting } from "./workflow-runtime.js";
+import { setComfyFetchGuardForTesting } from "./test-support.js";
+import { readJsonResponseForTest } from "./workflow-runtime.js";
 
 describe("readJsonResponse bounded read (readProviderJsonResponse delegation)", () => {
   const fetchMock = vi.fn();

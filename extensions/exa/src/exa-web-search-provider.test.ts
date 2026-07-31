@@ -153,6 +153,26 @@ describe("exa web search provider", () => {
     );
   });
 
+  it("partitions Exa cache keys by effective content options", () => {
+    const base = {
+      endpoint: "https://api.exa.ai/search",
+      type: "auto" as const,
+      query: "openclaw",
+      count: 5,
+    };
+    const defaultKey = testing.buildExaCacheKey(base);
+
+    expect(testing.buildExaCacheKey({ ...base, contents: { highlights: true } })).toBe(defaultKey);
+
+    const disabledKeys = [
+      testing.buildExaCacheKey({ ...base, contents: { highlights: false } }),
+      testing.buildExaCacheKey({ ...base, contents: { text: false } }),
+      testing.buildExaCacheKey({ ...base, contents: { summary: false } }),
+    ];
+    expect(disabledKeys).not.toContain(defaultKey);
+    expect(new Set(disabledKeys).size).toBe(disabledKeys.length);
+  });
+
   it("normalizes Exa result descriptions from highlights before text", () => {
     expect(
       testing.resolveExaDescription({
@@ -209,8 +229,10 @@ describe("exa web search provider", () => {
   it("exposes newer documented Exa search types and count limits", () => {
     const provider = createExaWebSearchProvider();
     const tool = provider.createTool({
-      config: {},
-      searchConfig: { exa: { apiKey: "exa-secret" } },
+      config: {
+        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
+      },
+      searchConfig: {},
     });
     if (!tool) {
       throw new Error("Expected tool definition");
@@ -243,8 +265,10 @@ describe("exa web search provider", () => {
   it("returns validation errors for conflicting time filters", async () => {
     const provider = createExaWebSearchProvider();
     const tool = provider.createTool({
-      config: {},
-      searchConfig: { exa: { apiKey: "exa-secret" } },
+      config: {
+        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
+      },
+      searchConfig: {},
     });
     if (!tool) {
       throw new Error("Expected tool definition");
@@ -267,8 +291,10 @@ describe("exa web search provider", () => {
   it("returns validation errors for invalid date input", async () => {
     const provider = createExaWebSearchProvider();
     const tool = provider.createTool({
-      config: {},
-      searchConfig: { exa: { apiKey: "exa-secret" } },
+      config: {
+        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
+      },
+      searchConfig: {},
     });
     if (!tool) {
       throw new Error("Expected tool definition");
@@ -288,6 +314,21 @@ describe("exa web search provider", () => {
 
   it("reports malformed Exa API JSON with a stable provider error", async () => {
     await expect(testing.readExaSearchResults(new Response("{ nope"))).rejects.toThrow(
+      "Exa API returned malformed JSON",
+    );
+  });
+
+  it("rejects invalid UTF-8 in Exa search JSON", async () => {
+    const prefix = new TextEncoder().encode(
+      '{"results":[{"url":"https://example.com","title":"bad',
+    );
+    const suffix = new TextEncoder().encode('"}]}');
+    const body = new Uint8Array(prefix.length + 1 + suffix.length);
+    body.set(prefix);
+    body[prefix.length] = 0xff;
+    body.set(suffix, prefix.length + 1);
+
+    await expect(testing.readExaSearchResults(new Response(body))).rejects.toThrow(
       "Exa API returned malformed JSON",
     );
   });

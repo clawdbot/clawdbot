@@ -104,6 +104,101 @@ function createSandboxFsTools(params: { sandbox: UnsafeMountedSandbox; workspace
 }
 
 describe("tools.fs.workspaceOnly", () => {
+  it("preserves valid UTF-8 BOM bytes through real sandbox edit and patch bridges", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, sandbox }) => {
+      const filePath = path.join(sandboxRoot, "source.txt");
+      const original = Buffer.from("\uFEFFheading\nprice: 5\n", "utf8");
+      const expected = Buffer.from("\uFEFFheading\nprice: 7\n", "utf8");
+      const editTool = createSandboxedEditTool({
+        root: sandbox.workspaceDir,
+        bridge: sandbox.fsBridge!,
+      });
+
+      await fs.writeFile(filePath, original);
+      await editTool.execute("sandbox-edit-bom", {
+        path: "source.txt",
+        edits: [{ oldText: "price: 5", newText: "price: 7" }],
+      });
+      await expect(fs.readFile(filePath)).resolves.toEqual(expected);
+
+      await fs.writeFile(filePath, original);
+      const patchTool = createApplyPatchTool({
+        cwd: sandbox.workspaceDir,
+        sandbox: { root: sandbox.workspaceDir, bridge: sandbox.fsBridge! },
+      });
+      await patchTool.execute("sandbox-patch-bom", {
+        input: `*** Begin Patch
+*** Update File: source.txt
+@@
+-price: 5
++price: 7
+*** End Patch`,
+      });
+      await expect(fs.readFile(filePath)).resolves.toEqual(expected);
+    });
+  });
+
+  it("preserves unrelated Unicode bytes through the real sandbox edit bridge", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, sandbox }) => {
+      const filePath = path.join(sandboxRoot, "source.txt");
+      const original =
+        "const value\u00A0= 1; // keep \uFF08\uFF13\uFF09 \uFF71\uFF72\uFF73 \u2014 unchanged\r\n";
+      const expected =
+        "const value = 2; // keep \uFF08\uFF13\uFF09 \uFF71\uFF72\uFF73 \u2014 unchanged\r\n";
+      const editTool = createSandboxedEditTool({
+        root: sandbox.workspaceDir,
+        bridge: sandbox.fsBridge!,
+      });
+
+      await fs.writeFile(filePath, original, "utf8");
+      await editTool.execute("sandbox-edit-fuzzy-unicode", {
+        path: "source.txt",
+        edits: [{ oldText: "const value = 1;", newText: "const value = 2;" }],
+      });
+
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe(expected);
+    });
+  });
+
+  it("rejects invalid UTF-8 before sandbox edit or patch bridge writes", async () => {
+    await withUnsafeMountedSandboxHarness(async ({ sandboxRoot, sandbox }) => {
+      const filePath = path.join(sandboxRoot, "source.txt");
+      const original = Buffer.concat([
+        Buffer.from("heading\nprice: 5\n"),
+        Buffer.from([0xff, 0xfe]),
+      ]);
+      await fs.writeFile(filePath, original);
+      const editTool = createSandboxedEditTool({
+        root: sandbox.workspaceDir,
+        bridge: sandbox.fsBridge!,
+      });
+
+      await expect(
+        editTool.execute("sandbox-edit-invalid-utf8", {
+          path: "source.txt",
+          edits: [{ oldText: "price: 5", newText: "price: 7" }],
+        }),
+      ).rejects.toThrow(/not valid UTF-8/);
+      await expect(fs.readFile(filePath)).resolves.toEqual(original);
+
+      const patchTool = createApplyPatchTool({
+        cwd: sandbox.workspaceDir,
+        sandbox: { root: sandbox.workspaceDir, bridge: sandbox.fsBridge! },
+      });
+      await expect(
+        patchTool.execute("sandbox-patch-invalid-utf8", {
+          input: `*** Begin Patch
+*** Update File: source.txt
+@@
+-price: 5
++price: 7
+*** End Patch`,
+        }),
+      ).rejects.toThrow(/not valid UTF-8/);
+      await expect(fs.readFile(filePath)).resolves.toEqual(original);
+    });
+  });
+
   it("defaults to allowing sandbox mounts outside the workspace root", async () => {
     await withUnsafeMountedSandboxHarness(async ({ agentRoot, sandbox }) => {
       await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");

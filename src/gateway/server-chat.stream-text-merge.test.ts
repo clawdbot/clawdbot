@@ -2,7 +2,9 @@
  * Tests chat stream text merging before gateway events reach clients.
  */
 import { describe, expect, it } from "vitest";
-import { MAX_LIVE_CHAT_BUFFER_CHARS, resolveMergedAssistantText } from "./live-chat-projector.js";
+import { resolveMergedAssistantText } from "./live-chat-projector.js";
+
+const LIVE_CHAT_BUFFER_CHARS = 500_000;
 
 describe("server chat stream text merge", () => {
   it.each([
@@ -85,12 +87,23 @@ describe("server chat stream text merge", () => {
 
   it("caps merged live text while preserving the newest assistant output", () => {
     const result = resolveMergedAssistantText({
-      previousText: "a".repeat(MAX_LIVE_CHAT_BUFFER_CHARS - 2),
+      previousText: "a".repeat(LIVE_CHAT_BUFFER_CHARS - 2),
       nextText: "",
       nextDelta: "bbbb",
     });
 
-    expect(result).toHaveLength(MAX_LIVE_CHAT_BUFFER_CHARS);
+    expect(result).toHaveLength(LIVE_CHAT_BUFFER_CHARS);
     expect(result.endsWith("bbbb")).toBe(true);
+  });
+
+  it("does not start the capped tail with the low half of a surrogate pair", () => {
+    const safeTail = "y".repeat(LIVE_CHAT_BUFFER_CHARS - 1);
+    const result = resolveMergedAssistantText({
+      previousText: "",
+      nextText: `x🚀${safeTail}`,
+      nextDelta: "",
+    });
+
+    expect(result).toBe(safeTail);
   });
 });

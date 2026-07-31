@@ -84,6 +84,7 @@ Minimal config:
 
 - Bots cannot initiate DMs. The user must message the bot first.
 - The webhook URL must be reachable from the Nextcloud server; set `webhookPublicUrl` when the gateway sits behind a proxy. Webhook requests are HMAC-SHA256 signed with the bot secret; invalid signatures are rejected and rate limited.
+- HTTP 200 is returned only after the raw event is durably stored; storage failures return HTTP 500. The durable `200` carries `x-openclaw-delivery-accepted: durable` (signature, validation, and storage-error responses omit it), so reverse proxies can require the marker to distinguish OpenClaw acceptance from a generic `200`.
 - Media uploads are not supported by the bot API; outbound media is appended as an `Attachment: <url>` line.
 - The webhook payload does not distinguish DMs from rooms; set `apiUser` + `apiPassword` to enable room-type lookups (cached about 5 minutes). Without them, every conversation is treated as a room.
 - Outbound requests go through the SSRF guard. For a Nextcloud host on a trusted private/internal network, opt in with `channels.nextcloud-talk.network.dangerouslyAllowPrivateNetwork: true`.
@@ -156,9 +157,9 @@ Provider options:
 - `channels.nextcloud-talk.dmHistoryLimit`: DM history limit (0 disables).
 - `channels.nextcloud-talk.dms`: per-DM overrides keyed by user ID (`historyLimit`).
 - `channels.nextcloud-talk.textChunkLimit`: outbound text chunk size in chars (default: 4000).
-- `channels.nextcloud-talk.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
-- `channels.nextcloud-talk.blockStreaming`: disable block streaming for this channel.
-- `channels.nextcloud-talk.blockStreamingCoalesce`: block streaming coalesce tuning.
+- `channels.nextcloud-talk.streaming.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
+- `channels.nextcloud-talk.streaming.block.enabled`: enable or disable block streaming for this channel.
+- `channels.nextcloud-talk.streaming.block.coalesce`: block streaming coalesce tuning.
 - `channels.nextcloud-talk.responsePrefix`: outbound reply prefix.
 - `channels.nextcloud-talk.markdown.tables`: markdown table rendering mode (`off | bullets | code | block`).
 - `channels.nextcloud-talk.mediaMaxMb`: inbound media cap (MB).

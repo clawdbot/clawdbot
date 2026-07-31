@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/irc",
-  "version": "2026.6.11",
+  "version": "2026.7.2",
   "description": "OpenClaw IRC channel plugin",
   "type": "module",
   "devDependencies": {
@@ -18,8 +18,19 @@
       "allowInvalidConfigRecovery": true
     },
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
     "channel": {
       "id": "irc",
+      "configuredState": {
+        "env": {
+          "allOf": [
+            "IRC_HOST",
+            "IRC_NICK"
+          ]
+        }
+      },
       "label": "IRC",
       "selectionLabel": "IRC (Server + Nick)",
       "detailLabel": "IRC",
@@ -30,22 +41,23 @@
         "internet-relay-chat"
       ],
       "systemImage": "network",
-      "configuredState": {
-        "env": {
-          "allOf": [
-            "IRC_HOST",
-            "IRC_NICK"
-          ]
-        },
-        "specifier": "./configured-state",
-        "exportName": "hasIrcConfiguredState"
-      }
+      "setup": { "fields": [
+        { "key": "host", "kind": "string", "cli": { "flags": "--host <host>", "description": "IRC server host" } },
+        { "key": "port", "kind": "string", "cli": { "flags": "--port <port>", "description": "IRC server port" } },
+        { "key": "tls", "kind": "boolean", "cli": { "flags": "--tls", "description": "Use TLS for IRC" } },
+        { "key": "nick", "kind": "string", "cli": { "flags": "--nick <nick>", "description": "IRC nickname" } },
+        { "key": "username", "kind": "string", "cli": { "flags": "--username <name>", "description": "IRC username" } },
+        { "key": "realname", "kind": "string", "cli": { "flags": "--realname <name>", "description": "IRC real name" } },
+        { "key": "channels", "kind": "string-list", "cli": { "flags": "--channels <names>", "description": "IRC channels" } },
+        { "key": "password", "kind": "string", "sensitive": true, "cli": { "flags": "--password <password>", "description": "IRC server password" } },
+        { "key": "useEnv", "kind": "boolean", "cli": { "flags": "--use-env", "description": "Use IRC environment configuration" } }
+      ] }
     },
     "compat": {
-      "pluginApi": ">=2026.6.11"
+      "pluginApi": ">=2026.7.2"
     },
     "build": {
-      "openclawVersion": "2026.6.11",
+      "openclawVersion": "2026.7.2",
       "bundledDist": false
     },
     "release": {

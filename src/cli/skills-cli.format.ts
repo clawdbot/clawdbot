@@ -432,7 +432,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
     }
     if (commandVisible.length > 0) {
       lines.push(
-        `  ${theme.muted("Available as command:")} people, scripts, or cron jobs can call the skill explicitly.`,
+        `  ${theme.muted("Available as command:")} people, scripts, or automations can call the skill explicitly.`,
       );
     }
     if (promptHidden.length > 0) {

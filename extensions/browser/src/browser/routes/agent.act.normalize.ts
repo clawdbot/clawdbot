@@ -21,11 +21,12 @@ import {
   parseClickModifiers,
 } from "./agent.act.shared.js";
 import {
+  readRouteFiniteNumber,
   readRouteInteger,
   readRouteNonNegativeInteger,
   readRouteTimerTimeoutMs,
 } from "./route-numeric.js";
-import { toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
+import { toBoolean, toStringArray, toStringOrEmpty } from "./utils.js";
 
 function normalizeActKind(raw: unknown): ActKind {
   const kind = toStringOrEmpty(raw);
@@ -174,8 +175,8 @@ export function normalizeActRequest(
       };
     }
     case "clickCoords": {
-      const x = toNumber(body.x);
-      const y = toNumber(body.y);
+      const x = readRouteFiniteNumber(body.x, "x");
+      const y = readRouteFiniteNumber(body.y, "y");
       if (x === undefined || y === undefined || x < 0 || y < 0) {
         throw new Error("clickCoords requires non-negative x and y");
       }

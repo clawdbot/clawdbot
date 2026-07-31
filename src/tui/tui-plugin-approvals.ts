@@ -153,7 +153,7 @@ function parseSeverity(value: unknown): TuiPluginApproval["request"]["severity"]
 }
 
 /** Parses the gateway event/list shape used for pending plugin approvals. */
-export function parseTuiPluginApproval(payload: unknown): TuiPluginApproval | null {
+function parseTuiPluginApproval(payload: unknown): TuiPluginApproval | null {
   if (!isRecord(payload) || !isRecord(payload.request)) {
     return null;
   }

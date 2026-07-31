@@ -223,8 +223,10 @@ function buildEffectiveKnownNode(entry: {
   return {
     nodeId,
     displayName: firstNormalizedString(
-      live?.displayName,
+      // The approved surface owns the operator's rename. Live metadata is a
+      // fallback only, or every reconnect would temporarily undo that choice.
       nodePairing?.displayName,
+      live?.displayName,
       devicePairing?.displayName,
       pendingNodePairing?.displayName,
     ),
@@ -279,6 +281,7 @@ function buildEffectiveKnownNode(entry: {
     commands: live
       ? uniqueSortedStrings(live.commands)
       : uniqueSortedStrings(nodePairing?.commands),
+    nodePluginTools: live?.nodePluginTools,
     pathEnv: live?.pathEnv,
     permissions: live?.permissions ?? nodePairing?.permissions,
     approvalState: pendingNodePairing
@@ -293,6 +296,8 @@ function buildEffectiveKnownNode(entry: {
     pendingDeclaredCommands: pendingNodePairing?.commands,
     pendingDeclaredPermissions: pendingNodePairing?.permissions,
     connectedAtMs: live?.connectedAtMs,
+    lastActiveAtMs: live?.lastActiveAtMs,
+    presenceUpdatedAtMs: live?.presenceUpdatedAtMs,
     lastSeenAtMs: lastSeen.lastSeenAtMs,
     lastSeenReason: lastSeen.lastSeenReason,
     approvedAtMs: nodePairing?.approvedAtMs ?? devicePairing?.approvedAtMs,
@@ -388,10 +393,7 @@ export function listKnownNodes(catalog: KnownNodeCatalog): NodeListNode[] {
 }
 
 /** Returns the merged catalog entry for diagnostics that need source details. */
-export function getKnownNodeEntry(
-  catalog: KnownNodeCatalog,
-  nodeId: string,
-): KnownNodeEntry | null {
+function getKnownNodeEntry(catalog: KnownNodeCatalog, nodeId: string): KnownNodeEntry | null {
   return catalog.entriesById.get(nodeId) ?? null;
 }
 

@@ -17,7 +17,7 @@ import {
 } from "./auth.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { warnLegacyOpenClawEnvVars } from "./env-deprecation.js";
-import { resolveHooksConfig } from "./hooks.js";
+import { commitHooksConfigReload, resolveHooksConfig } from "./hooks.js";
 import {
   defaultGatewayBindMode,
   isLoopbackHost,
@@ -71,6 +71,11 @@ export async function resolveGatewayRuntimeConfig(params: {
   if (bindMode === "loopback" && !isLoopbackHost(bindHost)) {
     throw new Error(
       `gateway bind=loopback resolved to non-loopback host ${bindHost}; refusing fallback to a network bind`,
+    );
+  }
+  if (bindMode === "tailnet" && bindHost === "0.0.0.0") {
+    throw new Error(
+      "gateway bind=tailnet could not resolve a Tailscale or loopback address; refusing wildcard fallback",
     );
   }
   if (bindMode === "custom") {
@@ -177,6 +182,10 @@ export async function resolveGatewayRuntimeConfig(params: {
         "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP",
       );
     }
+  }
+
+  if (hooksConfig) {
+    commitHooksConfigReload();
   }
 
   return {

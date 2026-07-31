@@ -2,6 +2,7 @@
 // gateway reports its listen step as ready.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { tryListenOnPort } from "../infra/ports-probe.js";
 import { getFreePort, installGatewayTestHooks, startGatewayServer } from "./test-helpers.js";
 import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-state.js";
 
@@ -88,5 +89,50 @@ describe("gateway startup websocket readiness", () => {
         process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimal;
       }
     }
+  });
+
+  it("serves a specific IPv4 bind and its required loopback alias", async () => {
+    const previousMinimal = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
+    let server: GatewayServerForTest | undefined;
+    const clients: WebSocket[] = [];
+    try {
+      const port = await getFreePort();
+      server = await startGatewayServer(port, {
+        host: "127.0.0.2",
+        auth: { mode: "none" },
+      });
+
+      clients.push(
+        await connectWebSocket(`ws://127.0.0.1:${port}`),
+        await connectWebSocket(`ws://127.0.0.2:${port}`),
+      );
+    } finally {
+      await Promise.all(clients.map(async (client) => await disconnectWebSocket(client)));
+      if (server) {
+        await server.close();
+      }
+      if (previousMinimal === undefined) {
+        delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+      } else {
+        process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimal;
+      }
+    }
+  });
+
+  it("releases the loopback alias when the selected bind fails", async () => {
+    const port = await getFreePort();
+
+    await expect(
+      startGatewayServer(port, {
+        bind: "lan",
+        host: "192.0.2.1",
+        auth: { mode: "token", token: "test-token" },
+      }),
+    ).rejects.toThrow("failed to bind gateway socket");
+
+    await expect(
+      tryListenOnPort({ host: "127.0.0.1", port, exclusive: true }),
+    ).resolves.toBeUndefined();
   });
 });

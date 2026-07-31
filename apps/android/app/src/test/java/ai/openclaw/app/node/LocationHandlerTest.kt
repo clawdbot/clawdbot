@@ -3,11 +3,13 @@ package ai.openclaw.app.node
 import ai.openclaw.app.LocationMode
 import android.content.Context
 import android.location.LocationManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class LocationHandlerTest : NodeHandlerRobolectricTest() {
@@ -204,6 +206,28 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
       assertFalse(result.ok)
       assertEquals("LOCATION_UNAVAILABLE", result.error?.code)
       assertEquals("gps offline", result.error?.message)
+    }
+
+  @Test
+  fun handleLocationGet_propagatesParentCancellation() =
+    runTest {
+      val handler =
+        LocationHandler.forTesting(
+          appContext = appContext(),
+          dataSource =
+            FakeLocationDataSource(
+              fineGranted = true,
+              coarseGranted = true,
+              failure = CancellationException("request retired"),
+            ),
+        )
+
+      try {
+        handler.handleLocationGet(null)
+        fail("expected cancellation to propagate")
+      } catch (err: CancellationException) {
+        assertEquals("request retired", err.message)
+      }
     }
 }
 

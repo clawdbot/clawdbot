@@ -2,12 +2,10 @@
 
 export * from "./error-format.js";
 export * from "./meta.js";
-export * from "./normalize-text.js";
-export * from "./numeric-options.js";
-export * from "./record-shared.js";
 export * from "./session-interaction-mode.js";
 export * from "./session-lineage-meta.js";
 export * from "./session.js";
+export * from "./structured-auth-redaction.js";
 export * from "./types.js";
 export * from "./runtime/error-text.js";
 export * from "./runtime/errors.js";

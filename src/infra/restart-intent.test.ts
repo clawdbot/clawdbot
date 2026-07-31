@@ -17,7 +17,7 @@ import {
   consumeGatewayRestartIntentPayloadSync,
   consumeGatewayRestartIntentSync,
   writeGatewayRestartIntentSync,
-} from "./restart.js";
+} from "./restart-intent.js";
 
 const tempDirs: string[] = [];
 type GatewayRestartIntentDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_intent">;
@@ -139,6 +139,15 @@ describe("gateway restart intent", () => {
     });
     expect(readIntentRow(env)).toBeUndefined();
     expect(fs.existsSync(legacyIntentPath(env))).toBe(false);
+  });
+
+  it("backs off before an emoji that crosses the persisted reason limit", () => {
+    const env = createIntentEnv();
+    insertIntentRow(env, { reason: "x".repeat(199) + "🧠tail" });
+
+    expect(consumeGatewayRestartIntentPayloadSync(env)).toEqual({
+      reason: "x".repeat(199),
+    });
   });
 
   it("overwrites the previous pending intent row", () => {

@@ -111,20 +111,37 @@ describe("run-tsgo sparse guard", () => {
     `);
   });
 
-  it("returns a helpful message for sparse core worktrees missing transitive project files", () => {
+  it("returns a helpful message for sparse UI worktrees missing transitive project files", () => {
     const cwd = createTempDir("openclaw-run-tsgo-");
-    const uiToolDisplay = path.join(cwd, "ui/src/ui/tool-display.ts");
+    const uiToolDisplay = path.join(cwd, "ui/src/lib/chat/tool-display.ts");
     fs.mkdirSync(path.dirname(uiToolDisplay), { recursive: true });
     fs.writeFileSync(uiToolDisplay, "", "utf8");
 
     expect(
-      getSparseTsgoGuardError(["-p", "tsconfig.core.json"], {
+      getSparseTsgoGuardError(["-p", "tsconfig.ui.json"], {
         cwd,
         isSparseCheckoutEnabled: () => true,
       }),
     ).toMatchInlineSnapshot(`
-      "tsconfig.core.json cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:
+      "tsconfig.ui.json cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:
       - apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json
+      Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree."
+    `);
+  });
+
+  it("rejects sparse UI worktrees missing the transitive src root", () => {
+    const cwd = createTempDir("openclaw-run-tsgo-");
+
+    expect(
+      getSparseTsgoGuardError(["-p", "tsconfig.ui.json"], {
+        cwd,
+        fileExists: () => true,
+        isSparseCheckoutEnabled: () => true,
+        sparseCheckoutPatterns: ["/packages/", "/ui/config/", "/ui/src/"],
+      }),
+    ).toMatchInlineSnapshot(`
+      "tsconfig.ui.json cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:
+      - src
       Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree."
     `);
   });

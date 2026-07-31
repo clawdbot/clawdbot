@@ -8,6 +8,21 @@ export type LazyPromiseLoader<T> = {
   clear: () => void;
 };
 
+/** Returns the cached promise for a key, creating and storing it when absent. */
+export function getOrCreatePromise<K, V>(
+  cache: Map<K, Promise<V>>,
+  key: K,
+  create: () => Promise<V>,
+): Promise<V> {
+  const cached = cache.get(key);
+  if (cached) {
+    return cached;
+  }
+  const created = create();
+  cache.set(key, created);
+  return created;
+}
+
 /** Options for controlling lazy promise cache behavior. */
 type LazyPromiseLoaderOptions = {
   /** Keep rejected promises cached instead of allowing the next caller to retry. */

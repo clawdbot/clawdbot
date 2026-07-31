@@ -5,15 +5,17 @@
 import type {
   AgentMessage,
   EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexSystemPromptReport } from "./attempt-context.js";
+import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexAttemptTurnWatchTimeoutKind } from "./attempt-turn-watches.js";
 
 const CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_USER_MESSAGE =
   "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.";
 const CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_SIDE_EFFECT_USER_MESSAGE =
   "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.";
+const CODEX_APP_SERVER_TERMINAL_IDLE_USER_MESSAGE =
+  "Codex stopped responding: no activity arrived for the turn's liveness window, so the turn was ended and the connection was replaced. Retry to continue on a fresh session.";
 
 /** Joins terminal assistant text blocks into the final attempt answer. */
 export function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): string {
@@ -31,6 +33,25 @@ export function buildCodexAppServerPromptTimeoutOutcome(params: {
 }): EmbeddedRunAttemptResult["promptTimeoutOutcome"] {
   if (!params.turnCompletionIdleTimedOut) {
     return undefined;
+  }
+  // Terminal-idle kills are dead-client events, not slow turns: the generic
+  // "increase agents.defaults.timeoutSeconds" advice would be wrong because
+  // that watch deliberately ignores the agent budget. Salvaged assistant
+  // output still wins over any timeout notice.
+  if (params.turnWatchTimeoutKind === "terminal") {
+    if (collectTerminalAssistantText(params.result)) {
+      return undefined;
+    }
+    const terminalReplayBlockedReason = resolveCodexAppServerReplayBlockedReason(params.result);
+    return {
+      message: CODEX_APP_SERVER_TERMINAL_IDLE_USER_MESSAGE,
+      ...(terminalReplayBlockedReason
+        ? {
+            replayInvalid: true,
+            livenessState: "abandoned" as const,
+          }
+        : {}),
+    };
   }
   if (params.turnWatchTimeoutKind !== undefined && params.turnWatchTimeoutKind !== "completion") {
     return undefined;
@@ -83,18 +104,15 @@ export function resolveCodexAppServerReplayBlockedReason(
 export function buildCodexTurnStartFailureResult(params: {
   params: EmbeddedRunAttemptParams;
   message: string;
+  promptError?: unknown;
   messagesSnapshot: AgentMessage[];
   systemPromptReport: CodexSystemPromptReport;
 }): EmbeddedRunAttemptResult {
   return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
-    promptError: params.message,
-    promptErrorSource: "prompt",
+    terminal: attemptTerminal.normalize({
+      promptError: params.promptError ?? params.message,
+      promptErrorSource: "prompt",
+    }),
     sessionIdUsed: params.params.sessionId,
     messagesSnapshot: params.messagesSnapshot,
     assistantTexts: [],

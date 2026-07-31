@@ -1,23 +1,17 @@
-import {
-  createModelCatalogPresetAppliers,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/provider-onboard";
-import { buildCohereModelDefinition, COHERE_BASE_URL, COHERE_MODEL_CATALOG } from "./models.js";
+import { readManifestProviderDefaultModelRef } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { createModelCatalogPresetAppliers } from "openclaw/plugin-sdk/provider-onboard";
+import { buildCohereCatalogModels, COHERE_BASE_URL } from "./models.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-export const COHERE_DEFAULT_MODEL_ID = "command-a-03-2025";
-export const COHERE_DEFAULT_MODEL_REF = `cohere/${COHERE_DEFAULT_MODEL_ID}`;
+const COHERE_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "cohere")!;
 
-const coherePresetAppliers = createModelCatalogPresetAppliers({
+export const { applyConfig: applyCohereConfig } = createModelCatalogPresetAppliers<[]>({
   primaryModelRef: COHERE_DEFAULT_MODEL_REF,
-  resolveParams: (_cfg: OpenClawConfig) => ({
+  resolveParams: () => ({
     providerId: "cohere",
     api: "openai-completions",
     baseUrl: COHERE_BASE_URL,
-    catalogModels: COHERE_MODEL_CATALOG.map(buildCohereModelDefinition),
-    aliases: [{ modelRef: COHERE_DEFAULT_MODEL_REF, alias: "Cohere Command A" }],
+    catalogModels: buildCohereCatalogModels(),
+    aliases: [{ modelRef: COHERE_DEFAULT_MODEL_REF, alias: "Cohere Command A+" }],
   }),
 });
-
-export function applyCohereConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return coherePresetAppliers.applyConfig(cfg);
-}

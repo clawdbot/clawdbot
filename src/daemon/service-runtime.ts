@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /** systemd supervision fields used to spot unhealthy or given-up gateway service state. */
-export type GatewayServiceSystemdRuntime = {
+type GatewayServiceSystemdRuntime = {
   unit?: string;
   killMode?: string;
   tasksCurrent?: number;
@@ -29,6 +29,12 @@ export type GatewayServiceRuntime = {
   missingUnit?: boolean;
   missingSupervision?: boolean;
   missingGuiSession?: boolean;
+  /** Same-label system-domain owner or an ownership probe that failed closed. */
+  systemLaunchDaemon?: {
+    status: "loaded" | "installed" | "unverifiable";
+    serviceTarget: string;
+    plistPath?: string;
+  };
   systemd?: GatewayServiceSystemdRuntime;
 };
 

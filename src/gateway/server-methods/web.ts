@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Web login methods delegate QR-login start/wait requests to the active channel
 // plugin that owns web login gateway methods.
 import {
@@ -52,11 +53,11 @@ function resolveMissingWebLoginPluginHint(context: GatewayRequestContext): strin
     return null;
   }
   if (hints.length === 1) {
-    return hints[0].repairHint;
+    return expectDefined(hints[0], "hints entry at 0").repairHint;
   }
   const labels = [...new Set(hints.map((hint) => hint.label))];
   const installCommands = [...new Set(hints.map((hint) => hint.installCommand))];
-  const doctorFixCommand = hints[0].doctorFixCommand;
+  const doctorFixCommand = expectDefined(hints[0], "hints entry at 0").doctorFixCommand;
   return `Configured official external channel plugins are missing for ${labels.join(", ")}. Install them with: ${installCommands.join("; ")}, or run: ${doctorFixCommand}.`;
 }
 
@@ -68,11 +69,7 @@ function respondProviderUnavailable(params: {
   const message = repairHint
     ? `web login provider is not available. ${repairHint}`
     : "web login provider is not available";
-  params.respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, message),
-  );
+  params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
 }
 
 function respondProviderUnsupported(respond: RespondFn, providerId: string) {

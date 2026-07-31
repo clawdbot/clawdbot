@@ -1,8 +1,10 @@
 // Policy doctor checks and findings for gateway exposure policy.
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
 import type { PolicyEvidence } from "../../policy-state.js";
 import { repairPolicyAutomaticNarrower } from "../automatic-repairs.js";
-import { CHECK_IDS } from "../metadata.js";
+import { CHECK_IDS } from "../check-ids.js";
+import { previewPolicyReviewRequiredRepair } from "../review-required-repairs.js";
 import type { PolicyDoctorCheckDeps } from "../types.js";
 import { readPolicyBoolean, readStringList } from "../utils.js";
 
@@ -16,6 +18,13 @@ export function createPolicyGatewayChecks(deps: PolicyDoctorCheckDeps): readonly
     source: "policy",
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayNonLoopbackBind);
+    },
+    repair(ctx, findings) {
+      return previewPolicyReviewRequiredRepair(
+        ctx,
+        findings,
+        CHECK_IDS.policyGatewayNonLoopbackBind,
+      );
     },
   };
   const policyGatewayAuthDisabledCheck: HealthCheck = {
@@ -107,6 +116,13 @@ export function createPolicyGatewayChecks(deps: PolicyDoctorCheckDeps): readonly
     source: "policy",
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayNodeCommandDenied);
+    },
+    repair(ctx, findings) {
+      return previewPolicyReviewRequiredRepair(
+        ctx,
+        findings,
+        CHECK_IDS.policyGatewayNodeCommandDenied,
+      );
     },
   };
 
@@ -385,10 +401,10 @@ function gatewayNodeCommandFindings(
         message: `Gateway node command '${command}' is denied by policy but not denied by OpenClaw config.`,
         source: "policy",
         path: "openclaw config",
-        ocPath: "oc://openclaw.config/gateway/nodes/denyCommands",
-        target: "oc://openclaw.config/gateway/nodes/denyCommands",
+        ocPath: "oc://openclaw.config/gateway/nodes/commands/deny",
+        target: "oc://openclaw.config/gateway/nodes/commands/deny",
         requirement: `oc://${policyDocName}/gateway/nodes/denyCommands`,
-        fixHint: `Add '${command}' to gateway.nodes.denyCommands or update policy after review.`,
+        fixHint: `Add '${command}' to gateway.nodes.commands.deny or update policy after review.`,
       };
     });
 }
@@ -406,8 +422,4 @@ function hasValidOptionalStringList(policy: unknown, path: readonly string[]): b
     (Array.isArray(current) &&
       current.every((entry) => typeof entry === "string" && entry.trim() !== ""))
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

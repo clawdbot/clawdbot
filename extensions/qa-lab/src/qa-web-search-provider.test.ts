@@ -4,14 +4,13 @@ import { createQaLabWebSearchProvider as createQaLabWebSearchContractProvider } 
 import {
   createQaLabWebSearchProvider,
   QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY,
-  QA_LAB_WEB_SEARCH_PROVIDER_ID,
 } from "./qa-web-search-provider.js";
 
 describe("qa-lab web search provider", () => {
   it("exposes a credential-free QA-only provider", () => {
     const provider = createQaLabWebSearchProvider();
 
-    expect(provider.id).toBe(QA_LAB_WEB_SEARCH_PROVIDER_ID);
+    expect(provider.id).toBe("qa-lab-search");
     expect(provider.requiresCredential).toBe(false);
     expect(provider.envVars).toEqual([]);
     expect(provider.credentialPath).toBe("");

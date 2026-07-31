@@ -24,10 +24,20 @@
         border-radius: 50%;
         background: #6b7280;
       }
-      .dot.on { background: #34c759; }
-      .dot.connecting { background: #f59e0b; }
-      .dot.error { background: #ff3b30; }
-      p { font-size: 12px; color: #98989f; margin: 6px 0; }
+      .dot.on {
+        background: #34c759;
+      }
+      .dot.connecting {
+        background: #f59e0b;
+      }
+      .dot.error {
+        background: #ff3b30;
+      }
+      p {
+        font-size: 12px;
+        color: #98989f;
+        margin: 6px 0;
+      }
       textarea {
         width: 100%;
         box-sizing: border-box;
@@ -39,6 +49,9 @@
         font-size: 11px;
         min-height: 52px;
         resize: vertical;
+      }
+      #pageNote {
+        font-family: system-ui, sans-serif;
       }
       button {
         margin-top: 8px;
@@ -55,16 +68,32 @@
         background: #3a3a3c;
         color: #f2f2f7;
       }
-      .hidden { display: none; }
-      #error { color: #ff453a; }
+      button:disabled {
+        cursor: default;
+        opacity: 0.5;
+      }
+      .hidden {
+        display: none;
+      }
+      #error {
+        color: #ff453a;
+      }
+      .send-page {
+        border-top: 1px solid #3a3a3c;
+        margin-top: 12px;
+        padding-top: 10px;
+      }
+      .error {
+        color: #ff453a;
+      }
     </style>
   </head>
   <body>
     <h1><span id="statusDot" class="dot"></span>OpenClaw</h1>
     <div id="pairSection">
       <p>
-        Run <code>openclaw browser extension pair</code> on this machine and
-        paste the pairing string:
+        Run <code>openclaw browser extension pair</code> on this machine and paste the pairing
+        string:
       </p>
       <textarea id="pairingString" placeholder="ws://127.0.0.1:18797/extension#…"></textarea>
       <p id="error" class="hidden"></p>
@@ -72,7 +101,18 @@
     </div>
     <div id="connectedSection" class="hidden">
       <p id="statusLine"></p>
+      <button id="copilotButton" disabled>Open tab copilot</button>
       <button id="shareButton"></button>
+      <div class="send-page">
+        <textarea
+          id="pageNote"
+          rows="2"
+          maxlength="2000"
+          placeholder="Optional note for the agent…"
+        ></textarea>
+        <button id="sendPageButton" disabled>Send page to OpenClaw</button>
+        <p id="pageShareStatus" class="hidden"></p>
+      </div>
       <button id="unpairButton" class="secondary">Unpair</button>
     </div>
     <script src="popup.js" type="module"></script>

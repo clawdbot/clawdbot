@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
@@ -13,17 +14,13 @@ import type { WebInboundMessageInput, WebListenerCloseReason } from "./inbound.j
 import type { WhatsAppSendResult } from "./inbound/send-result.js";
 import { createAcceptedWhatsAppSendResult as createAcceptedWhatsAppSendResultForHarness } from "./inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
+import { setWhatsAppRuntime } from "./runtime.js";
 import {
   resetBaileysMocks as _resetBaileysMocks,
   resetLoadConfigMock as _resetLoadConfigMock,
 } from "./test-helpers.js";
 
-export { createAcceptedWhatsAppSendResult } from "./inbound/send-result.test-helper.js";
-export {
-  resetLoadConfigMock,
-  setLoadConfigMock,
-  setRuntimeConfigSourceSnapshotMock,
-} from "./test-helpers.js";
+export { resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
 
 // Avoid exporting inferred vitest mock types (TS2742 under pnpm + d.ts emit).
 type AnyExport = any;
@@ -53,12 +50,15 @@ type WebAutoReplyMonitorHarness = {
   run: Promise<unknown>;
 };
 type MockSessionSocket = {
+  end: ReturnType<typeof vi.fn>;
   ev: {
     on: ReturnType<typeof vi.fn>;
     off: ReturnType<typeof vi.fn>;
   };
   ws: EventEmitter & {
     close: ReturnType<typeof vi.fn>;
+    readonly isClosed: boolean;
+    readonly isClosing: boolean;
   };
   user: { id: string };
 };
@@ -79,9 +79,21 @@ vi.mock("./session.js", async () => {
   return {
     ...actual,
     createWaSocket: vi.fn(async () => {
+      let closed = false;
       const ws = new EventEmitter() as MockSessionSocket["ws"];
-      ws.close = vi.fn();
+      Object.defineProperties(ws, {
+        isClosed: { get: () => closed },
+        isClosing: { get: () => false },
+      });
+      ws.close = vi.fn(() => {
+        closed = true;
+        ws.emit("close");
+      });
       const socket: MockSessionSocket = {
+        end: vi.fn(() => {
+          closed = true;
+          ws.emit("close");
+        }),
         ev: {
           on: vi.fn(),
           off: vi.fn(),
@@ -113,7 +125,6 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   appendCronStyleCurrentTimeLine: (text: string) => text,
   isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
-  queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   resolveAgentIdentity: (
     cfg: { agents?: { list?: Array<{ id: string; identity?: unknown }> } },
@@ -124,8 +135,8 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
     )?.identity,
   resolveIdentityNamePrefix: (cfg: { messages?: { responsePrefix?: string } }, _agentId: string) =>
     cfg.messages?.responsePrefix,
-  resolveMessagePrefix: (cfg: { messages?: { messagePrefix?: string } }) =>
-    cfg.messages?.messagePrefix,
+  resolveMessagePrefix: (_cfg: unknown, _agentId: string, opts?: { configured?: string }) =>
+    opts?.configured,
   runEmbeddedAgent: vi.fn(),
 }));
 
@@ -224,6 +235,8 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
     resetWebAutoReplySessionSockets();
     _resetBaileysMocks();
     _resetLoadConfigMock();
+    // Scoped test files must seed the plugin slot instead of inheriting another file's runtime.
+    setWhatsAppRuntime(createPluginRuntimeMock());
     if (opts?.pinDns) {
       resolvePinnedHostnameSpy = mockPinnedHostnameResolution([TEST_NET_IP]);
     }

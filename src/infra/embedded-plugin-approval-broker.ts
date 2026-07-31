@@ -1,11 +1,11 @@
 // Provides the process-local plugin approval path used by embedded TUI runs.
 import { randomUUID } from "node:crypto";
 import type { ExecApprovalDecision } from "./exec-approvals.js";
-import {
-  resolvePluginApprovalRequestAllowedDecisions,
-  type PluginApprovalRequest,
-  type PluginApprovalRequestPayload,
-  type PluginApprovalResolved,
+import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "./plugin-approval-canonical-decisions.js";
+import type {
+  PluginApprovalRequest,
+  PluginApprovalRequestPayload,
+  PluginApprovalResolved,
 } from "./plugin-approvals.js";
 
 type PendingApproval = {
@@ -95,7 +95,9 @@ export class EmbeddedPluginApprovalBroker {
     const entry = this.pending.get(id);
     if (
       !entry ||
-      !resolvePluginApprovalRequestAllowedDecisions(entry.record.request).includes(decision)
+      !resolveCanonicalPluginApprovalRequestAllowedDecisions(entry.record.request).includes(
+        decision,
+      )
     ) {
       return false;
     }

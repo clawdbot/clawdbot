@@ -2,10 +2,11 @@
 import { readLatestAssistantReply, waitForAgentRunsToDrain } from "../../agents/run-wait.js";
 import { listDescendantRunsForRequester } from "../../agents/subagent-registry-read.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function resolveCronSubagentTimings() {
-  const fastTestMode = process.env.OPENCLAW_TEST_FAST === "1";
+  const fastTestMode = isFastTestRuntimeEnv();
   return {
     waitMinMs: fastTestMode ? 10 : 30_000,
     finalReplyGraceMs: fastTestMode ? 50 : 5_000,
@@ -54,7 +55,7 @@ export async function readDescendantSubagentFallbackReply(params: {
       typeof frozenResultText === "string" && frozenResultText.trim()
         ? frozenResultText.trim()
         : undefined;
-    const usesInternalTranscript = typeof entry.execution?.transcriptFile === "string";
+    const usesInternalTranscript = entry.execution?.transcriptTarget !== undefined;
     let reply = usesInternalTranscript ? frozenReply : undefined;
     if (!reply && !usesInternalTranscript) {
       reply = (await readLatestAssistantReply({ sessionKey: entry.childSessionKey }))?.trim();

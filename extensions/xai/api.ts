@@ -1,8 +1,7 @@
 // Xai API module exposes the plugin public contract.
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   normalizeOptionalLowercaseString,
-  readStringValue,
+  normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   applyXaiModelCompat,
@@ -10,6 +9,8 @@ import {
   normalizeNativeXaiModelId,
   XAI_TOOL_SCHEMA_PROFILE,
 } from "./model-compat.js";
+import { XAI_BASE_URL } from "./model-definitions.js";
+import { isXaiProviderId } from "./provider-id.js";
 
 export { buildXaiProvider } from "./provider-catalog.js";
 export { applyXaiConfig, applyXaiProviderConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -68,13 +69,12 @@ function shouldUseXaiResponsesTransport(params: {
   api?: unknown;
   baseUrl?: unknown;
 }): boolean {
-  if (params.api !== "openai-completions") {
-    return false;
-  }
-  if (isXaiNativeEndpoint(params.baseUrl)) {
-    return true;
-  }
-  return normalizeProviderId(params.provider) === "xai" && !params.baseUrl;
+  const hasDefaultXaiRoute =
+    isXaiProviderId(params.provider) && !normalizeOptionalString(params.baseUrl);
+  return params.api === "openai-responses"
+    ? hasDefaultXaiRoute
+    : params.api === "openai-completions" &&
+        (isXaiNativeEndpoint(params.baseUrl) || hasDefaultXaiRoute);
 }
 
 export function resolveXaiTransport(params: {
@@ -87,6 +87,8 @@ export function resolveXaiTransport(params: {
   }
   return {
     api: "openai-responses",
-    baseUrl: readStringValue(params.baseUrl),
+    baseUrl:
+      normalizeOptionalString(params.baseUrl) ??
+      (isXaiProviderId(params.provider) ? XAI_BASE_URL : undefined),
   };
 }

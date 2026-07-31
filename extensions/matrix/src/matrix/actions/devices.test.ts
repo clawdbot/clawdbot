@@ -9,8 +9,7 @@ vi.mock("./client.js", () => ({
   withStartedActionClient: (...args: unknown[]) => withStartedActionClientMock(...args),
 }));
 
-const { getMatrixDeviceHealth, listMatrixOwnDevices, pruneMatrixStaleGatewayDevices } =
-  await import("./devices.js");
+const { listMatrixOwnDevices, pruneMatrixStaleGatewayDevices } = await import("./devices.js");
 
 function expectResolvedActionClientCall(): void {
   expect(withResolvedActionClientMock).toHaveBeenCalledTimes(1);
@@ -55,54 +54,6 @@ describe("matrix device actions", () => {
         current: true,
       },
     ]);
-  });
-
-  it("computes device health without starting a sync client", async () => {
-    withResolvedActionClientMock.mockImplementation(async (_opts, run) => {
-      return await run({
-        listOwnDevices: vi.fn(async () => [
-          {
-            deviceId: "du314Zpw3A",
-            displayName: "OpenClaw Gateway",
-            lastSeenIp: null,
-            lastSeenTs: null,
-            current: true,
-          },
-          {
-            deviceId: "old123",
-            displayName: "OpenClaw Gateway",
-            lastSeenIp: null,
-            lastSeenTs: null,
-            current: false,
-          },
-        ]),
-      });
-    });
-
-    const result = await getMatrixDeviceHealth({ accountId: "poe" });
-
-    expect(result).toEqual({
-      currentDeviceId: "du314Zpw3A",
-      staleOpenClawDevices: [
-        {
-          deviceId: "old123",
-          displayName: "OpenClaw Gateway",
-          lastSeenIp: null,
-          lastSeenTs: null,
-          current: false,
-        },
-      ],
-      currentOpenClawDevices: [
-        {
-          deviceId: "du314Zpw3A",
-          displayName: "OpenClaw Gateway",
-          lastSeenIp: null,
-          lastSeenTs: null,
-          current: true,
-        },
-      ],
-    });
-    expectResolvedActionClientCall();
   });
 
   it("prunes stale OpenClaw-managed devices but preserves the current device", async () => {

@@ -6,7 +6,7 @@ import {
 import { resolveStoredSubagentCapabilities } from "../../../agents/subagent-capabilities.js";
 import type { ResolvedSubagentController } from "../../../agents/subagent-control.js";
 import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
-import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-registry-queries.js";
+import { buildSubagentRunReadIndexFromRuns } from "../../../agents/subagent-registry-queries.js";
 import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../../../agents/subagent-registry.types.js";
 import {
@@ -28,7 +28,7 @@ import {
 
 export type { ChatMessage } from "../commands-subagents-text.js";
 
-export const COMMAND = "/subagents";
+const COMMAND = "/subagents";
 const COMMAND_FOCUS = "/focus";
 const COMMAND_UNFOCUS = "/unfocus";
 const COMMAND_AGENTS = "/agents";
@@ -60,6 +60,9 @@ function resolveSubagentTarget(
   runs: SubagentRunRecord[],
   token: string | undefined,
 ): SubagentTargetResolution {
+  const readIndex = buildSubagentRunReadIndexFromRuns({
+    runs: getSubagentRunsSnapshotForRead(subagentRuns),
+  });
   return resolveSubagentTargetFromRuns({
     runs,
     token,
@@ -68,13 +71,7 @@ function resolveSubagentTarget(
     aliases: (entry) => (entry.taskName ? [entry.taskName] : []),
     isActive: (entry) =>
       !entry.endedAt ||
-      Math.max(
-        0,
-        countPendingDescendantRunsFromRuns(
-          getSubagentRunsSnapshotForRead(subagentRuns),
-          entry.childSessionKey,
-        ),
-      ) > 0,
+      Math.max(0, readIndex.countPendingDescendantRuns(entry.childSessionKey)) > 0,
     errors: {
       missingTarget: "Missing subagent id.",
       invalidIndex: (value) => `Invalid subagent index: ${value}`,

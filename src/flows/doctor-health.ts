@@ -21,9 +21,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
   }
 
   const { createDoctorPrompter } = await import("../commands/doctor-prompter.js");
-  const { printWizardHeader } = await import("../commands/onboard-helpers.js");
   const prompter = createDoctorPrompter({ runtime: effectiveRuntime, options });
-  printWizardHeader(effectiveRuntime);
   intro("OpenClaw doctor");
 
   const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");

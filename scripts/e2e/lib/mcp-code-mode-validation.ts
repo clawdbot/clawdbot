@@ -3,13 +3,40 @@ export type McpCodeModeMentions = Record<
   number
 >;
 
+/** Extracts actual assistant tool calls, never prompt or assistant prose. */
+export function extractMcpCodeModePlannedTools(transcriptEvents: readonly unknown[]): string[] {
+  return transcriptEvents.flatMap((event) => {
+    if (!event || typeof event !== "object") {
+      return [];
+    }
+    const message = (event as { message?: unknown }).message;
+    if (!message || typeof message !== "object") {
+      return [];
+    }
+    const { role, content } = message as { role?: unknown; content?: unknown };
+    if (role !== "assistant" || !Array.isArray(content)) {
+      return [];
+    }
+    return content.flatMap((block) => {
+      if (!block || typeof block !== "object") {
+        return [];
+      }
+      const { type, name } = block as { type?: unknown; name?: unknown };
+      return (type === "toolCall" || type === "tool_use" || type === "tool_call") &&
+        typeof name === "string"
+        ? [name]
+        : [];
+    });
+  });
+}
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
   }
 }
 
-export function outputText(response: unknown): string {
+function outputText(response: unknown): string {
   const output = (response as { output?: Array<{ type?: unknown; content?: unknown }> }).output;
   if (!Array.isArray(output)) {
     return "";
@@ -54,7 +81,7 @@ export function validateMcpCodeModeResult(
   assert(mentions.apiFileList > 0, "session log lacks API.list usage");
   assert(mentions.apiFileRead > 0, "session log lacks API.read usage");
   assert(mentions.mcpNamespace > 0, "session log lacks MCP.fixture usage");
-  assert(mentions.mcpTool > 0, "session log lacks fixture__lookup_note call");
+  assert(mentions.mcpTool > 0, "session log lacks MCP.fixture.lookupNote call");
   assert(mentions.apiCall === 0, "agent should not call MCP.$api when API files are available");
   assert(mentions.toolSearchPollution === 0, "agent should not use tools.search for MCP lookup");
   return finalText;

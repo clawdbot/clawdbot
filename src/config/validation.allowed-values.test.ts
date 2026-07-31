@@ -1,7 +1,6 @@
 // Verifies config validation rejects unsupported enumerated values.
 import { describe, expect, it } from "vitest";
-import { z } from "zod";
-import { testing, validateConfigObjectRaw } from "./validation.js";
+import { validateConfigObjectRaw } from "./validation.js";
 
 function requireIssue<T extends { path: string }>(issues: T[], path: string): T {
   const issue = issues.find((entry) => entry.path === path);
@@ -9,22 +8,6 @@ function requireIssue<T extends { path: string }>(issues: T[], path: string): T 
     throw new Error(`expected validation issue at ${path}`);
   }
   return issue;
-}
-
-function mapFirstIssue(
-  schema: { safeParse: (value: unknown) => { success: true } | { success: false; error: unknown } },
-  value: unknown,
-) {
-  const result = schema.safeParse(value);
-  expect(result.success).toBe(false);
-  if (result.success) {
-    throw new Error("expected schema parse failure");
-  }
-  const issue = (result.error as { issues?: unknown[] }).issues?.[0];
-  if (!issue) {
-    throw new Error("expected first zod issue");
-  }
-  return testing.mapZodIssueToConfigIssue(issue);
 }
 
 describe("config validation allowed-values metadata", () => {
@@ -44,38 +27,12 @@ describe("config validation allowed-values metadata", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       const issue = requireIssue(result.issues, "update.channel");
-      expect(issue.message).toContain(
-        '(allowed: "stable", "extended-stable", "beta", "dev")',
-      );
+      expect(issue.pathSegments).toEqual(["update", "channel"]);
+      expect(JSON.stringify(issue)).not.toContain("pathSegments");
+      expect(issue.message).toContain('(allowed: "stable", "extended-stable", "beta", "dev")');
       expect(issue.allowedValues).toEqual(["stable", "extended-stable", "beta", "dev"]);
       expect(issue.allowedValuesHiddenCount).toBe(0);
     }
-  });
-
-  it("keeps native enum messages while attaching allowed values metadata", () => {
-    const issue = mapFirstIssue(
-      z.object({ dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]) }),
-      { dmPolicy: "maybe" },
-    );
-    expect(issue.path).toBe("dmPolicy");
-    expect(issue.message).toContain("expected one of");
-    expect(issue.message).not.toContain("(allowed:");
-    expect(issue.allowedValues).toEqual(["pairing", "allowlist", "open", "disabled"]);
-    expect(issue.allowedValuesHiddenCount).toBe(0);
-  });
-
-  it("includes boolean variants for boolean-or-enum unions", () => {
-    const issue = testing.mapZodIssueToConfigIssue({
-      code: "custom",
-      path: ["channels", "telegram"],
-      message:
-        "channels.telegram.streamMode, channels.telegram.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy",
-    });
-    expect(issue.path).toBe("channels.telegram");
-    expect(issue.message).toContain(
-      "channels.telegram.streamMode, channels.telegram.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy",
-    );
-    expect(issue.allowedValues).toBeUndefined();
   });
 
   it("skips allowed-values hints for unions with open-ended branches", () => {
@@ -89,6 +46,33 @@ describe("config validation allowed-values metadata", () => {
       expect(issue.allowedValues).toBeUndefined();
       expect(issue.allowedValuesHiddenCount).toBeUndefined();
       expect(issue.message).not.toContain("(allowed:");
+    }
+  });
+
+  it.each([
+    { value: 15, expected: "(maximum: 14)" },
+    { value: 0, expected: "(minimum: 1)" },
+  ])("adds numeric bound hints for invalid startup context limits", ({ value, expected }) => {
+    const result = validateConfigObjectRaw({
+      agents: { defaults: { startupContext: { dailyMemoryDays: value } } },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = requireIssue(result.issues, "agents.defaults.startupContext.dailyMemoryDays");
+      expect(issue.message).toContain(expected);
+    }
+  });
+
+  it("adds an exclusive lower-bound hint for positive config values", () => {
+    const result = validateConfigObjectRaw({
+      agents: { defaults: { maxConcurrent: 0 } },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = requireIssue(result.issues, "agents.defaults.maxConcurrent");
+      expect(issue.message).toContain("(must be greater than 0)");
     }
   });
 
@@ -142,7 +126,7 @@ describe("config validation allowed-values metadata", () => {
   it("keeps generic union messaging for mixed scalar-or-object unions", () => {
     const result = validateConfigObjectRaw({
       agents: {
-        list: [{ id: "a", model: true }],
+        entries: { a: { model: true } },
       },
     });
 
@@ -150,7 +134,7 @@ describe("config validation allowed-values metadata", () => {
     if (!result.ok) {
       expect(result.issues).toEqual([
         {
-          path: "agents.list.0.model",
+          path: "agents.entries.a.model",
           message: "Invalid input",
         },
       ]);
@@ -198,47 +182,5 @@ describe("config validation legacy openai-codex api", () => {
       expect(issue.message).toContain("expected one of");
       expect(issue.message).not.toContain("removed api id");
     }
-  });
-});
-
-describe("config validation numeric bound hints", () => {
-  it("appends maximum for inclusive too_big numeric bound", () => {
-    const issue = mapFirstIssue(
-      z.object({ maxPingPongTurns: z.number().int().min(0).max(20).optional() }),
-      { maxPingPongTurns: 50 },
-    );
-    expect(issue.path).toBe("maxPingPongTurns");
-    expect(issue.message).toContain("(maximum: 20)");
-    expect(issue.allowedValues).toBeUndefined();
-  });
-
-  it("appends 'must be less than' for exclusive too_big numeric bound", () => {
-    const issue = mapFirstIssue(z.object({ rate: z.number().lt(5) }), { rate: 5 });
-    expect(issue.path).toBe("rate");
-    expect(issue.message).toContain("(must be less than 5)");
-    expect(issue.message).not.toContain("(maximum: 5)");
-  });
-
-  it("appends 'must be greater than' for exclusive too_small numeric bound (positive/gt)", () => {
-    const issue = mapFirstIssue(z.object({ count: z.number().positive() }), { count: 0 });
-    expect(issue.path).toBe("count");
-    expect(issue.message).toContain("(must be greater than 0)");
-    expect(issue.message).not.toContain("(minimum: 0)");
-  });
-
-  it("appends minimum for inclusive too_small numeric bound", () => {
-    const issue = mapFirstIssue(z.object({ retries: z.number().min(0) }), { retries: -1 });
-    expect(issue.path).toBe("retries");
-    expect(issue.message).toContain("(minimum: 0)");
-  });
-
-  it("does not append numeric bound hints for non-number origins (string)", () => {
-    const issue = mapFirstIssue(z.object({ name: z.string().max(10) }), {
-      name: "abcdefghijklmnop",
-    });
-    expect(issue.path).toBe("name");
-    expect(issue.message).not.toContain("(maximum:");
-    expect(issue.message).not.toContain("(must be less than");
-    expect(issue.allowedValues).toBeUndefined();
   });
 });

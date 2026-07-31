@@ -12,7 +12,7 @@ working chat session.
 
 ## What you need
 
-- **Node.js 22.19+, 23.11+, or 24+** (24 is the recommended default)
+- **Node.js 22.22.3+, 24.15+, or 25.9+** (Node 26 is the recommended runtime)
 - **An API key** from a model provider (Anthropic, OpenAI, Google, etc.) — onboarding will prompt you
 
 <Tip>
@@ -106,7 +106,7 @@ Then set:
   "gateway": {
     "controlUi": {
       "enabled": true,
-      "root": "$HOME/.openclaw/control-ui-custom"
+      "root": "${HOME}/.openclaw/control-ui-custom"
     }
   }
 }

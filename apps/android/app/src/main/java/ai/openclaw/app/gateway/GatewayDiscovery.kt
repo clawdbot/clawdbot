@@ -62,6 +62,26 @@ private fun createContextDnsResolver(context: Context): DnsResolver = DnsResolve
 @Suppress("DEPRECATION")
 private fun createLegacyDnsResolver(): DnsResolver = DnsResolver.getInstance()
 
+internal fun gatewayDiscoveryStatusText(
+  localCount: Int,
+  wideAreaRcode: Int?,
+  wideAreaCount: Int,
+): String {
+  val wide =
+    when (wideAreaRcode) {
+      null -> "Wide: ?"
+      Rcode.NOERROR -> "Wide: $wideAreaCount"
+      Rcode.NXDOMAIN -> "Wide: NXDOMAIN"
+      else -> "Wide: ${Rcode.string(wideAreaRcode)}"
+    }
+
+  return when {
+    localCount == 0 && wideAreaRcode == null -> "Searching for gateways…"
+    localCount == 0 -> wide
+    else -> "Local: $localCount • $wide"
+  }
+}
+
 /**
  * Watches local DNS-SD and optional wide-area DNS-SD for reachable OpenClaw gateways.
  */
@@ -306,27 +326,12 @@ class GatewayDiscovery(
     _gateways.value =
       // Merge local and wide-area results deterministically for stable UI selection.
       (localById.values + unicastById.values).sortedBy { it.name.lowercase() }
-    _statusText.value = buildStatusText()
-  }
-
-  private fun buildStatusText(): String {
-    val localCount = localById.size
-    val wideRcode = lastWideAreaRcode
-    val wideCount = lastWideAreaCount
-
-    val wide =
-      when (wideRcode) {
-        null -> "Wide: ?"
-        Rcode.NOERROR -> "Wide: $wideCount"
-        Rcode.NXDOMAIN -> "Wide: NXDOMAIN"
-        else -> "Wide: ${Rcode.string(wideRcode)}"
-      }
-
-    return when {
-      localCount == 0 && wideRcode == null -> "Searching for gateways…"
-      localCount == 0 -> "$wide"
-      else -> "Local: $localCount • $wide"
-    }
+    _statusText.value =
+      gatewayDiscoveryStatusText(
+        localCount = localById.size,
+        wideAreaRcode = lastWideAreaRcode,
+        wideAreaCount = lastWideAreaCount,
+      )
   }
 
   private fun stableId(

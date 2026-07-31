@@ -87,7 +87,7 @@ protocol ChatSpeechLocalSpeaking: AnyObject {
 /// gateway audio first, on-device synthesis as the fallback voice.
 @MainActor
 @Observable
-public final class OpenClawChatSpeechController {
+public final class OpenClawChatSpeechController: ChatMediaPlaybackOwner {
     public enum Phase: Equatable {
         case idle
         case preparing(UUID)
@@ -99,6 +99,7 @@ public final class OpenClawChatSpeechController {
     private let synthesize: OpenClawChatSpeechSynthesis
     private let clipPlayer: any ChatSpeechClipPlaying
     private let localSpeech: any ChatSpeechLocalSpeaking
+    private let playbackCoordinator: ChatMediaPlaybackCoordinator
     @ObservationIgnored private var playbackTask: Task<Void, Never>?
     /// Monotonic token: completions from a superseded playback must not
     /// clear the phase owned by a newer one.
@@ -108,17 +109,20 @@ public final class OpenClawChatSpeechController {
         self.init(
             synthesize: synthesize,
             clipPlayer: ChatSpeechClipPlayer(),
-            localSpeech: ChatSpeechLocalSpeaker())
+            localSpeech: ChatSpeechLocalSpeaker(),
+            playbackCoordinator: .shared)
     }
 
     init(
         synthesize: @escaping OpenClawChatSpeechSynthesis,
         clipPlayer: any ChatSpeechClipPlaying,
-        localSpeech: any ChatSpeechLocalSpeaking)
+        localSpeech: any ChatSpeechLocalSpeaking,
+        playbackCoordinator: ChatMediaPlaybackCoordinator = .shared)
     {
         self.synthesize = synthesize
         self.clipPlayer = clipPlayer
         self.localSpeech = localSpeech
+        self.playbackCoordinator = playbackCoordinator
     }
 
     public var activeMessageID: UUID? {
@@ -151,6 +155,7 @@ public final class OpenClawChatSpeechController {
         self.playbackTask = nil
         self.clipPlayer.stop()
         self.localSpeech.stop()
+        self.playbackCoordinator.release(self)
         guard self.phase != .idle else { return }
         self.phase = .idle
         self.deactivateAudioSession()
@@ -160,6 +165,7 @@ public final class OpenClawChatSpeechController {
         self.stop()
         let spoken = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !spoken.isEmpty else { return }
+        self.playbackCoordinator.activate(self)
         self.generation &+= 1
         let generation = self.generation
         self.phase = .preparing(messageID)
@@ -201,7 +207,12 @@ public final class OpenClawChatSpeechController {
         guard self.generation == generation else { return }
         self.playbackTask = nil
         self.phase = .idle
+        self.playbackCoordinator.release(self)
         self.deactivateAudioSession()
+    }
+
+    func stopForMediaPlaybackInterruption() {
+        self.stop()
     }
 
     private func activateAudioSession() {
@@ -227,7 +238,7 @@ public final class OpenClawChatSpeechController {
 /// Whole-clip playback for gateway-rendered container audio. File metadata
 /// helps AVAudioPlayer parse clips whose type is not obvious from the bytes.
 @MainActor
-final class ChatSpeechClipPlayer: NSObject, ChatSpeechClipPlaying, @preconcurrency AVAudioPlayerDelegate {
+final class ChatSpeechClipPlayer: NSObject, ChatSpeechClipPlaying {
     private var player: AVAudioPlayer?
     private var continuation: CheckedContinuation<Bool, Never>?
 
@@ -275,6 +286,14 @@ final class ChatSpeechClipPlayer: NSObject, ChatSpeechClipPlaying, @preconcurren
         continuation?.resume(returning: finished)
     }
 }
+
+// SDK 27 imports AVAudioPlayerDelegate with compatible isolation. Older SDKs
+// still need the preconcurrency bridge for this main-actor implementation.
+#if compiler(>=6.4)
+extension ChatSpeechClipPlayer: AVAudioPlayerDelegate {}
+#else
+extension ChatSpeechClipPlayer: @preconcurrency AVAudioPlayerDelegate {}
+#endif
 
 /// On-device fallback voice via AVSpeechSynthesizer.
 @MainActor

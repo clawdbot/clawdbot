@@ -1,7 +1,7 @@
 // Plugins CLI list tests cover plugin listing output and installed-state formatting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import {
   buildPluginDiagnosticsReport,
   buildPluginInspectReport,
@@ -133,9 +133,8 @@ describe("plugins cli list", () => {
 
     const output = runtimeLogs.join("\n");
     expect(output).toContain("Plugin configuration:");
-    expect(output).toContain('plugins.allow: stale plugin reference "lossless-claw" was found.');
     expect(output).toContain(
-      'plugins.entries.lossless-claw: stale plugin reference "lossless-claw" was found.',
+      "Stale plugin references (plugins.allow/deny/entries): lossless-claw.",
     );
     expect(output).toContain(
       'plugins.slots.contextEngine: slot references missing plugin "lossless-claw".',

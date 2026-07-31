@@ -12,8 +12,10 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   runProviderDynamicModel: vi.fn(),
 }));
 
+const normalizeDiscoveredAgentModelMock = vi.hoisted(() => vi.fn((value: unknown) => value));
+
 vi.mock("./agent-model-discovery.js", () => ({
-  normalizeDiscoveredAgentModel: (value: unknown) => value,
+  normalizeDiscoveredAgentModel: normalizeDiscoveredAgentModelMock,
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => providerRuntimeMocks);
@@ -49,6 +51,7 @@ function model(provider: string, id: string): Model {
 
 describe("appendPrioritizedDynamicLiveModels", () => {
   beforeEach(() => {
+    normalizeDiscoveredAgentModelMock.mockClear();
     providerRuntimeMocks.prepareProviderDynamicModel.mockReset();
     providerRuntimeMocks.prepareProviderDynamicModel.mockResolvedValue(undefined);
     providerRuntimeMocks.resolveProviderModernModelRef.mockReset();
@@ -159,9 +162,22 @@ describe("appendPrioritizedDynamicLiveModels", () => {
         : undefined,
     );
 
+    const config = {
+      models: {
+        providers: {
+          [DYNAMIC_PROVIDER]: {
+            api: "openai-completions",
+            baseUrl: "https://configured.example/v1",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
     const result = await appendPrioritizedDynamicLiveModels({
       models: [],
+      config,
       agentDir: "/tmp/openclaw-agent",
+      workspaceDir: "/tmp/openclaw-workspace",
       modelRegistry: REGISTRY,
       refs: [{ provider: DYNAMIC_PROVIDER, id: "glm-5" }],
     });
@@ -171,5 +187,10 @@ describe("appendPrioritizedDynamicLiveModels", () => {
     ]);
     expect(providerRuntimeMocks.prepareProviderDynamicModel).toHaveBeenCalledTimes(1);
     expect(providerRuntimeMocks.runProviderDynamicModel).toHaveBeenCalledTimes(1);
+    expect(normalizeDiscoveredAgentModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: DYNAMIC_PROVIDER, id: "glm-5" }),
+      "/tmp/openclaw-agent",
+      { config, workspaceDir: "/tmp/openclaw-workspace" },
+    );
   });
 });

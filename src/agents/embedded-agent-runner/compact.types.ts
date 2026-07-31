@@ -1,17 +1,19 @@
+import type { Model } from "openclaw/plugin-sdk/llm";
 /**
  * Shared parameter and metric types for embedded-agent compaction.
  */
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
+import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
-import type { Model } from "openclaw/plugin-sdk/llm";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
-import type { AgentRuntimePlan } from "../runtime-plan/types.js";
+import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
 
 export type CompactEmbeddedAgentSessionParams = {
   sessionId: string;
@@ -25,6 +27,8 @@ export type CompactEmbeddedAgentSessionParams = {
   sandboxSessionKey?: string;
   messageChannel?: string;
   messageProvider?: string;
+  /** Capabilities declared by the gateway client that originated this run. */
+  clientCaps?: string[];
   chatType?: ChatType;
   agentAccountId?: string;
   currentChannelId?: string;
@@ -36,6 +40,7 @@ export type CompactEmbeddedAgentSessionParams = {
   senderUsername?: string;
   senderE164?: string;
   authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
   /** Host-resolved provider credential for native harness compaction. */
   resolvedApiKey?: string;
   /** Group id for channel-level tool policy resolution. */
@@ -46,6 +51,9 @@ export type CompactEmbeddedAgentSessionParams = {
   groupSpace?: string | null;
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
+  inputProvenance?: InputProvenance;
+  /** Trusted in-process subagent-completion handoff; never derived from public input. */
+  trustedInternalHandoff?: boolean;
   sessionFile: string;
   /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
   currentTokenCount?: number;
@@ -54,6 +62,7 @@ export type CompactEmbeddedAgentSessionParams = {
   cwd?: string;
   agentDir?: string;
   config?: OpenClawConfig;
+  toolOverrides?: SessionToolOverrides;
   skillsSnapshot?: SkillSnapshot;
   senderIsOwner?: boolean;
   provider?: string;
@@ -70,11 +79,15 @@ export type CompactEmbeddedAgentSessionParams = {
   contextEngineRuntimeContext?: ContextEngineRuntimeContext;
   /** Session-pinned embedded harness id. Prevents compaction hot-switching. */
   agentHarnessId?: string;
+  /** Prevent compaction from changing the persisted session runtime or model. */
+  modelSelectionLocked?: boolean;
   /** OpenClaw-owned runtime policy prepared for this compaction path. */
   runtimePlan?: AgentRuntimePlan;
+  /** Host-prepared route and credential selection for native harness compaction. */
+  runtimeAuthPlan?: AgentRuntimeAuthPlan;
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
-  execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+  execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node" | "nodeCwd">;
   bashElevated?: ExecElevatedDefaults;
   customInstructions?: string;
   tokenBudget?: number;

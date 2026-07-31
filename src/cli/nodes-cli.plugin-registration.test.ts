@@ -79,6 +79,22 @@ describe("registerNodesCli plugin registration", () => {
     );
   });
 
+  it("documents the supported system.which parameter shape", async () => {
+    const program = await registerWithArgv(["node", "openclaw", "nodes", "--help"]);
+    const nodesCommand = program.commands.find((command) => command.name() === "nodes");
+    const output: string[] = [];
+
+    nodesCommand?.configureOutput({
+      writeOut: (value) => output.push(value),
+      writeErr: (value) => output.push(value),
+    });
+    nodesCommand?.outputHelp();
+    const help = output.join("");
+
+    expect(help).toContain(`--params '{"bins":["uname"]}'`);
+    expect(help).not.toContain(`--params '{"name":"uname"}'`);
+  });
+
   it("does not route pass-through --json after the terminator", async () => {
     let forceStderrDuringRegistration = true;
     registerPluginCliCommandsFromValidatedConfig.mockImplementationOnce(async () => {

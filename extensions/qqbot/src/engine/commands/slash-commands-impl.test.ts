@@ -17,7 +17,7 @@ function createStreamingContext(overrides: Partial<SlashCommandContext> = {}): S
     args: "",
     accountId: "default",
     appId: "app",
-    accountConfig: { allowFrom: ["*"], streaming: false },
+    accountConfig: { allowFrom: ["*"], streaming: { mode: "off" } },
     commandAuthorized: false,
     queueSnapshot: {
       totalPending: 0,
@@ -142,7 +142,7 @@ describe("QQBot framework slash commands", () => {
         channels: {
           qqbot: {
             allowFrom: ["*"],
-            streaming: false,
+            streaming: { mode: "off" },
           },
         },
       },
@@ -163,7 +163,7 @@ describe("QQBot framework slash commands", () => {
         channels: {
           qqbot: {
             allowFrom,
-            streaming: false,
+            streaming: { mode: "off" },
           },
         },
       },
@@ -177,7 +177,7 @@ describe("QQBot framework slash commands", () => {
     });
     const result = await matchSlashCommand(
       createStreamingContext({
-        accountConfig: { allowFrom, streaming: false },
+        accountConfig: { allowFrom, streaming: { mode: "off" } },
         commandAuthorized,
       }),
     );
@@ -199,7 +199,7 @@ describe("QQBot framework slash commands", () => {
         channels: {
           qqbot: {
             allowFrom: ["*"],
-            streaming: false,
+            streaming: { mode: "off" },
           },
         },
       },
@@ -221,7 +221,7 @@ describe("QQBot framework slash commands", () => {
     const result = await matchSlashCommand(
       createStreamingContext({
         senderId: "TRUSTED_OPENID",
-        accountConfig: { allowFrom: ["*"], streaming: false },
+        accountConfig: { allowFrom: ["*"], streaming: { mode: "off" } },
         commandAuthorized,
       }),
     );
@@ -230,7 +230,7 @@ describe("QQBot framework slash commands", () => {
     expect(commandAuthorized).toBe(true);
     expect(result).toContain("已开启");
     expect(writes).toHaveLength(1);
-    expect(qqbot?.streaming).toBe(true);
+    expect(qqbot?.streaming).toEqual({ mode: "partial", nativeTransport: true });
   });
 
   it("writes streaming config when the sender is command-authorized", async () => {
@@ -241,11 +241,11 @@ describe("QQBot framework slash commands", () => {
         channels: {
           qqbot: {
             allowFrom,
-            streaming: false,
+            streaming: { mode: "off" },
             accounts: {
               default: {
                 allowFrom,
-                streaming: false,
+                streaming: { mode: "off" },
               },
             },
           },
@@ -262,7 +262,7 @@ describe("QQBot framework slash commands", () => {
     const result = await matchSlashCommand(
       createStreamingContext({
         senderId: "TRUSTED_OPENID",
-        accountConfig: { allowFrom, streaming: false },
+        accountConfig: { allowFrom, streaming: { mode: "off" } },
         commandAuthorized,
       }),
     );
@@ -271,7 +271,37 @@ describe("QQBot framework slash commands", () => {
     expect(commandAuthorized).toBe(true);
     expect(result).toContain("已开启");
     expect(writes).toHaveLength(1);
-    expect(qqbot?.streaming).toBe(true);
-    expect(qqbot?.accounts?.default?.streaming).toBe(true);
+    expect(qqbot?.streaming).toEqual({ mode: "partial", nativeTransport: true });
+    expect(qqbot?.accounts?.default?.streaming).toEqual({ mode: "partial", nativeTransport: true });
+  });
+
+  it("writes streaming mode off when toggled off", async () => {
+    const writes: OpenClawConfig[] = [];
+    const allowFrom = ["*", "TRUSTED_OPENID"];
+    installCommandRuntime(
+      {
+        channels: {
+          qqbot: {
+            allowFrom,
+            streaming: { mode: "partial", nativeTransport: true },
+          },
+        },
+      },
+      writes,
+    );
+
+    const result = await matchSlashCommand(
+      createStreamingContext({
+        senderId: "TRUSTED_OPENID",
+        rawContent: "/bot-streaming off",
+        accountConfig: { allowFrom, streaming: { mode: "partial", nativeTransport: true } },
+        commandAuthorized: true,
+      }),
+    );
+
+    const qqbot = getWrittenQQBotConfig(writes[0]);
+    expect(result).toContain("已关闭");
+    expect(writes).toHaveLength(1);
+    expect(qqbot?.streaming).toEqual({ mode: "off" });
   });
 });

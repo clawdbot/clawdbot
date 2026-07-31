@@ -1,10 +1,11 @@
 // Hook install service installs hook packages from archives and local sources.
-import fs from "node:fs/promises";
+
 import path from "node:path";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-safe-path.js";
 import type { NpmIntegrityDrift, NpmSpecResolution } from "../infra/install-source-utils.js";
+import { readRegularFile } from "../infra/regular-file.js";
 import { detectBundleManifestFormat } from "../plugins/bundle-manifest.js";
 import {
   scanPackageInstallSource,
@@ -17,10 +18,14 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { parseFrontmatter } from "./frontmatter.js";
 
+// HOOK.md is only parsed for frontmatter; a small cap prevents a malicious or
+// malformed hook package from OOMing the install path.
+const HOOK_MD_MAX_BYTES = 1024 * 1024;
+
 const loadHookInstallRuntime = createLazyRuntimeModule(() => import("./install.runtime.js"));
 
 /** Logger contract used by hook install and update operations. */
-export type HookInstallLogger = {
+type HookInstallLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
 };
@@ -358,8 +363,8 @@ async function resolveHookNameFromDir(hookDir: string): Promise<string> {
   if (!(await runtime.fileExists(hookMdPath))) {
     throw new Error(`HOOK.md missing in ${hookDir}`);
   }
-  const raw = await fs.readFile(hookMdPath, "utf-8");
-  const frontmatter = parseFrontmatter(raw);
+  const { buffer } = await readRegularFile({ filePath: hookMdPath, maxBytes: HOOK_MD_MAX_BYTES });
+  const frontmatter = parseFrontmatter(buffer.toString("utf-8"));
   return frontmatter.name || path.basename(hookDir);
 }
 
@@ -651,7 +656,7 @@ async function installHookFromDir(
 }
 
 /** Install hooks from an archive after extracting and validating the archive root. */
-export async function installHooksFromArchive(
+async function installHooksFromArchive(
   params: HookArchiveInstallParams,
 ): Promise<InstallHooksResult> {
   const runtime = await loadHookInstallRuntime();
@@ -768,3 +773,4 @@ export async function installHooksFromPath(
     ...forwardParams,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -57,8 +57,10 @@ type MiniMaxSearchResponse = {
 
 function resolveMiniMaxApiKey(searchConfig?: SearchConfigRecord): string | undefined {
   return (
-    readConfiguredSecretString(searchConfig?.apiKey, "tools.web.search.apiKey") ??
-    readProviderEnvValue([...MINIMAX_TOKEN_PLAN_ENV_VARS, "MINIMAX_API_KEY"])
+    readConfiguredSecretString(
+      searchConfig?.apiKey,
+      "plugins.entries.minimax.config.webSearch.apiKey",
+    ) ?? readProviderEnvValue([...MINIMAX_TOKEN_PLAN_ENV_VARS, "MINIMAX_API_KEY"])
   );
 }
 

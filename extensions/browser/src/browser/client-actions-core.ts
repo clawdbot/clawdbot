@@ -9,16 +9,21 @@ import {
   clampPositiveTimerTimeoutMs,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import {
+  BROWSER_ACTION_TRANSPORT_SLACK_MS,
+  resolveBrowserActRequestTimeoutMs,
+} from "./act-policy.js";
 import type {
   BrowserActionOk,
   BrowserActionPathResult,
   BrowserActionTabResult,
+  BrowserBatchAbort,
+  BrowserBatchActionResult,
 } from "./client-actions-types.js";
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import type { BrowserActRequest } from "./client-actions.types.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 import {
-  DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
   DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
 } from "./constants.js";
@@ -31,14 +36,13 @@ type BrowserActResponse = {
   targetId: string;
   url?: string;
   result?: unknown;
-  results?: Array<{ ok: boolean; error?: string }>;
+  results?: BrowserBatchActionResult[];
+  aborted?: BrowserBatchAbort;
   blockedByDialog?: boolean;
   browserState?: unknown;
   /** Download info when a click/batch/evaluate action triggers a browser download. */
   downloads?: BrowserDownloadResult[];
 };
-
-const BROWSER_REQUEST_TIMEOUT_SLACK_MS = 5_000;
 
 type BrowserDownloadActionResult = BrowserActionTabResult & { download: BrowserDownloadResult };
 
@@ -46,28 +50,11 @@ function normalizePositiveTimeoutMs(value: unknown): number | undefined {
   return clampPositiveTimerTimeoutMs(value);
 }
 
-function resolveBrowserActRequestTimeoutMs(req: BrowserActRequest): number {
-  const explicitTimeout = normalizePositiveTimeoutMs((req as { timeoutMs?: unknown }).timeoutMs);
-  const candidateTimeouts =
-    explicitTimeout === undefined
-      ? [DEFAULT_BROWSER_ACTION_TIMEOUT_MS]
-      : [addTimerTimeoutGraceMs(explicitTimeout, BROWSER_REQUEST_TIMEOUT_SLACK_MS) ?? 1];
-  if (req.kind === "wait") {
-    const waitDuration = normalizePositiveTimeoutMs(req.timeMs);
-    if (waitDuration !== undefined) {
-      candidateTimeouts.push(
-        addTimerTimeoutGraceMs(waitDuration, BROWSER_REQUEST_TIMEOUT_SLACK_MS) ?? 1,
-      );
-    }
-  }
-  return Math.max(...candidateTimeouts);
-}
-
 function resolveBrowserOperationRequestTimeoutMs(timeoutMs: unknown): number {
   const operationTimeoutMs =
     normalizePositiveTimeoutMs(timeoutMs) ?? DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS;
   // Let the browser operation report its own timeout/error before the client watchdog fires.
-  return addTimerTimeoutGraceMs(operationTimeoutMs, BROWSER_REQUEST_TIMEOUT_SLACK_MS) ?? 1;
+  return addTimerTimeoutGraceMs(operationTimeoutMs, BROWSER_ACTION_TRANSPORT_SLACK_MS) ?? 1;
 }
 
 async function postDownloadRequest(

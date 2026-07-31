@@ -49,6 +49,7 @@ struct OpenClawVoiceNoteButton: View {
 
 struct OpenClawVoiceNoteRecordingRow: View {
     let recorder: OpenClawVoiceNoteRecorder
+    var embedded = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -56,8 +57,11 @@ struct OpenClawVoiceNoteRecordingRow: View {
                 .fill(OpenClawChatTheme.danger)
                 .frame(width: 9, height: 9)
 
-            Text("Recording")
-                .font(OpenClawChatTypography.footnoteSemiBold)
+            // Live capture wave replaces a static "Recording" label; the level is
+            // real recorder metering, so silence reads flat and speech moves.
+            TalkWaveformView(phase: .listening(level: self.recorder.level, speechActive: false))
+                .frame(maxWidth: .infinity, minHeight: 26, maxHeight: 26)
+                .accessibilityLabel("Recording")
 
             Text(openClawVoiceNoteDurationLabel(self.recorder.elapsedSeconds))
                 .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
@@ -83,14 +87,17 @@ struct OpenClawVoiceNoteRecordingRow: View {
             .controlSize(.small)
             .accessibilityLabel("Finish voice note")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(OpenClawChatTheme.composerField)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(OpenClawChatTheme.composerBorder)))
+        .padding(.horizontal, self.embedded ? 2 : 14)
+        .padding(.vertical, self.embedded ? 2 : 10)
+        .background {
+            if !self.embedded {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(OpenClawChatTheme.composerField)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(OpenClawChatTheme.composerBorder))
+            }
+        }
     }
 }
 

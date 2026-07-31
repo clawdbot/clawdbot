@@ -4,6 +4,14 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+/** Agent-owned runtime handle carried opaquely through media provider requests. */
+type MediaPreparedModelRuntime = Readonly<{
+  agentDir: string;
+  workspaceDir?: string;
+  config: OpenClawConfig;
+  createStores: () => unknown;
+}>;
+
 type MediaUnderstandingKind = "audio.transcription" | "video.description" | "image.description";
 
 export type MediaUnderstandingCapability = "image" | "audio" | "video";
@@ -19,6 +27,7 @@ export type MediaAttachment = {
   path?: string;
   url?: string;
   mime?: string;
+  workspaceDir?: string;
   index: number;
   alreadyTranscribed?: boolean;
 };
@@ -29,6 +38,8 @@ export type MediaUnderstandingOutput = {
   text: string;
   provider: string;
   model?: string;
+  requestedBackend?: string;
+  observedBackend?: string;
 };
 
 type MediaUnderstandingDecisionOutcome =
@@ -42,6 +53,8 @@ type MediaUnderstandingDecisionOutcome =
 export type MediaUnderstandingModelDecision = {
   provider?: string;
   model?: string;
+  requestedBackend?: string;
+  observedBackend?: string;
   type: "provider" | "cli";
   outcome: "success" | "skipped" | "failed";
   reason?: string;
@@ -105,6 +118,7 @@ export type AudioTranscriptionRequest = {
   prompt?: string;
   query?: Record<string, string | number | boolean>;
   timeoutMs: number;
+  signal?: AbortSignal;
   fetchFn?: typeof fetch;
 };
 
@@ -126,6 +140,7 @@ export type VideoDescriptionRequest = {
   model?: string;
   prompt?: string;
   timeoutMs: number;
+  signal?: AbortSignal;
   fetchFn?: typeof fetch;
 };
 
@@ -141,11 +156,14 @@ export type ImageDescriptionRequest = {
   prompt?: string;
   maxTokens?: number;
   timeoutMs: number;
+  signal?: AbortSignal;
   profile?: string;
   preferredProfile?: string;
   authStore?: AuthProfileStore;
+  agentId?: string;
   agentDir: string;
   workspaceDir?: string;
+  preparedModelRuntime?: MediaPreparedModelRuntime;
   cfg: OpenClawConfig;
   model: string;
   provider: string;
@@ -164,11 +182,14 @@ export type ImagesDescriptionRequest = {
   prompt?: string;
   maxTokens?: number;
   timeoutMs: number;
+  signal?: AbortSignal;
   profile?: string;
   preferredProfile?: string;
   authStore?: AuthProfileStore;
+  agentId?: string;
   agentDir: string;
   workspaceDir?: string;
+  preparedModelRuntime?: MediaPreparedModelRuntime;
   cfg: OpenClawConfig;
 };
 
@@ -206,6 +227,7 @@ export type StructuredExtractionRequest = {
   jsonSchema?: unknown;
   jsonMode?: boolean;
   timeoutMs: number;
+  signal?: AbortSignal;
   profile?: string;
   preferredProfile?: string;
   authStore?: AuthProfileStore;
@@ -223,7 +245,7 @@ export type StructuredExtractionResult = {
   contentType?: "json" | "text";
 };
 
-export type MediaUnderstandingDocumentModelDefaults = {
+type MediaUnderstandingDocumentModelDefaults = {
   textExtraction?: string;
   image?: string | false;
 };

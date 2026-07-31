@@ -35,16 +35,18 @@ Auth env var: `STEPFUN_API_KEY`
 
 Standard (`stepfun`):
 
-| Model ref                | Context | Max output | Notes                  |
-| ------------------------ | ------- | ---------- | ---------------------- |
-| `stepfun/step-3.5-flash` | 262,144 | 65,536     | Default standard model |
+| Model ref                | Context | Max output | Notes                          |
+| ------------------------ | ------- | ---------- | ------------------------------ |
+| `stepfun/step-3.5-flash` | 262,144 | 65,536     | Default standard model         |
+| `stepfun/step-3.7-flash` | 262,144 | 262,144    | Multimodal image input support |
 
 Step Plan (`stepfun-plan`):
 
-| Model ref                          | Context | Max output | Notes                      |
-| ---------------------------------- | ------- | ---------- | -------------------------- |
-| `stepfun-plan/step-3.5-flash`      | 262,144 | 65,536     | Default Step Plan model    |
-| `stepfun-plan/step-3.5-flash-2603` | 262,144 | 65,536     | Additional Step Plan model |
+| Model ref                          | Context | Max output | Notes                          |
+| ---------------------------------- | ------- | ---------- | ------------------------------ |
+| `stepfun-plan/step-3.5-flash`      | 262,144 | 65,536     | Default Step Plan model        |
+| `stepfun-plan/step-3.7-flash`      | 262,144 | 262,144    | Multimodal image input support |
+| `stepfun-plan/step-3.5-flash-2603` | 262,144 | 65,536     | Additional Step Plan model     |
 
 ## Getting started
 
@@ -84,6 +86,7 @@ Step Plan (`stepfun-plan`):
     </Steps>
 
     Default model: `stepfun/step-3.5-flash`
+    Alternate model: `stepfun/step-3.7-flash`
 
   </Tab>
 
@@ -122,7 +125,7 @@ Step Plan (`stepfun-plan`):
     </Steps>
 
     Default model: `stepfun-plan/step-3.5-flash`
-    Alternate model: `stepfun-plan/step-3.5-flash-2603`
+    Alternate models: `stepfun-plan/step-3.7-flash`, `stepfun-plan/step-3.5-flash-2603`
 
   </Tab>
 </Tabs>
@@ -146,11 +149,21 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
             apiKey: "${STEPFUN_API_KEY}",
             models: [
               {
+                id: "step-3.7-flash",
+                name: "Step 3.7 Flash",
+                reasoning: true,
+                input: ["text", "image"],
+                thinkingLevelMap: { off: "low", minimal: "low", xhigh: "high", max: "high" },
+                cost: { input: 0.2, output: 1.15, cacheRead: 0.04, cacheWrite: 0 },
+                contextWindow: 262144,
+                maxTokens: 262144,
+              },
+              {
                 id: "step-3.5-flash",
                 name: "Step 3.5 Flash",
                 reasoning: true,
                 input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                cost: { input: 0.1, output: 0.3, cacheRead: 0.02, cacheWrite: 0 },
                 contextWindow: 262144,
                 maxTokens: 65536,
               },
@@ -175,6 +188,16 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
             api: "openai-completions",
             apiKey: "${STEPFUN_API_KEY}",
             models: [
+              {
+                id: "step-3.7-flash",
+                name: "Step 3.7 Flash",
+                reasoning: true,
+                input: ["text", "image"],
+                thinkingLevelMap: { off: "low", minimal: "low", xhigh: "high", max: "high" },
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 262144,
+                maxTokens: 262144,
+              },
               {
                 id: "step-3.5-flash",
                 name: "Step 3.5 Flash",
@@ -202,6 +225,8 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
   </Accordion>
 
   <Accordion title="Notes">
+    - `step-3.7-flash` accepts text and image input through OpenClaw. StepFun's API also supports video, which is not yet a model input modality in OpenClaw.
+    - Step 3.7 supports `low`, `medium`, and `high` reasoning effort. Because the model has no non-reasoning mode, `/think off` maps to `low`.
     - `step-3.5-flash-2603` is currently exposed only on `stepfun-plan`.
     - Use `openclaw models list` and `openclaw models set <provider/model>` to inspect or switch models.
 

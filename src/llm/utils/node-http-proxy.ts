@@ -4,19 +4,16 @@ import type { Agent as HttpsAgent } from "node:https";
 import {
   createFixedNodeProxyAgentPair,
   resolveEnvNodeProxyUrlForTarget,
-  UNSUPPORTED_PROXY_PROTOCOL_MESSAGE,
 } from "../../infra/net/node-proxy-agent.js";
 
 /** HTTP(S) agent pair for Node fetch/client integrations that accept explicit agents. */
-export interface NodeHttpProxyAgents {
+interface NodeHttpProxyAgents {
   httpAgent: HttpAgent;
   httpsAgent: HttpsAgent;
 }
 
-export { UNSUPPORTED_PROXY_PROTOCOL_MESSAGE };
-
 /** Resolves the environment proxy URL that applies to a target URL. */
-export function resolveHttpProxyUrlForTarget(targetUrl: string | URL): URL | undefined {
+function resolveHttpProxyUrlForTarget(targetUrl: string | URL): URL | undefined {
   return resolveEnvNodeProxyUrlForTarget(targetUrl);
 }
 
