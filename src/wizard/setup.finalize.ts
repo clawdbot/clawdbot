@@ -402,7 +402,12 @@ export async function finalizeSetupWizard(
   options: FinalizeOnboardingOptions,
 ): Promise<{ launchedTui: boolean }> {
   const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;
-  const suppressGatewayTokenOutput = opts.suppressGatewayTokenOutput === true;
+  // Default: suppress. Token-bearing output (the dashboard URL with `#token=` and the token
+  // memory lines) is not printed unless the operator explicitly opts in by passing
+  // `suppressGatewayTokenOutput: false`. The plain dashboard URL is still shown, and the
+  // token remains retrievable via `openclaw config get gateway.auth.token`. Avoids leaking
+  // the gateway token into terminal scrollback/logs by default.
+  const suppressGatewayTokenOutput = opts.suppressGatewayTokenOutput !== false;
   let gatewayProbe: { ok: boolean; detail?: string } = { ok: true };
   let resolvedGatewayPassword = "";
   let sessionGateway: import("../gateway/server.js").GatewayServer | undefined;

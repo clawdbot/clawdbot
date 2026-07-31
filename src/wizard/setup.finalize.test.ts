@@ -959,6 +959,43 @@ describe("finalizeSetupWizard", () => {
     expect(output).not.toContain("#token=");
   });
 
+  it("does not embed the gateway token in the dashboard URL by default", async () => {
+    const prompter = createLaterPrompter();
+
+    await finalizeSetupWizard({
+      flow: "advanced",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: true,
+        skipUi: true,
+        // suppressGatewayTokenOutput intentionally omitted — the default must suppress.
+      },
+      baseConfig: {},
+      nextConfig: {},
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "session-token",
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    const output = vi
+      .mocked(prompter.note)
+      .mock.calls.map((call) => call.join("\n"))
+      .join("\n");
+    expect(output).toContain("http://127.0.0.1:18789");
+    expect(output).not.toContain("#token=");
+    expect(output).not.toContain("session-token");
+  });
+
   it("stops after a scheduled restart instead of reinstalling the service", async () => {
     const progressUpdate = vi.fn();
     const progressStop = vi.fn();
