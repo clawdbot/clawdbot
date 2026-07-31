@@ -35,6 +35,14 @@ const PACKAGE_EXEC_TARGET_OPTIONS_WITH_VALUE = new Set([
   ...PACKAGE_TARGET_OPTIONS_WITH_VALUE,
   "-p",
 ]);
+const YARN_WORKSPACES_FOREACH_OPTIONS_WITH_VALUE = new Set([
+  "-j",
+  "--exclude",
+  "--from",
+  "--include",
+  "--jobs",
+  "--since",
+]);
 const PACKAGE_MUTATION_ALIASES = new Set([
   "add",
   "i",
@@ -357,6 +365,30 @@ export function resolveLifecyclePackageRunnerArgv(
   }
   if (packageOperationMutatesOpenClaw(argv, subcommandIndex)) {
     return { kind: "approval-required" };
+  }
+  if (executable === "yarn" && subcommand === "workspace") {
+    const workspaceArgv = packageTarget(argv, subcommandIndex + 1);
+    return workspaceArgv && workspaceArgv.length > 1
+      ? { kind: "argv", argv: ["yarn", ...workspaceArgv.slice(1)] }
+      : looksLikeUnresolvedLifecycleRunner(argv)
+        ? { kind: "approval-required" }
+        : { kind: "not-runner" };
+  }
+  if (
+    executable === "yarn" &&
+    subcommand === "workspaces" &&
+    normalizedToken(argv[subcommandIndex + 1]) === "foreach"
+  ) {
+    const commandArgv = packageTarget(
+      argv,
+      subcommandIndex + 2,
+      YARN_WORKSPACES_FOREACH_OPTIONS_WITH_VALUE,
+    );
+    return commandArgv?.length
+      ? { kind: "argv", argv: ["yarn", ...commandArgv] }
+      : looksLikeUnresolvedLifecycleRunner(argv)
+        ? { kind: "approval-required" }
+        : { kind: "not-runner" };
   }
   if (
     executable === "yarn" &&

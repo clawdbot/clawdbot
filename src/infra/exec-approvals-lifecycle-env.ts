@@ -429,6 +429,14 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
   return lifecycleDynamicArgvMayHideLifecycle(argv, isVariableReference);
 }
 
+/** Return true when PowerShell expressions can fill a lifecycle-sensitive argv position. */
+export function powerShellCalculatedArgvMayHideLifecycle(argv: readonly string[]): boolean {
+  return lifecycleDynamicArgvMayHideLifecycle(argv, (value) => {
+    const token = (value ?? "").trim();
+    return /^(?:[$@]?\(|[$@[{])|[+{}]|::/u.test(token) || token.toLowerCase() === "-f";
+  });
+}
+
 function readEnvironmentValue(
   env: NodeJS.ProcessEnv | undefined,
   key: string,

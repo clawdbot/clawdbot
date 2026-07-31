@@ -14,6 +14,7 @@ import {
   lifecycleAssignedEnvironmentKeys,
   lifecycleCommandHasUnquotedEnvironmentReference,
   lifecycleCommandShellDialect,
+  powerShellCalculatedArgvMayHideLifecycle,
   unresolvedEnvironmentMayHideLifecycle,
 } from "./exec-approvals-lifecycle-env.js";
 import { resolveNodeOpenClawArgv } from "./exec-approvals-lifecycle-node.js";
@@ -365,7 +366,10 @@ function classifyArgv(
     return true;
   }
   if (isOpenClawExecutable(argv[0])) {
-    return classifyOpenClawArgv(["openclaw", ...argv.slice(1)]);
+    return (
+      (shellContext === "powershell" && powerShellCalculatedArgvMayHideLifecycle(argv)) ||
+      classifyOpenClawArgv(["openclaw", ...argv.slice(1)])
+    );
   }
   if (depth >= MAX_NESTED_COMMAND_DEPTH) {
     return unresolvedDepthMayHideLifecycle(argv);

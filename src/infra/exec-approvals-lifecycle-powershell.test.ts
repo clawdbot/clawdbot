@@ -39,6 +39,18 @@ describe("OpenClaw PowerShell lifecycle edges", () => {
     expect(requiresApproval(command, ["powershell", "-Command", inline])).toBe(true);
   });
 
+  it("fails closed when PowerShell composes direct lifecycle arguments", () => {
+    const inline = `openclaw ("gate" + "way") ("re" + "start")`;
+    const command = `powershell -Command '${inline}'`;
+    expect(requiresApproval(command, ["powershell", "-Command", inline])).toBe(true);
+  });
+
+  it("keeps calculated arguments to a static read-only command non-blocking", () => {
+    const inline = `openclaw status ("f" + "oo")`;
+    const command = `powershell -Command '${inline}'`;
+    expect(requiresApproval(command, ["powershell", "-Command", inline])).toBe(false);
+  });
+
   it("keeps a calculated target with static non-lifecycle arguments non-blocking", () => {
     const inline = `& ("git") status`;
     const command = `powershell -Command '${inline}'`;

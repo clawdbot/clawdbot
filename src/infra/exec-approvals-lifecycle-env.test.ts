@@ -440,6 +440,27 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
   });
 
   it.each([
+    ["yarn workspace app add openclaw", ["yarn", "workspace", "app", "add", "openclaw"]],
+    [
+      "yarn workspace app run openclaw -- gateway restart",
+      ["yarn", "workspace", "app", "run", "openclaw", "--", "gateway", "restart"],
+    ],
+    [
+      "yarn workspaces foreach -A add openclaw",
+      ["yarn", "workspaces", "foreach", "-A", "add", "openclaw"],
+    ],
+  ] as Array<[string, string[]]>)("unwraps Yarn workspace dispatch: %s", (command, argv) => {
+    expect(requiresApproval(command, argv)).toBe(true);
+  });
+
+  it("keeps read-only Yarn workspace dispatch non-blocking", () => {
+    const command = "yarn workspace app run openclaw -- status";
+    expect(
+      requiresApproval(command, ["yarn", "workspace", "app", "run", "openclaw", "--", "status"]),
+    ).toBe(false);
+  });
+
+  it.each([
     [
       "hash -p /usr/local/bin/openclaw oc; oc gateway restart",
       ["hash", "-p", "/usr/local/bin/openclaw", "oc", ";", "oc", "gateway", "restart"],
