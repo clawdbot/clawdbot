@@ -1,5 +1,5 @@
 // Exercises the fake-backend TUI PTY harness and visible terminal output.
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -22,16 +22,20 @@ const EXIT_TIMEOUT_MS = 4_000;
 const TEST_TIMEOUT_MS = 5_000;
 const STARTUP_TEST_TIMEOUT_MS = 25_000;
 
-async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv } = {}) {
+async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv; controlledReset?: boolean } = {}) {
   const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-"));
   const scriptPath = await writeTuiPtyFixtureScript(tempDir);
   const logPath = path.join(tempDir, "fixture-log.jsonl");
+  const resetReleasePath = opts.controlledReset
+    ? path.join(tempDir, "release-reset-session")
+    : undefined;
   const run = startPty(process.execPath, ["--import", "tsx", scriptPath], {
     activeRuns,
     cwd: process.cwd(),
     env: {
       OPENCLAW_THEME: "dark",
       OPENCLAW_TUI_PTY_LOG_PATH: logPath,
+      OPENCLAW_TUI_PTY_RESET_RELEASE_PATH: resetReleasePath,
       NO_COLOR: undefined,
       ...opts.env,
     },
@@ -44,6 +48,11 @@ async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv } = {}) {
     logPath,
     waitForLogEntry: async (predicate: (entry: FixtureLogEntry) => boolean, timeoutMs?: number) =>
       await waitForFixtureLogEntry(logPath, predicate, timeoutMs ?? OUTPUT_TIMEOUT_MS, run.output),
+    releaseReset: async () => {
+      if (resetReleasePath) {
+        await writeFile(resetReleasePath, "released\n", "utf8");
+      }
+    },
     cleanup: async () => {
       await run.dispose();
       await rm(tempDir, { recursive: true, force: true });
@@ -894,6 +903,56 @@ describe.sequential("TUI PTY harness", () => {
       });
     },
     TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "rejects overlapping input while /reset owns the terminal session transition",
+    async () => {
+      const resetFixture = await startTuiFixture({ controlledReset: true });
+      try {
+        await resetFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        await resetFixture.run.write("/reset\r", { delay: false });
+        await resetFixture.waitForLogEntry(
+          (entry) => entry.method === "resetSession" && objectFieldEquals(entry, "reason", "reset"),
+        );
+
+        await resetFixture.run.write("overlap during reset\r", { delay: false });
+        await resetFixture.run.waitForOutput(
+          "session change in progress; wait for /reset to finish",
+        );
+        await resetFixture.releaseReset();
+        await resetFixture.run.waitForOutput("session main (Reset session after)");
+
+        await resetFixture.run.write("after reset\r", { delay: false });
+        await resetFixture.waitForLogEntry(
+          (entry) =>
+            entry.method === "sendChat" && objectFieldEquals(entry, "message", "after reset"),
+        );
+        await resetFixture.run.waitForOutput("PTY_RESPONSE: after reset");
+
+        const sends = (await readFixtureLog(resetFixture.logPath)).filter(
+          (entry) => entry.method === "sendChat",
+        );
+        expect(
+          sends.some((entry) => objectFieldEquals(entry, "message", "overlap during reset")),
+        ).toBe(false);
+        console.info(
+          "[behavior-evidence] tui-reset-transition",
+          JSON.stringify({
+            terminal: "real PTY",
+            overlappingInputRejected: true,
+            resetCompleted: true,
+            postResetInputDelivered: true,
+          }),
+        );
+
+        await resetFixture.run.write("/exit\r", { delay: false });
+        expect((await resetFixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await resetFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
   );
 
   it(

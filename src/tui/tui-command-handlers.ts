@@ -921,7 +921,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       return;
     }
     if (sessionTransitionInFlight) {
-      chatLog.addSystem("session change in progress; message not sent");
+      chatLog.addSystem(
+        `session change in progress; wait for /${sessionTransitionInFlight} to finish`,
+      );
       tui.requestRender();
       return;
     }

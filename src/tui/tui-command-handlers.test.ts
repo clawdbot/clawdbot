@@ -1526,7 +1526,6 @@ describe("tui command handlers", () => {
 
     expect(sendChat).not.toHaveBeenCalled();
     expect(createSession).toHaveBeenCalledTimes(1);
-    expect(addSystem).toHaveBeenCalledWith("session change in progress; message not sent");
     expect(addSystem).toHaveBeenCalledWith("session change in progress; wait for /new to finish");
 
     if (!resolveCreate) {
@@ -1556,7 +1555,6 @@ describe("tui command handlers", () => {
 
     expect(sendChat).not.toHaveBeenCalled();
     expect(resetSession).toHaveBeenCalledOnce();
-    expect(addSystem).toHaveBeenCalledWith("session change in progress; message not sent");
     expect(addSystem).toHaveBeenCalledWith("session change in progress; wait for /reset to finish");
 
     deferred.resolve({
