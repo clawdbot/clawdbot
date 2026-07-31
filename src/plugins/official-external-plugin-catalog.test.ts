@@ -1972,6 +1972,34 @@ describe("official external plugin catalog", () => {
     });
   });
 
+  it("preserves DuckDuckGo's keyless web search setup contract", () => {
+    const duckduckgo = expectCatalogEntry("duckduckgo");
+    const manifest = getOfficialExternalPluginCatalogManifest(duckduckgo);
+
+    expect(resolveOfficialExternalPluginInstall(duckduckgo)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/duckduckgo-plugin",
+      npmSpec: "@openclaw/duckduckgo-plugin",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(manifest?.contracts?.webSearchProviders).toEqual(["duckduckgo"]);
+    expect(manifest?.webSearchProviders).toEqual([
+      {
+        id: "duckduckgo",
+        label: "DuckDuckGo Search (experimental)",
+        hint: "Free web search fallback with no API key required",
+        onboardingScopes: ["text-inference"],
+        requiresCredential: false,
+        envVars: [],
+        placeholder: "(no key needed)",
+        signupUrl: "https://duckduckgo.com/",
+        docsUrl: "https://docs.openclaw.ai/tools/duckduckgo-search",
+        credentialPath: "",
+        autoDetectOrder: 100,
+      },
+    ]);
+  });
+
   it.each([
     ["teams-meetings", "@openclaw/teams-meetings", "teams_meetings", "teams"],
     ["zoom-meetings", "@openclaw/zoom-meetings", "zoom_meetings", "zoom"],

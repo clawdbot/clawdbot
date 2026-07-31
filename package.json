@@ -261,6 +261,7 @@
     "!dist/extensions/diffs/**",
     "!dist/extensions/diffs-language-pack/**",
     "!dist/extensions/discord/**",
+    "!dist/extensions/duckduckgo/**",
     "!dist/extensions/exa/**",
     "!dist/extensions/feishu/**",
     "!dist/extensions/featherless/**",
