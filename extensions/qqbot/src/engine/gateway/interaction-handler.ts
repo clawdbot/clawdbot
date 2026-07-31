@@ -414,15 +414,28 @@ async function authorizeApprovalButtonActor(params: {
       ) {
         return result;
       }
+      const isGroup = Boolean(params.event.group_openid);
       denial ??= {
         authorized: false,
-        reason: "You are not authorized to approve this request.",
+        reason: isGroup
+          ? "You are not authorized to approve this request."
+          : formatC2CApprovalDenialReason(senderId),
       };
       continue;
     }
     denial ??= result;
   }
   return denial ?? { authorized: false, reason: "You are not authorized to approve this request." };
+}
+
+function formatC2CApprovalDenialReason(senderId: string): string {
+  return (
+    `You are not authorized to approve this request.\n\n` +
+    `Your OpenID: ${senderId}\n\n` +
+    `To authorize approvals from this conversation, add this OpenID to ` +
+    `channels.qqbot.allowFrom or channels.qqbot.execApprovals.approvers ` +
+    `in your OpenClaw config. Use /bot-me to see your identity.`
+  );
 }
 
 async function isImplicitApprovalButtonActorAuthorized(params: {
@@ -432,12 +445,13 @@ async function isImplicitApprovalButtonActorAuthorized(params: {
   senderId: string;
   resolveCommandAuthorized?: QQBotCommandAuthorizationResolver;
 }): Promise<boolean> {
+  const isGroup = Boolean(params.event.group_openid);
   const accountConfig = resolveApprovalButtonAccountConfig(params.cfg, params.account.accountId);
   const authInput = {
     cfg: params.cfg,
     accountId: params.account.accountId,
     senderId: params.senderId,
-    isGroup: Boolean(params.event.group_openid),
+    isGroup,
     conversationId: params.event.group_openid ?? params.event.user_openid ?? params.senderId,
     allowFrom: accountConfig.allowFrom,
     groupAllowFrom: accountConfig.groupAllowFrom,

@@ -129,6 +129,18 @@ function installPlatformAdapter(): void {
   } as PlatformAdapter);
 }
 
+function formatC2CApprovalDenialReason(senderId: string): string {
+  return (
+    `You are not authorized to approve this request.\n\n` +
+    `Your OpenID: ${senderId}\n\n` +
+    `To authorize approvals from this conversation, add this OpenID to ` +
+    `channels.qqbot.allowFrom or channels.qqbot.execApprovals.approvers ` +
+    `in your OpenClaw config. Use /bot-me to see your identity.`
+  );
+}
+
+const genericDenial = "You are not authorized to approve this request.";
+
 describe("createInteractionHandler approval buttons", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -149,7 +161,7 @@ describe("createInteractionHandler approval buttons", () => {
       { appId: "app", clientSecret: "secret" },
       "interaction-1",
       0,
-      { content: "You are not authorized to approve this request." },
+      { content: genericDenial },
     );
     expect(resolveApprovalMock).not.toHaveBeenCalled();
   });
@@ -177,7 +189,7 @@ describe("createInteractionHandler approval buttons", () => {
       { appId: "app", clientSecret: "secret" },
       "interaction-1",
       0,
-      { content: "You are not authorized to approve this request." },
+      { content: genericDenial },
     );
     expect(resolveApprovalMock).not.toHaveBeenCalled();
   });
@@ -244,7 +256,7 @@ describe("createInteractionHandler approval buttons", () => {
       { appId: "app", clientSecret: "secret" },
       "interaction-1",
       0,
-      { content: "You are not authorized to approve this request." },
+      { content: genericDenial },
     );
     expect(resolveApprovalMock).not.toHaveBeenCalled();
   });
@@ -434,7 +446,7 @@ describe("createInteractionHandler approval buttons", () => {
       { appId: "app", clientSecret: "secret" },
       "interaction-1",
       0,
-      { content: "You are not authorized to approve this request." },
+      { content: genericDenial },
     );
     expect(resolveApprovalMock).not.toHaveBeenCalled();
   });
@@ -478,11 +490,125 @@ describe("createInteractionHandler approval buttons", () => {
         { appId: "app", clientSecret: "secret" },
         "interaction-1",
         0,
-        { content: "You are not authorized to approve this request." },
+        { content: genericDenial },
       );
       expect(resolveApprovalMock).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    [
+      "no allowlist",
+      {
+        channels: {
+          qqbot: {
+            appId: "app",
+            clientSecret: "secret",
+          },
+        },
+      },
+    ],
+    [
+      "wildcard allowlist",
+      {
+        channels: {
+          qqbot: {
+            appId: "app",
+            clientSecret: "secret",
+            allowFrom: ["*"],
+          },
+        },
+      },
+    ],
+  ] satisfies Array<[string, OpenClawConfig]>)(
+    "rejects fallback approval buttons in direct (C2C) conversations when %s does not grant command auth",
+    async (_name, cfg) => {
+      const handler = createInteractionHandler(account, runtime, undefined, {
+        getActiveCfg: () => cfg,
+      });
+
+      handler(
+        makeApprovalEvent({
+          chat_type: 2,
+          group_openid: undefined,
+          group_member_openid: undefined,
+          user_openid: "C2CUSER_OPENID",
+        }),
+      );
+
+      await vi.waitFor(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
+
+      expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
+        { appId: "app", clientSecret: "secret" },
+        "interaction-1",
+        0,
+        { content: formatC2CApprovalDenialReason("C2CUSER_OPENID") },
+      );
+      expect(resolveApprovalMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("resolves fallback approval buttons in direct (C2C) conversations when the sender has explicit command auth", async () => {
+    const handler = createInteractionHandler(account, runtime, undefined, {
+      getActiveCfg: () =>
+        ({
+          channels: {
+            qqbot: {
+              appId: "app",
+              clientSecret: "secret",
+              allowFrom: ["C2CUSER_OPENID"],
+            },
+          },
+        }) as OpenClawConfig,
+    });
+
+    handler(
+      makeApprovalEvent({
+        chat_type: 2,
+        group_openid: undefined,
+        group_member_openid: undefined,
+        user_openid: "C2CUSER_OPENID",
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(resolveApprovalMock).toHaveBeenCalledWith(expectedApprovalResolve),
+    );
+  });
+
+  it("rejects fallback approval buttons in direct (C2C) conversations when the sender lacks explicit command auth", async () => {
+    const handler = createInteractionHandler(account, runtime, undefined, {
+      getActiveCfg: () =>
+        ({
+          channels: {
+            qqbot: {
+              appId: "app",
+              clientSecret: "secret",
+              allowFrom: ["OWNER_OPENID"],
+            },
+          },
+        }) as OpenClawConfig,
+    });
+
+    handler(
+      makeApprovalEvent({
+        chat_type: 2,
+        group_openid: undefined,
+        group_member_openid: undefined,
+        user_openid: "UNAUTHORIZED_C2CUSER",
+      }),
+    );
+
+    await vi.waitFor(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
+
+    expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
+      { appId: "app", clientSecret: "secret" },
+      "interaction-1",
+      0,
+      { content: formatC2CApprovalDenialReason("UNAUTHORIZED_C2CUSER") },
+    );
+    expect(resolveApprovalMock).not.toHaveBeenCalled();
+  });
 
   it("rejects fallback approval buttons without a trusted actor id", async () => {
     const handler = createInteractionHandler(account, runtime, undefined, {
@@ -497,7 +623,7 @@ describe("createInteractionHandler approval buttons", () => {
       { appId: "app", clientSecret: "secret" },
       "interaction-1",
       0,
-      { content: "You are not authorized to approve this request." },
+      { content: genericDenial },
     );
     expect(resolveApprovalMock).not.toHaveBeenCalled();
   });
