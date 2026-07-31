@@ -499,6 +499,20 @@ describe("splitMediaFromOutput", () => {
     });
   });
 
+  it("preserves blank lines inside an indented code block after a media directive", () => {
+    expectParsedMediaOutputCase(
+      "MEDIA:https://example.com/chart.png\n    const first = 1;\n\n    const second = 2;",
+      {
+        text: "    const first = 1;\n\n    const second = 2;",
+        mediaUrls: ["https://example.com/chart.png"],
+        segments: [
+          { type: "media", url: "https://example.com/chart.png" },
+          { type: "text", text: "    const first = 1;\n\n    const second = 2;" },
+        ],
+      },
+    );
+  });
+
   it("preserves code indentation and paragraph breaks around extracted markdown images", () => {
     const input = [
       "Rendered the chart, and here is the code behind it.",
