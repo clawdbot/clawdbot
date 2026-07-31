@@ -327,7 +327,7 @@ describe("llama.cpp inference provider", () => {
     expect(mocks.generateResponse.mock.calls[0]?.[1]).not.toHaveProperty("grammar");
   });
 
-  it("emits native function calls in the final assistant message", async () => {
+  it("streams the complete lifecycle for native function calls", async () => {
     mocks.generateResponse.mockResolvedValueOnce({
       response: "",
       functionCalls: [{ functionName: "weather", params: { city: "Paris" }, raw: [] }],
@@ -346,7 +346,31 @@ describe("llama.cpp inference provider", () => {
 
     const events = await collectEvents(stream);
 
-    expect(events.map((event) => event.type)).toEqual(["done"]);
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+      "done",
+    ]);
+    const toolCallStart = events[1];
+    const toolCallDelta = events[2];
+    const toolCallEnd = events[3];
+    expect(toolCallStart).toMatchObject({
+      type: "toolcall_start",
+      contentIndex: 0,
+      partial: { content: [{ type: "toolCall", name: "weather", arguments: {} }] },
+    });
+    expect(toolCallDelta).toMatchObject({
+      type: "toolcall_delta",
+      contentIndex: 0,
+      delta: '{"city":"Paris"}',
+    });
+    expect(toolCallEnd).toMatchObject({
+      type: "toolcall_end",
+      contentIndex: 0,
+      toolCall: { name: "weather", arguments: { city: "Paris" } },
+    });
     expect(events.at(-1)).toMatchObject({
       type: "done",
       reason: "toolUse",
@@ -362,6 +386,170 @@ describe("llama.cpp inference provider", () => {
       },
     });
     expect(mocks.llama.createGrammarForJsonSchema).not.toHaveBeenCalled();
+  });
+
+  it("streams split native arguments with stable ids after mixed text", async () => {
+    mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
+      options.onTextChunk("Checking both.");
+      options.onFunctionCallParamsChunk({
+        callIndex: 0,
+        functionName: "weather",
+        paramsChunk: '{"city":',
+        done: false,
+      });
+      options.onFunctionCallParamsChunk({
+        callIndex: 0,
+        functionName: "weather",
+        paramsChunk: '"Paris"}',
+        done: true,
+      });
+      options.onFunctionCallParamsChunk({
+        callIndex: 1,
+        functionName: "calendar",
+        paramsChunk: '{"day":"today"}',
+        done: true,
+      });
+      return {
+        response: "Checking both.",
+        functionCalls: [
+          { functionName: "weather", params: { city: "Paris" }, raw: [] },
+          { functionName: "calendar", params: { day: "today" }, raw: [] },
+        ],
+        metadata: { stopReason: "functionCalls" },
+      };
+    });
+
+    const stream = await createLlamaCppStreamFn({})(model, {
+      messages: [{ role: "user", content: "Check both", timestamp: 1 }],
+      tools: [
+        { name: "weather", description: "Weather", parameters: { type: "object" } },
+        { name: "calendar", description: "Calendar", parameters: { type: "object" } },
+      ],
+    });
+    const events = await collectEvents(stream);
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_delta",
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+      "toolcall_end",
+      "done",
+    ]);
+    const toolDeltas = events.filter((event) => event.type === "toolcall_delta");
+    expect(toolDeltas).toMatchObject([
+      { contentIndex: 1, delta: '{"city":', partial: { content: [{}, { arguments: {} }] } },
+      {
+        contentIndex: 1,
+        delta: '"Paris"}',
+        partial: { content: [{}, { arguments: { city: "Paris" } }] },
+      },
+      {
+        contentIndex: 2,
+        delta: '{"day":"today"}',
+        partial: { content: [{}, {}, { arguments: { day: "today" } }] },
+      },
+    ]);
+    const toolEnds = events.filter((event) => event.type === "toolcall_end");
+    expect(toolEnds).toMatchObject([
+      { contentIndex: 1, toolCall: { name: "weather", arguments: { city: "Paris" } } },
+      { contentIndex: 2, toolCall: { name: "calendar", arguments: { day: "today" } } },
+    ]);
+    const done = events.at(-1);
+    expect(done).toMatchObject({
+      type: "done",
+      reason: "toolUse",
+      message: {
+        content: [
+          { type: "text", text: "Checking both." },
+          { type: "toolCall", name: "weather", arguments: { city: "Paris" } },
+          { type: "toolCall", name: "calendar", arguments: { day: "today" } },
+        ],
+      },
+    });
+    if (done?.type === "done") {
+      expect(toolEnds.map((event) => event.toolCall.id)).toEqual(
+        done.message.content
+          .filter((content) => content.type === "toolCall")
+          .map((content) => content.id),
+      );
+    }
+  });
+
+  it("never completes or executes an interrupted native call at the token limit", async () => {
+    mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
+      options.onFunctionCallParamsChunk({
+        callIndex: 0,
+        functionName: "weather",
+        paramsChunk: '{"city":',
+        done: false,
+      });
+      return {
+        response: "",
+        functionCalls: undefined,
+        metadata: { stopReason: "maxTokens" },
+      };
+    });
+
+    const events = await collectEvents(
+      await createLlamaCppStreamFn({})(model, {
+        messages: [{ role: "user", content: "Weather?", timestamp: 1 }],
+        tools: [{ name: "weather", description: "Weather", parameters: { type: "object" } }],
+      }),
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      reason: "length",
+      message: { content: [], stopReason: "length" },
+    });
+  });
+
+  it("never completes a native call when its final argument reaches the token limit", async () => {
+    mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
+      options.onFunctionCallParamsChunk({
+        callIndex: 0,
+        functionName: "weather",
+        paramsChunk: '{"city":"Paris"}',
+        done: true,
+      });
+      return {
+        response: "",
+        functionCalls: undefined,
+        metadata: { stopReason: "maxTokens" },
+      };
+    });
+
+    const events = await collectEvents(
+      await createLlamaCppStreamFn({})(model, {
+        messages: [{ role: "user", content: "Weather?", timestamp: 1 }],
+        tools: [{ name: "weather", description: "Weather", parameters: { type: "object" } }],
+      }),
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      reason: "length",
+      message: { content: [], stopReason: "length" },
+    });
   });
 
   it.each([

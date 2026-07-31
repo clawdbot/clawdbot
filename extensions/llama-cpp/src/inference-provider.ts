@@ -5,6 +5,7 @@ import type {
   Llama,
   LlamaContext,
   LlamaContextSequence,
+  LlamaChatResponseFunctionCallParamsChunk,
   LlamaModel,
 } from "node-llama-cpp";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
@@ -15,7 +16,7 @@ import type {
   ToolCall,
   Usage,
 } from "openclaw/plugin-sdk/llm";
-import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream, parseStreamingJson } from "openclaw/plugin-sdk/llm";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createPlainTextToolCallCompatWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
@@ -344,24 +345,90 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
         });
         const before = sequence.tokenMeter.getState();
         const functions = mapToolsToLlamaFunctions(context);
+        const streamedToolCalls = new Map<
+          number,
+          { toolCall: ToolCall; contentIndex: number; partialArgs: string }
+        >();
+        let streamStarted = false;
         let textStarted = false;
+        let textEnded = false;
         const partial = () =>
           buildMessage({
             model,
-            content: streamedText ? [{ type: "text", text: streamedText }] : [],
+            content: [
+              ...(streamedText ? [{ type: "text" as const, text: streamedText }] : []),
+              ...Array.from(streamedToolCalls.values(), ({ toolCall }) => toolCall),
+            ],
             stopReason: "stop",
           });
+        const ensureStreamStarted = () => {
+          if (streamStarted) {
+            return;
+          }
+          streamStarted = true;
+          stream.push({ type: "start", partial: partial() });
+        };
+        const closeTextBlock = () => {
+          if (!textStarted || textEnded) {
+            return;
+          }
+          textEnded = true;
+          stream.push({
+            type: "text_end",
+            contentIndex: 0,
+            content: streamedText,
+            partial: partial(),
+          });
+        };
         const appendTextDelta = (delta: string) => {
           if (!delta) {
             return;
           }
           if (!textStarted) {
+            ensureStreamStarted();
             textStarted = true;
-            stream.push({ type: "start", partial: partial() });
             stream.push({ type: "text_start", contentIndex: 0, partial: partial() });
           }
           streamedText += delta;
           stream.push({ type: "text_delta", contentIndex: 0, delta });
+        };
+        const appendFunctionCallParamsChunk = (chunk: LlamaChatResponseFunctionCallParamsChunk) => {
+          closeTextBlock();
+          let state = streamedToolCalls.get(chunk.callIndex);
+          if (!state) {
+            ensureStreamStarted();
+            state = {
+              toolCall: {
+                type: "toolCall",
+                id: `llama_cpp_call_${randomUUID()}`,
+                name: chunk.functionName,
+                arguments: {},
+              },
+              contentIndex: (streamedText ? 1 : 0) + streamedToolCalls.size,
+              partialArgs: "",
+            };
+            streamedToolCalls.set(chunk.callIndex, state);
+            stream.push({
+              type: "toolcall_start",
+              contentIndex: state.contentIndex,
+              partial: partial(),
+            });
+          }
+          if (chunk.paramsChunk) {
+            state.partialArgs += chunk.paramsChunk;
+            // Replace the block so already queued partial snapshots retain the
+            // exact argument state they exposed before this streamed delta.
+            state.toolCall = {
+              ...state.toolCall,
+              arguments: parseStreamingJson(state.partialArgs),
+            };
+            stream.push({
+              type: "toolcall_delta",
+              contentIndex: state.contentIndex,
+              delta: chunk.paramsChunk,
+              partial: partial(),
+            });
+          }
         };
         try {
           // node-llama-cpp makes grammar and functions mutually exclusive. Tool
@@ -380,7 +447,11 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
             customStopTriggers: options?.stop,
             onTextChunk: appendTextDelta,
             ...(functions
-              ? { functions, documentFunctionParams: true as const }
+              ? {
+                  functions,
+                  documentFunctionParams: true as const,
+                  onFunctionCallParamsChunk: appendFunctionCallParamsChunk,
+                }
               : grammar
                 ? { grammar }
                 : {}),
@@ -397,24 +468,43 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
           if (!streamedText && result.response) {
             appendTextDelta(result.response);
           }
-          const content: AssistantMessage["content"] = streamedText
-            ? [{ type: "text", text: streamedText }]
-            : [];
-          if (textStarted) {
+          closeTextBlock();
+          const toolCalls: ToolCall[] = (result.functionCalls ?? []).map((call, callIndex) => {
+            let state = streamedToolCalls.get(callIndex);
+            const argumentsObject = normalizeArguments(call.params);
+            if (!state) {
+              appendFunctionCallParamsChunk({
+                callIndex,
+                functionName: call.functionName,
+                paramsChunk: JSON.stringify(argumentsObject),
+                done: true,
+              });
+              state = streamedToolCalls.get(callIndex);
+            }
+            if (!state) {
+              throw new Error("llama.cpp native tool call stream state is missing");
+            }
+            state.toolCall = {
+              ...state.toolCall,
+              name: call.functionName,
+              arguments: argumentsObject,
+            };
+            // The dependency reports its final argument chunk before checking the
+            // token budget; only this authoritative result can complete a call.
             stream.push({
-              type: "text_end",
-              contentIndex: 0,
-              content: streamedText,
+              type: "toolcall_end",
+              contentIndex: state.contentIndex,
+              toolCall: state.toolCall,
               partial: partial(),
             });
-          }
-          const toolCalls: ToolCall[] = (result.functionCalls ?? []).map((call) => ({
-            type: "toolCall",
-            id: `llama_cpp_call_${randomUUID()}`,
-            name: call.functionName,
-            arguments: normalizeArguments(call.params),
-          }));
-          content.push(...toolCalls);
+            return state.toolCall;
+          });
+          // A length terminal cancels unfinished argument blocks. Emitting an
+          // artificial toolcall_end here would expose a partial call as executable.
+          const content: AssistantMessage["content"] = [
+            ...(streamedText ? [{ type: "text" as const, text: streamedText }] : []),
+            ...toolCalls,
+          ];
           const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
             toolCalls.length > 0
               ? "toolUse"
