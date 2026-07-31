@@ -284,7 +284,7 @@ function resolveDeltaPayload(text: string, previousText: string | undefined) {
   return { deltaText: text.slice(previousText.length) };
 }
 
-function createQueuedRunReadiness(predecessor?: Promise<void>) {
+function createQueuedRunReadiness(predecessor?: QueuedSessionRun) {
   let resolveReady!: () => void;
   const promise = new Promise<void>((ready) => {
     resolveReady = ready;
@@ -298,7 +298,11 @@ function createQueuedRunReadiness(predecessor?: Promise<void>) {
       }
       settled = true;
       // A canceled queue slot must keep later turns behind its live predecessor.
-      void (predecessor?.then(resolveReady, resolveReady) ?? resolveReady());
+      void (predecessor
+        ? Promise.allSettled([predecessor.run.queuedRunReady, predecessor.promise]).then(
+            resolveReady,
+          )
+        : resolveReady());
     },
   };
 }
@@ -521,7 +525,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       }
     }
     const controller = new AbortController();
-    const queuedRunReadiness = createQueuedRunReadiness(queuedAfter?.promise);
+    const queuedRunReadiness = createQueuedRunReadiness(queuedAfter);
     this.runs.set(runId, {
       sessionKey: opts.sessionKey,
       agentId,
@@ -1199,9 +1203,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private clearPendingLifecycleErrors() {
-    for (const pending of this.pendingLifecycleErrors.values()) {
-      clearTimeout(pending);
-    }
+    this.pendingLifecycleErrors.forEach(clearTimeout);
     this.pendingLifecycleErrors.clear();
   }
 
@@ -1281,9 +1283,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
     run: LocalRunState,
     metadata: Partial<Parameters<typeof buildAgentRunTerminalOutcome>[0]> & {
       aborted?: unknown;
+      phase?: unknown;
       toolErrorSummary?: unknown;
     },
-    options: { phase?: string; visibleText?: string; deferError?: boolean } = {},
+    options: {
+      visibleText?: string;
+      terminalOutcome?: ReturnType<typeof buildAgentRunTerminalOutcome>;
+    } = {},
   ): boolean {
     const aborted =
       typeof metadata.aborted === "boolean" ? metadata.aborted : run.controller.signal.aborted;
@@ -1293,23 +1299,23 @@ export class EmbeddedTuiBackend implements TuiBackend {
         ? metadata.error.message
         : metadata.error;
     const outcome =
-      "reason" in metadata
-        ? (metadata as ReturnType<typeof buildAgentRunTerminalOutcome>)
-        : buildAgentRunTerminalOutcome({
-            status:
-              stopReason === "timeout" || metadata.status === "timeout" || metadata.timeoutPhase
-                ? "timeout"
-                : aborted ||
-                    metadata.error ||
-                    [metadata.status, options.phase, stopReason].includes("error")
-                  ? "error"
-                  : "ok",
-            error: terminalError ? formatTuiErrorMessage(terminalError) : undefined,
-            stopReason,
-            livenessState: metadata.livenessState,
-            timeoutPhase: metadata.timeoutPhase,
-            providerStarted: metadata.providerStarted,
-          });
+      options.terminalOutcome ??
+      buildAgentRunTerminalOutcome({
+        status:
+          stopReason === "timeout" || metadata.status === "timeout" || metadata.timeoutPhase
+            ? "timeout"
+            : aborted ||
+                metadata.error ||
+                metadata.phase === "error" ||
+                [metadata.status, stopReason].includes("error")
+              ? "error"
+              : "ok",
+        error: terminalError ? formatTuiErrorMessage(terminalError) : undefined,
+        stopReason,
+        livenessState: metadata.livenessState,
+        timeoutPhase: metadata.timeoutPhase,
+        providerStarted: metadata.providerStarted,
+      });
     if (outcome.reason === "completed") {
       return false;
     }
@@ -1323,7 +1329,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           (outcome.reason === "hard_timeout"
             ? "The provider timed out. Please try again."
             : "Agent run failed.");
-    if (options.deferError && state === "error") {
+    if (metadata.phase === "error" && state === "error") {
       this.scheduleChatError(runId, run, diagnostic);
     } else {
       this.emitChatTerminal(runId, run, state, diagnostic);
@@ -1412,12 +1418,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (phase === "error") {
       run.buffer = "";
     }
-    if (
-      this.projectTerminalOutcome(evt.runId, run, evt.data, {
-        phase,
-        deferError: phase === "error",
-      })
-    ) {
+    if (this.projectTerminalOutcome(evt.runId, run, evt.data)) {
       return;
     }
     run.lifecycleEnded = true;
@@ -1582,8 +1583,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
       this.projectTerminalOutcome(
         params.runId,
         run,
-        outcome ?? { error: errorMessage },
-        outcome ? {} : { phase: "error" },
+        outcome ?? { status: "error", error: errorMessage },
+        outcome ? { terminalOutcome: outcome } : {},
       );
     } finally {
       this.runs.get(params.runId)?.markQueuedRunReady();

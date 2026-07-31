@@ -1464,7 +1464,7 @@ describe("EmbeddedTuiBackend", () => {
     expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps later queued turns behind the active provider when an intermediate turn is canceled", async () => {
+  it("keeps later queued turns behind the active provider when intermediate turns are canceled", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const active = deferred<{ payloads: Array<{ text: string }>; meta: Record<string, unknown> }>();
     let activeSignal: AbortSignal | undefined;
@@ -1501,6 +1501,11 @@ describe("EmbeddedTuiBackend", () => {
       message: "third",
       runId: "queue-third",
     });
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "fourth",
+      runId: "queue-fourth",
+    });
     await backend.abortChat({ sessionKey: "agent:main:main", runId: "queue-second" });
     await flushMicrotasks();
 
@@ -1517,11 +1522,25 @@ describe("EmbeddedTuiBackend", () => {
     expect(activeSignal?.aborted).toBe(false);
     expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
 
+    await backend.abortChat({ sessionKey: "agent:main:main", runId: "queue-third" });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: {
+        runId: "queue-third",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        state: "aborted",
+      },
+    });
+    expect(activeSignal?.aborted).toBe(false);
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+
     active.resolve({ payloads: [{ text: "the active turn completed" }], meta: {} });
     await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2));
     expect(agentCommandFromIngressMock.mock.calls[1]?.[0]).toMatchObject({
-      runId: "queue-third",
-      message: "third",
+      runId: "queue-fourth",
+      message: "fourth",
     });
   });
 
@@ -2013,6 +2032,7 @@ describe("EmbeddedTuiBackend", () => {
       label: "a provider timeout after mechanical cancellation",
       lifecycle: {
         phase: "end",
+        reason: "transport_cleanup",
         aborted: true,
         stopReason: "timeout",
         timeoutPhase: "provider",
@@ -2217,6 +2237,55 @@ describe("EmbeddedTuiBackend", () => {
         state: "aborted",
       },
     });
+  });
+
+  it.each([
+    {
+      label: "an unrelated completed reason during an actual abort",
+      data: { phase: "end", reason: "completed", aborted: true, stopReason: "aborted" },
+      terminal: { state: "aborted" },
+    },
+    {
+      label: "an unrelated cancelled reason during an actual provider error",
+      data: {
+        phase: "end",
+        reason: "cancelled",
+        aborted: false,
+        error: "real provider failure",
+      },
+      terminal: { state: "error", errorMessage: "real provider failure" },
+    },
+  ])("ignores $label in open lifecycle event data", async ({ data, terminal }) => {
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = ({ event, payload }) => events.push({ event, payload });
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "trust canonical facts, not an open reason",
+      runId: "open-lifecycle-reason",
+    });
+
+    registeredListener?.({ runId: "open-lifecycle-reason", stream: "lifecycle", data });
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: {
+        runId: "open-lifecycle-reason",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        ...terminal,
+      },
+    });
+    pending.resolve({ payloads: [{ text: "the provider finally settled" }], meta: {} });
+    await flushMicrotasks();
   });
 
   it("preserves a yielded parent turn in the embedded session projection", async () => {
