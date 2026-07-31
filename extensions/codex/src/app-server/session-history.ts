@@ -3,7 +3,10 @@
  * image payloads before replaying messages into the app-server projector.
  */
 import fs from "node:fs/promises";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  AgentMessage,
+  EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SessionEntry } from "openclaw/plugin-sdk/agent-sessions";
 import {
   buildSessionContext,
@@ -23,11 +26,12 @@ function isMissingFileError(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
 }
 
-type CodexMirroredSessionHistoryTarget = {
+export type CodexMirroredSessionHistoryTarget = {
   agentId?: string;
   sessionFile: string;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
 };
 
 /** Returns sanitized session-context messages for a Codex mirrored session file. */
@@ -78,6 +82,26 @@ export async function readCodexMirroredSessionHistoryMessages(
 async function readCodexMirroredSessionEntries(
   target: CodexMirroredSessionHistoryTarget,
 ): Promise<SessionEntry[]> {
+  if (target.sessionTarget) {
+    const { agentId, sessionId, sessionKey, storePath } = target.sessionTarget;
+    if (
+      !agentId ||
+      !sessionId ||
+      !sessionKey ||
+      !storePath ||
+      sessionId !== target.sessionId ||
+      (target.agentId !== undefined && agentId !== target.agentId) ||
+      (target.sessionKey !== undefined && sessionKey !== target.sessionKey)
+    ) {
+      return [];
+    }
+    return (await readSessionTranscriptEvents({
+      agentId,
+      sessionId,
+      sessionKey,
+      storePath,
+    })) as SessionEntry[];
+  }
   const sqliteMarker = parseSqliteSessionFileMarker(target.sessionFile);
   if (sqliteMarker) {
     if (
