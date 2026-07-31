@@ -300,6 +300,16 @@ impl AuthenticatedSidecarChannel {
         self.instance_id
     }
 
+    #[must_use]
+    pub const fn role(&self) -> SidecarPeerRole {
+        self.role
+    }
+
+    #[must_use]
+    pub const fn max_frame_bytes(&self) -> u32 {
+        self.max_frame_bytes
+    }
+
     /// Apply the negotiated frame ceiling without resetting channel sequence.
     ///
     /// # Errors

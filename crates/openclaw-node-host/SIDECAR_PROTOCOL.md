@@ -89,25 +89,36 @@ all 53 bits. JavaScript and TypeScript implementations must convert both masks
 to `BigInt` before `&` and convert the bounded result back to `Number`; their
 native number `&` operator truncates operands to 32 bits and is not conformant.
 
-The offer and acceptance are application payloads carried in authenticated
-frames. Higher layers must complete negotiation before accepting credentials,
-configuration, capability registration, or invocation traffic.
+The supervisor initiates with an authenticated `offer`. The runtime
+independently negotiates against its local offer and replies with one
+authenticated `accept` containing its offer and the selected parameters. The
+supervisor independently recomputes the selection; a mismatch is terminal.
+Both peers lower the already-sequenced channel only after the acceptance is
+encoded or verified, so the larger bootstrap ceiling cannot persist and
+sequence state is never reset.
+
+The `SidecarHandshake` state machine accepts only this two-frame ordering.
+Wrong roles, incompatible versions, malformed/authentication failures, forged
+selection, repeated/out-of-order messages, and unencodable bootstrap messages
+retire the handshake and channel. Negotiation must complete before accepting
+credentials, configuration, capability registration, or invocation traffic.
 
 ## Cross-language vector
 
 [`node-sidecar-protocol-v1.json`](../../test/fixtures/node-sidecar-protocol-v1.json)
-contains a test-only session key, payload, and exact encoded frame. Rust tests
-both reproduce and decode it.
+contains a test-only session key, payload, and exact encoded data frame.
 [`node-sidecar-negotiation-v1.json`](../../test/fixtures/node-sidecar-negotiation-v1.json)
-exercises a feature bit above the 32-bit JavaScript bitwise range. Every
-non-Rust adapter must consume both vectors before it can be selected as a
-runtime.
+exercises a feature bit above the 32-bit JavaScript bitwise range.
+[`node-sidecar-handshake-v1.json`](../../test/fixtures/node-sidecar-handshake-v1.json)
+contains both offers, the independently derived selection, and exact offer and
+accept frames. Rust tests reproduce and decode every vector. Every non-Rust
+adapter must consume the same vectors before it can be selected as a runtime.
 
 ## Not yet implemented
 
-This slice deliberately excludes the typed supervisor/runtime messages,
-handshake state machine, node-runtime bridge, native capability dispatch,
-product audit adapter, process supervision, restart/rollback policy, and
-production credential storage. Those concerns build on this framing contract;
-they must not weaken its authentication, bounds, generation, sequencing, or
-fail-closed behavior.
+This slice deliberately excludes post-handshake configuration and invocation
+messages, the node-runtime bridge, native capability dispatch, product audit
+adapter, process supervision, restart/rollback policy, and production
+credential storage. Those concerns build on this framing and handshake
+contract; they must not weaken its authentication, bounds, generation,
+sequencing, or fail-closed behavior.

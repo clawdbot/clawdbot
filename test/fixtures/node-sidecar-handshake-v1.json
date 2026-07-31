@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "session": {
+    "id": "handshake-session",
+    "generation": 9,
+    "keyBase64": "PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw8PDw="
+  },
+  "supervisorOffer": {
+    "protocolMajor": 1,
+    "protocolMinor": 0,
+    "peer": {
+      "role": "supervisor",
+      "name": "test-product",
+      "version": "1.0.0",
+      "artifactIdentity": "sha256:test-only"
+    },
+    "featureBits": 7,
+    "limits": {
+      "maxFrameBytes": 4096,
+      "maxInFlight": 8,
+      "bootstrapTimeoutMs": 1000
+    }
+  },
+  "runtimeOffer": {
+    "protocolMajor": 1,
+    "protocolMinor": 0,
+    "peer": {
+      "role": "runtime",
+      "name": "openclaw-node",
+      "version": "1.0.0",
+      "artifactIdentity": "sha256:test-only"
+    },
+    "featureBits": 11,
+    "limits": {
+      "maxFrameBytes": 2048,
+      "maxInFlight": 8,
+      "bootstrapTimeoutMs": 1000
+    }
+  },
+  "selection": {
+    "protocolMajor": 1,
+    "protocolMinor": 0,
+    "featureBits": 3,
+    "limits": {
+      "maxFrameBytes": 2048,
+      "maxInFlight": 8,
+      "bootstrapTimeoutMs": 1000
+    }
+  },
+  "offerFrameBase64": "T0NTQwABAAABAAAAAAAAAAkAAAAAAAAAAQARAAABA2hhbmRzaGFrZS1zZXNzaW9ueyJ0eXBlIjoib2ZmZXIiLCJvZmZlciI6eyJwcm90b2NvbE1ham9yIjoxLCJwcm90b2NvbE1pbm9yIjowLCJwZWVyIjp7InJvbGUiOiJzdXBlcnZpc29yIiwibmFtZSI6InRlc3QtcHJvZHVjdCIsInZlcnNpb24iOiIxLjAuMCIsImFydGlmYWN0SWRlbnRpdHkiOiJzaGEyNTY6dGVzdC1vbmx5In0sImZlYXR1cmVCaXRzIjo3LCJsaW1pdHMiOnsibWF4RnJhbWVCeXRlcyI6NDA5NiwibWF4SW5GbGlnaHQiOjgsImJvb3RzdHJhcFRpbWVvdXRNcyI6MTAwMH19fTSxSPVri786qBe92/qj1NGhn0efEyqVJfiZrCOdLbr1",
+  "acceptFrameBase64": "T0NTQwABAAACAAAAAAAAAAkAAAAAAAAAAQARAAABj2hhbmRzaGFrZS1zZXNzaW9ueyJ0eXBlIjoiYWNjZXB0Iiwib2ZmZXIiOnsicHJvdG9jb2xNYWpvciI6MSwicHJvdG9jb2xNaW5vciI6MCwicGVlciI6eyJyb2xlIjoicnVudGltZSIsIm5hbWUiOiJvcGVuY2xhdy1ub2RlIiwidmVyc2lvbiI6IjEuMC4wIiwiYXJ0aWZhY3RJZGVudGl0eSI6InNoYTI1Njp0ZXN0LW9ubHkifSwiZmVhdHVyZUJpdHMiOjExLCJsaW1pdHMiOnsibWF4RnJhbWVCeXRlcyI6MjA0OCwibWF4SW5GbGlnaHQiOjgsImJvb3RzdHJhcFRpbWVvdXRNcyI6MTAwMH19LCJzZWxlY3Rpb24iOnsicHJvdG9jb2xNYWpvciI6MSwicHJvdG9jb2xNaW5vciI6MCwiZmVhdHVyZUJpdHMiOjMsImxpbWl0cyI6eyJtYXhGcmFtZUJ5dGVzIjoyMDQ4LCJtYXhJbkZsaWdodCI6OCwiYm9vdHN0cmFwVGltZW91dE1zIjoxMDAwfX19DY3CiBg6igkouQFlG07FuMhFJuNEFCONtdVA6glc5tU="
+}

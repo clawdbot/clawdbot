@@ -14,6 +14,7 @@ mod lifecycle;
 mod node;
 mod reconnect;
 mod runtime;
+mod sidecar_handshake;
 mod sidecar_protocol;
 
 pub use duplex::InvocationIo;
@@ -35,6 +36,10 @@ pub use reconnect::{
 pub use runtime::{
     CancellationToken, CommandRuntime, CommandRuntimeBuilder, HandlerError,
     InvocationAdmissionContext, InvocationContext, RuntimeBuildError, RuntimeError,
+};
+pub use sidecar_handshake::{
+    SidecarHandshake, SidecarHandshakeError, SidecarHandshakeMessage, SidecarHandshakeState,
+    SidecarProtocolSelection,
 };
 pub use sidecar_protocol::{
     negotiate_sidecar_protocol, read_sidecar_frame, write_sidecar_frame,
