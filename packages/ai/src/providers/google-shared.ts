@@ -747,6 +747,8 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
   params.stream.push({ type: "start", partial: params.output });
   let currentBlock: TextContent | ThinkingContent | null = null;
   const blocks = params.output.content;
+  let sawTerminalReason = false;
+  let terminalGenerationError: (Error & { code: string; type: string }) | undefined;
   const toolCallIds = new Set<string>();
   for (const block of blocks) {
     if (block.type === "toolCall") {
@@ -780,16 +782,19 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
   for await (const chunk of params.chunks) {
     params.output.responseId ||= chunk.responseId;
     if (chunk.usageMetadata) {
+      const promptTokens = chunk.usageMetadata.promptTokenCount || 0;
+      const cacheRead = chunk.usageMetadata.cachedContentTokenCount || 0;
+      const toolUsePromptTokens = chunk.usageMetadata.toolUsePromptTokenCount || 0;
+      const outputTokens =
+        (chunk.usageMetadata.candidatesTokenCount || 0) +
+        (chunk.usageMetadata.thoughtsTokenCount || 0);
       params.output.usage = {
-        input:
-          (chunk.usageMetadata.promptTokenCount || 0) -
-          (chunk.usageMetadata.cachedContentTokenCount || 0),
-        output:
-          (chunk.usageMetadata.candidatesTokenCount || 0) +
-          (chunk.usageMetadata.thoughtsTokenCount || 0),
-        cacheRead: chunk.usageMetadata.cachedContentTokenCount || 0,
+        input: promptTokens - cacheRead + toolUsePromptTokens,
+        output: outputTokens,
+        cacheRead,
         cacheWrite: 0,
-        totalTokens: chunk.usageMetadata.totalTokenCount || 0,
+        totalTokens:
+          chunk.usageMetadata.totalTokenCount ?? promptTokens + outputTokens + toolUsePromptTokens,
         cost: {
           input: 0,
           output: 0,
@@ -813,6 +818,16 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
     }
     if (candidate?.content?.parts) {
       for (const part of candidate.content.parts) {
+        if (part.text === undefined && !part.functionCall && part.thought !== true) {
+          const latestBlock = blocks.at(-1);
+          if (latestBlock?.type === "toolCall" && part.thoughtSignature) {
+            latestBlock.thoughtSignature = retainThoughtSignature(
+              latestBlock.thoughtSignature,
+              part.thoughtSignature,
+            );
+            continue;
+          }
+        }
         if (part.text !== undefined) {
           const isThinking = isThinkingPart(part);
           if (
@@ -902,7 +917,17 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
     }
 
     if (candidate?.finishReason) {
+      sawTerminalReason = true;
       params.output.stopReason = mapStopReason(candidate.finishReason);
+      if (params.output.stopReason === "error") {
+        const finishMessage = candidate.finishMessage?.trim();
+        terminalGenerationError = Object.assign(
+          new Error(
+            `Google generation stopped (${candidate.finishReason})${finishMessage ? `: ${finishMessage}` : ""}`,
+          ),
+          { code: candidate.finishReason, type: "google_generation_failed" },
+        );
+      }
       // MAX_TOKENS can leave a complete-looking partial call. Only a normal
       // Google stop may promote parsed calls into an executable tool-use turn.
       if (
@@ -918,6 +943,18 @@ export async function consumeGoogleGenerateContentStream<T extends GoogleApiType
 
   if (params.signal?.aborted) {
     throw transportAbortError(params.signal);
+  }
+
+  if (terminalGenerationError) {
+    params.output.errorCode = terminalGenerationError.code;
+    params.output.errorType = terminalGenerationError.type;
+    throw terminalGenerationError;
+  }
+
+  if (!sawTerminalReason) {
+    params.output.errorCode = "STREAM_INCOMPLETE";
+    params.output.errorType = "google_incomplete_stream";
+    throw new Error("Google stream ended before a terminal finish reason");
   }
 
   if (params.output.stopReason === "aborted" || params.output.stopReason === "error") {
