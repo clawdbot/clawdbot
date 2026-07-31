@@ -55,6 +55,11 @@ The frame limit includes the authentication tag and excludes the outer length
 prefix. The sender and receiver use the same session key; direction is part of
 the authenticated header and prevents reflection between peers.
 
+Outbound JSON is serialized directly into the final frame through the local
+ceiling. Serialization stops on the first write that would consume the bytes
+reserved for the authentication tag; an oversized payload is never fully
+materialized or copied into a second plaintext buffer.
+
 A receiver verifies the frame-size ceiling and HMAC before interpreting any
 untrusted header or payload field. It then verifies version, direction,
 generation, exact next sequence, session identifier, internal lengths, and

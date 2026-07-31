@@ -21,6 +21,7 @@ pub const SIDECAR_PROTOCOL_MINOR: u16 = 0;
 const FRAME_MAGIC: [u8; 4] = *b"OCSC";
 const AUTH_TAG_BYTES: usize = 32;
 const FIXED_HEADER_BYTES: usize = 4 + 2 + 2 + 1 + 8 + 8 + 2 + 4;
+const PAYLOAD_LENGTH_OFFSET: usize = 4 + 2 + 2 + 1 + 8 + 8 + 2;
 const MIN_FRAME_BYTES: u32 = 65;
 #[cfg(test)]
 const LENGTH_PREFIX_BYTES: usize = 4;
@@ -308,30 +309,22 @@ impl AuthenticatedSidecarChannel {
             .send_sequence
             .checked_add(1)
             .ok_or(SidecarFrameError::SequenceExhausted)?;
-        let payload = serde_json::to_vec(payload).map_err(SidecarFrameError::Serialize)?;
         let session_id = self.session_id.as_bytes();
-        let payload_len =
-            u32::try_from(payload.len()).map_err(|_| SidecarFrameError::FrameTooLarge {
-                size: u64::MAX,
-                limit: self.max_frame_bytes,
-            })?;
-
-        let capacity = FIXED_HEADER_BYTES
+        let minimum_capacity = FIXED_HEADER_BYTES
             .checked_add(session_id.len())
-            .and_then(|size| size.checked_add(payload.len()))
             .and_then(|size| size.checked_add(AUTH_TAG_BYTES))
             .ok_or(SidecarFrameError::FrameTooLarge {
                 size: u64::MAX,
                 limit: self.max_frame_bytes,
             })?;
-        if capacity > self.max_frame_bytes as usize {
+        if minimum_capacity >= self.max_frame_bytes as usize {
             return Err(SidecarFrameError::FrameTooLarge {
-                size: capacity as u64,
+                size: minimum_capacity.saturating_add(1) as u64,
                 limit: self.max_frame_bytes,
             });
         }
 
-        let mut frame = Vec::with_capacity(capacity);
+        let mut frame = Vec::with_capacity(minimum_capacity);
         frame.extend_from_slice(&FRAME_MAGIC);
         frame.extend_from_slice(&SIDECAR_PROTOCOL_MAJOR.to_be_bytes());
         frame.extend_from_slice(&SIDECAR_PROTOCOL_MINOR.to_be_bytes());
@@ -341,9 +334,32 @@ impl AuthenticatedSidecarChannel {
         let session_len =
             u16::try_from(session_id.len()).map_err(|_| SidecarFrameError::InvalidSessionId)?;
         frame.extend_from_slice(&session_len.to_be_bytes());
-        frame.extend_from_slice(&payload_len.to_be_bytes());
+        frame.extend_from_slice(&0_u32.to_be_bytes());
         frame.extend_from_slice(session_id);
-        frame.extend_from_slice(&payload);
+
+        let payload_start = frame.len();
+        let max_authenticated_len = self.max_frame_bytes as usize - AUTH_TAG_BYTES;
+        let serialization = {
+            let mut writer = BoundedFrameWriter::new(&mut frame, max_authenticated_len);
+            match serde_json::to_writer(&mut writer, payload) {
+                Ok(()) => Ok(()),
+                Err(_) if writer.exceeded => Err(SidecarFrameError::FrameTooLarge {
+                    size: u64::from(self.max_frame_bytes) + 1,
+                    limit: self.max_frame_bytes,
+                }),
+                Err(error) => Err(SidecarFrameError::Serialize(error)),
+            }
+        };
+        serialization?;
+
+        let payload_len = u32::try_from(frame.len() - payload_start).map_err(|_| {
+            SidecarFrameError::FrameTooLarge {
+                size: u64::MAX,
+                limit: self.max_frame_bytes,
+            }
+        })?;
+        frame[PAYLOAD_LENGTH_OFFSET..PAYLOAD_LENGTH_OFFSET + 4]
+            .copy_from_slice(&payload_len.to_be_bytes());
 
         let mut mac = HmacSha256::new_from_slice(&self.key.0)
             .map_err(|_| SidecarFrameError::Authentication)?;
@@ -439,6 +455,38 @@ impl AuthenticatedSidecarChannel {
         let decoded = serde_json::from_slice(payload).map_err(SidecarFrameError::Deserialize)?;
         self.receive_sequence = sequence;
         Ok(decoded)
+    }
+}
+
+struct BoundedFrameWriter<'a> {
+    frame: &'a mut Vec<u8>,
+    max_len: usize,
+    exceeded: bool,
+}
+
+impl<'a> BoundedFrameWriter<'a> {
+    const fn new(frame: &'a mut Vec<u8>, max_len: usize) -> Self {
+        Self {
+            frame,
+            max_len,
+            exceeded: false,
+        }
+    }
+}
+
+impl std::io::Write for BoundedFrameWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let remaining = self.max_len.saturating_sub(self.frame.len());
+        if bytes.len() > remaining {
+            self.exceeded = true;
+            return Err(std::io::Error::other("sidecar frame limit exceeded"));
+        }
+        self.frame.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -603,8 +651,14 @@ pub enum SidecarFrameError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
     use super::*;
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    use serde::ser::SerializeSeq;
     use serde::Deserialize;
     use serde_json::{json, Value};
     use tokio::io::AsyncWriteExt;
@@ -632,6 +686,24 @@ mod tests {
     struct WireProbe {
         payload: Value,
         frame_base64: String,
+    }
+
+    struct CountingPayload {
+        serialized: Arc<AtomicUsize>,
+    }
+
+    impl Serialize for CountingPayload {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            let mut sequence = serializer.serialize_seq(Some(1_000_000))?;
+            for value in 0..1_000_000_u32 {
+                self.serialized.fetch_add(1, Ordering::Relaxed);
+                sequence.serialize_element(&value)?;
+            }
+            sequence.end()
+        }
     }
 
     fn offer(role: SidecarPeerRole, limits: SidecarLimits) -> SidecarProtocolOffer {
@@ -807,6 +879,41 @@ mod tests {
                 received: 1
             })
         ));
+    }
+
+    #[test]
+    fn outbound_serialization_stops_at_frame_ceiling_without_advancing_sequence() {
+        let serialized = Arc::new(AtomicUsize::new(0));
+        let mut supervisor = AuthenticatedSidecarChannel::new(
+            SidecarPeerRole::Supervisor,
+            "session-7".into(),
+            7,
+            SidecarSessionKey::from_bytes(KEY),
+            128,
+        )
+        .unwrap();
+        let oversized = supervisor.seal(&CountingPayload {
+            serialized: Arc::clone(&serialized),
+        });
+        assert!(matches!(
+            oversized,
+            Err(SidecarFrameError::FrameTooLarge {
+                size: 129,
+                limit: 128
+            })
+        ));
+        assert!(serialized.load(Ordering::Relaxed) < 100);
+
+        let frame = supervisor.seal(&json!({"ok":true})).unwrap();
+        let mut runtime = AuthenticatedSidecarChannel::new(
+            SidecarPeerRole::Runtime,
+            "session-7".into(),
+            7,
+            SidecarSessionKey::from_bytes(KEY),
+            128,
+        )
+        .unwrap();
+        assert_eq!(runtime.open::<Value>(&frame).unwrap(), json!({"ok":true}));
     }
 
     #[test]
