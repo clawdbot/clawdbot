@@ -6,9 +6,9 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe/errors";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { FsSafeError, type FsSafeErrorCode } from "../infra/fs-safe.js";
 import { privateFileStore } from "../infra/private-file-store.js";
 import {
   DEFAULT_INLINE_ATTACHMENT_SNAPSHOT_LIMITS,
