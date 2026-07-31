@@ -6,11 +6,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
+  type ManagedNpmOverrideOmissions,
   readOpenClawManagedNpmRootOverrides,
   syncManagedNpmRootPeerDependencies,
 } from "../infra/npm-managed-root.js";
 import { createSafeNpmInstallEnv } from "../infra/safe-package-install.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { classifyNpmManagedOverrideCompatibilityError } from "./install-managed-npm-state.js";
 import {
   resolveDefaultPluginGitDir,
   resolveDefaultPluginNpmDir,
@@ -43,6 +45,18 @@ export const UNINSTALL_ACTION_LABELS = {
   channelConfig: "channel config",
   directory: "directory",
 } satisfies Record<keyof UninstallActions, string>;
+
+const MANAGED_NPM_PEER_CLEANUP_ARGS = [
+  "npm",
+  "install",
+  "--omit=dev",
+  "--omit=peer",
+  "--loglevel=error",
+  "--legacy-peer-deps",
+  "--ignore-scripts",
+  "--no-audit",
+  "--no-fund",
+] as const;
 
 const UNINSTALL_ACTION_ORDER = [
   "entry",
@@ -80,6 +94,73 @@ export function formatUninstallActionLabels(actions: UninstallActions): string[]
   return UNINSTALL_ACTION_ORDER.flatMap((key) =>
     actions[key] ? [UNINSTALL_ACTION_LABELS[key]] : [],
   );
+}
+
+export async function pruneManagedNpmPeerDependenciesAfterUninstall(params: {
+  npmRoot: string;
+  packageName: string;
+  managedOverrides: Record<string, unknown>;
+  runCommand?: typeof runCommandWithTimeout;
+}): Promise<string | undefined> {
+  const command = params.runCommand ?? runCommandWithTimeout;
+  const commandOptions = {
+    cwd: params.npmRoot,
+    timeoutMs: 300_000,
+    env: createSafeNpmInstallEnv(process.env, {
+      legacyPeerDeps: true,
+      npmConfigCwd: params.npmRoot,
+      packageLock: true,
+      quiet: true,
+    }),
+  };
+  let overrideOmissions: Required<ManagedNpmOverrideOmissions> = {
+    npmAliases: false,
+    pnpmParentChildSelectors: false,
+  };
+  const syncPeerDependencies = async () =>
+    await syncManagedNpmRootPeerDependencies({
+      npmRoot: params.npmRoot,
+      managedOverrides: params.managedOverrides,
+      overrideOmissions,
+      runCommand: command,
+    });
+
+  if (!(await syncPeerDependencies())) {
+    return undefined;
+  }
+
+  let cleanup = await command([...MANAGED_NPM_PEER_CLEANUP_ARGS], commandOptions);
+  while (cleanup.code !== 0) {
+    const compatibility = classifyNpmManagedOverrideCompatibilityError(cleanup);
+    if (!compatibility) {
+      break;
+    }
+    const nextOverrideOmissions = {
+      npmAliases: overrideOmissions.npmAliases === true || compatibility.npmAliases,
+      pnpmParentChildSelectors:
+        overrideOmissions.pnpmParentChildSelectors === true ||
+        compatibility.pnpmParentChildSelectors,
+    };
+    if (
+      nextOverrideOmissions.npmAliases === overrideOmissions.npmAliases &&
+      nextOverrideOmissions.pnpmParentChildSelectors === overrideOmissions.pnpmParentChildSelectors
+    ) {
+      break;
+    }
+    overrideOmissions = nextOverrideOmissions;
+    // The first sync can only rewrite a manifest that npm rejected. Run the
+    // plan again against that compatible manifest so peer pins are refreshed.
+    await syncPeerDependencies();
+    await syncPeerDependencies();
+    cleanup = await command([...MANAGED_NPM_PEER_CLEANUP_ARGS], commandOptions);
+  }
+
+  if (cleanup.code === 0) {
+    return undefined;
+  }
+  return `Failed to prune managed peer dependencies after uninstalling ${params.packageName}: ${
+    cleanup.stderr.trim() || cleanup.stdout.trim() || `npm exited with code ${cleanup.code}`
+  }`;
 }
 
 /** Keep a staged plugin disabled until its managed directory is removed. */
@@ -683,43 +764,13 @@ export async function applyPluginUninstallDirectoryRemoval(
     }
     try {
       const managedOverrides = await readOpenClawManagedNpmRootOverrides();
-      const syncedPeerDependencies = await syncManagedNpmRootPeerDependencies({
+      const warning = await pruneManagedNpmPeerDependenciesAfterUninstall({
         npmRoot: removal.cleanup.npmRoot,
+        packageName: removal.cleanup.packageName,
         managedOverrides,
       });
-      if (syncedPeerDependencies) {
-        const cleanup = await runCommandWithTimeout(
-          [
-            "npm",
-            "install",
-            "--omit=dev",
-            "--omit=peer",
-            "--loglevel=error",
-            "--legacy-peer-deps",
-            "--ignore-scripts",
-            "--no-audit",
-            "--no-fund",
-          ],
-          {
-            cwd: removal.cleanup.npmRoot,
-            timeoutMs: 300_000,
-            env: createSafeNpmInstallEnv(process.env, {
-              legacyPeerDeps: true,
-              npmConfigCwd: removal.cleanup.npmRoot,
-              packageLock: true,
-              quiet: true,
-            }),
-          },
-        );
-        if (cleanup.code !== 0) {
-          warnings.push(
-            `Failed to prune managed peer dependencies after uninstalling ${removal.cleanup.packageName}: ${
-              cleanup.stderr.trim() ||
-              cleanup.stdout.trim() ||
-              `npm exited with code ${cleanup.code}`
-            }`,
-          );
-        }
+      if (warning) {
+        warnings.push(warning);
       }
     } catch (error) {
       warnings.push(
