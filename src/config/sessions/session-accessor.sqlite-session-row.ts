@@ -88,6 +88,7 @@ export function bindSqliteSessionNode(params: {
     session_key: params.sessionKey,
     current_session_id: params.entry.sessionId,
     entry_json: JSON.stringify(canonicalEntry),
+    entry_valid: 1,
     updated_at: params.updatedAt,
     status: normalizeSqliteStatus(params.entry.status),
     created_at: finiteSqliteNumber(params.entry.createdAt),

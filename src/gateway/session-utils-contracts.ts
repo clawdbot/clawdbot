@@ -41,6 +41,7 @@ export type GatewaySessionStoreTarget = {
 };
 
 export type GatewaySessionStoreTargetWithStore = GatewaySessionStoreTarget & {
+  canonicalValidationError?: Error;
   store: Record<string, SessionEntry>;
 };
 

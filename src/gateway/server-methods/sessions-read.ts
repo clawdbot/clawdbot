@@ -62,7 +62,7 @@ import {
   buildGatewaySessionRow,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
-  resolveFreshestSessionEntryFromStoreKeys,
+  resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
   type SessionsPreviewEntry,
@@ -595,7 +595,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           key,
           store,
         });
-        const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
+        const entry = resolveCanonicalSessionEntryFromStoreKeys(store, target.storeKeys);
         if (!entry?.sessionId) {
           previews.push({ key, status: "missing", items: [] });
           continue;
