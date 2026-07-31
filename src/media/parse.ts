@@ -12,18 +12,17 @@ import {
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
-import { normalizeDirectiveWhitespace } from "../utils/directive-whitespace.js";
 import { parseAudioTag } from "./audio-tags.js";
 
 function normalizeMediaVisibleWhitespace(text: string): string {
   if (!text.trim()) {
     return "";
   }
-  const normalized = normalizeDirectiveWhitespace(text);
-  const withoutLeadingBlankLines = normalized.replace(/^(?:[ \t]*\n)+/, "");
-  return /^(?: {4}|\t)/.test(withoutLeadingBlankLines)
-    ? withoutLeadingBlankLines
-    : normalized.trimStart();
+  const withoutLeadingBlankLines = text.replace(/^(?:[ \t]*\r?\n)+/, "");
+  const withoutTrailingBoundaryWhitespace = withoutLeadingBlankLines.trimEnd();
+  return /^(?: {4}|\t)/.test(withoutTrailingBoundaryWhitespace)
+    ? withoutTrailingBoundaryWhitespace
+    : withoutTrailingBoundaryWhitespace.trimStart();
 }
 
 /** Captures legacy MEDIA: attachment directives from model/tool output. */
@@ -587,6 +586,12 @@ export function splitMediaFromOutput(
         pushTextSegment(line);
       } else {
         foundMediaToken = true;
+        // The image line is removed below. When it is surrounded by blank
+        // lines, discard one preceding separator so the two paragraphs keep
+        // a single blank line between them.
+        if (keptLines.at(-1) === "") {
+          keptLines.pop();
+        }
         if (markdownImageResult.cleanedLine) {
           keptLines.push(markdownImageResult.cleanedLine);
         }

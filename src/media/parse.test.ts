@@ -466,6 +466,18 @@ describe("splitMediaFromOutput", () => {
     });
   });
 
+  it("preserves visible whitespace after a media directive", () => {
+    expectParsedMediaOutputCase("Use `a  b`\nMEDIA:https://example.com/chart.png\nA  B  C", {
+      text: "Use `a  b`\nA  B  C",
+      mediaUrls: ["https://example.com/chart.png"],
+      segments: [
+        { type: "text", text: "Use `a  b`" },
+        { type: "media", url: "https://example.com/chart.png" },
+        { type: "text", text: "A  B  C" },
+      ],
+    });
+  });
+
   it("preserves a leading indented code block after a media directive", () => {
     expectParsedMediaOutputCase("MEDIA:https://example.com/chart.png\n    const answer = 42;", {
       text: "    const answer = 42;",
