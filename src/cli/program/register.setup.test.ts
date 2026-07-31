@@ -68,6 +68,28 @@ describe("registerSetupCommand", () => {
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
+  it("requires --accept-risk for --baseline --non-interactive", async () => {
+    await runCli(["setup", "--baseline", "--non-interactive", "--workspace", "/tmp/ws"]);
+
+    expect(runtime.error).toHaveBeenCalledOnce();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(setupCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("runs --baseline --non-interactive when --accept-risk is given", async () => {
+    await runCli([
+      "setup",
+      "--baseline",
+      "--non-interactive",
+      "--accept-risk",
+      "--workspace",
+      "/tmp/ws",
+    ]);
+
+    expect(setupCommandMock).toHaveBeenCalledWith(lastSetupOptions(), runtime);
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
   it("runs setup wizard command when --wizard is set", async () => {
     await runCli(["setup", "--wizard", "--mode", "remote", "--remote-url", "wss://example"]);
 

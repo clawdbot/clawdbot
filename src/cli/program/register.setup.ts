@@ -111,6 +111,21 @@ export function registerSetupCommand(program: Command): void {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         if (opts.baseline) {
+          if (opts.nonInteractive && opts.acceptRisk !== true) {
+            // Baseline writes config and creates workspace/session directories without
+            // prompts, so non-interactive baseline requires the same risk acknowledgement
+            // as the onboarding wizard (whose gate lives in onboard.ts). Without this, the
+            // baseline short-circuit bypasses the accept-risk check entirely.
+            defaultRuntime.error(
+              [
+                "Non-interactive setup requires explicit risk acknowledgement.",
+                "Read: https://docs.openclaw.ai/security",
+                "Re-run with: openclaw setup --baseline --non-interactive --accept-risk ...",
+              ].join("\n"),
+            );
+            defaultRuntime.exit(1);
+            return;
+          }
           const { setupCommand } = await import("../../commands/setup.js");
           await setupCommand({ workspace: opts.workspace as string | undefined }, defaultRuntime);
           return;
