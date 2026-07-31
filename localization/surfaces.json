@@ -10,6 +10,16 @@
       "extensions": [
         ".json"
       ]
+    },
+    {
+      "id": "updater-dry-run-catalogs",
+      "owner": "updater",
+      "roots": [
+        "src/cli/i18n/locales"
+      ],
+      "extensions": [
+        ".ts"
+      ]
     }
   ],
   "surfaces": [
@@ -20,6 +30,22 @@
       "disposition": "adopted",
       "catalogArea": "wizard-core",
       "namespace": "wizard"
+    },
+    {
+      "id": "updater-dry-run-en",
+      "owner": "updater",
+      "source": "src/cli/i18n/locales/en.ts",
+      "disposition": "deferred",
+      "blockerIssue": 113105,
+      "reviewOwner": "@giodl73-repo"
+    },
+    {
+      "id": "updater-dry-run-zh-CN",
+      "owner": "updater",
+      "source": "src/cli/i18n/locales/zh-CN.ts",
+      "disposition": "deferred",
+      "blockerIssue": 113105,
+      "reviewOwner": "@giodl73-repo"
     }
   ]
 }

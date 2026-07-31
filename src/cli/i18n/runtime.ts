@@ -22,13 +22,20 @@ if (validationIssues.length > 0) {
   throw new Error(`Invalid CLI zh-CN catalog: ${JSON.stringify(validationIssues)}`);
 }
 
-const CLI_CATALOG_SNAPSHOT = createCatalogSnapshot({
+const cliCatalogSnapshotResult = createCatalogSnapshot({
+  namespace: "cli",
   catalogRevision: "cli-runtime:1",
   catalogs: {
     en: CLI_ENGLISH_CATALOG,
     "zh-CN": CLI_ZH_CN_CATALOG,
   },
 });
+if (!cliCatalogSnapshotResult.ok) {
+  throw new Error(
+    `Invalid CLI catalog snapshot: ${JSON.stringify(cliCatalogSnapshotResult.error)}`,
+  );
+}
+const CLI_CATALOG_SNAPSHOT = cliCatalogSnapshotResult.value;
 
 export type CliLocalization = {
   context: LocalizationContext;
@@ -58,6 +65,6 @@ export function createCliLocalization(options?: {
         key,
         params,
         fallback: CLI_ENGLISH_CATALOG[key],
-      }),
+      }).value,
   });
 }

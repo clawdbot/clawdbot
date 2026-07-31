@@ -13,13 +13,13 @@ describe("CLI runtime localization", () => {
 
   it("preserves operational parameter values", () => {
     const localization = createCliLocalization({ locale: "zh-CN" });
-    const rendered = localization.t("cli.update.dryRun.note.managedRoot", {
-      root: "/srv/openclaw",
-      previousRoot: "/home/operator/openclaw",
+    const rendered = localization.t("cli.update.dryRun.note.managedNodeDiffers", {
+      currentNode: "/usr/bin/node",
+      managedNode: "/srv/openclaw/bin/node",
     });
 
-    expect(rendered).toContain("/srv/openclaw");
-    expect(rendered).toContain("/home/operator/openclaw");
+    expect(rendered).toContain("/usr/bin/node");
+    expect(rendered).toContain("/srv/openclaw/bin/node");
   });
 
   it("falls back to reviewed English when the locale has no CLI catalog", () => {
@@ -30,7 +30,7 @@ describe("CLI runtime localization", () => {
     );
   });
 
-  it("honors the highest-priority POSIX locale instead of falling through", () => {
+  it("continues past an unsupported higher-priority POSIX locale", () => {
     const localization = createCliLocalization({
       env: {
         LC_ALL: "fr-FR",
@@ -38,7 +38,7 @@ describe("CLI runtime localization", () => {
       },
     });
 
-    expect(localization.context.locale).toBe("en");
-    expect(localization.t("cli.update.dryRun.noChanges")).toBe("No changes were applied.");
+    expect(localization.context.locale).toBe("zh-CN");
+    expect(localization.t("cli.update.dryRun.noChanges")).toBe("未应用任何更改。");
   });
 });

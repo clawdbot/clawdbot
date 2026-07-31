@@ -21,7 +21,7 @@ machine-readable output and operational values exactly.
 ## Adoption and verification
 
 - Register every CLI catalog source in `localization/surfaces.json` and update
-  `docs/reference/localization.md` when another command family is adopted.
+  `.agents/skills/localize-openclaw/SKILL.md` when another command family is adopted.
 - Extend the shared `localization/catalogs.json` gate and refresh workflow when
   moving a family to generated catalogs; do not create a CLI-specific pipeline.
 - Run `node scripts/run-vitest.mjs src/cli/i18n/runtime.test.ts

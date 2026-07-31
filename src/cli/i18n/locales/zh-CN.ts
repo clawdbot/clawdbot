@@ -27,8 +27,24 @@ export const CLI_ZH_CN_CATALOG = {
   "cli.update.dryRun.action.noRestart": "跳过重启（因为设置了 --no-restart）",
   "cli.update.dryRun.note.gitTag": "--tag 仅适用于 npm 安装；git 更新会忽略它。",
   "cli.update.dryRun.note.betaFallback": "本次运行中 beta 通道解析为 latest（回退）。",
-  "cli.update.dryRun.note.managedRoot":
-    "软件包更新以托管服务根目录 {root} 为目标，而不是调用根目录 {previousRoot}。",
+  "cli.update.dryRun.note.managedRootTarget": "以托管网关服务软件包根目录为目标：{root}",
+  "cli.update.dryRun.note.managedRootDiffers":
+    "Shell OpenClaw 根目录与托管网关服务根目录不同：{previousRoot}",
+  "cli.update.dryRun.note.managedRootReconcile":
+    "更新后，请确保 PATH 中的 `{cli}` 解析到托管服务根目录，或从要使用的 shell 安装重新安装网关服务。",
+  "cli.update.dryRun.note.managedNode": "托管网关服务 Node：{node}",
+  "cli.update.dryRun.note.managedNodeDiffers":
+    "当前 Node（{currentNode}）与托管网关服务 Node（{managedNode}）不同。",
+  "cli.update.dryRun.note.managedNodeUse": "此次更新将使用托管服务 Node，以便网关在升级后启动。",
+  "cli.update.dryRun.note.schemaIncompatible":
+    "将拒绝更新：{kind} 数据库 {path} 的架构版本为 {foundVersion}；目标支持 {supportedVersion}；写入版本为 {writerVersion}。",
+  "cli.update.dryRun.note.schemaIncompatibleAgent":
+    "将拒绝更新：{kind} 数据库（代理 {agentId}）{path} 的架构版本为 {foundVersion}；目标支持 {supportedVersion}；写入版本为 {writerVersion}。",
+  "cli.update.dryRun.note.schemaIndeterminate":
+    "将拒绝更新：无法检查 {kind} 数据库 {path}：{reason}；请在网关释放后重试。",
+  "cli.update.dryRun.note.schemaDocs": "{url}",
+  "cli.update.dryRun.note.schemaManualInstall":
+    "通过 npm 手动安装会绕过此保护；请先备份并验证兼容性。",
   "cli.update.dryRun.note.nonRegistry": "非注册表软件包规格会跳过 npm 版本查询和降级预览。",
   "cli.update.dryRun.note.gitSchemaCheck":
     "git 目标的数据库架构兼容性会在实际更新时验证；此预览不会检查。",

@@ -29,8 +29,26 @@ export const CLI_ENGLISH_CATALOG = {
   "cli.update.dryRun.action.noRestart": "Skip restart (because --no-restart is set)",
   "cli.update.dryRun.note.gitTag": "--tag applies to npm installs only; git updates ignore it.",
   "cli.update.dryRun.note.betaFallback": "Beta channel resolves to latest for this run (fallback).",
-  "cli.update.dryRun.note.managedRoot":
-    "Package update targets managed service root {root} instead of invoking root {previousRoot}.",
+  "cli.update.dryRun.note.managedRootTarget":
+    "Targeting managed gateway service package root: {root}",
+  "cli.update.dryRun.note.managedRootDiffers":
+    "Shell OpenClaw root differs from the managed gateway service root: {previousRoot}",
+  "cli.update.dryRun.note.managedRootReconcile":
+    "After the update, make sure `{cli}` on PATH resolves to the managed service root or reinstall the gateway service from the shell install you want to use.",
+  "cli.update.dryRun.note.managedNode": "Managed gateway service Node: {node}",
+  "cli.update.dryRun.note.managedNodeDiffers":
+    "Current Node ({currentNode}) differs from the managed gateway service Node ({managedNode}).",
+  "cli.update.dryRun.note.managedNodeUse":
+    "Using the managed service Node for this update so the gateway can start after the upgrade.",
+  "cli.update.dryRun.note.schemaIncompatible":
+    "Would refuse update: {kind} database {path} has schema {foundVersion}; target supports {supportedVersion}; writer build {writerVersion}.",
+  "cli.update.dryRun.note.schemaIncompatibleAgent":
+    "Would refuse update: {kind} database (agent {agentId}) {path} has schema {foundVersion}; target supports {supportedVersion}; writer build {writerVersion}.",
+  "cli.update.dryRun.note.schemaIndeterminate":
+    "Would refuse update: could not inspect {kind} database {path}: {reason}; retry once the gateway releases it.",
+  "cli.update.dryRun.note.schemaDocs": "{url}",
+  "cli.update.dryRun.note.schemaManualInstall":
+    "Installing manually via npm bypasses this guard; back up first and verify compatibility.",
   "cli.update.dryRun.note.nonRegistry":
     "Non-registry package specs skip npm version lookup and downgrade previews.",
   "cli.update.dryRun.note.gitSchemaCheck":
