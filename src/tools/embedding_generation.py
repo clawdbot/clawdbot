@@ -7,6 +7,10 @@ import os
 from sqlalchemy import create_engine
 from dotenv import load_dotenv
 load_dotenv()
+# print("MYSQL_USER:", os.environ.get("MYSQL_USER"))
+# print("MYSQL_HOST:", os.environ.get("MYSQL_HOST"))
+# print("MYSQL_DATABASE:", os.environ.get("MYSQL_DATABASE"))
+
 
 engine = create_engine(
     f"mysql+mysqlconnector://{os.environ['MYSQL_USER']}:{os.environ['MYSQL_PASSWORD']}"
@@ -81,4 +85,21 @@ def fetch_sample_listings(city: str, limit: int = 5) -> pd.DataFrame:
 
 if __name__ == "__main__":
      user_input = sys.argv[1]
+     query = sys.argv[2]
      df = fetch_sample_listings(user_input, limit=5)
+     if df.empty:
+        print(f"No active listings found for {user_input!r} — try a different city.")
+        raise SystemExit(0)
+ 
+     print(f"Fetched {len(df)} listings for {user_input}. Building embeddings...")
+ 
+     listing_embeddings = []
+     for _, row in df.iterrows():
+        emb = build_listing_embedding(row.to_dict())
+        listing_embeddings.append((row["L_ListingID"], emb))
+        print(f"  embedded listing {row['L_ListingID']}")
+ 
+     print(f"\nQuery: {query!r}")
+ 
+     top_matches = find_similar_listings(query, listing_embeddings, top_k=3)
+     print("Top matching listing IDs:", top_matches)
