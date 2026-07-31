@@ -22,7 +22,7 @@ export type StoredComposerSession = {
   updatedAt: number;
 };
 
-export function normalizeOptionalString(value: unknown): string | undefined {
+function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
@@ -55,7 +55,7 @@ function normalizeChatAttachment(value: unknown): ChatAttachment | null {
   return restored;
 }
 
-export function normalizeSkillWorkshopRevision(
+function normalizeSkillWorkshopRevision(
   value: unknown,
 ): ChatQueueSkillWorkshopRevision | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
