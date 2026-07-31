@@ -222,7 +222,9 @@ describe("openai plugin", () => {
     const registration = registerRuntimeLifecycle.mock.calls.find(
       (call) => call[0]?.id === "openai-quicksilver-realtime-browser-session",
     );
-    expectDefined(registration, "quicksilver runtime lifecycle registration");
+    if (!registration) {
+      throw new Error("quicksilver runtime lifecycle not registered");
+    }
     const cleanup = registration[0].cleanup as (ctx: {
       reason: "disable" | "reset" | "delete" | "restart";
     }) => void;
