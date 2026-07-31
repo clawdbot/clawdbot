@@ -1,6 +1,7 @@
 package ai.openclaw.app.wear
 
 import ai.openclaw.wear.shared.WearProtocol
+import ai.openclaw.wear.shared.WearRealtimeAudioFrameType
 import ai.openclaw.wear.shared.WearRealtimeTalkStatus
 import android.os.Parcel
 import com.google.android.gms.wearable.ChannelClient
@@ -25,6 +26,7 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class WearRealtimeChannelRegistryTest {
   @Test
@@ -302,6 +304,45 @@ class WearRealtimeChannelRegistryTest {
         assertTrue(synchronized(stoppedOwners) { stoppedOwners.isEmpty() })
         registry.close(owner)
       } finally {
+        scope.cancel()
+      }
+    }
+
+  @Test
+  fun `same path reconnect waits for an in flight frame before retiring its channel`() =
+    runBlocking {
+      val scope = kotlinx.coroutines.CoroutineScope(SupervisorJob() + Dispatchers.IO)
+      val transport = FakeChannelTransport()
+      val registry = WearRealtimeChannelRegistry(scope, transport)
+      val active = FakeChannel("watch-a", "channel-a", "attempt-a")
+      val reconnect = FakeChannel("watch-a", "channel-a-reconnect", "attempt-a")
+      val releaseWrite = transport.holdWrite(active)
+
+      try {
+        registry.accept(active, appendAudio = { _, _ -> }, stopTalk = {})
+        transport.awaitOpened(active)
+        val owner = checkNotNull(registry.claim("watch-a", "attempt-a")).owner
+        val send =
+          async(Dispatchers.IO) {
+            registry.send(owner, WearRealtimeAudioFrameType.OUTPUT_PCM, byteArrayOf(1, 2, 3, 4))
+          }
+        transport.awaitWriteStarted(active)
+
+        registry.accept(reconnect, appendAudio = { _, _ -> }, stopTalk = {})
+        transport.awaitOpened(reconnect)
+        delay(100L)
+        assertFalse(send.isCompleted)
+        assertEquals(0, transport.closeCount(active))
+
+        releaseWrite.countDown()
+        withTimeout(1_000L) { send.await() }
+        withTimeout(1_000L) {
+          while (transport.closeCount(active) != 1 || !transport.hasStartedReading(reconnect)) yield()
+        }
+        assertTrue(registry.isCurrent(owner))
+        registry.close(owner)
+      } finally {
+        releaseWrite.countDown()
         scope.cancel()
       }
     }
@@ -809,11 +850,20 @@ private class FakeChannelTransport : WearRealtimeChannelTransport {
   private val closeGates = ConcurrentHashMap<ChannelClient.Channel, CompletableDeferred<Unit>>()
   private val closeStarted = ConcurrentHashMap<ChannelClient.Channel, CompletableDeferred<Unit>>()
   private val closeCounts = ConcurrentHashMap<ChannelClient.Channel, Int>()
+  private val writeGates = ConcurrentHashMap<ChannelClient.Channel, CountDownLatch>()
+  private val writeStarted = ConcurrentHashMap<ChannelClient.Channel, CompletableDeferred<Unit>>()
   private val openedResources = ConcurrentHashMap<ChannelClient.Channel, WearRealtimeChannelResources>()
 
   override suspend fun open(channel: ChannelClient.Channel): WearRealtimeChannelResources {
     openGates[channel]?.await()
-    val resources = WearRealtimeChannelResources(ClosingInputStream(), ByteArrayOutputStream())
+    val resources =
+      WearRealtimeChannelResources(
+        ClosingInputStream(),
+        GatedOutputStream(
+          gate = writeGates[channel],
+          started = writeStarted.computeIfAbsent(channel) { CompletableDeferred() },
+        ),
+      )
     openedResources[channel] = resources
     opened.computeIfAbsent(channel) { CompletableDeferred() }.complete(Unit)
     return resources
@@ -850,6 +900,15 @@ private class FakeChannelTransport : WearRealtimeChannelTransport {
     closeStarted.computeIfAbsent(channel) { CompletableDeferred() }.await()
   }
 
+  fun holdWrite(channel: ChannelClient.Channel): CountDownLatch =
+    CountDownLatch(1).also { gate ->
+      writeGates[channel] = gate
+    }
+
+  suspend fun awaitWriteStarted(channel: ChannelClient.Channel) {
+    writeStarted.computeIfAbsent(channel) { CompletableDeferred() }.await()
+  }
+
   fun finishInput(channel: ChannelClient.Channel) {
     openedResources[channel]?.input?.close()
   }
@@ -874,6 +933,21 @@ private class ClosingInputStream : InputStream() {
   }
 
   fun hasStartedReading(): Boolean = started.count == 0L
+}
+
+private class GatedOutputStream(
+  private val gate: CountDownLatch?,
+  private val started: CompletableDeferred<Unit>,
+) : ByteArrayOutputStream() {
+  override fun write(
+    buffer: ByteArray,
+    offset: Int,
+    length: Int,
+  ) {
+    started.complete(Unit)
+    gate?.let { check(it.await(5, TimeUnit.SECONDS)) }
+    super.write(buffer, offset, length)
+  }
 }
 
 private data class FakeChannel(

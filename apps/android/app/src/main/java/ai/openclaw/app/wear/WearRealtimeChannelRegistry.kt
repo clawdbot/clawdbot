@@ -505,10 +505,13 @@ internal class WearRealtimeChannelRegistry(
     }
 
     suspend fun close(transport: WearRealtimeChannelTransport) {
-      closeMutex.withLock {
-        if (closed) return
-        transport.close(channel, resources)
-        closed = true
+      // Retirement must not close the stream beneath a frame already selected for this connection.
+      writeMutex.withLock {
+        closeMutex.withLock {
+          if (closed) return
+          transport.close(channel, resources)
+          closed = true
+        }
       }
     }
   }
