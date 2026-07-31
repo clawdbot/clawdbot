@@ -146,7 +146,10 @@ type TelegramQaSuiteOptions = LiveTransportQaCommandOptions & {
 export async function runQaTelegramSuite(opts: TelegramQaSuiteOptions) {
   const runOptions = resolveTelegramQaRunOptions(opts);
   if (runOptions.listScenarios) {
-    for (const scenario of listTelegramQaScenarios(runOptions.providerMode)) {
+    for (const scenario of listTelegramQaScenarios({
+      primaryModel: runOptions.primaryModel,
+      providerMode: runOptions.providerMode,
+    })) {
       const defaultLabel = scenario.defaultEnabled ? "default" : "optional";
       const refs =
         scenario.regressionRefs.length > 0 ? ` refs=${scenario.regressionRefs.join(",")}` : "";
@@ -160,6 +163,7 @@ export async function runQaTelegramSuite(opts: TelegramQaSuiteOptions) {
     ? [...opts.resolvedScenarioIds]
     : resolveTelegramQaScenarioIds({
         profile: opts.profile,
+        primaryModel: runOptions.primaryModel,
         providerMode: runOptions.providerMode,
         scenarioIds: runOptions.scenarioIds,
       });
@@ -213,6 +217,7 @@ export async function runQaTelegramCommand(opts: LiveTransportQaCommandOptions) 
   }
   const resolvedScenarioIds = resolveTelegramQaScenarioIds({
     profile: opts.profile,
+    primaryModel: runOptions.primaryModel,
     providerMode: runOptions.providerMode,
     scenarioIds: runOptions.scenarioIds,
   });

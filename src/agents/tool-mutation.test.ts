@@ -267,7 +267,10 @@ describe("tool mutation helpers", () => {
         plan: [{ step: "Inspect", status: "in_progress" }],
       }),
     ).toBe(true);
+    expect(isReplaySafeToolCall("automations", { action: "status" })).toBe(true);
+    // Legacy transcript entries predate the rename and must stay classified.
     expect(isReplaySafeToolCall("cron", { action: "status" })).toBe(true);
+    expect(isReplaySafeToolCall("cron", { action: "add" })).toBe(false);
     expect(isReplaySafeToolCall("gateway", { action: "config.get" })).toBe(true);
     expect(isReplaySafeToolCall("gateway", { action: "config.schema.lookup" })).toBe(true);
     expect(isReplaySafeToolCall("gateway", { action: "config.patch" })).toBe(false);

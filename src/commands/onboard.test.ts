@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   runInteractiveSetup: vi.fn(async () => {}),
   runGuidedOnboarding: vi.fn(async () => {}),
   runNonInteractiveSetup: vi.fn(async () => {}),
+  hasInteractiveOnboardingTty: vi.fn(() => true),
   resolvePluginProviders: vi.fn((): ProviderPlugin[] => [
     {
       id: "anthropic",
@@ -88,6 +89,10 @@ vi.mock("./onboard-guided.js", () => ({
 
 vi.mock("./onboard-non-interactive.js", () => ({
   runNonInteractiveSetup: mocks.runNonInteractiveSetup,
+}));
+
+vi.mock("./onboard-interactive-runner.js", () => ({
+  hasInteractiveOnboardingTty: mocks.hasInteractiveOnboardingTty,
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -173,6 +178,7 @@ describe("setupWizardCommand", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.clearAllMocks();
+    mocks.hasInteractiveOnboardingTty.mockReturnValue(true);
     mocks.readConfigFileSnapshot.mockResolvedValue({ exists: false, valid: false, config: {} });
   });
 
@@ -226,6 +232,42 @@ describe("setupWizardCommand", () => {
     );
 
     expectResetCall({ scope: "config+creds+sessions", runtime });
+  });
+
+  it.each([
+    ["guided", { reset: true }],
+    ["classic", { reset: true, classic: true }],
+  ] as const)("rejects headless %s onboarding before reset", async (_label, options) => {
+    const runtime = makeRuntime();
+    mocks.hasInteractiveOnboardingTty.mockReturnValue(false);
+
+    await setupWizardCommand(options, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it("keeps non-interactive reset ordering without a TTY", async () => {
+    const runtime = makeRuntime();
+    mocks.hasInteractiveOnboardingTty.mockReturnValue(false);
+
+    await setupWizardCommand({ reset: true, nonInteractive: true, acceptRisk: true }, runtime);
+
+    expect(mocks.handleReset).toHaveBeenCalledOnce();
+    expect(mocks.runNonInteractiveSetup).toHaveBeenCalledOnce();
+    const resetOrder = mocks.handleReset.mock.invocationCallOrder[0];
+    const setupOrder = mocks.runNonInteractiveSetup.mock.invocationCallOrder[0];
+    if (resetOrder === undefined || setupOrder === undefined) {
+      throw new Error("expected reset and non-interactive setup calls");
+    }
+    expect(resetOrder).toBeLessThan(setupOrder);
   });
 
   it("uses configured default workspace for --reset when --workspace is not provided", async () => {
@@ -833,7 +875,14 @@ describe("setupWizardCommand", () => {
 
     // Unset Commander booleans arrive as false and must not force classic.
     await setupWizardCommand(
-      { skipChannels: false, skipSkills: false, acceptRisk: false, json: false },
+      {
+        skipChannels: false,
+        skipSkills: false,
+        acceptRisk: false,
+        json: false,
+        tailscaleResetOnExit: undefined,
+        customImageInput: undefined,
+      },
       runtime,
     );
 
@@ -861,6 +910,8 @@ describe("setupWizardCommand", () => {
     ["--remote-url", { remoteUrl: "wss://gw.example.ts.net" }],
     ["--skip-bootstrap", { skipBootstrap: true }],
     ["--no-install-daemon", { installDaemon: false }],
+    ["--no-tailscale-reset-on-exit", { tailscaleResetOnExit: false }],
+    ["--custom-text-input", { customImageInput: false }],
     ["--daemon-runtime", { daemonRuntime: "node" as const }],
     ["a provider auth flag", { mistralApiKey: "sk-x" }],
   ])("keeps the classic interactive wizard for %s", async (_label, opts) => {

@@ -166,7 +166,10 @@ describe("createRuntimeConfigCapability", () => {
       if (method === "config.get") {
         configGetCount += 1;
         return {
-          config: configGetCount === 1 ? { count: 1, enabled: false, tags: [1], label: "ok" } : {},
+          config:
+            configGetCount === 1
+              ? { count: 1, composedCount: 2, enabled: false, tags: [1], label: "ok" }
+              : {},
           hash: configGetCount === 1 ? "hash-1" : "hash-2",
           valid: true,
           issues: [],
@@ -178,6 +181,7 @@ describe("createRuntimeConfigCapability", () => {
             type: "object",
             properties: {
               count: { type: "number" },
+              composedCount: { type: "number", allOf: [{ minimum: 2 }] },
               enabled: { type: "boolean" },
               tags: { type: "array", items: { type: "integer" } },
               label: { type: "string", minLength: 1 },
@@ -195,6 +199,7 @@ describe("createRuntimeConfigCapability", () => {
 
     await Promise.all([runtimeConfig.ensureLoaded(), runtimeConfig.ensureSchemaLoaded()]);
     runtimeConfig.patchForm(["count"], "42.5");
+    runtimeConfig.patchForm(["composedCount"], "8.5");
     runtimeConfig.patchForm(["enabled"], "true");
     runtimeConfig.patchForm(["tags"], ["7", ""]);
     runtimeConfig.patchForm(["label"], "");
@@ -204,7 +209,81 @@ describe("createRuntimeConfigCapability", () => {
     expect(submission?.params).toMatchObject({ baseHash: "hash-1" });
     const raw = (submission?.params as { raw?: unknown } | undefined)?.raw;
     expect(typeof raw).toBe("string");
-    expect(JSON.parse(raw as string)).toEqual({ count: 42.5, enabled: true, tags: [7] });
+    expect(JSON.parse(raw as string)).toEqual({
+      count: 42.5,
+      composedCount: 8.5,
+      enabled: true,
+      tags: [7],
+    });
+    runtimeConfig.dispose();
+  });
+
+  it("submits only decimal numeric spellings as numbers", async () => {
+    const submitted: Array<{ method: string; params: unknown }> = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        return {
+          config: {},
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.schema") {
+        return {
+          schema: {
+            type: "object",
+            properties: {
+              hex: { type: "number" },
+              binary: { type: "integer" },
+              explicitPlus: { type: "number" },
+              separator: { type: "number" },
+              nonFinite: { type: "number" },
+              scientific: { type: "number" },
+              decimal: { type: "number" },
+              fractionalInteger: { type: "integer" },
+              unionRadix: { anyOf: [{ type: "integer" }, { type: "string" }] },
+              unionScientific: { anyOf: [{ type: "integer" }, { type: "string" }] },
+            },
+          },
+          uiHints: {},
+        };
+      }
+      submitted.push({ method, params });
+      return { hash: "hash-2" };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+
+    await Promise.all([runtimeConfig.ensureLoaded(), runtimeConfig.ensureSchemaLoaded()]);
+    runtimeConfig.patchForm(["hex"], "0x10");
+    runtimeConfig.patchForm(["binary"], "0b1010");
+    runtimeConfig.patchForm(["explicitPlus"], "+5");
+    runtimeConfig.patchForm(["separator"], "1_000");
+    runtimeConfig.patchForm(["nonFinite"], "Infinity");
+    runtimeConfig.patchForm(["scientific"], "-2.5E-3");
+    runtimeConfig.patchForm(["decimal"], ".5");
+    runtimeConfig.patchForm(["fractionalInteger"], "42.5");
+    runtimeConfig.patchForm(["unionRadix"], "0o17");
+    runtimeConfig.patchForm(["unionScientific"], "1e5");
+
+    await expect(runtimeConfig.save()).resolves.toBe(true);
+    const submission = submitted.find((entry) => entry.method === "config.set");
+    const raw = (submission?.params as { raw?: unknown } | undefined)?.raw;
+    expect(typeof raw).toBe("string");
+    expect(JSON.parse(raw as string)).toEqual({
+      hex: "0x10",
+      binary: "0b1010",
+      explicitPlus: "+5",
+      separator: "1_000",
+      nonFinite: "Infinity",
+      scientific: -0.0025,
+      decimal: 0.5,
+      fractionalInteger: "42.5",
+      unionRadix: "0o17",
+      unionScientific: 100_000,
+    });
     runtimeConfig.dispose();
   });
 

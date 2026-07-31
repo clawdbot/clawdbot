@@ -163,6 +163,7 @@ export async function activateCodexAttemptTurn(
     client: resourceState.client,
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
+    requestTimeoutMs: connection.appServer.requestTimeoutMs,
     claimPendingUserInput: () => userInputBridgeRef.current?.claimPendingRequest(),
     signal: runAbortController.signal,
   });

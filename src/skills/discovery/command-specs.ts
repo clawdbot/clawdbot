@@ -15,7 +15,7 @@ import {
 } from "../loading/workspace.js";
 import type { SkillEligibilityContext, SkillCommandSpec, SkillEntry } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
-import { filterUserInvocableSkillEntries } from "./skill-index.js";
+import { filterUserInvocableSkillEntries, isSkillPromptVisible } from "./skill-index.js";
 
 const skillsLogger = createSubsystemLogger("skills");
 const skillCommandDebugOnce = createDedupeCache({ ttlMs: 0, maxSize: 1024 });
@@ -176,6 +176,7 @@ export function buildWorkspaceSkillCommandSpecs(
       skillFile: canonicalizePath(entry.skill.filePath),
       skillName: rawName,
       description,
+      modelVisible: isSkillPromptVisible(entry),
       skillSource: resolveSkillTelemetrySource(entry.skill),
       ...(dispatch ? { dispatch } : {}),
     });
@@ -207,6 +208,7 @@ export function buildWorkspaceSkillCommandSpecs(
       name: unique,
       skillName: entry.rawName,
       description: entry.description,
+      modelVisible: false,
       promptTemplate: entry.promptTemplate,
       sourceFilePath: entry.sourceFilePath,
     });

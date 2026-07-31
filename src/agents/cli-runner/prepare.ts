@@ -140,8 +140,18 @@ import type {
 } from "./types.js";
 
 type PrivateCliBackendPreparedExecution = CliBackendPreparedExecution & {
+  isolatedCompletionEnforced?: true;
   secretInput?: CliSecretInput;
 };
+
+function unsupportedIsolatedCompletionError(backendId: string): Error & { code: "unsupported" } {
+  const error = new Error(
+    `CLI backend "${backendId}" does not support isolated completion; OpenClaw did not start the run.`,
+  ) as Error & { code: "unsupported" };
+  error.name = "IsolatedCompletionUnsupportedError";
+  error.code = "unsupported";
+  return error;
+}
 
 function resolveClaudeCliContextModelId(modelId: string): string {
   const trimmed = modelId.trim();
@@ -1030,17 +1040,32 @@ export async function prepareCliRunContext(
         : undefined,
       env: preparedBackend.env,
     } satisfies Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
+    const privatePrepareExecutionContext = params.isolatedCompletion
+      ? {
+          ...prepareExecutionContext,
+          // Bundled owners may project this through a native per-process system-prompt
+          // channel. Keep it private so exact isolated inference does not expand the SDK.
+          isolatedCompletionCwd: cwd,
+          isolatedCompletionModelId: normalizedModel,
+          isolatedCompletionPrompt: params.prompt,
+          isolatedCompletionSystemPrompt: params.extraSystemPrompt ?? "",
+        }
+      : prepareExecutionContext;
     preparedExecution =
       (await backendResolved.prepareExecution?.(
         (backendAuthPolicy
           ? {
-              ...prepareExecutionContext,
-              // Private bridge for bundled auth-owning CLI backends. The core-internal auth
-              // policy table owns membership until a public forwarding contract exists.
+              ...privatePrepareExecutionContext,
+              // The core-internal auth policy table owns this private credential and isolated
+              // completion bridge; third-party backends cannot opt into either capability.
               authCredential,
             }
-          : prepareExecutionContext) as typeof prepareExecutionContext & {
+          : privatePrepareExecutionContext) as typeof prepareExecutionContext & {
           authCredential?: AuthProfileCredential;
+          isolatedCompletionCwd?: string;
+          isolatedCompletionModelId?: string;
+          isolatedCompletionPrompt?: string;
+          isolatedCompletionSystemPrompt?: string;
         },
       )) ?? undefined;
     const preparedBackendCleanup =
@@ -1054,6 +1079,9 @@ export async function prepareCliRunContext(
           }
         : undefined;
     cleanupPreparedResources = preparedBackendCleanup;
+    if (params.isolatedCompletion && preparedExecution?.isolatedCompletionEnforced !== true) {
+      throw unsupportedIsolatedCompletionError(backendResolved.id);
+    }
     if (
       params.cliToolAvailability &&
       backendResolved.toolAvailabilityEnforcement === "prepare-execution" &&

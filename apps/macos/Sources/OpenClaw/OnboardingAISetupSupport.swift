@@ -85,10 +85,11 @@ extension OnboardingAISetupModel {
         let icon: String
     }
 
-    struct PrepareOption: Identifiable, Equatable {
+    struct PrepareOption: Identifiable, Equatable, Decodable {
         let id: String
         let label: String
         let hint: String?
+        let brandId: String?
         let icon: String?
         let website: String?
     }
@@ -107,53 +108,33 @@ extension OnboardingAISetupModel {
 
     static func prepareOptions(
         candidates: [Candidate],
-        manualProviders: [ManualProvider],
-        authOptions: [AuthOption],
-        recommendedInstalls: [RecommendedInstall]) -> [PrepareOption]
+        advertisedOptions: [PrepareOption]?) -> [PrepareOption]
     {
-        let known = [
+        // Released Gateways do not send prepareOptions. Preserve their two
+        // existing rows until the connected Gateway advertises provider-owned choices.
+        let legacyOptions = [
             PrepareOption(
                 id: "ollama",
                 label: "Ollama",
                 hint: "Download a tools-capable model from your Ollama server",
+                brandId: "ollama",
                 icon: nil,
                 website: nil),
             PrepareOption(
                 id: "llama-cpp",
                 label: "Local model (llama.cpp)",
                 hint: "Download an approximately 5.0 GB local model; requires 16 GB RAM",
+                brandId: "llama-cpp",
                 icon: nil,
                 website: nil),
         ]
-        return known.compactMap { choice in
+        return (advertisedOptions ?? legacyOptions).filter { choice in
             guard !candidates.contains(where: {
-                $0.kind == "provider-auto:\(choice.id)" || $0.modelRef.hasPrefix("\(choice.id)/")
-            }) else { return nil }
-            if let option = authOptions.first(where: { $0.id == choice.id }) {
-                return PrepareOption(
-                    id: choice.id,
-                    label: option.label,
-                    hint: option.hint,
-                    icon: option.icon,
-                    website: option.website)
-            }
-            if let provider = manualProviders.first(where: { $0.id == choice.id }) {
-                return PrepareOption(
-                    id: choice.id,
-                    label: provider.label,
-                    hint: provider.hint,
-                    icon: provider.icon,
-                    website: provider.website)
-            }
-            if let install = recommendedInstalls.first(where: { $0.id == choice.id }) {
-                return PrepareOption(
-                    id: choice.id,
-                    label: install.label,
-                    hint: install.hint,
-                    icon: install.icon,
-                    website: install.website)
-            }
-            return choice
+                $0.credentials != false &&
+                    ($0.kind == "provider-auto:\(choice.id)" ||
+                        $0.modelRef.hasPrefix("\(choice.brandId ?? choice.id)/"))
+            }) else { return false }
+            return true
         }
     }
 

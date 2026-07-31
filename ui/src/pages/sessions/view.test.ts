@@ -318,6 +318,28 @@ describe("sessions view", () => {
     expect(container.querySelector(".data-table-pagination")).toBeNull();
   });
 
+  it("selects and names the current page size on first render", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            { key: "one", kind: "direct", updatedAt: 2 },
+            { key: "two", kind: "direct", updatedAt: 1 },
+          ]),
+        ),
+        pageSize: 25,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const pageSize = container.querySelector<HTMLSelectElement>(".data-table-pagination__size");
+    expect(pageSize?.getAttribute("aria-label")).toBe("Rows per page");
+    expect(pageSize?.value).toBe("25");
+    expect(pageSize?.selectedOptions[0]?.textContent?.trim()).toBe("25 per page");
+  });
+
   it("keeps the filtered empty state when grouping is active", async () => {
     const container = document.createElement("div");
     render(

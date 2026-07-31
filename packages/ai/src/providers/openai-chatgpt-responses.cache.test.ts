@@ -385,6 +385,120 @@ describe("ChatGPT Responses cached transport", () => {
     ).toEqual([]);
   });
 
+  it("closes the concurrent acquire loser promptly without leaking its socket", async () => {
+    const apiKey = createJwt();
+    const sessionId = "concurrent-acquire-loser";
+    const handshakes: Array<{ connectionId: number }> = [];
+    const receivedConnectionIds: number[] = [];
+    const closedConnectionIds: number[] = [];
+    const requestBodies: Array<{ connectionId: number; body: Record<string, unknown> }> = [];
+    let holdLoserHandshake: ((res: boolean) => void) | undefined;
+    let verifyCount = 0;
+    let holdNextReconnect = false;
+    const releaseLoserHandshake = () => {
+      const heldHandshake = holdLoserHandshake;
+      holdLoserHandshake = undefined;
+      holdNextReconnect = false;
+      heldHandshake?.(true);
+    };
+
+    class TrackingWebSocket extends WebSocket {
+      override close(code?: number, reason?: string | Buffer): void {
+        super.close(code, reason);
+      }
+    }
+
+    vi.stubGlobal("WebSocket", TrackingWebSocket);
+    const server = new WebSocketServer({
+      host: "127.0.0.1",
+      port: 0,
+      verifyClient: (_info, cb) => {
+        verifyCount += 1;
+        // verifyCount 1 = seed; after seed is closed, holdNextReconnect is set
+        // so the first reconnect (loser A) blocks while winner B proceeds.
+        if (holdNextReconnect && !holdLoserHandshake) {
+          holdLoserHandshake = cb;
+          return;
+        }
+        cb(true);
+      },
+    });
+    server.on("connection", (socket) => {
+      const connectionId = handshakes.length + 1;
+      handshakes.push({ connectionId });
+      socket.on("close", () => {
+        closedConnectionIds.push(connectionId);
+      });
+      socket.on("message", (raw: Buffer) => {
+        receivedConnectionIds.push(connectionId);
+        const body = JSON.parse(raw.toString("utf8")) as Record<string, unknown>;
+        requestBodies.push({ connectionId, body });
+        socket.send(JSON.stringify(completion(`resp_${connectionId}`)));
+      });
+    });
+
+    await once(server, "listening");
+    const port = (server.address() as AddressInfo).port;
+    const loopbackModel = {
+      ...model,
+      baseUrl: `http://127.0.0.1:${port}/backend-api`,
+    } satisfies Model<"openai-chatgpt-responses">;
+    const options = { apiKey, sessionId, transport: "websocket-cached" as const };
+
+    try {
+      // Seed connection 1 into cache.
+      expect(
+        (await streamOpenAICodexResponses(loopbackModel, context, options).result()).stopReason,
+      ).toBe("stop");
+
+      // Force the cached entry to be removed so both reconnects start fresh.
+      // This mirrors the existing authenticated-loopback tests.
+      closeOpenAICodexWebSocketSessions(sessionId);
+      holdNextReconnect = true;
+
+      // Start loser A; its verifyClient is held so winner B can install the cache entry first.
+      const loserResult = streamOpenAICodexResponses(loopbackModel, context, options).result();
+      await vi.waitFor(() => expect(holdLoserHandshake).toBeTypeOf("function"));
+
+      // Start winner B; it proceeds immediately and installs the cache entry.
+      const winnerResult = streamOpenAICodexResponses(loopbackModel, context, options).result();
+      expect((await winnerResult).stopReason).toBe("stop");
+
+      // Release loser A's handshake; it loses the CAS and should close promptly.
+      releaseLoserHandshake();
+      expect((await loserResult).stopReason).toBe("stop");
+      await vi.waitFor(() => expect(closedConnectionIds).toContain(3));
+      expect(closedConnectionIds).not.toContain(2);
+
+      // Follow-up must reuse winner B's connection, not open a fourth.
+      expect(
+        (
+          await streamOpenAICodexResponses(
+            loopbackModel,
+            {
+              messages: [...context.messages, { role: "user", content: "follow-up", timestamp: 2 }],
+            },
+            options,
+          ).result()
+        ).stopReason,
+      ).toBe("stop");
+
+      // Server saw seed=1, winner B=2, loser A=3, follow-up on connection 2.
+      expect(receivedConnectionIds).toEqual([1, 2, 3, 2]);
+      expect(handshakes).toHaveLength(3);
+      expect(requestBodies[3]?.body.previous_response_id).toBe("resp_2");
+    } finally {
+      releaseLoserHandshake();
+      closeOpenAICodexWebSocketSessions(sessionId);
+      for (const socket of server.clients) {
+        socket.terminate();
+      }
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("lazily builds authenticated SSE requests after session-scoped websocket fallback", async () => {
     let websocketAttempts = 0;
 

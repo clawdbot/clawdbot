@@ -8,7 +8,7 @@ import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import type { SessionEntry } from "./types.js";
 
-type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">;
+type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 
 export type SqliteSessionEntryCacheSnapshot = {
   entries: Map<string, SessionEntry>;
@@ -17,7 +17,6 @@ export type SqliteSessionEntryCacheSnapshot = {
 };
 
 type SqliteSessionEntryCache = SqliteSessionEntryCacheSnapshot & {
-  connection: DatabaseSync;
   listProjections: Map<string, SessionEntry>;
   updatedAtByKey: Map<string, number>;
   validityToken: SqliteSessionEntryCacheValidityToken;
@@ -36,9 +35,10 @@ type SqliteSessionEntryCacheValidityToken = {
 const MAX_INCREMENTAL_ENTRY_READ_KEYS = 500;
 
 // One parsed snapshot per opened agent database bounds memory to the process's database set.
-// The connection-local validity token plus tracked-write invalidation keeps it current;
-// without both, every read would re-query and re-parse every entry_json document.
-const sessionEntryCaches = new Map<string, SqliteSessionEntryCache>();
+// Weak connection ownership lets closed read-only and evicted database handles release their
+// snapshots. The connection-local validity token plus tracked-write invalidation keeps live
+// snapshots current; without both, every read would re-query and re-parse every entry_json document.
+const sessionEntryCaches = new WeakMap<DatabaseSync, SqliteSessionEntryCache>();
 
 function readDataVersion(database: DatabaseSync): number {
   const row = database.prepare("PRAGMA data_version").get() as { data_version?: unknown };
@@ -154,7 +154,7 @@ function incrementallyRevalidateSessionEntrySnapshot(
   // already cheaper to reload than to preserve individual parsed identities.
   if (changedKeys.length > MAX_INCREMENTAL_ENTRY_READ_KEYS) {
     const loaded = loadSessionEntrySnapshot(database);
-    return { ...loaded, connection: database.db, validityToken };
+    return { ...loaded, validityToken };
   }
 
   const entries = new Map(cached.entries);
@@ -184,7 +184,6 @@ function incrementallyRevalidateSessionEntrySnapshot(
     listEntries: createLazyListProjections(entries, listProjections),
     listProjections,
     updatedAtByKey,
-    connection: database.db,
     validityToken,
   };
 }
@@ -197,17 +196,11 @@ export function readSqliteSessionEntryCache(
     return loadSessionEntrySnapshot(database);
   }
   const validityToken = readCacheValidityToken(database.db);
-  const cached = sessionEntryCaches.get(database.path);
-  if (
-    cached?.connection === database.db &&
-    cacheValidityTokensEqual(cached.validityToken, validityToken)
-  ) {
+  const cached = sessionEntryCaches.get(database.db);
+  if (cached && cacheValidityTokensEqual(cached.validityToken, validityToken)) {
     return cached;
   }
-  if (
-    cached?.connection === database.db &&
-    cached.validityToken.dataVersion === validityToken.dataVersion
-  ) {
+  if (cached && cached.validityToken.dataVersion === validityToken.dataVersion) {
     // updated_at is entry-controlled, not a rowversion. Other connections can rewrite entry_json
     // without advancing it, so data_version changes must fully reload or same-ms rewrites go stale.
     // Accessor-owned writes on this connection hard-invalidate; unrelated local writes can safely diff.
@@ -221,25 +214,22 @@ export function readSqliteSessionEntryCache(
       // publishing their mixed result could temporarily omit or retain the wrong keys.
       const reloadToken = readCacheValidityToken(database.db);
       const loaded = loadSessionEntrySnapshot(database);
-      const next = { ...loaded, connection: database.db, validityToken: reloadToken };
-      sessionEntryCaches.set(database.path, next);
+      const next = { ...loaded, validityToken: reloadToken };
+      sessionEntryCaches.set(database.db, next);
       return next;
     }
-    sessionEntryCaches.set(database.path, revalidated);
+    sessionEntryCaches.set(database.db, revalidated);
     return revalidated;
   }
   const loaded = loadSessionEntrySnapshot(database);
-  const next = { ...loaded, connection: database.db, validityToken };
-  sessionEntryCaches.set(database.path, next);
+  const next = { ...loaded, validityToken };
+  sessionEntryCaches.set(database.db, next);
   return next;
 }
 
 function invalidateTrackedCache(database: OpenClawAgentDatabase): void {
   const invalidate = () => {
-    const cached = sessionEntryCaches.get(database.path);
-    if (cached?.connection === database.db) {
-      sessionEntryCaches.delete(database.path);
-    }
+    sessionEntryCaches.delete(database.db);
   };
   if (deferOpenClawAgentPostCommitPublication(database, invalidate)) {
     return;

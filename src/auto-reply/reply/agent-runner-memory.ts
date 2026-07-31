@@ -1436,6 +1436,9 @@ export async function runMemoryFlushIfNeeded(params: {
       sessionKey: params.sessionKey,
       ...(activeSessionEntry?.sessionId ? { sessionId: activeSessionEntry.sessionId } : {}),
       verboseLevel: params.resolvedVerboseLevel,
+      isControlUiVisible: false,
+      projectSessionActive: false,
+      projectSessionLifecycle: false,
     });
   }
   let memoryCompactionCompleted = false;

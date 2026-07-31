@@ -2,6 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { configureSqliteConnectionPragmas } from "../../infra/sqlite-wal.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -16,6 +17,7 @@ import {
   openSessionEntryReadView,
   upsertSessionEntry,
 } from "./session-accessor.js";
+import { readSqliteSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 
 const parseSessionEntryCalls = vi.hoisted(() => vi.fn());
@@ -187,6 +189,47 @@ describe("SQLite session entry cache", () => {
     expect(firstParseCount).toBe(2);
     expect(parseSessionEntryCalls).toHaveBeenCalledTimes(firstParseCount);
     expect(second).toEqual(first);
+  });
+
+  it("keeps same-path caches isolated by live connection", async () => {
+    const scope = createSessionScope("connection-identity");
+    await upsertSessionEntry(scope, {
+      label: "connection-identity",
+      sessionId: "connection-identity",
+      updatedAt: 1,
+    });
+    const primary = openOpenClawAgentDatabase(scope);
+    const first = listSessionEntries({ ...scope, clone: false });
+    const alternate = new DatabaseSync(primary.path, { readOnly: true });
+
+    try {
+      parseSessionEntryCalls.mockClear();
+      const alternateSnapshot = readSqliteSessionEntryCache(
+        { agentId: primary.agentId, db: alternate },
+        { cache: true },
+      );
+      expect(alternateSnapshot.entries.get(scope.sessionKey)?.label).toBe("connection-identity");
+      const alternateEntry = alternateSnapshot.entries.get(scope.sessionKey);
+      expect(parseSessionEntryCalls).toHaveBeenCalledOnce();
+
+      parseSessionEntryCalls.mockClear();
+      const second = listSessionEntries({ ...scope, clone: false });
+
+      expect(second[0]?.entry).toBe(first[0]?.entry);
+      expect(parseSessionEntryCalls).not.toHaveBeenCalled();
+
+      parseSessionEntryCalls.mockClear();
+      const alternateAgain = readSqliteSessionEntryCache(
+        { agentId: primary.agentId, db: alternate },
+        { cache: true },
+      );
+
+      expect(alternateAgain.entries.get(scope.sessionKey)).toBe(alternateEntry);
+      expect(parseSessionEntryCalls).not.toHaveBeenCalled();
+    } finally {
+      clearNodeSqliteKyselyCacheForDatabase(alternate);
+      alternate.close();
+    }
   });
 
   it("reuses parsed entries and list projections after a same-connection non-entry write", async () => {

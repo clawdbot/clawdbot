@@ -340,7 +340,7 @@ export async function prepareCronRunContext(params: {
         typeof input.job.name === "string" && input.job.name.trim()
           ? input.job.name.trim()
           : input.job.id;
-      cronSession.sessionEntry.label = `Cron: ${labelSuffix}`;
+      cronSession.sessionEntry.label = `Automation: ${labelSuffix}`;
     }
 
     const resolvedModelSelection = await resolveCronModelSelection({

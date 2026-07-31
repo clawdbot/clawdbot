@@ -46,7 +46,7 @@
       "appGuidedDiscovery": true,
       "appGuidedSecret": true,
       "choiceLabel": "LM Studio",
-      "choiceHint": "Local/self-hosted LM Studio server",
+      "choiceHint": "Connect to a running LM Studio server and use an already loaded model",
       "icon": "https://cdn.simpleicons.org/lmstudio",
       "website": "https://lmstudio.ai/download",
       "optionKey": "lmstudioApiKey",

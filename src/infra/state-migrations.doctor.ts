@@ -285,7 +285,7 @@ function createPluginDoctorStateMigrationContext(
     },
     importPluginStateEntries(
       options: OpenKeyedStoreOptions,
-      entries: readonly { key: string; value: unknown; createdAt: number }[],
+      entries: readonly { key: string; value: unknown; createdAt: number; ttlMs?: number }[],
     ) {
       importPluginStateEntriesForDoctor(pluginId, { ...options, env: options.env ?? env }, entries);
     },
@@ -1076,23 +1076,30 @@ function buildLegacyStateMigrationSteps(
     ),
     sharedStep(() => migrateLegacyTaskStateSidecars({ stateDir })),
     sharedStep(() => migrateLegacyDeliveryQueues({ stateDir })),
-    sharedStep(() => migrateLegacyVoiceWakeSettings({ detected: detected.voiceWake, stateDir })),
+    sharedStep(
+      () => migrateLegacyVoiceWakeSettings({ detected: detected.voiceWake, stateDir }),
+      true,
+    ),
     sharedStep(
       () => migrateLegacyUpdateCheckState({ detected: detected.updateCheck, stateDir }),
       true,
     ),
     sharedStep(() => migrateLegacyConfigHealth({ detected: detected.configHealth, stateDir })),
-    sharedStep(() =>
-      migrateLegacyPluginBindingApprovals({
-        detected: detected.pluginBindingApprovals,
-        stateDir,
-      }),
+    sharedStep(
+      () =>
+        migrateLegacyPluginBindingApprovals({
+          detected: detected.pluginBindingApprovals,
+          stateDir,
+        }),
+      true,
     ),
-    sharedStep(() =>
-      migrateLegacyCurrentConversationBindings({
-        detected: detected.currentConversationBindings,
-        stateDir,
-      }),
+    sharedStep(
+      () =>
+        migrateLegacyCurrentConversationBindings({
+          detected: detected.currentConversationBindings,
+          stateDir,
+        }),
+      true,
     ),
   ];
 
