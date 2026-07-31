@@ -118,6 +118,10 @@ OpenRouter onboarding exposes `openrouter/arcee-ai/trinity-large-preview` and
 and the stored `openrouter` credential under the same provider owner. Trinity
 Mini is no longer served by OpenRouter; use the direct Arcee API for that model.
 
+If an older OpenClaw release created an `arcee/...` OpenRouter route, run
+`openclaw doctor --fix` once after upgrading. Doctor moves the catalog and model
+references to the canonical `openrouter/arcee-ai/...` route.
+
 ## Supported features
 
 | Feature                                       | Supported                                    |
