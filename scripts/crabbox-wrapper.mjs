@@ -431,6 +431,21 @@ function checkedOutput(
   };
 }
 
+function recoveryCommand(commandArgs) {
+  return [binary, ...commandArgs].map(recoveryCommandArgument).join(" ");
+}
+
+function recoveryCommandArgument(value) {
+  const text = `${value}`;
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/u.test(text)) {
+    return text;
+  }
+  if (process.platform === "win32") {
+    return `"${text.replaceAll('"', '""')}"`;
+  }
+  return `'${text.replaceAll("'", "'\\''")}'`;
+}
+
 // Probe Crabbox metadata (`--version` / `run --help`) with one generous retry.
 // A cold Crabbox can be SIGKILLed by the snappy default timeout or emit nothing
 // on the first call, then be instant and clean on the next. Retrying keeps the
@@ -898,6 +913,7 @@ function crabboxProviderReadiness(providerName, versionText, targetContext) {
     return {
       ready: false,
       reason: `requires Crabbox >= ${formatVersionTuple(minimumBlacksmithCrabboxVersion)} for Blacksmith Testbox`,
+      recovery: "update Crabbox, then retry",
     };
   }
   if (
@@ -907,10 +923,15 @@ function crabboxProviderReadiness(providerName, versionText, targetContext) {
     return {
       ready: false,
       reason: `requires Crabbox >= ${formatVersionTuple(minimumBrokeredDaytonaCrabboxVersion)} for brokered Daytona`,
+      recovery: "update Crabbox, then retry",
     };
   }
   if (["aws", "azure", "daytona"].includes(canonicalProvider) && !managedBrokerAuthConfigured()) {
-    return { ready: false, reason: "managed Crabbox broker auth unavailable" };
+    return {
+      ready: false,
+      reason: "managed Crabbox broker auth unavailable",
+      recovery: `run \`${recoveryCommand(["login", "--url", "https://crabbox.openclaw.ai"])}\`, then retry`,
+    };
   }
   const doctorArgs = ["doctor", "--provider", canonicalProvider];
   if (targetContext.target) {
@@ -922,15 +943,38 @@ function crabboxProviderReadiness(providerName, versionText, targetContext) {
   doctorArgs.push("--json");
   const doctor = checkedOutput(binary, doctorArgs);
   if (doctor.status !== 0) {
-    return { ready: false, reason: `doctor exited ${doctor.status}` };
+    const diagnostic = compactDiagnosticText(doctor.text);
+    return {
+      ready: false,
+      reason: `doctor exited ${doctor.status}${diagnostic ? `: ${diagnostic}` : ""}`,
+      recovery: `run \`${recoveryCommand(doctorArgs)}\``,
+    };
   }
   return { ready: true, reason: "doctor-ready" };
+}
+
+function compactDiagnosticText(value, maxLength = 500) {
+  const compact = `${value ?? ""}`.replace(/\s+/gu, " ").trim();
+  if (compact.length <= maxLength) {
+    return compact;
+  }
+  return `${compact.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
 function formatProviderReadiness(readiness) {
   return [...readiness.entries()]
     .map(([candidate, status]) => `${candidate}:${status.ready ? "ready" : status.reason}`)
     .join(",");
+}
+
+function providerRecoveryAdvice(readiness) {
+  return [
+    ...new Set(
+      [...readiness.values()]
+        .map((status) => status.recovery)
+        .filter((recovery) => typeof recovery === "string" && recovery.length > 0),
+    ),
+  ];
 }
 
 function shouldRequireBrokeredCloud(commandArgs, providerName, explicitProviderRequested = false) {
@@ -1012,7 +1056,7 @@ function enforceBrokeredCloud(commandArgs, providerName, explicitProviderRequest
   const canonicalProvider = canonicalProviderName(providerName);
   const instructions = [
     `[crabbox] provider=${canonicalProvider} requires a configured managed Crabbox broker for OpenClaw proof.`,
-    "[crabbox] run `crabbox login --url https://crabbox.openclaw.ai`, then retry.",
+    `[crabbox] run \`${recoveryCommand(["login", "--url", "https://crabbox.openclaw.ai"])}\`, then retry.`,
   ];
   if (canonicalProvider !== "aws") {
     instructions.push(
@@ -3783,6 +3827,15 @@ const version = probeCrabboxMetadata(binary, ["--version"]);
 const help = probeCrabboxMetadata(binary, ["run", "--help"]);
 const providers = parseProvidersFromHelp(help.text);
 const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
+
+if (version.status !== 0 || help.status !== 0) {
+  console.error(
+    `[crabbox] bin=${displayBinary} version=${version.text || "unknown"} providers=${providers.join(",") || "unknown"}`,
+  );
+  console.error("[crabbox] selected binary failed basic --version/--help sanity checks");
+  process.exit(2);
+}
+
 const providerSelection = selectedProvider(args, providers, version.text);
 if (providerSelection.error) {
   console.error(`[crabbox] ${providerSelection.error}`);
@@ -3790,6 +3843,9 @@ if (providerSelection.error) {
     console.error(
       `[crabbox] provider readiness ${formatProviderReadiness(providerSelection.readiness)}`,
     );
+    for (const recovery of providerRecoveryAdvice(providerSelection.readiness)) {
+      console.error(`[crabbox] recovery: ${recovery}`);
+    }
   }
   process.exit(2);
 }
@@ -3811,11 +3867,6 @@ if (providerSelection.source === "policy") {
   console.error(
     `[crabbox] route workload=${providerSelection.workload} selected=${provider} chain=${providerSelection.chain.join(",")} readiness=${formatProviderReadiness(providerSelection.readiness)}`,
   );
-}
-
-if (version.status !== 0 || help.status !== 0) {
-  console.error("[crabbox] selected binary failed basic --version/--help sanity checks");
-  process.exit(2);
 }
 
 if (provider && !isProviderAdvertised(provider, providers)) {

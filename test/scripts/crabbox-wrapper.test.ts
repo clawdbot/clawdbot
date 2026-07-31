@@ -1437,6 +1437,10 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("no ready provider for workload=ci-fast");
     expect(result.stderr).toContain("provider readiness");
+    expect(result.stderr).toContain('{"ok":false,"provider":"blacksmith-testbox"}');
+    expect(result.stderr).toMatch(
+      /recovery: run `\S+crabbox doctor --provider blacksmith-testbox --json`/u,
+    );
   });
 
   it("rejects unknown workload policies before execution", () => {
@@ -2221,7 +2225,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("provider=aws requires a configured managed Crabbox broker");
-    expect(result.stderr).toContain("crabbox login --url https://crabbox.openclaw.ai");
+    expect(result.stderr).toContain("login --url https://crabbox.openclaw.ai");
     expect(result.stderr).not.toContain("--provider aws");
     expect(result.stderr).not.toContain("OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD");
   });
@@ -3786,6 +3790,22 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("version=unknown");
     expect(result.stderr).toContain("selected binary failed basic --version/--help sanity checks");
+  });
+
+  it("rejects a broken binary before workload provider discovery", () => {
+    const helpText =
+      "provider: hetzner, aws, local-container, blacksmith-testbox, daytona, azure, or cloudflare\n";
+    const result = runWrapper(helpText, ["run", "--workload", "ci-fast", "--", "echo ok"], {
+      env: { OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS: "100" },
+      extraPathEntries: [makeSlowVersionCrabbox(helpText)],
+      nodePreload: testTimingPreload({ spawnTimeoutMs: 25 }),
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("selected binary failed basic --version/--help sanity checks");
+    expect(result.stderr).not.toContain("no ready provider");
+    expect(result.stderr).not.toContain("provider readiness");
   });
 
   it("retries a cold Crabbox whose run --help is slower than the default probe timeout", () => {
