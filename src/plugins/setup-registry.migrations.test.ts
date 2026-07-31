@@ -15,31 +15,6 @@ function runMigration(config: OpenClawConfig) {
 }
 
 describe("bundled setup config migrations", () => {
-  test("repairs Tencent TokenHub model defaults", () => {
-    const result = runMigration({
-      agents: {
-        defaults: {
-          model: { primary: "tencent-tokenhub/hy3-preview" },
-          models: {
-            "tencent-tokenhub/hy3-preview": {},
-          },
-        },
-      },
-    });
-
-    expect(result.changes).toEqual([
-      "Updated Tencent TokenHub agent model defaults to include tencent-tokenhub/hy3 and tencent-tokenhub/hy3-preview.",
-      "Changed Tencent TokenHub primary default from tencent-tokenhub/hy3-preview to tencent-tokenhub/hy3.",
-    ]);
-    expect(result.config.agents?.defaults?.model).toEqual({
-      primary: "tencent-tokenhub/hy3",
-    });
-    expect(Object.keys(result.config.agents?.defaults?.models ?? {}).toSorted()).toEqual([
-      "tencent-tokenhub/hy3",
-      "tencent-tokenhub/hy3-preview",
-    ]);
-  });
-
   test("rewrites legacy canvasHost into plugin-owned config", () => {
     const result = runMigration({
       canvasHost: {

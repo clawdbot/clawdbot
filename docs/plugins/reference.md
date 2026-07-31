@@ -8,12 +8,12 @@ title: "Plugin reference"
 
 # Plugin reference
 
-This page is generated from bundled plugin package metadata and selected
-official external catalog entries. Regenerate it with:
+This page is generated from `extensions/*/package.json` and
+`openclaw.plugin.json`. Regenerate it with:
 
 ```bash
 pnpm plugins:inventory:gen
 ```
 
-Use [Plugin inventory](/plugins/plugin-inventory) to browse all 146
+Use [Plugin inventory](/plugins/plugin-inventory) to browse all 145
 generated plugin reference pages by distribution, package, and description.

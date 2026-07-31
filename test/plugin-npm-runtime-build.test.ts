@@ -225,21 +225,6 @@ describe("plugin npm runtime build planning", () => {
     expect(setupEntryText).toContain('specifier: "./secret-contract-api.cjs"');
   });
 
-  it("builds Tencent setup metadata for installed-package migrations", () => {
-    const plan = expectPluginNpmRuntimeBuildPlan(
-      resolvePluginNpmRuntimeBuildPlan({
-        repoRoot,
-        packageDir: path.join(repoRoot, "extensions", "tencent"),
-      }),
-    );
-
-    expect(plan.entry["setup-api"]).toBe(
-      path.join(repoRoot, "extensions", "tencent", "setup-api.ts"),
-    );
-    expect(plan.runtimeSetupEntry).toBe("./dist/setup-api.js");
-    expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
-  });
-
   it("keeps published Codex runtime imports resolvable from the host package", async () => {
     const result = await buildPluginNpmRuntime({
       repoRoot,

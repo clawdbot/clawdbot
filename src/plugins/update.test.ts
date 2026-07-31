@@ -4794,6 +4794,90 @@ describe("syncPluginsForUpdateChannel", () => {
     });
   });
 
+  it("upgrades a pre-externalization Tencent install to the external provider package", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "tencent",
+        targetDir: "/tmp/openclaw-plugins/tencent",
+        version: "2026.7.31",
+        npmResolution: {
+          name: "openclaw-tencent-provider",
+          version: "2026.7.31",
+          resolvedSpec: "openclaw-tencent-provider@2026.7.31",
+        },
+      }),
+    );
+    const bundledRoot = appBundledPluginRoot("tencent");
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "tencent",
+          enabledByDefault: true,
+          npmSpec: "openclaw-tencent-provider@2026.7.31",
+        },
+      ],
+      config: {
+        agents: { defaults: { model: { primary: "tencent-tokenhub/hy3" } } },
+        plugins: {
+          load: { paths: [bundledRoot] },
+          installs: {
+            tencent: { source: "path", sourcePath: bundledRoot, installPath: bundledRoot },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(npmInstallCall()?.spec).toBe("openclaw-tencent-provider@2026.7.31");
+    expect(npmInstallCall()?.expectedPluginId).toBe("tencent");
+    expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).toBe(true);
+    expect(result.changed).toBe(true);
+    expect(result.summary.switchedToNpm).toEqual(["tencent"]);
+    expect(result.summary.errors).toStrictEqual([]);
+    expectRecordFields(result.config.plugins?.installs?.tencent, {
+      source: "npm",
+      spec: "openclaw-tencent-provider@2026.7.31",
+      installPath: "/tmp/openclaw-plugins/tencent",
+      version: "2026.7.31",
+    });
+    expect(result.config.plugins?.load?.paths ?? []).not.toContain(bundledRoot);
+    expect(result.config.agents?.defaults?.model?.primary).toBe("tencent-tokenhub/hy3");
+  });
+
+  it("keeps a pre-externalization Tencent install untouched when the plugin was disabled", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+    const bundledRoot = appBundledPluginRoot("tencent");
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "tencent",
+          enabledByDefault: true,
+          npmSpec: "openclaw-tencent-provider@2026.7.31",
+        },
+      ],
+      config: {
+        plugins: {
+          entries: { tencent: { enabled: false } },
+          load: { paths: [bundledRoot] },
+          installs: {
+            tencent: { source: "path", sourcePath: bundledRoot, installPath: bundledRoot },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.summary.switchedToNpm).toStrictEqual([]);
+    expect(result.summary.errors).toStrictEqual([]);
+    expectRecordFields(result.config.plugins?.installs?.tencent, { source: "path" });
+    expect(result.config.plugins?.load?.paths ?? []).toContain(bundledRoot);
+  });
+
   it("leaves config unchanged when externalized plugin installation fails", async () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     installPluginFromNpmSpecMock.mockResolvedValue({

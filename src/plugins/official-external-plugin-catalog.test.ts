@@ -1886,8 +1886,8 @@ describe("official external plugin catalog", () => {
     }
     expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("tencent"))).toEqual({
       clawhubSpec: "clawhub:@tencent/openclaw-tencent-provider",
-      npmSpec: "openclaw-tencent-provider",
-      defaultChoice: "clawhub",
+      npmSpec: "openclaw-tencent-provider@2026.7.31",
+      defaultChoice: "npm",
       minHostVersion: ">=2026.6.10",
     });
   });

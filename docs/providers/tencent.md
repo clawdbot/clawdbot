@@ -29,13 +29,13 @@ Install the official Tencent Cloud provider plugin to access Tencent Hy3 through
 <Steps>
   <Step title="Install the plugin">
     ```bash
-    openclaw plugins install clawhub:@tencent/openclaw-tencent-provider
+    openclaw plugins install npm:openclaw-tencent-provider
     ```
 
-    If ClawHub is unavailable, install the same plugin from npm:
+    The same plugin is also published on ClawHub:
 
     ```bash
-    openclaw plugins install npm:openclaw-tencent-provider
+    openclaw plugins install clawhub:@tencent/openclaw-tencent-provider
     ```
 
   </Step>
