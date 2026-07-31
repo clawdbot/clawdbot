@@ -5,14 +5,9 @@
  * and compact AI snapshots with stable refs and duplicate tracking.
  */
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeString } from "../record-shared.js";
 import type { SnapshotAriaNode } from "./client.types.js";
-import {
-  getRoleSnapshotStats,
-  type RoleRefMap,
-  type RoleSnapshotOptions,
-} from "./pw-role-snapshot.js";
+import type { RoleRefMap, RoleSnapshotOptions } from "./pw-role-snapshot.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
 /** Structured snapshot node shape returned by chrome-devtools-mcp. */
@@ -31,7 +26,11 @@ function normalizeRole(node: ChromeMcpSnapshotNode): string {
 }
 
 function escapeQuoted(value: string): string {
-  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"')
+    .replaceAll("\r", "\\r")
+    .replaceAll("\n", "\\n");
 }
 
 function shouldIncludeNode(params: {
@@ -122,12 +121,9 @@ export function flattenChromeMcpSnapshotToAriaNodes(
 export function buildAiSnapshotFromChromeMcpSnapshot(params: {
   root: ChromeMcpSnapshotNode;
   options?: RoleSnapshotOptions;
-  maxChars?: number;
 }): {
   snapshot: string;
-  truncated?: boolean;
   refs: RoleRefMap;
-  stats: { lines: number; chars: number; refs: number; interactive: number };
 } {
   const refs: RoleRefMap = {};
   const tracker = createDuplicateTracker();
@@ -178,17 +174,5 @@ export function buildAiSnapshotFromChromeMcpSnapshot(params: {
     }
   }
 
-  let snapshot = lines.join("\n");
-  let truncated = false;
-  const maxChars =
-    typeof params.maxChars === "number" && Number.isFinite(params.maxChars) && params.maxChars > 0
-      ? Math.floor(params.maxChars)
-      : undefined;
-  if (maxChars && snapshot.length > maxChars) {
-    snapshot = `${truncateUtf16Safe(snapshot, maxChars)}\n\n[...TRUNCATED - page too large]`;
-    truncated = true;
-  }
-
-  const stats = getRoleSnapshotStats(snapshot, refs);
-  return truncated ? { snapshot, truncated, refs, stats } : { snapshot, refs, stats };
+  return { snapshot: lines.join("\n"), refs };
 }

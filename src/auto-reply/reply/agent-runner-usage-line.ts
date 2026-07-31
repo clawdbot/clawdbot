@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
@@ -121,7 +122,7 @@ export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPa
   if (index === -1) {
     return [...payloads, { text: line }];
   }
-  const existing = payloads[index];
+  const existing = expectDefined(payloads[index], "payloads entry at index");
   const existingText = existing.text ?? "";
   const separator = existingText.endsWith("\n") ? "" : "\n";
   const next = {

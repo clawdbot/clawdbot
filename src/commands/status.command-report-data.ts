@@ -8,6 +8,7 @@ import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { resolveOsSummary } from "../infra/os-summary.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { SecurityAuditReport } from "../security/audit.js";
+import type { SessionStatus, StatusSummary } from "../status/types.js";
 import type { HealthSummary } from "./health.js";
 import {
   buildStatusChannelsTableRows,
@@ -30,7 +31,6 @@ import {
   type StatusMemoryStateResolvers,
 } from "./status.command-sections.js";
 import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.shared.js";
-import type { SessionStatus, StatusSummary } from "./status.types.js";
 
 /** Builds all table rows, section lines, and footer data needed by the status report renderer. */
 export async function buildStatusCommandReportData(

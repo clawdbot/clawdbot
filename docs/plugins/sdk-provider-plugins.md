@@ -208,12 +208,64 @@ catalog, API-key auth, and dynamic model resolution.
 
     ### Live model discovery
 
-    If your provider exposes a `/models`-style API, keep the provider-specific
-    endpoint and row projection in your plugin and use
-    `openclaw/plugin-sdk/provider-catalog-live-runtime` for the shared fetch
-    lifecycle. The helper gives you guarded HTTP fetches, provider-auth headers,
-    structured HTTP errors, TTL caching, and static fallback behavior without
-    putting provider policy in OpenClaw core.
+    If your provider exposes an OpenAI-compatible `/models` API, opt the
+    single-provider helper into shared discovery:
+
+    ```typescript
+    catalog: {
+      buildProvider: () => ({
+        api: "openai-completions",
+        baseUrl: "https://api.acme-ai.com/v1",
+        models: [...STATIC_MODELS],
+      }),
+      buildStaticProvider: () => ({
+        api: "openai-completions",
+        baseUrl: "https://api.acme-ai.com/v1",
+        models: [...STATIC_MODELS],
+      }),
+      liveModelDiscovery: true,
+    },
+    ```
+
+    `liveModelDiscovery: true` is a public Plugin SDK contract with these
+    behaviors:
+
+    | Area | Contract |
+    | --- | --- |
+    | Credentials | Discovery uses the catalog's resolved provider credential, preferring `discoveryApiKey` when auth supplies one. Secret-reference markers are never sent as tokens. The default request uses `Authorization: Bearer <token>`; use `buildRequestHeaders` for another vendor auth scheme. |
+    | Endpoint | The default URL is `models` relative to the effective provider `baseUrl`, including an operator override when `allowExplicitBaseUrl` is enabled. Use `endpointPath` for another relative path. Use `endpointUrl: { url, requireBaseUrl }` only for a fixed vendor URL; discovery is skipped unless the effective base URL still equals `requireBaseUrl`, so a custom proxy credential is not sent to the vendor. |
+    | Network limits | Fetches use OpenClaw's SSRF guard, one 5-second timeout budget across pagination, a 4 MiB response limit per page, and a 50-page limit. Cross-origin pagination links are rejected; credentials are removed after a cross-origin redirect. |
+    | Cache | Successful, non-empty catalogs are cached for 60 seconds by provider, endpoint, and resolved credential. Empty or unusable results are not cached. |
+    | Filtering | Exact live IDs keep their trusted static metadata. New rows are projected conservatively as text/chat models. Disabled, archived, deprecated, explicitly non-chat, embedding, reranking, moderation, speech, image-only, and video-only rows are excluded. Use `readRows` only to select rows from a nonstandard response envelope; provider-specific model semantics still belong in a custom catalog. |
+    | Admission | Optional. Set `acceptUnknownModel: ({ id, record }) => boolean` when your request shaping is model-version specific, so discovery cannot publish a model you cannot yet build a valid request for. It is called only for IDs your static catalog does not already publish; known IDs bypass it and keep their published metadata. Return `false` to drop the row. Providers that omit it keep the previous behavior unchanged. Prefer comparing the vendor's advertised capabilities against your own contract checks over a hand-maintained model list, and fail closed when the row carries no capability data. |
+    | Failure | Live discovery is advisory. Auth, network, timeout, pagination, parsing, empty-catalog, and filtering failures return the provider-owned static seed instead of removing the provider. |
+
+    For a non-Bearer or nonstandard list endpoint, pass options instead of
+    `true`:
+
+    ```typescript
+    liveModelDiscovery: {
+      endpointPath: "model-catalog",
+      buildRequestHeaders: ({ apiKey, discoveryApiKey }) => ({
+        "vendor-version": "2026-01-01",
+        "x-api-key": discoveryApiKey ?? apiKey ?? "",
+      }),
+      readRows: (body) =>
+        body && typeof body === "object" &&
+        Array.isArray((body as { models?: unknown }).models)
+          ? (body as { models: unknown[] }).models
+          : [],
+    },
+    ```
+
+    Do not use `endpointUrl` as an unconditional alternate host. Its
+    `requireBaseUrl` check is the credential-isolation boundary for providers
+    whose model-list host differs from their inference host.
+
+    If the provider needs custom model semantics rather than the conservative
+    OpenAI-compatible projection, keep only that projection in the plugin. Pass
+    it as `projectRows`; the shared runtime still owns guarded fetches,
+    provider-auth headers, cache admission, and static fallback.
 
     Use `buildLiveModelProviderConfig` when the live API only tells you which
     provider-owned static catalog rows are currently available:
@@ -264,6 +316,11 @@ catalog, API-key auth, and dynamic model resolution.
         fetchGuard: params.fetchGuard,
         ttlMs: 60_000,
         auditContext: "acme-ai-model-discovery",
+        projectRows: (rows, fallback) =>
+          rows.flatMap((row) => {
+            const model = projectAcmeModel(row, fallback);
+            return model ? [model] : [];
+          }),
       });
     }
 
@@ -302,37 +359,6 @@ catalog, API-key auth, and dynamic model resolution.
         });
       },
     });
-    ```
-
-    Use `getCachedLiveProviderModelRows` when the provider API returns richer
-    metadata and the plugin needs to project rows into OpenClaw model
-    definitions itself:
-
-    ```typescript index.ts
-    import {
-      getCachedLiveProviderModelRows,
-      LiveModelCatalogHttpError,
-    } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-
-    async function discoverAcmeModels(apiKey: string) {
-      try {
-        const rows = await getCachedLiveProviderModelRows({
-          providerId: "acme-ai",
-          endpoint: "https://api.acme-ai.com/v1/models",
-          apiKey,
-          ttlMs: 60_000,
-          auditContext: "acme-ai-model-discovery",
-        });
-        return rows
-          .map((row) => projectAcmeModel(row))
-          .filter((model) => model !== null);
-      } catch (error) {
-        if (error instanceof LiveModelCatalogHttpError) {
-          return STATIC_MODELS;
-        }
-        throw error;
-      }
-    }
     ```
 
     `run` should stay auth-gated and return `null` when no usable credential is
@@ -505,7 +531,7 @@ catalog, API-key auth, and dynamic model resolution.
     | Family | What it wires in | Bundled examples |
     | --- | --- | --- |
     | `google-thinking` | Gemini thinking payload normalization on the shared stream path | `google`, `google-gemini-cli` |
-    | `kilocode-thinking` | Kilo reasoning wrapper on the shared proxy stream path, with `kilo/auto` and unsupported proxy reasoning ids skipping injected thinking | `kilocode` |
+    | `kilocode-thinking` | Kilo reasoning wrapper on the shared proxy stream path, with `kilo-auto/balanced` and unsupported proxy reasoning ids skipping injected thinking | `kilocode` |
     | `moonshot-thinking` | Moonshot binary native-thinking payload mapping from config + `/think` level | `moonshot` |
     | `minimax-fast-mode` | MiniMax fast-mode model rewrite on the shared stream path | `minimax`, `minimax-portal` |
     | `openai-responses-defaults` | Shared native OpenAI/Codex Responses wrappers: attribution headers, `/fast`/`serviceTier`, text verbosity, native Codex web search, reasoning-compat payload shaping, and Responses context management | `openai` |
@@ -600,8 +626,11 @@ catalog, API-key auth, and dynamic model resolution.
         },
         ```
 
-        `resolveUsageAuth` has three outcomes. Return `{ token, accountId? }`
-        when the provider has a usage/billing credential. Return
+        `resolveUsageAuth` has three outcomes. Return
+        `{ token, accountId?, subscriptionType?, rateLimitTier? }` when the
+        provider has a usage/billing credential (the optional fields carry
+        non-secret plan metadata from the resolved profile into
+        `fetchUsageSnapshot`). Return
         `{ handled: true }` only when the provider has definitively handled usage
         auth but has no usable usage token, and OpenClaw must skip generic
         API-key/OAuth fallback. Return `null` or `undefined` when the provider did
@@ -831,6 +860,18 @@ catalog, API-key auth, and dynamic model resolution.
         clients. Implement `handleBargeIn` when a transport can detect that a
         human is interrupting assistant playback and the provider supports
         truncating or clearing the active audio response.
+        `submitToolResult` may return `void` for synchronous submission, or a
+        `Promise<void>` for an asynchronous completion boundary the provider
+        bridge can expose. Gateway relay sessions wait for that promise before
+        confirming a final result or clearing the linked run; reject it when
+        submission fails.
+        Set `supportsToolResultSuppression: false` when the provider cannot
+        honor `options.suppressResponse`. OpenClaw then avoids suppression for
+        internal forced-consult and cancellation results, and rejects direct
+        suppressed-result requests instead of silently starting a response.
+        Consumers of `createRealtimeVoiceBridgeSession` may likewise return a
+        promise from `onToolCall`; synchronous throws and rejections are routed
+        to the session's `onError` callback.
         Set `handlesInputAudioBargeIn` only when provider VAD confirms an
         interruption by calling `onClearAudio("barge-in")`. Providers that omit
         the flag use OpenClaw's local input-audio fallback detection.
@@ -919,6 +960,7 @@ catalog, API-key auth, and dynamic model resolution.
           id: "acme-ai",
           label: "Acme Video",
           defaultTimeoutMs: 600_000,
+          models: ["acme-video", "acme-image-video"],
           capabilities: {
             generate: { maxVideos: 1, maxDurationSeconds: 10, supportsResolution: true },
             imageToVideo: {
@@ -930,6 +972,21 @@ catalog, API-key auth, and dynamic model resolution.
             },
             videoToVideo: { enabled: false },
           },
+          catalogByModel: {
+            "acme-image-video": {
+              modes: ["imageToVideo"],
+              capabilities: {
+                imageToVideo: {
+                  enabled: true,
+                  maxVideos: 1,
+                  maxInputImages: 1,
+                  resolutions: ["480P", "720P", "1080P"],
+                  supportsResolution: true,
+                },
+                videoToVideo: { enabled: false },
+              },
+            },
+          },
           generateVideo: async (req) => ({ videos: [] }),
         });
         ```
@@ -937,6 +994,13 @@ catalog, API-key auth, and dynamic model resolution.
         `capabilities` is required on both provider types; `edit` and the
         video transform blocks (`imageToVideo`, `videoToVideo`) always need an
         explicit `enabled` flag.
+
+        Use `catalogByModel` when a listed model's static modes or capabilities
+        differ from the provider defaults. This metadata keeps
+        `video_generate action=list` and model catalogs accurate without
+        invoking provider code. Request-time capability lookup and enforcement
+        still belong in `resolveModelCapabilities` and `generateVideo`; reuse
+        the same capability constant for both paths when possible.
       </Tab>
       <Tab title="Web fetch and search">
         ```typescript

@@ -21,7 +21,7 @@ function resolveDefault(
   return first ?? fallback[0] ?? "";
 }
 
-export async function transcribeDeepInfraAudio(params: AudioTranscriptionRequest) {
+async function transcribeDeepInfraAudio(params: AudioTranscriptionRequest) {
   return await transcribeOpenAiCompatibleAudio({
     ...params,
     provider: "deepinfra",

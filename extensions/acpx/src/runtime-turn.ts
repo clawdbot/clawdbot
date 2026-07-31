@@ -157,7 +157,7 @@ function legacyRunTurnAsStartTurn(runtime: AcpRuntime, input: AcpRuntimeTurnInpu
 }
 
 /** Start an ACP turn, adapting legacy runTurn-only runtimes when needed. */
-export function startRuntimeTurn(runtime: AcpRuntime, input: AcpRuntimeTurnInput): AcpRuntimeTurn {
+function startRuntimeTurn(runtime: AcpRuntime, input: AcpRuntimeTurnInput): AcpRuntimeTurn {
   return runtime.startTurn?.(input) ?? legacyRunTurnAsStartTurn(runtime, input);
 }
 

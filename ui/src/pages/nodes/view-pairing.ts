@@ -3,7 +3,7 @@ import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
-import type { DevicePairSetup } from "../../lib/device-pair-setup.ts";
+import type { DevicePairSetup, DevicePairSetupAccess } from "../../lib/device-pair-setup.ts";
 
 const PAIRING_DOCS_URL =
   "https://docs.openclaw.ai/channels/pairing#pair-from-the-control-ui-recommended";
@@ -13,11 +13,14 @@ type DevicePairSetupProps = {
   loading: boolean;
   error: string | null;
   setup: DevicePairSetup | null;
+  access: DevicePairSetupAccess;
   pendingCount: number;
   onRefresh: () => void;
+  onAccessChange: (access: DevicePairSetupAccess) => void;
   onClose: () => void;
   onCopy: (setupCode: string) => void;
   onManageDevices: () => void;
+  onGetApps: () => void;
 };
 
 export function renderDevicePairSetup(props: DevicePairSetupProps) {
@@ -38,6 +41,10 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
           <div>
             <h2>${title}</h2>
             <p>${description}</p>
+            <p class="device-pair-setup__get-apps">
+              ${t("nodes.pairing.noApp")}
+              <button type="button" @click=${props.onGetApps}>${t("nodes.pairing.getApps")}</button>
+            </p>
           </div>
           <button
             class="btn btn--icon btn--ghost device-pair-setup__close"
@@ -50,6 +57,40 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
         </header>
 
         <div class="device-pair-setup__body">
+          <fieldset class="device-pair-setup__access" ?disabled=${props.loading || setup !== null}>
+            <legend>${t("nodes.pairing.accessTitle")}</legend>
+            <label>
+              <input
+                type="radio"
+                name="device-pair-access"
+                .checked=${props.access === "full"}
+                @change=${() => props.onAccessChange("full")}
+              />
+              <span>
+                <strong>${t("nodes.pairing.fullAccess")}</strong>
+                <small>${t("nodes.pairing.fullAccessHint")}</small>
+              </span>
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="device-pair-access"
+                .checked=${props.access === "limited"}
+                @change=${() => props.onAccessChange("limited")}
+              />
+              <span>
+                <strong>${t("nodes.pairing.limitedAccess")}</strong>
+                <small>${t("nodes.pairing.limitedAccessHint")}</small>
+              </span>
+            </label>
+          </fieldset>
+          ${!setup && !props.loading && !props.error
+            ? html`
+                <button class="btn primary" type="button" @click=${props.onRefresh}>
+                  ${icons.smartphone} ${t("nodes.pairing.generateCode")}
+                </button>
+              `
+            : nothing}
           ${props.loading && !setup
             ? html`
                 <div class="device-pair-setup__loading" role="status">
@@ -90,7 +131,10 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
                 </div>
 
                 <div class="device-pair-setup__meta">
-                  <span class="pill">${setup.auth}</span>
+                  <span class="settings-status settings-status--accent">
+                    <span class="settings-status__dot"></span>
+                    ${setup.auth}
+                  </span>
                   <div class="device-pair-setup__gateways">
                     ${gatewayUrls.map(
                       (gatewayUrl) => html`
@@ -101,6 +145,15 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
                     )}
                   </div>
                 </div>
+
+                ${setup.accessDowngraded
+                  ? html`
+                      <div class="callout warn device-pair-setup__access-warning" role="status">
+                        <strong>${t("nodes.pairing.transportLimitedTitle")}</strong>
+                        <span>${t("nodes.pairing.transportLimitedHint")}</span>
+                      </div>
+                    `
+                  : nothing}
 
                 <div class="device-pair-setup__actions">
                   <button

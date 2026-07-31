@@ -75,6 +75,9 @@ describe("qa docker harness", () => {
       OPENCLAW_STATE_DIR: "/tmp/openclaw/state",
     });
     expect(services["qa-lab"]?.volumes).toContain("./state:/opt/openclaw-scaffold:ro");
+    expect(services["qa-lab"]?.volumes).toContain(
+      `${path.relative(outputDir, "/repo/openclaw/taxonomy.yaml").split(path.sep).join("/")}:/app/taxonomy.yaml:ro`,
+    );
     expect(compose).toContain('      - "127.0.0.1:18889:18789"');
     expect(compose).toContain('      - "127.0.0.1:43124:43123"');
     expect(compose).toContain(":/opt/openclaw-qa-lab-ui:ro");
@@ -110,7 +113,7 @@ describe("qa docker harness", () => {
         entries?: Record<string, { enabled?: boolean }>;
       };
     };
-    expect(configText).toContain('"allowInsecureAuth": true');
+    expect(configText).not.toContain('"allowInsecureAuth"');
     expect(configText).toContain('"pluginToolsMcpBridge": true');
     expect(configText).toContain('"openClawToolsMcpBridge": true');
     expect(configText).toContain("/app/dist/control-ui");
@@ -154,7 +157,7 @@ describe("qa docker harness", () => {
 
     expect(result.imageName).toBe("openclaw:qa-local-prebaked");
     expect(calls).toEqual([
-      "docker build -t openclaw:qa-local-prebaked --build-arg OPENCLAW_EXTENSIONS=qa-channel qa-lab -f Dockerfile . @/repo/openclaw",
+      "docker build -t openclaw:qa-local-prebaked --build-arg OPENCLAW_EXTENSIONS=acpx qa-channel qa-lab -f Dockerfile . @/repo/openclaw",
     ]);
   });
 
@@ -177,9 +180,13 @@ describe("qa docker harness", () => {
 
     const compose = await readFile(path.join(outputDir, "docker-compose.qa.yml"), "utf8");
     const services = parseComposeServices(compose);
+    expect(compose).toContain('OPENCLAW_EXTENSIONS: "acpx qa-channel qa-lab"');
     expect(services["qa-mock-openai"]?.build?.context).toBe("../repo #hash");
     expect(services["qa-lab"]?.volumes).toContain(
       "../repo #hash/extensions/qa-lab/web/dist:/opt/openclaw-qa-lab-ui:ro",
+    );
+    expect(services["qa-lab"]?.volumes).toContain(
+      "../repo #hash/taxonomy.yaml:/app/taxonomy.yaml:ro",
     );
     expect(services["openclaw-qa-gateway"]?.volumes).toContain(
       "../repo #hash:/opt/openclaw-repo:ro",

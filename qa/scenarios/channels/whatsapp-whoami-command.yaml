@@ -2,10 +2,11 @@ title: WhatsApp whoami command reply
 
 scenario:
   id: whatsapp-whoami-command
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
-    primary: [channels.native-commands]
+    primary:
+      - channels.channel-native-commands
   objective: Verify WhatsApp command identity includes channel and allowlist context.
   successCriteria:
     - The whoami command returns an identity block.
@@ -17,7 +18,6 @@ scenario:
     kind: flow
     channel: whatsapp
     config:
-      requiredChannelDriver: live
       requiredProviderMode: mock-openai
       expectedAny: [Identity, "Channel: whatsapp", "AllowFrom:"]
     summary: Run WhatsApp whoami and verify channel identity context.

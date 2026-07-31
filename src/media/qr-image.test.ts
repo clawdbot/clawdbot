@@ -2,37 +2,43 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { MOCK_PNG_BASE64, MOCK_PNG_DATA_URL, toDataURL } = vi.hoisted(() => {
-  const MOCK_PNG_BASE64Local = "ZmFrZXBuZw==";
-  const MOCK_PNG_DATA_URLLocal = `data:image/png;base64,${MOCK_PNG_BASE64Local}`;
+const { MOCK_PNG_BASE64, MOCK_PNG_BUFFER, toBuffer } = vi.hoisted(() => {
+  const MOCK_PNG_BUFFERLocal = Buffer.from("fakepng");
   return {
-    MOCK_PNG_BASE64: MOCK_PNG_BASE64Local,
-    MOCK_PNG_DATA_URL: MOCK_PNG_DATA_URLLocal,
-    toDataURL: vi.fn(async () => MOCK_PNG_DATA_URLLocal),
+    MOCK_PNG_BASE64: MOCK_PNG_BUFFERLocal.toString("base64"),
+    MOCK_PNG_BUFFER: MOCK_PNG_BUFFERLocal,
+    toBuffer: vi.fn(async () => MOCK_PNG_BUFFERLocal),
   };
 });
 
-vi.mock("qrcode", () => ({
-  default: {
-    toDataURL,
-  },
-}));
+vi.mock("qrcode", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("qrcode")>();
+  return {
+    ...actual,
+    default: {
+      ...(actual.default ?? actual),
+      toBuffer,
+    },
+  };
+});
 
-import {
-  formatQrPngDataUrl,
-  renderQrPngBase64,
-  renderQrPngDataUrl,
-  writeQrPngTempFile,
-} from "./qr-image.ts";
+let renderQrPngBase64: typeof import("./qr-image.ts").renderQrPngBase64;
+let renderQrPngDataUrl: typeof import("./qr-image.ts").renderQrPngDataUrl;
+let writeQrPngTempFile: typeof import("./qr-image.ts").writeQrPngTempFile;
+
+beforeAll(async () => {
+  vi.resetModules();
+  ({ renderQrPngBase64, renderQrPngDataUrl, writeQrPngTempFile } = await import("./qr-image.ts"));
+});
 
 describe("renderQrPngBase64", () => {
   const tmpRoot = path.join(os.tmpdir(), "openclaw-qr-image-tests");
 
   beforeEach(() => {
-    toDataURL.mockClear();
-    toDataURL.mockResolvedValue(MOCK_PNG_DATA_URL);
+    toBuffer.mockClear();
+    toBuffer.mockResolvedValue(MOCK_PNG_BUFFER);
   });
 
   afterEach(async () => {
@@ -43,28 +49,25 @@ describe("renderQrPngBase64", () => {
     await expect(renderQrPngBase64("openclaw", { scale: 8, marginModules: 2 })).resolves.toBe(
       MOCK_PNG_BASE64,
     );
-    expect(toDataURL).toHaveBeenCalledWith("openclaw", {
+    expect(toBuffer).toHaveBeenCalledWith("openclaw", {
       margin: 2,
       scale: 8,
-      type: "image/png",
     });
   });
 
   it("uses the default PNG rendering options", async () => {
     await renderQrPngBase64("openclaw");
-    expect(toDataURL).toHaveBeenCalledWith("openclaw", {
+    expect(toBuffer).toHaveBeenCalledWith("openclaw", {
       margin: 4,
       scale: 6,
-      type: "image/png",
     });
   });
 
   it("floors finite PNG rendering options before delegating", async () => {
     await renderQrPngBase64("openclaw", { scale: 8.9, marginModules: 2.9 });
-    expect(toDataURL).toHaveBeenCalledWith("openclaw", {
+    expect(toBuffer).toHaveBeenCalledWith("openclaw", {
       margin: 2,
       scale: 8,
-      type: "image/png",
     });
   });
 
@@ -77,18 +80,10 @@ describe("renderQrPngBase64", () => {
     ["marginModules", 6, Number.POSITIVE_INFINITY, "marginModules must be a finite number."],
   ])("rejects invalid %s values", async (_name, scale, marginModules, message) => {
     await expect(renderQrPngBase64("openclaw", { scale, marginModules })).rejects.toThrow(message);
-    expect(toDataURL).not.toHaveBeenCalled();
-  });
-
-  it("rejects non-PNG qrcode data URLs", async () => {
-    toDataURL.mockResolvedValue("data:image/svg+xml;base64,PHN2Zz4=");
-    await expect(renderQrPngBase64("openclaw")).rejects.toThrow(
-      "Expected qrcode to return a PNG data URL.",
-    );
+    expect(toBuffer).not.toHaveBeenCalled();
   });
 
   it("formats QR PNG data URLs", async () => {
-    expect(formatQrPngDataUrl(MOCK_PNG_BASE64)).toBe(`data:image/png;base64,${MOCK_PNG_BASE64}`);
     await expect(renderQrPngDataUrl("openclaw")).resolves.toBe(
       `data:image/png;base64,${MOCK_PNG_BASE64}`,
     );
@@ -120,6 +115,11 @@ describe("renderQrPngBase64", () => {
         fileName: opts.fileName,
       }),
     ).rejects.toThrow(`${name} must be a non-empty filename segment.`);
-    expect(toDataURL).not.toHaveBeenCalled();
+    expect(toBuffer).not.toHaveBeenCalled();
   });
+});
+
+afterAll(() => {
+  vi.doUnmock("qrcode");
+  vi.resetModules();
 });

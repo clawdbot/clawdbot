@@ -13,6 +13,7 @@ export function createUnitFastFakeTimersVitestConfig(
   options: { argv?: string[] } = {},
 ) {
   const sharedTest = sharedVitestConfig.test ?? {};
+  const sharedSequence = (sharedTest as { sequence?: { groupOrder?: number } }).sequence;
   const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
   const unitFastTimerTestFiles = getUnitFastTimerTestFiles();
   const cliInclude = narrowIncludePatternsForCli(unitFastTimerTestFiles, options.argv);
@@ -31,7 +32,7 @@ export function createUnitFastFakeTimersVitestConfig(
       maxWorkers: 1,
       fileParallelism: false,
       sequence: {
-        ...sharedTest.sequence,
+        ...sharedSequence,
         groupOrder: 1,
       },
       passWithNoTests: true,

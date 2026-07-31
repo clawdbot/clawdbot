@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import { Transform, type Readable, type TransformCallback } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import {
   Application,
   createDecoder as createLibopusDecoder,
@@ -108,7 +109,8 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
     windowsHide: true,
   });
   const opusStream = createDiscordOpusEncodeStream();
-  let stderr = "";
+  const stderr = Buffer.alloc(FFMPEG_ERROR_OUTPUT_BYTES);
+  let stderrBytes = 0;
   let ffmpegClosed = false;
   const killFfmpeg = (signal: NodeJS.Signals = "SIGTERM") => {
     if (!ffmpegClosed && !ffmpeg.killed) {
@@ -116,10 +118,9 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
     }
   };
 
-  ffmpeg.stderr.setEncoding("utf8");
-  ffmpeg.stderr.on("data", (chunk: string) => {
-    if (stderr.length < FFMPEG_ERROR_OUTPUT_BYTES) {
-      stderr = `${stderr}${chunk}`.slice(0, FFMPEG_ERROR_OUTPUT_BYTES);
+  ffmpeg.stderr.on("data", (chunk: Buffer) => {
+    if (stderrBytes < FFMPEG_ERROR_OUTPUT_BYTES) {
+      stderrBytes += chunk.copy(stderr, stderrBytes, 0, FFMPEG_ERROR_OUTPUT_BYTES - stderrBytes);
     }
   });
 
@@ -129,7 +130,9 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
   ffmpeg.once("close", (code, signal) => {
     ffmpegClosed = true;
     if (code && code !== 0) {
-      const suffix = stderr.trim() ? `: ${stderr.trim()}` : "";
+      // A byte cap can end inside a code point; omit that partial suffix instead of emitting U+FFFD.
+      const stderrText = new StringDecoder("utf8").write(stderr.subarray(0, stderrBytes)).trim();
+      const suffix = stderrText ? `: ${stderrText}` : "";
       opusStream.destroy(new Error(`ffmpeg exited with code ${code}${suffix}`));
       return;
     }

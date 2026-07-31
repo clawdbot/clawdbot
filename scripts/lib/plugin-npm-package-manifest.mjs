@@ -4,7 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
-import { packageJsonForShrinkwrap, readShrinkwrapOverrides } from "../generate-npm-shrinkwrap.mjs";
+import {
+  generateNpmPackageLock,
+  packageJsonForNpmLock,
+  readNpmLockOverrides,
+} from "../generate-npm-package-lock.mjs";
 import { resolveNpmRunner } from "../npm-runner.mjs";
 import {
   listPluginNpmRuntimeBuildOutputs,
@@ -111,6 +115,59 @@ function assertPluginNpmRuntimeBuildExists(plan) {
   assertPackageFilesDoNotExcludeRequiredRuntimeArtifacts(plan);
 }
 
+function resolvePackagedChannelStateMetadata(metadata, metadataKey, plan) {
+  if (
+    !metadata ||
+    typeof metadata !== "object" ||
+    Array.isArray(metadata) ||
+    typeof metadata.specifier !== "string" ||
+    !metadata.specifier.trim()
+  ) {
+    return metadata;
+  }
+
+  const normalizedSpecifier = normalizePackPath(metadata.specifier);
+  const sourceEntry = normalizedSpecifier.replace(/\.(?:[cm]?[jt]s)$/u, "");
+  const runtimeSpecifier = plan.runtimeBuildOutputs.find((runtimePath) => {
+    const normalizedRuntimePath = normalizePackPath(runtimePath);
+    return (
+      normalizedRuntimePath === normalizedSpecifier ||
+      normalizedRuntimePath.replace(/^dist\//u, "").replace(/\.(?:[cm]?js)$/u, "") === sourceEntry
+    );
+  });
+  if (!runtimeSpecifier) {
+    throw new Error(
+      `channel ${metadataKey} specifier '${metadata.specifier}' has no package-local runtime output for ${plan.pluginDir}`,
+    );
+  }
+
+  // Published plugins omit source files; installed channel probes must load
+  // the exact ESM or CommonJS sidecar emitted by the package runtime build.
+  return {
+    ...metadata,
+    specifier: runtimeSpecifier,
+  };
+}
+
+function resolvePackagedChannelMetadata(plan) {
+  const channel = plan.packageJson.openclaw?.channel;
+  if (!channel || typeof channel !== "object" || Array.isArray(channel)) {
+    return channel;
+  }
+
+  const packagedChannel = { ...channel };
+  for (const metadataKey of ["configuredState", "persistedAuthState"]) {
+    if (Object.hasOwn(channel, metadataKey)) {
+      packagedChannel[metadataKey] = resolvePackagedChannelStateMetadata(
+        channel[metadataKey],
+        metadataKey,
+        plan,
+      );
+    }
+  }
+  return packagedChannel;
+}
+
 function hasPackageRuntimeDependencies(packageJson) {
   return (
     Object.keys(packageJson.dependencies ?? {}).length > 0 ||
@@ -138,7 +195,10 @@ function listConfiguredBundledDependencyNames(packageJson) {
   return [];
 }
 
-/** Resolve an npm command invocation for plugin package scripts. */
+/**
+ * Resolve an npm command invocation for plugin package scripts.
+ * @internal Directly tested script implementation detail.
+ */
 export function resolvePluginNpmCommand(args, params = {}) {
   return resolveNpmRunner({
     comSpec: params.comSpec,
@@ -295,7 +355,7 @@ function installMissingOptionalBundledDependencies(params) {
       {
         cwd: params.packageDir,
         env: process.env,
-        stdio: ["ignore", "inherit", "inherit"],
+        stdio: ["ignore", "ignore", "inherit"],
       },
     );
     if (result.error) {
@@ -338,10 +398,10 @@ function installPackageLocalBundledDependencies(params) {
     return () => {};
   }
 
-  const shrinkwrapPath = path.join(params.packageDir, "npm-shrinkwrap.json");
-  if (!fs.existsSync(shrinkwrapPath)) {
+  const packageLockPath = path.join(params.packageDir, "package-lock.json");
+  if (fs.existsSync(packageLockPath)) {
     throw new Error(
-      `package-local bundled dependency install requires npm-shrinkwrap.json for ${params.pluginDir}`,
+      `package-local bundled dependency install refuses to replace existing package-lock.json for ${params.pluginDir}`,
     );
   }
 
@@ -360,17 +420,19 @@ function installPackageLocalBundledDependencies(params) {
   };
   delete installPackageJsonBase.peerDependencies;
   delete installPackageJsonBase.peerDependenciesMeta;
-  const installPackageJson = packageJsonForShrinkwrap(
-    installPackageJsonBase,
-    readShrinkwrapOverrides(),
-  );
+  const installPackageJson = packageJsonForNpmLock(installPackageJsonBase, readNpmLockOverrides());
   const installPackageJsonText = `${JSON.stringify(installPackageJson, null, 2)}\n`;
   if (installPackageJsonText !== packedPackageJsonText) {
-    // npm validates peer edges against the shrinkwrap during ci even when peers are omitted.
+    // npm validates peer edges against the package lock during ci even when peers are omitted.
     // The peer metadata belongs in the packed plugin, not in this temporary dependency install.
     fs.writeFileSync(packageJsonPath, installPackageJsonText, "utf8");
   }
   try {
+    fs.writeFileSync(
+      packageLockPath,
+      generateNpmPackageLock(params.packageDir, { installStrategy: "shallow" }),
+      "utf8",
+    );
     const result = spawnNpmSync(
       [
         "ci",
@@ -401,13 +463,17 @@ function installPackageLocalBundledDependencies(params) {
     installMissingOptionalBundledDependencies(params);
   } finally {
     fs.writeFileSync(packageJsonPath, packedPackageJsonText, "utf8");
+    fs.rmSync(packageLockPath, { force: true });
   }
   return () => {
     fs.rmSync(nodeModulesPath, { recursive: true, force: true });
   };
 }
 
-/** Build the package.json that should be used while packaging a plugin for npm. */
+/**
+ * Build the package.json that should be used while packaging a plugin for npm.
+ * @internal Directly tested script implementation detail.
+ */
 export function resolveAugmentedPluginNpmPackageJson(params) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
@@ -436,6 +502,7 @@ export function resolveAugmentedPluginNpmPackageJson(params) {
   }
   assertPluginNpmRuntimeBuildExists(plan);
 
+  const packagedChannel = resolvePackagedChannelMetadata(plan);
   const packageJson = {
     ...plan.packageJson,
     files: plan.packageFiles,
@@ -443,6 +510,7 @@ export function resolveAugmentedPluginNpmPackageJson(params) {
     peerDependenciesMeta: plan.packagePeerMetadata.peerDependenciesMeta,
     openclaw: {
       ...plan.packageJson.openclaw,
+      ...(packagedChannel ? { channel: packagedChannel } : {}),
       runtimeExtensions: plan.runtimeExtensions,
       ...(plan.runtimeSetupEntry
         ? {
@@ -571,7 +639,10 @@ export function mergeGeneratedChannelConfigs(manifest, generatedChannelConfigs) 
   };
 }
 
-/** Build the plugin manifest that should be used while packaging a plugin for npm. */
+/**
+ * Build the plugin manifest that should be used while packaging a plugin for npm.
+ * @internal Directly tested script implementation detail.
+ */
 export function resolveAugmentedPluginNpmManifest(params) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
@@ -601,7 +672,10 @@ export function resolveAugmentedPluginNpmManifest(params) {
   };
 }
 
-/** Temporarily write augmented manifest/package metadata while a packaging callback runs. */
+/**
+ * Temporarily write augmented manifest/package metadata while a packaging callback runs.
+ * @internal Directly tested script implementation detail.
+ */
 export function withAugmentedPluginNpmManifestForPackage(params, callback) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
@@ -694,6 +768,7 @@ function readRunPackageDir(argv) {
   return packageDir;
 }
 
+/** @internal Directly tested script implementation detail. */
 export function parseRunArgs(argv) {
   if (argv[0] === "--help" || argv[0] === "-h") {
     return { help: true, packageDir: "", command: "", args: [] };

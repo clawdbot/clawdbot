@@ -1,5 +1,6 @@
 // Imessage plugin module implements persisted echo cache behavior.
 import { createHash } from "node:crypto";
+import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getIMessageRuntime } from "../runtime.js";
@@ -8,6 +9,7 @@ import { stripLeadingEchoTextCorruptionMarkers } from "./echo-text-corruption.js
 type PersistedEchoEntry = {
   scope: string;
   text?: string;
+  media?: MediaPlaceholderTextFact;
   messageId?: string;
   timestamp: number;
   expiresAt?: number;
@@ -58,9 +60,41 @@ function reportFailure(scope: string, err: unknown): void {
 
 export function resolveIMessageSentEchoEntryKey(entry: PersistedEchoEntry): string {
   return createHash("sha256")
-    .update(JSON.stringify([entry.scope, entry.text ?? "", entry.messageId ?? "", entry.timestamp]))
+    .update(
+      JSON.stringify([
+        entry.scope,
+        entry.text ?? "",
+        resolveIMessageEchoMediaKey(entry.media) ?? "",
+        entry.messageId ?? "",
+        entry.timestamp,
+      ]),
+    )
     .digest("hex")
     .slice(0, 32);
+}
+
+export function resolveIMessageEchoMediaKey(
+  media: MediaPlaceholderTextFact | null | undefined,
+): string | undefined {
+  const contentType = media?.contentType?.trim().toLowerCase() || undefined;
+  const kind = media?.kind && media.kind !== "unknown" ? media.kind : undefined;
+  if (kind) {
+    return `kind:${kind}`;
+  }
+  const normalizedContentType = contentType?.split(";", 1)[0]?.trim();
+  return normalizedContentType ? `mime:${normalizedContentType}` : undefined;
+}
+
+function normalizeMedia(
+  media: MediaPlaceholderTextFact | null | undefined,
+): MediaPlaceholderTextFact | undefined {
+  const key = resolveIMessageEchoMediaKey(media);
+  if (!key) {
+    return undefined;
+  }
+  const contentType = media?.contentType?.trim().toLowerCase() || undefined;
+  const kind = media?.kind ?? undefined;
+  return { ...(kind ? { kind } : {}), ...(contentType ? { contentType } : {}) };
 }
 
 function openPersistedEchoStore(): PersistedEchoStore {
@@ -126,23 +160,26 @@ function persistEntry(entry: PersistedEchoEntry, ttlMs?: number): string | undef
 export function rememberPersistedIMessageEcho(params: {
   scope: string;
   text?: string;
+  media?: MediaPlaceholderTextFact;
   messageId?: string;
   ttlMs?: number;
   pending?: boolean;
 }): string | undefined {
   const text = normalizeText(params.text);
+  const media = normalizeMedia(params.media);
   const messageId = normalizeMessageId(params.messageId);
   const entry: PersistedEchoEntry = {
     scope: params.scope,
     timestamp: Date.now(),
     ...(text ? { text } : {}),
+    ...(media ? { media } : {}),
     ...(messageId ? { messageId } : {}),
     ...(params.pending ? { pending: true } : {}),
   };
   if (typeof params.ttlMs === "number" && Number.isFinite(params.ttlMs) && params.ttlMs > 0) {
     entry.expiresAt = entry.timestamp + params.ttlMs;
   }
-  if (!entry.text && !entry.messageId) {
+  if (!entry.text && !entry.media && !entry.messageId) {
     return undefined;
   }
   loadMirrorFromStore();
@@ -168,12 +205,14 @@ export function forgetPersistedIMessageEchoKey(key: string | undefined): void {
 export function hasPersistedIMessageEcho(params: {
   scope: string;
   text?: string;
+  media?: MediaPlaceholderTextFact;
   messageId?: string;
   includePendingText?: boolean;
 }): boolean {
   const text = normalizeText(params.text);
+  const mediaKey = resolveIMessageEchoMediaKey(params.media);
   const messageId = normalizeMessageId(params.messageId);
-  if (!text && !messageId) {
+  if (!text && !mediaKey && !messageId) {
     return false;
   }
   for (const entry of readRecentEntries()) {
@@ -183,24 +222,20 @@ export function hasPersistedIMessageEcho(params: {
     if (messageId && entry.messageId === messageId) {
       return true;
     }
+    const hasConflictingMessageIds = Boolean(
+      messageId && entry.messageId && messageId !== entry.messageId,
+    );
     if (text && entry.text === text && (!entry.pending || params.includePendingText)) {
+      return true;
+    }
+    if (
+      mediaKey &&
+      !hasConflictingMessageIds &&
+      resolveIMessageEchoMediaKey(entry.media) === mediaKey &&
+      (!entry.pending || params.includePendingText)
+    ) {
       return true;
     }
   }
   return false;
-}
-
-export function resetPersistedIMessageEchoCacheForTest(
-  options: { clearPersistent?: boolean } = {},
-): void {
-  mirror = null;
-  persistenceFailureLogged = false;
-  if (options.clearPersistent === false) {
-    return;
-  }
-  try {
-    openPersistedEchoStore().clear();
-  } catch {
-    // best-effort
-  }
 }

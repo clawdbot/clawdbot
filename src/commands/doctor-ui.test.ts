@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 // Doctor UI tests cover control UI asset checks, repair hints, and filesystem diagnostics.
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -7,10 +8,10 @@ import {
   detectUiProtocolFreshnessIssues,
   uiProtocolFreshnessIssueToHealthFinding,
   uiProtocolFreshnessIssueToRepairEffects,
-  type UiProtocolFreshnessIssue,
 } from "./doctor-ui.js";
 
 const tempRoots: string[] = [];
+type UiProtocolFreshnessIssue = Awaited<ReturnType<typeof detectUiProtocolFreshnessIssues>>[number];
 
 function issue(overrides: Partial<UiProtocolFreshnessIssue> = {}): UiProtocolFreshnessIssue {
   return {
@@ -88,12 +89,132 @@ describe("UI protocol freshness health mapping", () => {
     expect(uiProtocolFreshnessIssueToRepairEffects(issue({ canBuild: false }))).toEqual([]);
   });
 
+  it("reports missing packaged UI assets without requiring unpublished protocol sources", async () => {
+    const root = await createOpenClawRoot();
+    await fs.rm(path.join(root, "packages"), { recursive: true });
+
+    await expect(detectUiProtocolFreshnessIssues({ root })).resolves.toEqual([
+      {
+        kind: "missing-assets",
+        root,
+        uiIndexPath: path.join(root, "dist/control-ui/index.html"),
+        canBuild: false,
+      },
+    ]);
+  });
+
+  it("gives packaged installs an actionable recovery hint instead of a missing build command", () => {
+    const finding = uiProtocolFreshnessIssueToHealthFinding(issue({ canBuild: false }));
+
+    expect(finding.message).not.toContain("pnpm ui:build");
+    expect(finding.fixHint).toContain("Reinstall OpenClaw");
+  });
+
+  it("keeps healthy packaged UI assets quiet without probing unpublished protocol history", async () => {
+    const root = await createOpenClawRoot();
+    await fs.rm(path.join(root, "packages"), { recursive: true });
+    await touch(path.join(root, "dist/control-ui/index.html"), new Date("2026-01-02"));
+    let checkedHistory = false;
+
+    await expect(
+      detectUiProtocolFreshnessIssues({
+        root,
+        async collectChangesSinceBuild() {
+          checkedHistory = true;
+          return ["abc123 unavailable packaged source"];
+        },
+      }),
+    ).resolves.toEqual([]);
+    expect(checkedHistory).toBe(false);
+  });
+
+  it.each([
+    ["a nested schema module", "schema/sessions.ts"],
+    ["the protocol package entrypoint", "index.ts"],
+  ])("reports stale assets after changes to %s", async (_description, changedProtocolFile) => {
+    const root = await createOpenClawRoot();
+    const uiIndexPath = path.join(root, "dist/control-ui/index.html");
+    const schemaBarrelPath = path.join(root, "packages/gateway-protocol/src/schema.ts");
+    await touch(schemaBarrelPath, new Date("2026-01-01T00:00:00.000Z"));
+    await touch(uiIndexPath, new Date("2026-01-02T00:00:00.000Z"));
+    await touch(path.join(root, "ui/package.json"), new Date("2026-01-02T00:00:00.000Z"));
+    await touch(
+      path.join(root, "packages/gateway-protocol/src", changedProtocolFile),
+      new Date("2026-01-03T00:00:00.000Z"),
+    );
+
+    await expect(
+      detectUiProtocolFreshnessIssues({
+        root,
+        async collectChangesSinceBuild() {
+          return [`abc123 changed ${changedProtocolFile}`];
+        },
+      }),
+    ).resolves.toEqual([
+      {
+        kind: "stale-assets",
+        root,
+        uiIndexPath,
+        canBuild: true,
+        changesSinceBuild: [`abc123 changed ${changedProtocolFile}`],
+      },
+    ]);
+  });
+
+  it("reads committed nested protocol changes from the real complete-package git pathspec", async () => {
+    const root = await createOpenClawRoot();
+    const uiIndexPath = path.join(root, "dist/control-ui/index.html");
+    await touch(path.join(root, "packages/gateway-protocol/src/schema.ts"), new Date("2026-01-01"));
+    await touch(uiIndexPath, new Date("2026-01-02"));
+    await touch(path.join(root, "ui/package.json"), new Date("2026-01-02"));
+    await touch(
+      path.join(root, "packages/gateway-protocol/src/schema/sessions.ts"),
+      new Date("2026-01-03"),
+    );
+    execFileSync("git", ["init", "--quiet", root]);
+    execFileSync("git", ["-C", root, "add", "packages/gateway-protocol/src/schema/sessions.ts"]);
+    execFileSync(
+      "git",
+      [
+        "-C",
+        root,
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "commit.gpgSign=false",
+        "-c",
+        "user.name=Doctor UI Test",
+        "-c",
+        "user.email=doctor-ui@example.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "update nested protocol schema",
+      ],
+      {
+        env: {
+          ...process.env,
+          GIT_AUTHOR_DATE: "2026-01-03T00:00:00Z",
+          GIT_COMMITTER_DATE: "2026-01-03T00:00:00Z",
+        },
+      },
+    );
+
+    await expect(detectUiProtocolFreshnessIssues({ root })).resolves.toEqual([
+      expect.objectContaining({
+        kind: "stale-assets",
+        changesSinceBuild: [expect.stringMatching(/update nested protocol schema$/)],
+      }),
+    ]);
+  });
+
   it("does not report stale assets when git finds no schema changes", async () => {
     const root = await createOpenClawRoot();
     const schemaPath = path.join(root, "packages/gateway-protocol/src/schema.ts");
     const uiIndexPath = path.join(root, "dist/control-ui/index.html");
     await touch(uiIndexPath, new Date("2026-01-01T00:00:00.000Z"));
     await touch(schemaPath, new Date("2026-01-02T00:00:00.000Z"));
+    await touch(path.join(root, "ui/package.json"), new Date("2026-01-01T00:00:00.000Z"));
 
     await expect(
       detectUiProtocolFreshnessIssues({
@@ -111,6 +232,7 @@ describe("UI protocol freshness health mapping", () => {
     const uiIndexPath = path.join(root, "dist/control-ui/index.html");
     await touch(uiIndexPath, new Date("2026-01-01T00:00:00.000Z"));
     await touch(schemaPath, new Date("2026-01-02T00:00:00.000Z"));
+    await touch(path.join(root, "ui/package.json"), new Date("2026-01-01T00:00:00.000Z"));
 
     await expect(
       detectUiProtocolFreshnessIssues({

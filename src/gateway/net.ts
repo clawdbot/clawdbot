@@ -11,10 +11,7 @@ import {
 } from "@openclaw/net-policy/ip";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBindMode } from "../config/types.gateway.js";
-import {
-  resetContainerEnvironmentCacheForTest,
-  isContainerEnvironment,
-} from "../infra/container-environment.js";
+import { isContainerEnvironment } from "../infra/container-environment.js";
 import {
   pickMatchingExternalInterfaceAddress,
   readNetworkInterfaces,
@@ -58,6 +55,32 @@ export function resolveHostName(hostHeader?: string): string {
 
 export function isLoopbackAddress(ip: string | undefined): boolean {
   return isLoopbackIpAddress(ip);
+}
+
+/** Detect forwarded/proxy headers that make loopback requests ineligible for direct-local auth. */
+export function hasForwardedRequestHeaders(req?: IncomingMessage): boolean {
+  if (!req) {
+    return false;
+  }
+  const headers = req.headers ?? {};
+  return Boolean(
+    headers.forwarded ||
+    headers["x-real-ip"] ||
+    Object.keys(headers).some((header) =>
+      normalizeLowercaseStringOrEmpty(header).startsWith("x-forwarded-"),
+    ),
+  );
+}
+
+/** Return whether a request is a clean loopback request without forwarded identity headers. */
+export function isLocalDirectRequest(
+  req?: IncomingMessage,
+  _trustedProxies?: string[],
+  _allowRealIpFallback = false,
+): boolean {
+  return Boolean(
+    req && !hasForwardedRequestHeaders(req) && isLoopbackAddress(req.socket?.remoteAddress),
+  );
 }
 
 export function resolveLocalInterfaceAddressMatch(
@@ -232,20 +255,17 @@ export function resolveRequestClientIp(
   });
 }
 
-export {
-  isContainerEnvironment,
-  resetContainerEnvironmentCacheForTest as __resetContainerCacheForTest,
-};
+export { isContainerEnvironment };
 
 /**
  * Resolves gateway bind host with fallback strategy.
  *
  * Modes:
- * - loopback: 127.0.0.1 (rarely fails, but handled gracefully)
+ * - loopback: always 127.0.0.1
  * - lan: always 0.0.0.0 (no fallback)
  * - tailnet: Tailnet IPv4 if available, else loopback
  * - auto: 0.0.0.0 inside containers (Docker/Podman/K8s); loopback otherwise
- * - custom: User-specified IP, fallback to 0.0.0.0 if unavailable
+ * - custom: User-specified IPv4; unavailable values resolve to 0.0.0.0 for caller validation
  *
  * @returns The bind address to use (never null)
  */
@@ -256,11 +276,7 @@ export async function resolveGatewayBindHost(
   const mode = bind ?? "loopback";
 
   if (mode === "loopback") {
-    // 127.0.0.1 rarely fails, but handle gracefully
-    if (await canBindToHost("127.0.0.1")) {
-      return "127.0.0.1";
-    }
-    return "0.0.0.0"; // extreme fallback
+    return "127.0.0.1";
   }
 
   if (mode === "tailnet") {
@@ -287,7 +303,7 @@ export async function resolveGatewayBindHost(
     if (isValidIPv4(host) && (await canBindToHost(host))) {
       return host;
     }
-    // Custom IP failed → fall back to LAN
+    // Runtime startup rejects this fallback; status/display callers remain best-effort.
     return "0.0.0.0";
   }
 
@@ -353,8 +369,9 @@ export async function resolveGatewayListenHosts(
   bindHost: string,
   opts?: { canBindToHost?: (host: string) => Promise<boolean> },
 ): Promise<string[]> {
+  const requiredHosts = resolveGatewayRequiredListenHosts(bindHost);
   if (bindHost !== "127.0.0.1") {
-    return [bindHost];
+    return requiredHosts;
   }
   // Windows: uv_tcp_bind6 creates a dual-stack socket (no UV_TCP_IPV6ONLY), which
   // also accepts ::ffff:127.0.0.1 connections. Binding both ::1 and 127.0.0.1 on
@@ -367,6 +384,16 @@ export async function resolveGatewayListenHosts(
     return [bindHost, "::1"];
   }
   return [bindHost];
+}
+
+/** Returns every address whose bind must succeed for Gateway startup to succeed. */
+export function resolveGatewayRequiredListenHosts(bindHost: string): string[] {
+  if (!isValidIPv4(bindHost) || bindHost === "0.0.0.0" || bindHost === "127.0.0.1") {
+    return [bindHost];
+  }
+  // Same-host clients use the canonical loopback URL even when external access is
+  // pinned to one interface. Lifecycle checks must therefore cover both listeners.
+  return [bindHost, "127.0.0.1"];
 }
 
 /**

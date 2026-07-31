@@ -60,9 +60,9 @@ vi.mock("../plugins/tools.js", () => ({
 vi.mock("../agents/openclaw-tools.js", () => {
   const tools = [
     {
-      name: "cron",
+      name: "automations",
       parameters: { type: "object", properties: { action: { type: "string" } } },
-      execute: async () => ({ ok: true, via: "cron" }),
+      execute: async () => ({ ok: true, via: "automations" }),
     },
     {
       name: "gateway",

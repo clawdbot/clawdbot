@@ -64,7 +64,7 @@ export async function loadValidConfigOrThrow(): Promise<OpenClawConfig> {
 }
 
 /** Runtime config snapshot supplied to model config mutators. */
-export type UpdateConfigContext = {
+type UpdateConfigContext = {
   runtimeConfig: OpenClawConfig;
 };
 
@@ -179,7 +179,7 @@ export function resolveModelsTargetAgent(
 }
 
 /** Normalized primary/fallback config shape used by text and image defaults. */
-export type PrimaryFallbackConfig = { primary?: string; fallbacks?: string[] };
+type PrimaryFallbackConfig = { primary?: string; fallbacks?: string[] };
 
 /** Upserts the canonical model entry and folds legacy key metadata into it. */
 export function upsertCanonicalModelConfigEntry(

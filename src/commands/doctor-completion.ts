@@ -23,7 +23,7 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
 
-export type ShellCompletionStatusOptions = {
+type ShellCompletionStatusOptions = {
   shell?: CompletionShell;
 };
 
@@ -44,7 +44,10 @@ function resolveCompletionReloadPath(shell: CompletionShell): string {
   if (shell === "powershell") {
     return resolveCompletionProfilePath("powershell");
   }
-  return `~/.${shell === "zsh" ? "zshrc" : shell === "bash" ? "bashrc" : "config/fish/config.fish"}`;
+  if (shell === "bash") {
+    return `~/${path.basename(resolveCompletionProfilePath("bash"))}`;
+  }
+  return `~/.${shell === "zsh" ? "zshrc" : "config/fish/config.fish"}`;
 }
 
 function formatCompletionReloadNote(
@@ -203,7 +206,7 @@ export function shellCompletionStatusToRepairEffects(
   return effects;
 }
 
-export type DoctorCompletionOptions = {
+type DoctorCompletionOptions = {
   nonInteractive?: boolean;
 };
 

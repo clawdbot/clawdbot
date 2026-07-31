@@ -1,10 +1,46 @@
 import { describe, expect, it } from "vitest";
-import { mintSecretSentinel } from "../secrets/sentinel.js";
+import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction-registry.js";
+import { looksLikeSecretSentinel, mintSecretSentinel } from "../secrets/sentinel.js";
 import {
   attachModelProviderRequestTransport,
   getModelProviderRequestTransport,
 } from "./provider-request-config.js";
-import { unwrapModelHeaderSentinelsForProviderEgress } from "./provider-secret-egress.js";
+import {
+  protectPreparedProviderRuntimeAuth,
+  unwrapModelHeaderSentinelsForProviderEgress,
+} from "./provider-secret-egress.js";
+
+describe("protectPreparedProviderRuntimeAuth", () => {
+  it("sentinels a real credential returned by the auth exchange and registers it for redaction", () => {
+    const runtimeToken = "bedrock-api-key-egress-runtime-token";
+    const result = protectPreparedProviderRuntimeAuth({
+      provider: "amazon-bedrock-mantle",
+      preparedAuth: {
+        apiKey: runtimeToken,
+        request: {
+          auth: { mode: "authorization-bearer", token: runtimeToken },
+        },
+      },
+    });
+
+    expect(result?.apiKey).not.toBe(runtimeToken);
+    expect(looksLikeSecretSentinel(result?.apiKey ?? "")).toBe(true);
+    const auth = result?.request?.auth;
+    const bearerToken = auth?.mode === "authorization-bearer" ? auth.token : "";
+    expect(looksLikeSecretSentinel(bearerToken)).toBe(true);
+    expect(isSecretValueRegisteredForRedaction(runtimeToken)).toBe(true);
+  });
+
+  it("leaves non-secret auth markers untouched", () => {
+    const result = protectPreparedProviderRuntimeAuth({
+      provider: "ollama",
+      preparedAuth: { apiKey: "ollama-local" },
+    });
+
+    expect(result?.apiKey).toBe("ollama-local");
+    expect(isSecretValueRegisteredForRedaction("ollama-local")).toBe(false);
+  });
+});
 
 describe("unwrapModelHeaderSentinelsForProviderEgress", () => {
   it("unwraps sentinels in visible headers and attached request transport overrides", () => {
@@ -79,7 +115,7 @@ describe("unwrapModelHeaderSentinelsForProviderEgress", () => {
       {
         auth: {
           mode: "authorization-bearer",
-          token: "oc-sent-v1-00000000000000000000dead",
+          token: "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end",
         },
       },
     );

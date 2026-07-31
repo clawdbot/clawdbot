@@ -1,8 +1,8 @@
 // Channel account context tests cover default account resolution and read-only account inspection fallback.
 import { describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { resolveDefaultChannelAccountContext } from "../channels/account-context.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
 
 vi.mock("../channels/read-only-account-inspect.js", () => ({
   inspectReadOnlyChannelAccount: vi.fn(async () => null),

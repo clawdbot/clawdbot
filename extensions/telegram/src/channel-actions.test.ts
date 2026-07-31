@@ -1,10 +1,14 @@
 // Telegram tests cover channel actions plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { telegramMessageActions, telegramMessageActionRuntime } from "./channel-actions.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { telegramMessageActions } from "./channel-actions.js";
 
 const handleTelegramActionMock = vi.hoisted(() => vi.fn());
-const originalHandleTelegramAction = telegramMessageActionRuntime.handleTelegramAction;
+
+vi.mock("./action-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./action-runtime.js")>("./action-runtime.js");
+  return { ...actual, handleTelegramAction: handleTelegramActionMock };
+});
 
 describe("telegramMessageActions", () => {
   beforeEach(() => {
@@ -13,12 +17,6 @@ describe("telegramMessageActions", () => {
       content: [],
       details: {},
     });
-    telegramMessageActionRuntime.handleTelegramAction = (...args) =>
-      handleTelegramActionMock(...args);
-  });
-
-  afterEach(() => {
-    telegramMessageActionRuntime.handleTelegramAction = originalHandleTelegramAction;
   });
 
   it("executes message actions in the gateway when a gateway is available", () => {
@@ -34,6 +32,50 @@ describe("telegramMessageActions", () => {
     for (const action of ["searchSticker", "stickerCacheStats"]) {
       expect(telegramMessageActions.isToolDeliveryAction?.({ args: { action } })).toBe(false);
     }
+  });
+
+  it("classifies Telegram message ids as resources rather than delivery targets", () => {
+    for (const action of ["react", "edit", "delete"] as const) {
+      expect(telegramMessageActions.messageActionTargetAliases?.[action]).toEqual({
+        aliases: ["messageId"],
+        deliveryTargetAliases: [],
+      });
+    }
+  });
+
+  it("forwards only host-owned mutation context to the runtime", async () => {
+    await telegramMessageActions.handleAction?.({
+      channel: "telegram",
+      action: "delete",
+      params: {
+        messageId: "9001",
+        to: "-1001:topic:77",
+        conversationReadOrigin: "direct-operator",
+      },
+      cfg: { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig,
+      accountId: "work",
+      requesterAccountId: "work",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:-1001:topic:77",
+        currentMessageId: "9001",
+      },
+    } as never);
+
+    expect(handleTelegramActionMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ conversationReadOrigin: "direct-operator" }),
+      expect.anything(),
+      expect.objectContaining({
+        conversationReadOrigin: "delegated",
+        requesterAccountId: "work",
+        toolContext: expect.objectContaining({ currentMessageId: "9001" }),
+      }),
+    );
+    expect(handleTelegramActionMock.mock.calls[0]?.[0]).toMatchObject({
+      action: "deleteMessage",
+      messageId: "9001",
+    });
   });
 
   it("allows interactive-only sends", async () => {

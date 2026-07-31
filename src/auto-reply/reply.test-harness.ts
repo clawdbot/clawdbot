@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, vi, type Mock } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
-import { withFastReplyConfig } from "./reply/get-reply-fast-path.js";
+import { withFastReplyConfig } from "./reply/get-reply-fast-path.test-support.js";
 
 type ReplyRuntimeMocks = {
   runEmbeddedAgent: Mock;
@@ -27,14 +27,14 @@ const replyRuntimeMockState = vi.hoisted(() => ({
 vi.mock("../agents/embedded-agent.js", () => ({
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   runEmbeddedAgent: (...args: unknown[]) => replyRuntimeMockState.mocks.runEmbeddedAgent(...args),
-  queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock("../agents/model-catalog.runtime.js", () => ({
-  loadModelCatalog: (...args: unknown[]) => replyRuntimeMockState.mocks.loadModelCatalog(...args),
+  loadPreparedModelCatalog: (...args: unknown[]) =>
+    replyRuntimeMockState.mocks.loadModelCatalog(...args),
 }));
 
 vi.mock("../agents/auth-profiles/session-override.js", () => ({

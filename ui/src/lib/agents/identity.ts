@@ -1,9 +1,10 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
+import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 
 type AgentIdentityGatewaySnapshot = {
   client: GatewayBrowserClient | null;
-  connected: boolean;
+  phase: ApplicationGatewayPhase;
 };
 
 type AgentIdentityGateway = {
@@ -15,6 +16,7 @@ export type AgentIdentityCapability = {
   get: (agentId: string | null | undefined) => AgentIdentityResult | null;
   entries: () => AgentIdentityResult[];
   ensure: (agentIds: readonly (string | null | undefined)[]) => Promise<void>;
+  invalidate: (agentIds: readonly (string | null | undefined)[]) => void;
   subscribe: (listener: () => void) => () => void;
 };
 
@@ -22,8 +24,11 @@ export function createAgentIdentityCapability(
   gateway: AgentIdentityGateway,
 ): AgentIdentityCapability {
   let cachedClient: GatewayBrowserClient | null = gateway.snapshot.client;
+  let cachedConnected = gateway.snapshot.phase === "connected";
+  let connectionGeneration = 0;
   const identities = new Map<string, AgentIdentityResult>();
   const inFlight = new Map<string, Promise<AgentIdentityResult | null>>();
+  const invalidationEpochs = new Map<string, number>();
   const listeners = new Set<() => void>();
 
   const publish = () => {
@@ -32,20 +37,24 @@ export function createAgentIdentityCapability(
     }
   };
 
-  const resetForClient = (client: GatewayBrowserClient | null) => {
-    if (client === cachedClient) {
+  const resetForGateway = (snapshot: AgentIdentityGatewaySnapshot) => {
+    const connected = snapshot.phase === "connected";
+    if (snapshot.client === cachedClient && connected === cachedConnected) {
       return;
     }
     const hadIdentities = identities.size > 0;
-    cachedClient = client;
+    cachedClient = snapshot.client;
+    cachedConnected = connected;
+    connectionGeneration += 1;
     identities.clear();
     inFlight.clear();
+    invalidationEpochs.clear();
     if (hadIdentities) {
       publish();
     }
   };
 
-  gateway.subscribe((snapshot) => resetForClient(snapshot.client));
+  gateway.subscribe(resetForGateway);
 
   const normalizeIds = (agentIds: readonly (string | null | undefined)[]) => [
     ...new Set(
@@ -84,27 +93,49 @@ export function createAgentIdentityCapability(
       return [...identities.values()];
     },
     async ensure(agentIds) {
-      const client = gateway.snapshot.client;
-      if (!client || !gateway.snapshot.connected) {
+      const snapshot = gateway.snapshot;
+      resetForGateway(snapshot);
+      const client = snapshot.client;
+      if (!client || snapshot.phase !== "connected") {
         return;
       }
-      resetForClient(client);
+      const generation = connectionGeneration;
       const missing = normalizeIds(agentIds).filter((agentId) => !identities.has(agentId));
       if (missing.length === 0) {
         return;
       }
       const results = await Promise.all(
-        missing.map(async (agentId) => [agentId, await fetchIdentity(client, agentId)] as const),
+        missing.map(async (agentId) => {
+          const invalidationEpoch = invalidationEpochs.get(agentId) ?? 0;
+          return [agentId, invalidationEpoch, await fetchIdentity(client, agentId)] as const;
+        }),
       );
-      if (gateway.snapshot.client !== client) {
+      if (
+        connectionGeneration !== generation ||
+        gateway.snapshot.client !== client ||
+        gateway.snapshot.phase !== "connected"
+      ) {
         return;
       }
       let changed = false;
-      for (const [agentId, identity] of results) {
-        if (identity) {
+      for (const [agentId, invalidationEpoch, identity] of results) {
+        if (identity && invalidationEpoch === (invalidationEpochs.get(agentId) ?? 0)) {
           identities.set(agentId, identity);
           changed = true;
         }
+      }
+      if (changed) {
+        publish();
+      }
+    },
+    invalidate(agentIds) {
+      let changed = false;
+      for (const agentId of normalizeIds(agentIds)) {
+        invalidationEpochs.set(agentId, (invalidationEpochs.get(agentId) ?? 0) + 1);
+        if (identities.delete(agentId)) {
+          changed = true;
+        }
+        inFlight.delete(agentId);
       }
       if (changed) {
         publish();

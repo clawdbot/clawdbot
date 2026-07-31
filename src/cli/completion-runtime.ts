@@ -1,4 +1,5 @@
 // Shell completion runtime: cache paths, profile installation, and shell detection.
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -61,12 +62,14 @@ function resolveCompletionCacheDir(env: NodeJS.ProcessEnv = process.env): string
   return path.join(stateDir, "completions");
 }
 
+function completionShellExtension(shell: CompletionShell): string {
+  return shell === "powershell" ? "ps1" : shell;
+}
+
 /** Returns the per-shell cached completion script path for a sanitized CLI binary name. */
 export function resolveCompletionCachePath(shell: CompletionShell, binName: string): string {
   const basename = sanitizeCompletionBasename(binName);
-  const extension =
-    shell === "powershell" ? "ps1" : shell === "fish" ? "fish" : shell === "bash" ? "bash" : "zsh";
-  return path.join(resolveCompletionCacheDir(), `${basename}.${extension}`);
+  return path.join(resolveCompletionCacheDir(), `${basename}.${completionShellExtension(shell)}`);
 }
 
 /** Check if the completion cache file exists for the given shell. */
@@ -105,20 +108,110 @@ function isCompletionProfileHeader(line: string): boolean {
 }
 
 function isCompletionProfileLine(line: string, binName: string, cachePath: string | null): boolean {
-  if (line.includes(`${binName} completion`)) {
+  if (isSlowDynamicCompletionLine(line, binName)) {
     return true;
   }
-  if (cachePath && line.includes(cachePath)) {
-    return true;
+  if (!cachePath) {
+    return false;
   }
-  return false;
+  const trimmed = line.trim();
+  return (
+    trimmed === `source "${cachePath}"` ||
+    COMPLETION_SHELLS.some((shell) => trimmed === formatCompletionSourceLine(shell, cachePath))
+  );
 }
 
-/** Check if a line uses the slow dynamic completion pattern (source <(...)) */
-function isSlowDynamicCompletionLine(line: string, binName: string): boolean {
+function isPreviousCompletionSourceLine(line: string, currentCachePath: string | null): boolean {
+  if (!currentCachePath) {
+    return false;
+  }
+  const trimmed = line.trim();
+  const guarded =
+    /^(?:\[\s+-f|test\s+-f)\s+"([^"]+)"\s*(?:\]\s*&&|;\s*and)\s+source\s+"([^"]+)"$/u.exec(trimmed);
+  const direct = /^source\s+"([^"]+)"$/u.exec(trimmed);
+  const powershell = /^\.\s+'((?:[^']|'')+)'$/u.exec(trimmed);
+  let sourcePath: string | undefined;
+  if (guarded && guarded[1] === guarded[2]) {
+    sourcePath = guarded[1];
+  } else if (direct) {
+    sourcePath = direct[1];
+  } else if (powershell) {
+    sourcePath = powershell[1]?.replace(/''/g, "'");
+  }
+  if (!sourcePath) {
+    return false;
+  }
+  const sourcePaths = sourcePath.includes("\\") ? path.win32 : path;
+  if (sourcePaths.basename(sourcePaths.dirname(sourcePath)) !== "completions") {
+    return false;
+  }
+  return sourcePaths.basename(sourcePath) === path.basename(currentCachePath);
+}
+
+function isOwnedCompletionInvocation(invocation: string, binName: string): boolean {
+  const [command, action, ...args] = invocation.trim().split(/\s+/u);
+  if (command !== binName || action !== "completion") {
+    return false;
+  }
+  if (args.length === 0) {
+    return true;
+  }
+  if (args.length === 1) {
+    const argument = args[0] ?? "";
+    const shell = argument.startsWith("--shell=")
+      ? argument.slice("--shell=".length)
+      : argument.startsWith("-s") && argument.length > 2
+        ? argument.slice(2).replace(/^=/u, "")
+        : argument;
+    return isCompletionShell(shell);
+  }
   return (
-    line.includes(`<(${binName} completion`) ||
-    (line.includes(`${binName} completion`) && line.includes("| source"))
+    args.length === 2 &&
+    (args[0] === "--shell" || args[0] === "-s") &&
+    isCompletionShell(args[1] ?? "")
+  );
+}
+
+/** Check if a line uses an owned slow dynamic completion pattern (source <(...)). */
+function isSlowDynamicCompletionLine(line: string, binName: string): boolean {
+  const trimmed = line.trim();
+  const dynamicMarker = `<(${binName} completion`;
+  const markerIndex = trimmed.indexOf(dynamicMarker);
+  if (markerIndex >= 0) {
+    const expression = trimmed.slice(markerIndex);
+    // Compound profile statements are user-owned; deleting the entire line loses their commands.
+    return (
+      /^(?:(?:\[\s+-f\s+[^\]]+\]\s*&&\s*)?(?:source|\.))\s*$/u.test(
+        trimmed.slice(0, markerIndex).trimEnd(),
+      ) &&
+      expression.endsWith(")") &&
+      isOwnedCompletionInvocation(expression.slice(2, -1), binName)
+    );
+  }
+  const invocationIndex = trimmed.indexOf(`${binName} completion`);
+  if (invocationIndex < 0) {
+    return false;
+  }
+  const invocationPrefix = trimmed.slice(0, invocationIndex).trimEnd();
+  const evalPrefix = /^eval\s+(["']?)\$\($/u.exec(invocationPrefix);
+  if (evalPrefix) {
+    const invocation = trimmed.slice(invocationIndex);
+    const closing = `)${evalPrefix[1] ?? ""}`;
+    return (
+      invocation.endsWith(closing) &&
+      isOwnedCompletionInvocation(invocation.slice(0, -closing.length), binName)
+    );
+  }
+  if (invocationIndex !== 0 || /[;&]/u.test(trimmed)) {
+    return false;
+  }
+  const pipeline = trimmed.split("|").map((stage) => stage.trim());
+  const terminal = pipeline.at(-1) ?? "";
+  // Only the documented optional Out-String stage is owned by completion migration.
+  return (
+    isOwnedCompletionInvocation(pipeline[0] ?? "", binName) &&
+    /^(?:source|Invoke-Expression|iex)$/iu.test(terminal) &&
+    (pipeline.length === 2 || (pipeline.length === 3 && /^Out-String$/iu.test(pipeline[1] ?? "")))
   );
 }
 
@@ -137,7 +230,14 @@ function updateCompletionProfile(
     const line = lines[i] ?? "";
     if (isCompletionProfileHeader(line)) {
       hadExisting = true;
-      i += 1;
+      // An orphaned marker owns no following user line; remove only a recognized source line.
+      const following = lines[i + 1] ?? "";
+      if (
+        isCompletionProfileLine(following, binName, cachePath) ||
+        isPreviousCompletionSourceLine(following, cachePath)
+      ) {
+        i += 1;
+      }
       continue;
     }
     if (isCompletionProfileLine(line, binName, cachePath)) {
@@ -170,7 +270,9 @@ export function resolveCompletionProfilePath(
     return path.join(home, ".zshrc");
   }
   if (shell === "bash") {
-    return path.join(home, ".bashrc");
+    // Installation, status, and repairs must inspect the same real Bash profile.
+    const bashrc = path.join(home, ".bashrc");
+    return existsSync(bashrc) ? bashrc : path.join(home, ".bash_profile");
   }
   if (shell === "fish") {
     return path.join(home, ".config", "fish", "config.fish");
@@ -199,13 +301,11 @@ export async function isCompletionInstalled(
   if (!(await pathExists(profilePath))) {
     return false;
   }
-  const cachePathCandidate = resolveCompletionCachePath(shell, binName);
-  const cachedPath = (await pathExists(cachePathCandidate)) ? cachePathCandidate : null;
+  const cachePath = resolveCompletionCachePath(shell, binName);
   const content = await fs.readFile(profilePath, "utf-8");
   const lines = content.split("\n");
-  return lines.some(
-    (line) => isCompletionProfileHeader(line) || isCompletionProfileLine(line, binName, cachedPath),
-  );
+  // A marker does not install completion; retain missing-cache source lines for doctor repair.
+  return lines.some((line) => isCompletionProfileLine(line, binName, cachePath));
 }
 
 /**
@@ -257,12 +357,6 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       break;
     case "bash":
       profilePath = resolveCompletionProfilePath("bash");
-      try {
-        await fs.access(profilePath);
-      } catch {
-        const home = process.env.HOME || os.homedir();
-        profilePath = path.join(home, ".bash_profile");
-      }
       sourceLine = formatCompletionSourceLine("bash", cachePath);
       break;
     case "fish":

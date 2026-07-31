@@ -99,6 +99,11 @@ print_install_audit() {
   fi
 }
 
+verify_candidate_ai_runtime() {
+  echo "==> Verify installed AI runtime"
+  OPENCLAW_ALLOW_ROOT=1 openclaw infer image providers --json >/dev/null
+}
+
 run_with_heartbeat() {
   local label="$1"
   shift
@@ -247,13 +252,16 @@ resolve_update_baseline_version() {
   UPDATE_BASELINE_VERSION="$resolved_version"
 }
 
-run_installer_for_package_spec() {
+run_installer_pipeline() {
   local install_url="$1"
-  local package_spec="$2"
+  shift
 
+  # Keep both pipeline processes under one timeout, and preserve download failures
+  # even when the installer shell consumes a partial response and exits cleanly.
   timeout --kill-after=30s "${INSTALL_COMMAND_TIMEOUT}s" \
-    bash -c "curl -fsSL \"\$1\" | bash -s -- --install-method npm --version \"\$2\" --no-prompt --no-onboard" \
-    _ "$install_url" "$package_spec"
+    bash -o pipefail -c \
+      'curl -fsSL --connect-timeout 30 --max-time 300 -- "$1" | bash -s -- "${@:2}"' \
+      _ "$install_url" "$@"
 }
 
 run_install_smoke() {
@@ -262,7 +270,12 @@ run_install_smoke() {
     echo "==> Run official installer one-liner for latest release tarball"
     OPENCLAW_NO_ONBOARD=1 OPENCLAW_NO_PROMPT=1 \
       run_with_heartbeat "installer latest release tarball" \
-        run_installer_for_package_spec "$INSTALL_URL" "$FRESH_TAG_URL"
+        run_installer_pipeline \
+          "$INSTALL_URL" \
+          --install-method npm \
+          --version "$FRESH_TAG_URL" \
+          --no-prompt \
+          --no-onboard
     print_install_audit "fresh install"
 
     echo "==> Verify installed version"
@@ -278,6 +291,7 @@ run_install_smoke() {
       fi
     fi
     verify_installed_cli "$PACKAGE_NAME" "$FRESH_VERSION"
+    verify_candidate_ai_runtime
 
     echo "OK"
     return 0
@@ -329,7 +343,7 @@ NODE
   fi
 
   echo "==> Run official installer one-liner"
-  curl -fsSL "$INSTALL_URL" | bash -s -- --no-prompt
+  run_installer_pipeline "$INSTALL_URL" --no-prompt
 
   echo "==> Verify installed version"
   if [[ -n "${OPENCLAW_INSTALL_LATEST_OUT:-}" ]]; then
@@ -475,11 +489,26 @@ if (Number(updateStep.exitCode ?? 1) !== 0) {
 if (typeof updateStep.command !== "string" || !updateStep.command.includes(expectedUrl)) {
   throw new Error(`global update step missing expected tgz URL: ${JSON.stringify(updateStep)}`);
 }
+const doctorStep = steps.find((step) => step?.name === "openclaw doctor");
+// Every baseline that passes verify_installed_cli implements this contract;
+// the sole earlier npm artifact has no CLI and cannot reach this parser.
+if (!doctorStep) {
+  throw new Error("missing openclaw doctor step in update JSON");
+}
+// Exit 86 is the updater's explicit recoverable post-install doctor contract.
+const doctorSucceeded = doctorStep.exitCode === 0;
+const doctorWasAdvisory =
+  doctorStep.exitCode === 86 &&
+  doctorStep.advisory?.kind === "package-post-install-doctor";
+if (!doctorSucceeded && !doctorWasAdvisory) {
+  throw new Error(`openclaw doctor step failed: ${JSON.stringify(doctorStep)}`);
+}
 NODE
 
   echo "==> Verify updated version"
   print_install_audit "updated install"
   verify_installed_cli "$PACKAGE_NAME" "$UPDATE_EXPECT_VERSION"
+  verify_candidate_ai_runtime
 
   echo "OK"
 }
@@ -573,13 +602,16 @@ run_freshness_smoke() {
   fi
 
   echo "==> Run installer with same npm freshness policy"
-  env \
-    HOME="$policy_home" \
-    NPM_CONFIG_USERCONFIG="${policy_home}/.npmrc" \
-    OPENCLAW_NO_ONBOARD=1 \
-    OPENCLAW_NO_PROMPT=1 \
-    bash -c 'curl -fsSL "$1" | bash -s -- --install-method npm --version "$2" --no-prompt --no-onboard' \
-    _ "$INSTALL_URL" "$FRESHNESS_VERSION"
+  HOME="$policy_home" \
+  NPM_CONFIG_USERCONFIG="${policy_home}/.npmrc" \
+  OPENCLAW_NO_ONBOARD=1 \
+  OPENCLAW_NO_PROMPT=1 \
+    run_installer_pipeline \
+      "$INSTALL_URL" \
+      --install-method npm \
+      --version "$FRESHNESS_VERSION" \
+      --no-prompt \
+      --no-onboard
 
   echo "==> Verify installed version"
   print_install_audit "freshness install"

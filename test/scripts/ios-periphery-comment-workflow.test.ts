@@ -9,6 +9,7 @@ import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 
 const WORKFLOW_PATH = ".github/workflows/ios-periphery-comment.yml";
 const PRODUCER_WORKFLOW_PATH = ".github/workflows/ios-periphery.yml";
+const MACOS_PRODUCER_WORKFLOW_PATH = ".github/workflows/macos-periphery.yml";
 const ARTIFACT_NAME = "ios-periphery-dead-code-12345-2";
 
 type WorkflowStep = {
@@ -44,6 +45,7 @@ type ProducerWorkflow = {
       steps?: WorkflowStep[];
     };
     scan?: {
+      "runs-on"?: string;
       steps?: WorkflowStep[];
     };
   };
@@ -84,62 +86,6 @@ function commenterScript(): string {
     throw new Error("missing iOS Periphery commenter script");
   }
   return script;
-}
-
-function scopeScript(): string {
-  const workflow = parse(readFileSync(PRODUCER_WORKFLOW_PATH, "utf8")) as ProducerWorkflow;
-  const step = workflow.jobs?.scope?.steps?.find((candidate) => candidate.id === "scope");
-  const script = step?.with?.script;
-  if (!script) {
-    throw new Error("missing iOS Periphery scope script");
-  }
-  return script;
-}
-
-async function runScope(options: {
-  draft?: boolean;
-  eventName?: string;
-  files?: Array<string | { filename: string; previous_filename?: string }>;
-}): Promise<string | undefined> {
-  const outputs = new Map<string, string>();
-  const core = {
-    setOutput(name: string, value: string) {
-      outputs.set(name, value);
-    },
-  };
-  const context = {
-    eventName: options.eventName ?? "pull_request",
-    payload: {
-      pull_request: {
-        draft: options.draft ?? false,
-        number: 123,
-      },
-    },
-    repo: {
-      owner: "openclaw",
-      repo: "openclaw",
-    },
-  };
-  const github = {
-    rest: {
-      pulls: {
-        listFiles() {},
-      },
-    },
-    async paginate() {
-      return (options.files ?? []).map((file) =>
-        typeof file === "string" ? { filename: file } : file,
-      );
-    },
-  };
-  const execute = compileFunction(`return (async () => {\n${scopeScript()}\n})();`, [
-    "context",
-    "core",
-    "github",
-  ]) as (context: typeof context, core: typeof core, github: typeof github) => Promise<void>;
-
-  await execute(context, core, github);
-  return outputs.get("should-scan");
 }
 
 async function runCommenter(
@@ -286,9 +232,9 @@ async function runCommenter(
     "github",
   ]) as (
     require: NodeJS.Require,
-    context: typeof context,
-    core: typeof core,
-    github: typeof github,
+    context: unknown,
+    core: unknown,
+    github: unknown,
   ) => Promise<void>;
 
   await execute(createRequire(import.meta.url), context, core, github);
@@ -456,60 +402,12 @@ describe("iOS Periphery comment workflow", () => {
     expect(upload?.with?.["if-no-files-found"]).toBe("error");
   });
 
-  it("runs scope detection for PR transitions that can clear stale findings", () => {
-    const workflow = parse(readFileSync(PRODUCER_WORKFLOW_PATH, "utf8")) as ProducerWorkflow;
-
-    expect(workflow.on?.pull_request?.types).toContain("converted_to_draft");
-    expect(workflow.on?.pull_request?.paths).toBeUndefined();
-    expect(() =>
-      compileFunction(`return (async () => {\n${scopeScript()}\n})();`, [
-        "context",
-        "core",
-        "github",
-      ]),
-    ).not.toThrow();
+  it("uses hosted macOS capacity on retried scans", () => {
+    for (const workflowPath of [PRODUCER_WORKFLOW_PATH, MACOS_PRODUCER_WORKFLOW_PATH]) {
+      const workflow = parse(readFileSync(workflowPath, "utf8")) as ProducerWorkflow;
+      expect(workflow.jobs?.scan?.["runs-on"]).toContain("github.run_attempt > 1");
+    }
   });
-
-  it.each([
-    {
-      expected: "false",
-      files: ["apps/ios/Sources/Test.swift"],
-      name: "draft pull request",
-      options: { draft: true },
-    },
-    {
-      expected: "true",
-      files: ["apps/ios/Sources/Test.swift"],
-      name: "iOS change",
-      options: {},
-    },
-    {
-      expected: "false",
-      files: ["docs/index.md"],
-      name: "out-of-scope change",
-      options: {},
-    },
-    {
-      expected: "true",
-      files: [
-        {
-          filename: "docs/Moved.swift",
-          previous_filename: "apps/ios/Sources/Moved.swift",
-        },
-      ],
-      name: "iOS file renamed out of scope",
-      options: {},
-    },
-    {
-      expected: "true",
-      files: [],
-      name: "manual dispatch",
-      options: { eventName: "workflow_dispatch" },
-    },
-  ])("sets scope output for $name", async ({ expected, files, options }) => {
-    await expect(runScope({ ...options, files })).resolves.toBe(expected);
-  });
-
   it("accepts a valid small Periphery artifact", async () => {
     const archive = makeZip({
       "periphery.json": "[]\n",

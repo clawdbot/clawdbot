@@ -9,6 +9,7 @@ const mockEmbeddingRegistry = vi.hoisted(() => ({
   genericAdapters: [] as EmbeddingProviderAdapter[],
   adapters: [] as MemoryEmbeddingProviderAdapter[],
   genericLookupConfigs: [] as Array<OpenClawConfig | undefined>,
+  acquireLocalService: vi.fn(async () => undefined),
 }));
 
 vi.mock("openclaw/plugin-sdk/embedding-providers", () => ({
@@ -36,7 +37,10 @@ const missingBedrockCredentialsError = new Error(
   'No API key found for provider "bedrock". AWS credentials are not available.',
 );
 
-function createOptions(provider: string) {
+function createOptions(
+  provider: string,
+  acquireLocalService = mockEmbeddingRegistry.acquireLocalService,
+) {
   return {
     config: {
       plugins: {
@@ -57,6 +61,7 @@ function createOptions(provider: string) {
     provider,
     fallback: "none",
     model: "",
+    acquireLocalService,
   };
 }
 
@@ -100,6 +105,7 @@ function registerMemoryEmbeddingProvider(adapter: MemoryEmbeddingProviderAdapter
 describe("createEmbeddingProvider", () => {
   beforeEach(() => {
     clearMemoryEmbeddingProviders();
+    mockEmbeddingRegistry.acquireLocalService.mockReset();
   });
 
   afterEach(() => {
@@ -159,17 +165,32 @@ describe("createEmbeddingProvider", () => {
   });
 
   it("uses a generic embedding provider when no memory-specific provider exists", async () => {
+    const genericProvider = {
+      id: "generic",
+      model: "generic-model",
+      closed: false,
+      embed: async (_input: unknown, callOptions?: { inputType?: string }) =>
+        callOptions?.inputType === "query" ? [1] : [2],
+      embedBatch: async (inputs: unknown[], callOptions?: { inputType?: string }) =>
+        inputs.map(() => (callOptions?.inputType === "document" ? [3] : [4])),
+      async close() {
+        this.closed = true;
+      },
+    };
     registerGenericEmbeddingProvider({
       id: "openai-compatible",
-      create: async () => ({
-        provider: {
-          id: "generic",
-          model: "generic-model",
-          embed: async (_input, options) => (options?.inputType === "query" ? [1] : [2]),
-          embedBatch: async (inputs, options) =>
-            inputs.map(() => (options?.inputType === "document" ? [3] : [4])),
-        },
-      }),
+      create: async (options) => {
+        expect(
+          (
+            options as typeof options & {
+              acquireLocalService?: typeof mockEmbeddingRegistry.acquireLocalService;
+            }
+          ).acquireLocalService,
+        ).toBe(mockEmbeddingRegistry.acquireLocalService);
+        return {
+          provider: genericProvider,
+        };
+      },
     });
 
     const options = createOptions("openai-compatible");
@@ -179,6 +200,38 @@ describe("createEmbeddingProvider", () => {
     expect(mockEmbeddingRegistry.genericLookupConfigs).toEqual([options.config]);
     await expect(result.provider?.embedQuery("hello")).resolves.toEqual([1]);
     await expect(result.provider?.embedBatch(["doc"])).resolves.toEqual([[3]]);
+    await result.provider?.close?.();
+    expect(genericProvider.closed).toBe(true);
+  });
+
+  it("keeps concurrent provider creation bound to each caller's local-service hook", async () => {
+    const observedHooks: unknown[] = [];
+    registerGenericEmbeddingProvider({
+      id: "openai-compatible",
+      create: async (options) => {
+        observedHooks.push(
+          (options as typeof options & { acquireLocalService?: unknown }).acquireLocalService,
+        );
+        await Promise.resolve();
+        return {
+          provider: {
+            id: "generic",
+            model: "generic-model",
+            embed: async () => [1],
+            embedBatch: async (inputs) => inputs.map(() => [1]),
+          },
+        };
+      },
+    });
+    const firstAcquire = vi.fn(async () => undefined);
+    const secondAcquire = vi.fn(async () => undefined);
+
+    await Promise.all([
+      createEmbeddingProvider(createOptions("openai-compatible", firstAcquire)),
+      createEmbeddingProvider(createOptions("openai-compatible", secondAcquire)),
+    ]);
+
+    expect(observedHooks).toEqual([firstAcquire, secondAcquire]);
   });
 
   it("keeps memory-specific providers authoritative during dual registration", async () => {

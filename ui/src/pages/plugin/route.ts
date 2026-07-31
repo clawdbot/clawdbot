@@ -1,7 +1,11 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 
-type PluginTabRef = { pluginId: string; id: string };
+type PluginTabRef = {
+  pluginId: string;
+  id: string;
+};
 
 /** Reads the plugin tab reference from a `/plugin?plugin=<pluginId>&id=<tab>` search string. */
 export function pluginTabRefFromSearch(search: string): PluginTabRef {
@@ -13,7 +17,7 @@ export function pluginTabRefFromSearch(search: string): PluginTabRef {
 }
 
 export function pluginTabSearch(ref: PluginTabRef): string {
-  return `?plugin=${encodeURIComponent(ref.pluginId)}&id=${encodeURIComponent(ref.id)}`;
+  return `?${new URLSearchParams({ plugin: ref.pluginId, id: ref.id }).toString()}`;
 }
 
 /** Stable key for one tab; ids are only unique per plugin, so both parts matter. */
@@ -22,10 +26,9 @@ export function pluginTabKey(ref: PluginTabRef): string {
 }
 
 // One static route hosts every plugin-declared tab; the router only supports
-// exact paths, so the tab reference travels in the query like chat sessions.
+// exact paths, so the tab reference travels in the query.
 export const page = definePage({
-  id: "plugin",
-  path: "/plugin",
+  ...routePageSpec("plugin"),
   loaderDeps: (_context, location) => location.search,
   loader: (_context, options) => pluginTabRefFromSearch(options.location.search),
   component: () =>

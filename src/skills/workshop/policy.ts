@@ -1,5 +1,7 @@
 // Workshop policy helpers validate generated skill drafts against workspace policy.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH } from "../../infra/plugin-approvals.js";
 import type { PluginHookBeforeToolCallResult } from "../../plugins/hook-before-tool-call-result.js";
@@ -92,7 +94,7 @@ function buildLifecycleApprovalDescription(params: {
   const skillName =
     requestedSkillName.length <= availableSkillNameLength
       ? requestedSkillName
-      : `${requestedSkillName.slice(0, Math.max(0, availableSkillNameLength - 1))}…`;
+      : `${truncateUtf16Safe(requestedSkillName, Math.max(0, availableSkillNameLength - 1))}…`;
   return [fixedLines[0], `${skillPrefix}${skillName}`, ...fixedLines.slice(1)].join("\n");
 }
 
@@ -140,6 +142,19 @@ function lifecycleApprovalTimeoutReason(proposalId?: string): string {
   ].join(" ");
 }
 
+function resolveApprovalConfig(config?: OpenClawConfig): OpenClawConfig | undefined {
+  if (config) {
+    return config;
+  }
+  // Explicit hook config wins. Missing hook config may happen on agent paths;
+  // unreadable runtime config cannot supply an explicit pending override.
+  try {
+    return getRuntimeConfig();
+  } catch {
+    return undefined;
+  }
+}
+
 /** Returns approval policy for skill workshop lifecycle tool calls. */
 export async function resolveSkillWorkshopToolApproval(params: {
   toolName: string;
@@ -154,7 +169,7 @@ export async function resolveSkillWorkshopToolApproval(params: {
   if (!action) {
     return undefined;
   }
-  const config = resolveSkillWorkshopConfig(params.config);
+  const config = resolveSkillWorkshopConfig(resolveApprovalConfig(params.config));
   if (config.approvalPolicy === "auto") {
     return undefined;
   }

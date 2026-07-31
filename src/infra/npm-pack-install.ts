@@ -108,7 +108,7 @@ export function finalizeNpmSpecArchiveInstall<TResult extends { ok: boolean }>(
  * Packs a validated registry npm spec into a temporary tarball, verifies the
  * resolved package metadata, then delegates archive extraction to the caller.
  */
-export async function installFromNpmSpecArchive<TResult extends { ok: boolean }>(params: {
+async function installFromNpmSpecArchive<TResult extends { ok: boolean }>(params: {
   tempDirPrefix: string;
   spec: string;
   timeoutMs: number;

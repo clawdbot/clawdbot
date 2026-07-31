@@ -27,7 +27,7 @@ function isQqbotDebugEnabled(): boolean {
 const isDebug = () => isQqbotDebugEnabled();
 const MAX_LOG_VALUE_CHARS = 4096;
 
-export function sanitizeDebugLogValue(value: unknown): string {
+function sanitizeDebugLogValue(value: unknown): string {
   let text: string;
   if (typeof value === "string") {
     text = value;

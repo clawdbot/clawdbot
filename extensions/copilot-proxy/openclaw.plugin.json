@@ -14,9 +14,10 @@
       "choiceId": "copilot-proxy",
       "choiceLabel": "Copilot Proxy",
       "choiceHint": "Configure base URL + model ids",
+      "assistantPriority": 3,
       "groupId": "copilot",
       "groupLabel": "Copilot",
-      "groupHint": "GitHub + local proxy"
+      "groupHint": "GitHub, GitHub Enterprise + Local Proxy"
     }
   ],
   "configSchema": {

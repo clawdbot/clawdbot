@@ -7,15 +7,12 @@ import {
   emitTrustedDiagnosticEventWithPrivateData,
   type DiagnosticModelCallContent,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import type {
-  CodexAppServerRuntimeOptions,
-  resolveCodexPluginsPolicy,
-} from "./config.js";
+import type { CodexAppServerRuntimeOptions, resolveCodexPluginsPolicy } from "./config.js";
 
 type TrustedDiagnosticEventInput = Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0];
 
 /** Reads a tool schema field in either app-server or OpenClaw naming. */
-export function readCodexDiagnosticToolParameters(tool: {
+function readCodexDiagnosticToolParameters(tool: {
   inputSchema?: unknown;
   parameters?: unknown;
 }): unknown {
@@ -23,7 +20,7 @@ export function readCodexDiagnosticToolParameters(tool: {
 }
 
 /** Builds compact diagnostic tool definitions for trusted private telemetry. */
-export function buildCodexDiagnosticToolDefinitions(
+function buildCodexDiagnosticToolDefinitions(
   tools: readonly {
     name: string;
     description: string;
@@ -48,7 +45,7 @@ export function utf8JsonByteLength(value: unknown): number | undefined {
 }
 
 /** Builds a short namespaced fingerprint for sensitive log values. */
-export function fingerprintCodexLogValue(namespace: string, value: string): string {
+function fingerprintCodexLogValue(namespace: string, value: string): string {
   const hash = createHash("sha256");
   hash.update(namespace);
   hash.update("\0");

@@ -16,8 +16,8 @@ Adds the iMessage channel surface for sending and receiving OpenClaw messages.
 
 ## Surface
 
-channels: imessage
+channels: `imessage`; skills
 
 ## Related docs
 
-- [imessage](/channels/imessage)
+- [iMessage](/channels/imessage)

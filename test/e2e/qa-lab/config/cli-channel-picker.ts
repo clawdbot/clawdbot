@@ -230,14 +230,13 @@ function createEvidenceWriter(options: ProducerOptions) {
   return createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: "cli-channel-picker.log",
-    primaryModel: "mock-openai/gpt-5.5",
+    primaryModel: "mock-openai/gpt-5.6-luna",
     providerMode: "mock-openai",
     repoRoot: options.repoRoot,
     target: {
       id: SCENARIO_ID,
       title: "CLI channel picker",
       sourcePath: SOURCE_PATH,
-      primaryCoverageIds: ["cli.channel-picker"],
       docsRefs: ["docs/channels/telegram.md", "docs/help/testing.md"],
       codeRefs: [SOURCE_PATH, "scripts/e2e/lib/run-with-pty.mjs", "src/flows/channel-setup.ts"],
     },

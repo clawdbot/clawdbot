@@ -59,8 +59,10 @@ enum HostEnvSecurityPolicy {
         "CORECLR_PROFILER_PATH",
         "CPATH",
         "CPLUS_INCLUDE_PATH",
+        "CPP",
         "CURL_HOME",
         "CXX",
+        "CXXCPP",
         "C_INCLUDE_PATH",
         "DATABASE_URL",
         "DENO_DIR",
@@ -212,13 +214,13 @@ enum HostEnvSecurityPolicy {
         "VISUAL",
         "WGETRC",
         "YARN_RC_FILENAME",
-        "_JAVA_OPTIONS"
+        "_JAVA_OPTIONS",
     ]
 
     static let blockedInheritedPrefixes: [String] = [
         "BASH_FUNC_",
         "DYLD_",
-        "LD_"
+        "LD_",
     ]
 
     static let blockedKeys: Set<String> = [
@@ -241,7 +243,9 @@ enum HostEnvSecurityPolicy {
         "CONFIG_SHELL",
         "CONFIG_SITE",
         "CORECLR_PROFILER",
+        "CPP",
         "CXX",
+        "CXXCPP",
         "DOTNET_ADDITIONAL_DEPS",
         "DOTNET_STARTUP_HOOKS",
         "ELIXIR_ERL_OPTIONS",
@@ -329,7 +333,7 @@ enum HostEnvSecurityPolicy {
         "TCLLIBPATH",
         "VAGRANT_VAGRANTFILE",
         "VIMINIT",
-        "_JAVA_OPTIONS"
+        "_JAVA_OPTIONS",
     ]
 
     static let blockedOverrideKeys: Set<String> = [
@@ -488,19 +492,19 @@ enum HostEnvSecurityPolicy {
         "XDG_RUNTIME_DIR",
         "XDG_STATE_HOME",
         "YARN_RC_FILENAME",
-        "ZDOTDIR"
+        "ZDOTDIR",
     ]
 
     static let blockedOverridePrefixes: [String] = [
         "CARGO_REGISTRIES_",
         "GIT_CONFIG_",
         "NPM_CONFIG_",
-        "TF_VAR_"
+        "TF_VAR_",
     ]
 
     static let blockedPrefixes: [String] = [
         "BASH_FUNC_",
         "DYLD_",
-        "LD_"
+        "LD_",
     ]
 }

@@ -54,6 +54,14 @@ function resolveRestartOptions(cmdOpts: DaemonLifecycleOptions, command?: Comman
   };
 }
 
+function resolveStopOptions(cmdOpts: DaemonLifecycleOptions, command?: Command) {
+  const parentForce = inheritOptionFromParent<boolean>(command, "force");
+  return {
+    ...cmdOpts,
+    force: Boolean(cmdOpts.force || parentForce),
+  };
+}
+
 /** Attach Gateway service status/install/lifecycle subcommands to a parent command. */
 export function addGatewayServiceCommands(parent: Command, opts?: { statusDescription?: string }) {
   parent
@@ -84,7 +92,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .command("install")
     .description("Install the Gateway service (launchd/systemd/schtasks)")
     .option("--port <port>", "Gateway port")
-    .option("--runtime <runtime>", "Daemon runtime (node|bun). Default: node")
+    .option("--runtime <runtime>", "Daemon runtime (node). Default: node")
     .option("--token <token>", "Gateway token (token auth)")
     .option("--wrapper <path>", "Executable wrapper for generated service ProgramArguments")
     .option("--force", "Reinstall/overwrite if already installed", false)
@@ -115,15 +123,16 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("stop")
     .description("Stop the Gateway service (launchd/systemd/schtasks)")
+    .option("--force", "Allow stop from a non-interactive shell", false)
     .option("--json", "Output JSON", false)
     .option(
       "--disable",
       "Persistently suppress KeepAlive/RunAtLoad so the gateway does not respawn until next start (launchd only)",
       false,
     )
-    .action(async (cmdOpts) => {
+    .action(async (cmdOpts, command) => {
       const { runDaemonStop } = await loadDaemonLifecycleModule();
-      await runDaemonStop(cmdOpts);
+      await runDaemonStop(resolveStopOptions(cmdOpts, command));
     });
 
   parent
@@ -133,8 +142,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .option(
       "--safe",
       "Request an OpenClaw-aware restart after active work drains " +
-        "(bounded wait; may force after gateway.reload.deferralTimeoutMs expires; " +
-        "set deferralTimeoutMs=0 for indefinite wait)",
+        "(bounded wait; may force after the timeout expires)",
       false,
     )
     .option("--skip-deferral", "Bypass the safe-restart deferral gate; requires --safe", false)

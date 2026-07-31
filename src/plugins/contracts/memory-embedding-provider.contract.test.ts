@@ -8,7 +8,7 @@ import {
   getRegisteredMemoryEmbeddingProvider,
   type MemoryEmbeddingBatchOptions,
 } from "../memory-embedding-providers.js";
-import { createPluginRecord } from "../status.test-helpers.js";
+import { createPluginRecord } from "../status.test-fixtures.js";
 
 describe("memory embedding provider registration", () => {
   it("rejects non-memory plugins that did not declare the capability contract", () => {

@@ -174,6 +174,8 @@ function createXaiRealtimeTranscriptionSession(
           return;
         }
         if (!speechStarted) {
+          // Dedupe final/terminal echoes within one utterance, not identical later turns.
+          lastTranscript = undefined;
           speechStarted = true;
           config.onSpeechStart?.();
         }
@@ -237,8 +239,10 @@ export function buildXaiRealtimeTranscriptionProvider(): RealtimeTranscriptionPr
     autoSelectOrder: 25,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig, cfg }) =>
-      Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.XAI_API_KEY) ||
-      isProviderAuthProfileConfigured({ provider: "xai", cfg }),
+      Boolean(
+        normalizeProviderConfig(providerConfig).apiKey ??
+        normalizeOptionalString(process.env.XAI_API_KEY),
+      ) || isProviderAuthProfileConfigured({ provider: "xai", cfg }),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
       // createSession must stay sync per RealtimeTranscriptionProviderPlugin; bearer is resolved lazily in headers().

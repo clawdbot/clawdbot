@@ -12,6 +12,10 @@ type OpenAICodexOAuthFacade = {
   refreshOpenAICodexToken: (refreshToken: string) => Promise<OAuthCredentials>;
 };
 
+type OpenAICodexLoginCallbacks = Omit<OAuthLoginCallbacks, "onAuth"> & {
+  onAuth: (info: Parameters<OAuthLoginCallbacks["onAuth"]>[0]) => Promise<void> | void;
+};
+
 function loadOpenAICodexOAuthFacade(): OpenAICodexOAuthFacade {
   return loadActivatedBundledPluginPublicSurfaceModuleSync<OpenAICodexOAuthFacade>({
     dirName: "openai",
@@ -81,7 +85,7 @@ async function refreshViaProviderRuntime(refreshToken: string): Promise<OAuthCre
 }
 
 /** Runs the ChatGPT/Codex OAuth login flow and returns normalized credentials. */
-export async function loginOpenAICodex(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
+async function loginOpenAICodex(callbacks: OpenAICodexLoginCallbacks): Promise<OAuthCredentials> {
   throwIfOAuthLoginAborted(callbacks.signal);
   const { loginOpenAICodexOAuth } =
     await import("../../../plugins/provider-openai-chatgpt-oauth.js");
@@ -98,7 +102,7 @@ export async function loginOpenAICodex(callbacks: OAuthLoginCallbacks): Promise<
       onManualCodeInput,
       openUrl: async (url) => {
         throwIfOAuthLoginAborted(callbacks.signal);
-        callbacks.onAuth({ url });
+        await callbacks.onAuth({ url });
       },
     }),
     callbacks.signal,
@@ -110,7 +114,7 @@ export async function loginOpenAICodex(callbacks: OAuthLoginCallbacks): Promise<
 }
 
 /** Refreshes a ChatGPT/Codex OAuth token through the provider runtime or bundled facade. */
-export async function refreshOpenAICodexToken(refreshToken: string): Promise<OAuthCredentials> {
+async function refreshOpenAICodexToken(refreshToken: string): Promise<OAuthCredentials> {
   return await refreshViaProviderRuntime(refreshToken);
 }
 

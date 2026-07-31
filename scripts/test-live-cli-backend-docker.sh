@@ -374,11 +374,10 @@ WRAP
   fi
   if [ "$auth_mode" = "subscription" ]; then
     claude --version
-    direct_token="violet-lantern-42"
     direct_probe_log="$(mktemp)"
     set +e
     claude \
-      -p "This is a local CLI smoke test. Reply with only this harmless phrase: $direct_token" \
+      -p "This is a local CLI smoke test. What is two plus two? Reply with only the result." \
       --output-format text \
       --model sonnet \
       --permission-mode bypassPermissions \
@@ -388,22 +387,25 @@ WRAP
       --no-session-persistence >"$direct_probe_log" 2>&1
     direct_probe_status=$?
     set -e
-    direct_output="$(<"$direct_probe_log")"
-    if [ "$direct_probe_status" -ne 0 ]; then
-      echo "ERROR: direct Claude subscription probe exited with status $direct_probe_status." >&2
+    print_redacted_direct_probe_log() {
       sed -E \
         -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<redacted-email>/g' \
         -e 's/(sk-ant-|sk-)[A-Za-z0-9_-]+/<redacted-secret>/g' \
         "$direct_probe_log" >&2
+    }
+    if [ "$direct_probe_status" -ne 0 ]; then
+      echo "ERROR: direct Claude subscription probe exited with status $direct_probe_status." >&2
+      print_redacted_direct_probe_log
       rm -f "$direct_probe_log"
       exit "$direct_probe_status"
     fi
-    rm -f "$direct_probe_log"
-    if [[ "$direct_output" != *"$direct_token"* ]]; then
-      echo "ERROR: direct Claude subscription probe did not return expected token." >&2
-      echo "$direct_output" >&2
+    if ! grep -Eiq '(^|[^[:alnum:]])(4|four)([^[:alnum:]]|$)' "$direct_probe_log"; then
+      echo "ERROR: direct Claude subscription probe did not return the expected arithmetic result." >&2
+      print_redacted_direct_probe_log
+      rm -f "$direct_probe_log"
       exit 1
     fi
+    rm -f "$direct_probe_log"
     echo "[claude-subscription] direct claude -p probe ok"
   else
     claude auth status || true

@@ -21,7 +21,7 @@ export type InstallSecurityScanResult = {
 };
 
 /** Plugin install request kinds that share install policy without skill install semantics. */
-export type PluginInstallRequestKind = Exclude<InstallPolicyRequestKind, "skill-install">;
+type PluginInstallRequestKind = Exclude<InstallPolicyRequestKind, "skill-install">;
 
 /** Skill install metadata shape passed into shared install policy evaluation. */
 export type SkillInstallSpecMetadata = {
@@ -41,7 +41,7 @@ export type SkillInstallSpecMetadata = {
 };
 
 /** Package executable metadata used to scope dependency and entrypoint scans. */
-export type PackageExecutableScanMetadata = {
+type PackageExecutableScanMetadata = {
   runtimeExtensions?: readonly string[];
   runtimeSetupEntry?: string;
   setupEntry?: string;
@@ -113,7 +113,10 @@ export async function scanInstalledPackageDependencyTree(params: {
   return await scanInstalledPackageDependencyTreeRuntime(params);
 }
 
-/** Scans one file-based plugin install source. */
+/**
+ * Retained for install.runtime compatibility with pre-v2026.6.5 lazy install chunks.
+ * Remove only with the matching runtime-postbuild legacy alias cleanup.
+ */
 export async function scanFileInstallSource(
   params: InstallSafetyOverrides & {
     config?: OpenClawConfig;

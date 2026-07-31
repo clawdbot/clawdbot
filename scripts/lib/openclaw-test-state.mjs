@@ -119,34 +119,32 @@ function scenarioConfig(scenario, options = {}) {
       agents: {
         defaults: {
           model: {
-            primary: "openai/gpt-5.5",
+            primary: "openai/gpt-5.6-luna",
           },
           contextTokens: 64000,
           skills: ["memory"],
         },
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             default: true,
             name: "Main",
             workspace: "~/workspace",
             model: {
-              primary: "openai/gpt-5.5",
+              primary: "openai/gpt-5.6-luna",
             },
             thinkingDefault: "low",
             skills: ["memory"],
             contextTokens: 64000,
           },
-          {
-            id: "ops",
+          ops: {
             name: "Ops",
             workspace: "~/workspace/ops",
             model: {
-              primary: "openai/gpt-5.5",
+              primary: "openai/gpt-5.6-luna",
             },
             fastModeDefault: true,
           },
-        ],
+        },
       },
       skills: {
         allowBundled: ["memory", "openclaw-testing"],
@@ -323,7 +321,7 @@ function buildCreatePlan(options = {}) {
 }
 
 /** Create an isolated OpenClaw test state directory and optional scenario config. */
-export async function createState(options = {}) {
+async function createState(options = {}) {
   const label = normalizeLabel(options.label);
   const root = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${label}-`));
   const plan = buildCreatePlan({ ...options, root });
@@ -466,7 +464,7 @@ OPENCLAW_TEST_STATE_JSON
   "agents": {
     "defaults": {
       "model": {
-        "primary": "openai/gpt-5.5"
+        "primary": "openai/gpt-5.6-luna"
       },
       "contextTokens": 64000,
       "skills": [
@@ -480,7 +478,7 @@ OPENCLAW_TEST_STATE_JSON
         "name": "Main",
         "workspace": "~/workspace",
         "model": {
-          "primary": "openai/gpt-5.5"
+          "primary": "openai/gpt-5.6-luna"
         },
         "thinkingDefault": "low",
         "skills": [
@@ -493,7 +491,7 @@ OPENCLAW_TEST_STATE_JSON
         "name": "Ops",
         "workspace": "~/workspace/ops",
         "model": {
-          "primary": "openai/gpt-5.5"
+          "primary": "openai/gpt-5.6-luna"
         },
         "fastModeDefault": true
       }

@@ -49,12 +49,12 @@ public enum ShareGatewayRelaySettings {
     /// host can prove a stable ID, discard unscoped device auth and use explicit auth only.
     public static func loadConfigDiscardingUnscopedDeviceAuth() -> ShareGatewayRelayConfig? {
         guard let config = self.loadConfig() else { return nil }
-        if let gatewayID = config.gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !gatewayID.isEmpty
-        {
+        if config.gatewayStableID?.isEmpty == false {
             return config
         }
-        let identity = DeviceIdentityStore.loadOrCreate(profile: .shareExtension)
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: .shareExtension) else {
+            return config
+        }
         DeviceAuthStore.discardUnscopedTokens(
             deviceId: identity.deviceId,
             profile: .shareExtension)

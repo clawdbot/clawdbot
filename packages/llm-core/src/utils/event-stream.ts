@@ -11,16 +11,22 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
   private waiting: ((value: IteratorResult<T>) => void)[] = [];
   private done = false;
   private finalResultPromise: Promise<R>;
-  private resolveFinalResult!: (result: R) => void;
+  private resolveFinalResult: (result: R) => void;
   private isComplete: (event: T) => boolean;
   private extractResult: (event: T) => R;
 
   constructor(isComplete: (event: T) => boolean, extractResult: (event: T) => R) {
     this.isComplete = isComplete;
     this.extractResult = extractResult;
+    const resolvers: Array<(result: R) => void> = [];
     this.finalResultPromise = new Promise((resolve) => {
-      this.resolveFinalResult = resolve;
+      resolvers.push(resolve);
     });
+    const resolveFinalResult = resolvers.at(0);
+    if (!resolveFinalResult) {
+      throw new Error("event stream result promise did not initialize its resolver");
+    }
+    this.resolveFinalResult = resolveFinalResult;
   }
 
   push(event: T): void {
@@ -47,7 +53,10 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
       this.resolveFinalResult(result);
     }
     while (this.waiting.length > 0) {
-      const waiter = this.waiting.shift()!;
+      const waiter = this.waiting.shift();
+      if (!waiter) {
+        break;
+      }
       waiter({ value: undefined as unknown, done: true });
     }
   }
@@ -55,7 +64,9 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
   async *[Symbol.asyncIterator](): AsyncIterator<T> {
     while (true) {
       if (this.queue.length > 0) {
-        yield this.queue.shift()!;
+        for (const event of this.queue.splice(0, 1)) {
+          yield event;
+        }
       } else if (this.done) {
         return;
       } else {

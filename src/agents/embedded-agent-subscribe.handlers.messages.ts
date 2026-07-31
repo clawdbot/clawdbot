@@ -2,8 +2,10 @@
  * Handles embedded-agent assistant message events, block replies, reasoning
  * streams, reply directives, and pending tool media attachment handoff.
  */
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import {
@@ -13,6 +15,7 @@ import {
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { AssistantMessage } from "../llm/types.js";
+import { splitMediaFromOutput } from "../media/parse.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
 import {
   parseAssistantTextSignature,
@@ -24,13 +27,14 @@ import {
   normalizeTextForComparison,
 } from "./embedded-agent-helpers.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type {
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import { appendRawStream } from "./embedded-agent-subscribe.raw-stream.js";
-import { warnIfAssistantEmittedToolText } from "./embedded-agent-subscribe.tool-text-diagnostics.js";
+import { warnIfAssistantEmittedSuspiciousText } from "./embedded-agent-subscribe.tool-text-diagnostics.js";
 import {
   extractAssistantText,
   extractAssistantThinking,
@@ -63,12 +67,21 @@ function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefi
   return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
 }
 
-function isOpenAiResponsesAssistantMessage(message: AgentMessage | undefined): boolean {
+const RESPONSES_API_IDS = new Set([
+  "openai-responses",
+  "openai-chatgpt-responses",
+  "azure-openai-responses",
+  "openclaw-openai-responses-transport",
+  "openclaw-openai-chatgpt-responses-transport",
+  "openclaw-azure-openai-responses-transport",
+]);
+
+function isResponsesApiAssistantMessage(message: AgentMessage | undefined): boolean {
   if (!message || message.role !== "assistant") {
     return false;
   }
   const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
-  return api === "openai-responses" || api === "azure-openai-responses";
+  return RESPONSES_API_IDS.has(api);
 }
 
 function isAnthropicAssistantMessage(message: AgentMessage | undefined): boolean {
@@ -149,12 +162,6 @@ export function resetPendingAssistantUsage(
   ctx.state.assistantUsageCommitted = false;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function extractStandaloneMessageToolText(
   text: string,
   params: { allowCurrentSourceReply?: boolean; allowRoutedReply?: boolean } = {},
@@ -196,8 +203,13 @@ function resolveAssistantStreamItemId(params: {
     params.contentIndex >= 0
       ? params.contentIndex
       : undefined;
-  const candidateBlocks =
-    contentIndex !== undefined ? [content[contentIndex]] : content.toReversed();
+  const indexedBlock = contentIndex !== undefined ? content[contentIndex] : undefined;
+  const indexedRecord =
+    indexedBlock && typeof indexedBlock === "object"
+      ? (indexedBlock as { type?: unknown })
+      : undefined;
+  const hasIndexedTextBlock = indexedRecord?.type === "text";
+  const candidateBlocks = hasIndexedTextBlock ? [indexedBlock] : content.toReversed();
   for (const block of candidateBlocks) {
     if (!block || typeof block !== "object") {
       continue;
@@ -214,12 +226,57 @@ function resolveAssistantStreamItemId(params: {
   return undefined;
 }
 
+function resolveAssistantStreamContentIndex(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+function scopeAssistantMessageToStreamBlock(
+  message: AssistantMessage,
+  contentIndex: number | undefined,
+  itemId: string | undefined,
+): AssistantMessage {
+  if (!Array.isArray(message.content)) {
+    return message;
+  }
+  const indexedBlock = contentIndex === undefined ? undefined : message.content[contentIndex];
+  const block =
+    indexedBlock && typeof indexedBlock === "object" && indexedBlock.type === "text"
+      ? indexedBlock
+      : itemId
+        ? message.content.toReversed().find((candidate) => {
+            if (!candidate || typeof candidate !== "object" || candidate.type !== "text") {
+              return false;
+            }
+            return parseAssistantTextSignature(candidate.textSignature)?.id === itemId;
+          })
+        : undefined;
+  if (!block) {
+    return message;
+  }
+  // Provider partials are cumulative across content blocks. Once a content
+  // index becomes a logical reply boundary, downstream snapshots must be
+  // cumulative only within that block or earlier text is replayed.
+  return { ...message, content: [block] };
+}
+
 function emitReasoningEnd(ctx: EmbeddedAgentSubscribeContext) {
   if (!ctx.state.reasoningStreamOpen) {
     return;
   }
   ctx.state.reasoningStreamOpen = false;
-  void ctx.params.onReasoningEnd?.();
+  runBestEffortCallback({
+    label: "reasoning end",
+    log: ctx.log,
+    callback: () => ctx.params.onReasoningEnd?.(),
+  });
+}
+
+function emitAssistantMessageStart(ctx: EmbeddedAgentSubscribeContext) {
+  runBestEffortCallback({
+    label: "assistant message start",
+    log: ctx.log,
+    callback: () => ctx.params.onAssistantMessageStart?.(),
+  });
 }
 
 function openReasoningStream(ctx: EmbeddedAgentSubscribeContext) {
@@ -349,7 +406,7 @@ function copyPartialBlockState(
 }
 
 /** Replaces a silent-reply token with the latest sent messaging-tool text when available. */
-export function resolveSilentReplyFallbackText(params: {
+function resolveSilentReplyFallbackText(params: {
   text: unknown;
   messagingToolSentTexts: string[];
 }): string {
@@ -368,50 +425,110 @@ export function resolveSilentReplyFallbackText(params: {
 function clearPendingToolMedia(
   state: Pick<
     EmbeddedAgentSubscribeState,
-    "pendingToolMediaUrls" | "pendingToolAudioAsVoice" | "pendingToolTrustedLocalMedia"
+    | "pendingToolMediaUrls"
+    | "pendingToolMediaAttachments"
+    | "pendingToolMediaTrustByUrl"
+    | "pendingToolAudioAsVoice"
   >,
 ) {
   state.pendingToolMediaUrls = [];
+  state.pendingToolMediaAttachments = [];
+  state.pendingToolMediaTrustByUrl.clear();
   state.pendingToolAudioAsVoice = false;
-  state.pendingToolTrustedLocalMedia = false;
 }
 
 function hasReplyMedia(payload: BlockReplyPayload): boolean {
   return (payload.mediaUrls ?? []).some((url) => url.trim().length > 0);
 }
 
+function readAlignedPendingToolMedia(
+  state: Pick<
+    EmbeddedAgentSubscribeState,
+    "pendingToolMediaUrls" | "pendingToolMediaAttachments" | "pendingToolMediaTrustByUrl"
+  >,
+) {
+  const seen = new Set<string>();
+  const mediaUrls: string[] = [];
+  const attachments: NonNullable<BlockReplyPayload["attachments"]> = [];
+  for (const [index, url] of state.pendingToolMediaUrls.entries()) {
+    if (seen.has(url)) {
+      continue;
+    }
+    seen.add(url);
+    mediaUrls.push(url);
+    const { trustedLocalMedia: _untrustedInput, ...attachment } =
+      state.pendingToolMediaAttachments?.[index] ?? {};
+    attachments.push({
+      ...attachment,
+      ...(state.pendingToolMediaTrustByUrl.get(url) === true ? { trustedLocalMedia: true } : {}),
+    });
+  }
+  return {
+    mediaUrls,
+    attachments: attachments.some((entry) => Object.keys(entry).length > 0)
+      ? attachments
+      : undefined,
+  };
+}
+
 /** Moves queued tool media into a non-reasoning assistant reply payload. */
 export function consumePendingToolMediaIntoReply(
   state: Pick<
     EmbeddedAgentSubscribeState,
-    "pendingToolMediaUrls" | "pendingToolAudioAsVoice" | "pendingToolTrustedLocalMedia"
+    | "pendingToolMediaUrls"
+    | "pendingToolMediaAttachments"
+    | "pendingToolMediaTrustByUrl"
+    | "pendingToolAudioAsVoice"
   >,
   payload: BlockReplyPayload,
 ): BlockReplyPayload {
   if (payload.isReasoning) {
     return payload;
   }
-  if (
-    state.pendingToolMediaUrls.length === 0 &&
-    !state.pendingToolAudioAsVoice &&
-    !state.pendingToolTrustedLocalMedia
-  ) {
+  if (state.pendingToolMediaUrls.length === 0 && !state.pendingToolAudioAsVoice) {
     return payload;
   }
   if (hasReplyMedia(payload)) {
     // Pending tool media is a fallback delivery queue; explicit final media is
     // the assistant's user-visible selection, while tool output remains in the transcript.
+    const alignedPendingMedia = readAlignedPendingToolMedia(state);
+    const metadataByUrl = new Map(
+      alignedPendingMedia.mediaUrls.map((url, index) => [
+        url,
+        alignedPendingMedia.attachments?.[index] ?? {},
+      ]),
+    );
+    const selectedAttachments = (payload.mediaUrls ?? []).map(
+      (url) => metadataByUrl.get(url.trim()) ?? {},
+    );
+    const allSelectedMediaIsPending =
+      (payload.mediaUrls?.length ?? 0) > 0 &&
+      (payload.mediaUrls ?? []).every((url) => metadataByUrl.has(url.trim()));
+    const payloadWithMetadata =
+      payload.attachments?.length ||
+      selectedAttachments.every((entry) => Object.keys(entry).length === 0)
+        ? payload
+        : { ...payload, attachments: selectedAttachments };
+    const selectedPayload =
+      allSelectedMediaIsPending &&
+      (payload.mediaUrls ?? []).every(
+        (url) => state.pendingToolMediaTrustByUrl.get(url.trim()) === true,
+      )
+        ? { ...payloadWithMetadata, trustedLocalMedia: true }
+        : payloadWithMetadata;
     clearPendingToolMedia(state);
-    return payload;
+    return selectedPayload;
   }
-  const mergedMediaUrls = Array.from(
-    new Set([...(payload.mediaUrls ?? []), ...state.pendingToolMediaUrls]),
-  );
+  const pendingMedia = readAlignedPendingToolMedia(state);
+  const allPendingMediaTrusted =
+    pendingMedia.mediaUrls.length > 0 &&
+    pendingMedia.mediaUrls.every((url) => state.pendingToolMediaTrustByUrl.get(url) === true);
   const mergedPayload: BlockReplyPayload = {
     ...payload,
-    mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
+    mediaUrls: pendingMedia.mediaUrls.length ? pendingMedia.mediaUrls : undefined,
+    attachments: pendingMedia.attachments,
     audioAsVoice: payload.audioAsVoice || state.pendingToolAudioAsVoice || undefined,
-    trustedLocalMedia: payload.trustedLocalMedia || state.pendingToolTrustedLocalMedia || undefined,
+    ...(payload.trustedLocalMedia || allPendingMediaTrusted ? { trustedLocalMedia: true } : {}),
   };
   clearPendingToolMedia(state);
   return mergedPayload;
@@ -421,7 +538,10 @@ export function consumePendingToolMediaIntoReply(
 export function consumePendingToolMediaReply(
   state: Pick<
     EmbeddedAgentSubscribeState,
-    "pendingToolMediaUrls" | "pendingToolAudioAsVoice" | "pendingToolTrustedLocalMedia"
+    | "pendingToolMediaUrls"
+    | "pendingToolMediaAttachments"
+    | "pendingToolMediaTrustByUrl"
+    | "pendingToolAudioAsVoice"
   >,
 ): BlockReplyPayload | null {
   const payload = readPendingToolMediaReply(state);
@@ -436,22 +556,24 @@ export function consumePendingToolMediaReply(
 export function readPendingToolMediaReply(
   state: Pick<
     EmbeddedAgentSubscribeState,
-    "pendingToolMediaUrls" | "pendingToolAudioAsVoice" | "pendingToolTrustedLocalMedia"
+    | "pendingToolMediaUrls"
+    | "pendingToolMediaAttachments"
+    | "pendingToolMediaTrustByUrl"
+    | "pendingToolAudioAsVoice"
   >,
 ): BlockReplyPayload | null {
-  if (
-    state.pendingToolMediaUrls.length === 0 &&
-    !state.pendingToolAudioAsVoice &&
-    !state.pendingToolTrustedLocalMedia
-  ) {
+  if (state.pendingToolMediaUrls.length === 0 && !state.pendingToolAudioAsVoice) {
     return null;
   }
+  const pendingMedia = readAlignedPendingToolMedia(state);
+  const allPendingMediaTrusted =
+    pendingMedia.mediaUrls.length > 0 &&
+    pendingMedia.mediaUrls.every((url) => state.pendingToolMediaTrustByUrl.get(url) === true);
   return {
-    mediaUrls: state.pendingToolMediaUrls.length
-      ? uniqueStrings(state.pendingToolMediaUrls)
-      : undefined,
+    mediaUrls: pendingMedia.mediaUrls.length ? pendingMedia.mediaUrls : undefined,
+    attachments: pendingMedia.attachments,
     audioAsVoice: state.pendingToolAudioAsVoice || undefined,
-    trustedLocalMedia: state.pendingToolTrustedLocalMedia || undefined,
+    ...(allPendingMediaTrusted ? { trustedLocalMedia: true } : {}),
   };
 }
 
@@ -486,17 +608,12 @@ function mergeReplyDirectiveResults(
   return {
     text: `${first.text ?? ""}${second.text ?? ""}`,
     mediaUrls: mediaUrls.length ? mediaUrls : undefined,
-    mediaUrl: mediaUrls[0] ?? first.mediaUrl ?? second.mediaUrl,
     replyToId: second.replyToId ?? first.replyToId,
     replyToCurrent: first.replyToCurrent || second.replyToCurrent,
     replyToTag: first.replyToTag || second.replyToTag,
     audioAsVoice: first.audioAsVoice || second.audioAsVoice || undefined,
     isSilent: first.isSilent || second.isSilent,
   };
-}
-
-function parseFullStreamingReplyText(text: string): string {
-  return parseReplyDirectives(splitTrailingDirective(text).text).text;
 }
 
 function containsCompleteMediaDirectiveLine(text: string): boolean {
@@ -543,17 +660,20 @@ function resolveStreamingReplyText(params: {
   parsedStreamDirectives: ReplyDirectiveParseResult | null;
   shouldUsePhaseAwareBlockReply: boolean;
 }): string {
-  if (!params.parsedStreamDirectives) {
-    return params.evtType === "text_delta"
-      ? params.previousCleaned
-      : parseFullStreamingReplyText(params.next);
+  if (!params.parsedStreamDirectives && params.evtType === "text_delta") {
+    return params.previousCleaned;
   }
 
-  return resolveIncrementalStreamingReplyText(params) ?? parseFullStreamingReplyText(params.next);
+  return (
+    resolveIncrementalStreamingReplyText(params) ??
+    parseReplyDirectives(
+      params.evtType === "text_end" ? params.next : splitTrailingDirective(params.next).text,
+    ).text
+  );
 }
 
 /** Records parsed reply directives until a sendable reply payload is built. */
-export function recordPendingAssistantReplyDirectives(
+function recordPendingAssistantReplyDirectives(
   state: Pick<EmbeddedAgentSubscribeState, "pendingAssistantReplyDirectives">,
   parsed: ReplyDirectiveParseResult | null | undefined,
 ) {
@@ -607,7 +727,7 @@ export function hasAssistantVisibleReply(params: {
 }
 
 /** Builds normalized stream payload data for assistant visible output. */
-export function buildAssistantStreamData(params: {
+function buildAssistantStreamData(params: {
   text?: string;
   delta?: string;
   replace?: boolean;
@@ -651,7 +771,7 @@ export function handleMessageStart(
   // re-trigger block replies.
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
   // Use assistant message_start as the earliest "writing" signal for typing.
-  void ctx.params.onAssistantMessageStart?.();
+  emitAssistantMessageStart(ctx);
 }
 
 /** Handles assistant message deltas, reasoning, directives, and block replies. */
@@ -665,8 +785,21 @@ export function handleMessageUpdate(
   }
 
   ctx.noteLastAssistant(msg);
+  const assistantEvent = evt.assistantMessageEvent;
+  const assistantRecord =
+    assistantEvent && typeof assistantEvent === "object"
+      ? (assistantEvent as Record<string, unknown>)
+      : undefined;
+  const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
+  const eventAssistantMessage =
+    assistantRecord?.partial && typeof assistantRecord.partial === "object"
+      ? (assistantRecord.partial as AssistantMessage)
+      : msg;
+  const isResponsesTextEvent =
+    isResponsesApiAssistantMessage(eventAssistantMessage) &&
+    (evtType === "text_start" || evtType === "text_delta" || evtType === "text_end");
   const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(msg);
-  if (suppressVisibleAssistantOutput) {
+  if (suppressVisibleAssistantOutput && !isResponsesTextEvent) {
     const commentaryText = coerceChatContentText(extractAssistantCommentaryText(msg));
     if (commentaryText) {
       appendRawStream({
@@ -687,13 +820,7 @@ export function handleMessageUpdate(
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
   const suppressMessageToolOnlySourceReplyOutput = hasMessageToolOnlySourceDelivery(ctx);
 
-  const assistantEvent = evt.assistantMessageEvent;
   const assistantPhase = resolveAssistantMessagePhase(msg);
-  const assistantRecord =
-    assistantEvent && typeof assistantEvent === "object"
-      ? (assistantEvent as Record<string, unknown>)
-      : undefined;
-  const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
 
   if (evtType === "text_end" || evtType === "done" || evtType === "error") {
     capturePendingAssistantUsage(ctx, evt);
@@ -765,47 +892,87 @@ export function handleMessageUpdate(
     accumulatedText: ctx.state.deltaBuffer,
   });
 
-  const partialAssistant =
-    assistantRecord?.partial && typeof assistantRecord.partial === "object"
-      ? (assistantRecord.partial as AssistantMessage)
-      : msg;
-  const deliveryPhase = resolveAssistantMessagePhase(partialAssistant);
+  const partialAssistant = eventAssistantMessage;
+  const streamContentIndex = resolveAssistantStreamContentIndex(assistantRecord?.contentIndex);
   const streamItemId = resolveAssistantStreamItemId({
-    contentIndex: assistantRecord?.contentIndex,
+    contentIndex: streamContentIndex,
     message: partialAssistant,
   });
-  const isPhasePendingOpenAiResponsesTextItem =
+  const streamAssistant = scopeAssistantMessageToStreamBlock(
+    partialAssistant,
+    streamContentIndex,
+    streamItemId,
+  );
+  const deliveryPhase = resolveAssistantMessagePhase(streamAssistant);
+  const isPhasePendingResponsesTextItem =
     evtType !== "text_end" &&
     !deliveryPhase &&
     Boolean(streamItemId) &&
-    isOpenAiResponsesAssistantMessage(partialAssistant);
-  // Anthropic commentary is known only at the tool boundary; keep early
-  // unphased deltas out of durable block replies until that phase is known.
+    isResponsesApiAssistantMessage(partialAssistant);
+  // These transports resolve commentary only at the tool boundary. Withhold
+  // early unphased deltas from durable block replies until that decision exists.
   const isPhasePendingAnthropicText =
     evtType !== "text_end" && !deliveryPhase && isAnthropicAssistantMessage(partialAssistant);
+  const isPhasePendingCompletionsText =
+    !deliveryPhase && isOpenAiCompletionsAssistantMessage(partialAssistant);
+  const hasResponsesContentIndex =
+    streamContentIndex !== undefined && isResponsesApiAssistantMessage(partialAssistant);
   let streamItemChanged = false;
-  if ((deliveryPhase || isPhasePendingOpenAiResponsesTextItem) && streamItemId) {
+  let deliveryItemId = streamItemId;
+  if (
+    (deliveryPhase || isPhasePendingResponsesTextItem || hasResponsesContentIndex) &&
+    (streamContentIndex !== undefined || streamItemId)
+  ) {
+    const previousStreamContentIndex = ctx.state.lastAssistantStreamContentIndex;
     const previousStreamItemId = ctx.state.lastAssistantStreamItemId;
-    if (previousStreamItemId && previousStreamItemId !== streamItemId) {
+    const contentIndexChanged =
+      previousStreamContentIndex !== undefined &&
+      streamContentIndex !== undefined &&
+      previousStreamContentIndex !== streamContentIndex;
+    const itemIdChangedWithoutIndexes =
+      (previousStreamContentIndex === undefined || streamContentIndex === undefined) &&
+      Boolean(previousStreamItemId && streamItemId && previousStreamItemId !== streamItemId);
+    if (contentIndexChanged || itemIdChangedWithoutIndexes) {
       streamItemChanged = true;
       void ctx.flushBlockReplyBuffer({ assistantMessageIndex: ctx.state.assistantMessageIndex });
       ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
-      void ctx.params.onAssistantMessageStart?.();
+      emitAssistantMessageStart(ctx);
+    } else if (
+      previousStreamContentIndex !== undefined &&
+      streamContentIndex === previousStreamContentIndex &&
+      previousStreamItemId
+    ) {
+      // Snapshot-extension items can rotate provider ids while retaining one logical block.
+      // Keep the original live key so downstream commentary accumulators do not split it.
+      deliveryItemId = previousStreamItemId;
     }
-    ctx.state.lastAssistantStreamItemId = streamItemId;
+    ctx.state.lastAssistantStreamContentIndex = streamContentIndex;
+    ctx.state.lastAssistantStreamItemId = deliveryItemId;
+  }
+  // Responses text_start snapshots may already contain text replayed by the first delta.
+  // Keep starts lifecycle-only so commentary and final-answer lanes consume each byte once.
+  if (evtType === "text_start" && isResponsesApiAssistantMessage(partialAssistant)) {
+    return;
   }
   if (deliveryPhase === "commentary") {
-    const commentaryText = chunk
-      ? undefined
-      : coerceChatContentText(extractAssistantCommentaryText(partialAssistant));
+    const isResponsesCommentary = isResponsesApiAssistantMessage(partialAssistant);
+    const hadResponsesCommentaryText = isResponsesCommentary && Boolean(ctx.state.deltaBuffer);
+    if (isResponsesCommentary && chunk) {
+      // Keep cumulative end events monotonic without feeding commentary into reply buffers.
+      ctx.state.deltaBuffer += chunk;
+    }
+    const commentaryText =
+      !chunk && (!isResponsesCommentary || !hadResponsesCommentaryText)
+        ? coerceChatContentText(extractAssistantCommentaryText(streamAssistant))
+        : undefined;
     const commentaryData = chunk
-      ? buildAssistantStreamData({ delta: chunk, phase: "commentary", itemId: streamItemId })
+      ? buildAssistantStreamData({ delta: chunk, phase: "commentary", itemId: deliveryItemId })
       : commentaryText
         ? buildAssistantStreamData({
             text: commentaryText,
             replace: true,
             phase: "commentary",
-            itemId: streamItemId,
+            itemId: deliveryItemId,
           })
         : undefined;
     if (commentaryData) {
@@ -813,7 +980,7 @@ export function handleMessageUpdate(
     }
     return;
   }
-  if (isPhasePendingOpenAiResponsesTextItem) {
+  if (isPhasePendingResponsesTextItem) {
     return;
   }
   // Subagents have no live consumer; their final result is delivered from
@@ -824,8 +991,10 @@ export function handleMessageUpdate(
 
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
-    if (!skipLiveStream && !shouldUsePhaseAwareBlockReply && !isPhasePendingAnthropicText) {
-      appendBlockReplyChunk(ctx, chunk);
+    if (!skipLiveStream && !shouldUsePhaseAwareBlockReply) {
+      if (!isPhasePendingAnthropicText && !isPhasePendingCompletionsText) {
+        appendBlockReplyChunk(ctx, chunk);
+      }
     }
   }
 
@@ -839,10 +1008,12 @@ export function handleMessageUpdate(
   ctx.emitReasoningStream(extractThinkingFromTaggedStream(ctx.state.deltaBuffer));
   const wasThinking = ctx.state.partialBlockState.thinking;
   let visibleDelta = "";
-  const shouldReadPhaseAwarePartialText =
-    shouldUsePhaseAwareBlockReply && (streamItemChanged || evtType === "text_end" || !chunk);
-  let next = shouldReadPhaseAwarePartialText
-    ? coerceChatContentText(extractAssistantVisibleText(partialAssistant)).trim()
+  // A text_start partial may already contain text that the following text_delta replays.
+  // Use starts only for lifecycle boundaries; consume their text from delta/end events.
+  const shouldReadScopedPartialText =
+    streamItemChanged || (shouldUsePhaseAwareBlockReply && (evtType === "text_end" || !chunk));
+  let next = shouldReadScopedPartialText
+    ? coerceChatContentText(extractAssistantVisibleText(streamAssistant)).trim()
     : "";
   let nextRawStreamText = next;
   let shouldPersistRawStreamText = false;
@@ -968,6 +1139,10 @@ export function handleMessageUpdate(
       if (evtType === "text_end" && !ctx.state.lastBlockReplyText && cleanedText) {
         replaceBlockReplyBuffer(ctx, cleanedText);
       }
+    } else if (streamItemChanged && !chunk) {
+      // An unphased equal/shrinking Responses item can end without a delta.
+      // Rebuild its block buffer from the scoped snapshot after the boundary reset.
+      appendBlockReplyChunk(ctx, cleanedText);
     }
 
     ctx.state.lastStreamedAssistant = nextRawStreamText;
@@ -1023,6 +1198,16 @@ export function handleMessageUpdate(
   }
 }
 
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.embeddedSubscribeMessagesTestApi")
+  ] = {
+    buildAssistantStreamData,
+    recordPendingAssistantReplyDirectives,
+    resolveSilentReplyFallbackText,
+  };
+}
+
 /** Handles assistant message-end finalization, block flush, and usage commit. */
 export function handleMessageEnd(
   ctx: EmbeddedAgentSubscribeContext,
@@ -1033,16 +1218,28 @@ export function handleMessageEnd(
     return;
   }
 
+  // Transcript-only messages never reach the provider, so this counts exactly
+  // the completed model round trips consumers see as `assistantTurns`.
+  ctx.state.assistantTurnCount += 1;
   const assistantMessage = preservePendingAssistantUsage(msg, ctx.state.pendingAssistantUsage);
   const assistantPhase = resolveAssistantMessagePhase(assistantMessage);
   const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(assistantMessage);
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
   const suppressMessageToolOnlySourceReplyOutput = hasMessageToolOnlySourceDelivery(ctx);
   ctx.noteLastAssistant(assistantMessage);
+  ctx.noteCompletedAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   ctx.commitAssistantUsage();
   if (suppressVisibleAssistantOutput) {
-    const commentaryText = coerceChatContentText(extractAssistantCommentaryText(assistantMessage));
+    const isResponsesCommentary = isResponsesApiAssistantMessage(assistantMessage);
+    const commentaryMessage = isResponsesCommentary
+      ? scopeAssistantMessageToStreamBlock(
+          assistantMessage as AssistantMessage,
+          ctx.state.lastAssistantStreamContentIndex,
+          ctx.state.lastAssistantStreamItemId,
+        )
+      : assistantMessage;
+    const commentaryText = coerceChatContentText(extractAssistantCommentaryText(commentaryMessage));
     appendRawStream({
       ts: Date.now(),
       event: "assistant_message_end",
@@ -1051,9 +1248,18 @@ export function handleMessageEnd(
       rawText: coerceChatContentText(extractAssistantText(assistantMessage)),
       rawThinking: extractAssistantThinking(assistantMessage),
     });
-    if (commentaryText) {
+    const commentaryAlreadyStreamed =
+      isResponsesCommentary &&
+      Boolean(ctx.state.deltaBuffer) &&
+      ctx.state.deltaBuffer === commentaryText;
+    if (commentaryText && !commentaryAlreadyStreamed) {
       ctx.emitAssistantStreamData(
-        buildAssistantStreamData({ text: commentaryText, replace: true, phase: "commentary" }),
+        buildAssistantStreamData({
+          text: commentaryText,
+          replace: true,
+          phase: "commentary",
+          itemId: isResponsesCommentary ? ctx.state.lastAssistantStreamItemId : undefined,
+        }),
       );
     }
     // Commentary-tagged tool turns can still carry durable reasoning under /reasoning on.
@@ -1086,7 +1292,7 @@ export function handleMessageEnd(
     rawText,
     rawThinking: extractAssistantThinking(assistantMessage),
   });
-  warnIfAssistantEmittedToolText(ctx, assistantMessage);
+  warnIfAssistantEmittedSuspiciousText(ctx, assistantMessage);
   const visibleText =
     extractStandaloneMessageToolText(rawVisibleText, {
       allowRoutedReply: isOpenAiCompletionsAssistantMessage(assistantMessage),
@@ -1108,9 +1314,7 @@ export function handleMessageEnd(
       : "";
   const trimmedReasoning = rawThinking ? rawThinking.trim() : "";
   const trimmedText = text.trim();
-  const parsedText = trimmedText
-    ? parseReplyDirectives(splitTrailingDirective(trimmedText, { final: true }).text)
-    : null;
+  const parsedText = trimmedText ? parseReplyDirectives(trimmedText) : null;
   const cleanedText = parsedText?.text ?? "";
   const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
 
@@ -1244,6 +1448,27 @@ export function handleMessageEnd(
     }
   };
 
+  const consumeFinalReplyDirectives = () => {
+    const bufferedResult = ctx.consumeReplyDirectives("", { final: true });
+    if (!hasMedia || !parsedText) {
+      return bufferedResult;
+    }
+    const bufferedRawText = bufferedResult?.text ?? "";
+    const leadingWhitespace = bufferedRawText.match(/^\s+/u)?.[0] ?? "";
+    const strippedBufferedText = bufferedRawText ? splitMediaFromOutput(bufferedRawText).text : "";
+    const bufferedText =
+      leadingWhitespace &&
+      strippedBufferedText &&
+      !strippedBufferedText.startsWith(leadingWhitespace)
+        ? `${leadingWhitespace}${strippedBufferedText}`
+        : strippedBufferedText;
+    return {
+      ...bufferedResult,
+      ...parsedText,
+      text: bufferedText,
+    };
+  };
+
   const hasBufferedBlockReply = ctx.blockChunker
     ? ctx.blockChunker.hasBuffered()
     : ctx.state.blockBuffer.length > 0;
@@ -1272,14 +1497,7 @@ export function handleMessageEnd(
       // Final-flush the streaming directive accumulator so any partial
       // inline reply/audio tag held back by splitTrailingDirective gets
       // emitted on the message_end / blockReplyChunking path.
-      emitSplitResultAsBlockReply(
-        hasMedia && parsedText
-          ? {
-              ...parsedText,
-              text: "",
-            }
-          : ctx.consumeReplyDirectives("", { final: true }),
-      );
+      emitSplitResultAsBlockReply(consumeFinalReplyDirectives());
     } else if (text !== ctx.state.lastBlockReplyText || hasMedia) {
       // Guard: for text_end channels, if text_end already delivered content
       // (lastBlockReplyText is set), skip this safety send. The text comparison
@@ -1306,7 +1524,7 @@ export function handleMessageEnd(
           )
         ) {
           ctx.log.debug(
-            `Skipping message_end block reply - already sent via messaging tool: ${text.slice(0, 50)}...`,
+            `Skipping message_end block reply - already sent via messaging tool: ${truncateUtf16Safe(text, 50)}...`,
           );
         } else {
           const alreadyDeliveredFinalText = Boolean(
@@ -1378,3 +1596,4 @@ export function handleMessageEnd(
   finalizeMessageEnd();
   return undefined;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

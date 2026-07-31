@@ -31,7 +31,7 @@
     },
     "visionModel": {
       "label": "Vision Model",
-      "placeholder": "codex/gpt-5.5",
+      "placeholder": "codex/gpt-5.6-sol",
       "help": "provider/model used to read snapshots; the provider must support structured extraction (the bundled Codex plugin does). Defaults to the first image-capable Codex entry under tools.media."
     },
     "captureEnabled": {

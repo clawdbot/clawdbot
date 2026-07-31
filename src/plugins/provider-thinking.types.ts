@@ -10,7 +10,7 @@ export type ProviderThinkingPolicyContext = {
   modelId: string;
 };
 
-export type ProviderThinkingModelCompat = {
+type ProviderThinkingModelCompat = {
   thinkingFormat?: string;
   supportedReasoningEfforts?: readonly string[] | null;
 };
@@ -27,12 +27,16 @@ export type ProviderThinkingModelCompat = {
  * profiles only when the configured payload style supports them.
  */
 export type ProviderDefaultThinkingPolicyContext = ProviderThinkingPolicyContext & {
+  /** Effective agent runtime selected for this model, when known. */
+  agentRuntime?: string | null;
+  /** API adapter id from the selected catalog route, when known. */
+  api?: string | null;
   reasoning?: boolean;
   params?: Record<string, unknown>;
   compat?: ProviderThinkingModelCompat | null;
 };
 
-export type ProviderThinkingLevelId =
+type ProviderThinkingLevelId =
   | "off"
   | "minimal"
   | "low"
@@ -40,9 +44,10 @@ export type ProviderThinkingLevelId =
   | "high"
   | "xhigh"
   | "adaptive"
-  | "max";
+  | "max"
+  | "ultra";
 
-export type ProviderThinkingLevel = {
+type ProviderThinkingLevel = {
   id: ProviderThinkingLevelId;
   /**
    * Optional display label. Use this when the stored value differs from the

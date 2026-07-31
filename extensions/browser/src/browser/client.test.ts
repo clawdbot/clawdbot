@@ -11,6 +11,7 @@ import {
   browserScreenshotAction,
 } from "./client-actions.js";
 import {
+  browserCloseTabByRawTargetId,
   browserDoctor,
   browserOpenTab,
   browserSnapshot,
@@ -19,6 +20,12 @@ import {
 } from "./client.js";
 
 describe("browser client", () => {
+  function jsonResponse(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      headers: { "content-type": "application/json" },
+    });
+  }
+
   function requireSnapshotCall(calls: string[]): string {
     const call = calls.find((url) => url.includes("/snapshot?"));
     if (!call) {
@@ -32,16 +39,13 @@ describe("browser client", () => {
       "fetch",
       vi.fn(async (url: string) => {
         calls.push(url);
-        return {
+        return jsonResponse({
           ok: true,
-          json: async () => ({
-            ok: true,
-            format: "ai",
-            targetId: "t1",
-            url: "https://x",
-            snapshot: "ok",
-          }),
-        } as unknown as Response;
+          format: "ai",
+          targetId: "t1",
+          url: "https://x",
+          snapshot: "ok",
+        });
       }),
     );
   }
@@ -168,147 +172,111 @@ describe("browser client", () => {
       vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
         calls.push({ url, init });
         if (url.endsWith("/tabs") && (!init || init.method === undefined)) {
-          return {
-            ok: true,
-            json: async () => ({
-              running: true,
-              tabs: [{ targetId: "t1", title: "T", url: "https://x" }],
-            }),
-          } as unknown as Response;
+          return jsonResponse({
+            running: true,
+            tabs: [{ targetId: "t1", title: "T", url: "https://x" }],
+          });
         }
         if (url.endsWith("/tabs/open")) {
-          return {
-            ok: true,
-            json: async () => ({
-              targetId: "t2",
-              title: "N",
-              url: "https://y",
-            }),
-          } as unknown as Response;
+          return jsonResponse({
+            targetId: "t2",
+            title: "N",
+            url: "https://y",
+          });
         }
         if (url.endsWith("/navigate")) {
-          return {
+          return jsonResponse({
             ok: true,
-            json: async () => ({
-              ok: true,
-              targetId: "t1",
-              url: "https://y",
-              download: {
-                url: "https://y/report.csv",
-                suggestedFilename: "report.csv",
-                path: "/tmp/openclaw/downloads/report.csv",
-              },
-            }),
-          } as unknown as Response;
+            targetId: "t1",
+            url: "https://y",
+            download: {
+              url: "https://y/report.csv",
+              suggestedFilename: "report.csv",
+              path: "/tmp/openclaw/downloads/report.csv",
+            },
+          });
         }
         if (url.endsWith("/act")) {
-          return {
+          return jsonResponse({
             ok: true,
-            json: async () => ({
-              ok: true,
-              targetId: "t1",
-              url: "https://x",
-              result: 1,
-              results: [{ ok: true }],
-              downloads: [
-                {
-                  url: "https://x/report.pdf",
-                  suggestedFilename: "report.pdf",
-                  path: "/tmp/openclaw/downloads/report.pdf",
-                },
-              ],
-            }),
-          } as unknown as Response;
+            targetId: "t1",
+            url: "https://x",
+            result: 1,
+            results: [{ ok: true }],
+            downloads: [
+              {
+                url: "https://x/report.pdf",
+                suggestedFilename: "report.pdf",
+                path: "/tmp/openclaw/downloads/report.pdf",
+              },
+            ],
+          });
         }
         if (url.endsWith("/hooks/file-chooser")) {
-          return {
-            ok: true,
-            json: async () => ({ ok: true }),
-          } as unknown as Response;
+          return jsonResponse({ ok: true });
         }
         if (url.endsWith("/hooks/dialog")) {
-          return {
-            ok: true,
-            json: async () => ({ ok: true }),
-          } as unknown as Response;
+          return jsonResponse({ ok: true });
         }
         if (url.includes("/console?")) {
-          return {
+          return jsonResponse({
             ok: true,
-            json: async () => ({
-              ok: true,
-              targetId: "t1",
-              messages: [],
-            }),
-          } as unknown as Response;
+            targetId: "t1",
+            messages: [],
+          });
         }
         if (url.endsWith("/pdf")) {
-          return {
+          return jsonResponse({
             ok: true,
-            json: async () => ({
-              ok: true,
-              path: "/tmp/a.pdf",
-              targetId: "t1",
-              url: "https://x",
-            }),
-          } as unknown as Response;
+            path: "/tmp/a.pdf",
+            targetId: "t1",
+            url: "https://x",
+          });
         }
         if (url.endsWith("/screenshot")) {
-          return {
+          return jsonResponse({
             ok: true,
-            json: async () => ({
-              ok: true,
-              path: "/tmp/a.png",
-              targetId: "t1",
-              url: "https://x",
-            }),
-          } as unknown as Response;
+            path: "/tmp/a.png",
+            targetId: "t1",
+            url: "https://x",
+          });
         }
         if (url.includes("/snapshot?")) {
-          return {
+          return jsonResponse({
             ok: true,
-            json: async () => ({
-              ok: true,
-              format: "aria",
-              targetId: "t1",
-              url: "https://x",
-              nodes: [],
-            }),
-          } as unknown as Response;
+            format: "aria",
+            targetId: "t1",
+            url: "https://x",
+            nodes: [],
+          });
         }
         if (url.includes("/doctor")) {
-          return {
+          return jsonResponse({
             ok: true,
-            json: async () => ({
-              ok: true,
-              profile: "openclaw",
-              transport: "cdp",
-              checks: [],
-              status: {
-                enabled: true,
-                running: true,
-                cdpPort: 18792,
-              },
-            }),
-          } as unknown as Response;
+            profile: "openclaw",
+            transport: "cdp",
+            checks: [],
+            status: {
+              enabled: true,
+              running: true,
+              cdpPort: 18792,
+            },
+          });
         }
-        return {
-          ok: true,
-          json: async () => ({
-            enabled: true,
-            running: true,
-            pid: 1,
-            cdpPort: 18792,
-            cdpUrl: "http://127.0.0.1:18792",
-            chosenBrowser: "chrome",
-            userDataDir: "/tmp",
-            color: "#FF4500",
-            headless: false,
-            noSandbox: false,
-            executablePath: null,
-            attachOnly: false,
-          }),
-        } as unknown as Response;
+        return jsonResponse({
+          enabled: true,
+          running: true,
+          pid: 1,
+          cdpPort: 18792,
+          cdpUrl: "http://127.0.0.1:18792",
+          chosenBrowser: "chrome",
+          userDataDir: "/tmp",
+          color: "#FF4500",
+          headless: false,
+          noSandbox: false,
+          executablePath: null,
+          attachOnly: false,
+        });
       }),
     );
 
@@ -423,30 +391,68 @@ describe("browser client", () => {
     expect(defaultScreenshotBody.timeoutMs).toBe(20_000);
   });
 
+  it("marks internally selected close targets as exact", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      jsonResponse({ ok: true }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await browserCloseTabByRawTargetId("http://127.0.0.1:18791", "RAW_TARGET", {
+      profile: "openclaw",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("http://127.0.0.1:18791/tabs/RAW_TARGET?targetIdMode=raw&profile=openclaw");
+    expect(init).toMatchObject({
+      method: "DELETE",
+    });
+    expect(init?.body).toBeUndefined();
+  });
+
   it("gives browser act requests enough client timeout for long waits", async () => {
     const calls: Array<{ url: string; init?: RequestInit & { timeoutMs?: number } }> = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
         calls.push({ url, init });
-        return {
-          ok: true,
-          json: async () => ({ ok: true, targetId: "t1" }),
-        } as unknown as Response;
+        return jsonResponse({ ok: true, targetId: "t1" });
       }),
     );
 
     await browserAct("http://127.0.0.1:18791", { kind: "click", ref: "1" });
     await browserAct("http://127.0.0.1:18791", {
       kind: "wait",
-      timeMs: 70_000,
+      timeMs: 10_000,
+      text: "ready",
+      timeoutMs: 20_000,
     });
     await browserAct("http://127.0.0.1:18791", {
       kind: "wait",
+      text: "ready",
       timeoutMs: 45_000,
     });
+    await browserAct("http://127.0.0.1:18791", {
+      kind: "batch",
+      actions: [
+        { kind: "wait", timeMs: 30_000 },
+        {
+          kind: "batch",
+          actions: [
+            { kind: "wait", timeMs: 30_000 },
+            { kind: "wait", timeMs: 30_000 },
+          ],
+        },
+      ],
+    });
+    await browserAct(
+      "http://127.0.0.1:18791",
+      { kind: "wait", timeMs: 30_000 },
+      { timeoutMs: 12_345 },
+    );
 
-    expect(calls.map((call) => call.init?.timeoutMs)).toEqual([60_000, 75_000, 50_000]);
+    expect(calls.map((call) => call.init?.timeoutMs)).toEqual([
+      65_000, 35_000, 50_000, 95_000, 12_345,
+    ]);
   });
 
   it("clamps oversized browser action timeouts before forwarding", async () => {
@@ -455,23 +461,27 @@ describe("browser client", () => {
       "fetch",
       vi.fn(async (url: string, init?: RequestInit & { timeoutMs?: number }) => {
         calls.push({ url, init });
-        return {
-          ok: true,
-          json: async () => ({ ok: true, targetId: "t1", path: "/tmp/a.png" }),
-        } as unknown as Response;
+        return jsonResponse({ ok: true, targetId: "t1", path: "/tmp/a.png" });
       }),
     );
 
     await browserAct("http://127.0.0.1:18791", {
       kind: "wait",
+      text: "ready",
       timeoutMs: Number.MAX_SAFE_INTEGER,
     });
+    await browserAct(
+      "http://127.0.0.1:18791",
+      { kind: "wait", text: "ready" },
+      { timeoutMs: Number.MAX_SAFE_INTEGER },
+    );
     await browserScreenshotAction("http://127.0.0.1:18791", {
       timeoutMs: Number.MAX_SAFE_INTEGER,
     });
 
-    const act = calls.find((call) => call.url.endsWith("/act"));
-    expect(act?.init?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    const actCalls = calls.filter((call) => call.url.endsWith("/act"));
+    expect(actCalls[0]?.init?.timeoutMs).toBe(125_000);
+    expect(actCalls[1]?.init?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
     const screenshot = calls.find((call) => call.url.endsWith("/screenshot"));
     expect(screenshot?.init?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
     const screenshotBody = JSON.parse(

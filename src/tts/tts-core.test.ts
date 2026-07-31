@@ -1,9 +1,10 @@
 // TTS core tests cover provider selection, synthesis, and error handling.
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { AssistantMessage, Model, Usage } from "../llm/types.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import type { SpeechModelOverridePolicy } from "./provider-types.js";
-import { summarizeText } from "./tts-core.js";
+import { resolveSpeechProviderApiKey, summarizeText } from "./tts-core.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
 
 const modelOverridePolicy: SpeechModelOverridePolicy = {
@@ -33,6 +34,23 @@ const usage: Usage = {
 };
 
 describe("TTS core", () => {
+  it("keeps summarization-only LLM modules lazy", () => {
+    const source = readFileSync(new URL("./tts-core.ts", import.meta.url), "utf8");
+
+    expect(source).toContain('import("../llm/stream.js")');
+    expect(source).toContain('import("../agents/simple-completion-runtime.js")');
+    expect(source).not.toContain('from "../llm/stream.js"');
+    expect(source).not.toContain('from "../agents/simple-completion-runtime.js"');
+    expect(source).not.toContain('from "../agents/model-auth.js"');
+  });
+
+  it("resolves the first non-blank speech provider API key", () => {
+    expect(resolveSpeechProviderApiKey(undefined, " \t", "  provider-key  ", "fallback")).toBe(
+      "provider-key",
+    );
+    expect(resolveSpeechProviderApiKey(undefined, "\n")).toBeUndefined();
+  });
+
   it("clamps oversized summarization timeout timers", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {

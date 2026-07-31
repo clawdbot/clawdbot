@@ -93,6 +93,7 @@ vi.mock("./provider-local-service.js", () => ({
 
 vi.mock("./provider-request-config.js", () => ({
   buildProviderRequestDispatcherPolicy: buildProviderRequestDispatcherPolicyMock,
+  getModelProviderMetadataOwners: vi.fn(() => undefined),
   getModelProviderRequestTransport: vi.fn(() => undefined),
   mergeModelProviderRequestOverrides: mergeModelProviderRequestOverridesMock,
   resolveProviderRequestPolicyConfig: resolveProviderRequestPolicyConfigMock,
@@ -261,7 +262,7 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("rejects unknown sentinel-shaped values before guarded fetch", async () => {
-    const unknown = "oc-sent-v1-fedcba987654321001234567";
+    const unknown = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
     await expect(
       buildGuardedModelFetch(sentinelModel())("https://api.openai.com/v1/responses", {
         headers: { Authorization: `Bearer ${unknown}` },
@@ -356,7 +357,7 @@ describe("buildGuardedModelFetch", () => {
     const model = {
       id: "gpt-5.5",
       provider: "openai",
-      api: "openclaw-openai-responses-transport",
+      api: "openclaw-openai-chatgpt-responses-transport",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     } as unknown as Model<"openai-responses">;
 
@@ -386,7 +387,7 @@ describe("buildGuardedModelFetch", () => {
     const model = {
       id: "gpt-5.5",
       provider: "openai",
-      api: "openclaw-openai-responses-transport",
+      api: "openclaw-openai-chatgpt-responses-transport",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     } as unknown as Model<"openai-responses">;
 
@@ -426,7 +427,7 @@ describe("buildGuardedModelFetch", () => {
     const model = {
       id: "gpt-5.5",
       provider: "openai",
-      api: "openclaw-openai-responses-transport",
+      api: "openclaw-openai-chatgpt-responses-transport",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     } as unknown as Model<"openai-responses">;
 
@@ -455,7 +456,7 @@ describe("buildGuardedModelFetch", () => {
     const model = {
       id: "gpt-5.5",
       provider: "openai",
-      api: "openclaw-openai-responses-transport",
+      api: "openclaw-openai-chatgpt-responses-transport",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     } as unknown as Model<"openai-responses">;
 
@@ -914,6 +915,31 @@ describe("buildGuardedModelFetch", () => {
     expect(policy).toBeUndefined();
   });
 
+  it("keeps Meta's native endpoint under DNS rebinding checks", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      policy: { endpointClass: "meta-native" },
+    });
+    const model = {
+      id: "muse-spark-1.1",
+      provider: "meta",
+      api: "openai-responses",
+      baseUrl: "https://api.meta.ai/v1",
+    } as unknown as Model<"openai-responses">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("https://api.meta.ai/v1/responses", { method: "POST" });
+
+    const policy = latestGuardedFetchParams().policy as Record<string, unknown> | undefined;
+    expect(policy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: ["api.meta.ai"],
+    });
+    expect(policy?.allowedOrigins).toBeUndefined();
+    expect(policy?.allowPrivateNetwork).toBeUndefined();
+  });
+
   it.each([
     {
       label: "link-local metadata IP",
@@ -1151,11 +1177,17 @@ describe("buildGuardedModelFetch", () => {
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
     } as unknown as Model<"openai-responses">;
+    const body = JSON.stringify({ model: "gpt-5.5", stream: true });
+    const parse = vi.spyOn(JSON, "parse");
 
     const response = await buildGuardedModelFetch(model)("https://api.openai.com/v1/responses", {
       method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
     });
 
+    expect(parse).not.toHaveBeenCalled();
+    parse.mockRestore();
     await expect(response.text()).resolves.toBe(
       'event: response.created\n\ndata: {"ok": true}\n\n',
     );
@@ -1296,6 +1328,58 @@ describe("buildGuardedModelFetch", () => {
 
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     expect(items).toEqual([{ ok: true }]);
+  });
+
+  it.each([
+    {
+      name: "JSON-to-SSE synthesis",
+      contentType: "application/json",
+      body: '{"ok": true}',
+    },
+    {
+      name: "SSE sanitization",
+      contentType: "text/event-stream",
+      body: 'data: {"ok": true}\n\n',
+    },
+  ])("ignores source cancellation failures during $name", async ({ contentType, body }) => {
+    const cancel = vi.fn(async () => {
+      throw new Error("upstream cancellation failed");
+    });
+    const release = vi.fn(async () => undefined);
+    const encoder = new TextEncoder();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(body));
+          },
+          cancel,
+        }),
+        { headers: { "content-type": contentType } },
+      ),
+      finalUrl: "https://openrouter.ai/api/v1/chat/completions",
+      release,
+    });
+    const model = {
+      id: "gpt-5.4",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.4", stream: true }),
+      },
+    );
+
+    expect(response.body).not.toBeNull();
+    await expect(response.body!.cancel("consumer stopped")).resolves.toBeUndefined();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("does not re-prefix SSE bodies mislabeled as JSON by streaming gateways", async () => {
@@ -1981,6 +2065,50 @@ describe("buildGuardedModelFetch", () => {
       expect(response.headers.get("x-should-retry")).toBeNull();
     });
 
+    it.each([
+      "Sun, 31 Feb 2027 00:00:00 GMT",
+      "Sunday, 31-Feb-27 00:00:00 GMT",
+      "Mon, 06 Nov 1994 08:49:37 GMT",
+      "Monday, 06-Nov-94 08:49:37 GMT",
+    ])("ignores invalid HTTP-date retry-after values: %s", async (retryAfter) => {
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(null, {
+          status: 503,
+          headers: { "retry-after": retryAfter },
+        }),
+        finalUrl: "https://api.anthropic.com/v1/messages",
+        release: vi.fn(async () => undefined),
+      });
+      const response = await buildGuardedModelFetch(anthropicModel)(
+        "https://api.anthropic.com/v1/messages",
+        { method: "POST" },
+      );
+
+      expect(response.headers.get("x-should-retry")).toBeNull();
+    });
+
+    it("interprets RFC 850 retry-after years within the 50-year future window", async () => {
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-06T00:00:00.000Z"));
+      try {
+        fetchWithSsrFGuardMock.mockResolvedValue({
+          response: new Response(null, {
+            status: 503,
+            headers: { "retry-after": "Sunday, 06-Nov-50 00:00:00 GMT" },
+          }),
+          finalUrl: "https://api.anthropic.com/v1/messages",
+          release: vi.fn(async () => undefined),
+        });
+        const response = await buildGuardedModelFetch(anthropicModel)(
+          "https://api.anthropic.com/v1/messages",
+          { method: "POST" },
+        );
+
+        expect(response.headers.get("x-should-retry")).toBe("false");
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
     it("respects OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS", async () => {
       process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS = "10";
       fetchWithSsrFGuardMock.mockResolvedValue({
@@ -2165,3 +2293,4 @@ describe("buildGuardedModelFetch", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

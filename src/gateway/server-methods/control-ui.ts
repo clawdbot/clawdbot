@@ -1,10 +1,11 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { ControlUiGitHubError } from "../control-ui-github-api.js";
 import {
-  ControlUiGitHubPreviewError,
   loadControlUiGitHubPreview,
   parseControlUiGitHubPreviewTarget,
   type ControlUiGitHubPreviewTarget,
 } from "../control-ui-github-preview.js";
+import { parseControlUiSessionPullRequestsSubscribeParams } from "../control-ui-session-pr-subscriptions.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type LoadGitHubPreview = (
@@ -28,8 +29,7 @@ export function createControlUiHandlers(
       try {
         respond(true, await loadGitHubPreview(target), undefined);
       } catch (error) {
-        const statusCode =
-          error instanceof ControlUiGitHubPreviewError ? error.statusCode : undefined;
+        const statusCode = error instanceof ControlUiGitHubError ? error.statusCode : undefined;
         respond(
           false,
           undefined,
@@ -38,6 +38,36 @@ export function createControlUiHandlers(
           }),
         );
       }
+    },
+    "controlUi.sessionPullRequests.subscribe": async ({ params, client, context, respond }) => {
+      const parsed = parseControlUiSessionPullRequestsSubscribeParams(params);
+      if (!parsed) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "invalid controlUi.sessionPullRequests.subscribe params",
+          ),
+        );
+        return;
+      }
+      const connId = client?.connId?.trim();
+      const subscriptions = context.controlUiSessionPullRequests;
+      if (!connId || !subscriptions) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "session pull request subscriptions unavailable"),
+        );
+        return;
+      }
+      if (parsed.refreshSessionKeys.length > 0) {
+        await subscriptions.replace(connId, parsed.sessionKeys, new Set(parsed.refreshSessionKeys));
+      } else {
+        await subscriptions.replace(connId, parsed.sessionKeys);
+      }
+      respond(true, { subscribed: parsed.sessionKeys.length > 0 }, undefined);
     },
   };
 }

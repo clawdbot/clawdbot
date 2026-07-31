@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectReplaySafeToolNames,
   isAgentToolReplaySafe,
-  isCoreToolNameReplaySafe,
+  isAgentToolRestartSafe,
 } from "./tool-replay-safety.js";
 
 describe("agent tool replay safety", () => {
@@ -32,6 +32,21 @@ describe("agent tool replay safety", () => {
     expect(isAgentToolReplaySafe(vendorWidget, { declaredReplaySafe })).toBe(false);
   });
 
+  it("accepts owner-declared concrete tools for restart-safe turns", () => {
+    const pluginTool = { name: "vendor_widget" };
+
+    expect(
+      isAgentToolRestartSafe(pluginTool, {
+        declaredReplaySafe: (tool) => (tool === pluginTool ? true : undefined),
+      }),
+    ).toBe(true);
+    expect(
+      isAgentToolRestartSafe(pluginTool, {
+        declaredReplaySafe: () => false,
+      }),
+    ).toBe(false);
+  });
+
   it("rejects memory_search because it records durable recall signals", () => {
     expect(
       isAgentToolReplaySafe(
@@ -52,10 +67,5 @@ describe("agent tool replay safety", () => {
         declaredReplaySafe: (tool) => (tool === pluginTool ? true : undefined),
       }),
     ).toEqual(new Set());
-  });
-
-  it("classifies fixture names with the same audited contract", () => {
-    expect(isCoreToolNameReplaySafe("web_search")).toBe(true);
-    expect(isCoreToolNameReplaySafe("browser")).toBe(false);
   });
 });

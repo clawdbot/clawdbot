@@ -35,6 +35,10 @@ function hasLegacyPluginDestructivePolicy(value: unknown): boolean {
   );
 }
 
+function hasRetiredOnFailureApprovalPolicy(value: unknown): boolean {
+  return asRecord(value)?.approvalPolicy === "on-failure";
+}
+
 /** Legacy Codex config keys that doctor should report or repair. */
 export const legacyConfigRules: LegacyConfigRule[] = [
   {
@@ -49,6 +53,12 @@ export const legacyConfigRules: LegacyConfigRule[] = [
       'plugins.entries.codex.config.codexPlugins.allow_destructive_actions="on-request" was renamed to "auto". Run "openclaw doctor --fix".',
     match: hasLegacyPluginDestructivePolicy,
   },
+  {
+    path: ["plugins", "entries", "codex", "config", "appServer"],
+    message:
+      'plugins.entries.codex.config.appServer.approvalPolicy="on-failure" was retired by Codex 0.143; use "on-request". Run "openclaw doctor --fix".',
+    match: hasRetiredOnFailureApprovalPolicy,
+  },
 ];
 
 /**
@@ -61,10 +71,17 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   const rawEntry = asRecord(cfg.plugins?.entries?.codex);
   const rawPluginConfig = asRecord(rawEntry?.config);
   const rawCodexPlugins = asRecord(rawPluginConfig?.codexPlugins);
+  const rawAppServer = asRecord(rawPluginConfig?.appServer);
   const shouldRemoveDynamicToolsProfile =
     rawPluginConfig !== null && hasRetiredDynamicToolsProfile(rawPluginConfig);
   const shouldRewriteDestructivePolicy = hasLegacyPluginDestructivePolicy(rawCodexPlugins);
-  if (!rawPluginConfig || (!shouldRemoveDynamicToolsProfile && !shouldRewriteDestructivePolicy)) {
+  const shouldRewriteApprovalPolicy = hasRetiredOnFailureApprovalPolicy(rawAppServer);
+  if (
+    !rawPluginConfig ||
+    (!shouldRemoveDynamicToolsProfile &&
+      !shouldRewriteDestructivePolicy &&
+      !shouldRewriteApprovalPolicy)
+  ) {
     return { config: cfg, changes: [] };
   }
 
@@ -101,6 +118,16 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     }
     changes.push(
       'Renamed plugins.entries.codex.config.codexPlugins allow_destructive_actions="on-request" values to "auto".',
+    );
+  }
+
+  if (shouldRewriteApprovalPolicy) {
+    const nextAppServer = asRecord(nextPluginConfig.appServer);
+    if (nextAppServer?.approvalPolicy === "on-failure") {
+      nextAppServer.approvalPolicy = "on-request";
+    }
+    changes.push(
+      'Renamed plugins.entries.codex.config.appServer.approvalPolicy="on-failure" to "on-request".',
     );
   }
 

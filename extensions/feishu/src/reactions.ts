@@ -6,7 +6,7 @@ import { createFeishuClient } from "./client.js";
 type FeishuReaction = {
   reactionId: string;
   emojiType: string;
-  operatorType: "app" | "user";
+  operatorType: "app" | "user" | "unknown";
   operatorId: string;
 };
 
@@ -94,31 +94,65 @@ export async function listReactionsFeishu(params: {
 }): Promise<FeishuReaction[]> {
   const { cfg, messageId, emojiType, accountId } = params;
   const client = resolveConfiguredFeishuClient({ cfg, accountId });
+  const reactions: FeishuReaction[] = [];
+  const seenPageTokens = new Set<string>();
+  let pageToken: string | undefined;
 
-  const response = (await client.im.messageReaction.list({
-    path: { message_id: messageId },
-    params: emojiType ? { reaction_type: emojiType } : undefined,
-  })) as {
-    code?: number;
-    msg?: string;
-    data?: {
-      items?: Array<{
-        reaction_id?: string;
-        reaction_type?: { emoji_type?: string };
-        operator_type?: string;
-        operator_id?: { open_id?: string; user_id?: string; union_id?: string };
-      }>;
+  while (true) {
+    const response = (await client.im.messageReaction.list({
+      path: { message_id: messageId },
+      params:
+        emojiType || pageToken
+          ? {
+              ...(emojiType ? { reaction_type: emojiType } : {}),
+              ...(pageToken ? { page_token: pageToken } : {}),
+            }
+          : undefined,
+    })) as {
+      code?: number;
+      msg?: string;
+      data?: {
+        items?: Array<{
+          reaction_id?: string;
+          reaction_type?: { emoji_type?: string };
+          operator?: {
+            operator_type?: string;
+            operator_id?: string;
+          };
+        }>;
+        has_more?: boolean;
+        page_token?: string;
+      };
     };
-  };
 
-  assertFeishuReactionApiSuccess(response, "list reactions");
+    assertFeishuReactionApiSuccess(response, "list reactions");
 
-  const items = response.data?.items ?? [];
-  return items.map((item) => ({
-    reactionId: item.reaction_id ?? "",
-    emojiType: item.reaction_type?.emoji_type ?? "",
-    operatorType: item.operator_type === "app" ? "app" : "user",
-    operatorId:
-      item.operator_id?.open_id ?? item.operator_id?.user_id ?? item.operator_id?.union_id ?? "",
-  }));
+    for (const item of response.data?.items ?? []) {
+      reactions.push({
+        reactionId: item.reaction_id ?? "",
+        emojiType: item.reaction_type?.emoji_type ?? "",
+        operatorType:
+          item.operator?.operator_type === "app"
+            ? "app"
+            : item.operator?.operator_type === "user"
+              ? "user"
+              : "unknown",
+        operatorId: item.operator?.operator_id ?? "",
+      });
+    }
+
+    if (response.data?.has_more !== true) {
+      return reactions;
+    }
+
+    const nextPageToken = response.data.page_token?.trim();
+    if (!nextPageToken) {
+      throw new Error("Feishu reaction pagination is missing its next page token");
+    }
+    if (seenPageTokens.has(nextPageToken)) {
+      throw new Error("Feishu reaction pagination returned a repeated page token");
+    }
+    seenPageTokens.add(nextPageToken);
+    pageToken = nextPageToken;
+  }
 }

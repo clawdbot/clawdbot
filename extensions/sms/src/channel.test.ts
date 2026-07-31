@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type ChannelModule = typeof import("./channel.js");
 
-let resolveSmsTextChunkLimit: ChannelModule["resolveSmsTextChunkLimit"];
 let smsPlugin: ChannelModule["smsPlugin"];
 
 const sendSmsViaTwilio = vi.hoisted(() =>
@@ -21,7 +20,7 @@ beforeEach(async () => {
   vi.doMock("./twilio.js", () => ({
     sendSmsViaTwilio,
   }));
-  ({ resolveSmsTextChunkLimit, smsPlugin } = await import("./channel.js"));
+  ({ smsPlugin } = await import("./channel.js"));
 });
 
 afterEach(() => {
@@ -71,7 +70,7 @@ describe("smsPlugin outbound", () => {
     expect(smsPlugin.messaging?.targetPrefixes).toEqual(["twilio-sms"]);
     expect(smsPlugin.outbound?.chunker?.("alpha beta", 6)).toEqual(["alpha", "beta"]);
     expect(
-      resolveSmsTextChunkLimit({
+      smsPlugin.outbound?.resolveEffectiveTextChunkLimit?.({
         cfg: {
           channels: {
             sms: {
@@ -85,7 +84,7 @@ describe("smsPlugin outbound", () => {
       }),
     ).toBe(42);
     expect(
-      resolveSmsTextChunkLimit({
+      smsPlugin.outbound?.resolveEffectiveTextChunkLimit?.({
         cfg: {
           channels: {
             sms: {

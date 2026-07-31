@@ -12,7 +12,6 @@ import {
 import {
   CODEX_PLUGIN_CURRENT_VERSION,
   CODEX_PLUGIN_LIFECYCLE_MESSAGES,
-  createCodexPluginInstallGate,
   evaluateCodexPluginLifecycle,
   seedCodexPluginAt,
   snapshotCodexPluginState,
@@ -97,6 +96,21 @@ describe("codex plugin lifecycle: pinned-old codex plugin with new OpenClaw", ()
       'Codex plugin version 2026.5.19 is older than OpenClaw 2026.5.21. Run "openclaw plugins update codex" or unpin codex, then rerun "openclaw doctor --fix".',
     );
   });
+
+  it("treats an equal-base prerelease plugin as older than the stable host", async () => {
+    const agentDir = await createAgentDir("qa-codex-plugin-prerelease-");
+    await seedCodexPluginAt("2026.5.21-beta.1", agentDir);
+    await seedAuthProfiles("oauth-only", agentDir);
+
+    const result = evaluateCodexPluginLifecycle({
+      plugin: await snapshotCodexPluginState(agentDir),
+      auth: await snapshotAuthProfiles(agentDir),
+      hostVersion: "2026.5.21",
+    });
+
+    expect(result.status).toBe("blocked");
+    expect(result.remediation).toContain("is older than OpenClaw 2026.5.21");
+  });
 });
 
 describe("codex plugin lifecycle: pinned-new codex plugin with old OpenClaw", () => {
@@ -116,30 +130,20 @@ describe("codex plugin lifecycle: pinned-new codex plugin with old OpenClaw", ()
       "Codex plugin version 2026.5.22 requires a newer OpenClaw host than 2026.5.21. Upgrade OpenClaw or install a codex plugin version pinned to 2026.5.21.",
     );
   });
-});
 
-describe("codex plugin lifecycle: install racing first agent turn", () => {
-  it("gates the first turn on install completion without sleeps, lost tokens, or duplicate responses", async () => {
-    const gate = createCodexPluginInstallGate();
-    const turn = gate.runFirstTurnAfterInstall({
-      inputTokens: 17,
-      run: () => "QA_CODEX_PLUGIN_TURN_OK",
+  it("orders a numeric correction plugin after the base stable host", async () => {
+    const agentDir = await createAgentDir("qa-codex-plugin-correction-");
+    await seedCodexPluginAt("2026.5.21-1", agentDir);
+    await seedAuthProfiles("oauth-only", agentDir);
+
+    const result = evaluateCodexPluginLifecycle({
+      plugin: await snapshotCodexPluginState(agentDir),
+      auth: await snapshotAuthProfiles(agentDir),
+      hostVersion: "2026.5.21",
     });
 
-    expect(gate.events).toEqual(["agent-turn:waiting-for-codex-plugin"]);
-
-    gate.markInstalled();
-    await expect(turn).resolves.toEqual({
-      text: "QA_CODEX_PLUGIN_TURN_OK",
-      inputTokens: 17,
-      responseCount: 1,
-    });
-    expect(gate.events).toEqual([
-      "agent-turn:waiting-for-codex-plugin",
-      "codex-plugin:installed",
-      "agent-turn:started",
-      "agent-turn:completed",
-    ]);
+    expect(result.status).toBe("blocked");
+    expect(result.remediation).toContain("requires a newer OpenClaw host than 2026.5.21");
   });
 });
 

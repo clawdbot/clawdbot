@@ -4,6 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveAcpToolTerminalOutcome } from "../../acp/tool-status.js";
 import { EmbeddedBlockChunker } from "../../agents/embedded-agent-block-chunker.js";
 import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display.js";
@@ -50,9 +51,9 @@ function truncateText(input: string, maxChars: number): string {
     return input;
   }
   if (maxChars <= 1) {
-    return input.slice(0, maxChars);
+    return truncateUtf16Safe(input, maxChars);
   }
-  return `${input.slice(0, maxChars - 1)}…`;
+  return `${truncateUtf16Safe(input, maxChars - 1)}…`;
 }
 
 function hashText(text: string): string {
@@ -462,7 +463,7 @@ export function createAcpReplyProjector(params: {
         return;
       }
       const remaining = settings.maxOutputChars - emittedOutputChars;
-      const accepted = remaining < text.length ? text.slice(0, remaining) : text;
+      const accepted = remaining < text.length ? truncateUtf16Safe(text, remaining) : text;
       if (accepted.length > 0) {
         emittedOutputChars += accepted.length;
         lastVisibleOutputTail = accepted.slice(-1);
@@ -479,6 +480,9 @@ export function createAcpReplyProjector(params: {
         }
       }
       if (accepted.length < text.length) {
+        // A split code point can leave the accepted prefix shorter than the remaining budget.
+        // Exhaust it after any drop so later deltas cannot skip past omitted text.
+        emittedOutputChars = settings.maxOutputChars;
         await emitTruncationNotice();
       }
       return;

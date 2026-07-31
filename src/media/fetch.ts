@@ -3,6 +3,7 @@ import { MAX_DOCUMENT_BYTES } from "@openclaw/media-core/constants";
 import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/file-name";
 import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isAbortError } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -19,10 +20,15 @@ import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/
 import { retryAsync, type RetryOptions } from "../infra/retry.js";
 import { isTransientNetworkError } from "../infra/unhandled-rejections.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "./store.js";
 
 /** Default remote media fetch cap shared by buffer reads and store writes. */
-export const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
+const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
+
+// Large media endpoints get a generous header-only deadline. The timer is
+// cleared once headers arrive, so healthy streaming bodies keep their own limits.
+const DEFAULT_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 15 * 60_000;
 
 /** Remote media bytes plus metadata before they are persisted to the media store. */
 type FetchMediaResult = {
@@ -37,7 +43,7 @@ export type SavedRemoteMedia = SavedMedia & {
 };
 
 /** Closed error classes callers can use for retry and diagnostic policy. */
-export type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
+type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
 
 /** Retry policy applied around the complete guarded fetch and body read/save operation. */
 export type MediaFetchRetryOptions = RetryOptions;
@@ -63,7 +69,7 @@ export class MediaFetchError extends Error {
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 /** Alternate dispatcher/lookup pair tried inside a single guarded fetch attempt. */
-export type FetchDispatcherAttempt = {
+type FetchDispatcherAttempt = {
   dispatcherPolicy?: PinnedDispatcherPolicy;
   lookupFn?: LookupFn;
 };
@@ -75,8 +81,10 @@ type FetchMediaOptions = {
   filePathHint?: string;
   maxBytes?: number;
   maxRedirects?: number;
-  /** Abort the guarded fetch request if it has not completed by this deadline (ms). */
+  /** Abort the complete guarded fetch and body operation after this deadline (ms). */
   timeoutMs?: number;
+  /** Abort if final response headers have not arrived by this deadline (ms). */
+  responseHeaderTimeoutMs?: number;
   /** Abort if the response body stops yielding data for this long (ms). */
   readIdleTimeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
@@ -97,7 +105,7 @@ type FetchMediaOptions = {
 };
 
 /** Options for validating and saving an existing Response body into the media store. */
-export type SaveResponseMediaOptions = {
+type SaveResponseMediaOptions = {
   sourceUrl?: string;
   filePathHint?: string;
   maxBytes?: number;
@@ -108,7 +116,7 @@ export type SaveResponseMediaOptions = {
 };
 
 /** Options for guarded URL fetches that are saved directly into the media store. */
-export type SaveRemoteMediaOptions = FetchMediaOptions & {
+type SaveRemoteMediaOptions = FetchMediaOptions & {
   fallbackContentType?: string;
   subdir?: string;
   originalFilename?: string;
@@ -125,25 +133,121 @@ function stripQuotes(value: string): string {
   return value.replace(/^["']|["']$/g, "");
 }
 
+function decodeRemoteFileNameComponent(value: string): string {
+  try {
+    return decodeURIComponent(value).replace(/[\\/]/g, "_");
+  } catch {
+    return value;
+  }
+}
+
+function decodeExtendedRemoteFileName(value: string): string | undefined {
+  const match = /^([^']*)'[^']*'(.*)$/u.exec(value);
+  if (!match) {
+    return undefined;
+  }
+  const charset = match[1]?.toLowerCase();
+  const encoded = match[2] ?? "";
+  try {
+    if (charset === "utf-8") {
+      return decodeURIComponent(encoded).replace(/[\\/]/g, "_");
+    }
+    if (charset === "iso-8859-1") {
+      if (/%(?![\da-f]{2})/iu.test(encoded)) {
+        return undefined;
+      }
+      return encoded
+        .replace(/%([\da-f]{2})/giu, (_match, hex: string) =>
+          String.fromCharCode(Number.parseInt(hex, 16)),
+        )
+        .replace(/[\\/]/g, "_");
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function* parseContentDispositionParameters(header: string): Generator<{
+  name: string;
+  value: string;
+}> {
+  let start = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index <= header.length; index += 1) {
+    const character = header[index];
+    if (escaped || (quoted && character === "\\")) {
+      escaped = !escaped;
+      continue;
+    }
+    if (character === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (index !== header.length && (quoted || character !== ";")) {
+      continue;
+    }
+    const parameter = header.slice(start, index).trim();
+    start = index + 1;
+    const separator = parameter.indexOf("=");
+    if (separator > 0) {
+      yield {
+        name: parameter.slice(0, separator).trim().toLowerCase(),
+        value: stripQuotes(parameter.slice(separator + 1).trim()),
+      };
+    }
+  }
+}
+
+function decodeQuotedRemoteFileName(value: string): string {
+  const windowsDrivePath = /^[a-z]:[\\/]/iu.test(value);
+  const windowsNetworkPath = value.startsWith("\\\\");
+  const mixedWindowsPath = value.includes("/") && value.includes("\\");
+  const relativeWindowsPath =
+    /\\[\p{L}\p{N}]/u.test(value) && /^[^\\/:]+(?:\\[^\\]+)+$/u.test(value);
+  if (!windowsDrivePath && !windowsNetworkPath && !mixedWindowsPath && !relativeWindowsPath) {
+    return value.replace(/\\(.)/gu, "$1");
+  }
+  const lastForwardSeparator = value.lastIndexOf("/");
+  if (lastForwardSeparator >= 0) {
+    const prefix = value.slice(0, lastForwardSeparator + 1);
+    const fileName = value.slice(lastForwardSeparator + 1).replace(/\\([^\p{L}\p{N}])/gu, "$1");
+    return `${prefix}${fileName}`;
+  }
+  const firstBackslash = value.indexOf("\\");
+  if (
+    !windowsDrivePath &&
+    !windowsNetworkPath &&
+    firstBackslash === value.lastIndexOf("\\") &&
+    /\\[^\p{L}\p{N}]/u.test(value)
+  ) {
+    return value.replace(/\\(.)/gu, "$1");
+  }
+  // Backslash-only legacy paths need every separator, including before Unicode or spaces.
+  return value.replace(/\\"/gu, '"');
+}
+
 function parseContentDispositionFileName(header?: string | null): string | undefined {
   if (!header) {
     return undefined;
   }
-  const starMatch = /filename\*\s*=\s*([^;]+)/i.exec(header);
-  if (starMatch?.[1]) {
-    const cleaned = stripQuotes(starMatch[1].trim());
-    const encoded = cleaned.split("''").slice(1).join("''") || cleaned;
-    try {
-      return basenameFromAnyPath(decodeURIComponent(encoded));
-    } catch {
-      return basenameFromAnyPath(encoded);
+  let fallbackFileName: string | undefined;
+  for (const parameter of parseContentDispositionParameters(header)) {
+    if (parameter.name === "filename") {
+      fallbackFileName ??=
+        basenameFromAnyPath(decodeQuotedRemoteFileName(parameter.value)) || undefined;
+      continue;
+    }
+    if (parameter.name !== "filename*") {
+      continue;
+    }
+    const decoded = decodeExtendedRemoteFileName(parameter.value);
+    if (decoded) {
+      return basenameFromAnyPath(decoded) || undefined;
     }
   }
-  const match = /filename\s*=\s*([^;]+)/i.exec(header);
-  if (match?.[1]) {
-    return basenameFromAnyPath(stripQuotes(match[1].trim()));
-  }
-  return undefined;
+  return fallbackFileName;
 }
 
 function basenameFromUrlPathname(pathname: string): string {
@@ -151,11 +255,7 @@ function basenameFromUrlPathname(pathname: string): string {
   if (!base) {
     return "";
   }
-  try {
-    return decodeURIComponent(base).replace(/[\\/]/g, "_");
-  } catch {
-    return base;
-  }
+  return decodeRemoteFileNameComponent(base);
 }
 
 async function readErrorBodySnippet(
@@ -189,6 +289,7 @@ async function fetchGuardedMediaResponse(
     requestInit,
     maxRedirects,
     timeoutMs,
+    responseHeaderTimeoutMs = DEFAULT_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
     ssrfPolicy,
     lookupFn,
     dispatcherPolicy,
@@ -203,6 +304,13 @@ async function fetchGuardedMediaResponse(
     dispatcherAttempts && dispatcherAttempts.length > 0
       ? dispatcherAttempts
       : [{ dispatcherPolicy, lookupFn }];
+  const responseHeaderDeadline = buildTimeoutAbortSignal({
+    timeoutMs: responseHeaderTimeoutMs,
+    signal: requestInit?.signal ?? undefined,
+    operation: "media response headers",
+    url,
+  });
+  const requestSignal = responseHeaderDeadline.signal;
   const runGuardedFetch = async (attempt: FetchDispatcherAttempt) =>
     await fetchWithSsrFGuard(
       (trustExplicitProxyDns && attempt.dispatcherPolicy?.mode === "explicit-proxy"
@@ -213,6 +321,7 @@ async function fetchGuardedMediaResponse(
         init: requestInit,
         maxRedirects,
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        ...(requestSignal ? { signal: requestSignal } : {}),
         policy: ssrfPolicy,
         lookupFn: attempt.lookupFn ?? lookupFn,
         dispatcherPolicy: attempt.dispatcherPolicy,
@@ -223,7 +332,7 @@ async function fetchGuardedMediaResponse(
     const attemptErrors: unknown[] = [];
     for (let i = 0; i < attempts.length; i += 1) {
       try {
-        result = await runGuardedFetch(attempts[i]);
+        result = await runGuardedFetch(expectDefined(attempts[i], "attempts entry at i"));
         break;
       } catch (err) {
         if (
@@ -253,13 +362,19 @@ async function fetchGuardedMediaResponse(
         attemptErrors.push(err);
       }
     }
+    // Clear only the header timer. The merged parent signal stays attached until
+    // release so shutdown can still interrupt a response body read.
+    responseHeaderDeadline.cleanup();
     return {
       response: result.response,
       finalUrl: result.finalUrl,
-      release: result.release,
+      release: async () => {
+        await result.release();
+      },
       sourceUrl,
     };
   } catch (err) {
+    responseHeaderDeadline.cleanup();
     throw new MediaFetchError(
       "fetch_failed",
       `Failed to fetch media from ${sourceUrl}: ${formatErrorMessage(err)}`,
@@ -455,7 +570,7 @@ async function saveOkMediaResponse(params: {
     fallbackContentType: params.fallbackContentType,
   });
   const detectionFilePathHint = isGenericResponseContentType(contentType)
-    ? params.filePathHint
+    ? (params.filePathHint ?? fileName)
     : undefined;
   try {
     const saved = params.res.body

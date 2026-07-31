@@ -11,7 +11,7 @@ import {
   setActivePluginRegistry,
 } from "./runtime.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import { createPluginRecord } from "./status.test-helpers.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
 function expectRouteRegistrationDenied(params: {
   replaceExisting: boolean;

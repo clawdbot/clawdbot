@@ -7,11 +7,12 @@ import {
   clearSessionGoal,
   createSessionGoal,
   formatSessionGoalStatus,
-  getSessionEntry,
   getSessionGoal,
   updateSessionGoalObjective,
   updateSessionGoalStatus,
 } from "../../config/sessions.js";
+import { loadSessionEntry as getSessionEntry } from "../../config/sessions/session-accessor.js";
+import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type {
@@ -118,32 +119,6 @@ export function isFormattedGoalContinuationPrompt(message: string): boolean {
   );
 }
 
-function applyGoalPromptToContext(ctx: HandleCommandsParams["ctx"], message: string): void {
-  const mutableCtx = ctx as HandleCommandsParams["ctx"] & {
-    Body?: string;
-    RawBody?: string;
-    CommandBody?: string;
-    BodyForCommands?: string;
-    BodyForAgent?: string;
-    BodyStripped?: string;
-  };
-  mutableCtx.Body = message;
-  mutableCtx.RawBody = message;
-  mutableCtx.CommandBody = message;
-  mutableCtx.BodyForCommands = message;
-  mutableCtx.BodyForAgent = message;
-  mutableCtx.BodyStripped = message;
-}
-
-function applyGoalContinuationPrompt(params: HandleCommandsParams, message: string): void {
-  applyGoalPromptToContext(params.ctx, message);
-  if (params.rootCtx && params.rootCtx !== params.ctx) {
-    applyGoalPromptToContext(params.rootCtx, message);
-  }
-  params.command.rawBodyNormalized = message;
-  params.command.commandBodyNormalized = message;
-}
-
 function goalContinuation(): CommandHandlerResult {
   return { shouldContinue: true };
 }
@@ -166,6 +141,8 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
   if (unauthorized) {
     return unauthorized;
   }
+  const actor = { type: "human" as const };
+  const goalAgentId = params.agentId;
 
   try {
     switch (parsed.action) {
@@ -191,10 +168,12 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           storePath: params.storePath,
           objective,
           fallbackEntry: params.sessionEntry,
+          actor,
+          agentId: goalAgentId,
         });
         syncGoalSessionEntry(params);
         markCommandSessionMetadataChanged(params);
-        applyGoalContinuationPrompt(params, formatGoalContinuationPrompt(goal.objective));
+        applyCommandTextToParams(params, formatGoalContinuationPrompt(goal.objective));
         return goalContinuation();
       }
       case "edit": {
@@ -206,6 +185,8 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           sessionKey: params.sessionKey,
           storePath: params.storePath,
           objective,
+          actor,
+          agentId: goalAgentId,
         });
         syncGoalSessionEntry(params);
         markCommandSessionMetadataChanged(params);
@@ -216,6 +197,8 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           sessionKey: params.sessionKey,
           storePath: params.storePath,
           status: "paused",
+          actor,
+          agentId: goalAgentId,
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
@@ -227,12 +210,14 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           sessionKey: params.sessionKey,
           storePath: params.storePath,
           status: "active",
+          actor,
+          agentId: goalAgentId,
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
         markCommandSessionMetadataChanged(params);
         const message = formatGoalResumeContinuationPrompt(parsed.text);
-        applyGoalContinuationPrompt(params, message);
+        applyCommandTextToParams(params, message);
         return goalContinuation();
       }
       case "complete":
@@ -241,6 +226,8 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           sessionKey: params.sessionKey,
           storePath: params.storePath,
           status: "complete",
+          actor,
+          agentId: goalAgentId,
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
@@ -253,6 +240,8 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           sessionKey: params.sessionKey,
           storePath: params.storePath,
           status: "blocked",
+          actor,
+          agentId: goalAgentId,
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
@@ -263,6 +252,8 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
         const removed = await clearSessionGoal({
           sessionKey: params.sessionKey,
           storePath: params.storePath,
+          actor,
+          agentId: goalAgentId,
         });
         syncGoalSessionEntry(params);
         if (removed) {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 function resumeResponse(threadId: string, restoredTurns = 0) {
   return {
@@ -16,7 +17,7 @@ function resumeResponse(threadId: string, restoredTurns = 0) {
       status: { type: "idle" },
       path: null,
       cwd: "/repo",
-      cliVersion: "0.139.0",
+      cliVersion: CODEX_APP_SERVER_VERSION,
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -72,6 +73,26 @@ describe("resumeCodexAppServerThread", () => {
       { code: -32_000, message: "thread not found" },
       "thread/resume",
     );
+    const { client } = createClient(async () => {
+      throw rejection;
+    });
+    const abandonClient = vi.fn(async () => undefined);
+
+    await expect(
+      resumeCodexAppServerThread({
+        client,
+        abandonClient,
+        request: { threadId: "thread-1", excludeTurns: true },
+      }),
+    ).rejects.toBe(rejection);
+    expect(abandonClient).not.toHaveBeenCalled();
+  });
+
+  it("keeps the shared client after cancellation before the resume write", async () => {
+    const rejection = Object.assign(new Error("thread/resume aborted"), {
+      code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED",
+      mayHaveWritten: false,
+    });
     const { client } = createClient(async () => {
       throw rejection;
     });

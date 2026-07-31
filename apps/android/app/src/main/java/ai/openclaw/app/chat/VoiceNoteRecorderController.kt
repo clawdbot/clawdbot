@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.voice.TalkAudioLevel
 import android.content.Context
 import android.media.MediaRecorder
 import android.os.SystemClock
@@ -36,6 +37,7 @@ internal sealed interface VoiceNoteRecorderState {
 internal data class VoiceNoteRecording(
   val file: File,
   val durationMs: Long,
+  val id: String = file.absolutePath,
 )
 
 internal interface VoiceNoteRecordingEngine {
@@ -44,6 +46,9 @@ internal interface VoiceNoteRecordingEngine {
   fun stop(): Long
 
   fun cancel()
+
+  /** Peak abs PCM amplitude (0..32767) since the last poll; 0 when not recording. */
+  fun pollAmplitude(): Int
 }
 
 /** Owns voice-note recording state and temporary-file cleanup. */
@@ -64,11 +69,15 @@ internal class VoiceNoteRecorderController(
   private val _elapsedMs = MutableStateFlow(0L)
   val elapsedMs: StateFlow<Long> = _elapsedMs.asStateFlow()
 
+  private val _inputLevel = MutableStateFlow(0f)
+  val inputLevel: StateFlow<Float> = _inputLevel.asStateFlow()
+
   private var outputFile: File? = null
+  private var recordingId: String? = null
   private var elapsedJob: Job? = null
   private var ownsMic = false
 
-  suspend fun start(): Boolean {
+  suspend fun start(id: String = UUID.randomUUID().toString()): Boolean {
     synchronized(lock) {
       if (_state.value !is VoiceNoteRecorderState.Idle && _state.value !is VoiceNoteRecorderState.Failure) return false
     }
@@ -88,7 +97,7 @@ internal class VoiceNoteRecorderController(
       ownsMic = true
 
       val startedAt = elapsedRealtimeMillis()
-      val file = File(outputDirectory, "voice-note-${UUID.randomUUID()}.m4a")
+      val file = File(outputDirectory, "voice-note-$id.m4a")
       try {
         engine.start(file)
       } catch (_: Throwable) {
@@ -100,6 +109,7 @@ internal class VoiceNoteRecorderController(
       }
 
       outputFile = file
+      recordingId = id
       _elapsedMs.value = 0L
       _state.value = VoiceNoteRecorderState.Recording(startedAtMillis = startedAt)
       startElapsedUpdates(startedAt)
@@ -112,6 +122,7 @@ internal class VoiceNoteRecorderController(
       synchronized(lock) {
         if (_state.value !is VoiceNoteRecorderState.Recording) return false
         val file = outputFile ?: return false
+        val id = recordingId ?: return false
         elapsedJob?.cancel()
         elapsedJob = null
 
@@ -143,9 +154,10 @@ internal class VoiceNoteRecorderController(
         // coroutine is composition-scoped and may be cancelled before it runs,
         // so cancel() must still be able to delete the handed-off recording.
         _elapsedMs.value = 0L
+        _inputLevel.value = 0f
         _state.value = VoiceNoteRecorderState.Preparing
         releaseMicLocked()
-        VoiceNoteRecording(file = file, durationMs = durationMs)
+        VoiceNoteRecording(file = file, durationMs = durationMs, id = id)
       }
     onFinished(recording)
     return true
@@ -155,10 +167,16 @@ internal class VoiceNoteRecorderController(
     synchronized(lock) {
       if (_state.value is VoiceNoteRecorderState.Preparing) {
         outputFile = null
+        recordingId = null
         _state.value = VoiceNoteRecorderState.Idle
       }
     }
   }
+
+  fun canCommitPreparation(id: String): Boolean =
+    synchronized(lock) {
+      _state.value is VoiceNoteRecorderState.Preparing && recordingId == id
+    }
 
   fun cancel() {
     synchronized(lock) {
@@ -170,7 +188,9 @@ internal class VoiceNoteRecorderController(
       releaseMicLocked()
       outputFile?.delete()
       outputFile = null
+      recordingId = null
       _elapsedMs.value = 0L
+      _inputLevel.value = 0f
       _state.value = VoiceNoteRecorderState.Idle
     }
   }
@@ -179,6 +199,7 @@ internal class VoiceNoteRecorderController(
     synchronized(lock) {
       outputFile?.delete()
       outputFile = null
+      recordingId = null
       failLocked(message)
     }
   }
@@ -190,13 +211,18 @@ internal class VoiceNoteRecorderController(
         while (isActive && state.value is VoiceNoteRecorderState.Recording) {
           val elapsed = (elapsedRealtimeMillis() - startedAt).coerceIn(0L, VOICE_NOTE_MAX_DURATION_MS)
           _elapsedMs.value = elapsed
+          // MediaRecorder exposes only the peak since the last poll; running it
+          // through the shared dB window keeps this wave on the same visual
+          // scale as the RMS-metered talk and dictation waves.
+          val rawLevel = TalkAudioLevel.normalized((engine.pollAmplitude().coerceIn(0, 32_767)) / 32_767.0)
+          _inputLevel.value = TalkAudioLevel.smoothed(_inputLevel.value, rawLevel)
           // MediaRecorder's duration callback races its asynchronous auto-stop.
           // Own the cap here so every successful finish calls stop() exactly once.
           if (elapsed >= VOICE_NOTE_MAX_DURATION_MS) {
             finish()
             return@launch
           }
-          delay(250L)
+          delay(100L)
         }
       }
   }
@@ -212,7 +238,9 @@ internal class VoiceNoteRecorderController(
   private fun finishFailureLocked(message: String) {
     releaseMicLocked()
     outputFile = null
+    recordingId = null
     _elapsedMs.value = 0L
+    _inputLevel.value = 0f
     _state.value = VoiceNoteRecorderState.Failure(message)
   }
 
@@ -282,4 +310,8 @@ internal class AndroidVoiceNoteRecordingEngine(
     runCatching { active.stop() }
     active.release()
   }
+
+  // maxAmplitude throws until sampling starts on some OEMs; a dead meter beats
+  // killing the recording.
+  override fun pollAmplitude(): Int = recorder?.let { active -> runCatching { active.maxAmplitude }.getOrDefault(0) } ?: 0
 }

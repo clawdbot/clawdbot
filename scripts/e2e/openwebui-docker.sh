@@ -12,7 +12,7 @@ MAX_MEMORY_MIB="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_OPENWEBUI_MAX
 MAX_CPU_PERCENT="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_OPENWEBUI_MAX_CPU_PERCENT 1600)"
 # Keep the default on the preferred GPT-5 OpenAI model for Open WebUI
 # compatibility smoke. Callers can still override this explicitly.
-MODEL="${OPENCLAW_OPENWEBUI_MODEL:-openai/gpt-5.5}"
+MODEL="${OPENCLAW_OPENWEBUI_MODEL:-openai/gpt-5.6-luna}"
 PROMPT_NONCE="OPENWEBUI_DOCKER_E2E_$(date +%s)_$$"
 PROMPT="${OPENCLAW_OPENWEBUI_PROMPT:-Reply with exactly this token and nothing else: ${PROMPT_NONCE}}"
 PORT="$(docker_e2e_read_tcp_port_env OPENCLAW_OPENWEBUI_GATEWAY_PORT 18789)"
@@ -159,6 +159,7 @@ docker_e2e_docker_cmd run -d \
     node "$entry" config set --batch-file "$batch_file" >/dev/null
     rm -f "$batch_file"
     node scripts/e2e/lib/fixture.mjs openwebui-workspace
+    node "$entry" doctor --fix --yes --force >/dev/null
 
     openclaw_e2e_exec_gateway "$entry" '"$PORT"' lan /tmp/openwebui-gateway.log
   ' >/dev/null

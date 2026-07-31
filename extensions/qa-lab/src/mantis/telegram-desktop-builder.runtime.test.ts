@@ -108,7 +108,20 @@ describe("mantis Telegram desktop builder runtime", () => {
     expect(runCommand?.env?.OPENCLAW_MANTIS_TELEGRAM_GROUP_ID).toBe("-1001234567890");
     expect(runCommand?.env?.OPENCLAW_MANTIS_TELEGRAM_SUT_BOT_TOKEN).toBe("sut-token");
     const remoteScript = runCommand?.args.at(-1);
-    expect(remoteScript).toContain("https://telegram.org/dl/desktop/linux");
+    expect(remoteScript).toContain(
+      'curl -fsSL --connect-timeout 10 --max-time 120 https://deb.nodesource.com/setup_22.x -o "$out/nodesource-setup.sh"',
+    );
+    expect(remoteScript).toContain(
+      'sudo -E bash "$out/nodesource-setup.sh" >>"$out/node-apt.log" 2>&1',
+    );
+    expect(remoteScript).not.toContain("setup_22.x | sudo");
+    expect(remoteScript).toContain(
+      'curl -fsSL --connect-timeout 10 --max-time 600 --retry 2 --retry-delay 2 https://telegram.org/dl/desktop/linux -o "$out/telegram-desktop.tar.xz"',
+    );
+    expect(remoteScript?.match(/--connect-timeout 10/gu)?.length).toBe(2);
+    expect(remoteScript?.match(/--max-time 120/gu)?.length).toBe(1);
+    expect(remoteScript?.match(/--max-time 600/gu)?.length).toBe(1);
+    expect(remoteScript?.match(/--retry 2 --retry-delay 2/gu)?.length).toBe(1);
     expect(remoteScript).toContain('-workdir "$telegram_profile_dir"');
     expect(remoteScript).toContain("OPENCLAW_MANTIS_TELEGRAM_DESKTOP_PROFILE_TGZ_B64");
     expect(remoteScript).toContain(
@@ -119,6 +132,13 @@ describe("mantis Telegram desktop builder runtime", () => {
     expect(remoteScript).toContain("openclaw gateway run");
     expect(remoteScript).toContain("telegram-ready-message.json");
     expect(remoteScript).toContain("telegram-desktop-builder.mp4");
+    expect(remoteScript).toContain(
+      "const response = await fetch(`https://api.telegram.org/bot${token}/getMe`, {\n  signal: AbortSignal.timeout(15_000),\n});",
+    );
+    expect(remoteScript).toContain(
+      'const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {\n  method: "POST",\n  headers: { "content-type": "application/json" },\n  body: JSON.stringify({ chat_id: chatId, text, disable_notification: true }),\n  signal: AbortSignal.timeout(15_000),\n});',
+    );
+    expect(remoteScript?.match(/signal: AbortSignal\.timeout\(15_000\)/gu)?.length).toBe(2);
     expect(
       commands.some((entry) => entry.command === "/tmp/crabbox" && entry.args[0] === "stop"),
     ).toBe(false);

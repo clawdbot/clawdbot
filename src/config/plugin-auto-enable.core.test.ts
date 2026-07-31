@@ -108,6 +108,54 @@ describe("applyPluginAutoEnable core", () => {
     ]);
   });
 
+  it("keeps configured channel candidates when plugin config is already present", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: {
+          discord: {
+            enabled: true,
+            accounts: { default: { token: "redacted" } },
+          },
+        },
+        plugins: {
+          entries: {
+            discord: { config: {} },
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([{ id: "discord", channels: ["discord"], origin: "global" }]),
+    });
+
+    expect(result.config.plugins?.entries?.discord).toEqual({ config: {}, enabled: true });
+    expect(result.changes).toContain("Discord configured, enabled automatically.");
+  });
+
+  it("keeps configured channel candidates under a material plugin allowlist", () => {
+    const candidates = detectPluginAutoEnableCandidates({
+      config: {
+        channels: { discord: { token: "redacted" } },
+        plugins: {
+          allow: ["existing"],
+          entries: {
+            existing: { enabled: true },
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        { id: "discord", channels: ["discord"], origin: "global" },
+        { id: "existing", channels: [], origin: "global" },
+      ]),
+    });
+
+    expect(candidates).toContainEqual({
+      pluginId: "discord",
+      kind: "channel-configured",
+      channelId: "discord",
+    });
+  });
+
   it("reuses policy-compatible current manifest registry when runtime config differs", () => {
     const manifestRegistry = makeRegistry([{ id: "custom-chat", channels: ["custom-chat"] }]);
     const snapshotConfig: OpenClawConfig = { plugins: { allow: ["existing"] } };
@@ -224,7 +272,7 @@ describe("applyPluginAutoEnable core", () => {
   it("auto-enables external speech providers selected by TTS config", () => {
     const result = applyPluginAutoEnable({
       config: {
-        messages: { tts: { provider: "gradium" } },
+        tts: { provider: "gradium" },
         plugins: { allow: ["telegram"] },
       },
       env,
@@ -293,7 +341,6 @@ describe("applyPluginAutoEnable core", () => {
         channels: { slack: { botToken: "x" } },
         plugins: {
           allow: [],
-          bundledDiscovery: "compat",
         },
       },
       env,
@@ -512,40 +559,24 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("firecrawl web fetch configured, enabled automatically.");
   });
 
-  it("auto-enables an opt-in provider plugin when an explicit provider model is configured", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        agents: {
-          defaults: {
-            model: "codex/gpt-5.4",
-          },
-        },
-      },
-      env,
-      manifestRegistry: makeRegistry([{ id: "codex", channels: [], providers: ["codex"] }]),
-    });
-
-    expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
-    expect(result.config.plugins?.allow).toBeUndefined();
-    expect(result.changes).toContain("codex/gpt-5.4 model configured, enabled automatically.");
-  });
-
   it("auto-enables provider plugins referenced by media generation model fallbacks", () => {
     const result = applyPluginAutoEnable({
       config: {
         agents: {
           defaults: {
-            imageGenerationModel: {
-              primary: "openai/gpt-image-1",
-              fallbacks: ["google/gemini-3-pro-image-preview"],
-            },
-            videoGenerationModel: {
-              primary: "openai/sora-2",
-              fallbacks: ["google/veo-3.1-fast-generate-preview", "minimax/MiniMax-Hailuo-2.3"],
-            },
-            musicGenerationModel: {
-              primary: "minimax/music-2.6",
-              fallbacks: ["google/lyria-3-clip-preview"],
+            mediaModels: {
+              image: {
+                primary: "openai/gpt-image-1",
+                fallbacks: ["google/gemini-3-pro-image-preview"],
+              },
+              video: {
+                primary: "openai/sora-2",
+                fallbacks: ["google/veo-3.1-fast-generate-preview", "minimax/MiniMax-Hailuo-2.3"],
+              },
+              music: {
+                primary: "minimax/music-2.6",
+                fallbacks: ["google/lyria-3-clip-preview"],
+              },
             },
           },
         },
@@ -977,6 +1008,25 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("discord plugin config present, added to plugin allowlist.");
   });
 
+  it("preserves official external plugin entries before installation", () => {
+    const result = materializePluginAutoEnableCandidates({
+      config: {
+        plugins: {
+          allow: ["glueclaw"],
+          entries: {
+            codex: { enabled: true },
+          },
+        },
+      },
+      candidates: [],
+      env,
+      manifestRegistry: makeRegistry([]),
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["glueclaw", "codex"]);
+    expect(result.changes).toContain("codex plugin config present, added to plugin allowlist.");
+  });
+
   it("does not preserve stale configured plugin entries in restrictive plugins.allow", () => {
     const result = materializePluginAutoEnableCandidates({
       config: {
@@ -1270,7 +1320,7 @@ describe("applyPluginAutoEnable core", () => {
     const result = applyPluginAutoEnable({
       config: {
         channels: { slack: { botToken: "x" } },
-        plugins: { entries: { slack: { enabled: false } } },
+        plugins: { entries: { slack: { enabled: false, config: {} } } },
       },
       env,
     });
@@ -1360,3 +1410,4 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toStrictEqual([]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

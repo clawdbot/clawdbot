@@ -3,15 +3,16 @@ import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coer
 import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
 import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-registry-queries.js";
 import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
+import { resolveSubagentDisplayStatus } from "../../../agents/subagent-session-metrics.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
-import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { formatDurationCompact } from "../../../shared/subagents-format.js";
 import { findTaskByRunIdForOwner } from "../../../tasks/task-owner-access.js";
 import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";
 import type { CommandHandlerResult } from "../commands-types.js";
-import { formatRunLabel, formatRunStatus } from "../subagents-utils.js";
+import { formatRunLabel } from "../subagents-utils.js";
 import {
   resolveSubagentEntryForToken,
   stopWithText,
@@ -29,26 +30,13 @@ function formatTimestampWithAge(valueMs?: number) {
   return `${timestamp} (${formatTimeAgo(Date.now() - valueMs, { fallback: "n/a" })})`;
 }
 
-function resolveDisplayStatus(
-  entry: SubagentsCommandContext["runs"][number],
-  options?: { pendingDescendants?: number },
-) {
-  const pendingDescendants = Math.max(0, options?.pendingDescendants ?? 0);
-  if (pendingDescendants > 0) {
-    const childLabel = pendingDescendants === 1 ? "child" : "children";
-    return `active (waiting on ${pendingDescendants} ${childLabel})`;
-  }
-  const status = formatRunStatus(entry);
-  return status === "error" ? "failed" : status;
-}
-
 function loadSubagentSessionEntry(params: SubagentsCommandContext["params"], childKey: string) {
   const parsed = parseAgentSessionKey(childKey);
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: parsed?.agentId,
   });
   return {
-    entry: loadSessionEntry({
+    entry: loadSessionEntryReadOnly({
       storePath,
       sessionKey: childKey,
       clone: false,
@@ -91,12 +79,13 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
 
   const lines = [
     "ℹ️ Subagent info",
-    `Status: ${resolveDisplayStatus(run, {
-      pendingDescendants: countPendingDescendantRunsFromRuns(
+    `Status: ${resolveSubagentDisplayStatus(
+      run,
+      countPendingDescendantRunsFromRuns(
         getSubagentRunsSnapshotForRead(subagentRuns),
         run.childSessionKey,
       ),
-    })}`,
+    )}`,
     `Label: ${formatRunLabel(run)}`,
     `Task: ${taskText}`,
     `Run: ${run.runId}`,
@@ -104,7 +93,6 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
     linkedTask ? `TaskStatus: ${linkedTask.status}` : undefined,
     `Session: ${run.childSessionKey}`,
     `SessionId: ${sessionEntry?.sessionId ?? "n/a"}`,
-    `Transcript: ${sessionEntry?.sessionFile ?? "n/a"}`,
     `Runtime: ${runtime}`,
     `Created: ${formatTimestampWithAge(run.createdAt)}`,
     `Started: ${formatTimestampWithAge(run.startedAt)}`,

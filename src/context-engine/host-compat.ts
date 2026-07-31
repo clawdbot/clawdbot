@@ -46,7 +46,7 @@ export const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST = {
   ],
 } as const satisfies ContextEngineHostSupport;
 
-export type ContextEngineHostSupportEvaluation =
+type ContextEngineHostSupportEvaluation =
   | {
       ok: true;
       requirements?: ContextEngineHostRequirements;

@@ -1,9 +1,10 @@
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
+import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 // Telegram tests cover telegram outbound plugin behavior.
-import { describe, expect, it } from "vitest";
-import { splitTelegramHtmlChunks } from "./format.js";
+import { describe, expect, it, vi } from "vitest";
+import { markdownToTelegramHtml, splitTelegramHtmlChunks } from "./format.js";
 import { telegramOutbound } from "./outbound-adapter.js";
-import { clearTelegramRuntime } from "./runtime.js";
+import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 
 function markdownTable(columns: number): string {
   return [
@@ -29,7 +30,7 @@ describe("telegramPlugin outbound", () => {
     expect(telegramOutbound.presentationCapabilities?.limits?.text?.markdownDialect).toBe(
       "markdown",
     );
-    expect(telegramOutbound.pollMaxOptions).toBe(10);
+    expect(telegramOutbound.pollMaxOptions).toBe(12);
   });
 
   it("strips assistant-visible tool traces before outbound delivery", () => {
@@ -46,6 +47,15 @@ describe("telegramPlugin outbound", () => {
     expect(telegramOutbound.sanitizeText?.({ text, payload: { text } })).toBe(text);
   });
 
+  it("uses Telegram markdown markers for sanitized HTML formatting", () => {
+    clearTelegramRuntime();
+    const text = `<strong title="b>">bold</strong> <del data-note='s>'>strike</del>`;
+    const sanitized = telegramOutbound.sanitizeText?.({ text, payload: { text } });
+
+    expect(sanitized).toBe("**bold** ~~strike~~");
+    expect(markdownToTelegramHtml(sanitized ?? "")).toBe("<b>bold</b> <s>strike</s>");
+  });
+
   it("preserves explicit HTML parse mode before chunking", () => {
     clearTelegramRuntime();
     const text = "<b>hi</b>";
@@ -54,6 +64,33 @@ describe("telegramPlugin outbound", () => {
       splitTelegramHtmlChunks(text, 4000),
     );
     expect(telegramOutbound.chunker?.(text, 4000)).toEqual([text]);
+  });
+
+  it("delivers bounded HTML through the shared payload path when tag overhead overflows", async () => {
+    clearTelegramRuntime();
+    const oversizedLink = `<a href="https://example.com/${"x".repeat(4_000)}">first</a>`;
+    const text = `${oversizedLink}<b>second</b>`;
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-1", chatId: "12345" });
+
+    await sendTextMediaPayload({
+      channel: "telegram",
+      ctx: {
+        cfg: {},
+        to: "12345",
+        text: "",
+        payload: { text },
+        formatting: { parseMode: "HTML" },
+        deps: { sendTelegram },
+      },
+      adapter: telegramOutbound,
+    });
+
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "12345",
+      "first<b>second</b>",
+      expect.objectContaining({ textMode: "html" }),
+    );
   });
 
   it("keeps astral characters whole at positive configured chunk limits", () => {

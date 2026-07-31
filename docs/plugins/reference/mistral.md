@@ -12,11 +12,11 @@ Adds Mistral model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/mistral-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/mistral-provider`
 
 ## Surface
 
-providers: mistral; contracts: mediaUnderstandingProviders, memoryEmbeddingProviders, realtimeTranscriptionProviders
+providers: `mistral`; contracts: `mediaUnderstandingProviders`, `memoryEmbeddingProviders`, `realtimeTranscriptionProviders`
 
 ## Related docs
 

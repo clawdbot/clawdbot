@@ -1,6 +1,6 @@
 // Verifies WhatsApp provider schema parsing and defaults.
 import { describe, it, expect } from "vitest";
-import { WhatsAppConfigSchema, WhatsAppAccountSchema } from "./zod-schema.providers-whatsapp.js";
+import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
 describe("WhatsApp prompt config Zod validation", () => {
   it("validates group-level systemPrompt", () => {
@@ -73,49 +73,7 @@ describe("WhatsApp prompt config Zod validation", () => {
     }
   });
 
-  it("validates WhatsAppAccountSchema directly", () => {
-    const accountConfig = {
-      name: "Personal Account",
-      groups: {
-        "family@g.us": {
-          systemPrompt: "Keep responses family-friendly",
-        },
-      },
-      direct: {
-        "+15557654321": {
-          systemPrompt: "Keep responses concise",
-        },
-      },
-    };
-
-    const result = WhatsAppAccountSchema.safeParse(accountConfig);
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.groups?.["family@g.us"]?.systemPrompt).toBe(
-        "Keep responses family-friendly",
-      );
-      expect(result.data.direct?.["+15557654321"]?.systemPrompt).toBe("Keep responses concise");
-    }
-  });
-
-  it("accepts deprecated exposeErrorText as a no-op compatibility key", () => {
-    const result = WhatsAppConfigSchema.safeParse({
-      exposeErrorText: false,
-      accounts: {
-        work: {
-          exposeErrorText: true,
-        },
-      },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(Object.hasOwn(result.data, "exposeErrorText")).toBe(false);
-      expect(Object.hasOwn(result.data.accounts?.work ?? {}, "exposeErrorText")).toBe(false);
-    }
-  });
-
-  it("keeps deprecated exposeErrorText out of generated config surfaces", () => {
+  it("keeps exposeErrorText out of generated config surfaces", () => {
     const schema = WhatsAppConfigSchema.toJSONSchema({
       target: "draft-07",
       unrepresentable: "any",

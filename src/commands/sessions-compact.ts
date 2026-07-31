@@ -11,7 +11,7 @@ import { callGatewayCli, type GatewayRpcOpts } from "../cli/gateway-cli/call.js"
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
-export type SessionsCompactCliOptions = {
+type SessionsCompactCliOptions = {
   key: string;
   agent?: string;
   maxLines?: number;

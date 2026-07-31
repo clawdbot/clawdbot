@@ -8,9 +8,9 @@ type FileTransferToolDescriptor = Pick<
   "label" | "name" | "description" | "parameters"
 >;
 
-// Stash fetched files in a non-TTL subdir so follow-up tool calls within
-// the same turn can still reference them.
-export const FILE_TRANSFER_SUBDIR = "file-transfer";
+// Keep fetched files in the managed tool-media namespace so sandboxed replies
+// can attach them and follow-up file_write calls can reuse the media id.
+export const FILE_TRANSFER_SUBDIR = "tool-file-transfer";
 
 export const FILE_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 export const FILE_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;

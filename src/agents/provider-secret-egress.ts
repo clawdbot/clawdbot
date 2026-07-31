@@ -1,9 +1,9 @@
-import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction-registry.js";
 import {
   looksLikeSecretSentinel,
   mintSecretSentinel,
   swapSecretSentinelsInText,
 } from "../secrets/sentinel.js";
+import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import {
   attachModelProviderRequestTransport,
   getModelProviderRequestTransport,
@@ -34,7 +34,6 @@ function protectRuntimeAuthValue(params: {
 
 /** Re-sentinels credentials returned by a provider auth exchange. */
 export function protectPreparedProviderRuntimeAuth(params: {
-  sourceApiKey: string;
   provider: string;
   preparedAuth: PreparedProviderRuntimeAuth | null | undefined;
 }): PreparedProviderRuntimeAuth | undefined {
@@ -42,14 +41,10 @@ export function protectPreparedProviderRuntimeAuth(params: {
   if (!preparedAuth) {
     return undefined;
   }
-  if (
-    !looksLikeSecretSentinel(params.sourceApiKey) &&
-    !isSecretValueRegisteredForRedaction(params.sourceApiKey)
-  ) {
-    return preparedAuth;
-  }
-  const protect = (value: string, label: string) =>
-    protectRuntimeAuthValue({ value, provider: params.provider, label });
+  const protect = (value: string, label: string): string =>
+    !value || isNonSecretApiKeyMarker(value)
+      ? value
+      : protectRuntimeAuthValue({ value, provider: params.provider, label });
   const request = preparedAuth.request;
   const headers = request?.headers
     ? Object.fromEntries(

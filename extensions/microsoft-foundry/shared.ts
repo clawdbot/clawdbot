@@ -144,7 +144,7 @@ function normalizeFoundryModelName(value?: string | null): string | undefined {
   return trimmed || undefined;
 }
 
-export function isAnthropicFoundryDeployment(modelName?: string | null): boolean {
+function isAnthropicFoundryDeployment(modelName?: string | null): boolean {
   const normalized = normalizeFoundryModelName(modelName);
   return normalized ? normalized.startsWith("claude") : false;
 }
@@ -182,12 +182,12 @@ export function isFoundryMaiImageModel(value?: string | null): boolean {
   );
 }
 
-export function supportsFoundryReasoningContent(value?: string | null): boolean {
+function supportsFoundryReasoningContent(value?: string | null): boolean {
   const normalized = normalizeFoundryModelName(value);
   return normalized === "mai-ds-r1" || normalized === "mai-thinking-1";
 }
 
-export function supportsFoundryImageInput(value?: string | null): boolean {
+function supportsFoundryImageInput(value?: string | null): boolean {
   const normalized = normalizeFoundryModelName(value);
   if (!normalized) {
     return false;
@@ -225,12 +225,33 @@ function supportsFoundryManualClaudeThinking(value?: string | null): boolean {
     : false;
 }
 
+function resolveFoundryOpenAIModelTokenLimits(
+  normalized: string | undefined,
+): { contextWindow: number; maxTokens: number } | undefined {
+  if (!normalized) {
+    return undefined;
+  }
+  // Foundry publishes provider-native capacities. Keep exact families here so
+  // older GPT and continuously updated chat models retain their separate caps.
+  if (/^gpt-5\.(?:4(?:-pro)?|5|6(?:-(?:sol|terra|luna))?)$/u.test(normalized)) {
+    return { contextWindow: 1_050_000, maxTokens: 128_000 };
+  }
+  if (/^gpt-5\.4-(?:mini|nano)$/u.test(normalized)) {
+    return { contextWindow: 400_000, maxTokens: 128_000 };
+  }
+  return undefined;
+}
+
 function resolveFoundryModelTokenLimits(value?: string | null): {
   contextWindow: number;
   maxTokens: number;
 } {
   const normalized = normalizeFoundryModelName(value);
   const normalizedVersion = normalized?.replace(/\./g, "-");
+  const foundryOpenAILimits = resolveFoundryOpenAIModelTokenLimits(normalized);
+  if (foundryOpenAILimits) {
+    return foundryOpenAILimits;
+  }
   if (
     normalized &&
     (supportsClaudeAdaptiveThinking({ id: normalized }) ||
@@ -267,7 +288,7 @@ export function requiresFoundryMaxCompletionTokens(value?: string | null): boole
   );
 }
 
-export function supportsFoundryReasoningEffort(value?: string | null): boolean {
+function supportsFoundryReasoningEffort(value?: string | null): boolean {
   const normalized = normalizeFoundryModelName(value);
   if (
     !normalized ||
@@ -282,6 +303,18 @@ export function supportsFoundryReasoningEffort(value?: string | null): boolean {
     normalized.startsWith("o3") ||
     normalized.startsWith("o4")
   );
+}
+
+if (process.env.VITEST === "true") {
+  const key = Symbol.for("openclaw.microsoftFoundryTestApi");
+  const api = (Reflect.get(globalThis, key) as Record<string, unknown> | undefined) ?? {};
+  Reflect.set(globalThis, key, {
+    ...api,
+    isAnthropicFoundryDeployment,
+    supportsFoundryImageInput,
+    supportsFoundryReasoningContent,
+    supportsFoundryReasoningEffort,
+  });
 }
 
 function resolveFoundryReasoningEfforts(value?: string | null): string[] | undefined {
@@ -397,11 +430,16 @@ export function buildFoundryProviderBaseUrl(
 }
 
 export function extractFoundryEndpoint(baseUrl: string | null | undefined): string | undefined {
-  if (!baseUrl) {
+  const trimmed = normalizeOptionalString(baseUrl);
+  if (!trimmed) {
     return undefined;
   }
   try {
-    return normalizeFoundryEndpoint(baseUrl);
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return undefined;
+    }
+    return normalizeFoundryEndpoint(trimmed) || undefined;
   } catch {
     return undefined;
   }
@@ -767,3 +805,4 @@ export function resolveFoundryTargetProfileId(config: FoundryConfigShape): strin
     (configuredProfileEntries.length === 1 ? configuredProfileEntries[0]?.[0] : undefined)
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

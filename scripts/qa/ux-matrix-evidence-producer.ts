@@ -1,4 +1,4 @@
-// Produces a QA Lab UX Matrix evidence bundle through the script scenario contract.
+// Produces standalone QA Lab UX Matrix fixture artifacts for gallery and evidence tests.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -6,11 +6,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { toRepoRelativePath } from "../../extensions/qa-lab/src/cli-paths.js";
+import { resolveQaEvidenceEnvironment } from "../../extensions/qa-lab/src/evidence-environment.js";
 import {
   QA_EVIDENCE_FILENAME,
   QA_EVIDENCE_SUMMARY_KIND,
   QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
-  resolveQaEvidenceEnvironment,
   validateQaEvidenceSummaryJson,
   type QaEvidenceStatus,
   type QaEvidenceSummaryEntry,
@@ -22,13 +22,10 @@ import {
 } from "../ensure-playwright-chromium.mjs";
 
 const execFileAsync = promisify(execFile);
-const SCENARIO_ID = "ux-matrix-evidence-dashboard";
 const SOURCE_PATH = "scripts/qa/ux-matrix-evidence-producer.ts";
-const SUITE_COMMAND = `pnpm openclaw qa suite --scenario ${SCENARIO_ID}`;
 
 type MatrixCell = {
   artifacts: Array<{ kind: string; path: string }>;
-  coverageIds: string[];
   failureReason?: string;
   stage: string;
   status: QaEvidenceStatus;
@@ -40,7 +37,7 @@ type MatrixCell = {
 type ChromiumLauncher = Awaited<typeof import("playwright")>["chromium"];
 type ChromiumBrowser = Awaited<ReturnType<ChromiumLauncher["launch"]>>;
 
-export type ProducerOptions = {
+type ProducerOptions = {
   artifactBase: string;
   repoRoot: string;
   skipVisualProof: boolean;
@@ -236,10 +233,8 @@ function buildEvidenceEntry(cell: MatrixCell, repoRoot: string): QaEvidenceSumma
       title: cell.title,
       source: { path: SOURCE_PATH },
     },
-    coverage: cell.coverageIds.map((id, index) => ({
-      id,
-      role: index === 0 ? "primary" : "secondary",
-    })),
+    // These entries prove the evidence/gallery infrastructure, not product taxonomy behavior.
+    coverage: [],
     refs: [
       { kind: "code", path: SOURCE_PATH },
       { kind: "docs", path: "docs/concepts/qa-e2e-automation.md" },
@@ -488,9 +483,9 @@ async function writeProducerArtifactFixtureHtml(params: {
 </style>
 <main>
   <h1>UX Matrix Producer Artifact Fixture</h1>
-  <p class="meta">Script-produced ${escapeHtml(QA_EVIDENCE_FILENAME)} for ${escapeHtml(
-    SCENARIO_ID,
-  )}; this fixture is not the QA Lab Evidence Archive UI.</p>
+  <p class="meta">Standalone script-produced ${escapeHtml(
+    QA_EVIDENCE_FILENAME,
+  )}; this fixture is not the QA Lab Evidence Archive UI or product-behavior proof.</p>
   <section class="panel">
     <h2>UX Matrix entries</h2>
     <ul>${entryRows}</ul>
@@ -607,13 +602,12 @@ async function writeProducerMetadata(params: {
   await writeJson(path.join(params.artifactBase, "manifest.json"), {
     kind: "openclaw.qa.ux-matrix",
     run: {
-      scenarioId: SCENARIO_ID,
       status: counts.fail ? "fail" : counts.blocked ? "blocked" : "pass",
     },
   });
   await writeJson(path.join(params.artifactBase, "matrix.json"), {
     cells: params.cells.map((cell) => ({
-      coverageIds: cell.coverageIds,
+      coverageIds: [],
       stage: cell.stage,
       status: cell.status,
       surface: cell.surface,
@@ -622,7 +616,7 @@ async function writeProducerMetadata(params: {
   });
   await writeJson(path.join(params.artifactBase, "release-ledger.json"), {
     entries: params.cells.map((cell) => ({
-      coverageIds: cell.coverageIds,
+      coverageIds: [],
       stage: cell.stage,
       status: cell.status,
       surface: cell.surface,
@@ -631,13 +625,10 @@ async function writeProducerMetadata(params: {
   });
   await writeText(
     path.join(params.artifactBase, "commands.txt"),
-    [
-      `${SUITE_COMMAND} --output-dir ${toRepoRelativePath(params.repoRoot, params.artifactBase)}`,
-      `node --import tsx ${SOURCE_PATH} --artifact-base ${toRepoRelativePath(
-        params.repoRoot,
-        params.artifactBase,
-      )}`,
-    ].join("\n") + "\n",
+    `node --import tsx ${SOURCE_PATH} --artifact-base ${toRepoRelativePath(
+      params.repoRoot,
+      params.artifactBase,
+    )}\n`,
   );
   await writeText(
     path.join(params.artifactBase, "scorecard.md"),
@@ -702,8 +693,10 @@ async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
             ]
           : []),
       ],
-      coverageIds: ["ui.control", "gateway.control-ui-hosting"],
-      failureReason: matrixScreenshotResult.failureReason,
+      failureReason:
+        "failureReason" in matrixScreenshotResult
+          ? matrixScreenshotResult.failureReason
+          : undefined,
       stage: "screenshot-artifact",
       status: matrixScreenshotResult.status,
       surface: "control-ui",
@@ -712,7 +705,6 @@ async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
     },
     {
       artifacts: [{ kind: "log", path: relativeToArtifactBase(options.artifactBase, cliLogPath) }],
-      coverageIds: ["cli.entrypoint", "cli.status-snapshots"],
       failureReason: cliResult.failureReason,
       stage: "entrypoint-help",
       status: cliResult.status,
@@ -780,8 +772,8 @@ async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
             ]
           : []),
       ],
-      coverageIds: ["qa.artifact-safety", "tools.evidence", "workspace.artifacts"],
-      failureReason: fixtureProofResult.failureReason,
+      failureReason:
+        "failureReason" in fixtureProofResult ? fixtureProofResult.failureReason : undefined,
       stage: "producer-artifact-fixture",
       status: fixtureProofResult.status,
       surface: "qa-lab",

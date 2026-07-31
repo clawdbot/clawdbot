@@ -51,8 +51,10 @@ export async function deliverReplies(params: {
           accountId,
           replyToId: payload.replyToId,
         });
+        const echoText = sent.echoText ?? sent.sentText;
         sentMessageCache?.remember(scope, {
-          text: sent.echoText ?? sent.sentText,
+          ...(echoText ? { text: echoText } : {}),
+          ...(sent.echoMedia ? { media: sent.echoMedia } : {}),
           messageId: sent.messageId,
         });
       },
@@ -60,12 +62,15 @@ export async function deliverReplies(params: {
         const sent = await sendMessageIMessage(target, caption ?? "", {
           config: params.cfg,
           mediaUrl,
+          ...(payload.audioAsVoice ? { audioAsVoice: true } : {}),
           maxBytes,
           accountId,
           replyToId: payload.replyToId,
         });
+        const echoText = sent.echoText ?? (sent.sentText || undefined);
         sentMessageCache?.remember(scope, {
-          text: sent.echoText ?? (sent.sentText || undefined),
+          ...(echoText ? { text: echoText } : {}),
+          ...(sent.echoMedia ? { media: sent.echoMedia } : {}),
           messageId: sent.messageId,
         });
       },
@@ -84,8 +89,10 @@ export function createIMessageEchoCachingSend(params: {
     const sanitizedText = sanitizeOutboundText(text);
     const sent = await sendMessageIMessage(target, sanitizedText, opts);
     const scope = `${params.accountId ?? opts.accountId ?? ""}:${target}`;
+    const echoText = sent.echoText ?? (sent.sentText || undefined);
     params.sentMessageCache?.remember(scope, {
-      text: sent.echoText ?? (sent.sentText || undefined),
+      ...(echoText ? { text: echoText } : {}),
+      ...(sent.echoMedia ? { media: sent.echoMedia } : {}),
       messageId: sent.messageId,
     });
     return sent;

@@ -3,6 +3,7 @@ type RunStateStatusPatch = {
   busy?: boolean;
   activeRuns?: number;
   lastRunActivityAt?: number | null;
+  activeRunStartedAt?: number | null;
 };
 
 /** Status sink used by channel run-state updates. */
@@ -61,6 +62,7 @@ export function createRunStateMachine(params: RunStateMachineParams) {
   const deactivate = () => {
     lifecycleActive = false;
     clearHeartbeat();
+    params.abortSignal?.removeEventListener("abort", onAbort);
   };
 
   const onAbort = () => {

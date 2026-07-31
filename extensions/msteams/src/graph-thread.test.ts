@@ -1,11 +1,10 @@
 // Msteams tests cover graph thread plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  _teamGroupIdCacheForTest,
   fetchChannelMessage,
+  fetchChatMessageText,
   fetchThreadReplies,
   formatThreadContext,
-  resolveTeamGroupId,
   stripHtmlFromTeamsMessage,
 } from "./graph-thread.js";
 import { fetchGraphJson } from "./graph.js";
@@ -31,10 +30,10 @@ describe("stripHtmlFromTeamsMessage", () => {
     expect(stripHtmlFromTeamsMessage("<p>Hello <b>world</b></p>")).toBe("Hello world");
   });
 
-  it("decodes common HTML entities", () => {
-    expect(stripHtmlFromTeamsMessage("&amp; &lt;b&gt; &quot;x&quot; &#39;y&#39; &nbsp;z")).toBe(
-      "& <b> \"x\" 'y' z",
-    );
+  it("decodes HTML5 entities", () => {
+    expect(
+      stripHtmlFromTeamsMessage("&amp; &lt;b&gt; &quot;x&quot; &#39;y&#39; &nbsp;z &copy;"),
+    ).toBe("& <b> \"x\" 'y' z ©");
   });
 
   it("does not double-decode escaped entities (decodes &amp; last)", () => {
@@ -58,69 +57,6 @@ describe("stripHtmlFromTeamsMessage", () => {
 
   it("returns empty string for empty input", () => {
     expect(stripHtmlFromTeamsMessage("")).toBe("");
-  });
-});
-
-describe("resolveTeamGroupId", () => {
-  beforeEach(() => {
-    vi.mocked(fetchGraphJson).mockReset();
-    _teamGroupIdCacheForTest.clear();
-  });
-
-  it("fetches team id from Graph and caches it", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({ id: "group-guid-1" } as never);
-
-    const result = await resolveTeamGroupId("tok", "team-123");
-    expect(result).toBe("group-guid-1");
-    expect(fetchGraphJson).toHaveBeenCalledWith({
-      token: "tok",
-      path: "/teams/team-123?$select=id",
-    });
-  });
-
-  it("returns cached value without calling Graph again", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({ id: "group-guid-2" } as never);
-
-    await resolveTeamGroupId("tok", "team-456");
-    await resolveTeamGroupId("tok", "team-456");
-
-    expect(fetchGraphJson).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not cache team ids when the expiry would exceed a valid Date", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-    try {
-      vi.mocked(fetchGraphJson).mockResolvedValue({ id: "group-guid-boundary" } as never);
-
-      await resolveTeamGroupId("tok", "team-boundary");
-      await resolveTeamGroupId("tok", "team-boundary");
-
-      expect(fetchGraphJson).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("evicts cached team ids when the current clock is invalid", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValue({ id: "group-guid-invalid-clock" } as never);
-
-    await resolveTeamGroupId("tok", "team-invalid-clock");
-    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-    try {
-      await resolveTeamGroupId("tok", "team-invalid-clock");
-    } finally {
-      dateNow.mockRestore();
-    }
-
-    expect(fetchGraphJson).toHaveBeenCalledTimes(2);
-  });
-
-  it("falls back to conversationTeamId when Graph returns no id", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({} as never);
-
-    const result = await resolveTeamGroupId("tok", "team-fallback");
-    expect(result).toBe("team-fallback");
   });
 });
 
@@ -157,6 +93,70 @@ describe("fetchChannelMessage", () => {
     expect(fetchGraphJson).toHaveBeenCalledWith({
       token: "tok",
       path: "/teams/g%2F1/channels/c%2F2/messages/m%2F3?$select=id,from,body,createdDateTime",
+    });
+  });
+});
+
+describe("fetchChatMessageText", () => {
+  beforeEach(() => {
+    vi.mocked(fetchGraphJson).mockReset();
+  });
+
+  it("fetches the chat message and strips HTML body to plain text", async () => {
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({
+      id: "1783379480258",
+      body: {
+        content: "<p>San Francisco right now: <at>Bot</at> full text</p>",
+        contentType: "html",
+      },
+    } as never);
+
+    const result = await fetchChatMessageText("tok", "19:chat@thread.v2", "1783379480258");
+
+    expect(result).toBe("San Francisco right now: @Bot full text");
+    expect(fetchGraphJson).toHaveBeenCalledWith({
+      token: "tok",
+      path: "/chats/19%3Achat%40thread.v2/messages/1783379480258",
+    });
+  });
+
+  it("returns trimmed plain text when body is not HTML", async () => {
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({
+      body: { content: "  plain body  ", contentType: "text" },
+    } as never);
+
+    const result = await fetchChatMessageText("tok", "19:chat", "m-1");
+    expect(result).toBe("plain body");
+  });
+
+  it("returns undefined on fetch error", async () => {
+    vi.mocked(fetchGraphJson).mockRejectedValueOnce(new Error("not found") as never);
+
+    const result = await fetchChatMessageText("tok", "19:chat", "m-1");
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined when the message has no body", async () => {
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({} as never);
+
+    const result = await fetchChatMessageText("tok", "19:chat", "m-1");
+    expect(result).toBeUndefined();
+  });
+
+  it("forwards a shared deadline to the Graph request", async () => {
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({} as never);
+    const deadline = {
+      label: "MS Teams inbound preprocessing",
+      timeoutMs: 10_000,
+      deadlineAtMs: Date.now() + 10_000,
+    };
+
+    await fetchChatMessageText("tok", "19:chat", "m-1", deadline);
+
+    expect(fetchGraphJson).toHaveBeenCalledWith({
+      token: "tok",
+      path: "/chats/19%3Achat/messages/m-1",
+      deadline,
     });
   });
 });

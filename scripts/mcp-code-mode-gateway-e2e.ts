@@ -7,6 +7,11 @@ import process from "node:process";
 import { setTimeout as setNodeTimeout, clearTimeout as clearNodeTimeout } from "node:timers";
 import { pathToFileURL } from "node:url";
 import { startQaMockOpenAiServer } from "../extensions/qa-lab/src/providers/mock-openai/server.js";
+import {
+  qaMockRequestCursorUrl,
+  qaMockRequestsAfterUrl,
+  readQaMockRequestCursor,
+} from "../extensions/qa-lab/src/providers/shared/debug-request-cursor.js";
 import { stageQaMockAuthProfiles } from "../extensions/qa-lab/src/providers/shared/mock-auth.js";
 import { buildQaGatewayConfig } from "../extensions/qa-lab/src/qa-gateway-config.js";
 import { resetConfigRuntimeState } from "../src/config/config.js";
@@ -120,20 +125,11 @@ async function writeConfig(params: {
         memory: "none",
       },
     },
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        memorySearch: {
-          ...cfg.agents?.defaults?.memorySearch,
-          enabled: false,
-          sync: {
-            ...cfg.agents?.defaults?.memorySearch?.sync,
-            onSearch: false,
-            onSessionStart: false,
-            watch: false,
-          },
-        },
+    memory: {
+      ...cfg.memory,
+      search: {
+        ...cfg.memory?.search,
+        enabled: false,
       },
     },
     tools: {
@@ -176,7 +172,7 @@ async function writeConfig(params: {
   await fs.writeFile(params.configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
 }
 
-export async function main() {
+async function main() {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mcp-code-mode-"));
   const keep = process.env.OPENCLAW_MCP_CODE_MODE_GATEWAY_E2E_KEEP === "1";
   const previousEnv = {
@@ -216,7 +212,9 @@ export async function main() {
       openResponsesEnabled: true,
     });
 
-    const beforeRequests = (await fetchJson(`${provider.baseUrl}/debug/requests`)) as unknown[];
+    const requestCursorBefore = readQaMockRequestCursor(
+      await fetchJson(qaMockRequestCursorUrl(provider.baseUrl)),
+    );
     const response = await fetchJson(`http://127.0.0.1:${gatewayPort}/v1/responses`, {
       method: "POST",
       headers: {
@@ -242,12 +240,13 @@ export async function main() {
         stream: false,
       }),
     });
-    const requests = (await fetchJson(`${provider.baseUrl}/debug/requests`)) as Array<{
+    const laneRequests = (await fetchJson(
+      qaMockRequestsAfterUrl(provider.baseUrl, requestCursorBefore),
+    )) as Array<{
       raw?: string;
       body?: { tools?: unknown[] };
       plannedToolName?: string;
     }>;
-    const laneRequests = requests.slice(beforeRequests.length);
     const firstRequest = laneRequests[0] ?? {};
     const mentions = await readSessionLogMentions(stateDir);
     const plannedTools = laneRequests

@@ -12,11 +12,11 @@ Adds Novita, Novita AI, Novitaai model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/novita-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/novita-provider`
 
 ## Surface
 
-providers: novita, novita-ai, novitaai
+providers: `novita`, `novita-ai`, `novitaai`
 
 ## Related docs
 

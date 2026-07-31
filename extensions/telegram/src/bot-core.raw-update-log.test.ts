@@ -1,8 +1,8 @@
 // Telegram tests cover bot core.raw update log plugin behavior.
 import { describe, expect, it } from "vitest";
-import { stringifyTelegramRawUpdateForLog } from "./raw-update-log.js";
+import { formatTelegramRawUpdateForLog } from "./raw-update-log.js";
 
-describe("stringifyTelegramRawUpdateForLog", () => {
+describe("formatTelegramRawUpdateForLog", () => {
   it("redacts private Telegram raw update fields before verbose logging", () => {
     const update = {
       update_id: 98765,
@@ -45,7 +45,7 @@ describe("stringifyTelegramRawUpdateForLog", () => {
       },
     };
 
-    const rawLog = stringifyTelegramRawUpdateForLog(update);
+    const rawLog = formatTelegramRawUpdateForLog(update);
 
     expect(rawLog).toContain('"update_id":98765');
     expect(rawLog).toContain('"message_id":44');
@@ -138,7 +138,7 @@ describe("stringifyTelegramRawUpdateForLog", () => {
       },
     };
 
-    const rawLog = stringifyTelegramRawUpdateForLog(update);
+    const rawLog = formatTelegramRawUpdateForLog(update);
 
     expect(rawLog).toContain('"update_id":45678');
     expect(rawLog).toContain('"message_id":99');
@@ -176,7 +176,7 @@ describe("stringifyTelegramRawUpdateForLog", () => {
 
   it("truncates long raw update strings without splitting UTF-16 surrogate pairs", () => {
     const prefix = "a".repeat(499);
-    const rawLog = stringifyTelegramRawUpdateForLog({
+    const rawLog = formatTelegramRawUpdateForLog({
       update_id: 123,
       diagnostic: `${prefix}\uD83D\uDE80tail`,
     });
@@ -187,5 +187,13 @@ describe("stringifyTelegramRawUpdateForLog", () => {
     expect(parsed.diagnostic).not.toContain("\uDE80");
     expect(rawLog).not.toContain("\\ud83d");
     expect(rawLog).not.toContain("\\ude80");
+  });
+
+  it("truncates the complete raw update log without splitting surrogate pairs", () => {
+    const keyPrefix = "x".repeat(7997);
+    const rawLog = formatTelegramRawUpdateForLog({ [`${keyPrefix}😀tail`]: 1 });
+
+    expect(rawLog).toBe(`{"${keyPrefix}...`);
+    expect(rawLog).not.toMatch(/[\uD800-\uDFFF]/u);
   });
 });

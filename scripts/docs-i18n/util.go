@@ -12,10 +12,11 @@ import (
 
 const (
 	workflowVersion          = 16
+	promptVersion            = 32
 	docsI18nEngineName       = "codex"
 	envDocsI18nProvider      = "OPENCLAW_DOCS_I18N_PROVIDER"
 	envDocsI18nModel         = "OPENCLAW_DOCS_I18N_MODEL"
-	defaultOpenAIModel       = "gpt-5.5"
+	defaultOpenAIModel       = "gpt-5.6"
 	defaultFallbackProvider  = "openai"
 	defaultFallbackModelName = defaultOpenAIModel
 )
@@ -24,8 +25,9 @@ var translationTranscriptArtifactRE = regexp.MustCompile(`(?i)(?:\b(?:analysis|c
 
 func cacheNamespace() string {
 	return fmt.Sprintf(
-		"wf=%d|engine=%s|provider=%s|model=%s",
+		"wf=%d|prompt=%d|engine=%s|provider=%s|model=%s",
 		workflowVersion,
+		promptVersion,
 		docsI18nEngineName,
 		docsI18nProvider(),
 		docsI18nModel(),

@@ -1,6 +1,7 @@
 package ai.openclaw.app.voice
 
 import ai.openclaw.app.gateway.GatewaySession
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -58,6 +59,8 @@ internal class TalkSpeakClient(
           paramsJson = json.encodeToString(TalkSpeakRequest.from(text = text, directive = directive)),
           timeoutMs = 45_000,
         )
+      } catch (err: CancellationException) {
+        throw err
       } catch (err: Throwable) {
         return TalkSpeakResult.Failure(err.message ?: "talk.speak request failed")
       }

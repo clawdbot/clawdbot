@@ -189,14 +189,16 @@ describe("managed-child-process", () => {
   it("shares process signal listeners across parallel managed commands", async () => {
     const signals = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
     const baseline = new Map(signals.map((signal) => [signal, process.listenerCount(signal)]));
+    const children: Array<Parameters<typeof terminateManagedChild>[0]> = [];
     let readyCount = 0;
     const commands = Array.from({ length: 12 }, () =>
       runManagedCommand({
-        args: ["-e", "setTimeout(() => {}, 500)"],
+        args: ["-e", "setTimeout(() => {}, 10_000)"],
         bin: process.execPath,
         shell: false,
         stdio: "ignore",
-        onReady: () => {
+        onReady: (child) => {
+          children.push(child);
           readyCount += 1;
         },
       }),
@@ -208,11 +210,64 @@ describe("managed-child-process", () => {
         expect(process.listenerCount(signal)).toBe((baseline.get(signal) ?? 0) + 1);
       }
     } finally {
+      for (const child of children) {
+        terminateManagedChild(child, "SIGTERM");
+      }
       await Promise.all(commands);
     }
 
     for (const signal of signals) {
       expect(process.listenerCount(signal)).toBe(baseline.get(signal) ?? 0);
+    }
+  });
+
+  it("times out and kills managed command descendants", async () => {
+    const dir = createTempDir("openclaw-managed-timeout-");
+    const childPath = path.join(dir, "child.mjs");
+    const childPidPath = path.join(dir, "child.pid");
+    const descendantPidPath = path.join(dir, "descendant.pid");
+    fs.writeFileSync(
+      childPath,
+      `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const descendant = spawn(process.execPath, [
+  "-e",
+  "process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 5_000); setInterval(() => {}, 1000);",
+], { stdio: "ignore" });
+fs.writeFileSync(process.argv[2], String(process.pid));
+fs.writeFileSync(process.argv[3], String(descendant.pid));
+process.on("SIGTERM", () => {});
+setInterval(() => {}, 1_000);
+`,
+      "utf8",
+    );
+
+    let childPid = 0;
+    let descendantPid = 0;
+    try {
+      await expect(
+        runManagedCommand({
+          bin: process.execPath,
+          args: [childPath, childPidPath, descendantPidPath],
+          shell: false,
+          stdio: "ignore",
+          timeoutMs: 500,
+        }),
+      ).rejects.toMatchObject({ code: "ETIMEDOUT" });
+
+      childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+      await waitFor(() => !isProcessAlive(childPid), 1_500);
+      await waitFor(() => !isProcessAlive(descendantPid), 1_500);
+    } finally {
+      if (childPid && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+      if (descendantPid && isProcessAlive(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
+      }
     }
   });
 
@@ -307,7 +362,7 @@ async function waitFor(condition: () => boolean, timeoutMs = 3_000) {
     if (Date.now() - startedAt > timeoutMs) {
       throw new Error("timed out waiting for condition");
     }
-    await delay(25);
+    await delay(5);
   }
 }
 
@@ -320,7 +375,16 @@ async function waitForClose(child: ReturnType<typeof spawn>) {
 function isProcessAlive(pid: number) {
   try {
     process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  if (process.platform !== "linux") {
     return true;
+  }
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    // kill(pid, 0) also succeeds for a terminated process awaiting reaping.
+    return stat.charAt(stat.lastIndexOf(")") + 2) !== "Z";
   } catch {
     return false;
   }

@@ -1,10 +1,16 @@
 // Routing session key tests cover route-derived session key behavior.
-import { describe, expect, it } from "vitest";
-import { resolveSessionStoreAgentId } from "../gateway/session-store-key.js";
+import { describe, expect, it, vi } from "vitest";
+
+vi.unmock("./session-key.js");
+import {
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
+} from "../gateway/session-store-key.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import {
   getSubagentDepth,
   isCronSessionKey,
+  parseCronRunScopeSuffix,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
 import {
@@ -14,12 +20,26 @@ import {
   classifySessionKeyShape,
   isValidAgentId,
   parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
   resolveEventSessionKey,
   scopedHeartbeatWakeOptions,
   isUnscopedSessionKeySentinel,
   scopeLegacySessionKeyToAgent,
   toAgentStoreSessionKey,
 } from "./session-key.js";
+
+describe("agent id session-key boundary", () => {
+  it("keeps legacy keys absent at parse time and resolves them only with a configured default", () => {
+    expect(parseAgentSessionKey("main")?.agentId).toBeUndefined();
+    expect(() => resolveAgentIdFromSessionKey("main")).toThrow("configured default agent");
+    expect(() => resolveAgentIdFromSessionKey("main", "   ")).toThrow("configured default agent");
+    expect(resolveAgentIdFromSessionKey("main", "primary")).toBe("primary");
+    expect(resolveAgentIdFromSessionKey("agent:worker:main", "primary")).toBe("worker");
+    expect(() => resolveAgentIdFromSessionKey("agent::secret", "primary")).toThrow(
+      "Malformed agent session key",
+    );
+  });
+});
 
 describe("classifySessionKeyShape", () => {
   it.each([
@@ -86,6 +106,22 @@ describe("agentSessionKeysMatchByRequestKey", () => {
   });
 });
 
+describe("resolveSessionStoreKey", () => {
+  it("scopes unprefixed explicit-agent keys to the requested store agent", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+      session: { mainKey: "primary" },
+    };
+
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "main", storeAgentId: "ops" })).toBe(
+      "agent:ops:primary",
+    );
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:dm:U1", storeAgentId: "ops" })).toBe(
+      "agent:ops:discord:dm:u1",
+    );
+  });
+});
+
 describe("session key backward compatibility", () => {
   function expectBackwardCompatibleDirectSessionKey(key: string) {
     expect(classifySessionKeyShape(key)).toBe("agent");
@@ -113,7 +149,6 @@ describe("getSubagentDepth", () => {
     { key: "subagent:parent:subagent:child", expected: 2 },
   ] as const)("returns $expected for session key %j", ({ key, expected }) => {
     expect(getSubagentDepth(key)).toBe(expected);
-
   });
 });
 
@@ -198,6 +233,52 @@ describe("thread session suffix parsing", () => {
     ).toEqual({
       baseSessionKey: "agent:main:slack:channel:General",
       threadId: "1699999999.0001",
+    });
+  });
+});
+
+describe("cron run scope suffix parsing", () => {
+  it("splits the per-run scope off an isolated cron key", () => {
+    expect(parseCronRunScopeSuffix("agent:work:cron:nightly-job:run:abc-123")).toEqual({
+      baseSessionKey: "agent:work:cron:nightly-job",
+      runId: "abc-123",
+    });
+  });
+
+  it("parses mixed-case run markers without lowercasing the stored key", () => {
+    expect(parseCronRunScopeSuffix("AGENT:Work:CRON:Nightly-Job:RUN:ABC-123")).toEqual({
+      baseSessionKey: "AGENT:Work:CRON:Nightly-Job",
+      runId: "ABC-123",
+    });
+  });
+
+  it("leaves keys without a run scope untouched", () => {
+    expect(parseCronRunScopeSuffix("agent:main:main")).toEqual({
+      baseSessionKey: "agent:main:main",
+      runId: undefined,
+    });
+  });
+
+  it("does not strip a :run: segment from a non-cron key", () => {
+    // The run scope is only ever appended to cron keys; a channel id that embeds
+    // `:run:` must keep its identity intact.
+    expect(parseCronRunScopeSuffix("agent:main:slack:channel:general:run:42")).toEqual({
+      baseSessionKey: "agent:main:slack:channel:general:run:42",
+      runId: undefined,
+    });
+  });
+
+  it("does not treat a non-terminal cron :run: as a run scope", () => {
+    expect(parseCronRunScopeSuffix("agent:main:cron:run:job:run:abc:extra")).toEqual({
+      baseSessionKey: "agent:main:cron:run:job:run:abc:extra",
+      runId: undefined,
+    });
+  });
+
+  it("returns undefined for empty input", () => {
+    expect(parseCronRunScopeSuffix(undefined)).toEqual({
+      baseSessionKey: undefined,
+      runId: undefined,
     });
   });
 });

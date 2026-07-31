@@ -129,6 +129,21 @@ describe("google provider plugin hooks", () => {
     ).toBe("tagged");
   });
 
+  it("keeps the Gemini CLI runtime without offering new OAuth setup", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
+
+    expect(cliProvider.label).toBe("Gemini CLI runtime");
+    expect(cliProvider.auth).toEqual([]);
+    expect(cliProvider.envVars).toEqual([]);
+    expect(cliProvider.wizard).toBeUndefined();
+    expect(cliProvider.refreshOAuth).toBeTypeOf("function");
+  });
+
   it("keeps google-antigravity hook aliases on tagged reasoning mode", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: googleProviderPlugin,
@@ -404,6 +419,8 @@ describe("google provider plugin hooks", () => {
     if (!bridge) {
       throw new Error("expected Google realtime bridge");
     }
+    expect(bridge.supportsToolResultContinuation).toBe(false);
+    expect(bridge.supportsToolResultSuppression).toBe(false);
     expect(bridge.sendAudio(Buffer.alloc(160))).toBeUndefined();
     expect(bridge.setMediaTimestamp(20)).toBeUndefined();
     expect(bridge.sendUserMessage?.("hello")).toBeUndefined();

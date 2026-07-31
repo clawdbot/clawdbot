@@ -4,6 +4,8 @@ import {
   createTopLevelChannelDmPolicy,
   createTopLevelChannelGroupPolicySetter,
   mergeAllowFromEntries,
+  patchTopLevelChannelConfigSection,
+  setSetupChannelEnabled,
   splitSetupEntries,
   createSetupTranslator,
   type ChannelSetupDmPolicy,
@@ -11,7 +13,6 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
-import type { MSTeamsTeamConfig } from "../runtime-api.js";
 import { formatUnknownError } from "./errors.js";
 import {
   parseMSTeamsTeamEntry,
@@ -130,17 +131,7 @@ function setMSTeamsTeamsAllowlist(
       teams[teamKey] = existing;
     }
   }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams: {
-        ...cfg.channels?.msteams,
-        enabled: true,
-        teams: teams as Record<string, MSTeamsTeamConfig>,
-      },
-    },
-  };
+  return patchTopLevelChannelConfigSection({ cfg, channel, enabled: true, patch: { teams } });
 }
 
 function listMSTeamsGroupEntries(cfg: OpenClawConfig): string[] {
@@ -277,10 +268,26 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
             },
           },
         };
+        const noteDelegatedAuthFailure = async (err: unknown) => {
+          await params.prompter.note(
+            `Delegated auth setup failed: ${formatUnknownError(err)}\n` +
+              t("wizard.msteams.delegatedAuthRetry"),
+            t("wizard.msteams.delegatedAuthTitle"),
+          );
+        };
+        let oauthModule: typeof import("./oauth.js");
         try {
-          const { loginMSTeamsDelegated } = await import("./oauth.js");
-          const progress = params.prompter.progress(t("wizard.msteams.delegatedOAuthProgress"));
-          const tokens = await loginMSTeamsDelegated(
+          oauthModule = await import("./oauth.js");
+        } catch (err) {
+          await noteDelegatedAuthFailure(err);
+          return { ...baseResult, cfg: next };
+        }
+
+        await params.options?.beforePersistentEffect?.();
+        const progress = params.prompter.progress(t("wizard.msteams.delegatedOAuthProgress"));
+        let tokens: Awaited<ReturnType<typeof oauthModule.loginMSTeamsDelegated>>;
+        try {
+          tokens = await oauthModule.loginMSTeamsDelegated(
             {
               isRemote: true,
               openUrl: openDelegatedOAuthUrl,
@@ -297,26 +304,25 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
               clientSecret: finalCreds.appPassword,
             },
           );
-          saveDelegatedTokens(tokens);
-          progress.stop(t("wizard.msteams.delegatedAuthConfigured"));
         } catch (err) {
-          await params.prompter.note(
-            `Delegated auth setup failed: ${formatUnknownError(err)}\n` +
-              t("wizard.msteams.delegatedAuthRetry"),
-            t("wizard.msteams.delegatedAuthTitle"),
-          );
+          progress.stop();
+          await noteDelegatedAuthFailure(err);
+          return { ...baseResult, cfg: next };
         }
+
+        try {
+          await params.options?.beforePersistentEffect?.();
+        } catch (err) {
+          progress.stop();
+          throw err;
+        }
+        saveDelegatedTokens(tokens);
+        progress.stop(t("wizard.msteams.delegatedAuthConfigured"));
       }
     }
     return { ...baseResult, cfg: next };
   },
   dmPolicy: msteamsDmPolicy,
   groupAccess: msteamsGroupAccess,
-  disable: (cfg) => ({
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams: { ...cfg.channels?.msteams, enabled: false },
-    },
-  }),
+  disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };

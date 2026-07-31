@@ -59,7 +59,7 @@ function openStateDatabase(stateDir?: string) {
 }
 
 /** Normalize a voice wake trigger phrase for matching and duplicate checks. */
-export function normalizeVoiceWakeTriggerWord(value: string): string {
+function normalizeVoiceWakeTriggerWord(value: string): string {
   return value
     .toLowerCase()
     .split(/\s+/)

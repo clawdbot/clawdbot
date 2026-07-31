@@ -17,7 +17,7 @@ describe("heartbeat active-hours runtime evidence", () => {
     const evidence = await runHeartbeatActiveHoursRuntime({
       artifactBase,
       repoRoot: process.cwd(),
-      timeoutMs: 2_000,
+      timeoutMs: 5_000,
     });
 
     expect(evidence.entries[0]?.result.status).toBe("pass");

@@ -1,6 +1,6 @@
 // Tests gateway process argv parsing for diagnostics.
 import { describe, expect, it } from "vitest";
-import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
+import { isGatewayArgv, isOpenClawCommandArgv, parseProcCmdline } from "./gateway-process-argv.js";
 
 describe("parseProcCmdline", () => {
   it("splits null-delimited argv and trims empty entries", () => {
@@ -51,5 +51,24 @@ describe("isGatewayArgv", () => {
   it("rejects unknown gateway argv even when the token is present", () => {
     expect(isGatewayArgv(["node", "/srv/openclaw/custom.js", "gateway"])).toBe(false);
     expect(isGatewayArgv(["python", "gateway", "script.py"])).toBe(false);
+  });
+});
+
+describe("isOpenClawCommandArgv", () => {
+  it("matches doctor across source, built, and installed entrypoints", () => {
+    expect(isOpenClawCommandArgv(["node", "/srv/openclaw/openclaw.mjs", "doctor"], "doctor")).toBe(
+      true,
+    );
+    expect(
+      isOpenClawCommandArgv(["NODE", "C:\\OpenClaw\\DIST\\ENTRY.JS", "DOCTOR"], "doctor"),
+    ).toBe(true);
+    expect(isOpenClawCommandArgv(["C:\\bin\\openclaw.cmd", "doctor", "--fix"], "doctor")).toBe(
+      true,
+    );
+  });
+
+  it("rejects other OpenClaw commands and unrelated doctor processes", () => {
+    expect(isOpenClawCommandArgv(["openclaw", "gateway"], "doctor")).toBe(false);
+    expect(isOpenClawCommandArgv(["python", "doctor", "worker.py"], "doctor")).toBe(false);
   });
 });

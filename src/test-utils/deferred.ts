@@ -1,1 +1,1 @@
-export { createDeferred, type Deferred } from "../shared/deferred.js";
+export { createDeferred } from "../shared/deferred.js";

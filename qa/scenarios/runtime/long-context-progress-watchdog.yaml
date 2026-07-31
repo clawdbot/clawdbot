@@ -3,13 +3,12 @@ title: Long-context progress watchdog
 scenario:
   id: long-context-progress-watchdog
   surface: runtime
-  runtimeParityTier: live-only
   coverage:
     primary:
-      - runtime.gateway-log-sentinel.codex-progress
+      - session-memory.codex-progress-sentinel
     secondary:
-      - runtime.long-context
-      - runtime.codex-app-server
+      - session-memory.token-pressure-long-context
+      - openai.codex-harness
   objective: Fail live proof when long-context activity triggers Codex app-server timeout or stalled-progress sentinels.
   successCriteria:
     - Gateway config routes the selected QA model through the Codex app-server runtime.
@@ -75,7 +74,7 @@ flow:
                       agents:
                         defaults:
                           models:
-                            expr: "({ [env.primaryModel]: { agentRuntime: { id: config.harnessRuntime } } })"
+                            expr: "({ [env.primaryModel]: { agentRuntime: { id: config.harnessRuntime }, params: null } })"
               - call: waitForGatewayHealthy
                 args:
                   - ref: env
@@ -92,6 +91,10 @@ flow:
                   expr: "snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.agentRuntime?.id === config.harnessRuntime"
                   message:
                     expr: "`expected ${env.primaryModel} agentRuntime.id=${config.harnessRuntime}, got ${JSON.stringify(snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.agentRuntime)}`"
+              - assert:
+                  expr: "snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.params === undefined"
+                  message:
+                    expr: "`expected ${env.primaryModel} provider request params to be absent for the Codex harness, got ${JSON.stringify(snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.params)}`"
               - call: reset
               - set: logCursor
                 value:

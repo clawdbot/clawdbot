@@ -12,7 +12,56 @@ function envRef(id: string) {
   return { source: "env" as const, provider: "default", id };
 }
 
+const explicitMainRoster: NonNullable<OpenClawConfig["agents"]> = {
+  list: [{ id: "main", default: true }],
+};
+
 describe("collectPluginConfigAssignments bundled plugin manifests", () => {
+  it("assigns each webhooks route SecretRef to its exact runtime owner", () => {
+    expect(
+      findBundledPluginMetadataById("webhooks", {
+        includeChannelConfigs: false,
+        includeSyntheticChannelConfigs: false,
+      })?.manifest.configContracts?.secretInputs?.paths,
+    ).toEqual([{ path: "routes.*.secret", expected: "string", ownerKind: "route" }]);
+    const config = {
+      agents: explicitMainRoster,
+      plugins: {
+        entries: {
+          webhooks: {
+            enabled: true,
+            config: {
+              routes: {
+                zapier: {
+                  sessionKey: "agent:main:main",
+                  secret: envRef("WEBHOOK_SECRET"),
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const context = createResolverContext({ sourceConfig: config, env: {} });
+
+    collectPluginConfigAssignments({
+      config,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: new Map([["webhooks", "bundled"]]),
+    });
+
+    expect(context.assignments).toMatchObject([
+      {
+        path: "plugins.entries.webhooks.config.routes.zapier.secret",
+        ownerKind: "route",
+        ownerId: "plugins.entries.webhooks.config.routes.zapier.secret",
+        requiredForGateway: false,
+        disposition: "isolate",
+      },
+    ]);
+  });
+
   it("collects Codex app-server SecretRefs from bundled manifest contracts", () => {
     expect(
       findBundledPluginMetadataById("codex", {
@@ -24,6 +73,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       { path: "appServer.headers.*", expected: "string" },
     ]);
     const config = {
+      agents: explicitMainRoster,
       plugins: {
         entries: {
           codex: {
@@ -106,6 +156,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       { path: "tts.providers.*.apiKey", expected: "string" },
     ]);
     const config = {
+      agents: explicitMainRoster,
       plugins: {
         entries: {
           "voice-call": {
@@ -191,6 +242,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       new URL("../../extensions/google-meet", import.meta.url),
     );
     const config = {
+      agents: explicitMainRoster,
       plugins: {
         load: { paths: [googleMeetPluginDir] },
         entries: {

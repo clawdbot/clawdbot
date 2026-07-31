@@ -85,6 +85,11 @@ describe("npm extended-stable publication boundary", () => {
     expect(() => validateNpmPublishBoundary("2026.6.11", "extended-stable")).toThrow(
       /patch 33 or above/u,
     );
+    expect(() =>
+      validateNpmPublishBoundary("2026.6.11-1", "extended-stable", {
+        bypassExtendedStableGuard: true,
+      }),
+    ).toThrow(/does not allow correction suffixes/u);
   });
 
   it.each(["alpha", "beta", "latest"])(
@@ -209,12 +214,14 @@ describe("extended-stable npm release request", () => {
     ).toEqual({ extendedStable: false });
   });
 
-  it("accepts a SHA-only extended-stable preflight bound to the branch tip", () => {
+  it("accepts a SHA-only extended-stable preflight from an arbitrary workflow ref", () => {
     expect(
       validateExtendedStableNpmReleaseRequest({
         ...valid,
         preflightOnly: true,
         releaseTag: sha,
+        npmWorkflowRef: "refs/heads/main",
+        extendedStableBranchSha: "",
       }),
     ).toEqual({
       extendedStable: true,
@@ -226,8 +233,18 @@ describe("extended-stable npm release request", () => {
         ...valid,
         preflightOnly: true,
         releaseTag: "b".repeat(40),
+        npmWorkflowRef: "refs/heads/dev/preflight-candidate",
+        extendedStableBranchSha: "",
       }),
     ).toThrow(/must match the checked-out commit/u);
+    expect(() =>
+      validateExtendedStableNpmReleaseRequest({
+        ...valid,
+        preflightOnly: true,
+        releaseTag: sha,
+        checkoutSha: "",
+      }),
+    ).toThrow(/requires the full checked-out commit SHA/u);
     expect(() => validateExtendedStableNpmReleaseRequest({ ...valid, releaseTag: sha })).toThrow(
       /exact final vYYYY\.M\.P release tag/u,
     );
@@ -369,7 +386,13 @@ describe("extended-stable npm run identity", () => {
 });
 
 describe("Full Validation manifest identity", () => {
-  const valid = { workflowName: "Full Release Validation", workflowRef: branch, targetSha: sha };
+  const valid = {
+    workflowName: "Full Release Validation",
+    workflowRef: branch,
+    targetSha: sha,
+    runId: "123",
+    runAttempt: "2",
+  };
 
   it("accepts the exact branch and target SHA", () => {
     expect(
@@ -378,6 +401,8 @@ describe("Full Validation manifest identity", () => {
         npmDistTag: "extended-stable",
         expectedWorkflowRef: branch,
         expectedSha: sha,
+        expectedRunId: "123",
+        expectedRunAttempt: "2",
       }),
     ).toBe(valid);
   });
@@ -387,6 +412,8 @@ describe("Full Validation manifest identity", () => {
     ["missing workflow ref", { workflowRef: undefined }],
     ["wrong target SHA", { targetSha: "b".repeat(40) }],
     ["missing target SHA", { targetSha: undefined }],
+    ["wrong run ID", { runId: "124" }],
+    ["wrong run attempt", { runAttempt: "1" }],
   ])("rejects %s", (_label, changes) => {
     expect(() =>
       validateFullReleaseValidationManifest({
@@ -394,6 +421,8 @@ describe("Full Validation manifest identity", () => {
         npmDistTag: "extended-stable",
         expectedWorkflowRef: branch,
         expectedSha: sha,
+        expectedRunId: "123",
+        expectedRunAttempt: "2",
       }),
     ).toThrow();
   });
@@ -419,7 +448,7 @@ describe("extended-stable selector capture", () => {
 describe("extended-stable registry readback", () => {
   it("accepts eventual convergence and sleeps 10 seconds between attempts", async () => {
     let attempt = 0;
-    const sleep = vi.fn(async () => {});
+    const sleep = vi.fn(async (_delay: number) => {});
     const result = await verifyExtendedStableRegistryReadback({
       expectedVersion: "2026.6.33",
       query: async (target: string) => {
@@ -441,7 +470,7 @@ describe("extended-stable registry readback", () => {
 
   it("exhausts exactly 12 dual-query attempts on mismatch or failure", async () => {
     const query = vi.fn(async () => ({ status: 1, stdout: "" }));
-    const sleep = vi.fn(async () => {});
+    const sleep = vi.fn(async (_delay: number) => {});
     await expect(
       verifyExtendedStableRegistryReadback({ expectedVersion: "2026.6.33", query, sleep }),
     ).rejects.toThrow(/after 12 attempts/u);

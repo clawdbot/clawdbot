@@ -16,8 +16,8 @@ OpenClaw Google Chat channel plugin for spaces and direct messages.
 
 ## Surface
 
-channels: googlechat
+channels: `googlechat`
 
 ## Related docs
 
-- [googlechat](/channels/googlechat)
+- [Google Chat](/channels/googlechat)

@@ -9,7 +9,8 @@ title: "Channel routing"
 
 OpenClaw routes replies **back to the channel where a message came from**. The
 model does not choose a channel; routing is deterministic and controlled by the
-host configuration.
+host configuration. Under the default DM scope, direct messages from every
+channel converge on the agent's [main session](/concepts/main-session).
 
 ## Key terms
 
@@ -89,7 +90,7 @@ Routing picks **one agent** for each inbound message:
 6. **Team match** (Slack) via `teamId`.
 7. **Account match** (`accountId` on the channel).
 8. **Channel match** (any account on that channel, `accountId: "*"`).
-9. **Default agent** (`agents.list[].default`, else first list entry, fallback to `main`).
+9. **Default agent** (`agents.entries.*.default`, else first list entry, fallback to `main`).
 
 When a binding includes multiple match fields (`peer`, `guildId`, `teamId`, `roles`), **all provided fields must match** for that binding to apply.
 
@@ -115,7 +116,7 @@ See: [Broadcast Groups](/channels/broadcast-groups).
 
 ## Config overview
 
-- `agents.list`: named agent definitions (workspace, model, etc.).
+- `agents.entries`: named agent definitions (workspace, model, etc.).
 - `bindings`: map inbound channels/accounts/peers to agents.
 
 Example:
@@ -134,16 +135,24 @@ Example:
 
 ## Session storage
 
-Session stores live under the state directory (default `~/.openclaw`):
+Runtime session rows live in each agent's SQLite database under the state
+directory (default `~/.openclaw`):
 
-- `~/.openclaw/agents/<agentId>/sessions/sessions.json`
-- JSONL transcripts live alongside the store
+- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
 
-You can override the store path via `session.store` and `{agentId}` templating.
+Older installs may have legacy transcript JSONL files and a `sessions.json` row
+store under `~/.openclaw/agents/<agentId>/sessions/`. Gateway startup and
+`openclaw doctor --fix` import hot legacy rows/history into SQLite
+automatically. Use `openclaw doctor --session-sqlite inspect
+--session-sqlite-all-agents` and the
+[Doctor](/cli/doctor#session-sqlite-migration) validation sequence when you need
+explicit migration evidence.
+You can still select a legacy store path via `session.store` and `{agentId}`
+templating for migration and offline-maintenance workflows.
 
 Gateway and ACP session discovery also scans disk-backed agent stores under the
 default `agents/` root and under templated `session.store` roots. Discovered
-stores must stay inside that resolved agent root and use a regular
+stores must stay inside that resolved agent root and use a regular legacy
 `sessions.json` file. Symlinks and out-of-root paths are ignored.
 
 ## WebChat behavior

@@ -32,7 +32,7 @@ function inheritedUpdateTimeout(
   command?: Command,
 ): string | undefined {
   const timeout = opts.timeout as string | undefined;
-  if (timeout) {
+  if (timeout !== undefined) {
     return timeout;
   }
   return inheritOptionFromParent<string>(command, "timeout");
@@ -61,15 +61,24 @@ function inheritedUpdateClawHubRisk(command?: Command): boolean {
   );
 }
 
+function rejectUnsupportedInheritedUpdateDryRun(command: Command): boolean {
+  if (!inheritOptionFromParent<boolean>(command, "dryRun")) {
+    return false;
+  }
+
+  defaultRuntime.error(
+    `--dry-run is not supported for \`openclaw update ${command.name()}\`. Run \`openclaw update --dry-run\` instead.`,
+  );
+  defaultRuntime.exit(1);
+  return true;
+}
+
 function registerUpdateFinalizationCommand(update: Command, name: string, hidden: boolean) {
   const command = update.command(name, { hidden });
   command
     .description("Repair post-update doctor and plugin convergence")
     .option("--json", "Output result as JSON", false)
-    .option(
-      "--channel <stable|extended-stable|beta|dev>",
-      "Persist update channel before repair",
-    )
+    .option("--channel <stable|extended-stable|beta|dev>", "Persist update channel before repair")
     .option("--timeout <seconds>", "Timeout for update repair steps in seconds (default: 1800)")
     .option("--yes", "Skip confirmation prompts (non-interactive)", false)
     .option(
@@ -93,11 +102,17 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
     )
     .action(async (opts, actionCommand) => {
       try {
+        if (rejectUnsupportedInheritedUpdateDryRun(actionCommand)) {
+          return;
+        }
+
         await updateFinalizeCommand({
           json: Boolean(opts.json) || inheritedUpdateJson(actionCommand),
-          channel: opts.channel as string | undefined,
+          channel:
+            (opts.channel as string | undefined) ??
+            inheritOptionFromParent<string>(actionCommand, "channel"),
           timeout: inheritedUpdateTimeout(opts, actionCommand),
-          yes: Boolean(opts.yes),
+          yes: Boolean(opts.yes) || Boolean(inheritOptionFromParent<boolean>(actionCommand, "yes")),
           restart: false,
           acknowledgeClawHubRisk:
             normalizeCommanderClawHubRiskOption(opts) || inheritedUpdateClawHubRisk(actionCommand),
@@ -118,10 +133,7 @@ export function registerUpdateCli(program: Command) {
     .option("--json", "Output result as JSON", false)
     .option("--no-restart", "Skip restarting the gateway service after a successful update")
     .option("--dry-run", "Preview update actions without making changes", false)
-    .option(
-      "--channel <stable|extended-stable|beta|dev>",
-      "Persist update channel (git + npm)",
-    )
+    .option("--channel <stable|extended-stable|beta|dev>", "Persist update channel (git + npm)")
     .option(
       "--tag <dist-tag|version|spec>",
       "Override the package target for this update (dist-tag, version, or package spec)",
@@ -215,6 +227,10 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     )
     .action(async (opts, command) => {
       try {
+        if (rejectUnsupportedInheritedUpdateDryRun(command)) {
+          return;
+        }
+
         await updateWizardCommand({
           timeout: inheritedUpdateTimeout(opts, command),
         });

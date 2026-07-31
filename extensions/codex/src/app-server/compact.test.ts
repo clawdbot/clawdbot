@@ -9,6 +9,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import { maybeCompactCodexAppServerSession as maybeCompactCodexAppServerSessionImpl } from "./compact.js";
+import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { sessionBindingIdentity } from "./session-binding.js";
 import {
@@ -79,6 +81,25 @@ async function writeTestBinding(
     ...options,
   });
   return sessionFile;
+}
+
+async function writeSupervisedTestBinding(
+  options: Partial<Parameters<typeof writeCodexAppServerBinding>[1]> = {},
+): Promise<string> {
+  return writeTestBinding({
+    connectionScope: "supervision",
+    supervisionSourceThreadId: "source-thread-1",
+    preserveNativeModel: true,
+    conversationSourceTransferComplete: true,
+    model: "gpt-5.4",
+    modelProvider: "openai",
+    appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
+      resolveCodexSupervisionAppServerRuntimeOptions({
+        pluginConfig: { supervision: { enabled: true } },
+      }),
+    ),
+    ...options,
+  });
 }
 
 function startCompaction(sessionFile: string, options: { currentTokenCount?: number } = {}) {
@@ -179,6 +200,156 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(details.signal).toBe("thread/compact/start");
     expect(details.pending).toBe(false);
     expect(details.completed).toBe(true);
+  });
+
+  it("uses the exact prepared Platform key for native compaction", async () => {
+    const fake = createFakeCodexClient();
+    const factory = vi.fn<CodexAppServerClientFactory>(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "manual",
+          provider: "openai",
+          model: "gpt-5.5",
+          resolvedApiKey: "prepared-platform-key",
+          runtimeAuthPlan: {
+            providerForAuth: "openai",
+            authProfileProviderForAuth: "openai",
+            harnessAuthProvider: "openai",
+            selectedAuthMode: "api-key",
+            modelRoute: {
+              provider: "openai",
+              modelId: "gpt-5.5",
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+              authRequirement: "api-key",
+              requestTransportOverrides: "none",
+            },
+          },
+        },
+        { clientFactory: factory },
+      ),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(factory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preparedAuth: { kind: "api-key", apiKey: "prepared-platform-key" },
+      }),
+    );
+    expect(factory.mock.calls[0]?.[0]).not.toHaveProperty("authProfileId");
+  });
+
+  it("fails closed when prepared Platform compaction has no key", async () => {
+    const fake = createFakeCodexClient();
+    const factory = vi.fn(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "manual",
+          provider: "openai",
+          model: "gpt-5.5",
+          runtimeAuthPlan: {
+            providerForAuth: "openai",
+            authProfileProviderForAuth: "openai",
+            harnessAuthProvider: "openai",
+            selectedAuthMode: "api-key",
+            modelRoute: {
+              provider: "openai",
+              modelId: "gpt-5.5",
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+              authRequirement: "api-key",
+              requestTransportOverrides: "none",
+            },
+          },
+        },
+        { clientFactory: factory },
+      ),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      compacted: false,
+      reason: "Prepared Codex Platform compaction route is missing its resolved API key.",
+    });
+    expect(factory).not.toHaveBeenCalled();
+  });
+
+  it("uses the native supervision runtime and auth for supervised bindings", async () => {
+    const fake = createFakeCodexClient();
+    const factory = vi.fn(async () => fake.client);
+    const sessionFile = await writeSupervisedTestBinding({
+      authProfileId: "openai:binding-profile",
+    });
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "manual",
+          authProfileId: "openai:outer-profile",
+        },
+        {
+          clientFactory: factory,
+          pluginConfig: { supervision: { enabled: true } },
+        },
+      ),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(factory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileId: null,
+        startOptions: expect.objectContaining({ homeScope: "user" }),
+      }),
+    );
+  });
+
+  it("fails closed when a supervised binding is no longer enabled", async () => {
+    const fake = createFakeCodexClient();
+    const factory = vi.fn(async () => fake.client);
+    const sessionFile = await writeSupervisedTestBinding();
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "manual",
+        },
+        { clientFactory: factory, pluginConfig: { supervision: { enabled: false } } },
+      ),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      compacted: false,
+      reason:
+        "Codex supervision is disabled; refusing to open a native user-home supervised session",
+    });
+    expect(factory).not.toHaveBeenCalled();
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-1",
+      connectionScope: "supervision",
+    });
   });
 
   it("skips native app-server compaction for automatic budget triggers", async () => {
@@ -972,6 +1143,54 @@ describe("maybeCompactCodexAppServerSession", () => {
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
+  it("never detaches an unconfirmed remote supervised thread", async () => {
+    const fake = createFakeCodexClient({
+      autoCompleteCompaction: false,
+      rejectInterrupt: true,
+    });
+    fake.closeAndWait.mockResolvedValueOnce(false);
+    const pluginConfig = {
+      supervision: { enabled: true },
+      appServer: { transport: "websocket" as const, url: "ws://127.0.0.1:45001" },
+    };
+    const sessionFile = await writeSupervisedTestBinding({
+      threadId: "thread-stuck-supervision",
+      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
+        resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig }),
+      ),
+    });
+
+    const pendingResult = maybeCompactCodexAppServerSession(
+      {
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+        trigger: "manual",
+      },
+      {
+        clientFactory: async () => fake.client,
+        pluginConfig,
+        nativeCompletionTimeoutMs: 10,
+        nativeInterruptGraceMs: 10,
+      },
+    );
+
+    const outcome = await Promise.race([
+      pendingResult.then(() => "settled" as const),
+      new Promise<"pending">((resolve) => {
+        setTimeout(() => resolve("pending"), 100);
+      }),
+    ]);
+
+    expect(outcome).toBe("pending");
+    expect(fake.closeAndWait).toHaveBeenCalledOnce();
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-stuck-supervision",
+      connectionScope: "supervision",
+    });
+  });
+
   it("cancels a native compaction after the start request", async () => {
     const fake = createFakeCodexClient({ autoCompleteCompaction: false });
     setCodexAppServerClientFactoryForTest(async () => fake.client);
@@ -1187,7 +1406,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     const fake = createFakeCodexClient();
     fake.request.mockRejectedValueOnce(
       new CodexAppServerRpcError(
-        { code: -32_602, message: "thread not found: thread-1" },
+        { code: -32_600, message: "thread not found: thread-1" },
         "thread/compact/start",
       ),
     );
@@ -1335,6 +1554,7 @@ describe("maybeCompactCodexAppServerSession", () => {
             compaction: {
               model: "openai/gpt-5.4",
               provider: "custom-summary",
+              thinkingLevel: "ultra",
             },
           },
         },
@@ -1347,7 +1567,11 @@ describe("maybeCompactCodexAppServerSession", () => {
       {
         sessionId: "session-1",
         sessionKey: "agent:main:session-1",
-        ignoredConfig: ["agents.defaults.compaction.model", "agents.defaults.compaction.provider"],
+        ignoredConfig: [
+          "agents.defaults.compaction.model",
+          "agents.defaults.compaction.thinkingLevel",
+          "agents.defaults.compaction.provider",
+        ],
       },
     );
     warn.mockRestore();
@@ -1806,3 +2030,4 @@ function createFakeCodexClient(
     completeCompaction,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -10,6 +10,9 @@ const normalizeSecretInputString = vi.hoisted(() =>
 );
 const hasConfiguredMSTeamsCredentials = vi.hoisted(() => vi.fn());
 const resolveMSTeamsCredentials = vi.hoisted(() => vi.fn());
+const saveDelegatedTokens = vi.hoisted(() => vi.fn());
+const loginMSTeamsDelegated = vi.hoisted(() => vi.fn());
+const oauthModuleState = vi.hoisted(() => ({ loaded: false }));
 
 vi.mock("./resolve-allowlist.js", () => ({
   parseMSTeamsTeamEntry: vi.fn(),
@@ -24,7 +27,15 @@ vi.mock("./secret-input.js", () => ({
 vi.mock("./token.js", () => ({
   hasConfiguredMSTeamsCredentials,
   resolveMSTeamsCredentials,
+  saveDelegatedTokens,
 }));
+
+vi.mock("./oauth.js", () => {
+  oauthModuleState.loaded = true;
+  return { loginMSTeamsDelegated };
+});
+
+import { msteamsSetupWizard as delegatedMsteamsSetupWizard } from "./setup-surface.js";
 
 describe("msteams setup surface", () => {
   const msteamsSetupWizard = createMSTeamsSetupWizardBase();
@@ -35,6 +46,8 @@ describe("msteams setup surface", () => {
     normalizeSecretInputString.mockClear();
     hasConfiguredMSTeamsCredentials.mockReset();
     resolveMSTeamsCredentials.mockReset();
+    saveDelegatedTokens.mockReset();
+    loginMSTeamsDelegated.mockReset();
   });
 
   afterEach(() => {
@@ -172,5 +185,95 @@ describe("msteams setup surface", () => {
         },
       },
     });
+  });
+
+  it("revalidates before delegated OAuth and immediately before saving tokens", async () => {
+    const tokens = {
+      accessToken: "access-token",
+      refreshToken: "refresh-token",
+      expiresAt: Date.now() + 60_000,
+      scopes: ["User.Read"],
+    };
+    resolveMSTeamsCredentials.mockReturnValue({
+      type: "secret",
+      appId: "app-id",
+      appPassword: "app-password",
+      tenantId: "tenant-id",
+    });
+    hasConfiguredMSTeamsCredentials.mockReturnValue(true);
+    loginMSTeamsDelegated.mockResolvedValue(tokens);
+    expect(oauthModuleState.loaded).toBe(false);
+    const beforePersistentEffect = vi.fn(async () => {
+      expect(oauthModuleState.loaded).toBe(true);
+    });
+    const progress = { update: vi.fn(), stop: vi.fn() };
+
+    await delegatedMsteamsSetupWizard.finalize?.({
+      cfg: { channels: { msteams: {} } },
+      prompter: {
+        confirm: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(true),
+        note: vi.fn(async () => {}),
+        progress: vi.fn(() => progress),
+        text: vi.fn(),
+      },
+      options: { beforePersistentEffect },
+    } as never);
+
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(2);
+    expect(loginMSTeamsDelegated).toHaveBeenCalledTimes(1);
+    expect(saveDelegatedTokens).toHaveBeenCalledWith(tokens);
+    expect(beforePersistentEffect.mock.invocationCallOrder[0]).toBeLessThan(
+      loginMSTeamsDelegated.mock.invocationCallOrder[0]!,
+    );
+    expect(loginMSTeamsDelegated.mock.invocationCallOrder[0]).toBeLessThan(
+      beforePersistentEffect.mock.invocationCallOrder[1]!,
+    );
+    expect(beforePersistentEffect.mock.invocationCallOrder[1]).toBeLessThan(
+      saveDelegatedTokens.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("propagates a stale inference guard instead of treating it as an OAuth failure", async () => {
+    const guardError = new Error("verified inference changed");
+    resolveMSTeamsCredentials.mockReturnValue({
+      type: "secret",
+      appId: "app-id",
+      appPassword: "app-password",
+      tenantId: "tenant-id",
+    });
+    hasConfiguredMSTeamsCredentials.mockReturnValue(true);
+    loginMSTeamsDelegated.mockResolvedValue({
+      accessToken: "access-token",
+      refreshToken: "refresh-token",
+      expiresAt: Date.now() + 60_000,
+      scopes: ["User.Read"],
+    });
+    const beforePersistentEffect = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(guardError);
+    const note = vi.fn(async () => {});
+    const progress = { update: vi.fn(), stop: vi.fn() };
+
+    await expect(
+      delegatedMsteamsSetupWizard.finalize?.({
+        cfg: { channels: { msteams: {} } },
+        prompter: {
+          confirm: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(true),
+          note,
+          progress: vi.fn(() => progress),
+          text: vi.fn(),
+        },
+        options: { beforePersistentEffect },
+      } as never),
+    ).rejects.toBe(guardError);
+
+    expect(loginMSTeamsDelegated).toHaveBeenCalledTimes(1);
+    expect(saveDelegatedTokens).not.toHaveBeenCalled();
+    expect(progress.stop).toHaveBeenCalledWith();
+    expect(note).not.toHaveBeenCalledWith(
+      expect.stringContaining("Delegated auth setup failed"),
+      expect.anything(),
+    );
   });
 });

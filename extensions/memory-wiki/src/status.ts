@@ -4,6 +4,8 @@ import path from "node:path";
 import { listActiveMemoryPublicArtifacts } from "openclaw/plugin-sdk/memory-host-core";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import type { OpenClawConfig } from "../api.js";
+import { walkMemoryWikiDirectory } from "./bounded-walk.js";
+import { filterMemoryWikiBridgeArtifacts, resolveMemoryWikiVaultAgentId } from "./bridge.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { toWikiPageSummary, type WikiPageKind } from "./markdown.js";
 import { probeObsidianCli } from "./obsidian.js";
@@ -21,6 +23,8 @@ type MemoryWikiStatusWarning = {
 };
 
 export type MemoryWikiStatus = {
+  vaultScope: ResolvedMemoryWikiConfig["vault"]["scope"];
+  agentId: string | null;
   vaultMode: ResolvedMemoryWikiConfig["vaultMode"];
   renderMode: ResolvedMemoryWikiConfig["vault"]["renderMode"];
   vaultPath: string;
@@ -62,6 +66,7 @@ export type MemoryWikiDoctorReport = {
 
 type ResolveMemoryWikiStatusDeps = {
   appConfig?: OpenClawConfig;
+  callerAgentId?: string;
   pathExists?: (inputPath: string) => Promise<boolean>;
   listPublicArtifacts?: typeof listActiveMemoryPublicArtifacts;
   resolveCommand?: (command: string) => Promise<string | null>;
@@ -87,16 +92,17 @@ async function collectVaultCounts(vaultPath: string): Promise<{
   };
   const dirs = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
   for (const dir of dirs) {
-    const dirPath = path.join(vaultPath, dir);
-    const entries = await fs
-      .readdir(dirPath, { withFileTypes: true, recursive: true })
-      .catch(() => []);
+    const entries = await walkMemoryWikiDirectory(vaultPath, dir);
     for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".md") || entry.name === "index.md") {
+      if (
+        entry.kind !== "file" ||
+        !entry.relativePath.endsWith(".md") ||
+        path.basename(entry.relativePath) === "index.md"
+      ) {
         continue;
       }
-      const absolutePath = path.join(entry.parentPath ?? dirPath, entry.name);
-      const relativeToVault = path.relative(vaultPath, absolutePath).split(path.sep).join("/");
+      const absolutePath = path.join(vaultPath, entry.relativePath);
+      const relativeToVault = entry.relativePath.split(path.sep).join("/");
       const raw = await fs.readFile(absolutePath, "utf8").catch(() => null);
       if (raw === null) {
         continue;
@@ -208,6 +214,7 @@ export async function resolveMemoryWikiStatus(
   config: ResolvedMemoryWikiConfig,
   deps?: ResolveMemoryWikiStatusDeps,
 ): Promise<MemoryWikiStatus> {
+  const agentId = resolveMemoryWikiVaultAgentId(config);
   const exists = deps?.pathExists ?? pathExists;
   const vaultExists = await exists(config.vault.path);
   const bridgePublicArtifactCount =
@@ -215,11 +222,13 @@ export async function resolveMemoryWikiStatus(
     config.vaultMode === "bridge" &&
     config.bridge.enabled &&
     config.bridge.readMemoryArtifacts
-      ? (
-          await (deps.listPublicArtifacts ?? listActiveMemoryPublicArtifacts)({
+      ? filterMemoryWikiBridgeArtifacts({
+          config,
+          callerAgentId: deps.callerAgentId,
+          artifacts: await (deps.listPublicArtifacts ?? listActiveMemoryPublicArtifacts)({
             cfg: deps.appConfig,
-          })
-        ).length
+          }),
+        }).length
       : null;
   const obsidianProbe = await probeObsidianCli({ resolveCommand: deps?.resolveCommand });
   const counts = vaultExists
@@ -242,6 +251,8 @@ export async function resolveMemoryWikiStatus(
       };
 
   return {
+    vaultScope: config.vault.scope,
+    agentId,
     vaultMode: config.vaultMode,
     renderMode: config.vault.renderMode,
     vaultPath: config.vault.path,
@@ -298,6 +309,7 @@ export function buildMemoryWikiDoctorReport(status: MemoryWikiStatus): MemoryWik
 export function renderMemoryWikiStatus(status: MemoryWikiStatus): string {
   const lines = [
     `Wiki vault mode: ${status.vaultMode}`,
+    `Vault scope: ${status.vaultScope}${status.agentId ? ` (${status.agentId})` : ""}`,
     `Vault: ${status.vaultExists ? "ready" : "missing"} (${status.vaultPath})`,
     `Render mode: ${status.renderMode}`,
     `Obsidian CLI: ${status.obsidianCli.available ? "available" : "missing"}${status.obsidianCli.requested ? " (requested)" : ""}`,

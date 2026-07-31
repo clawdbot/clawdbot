@@ -1,4 +1,9 @@
 // Qqbot plugin module implements mention behavior.
+import {
+  compileSafeRegexDetailed,
+  type SafeRegexRejectReason,
+} from "openclaw/plugin-sdk/security-runtime";
+import { debugWarn } from "../utils/log.js";
 export interface RawMention {
   is_you?: boolean;
   bot?: boolean;
@@ -23,6 +28,60 @@ interface HasAnyMentionInput {
 }
 
 const MENTION_TAG_RE = /<@!?\w+>/;
+const MENTION_PATTERN_FLAGS = "i";
+const MAX_MENTION_PATTERN_CACHE_KEYS = 256;
+const MAX_MENTION_PATTERN_WARNING_KEYS = 256;
+const mentionPatternCompileCache = new Map<string, RegExp[]>();
+const rejectedMentionPatternWarningCache = new Set<string>();
+
+type MentionPatternRejectReason = Exclude<SafeRegexRejectReason, "empty">;
+
+function warnRejectedMentionPattern(pattern: string, reason: MentionPatternRejectReason): void {
+  const key = `${MENTION_PATTERN_FLAGS}::${reason}::${pattern}`;
+  if (rejectedMentionPatternWarningCache.has(key)) {
+    return;
+  }
+  rejectedMentionPatternWarningCache.add(key);
+  if (rejectedMentionPatternWarningCache.size > MAX_MENTION_PATTERN_WARNING_KEYS) {
+    rejectedMentionPatternWarningCache.clear();
+    rejectedMentionPatternWarningCache.add(key);
+  }
+  debugWarn(`qqbot: mentionPattern rejected (${reason}): ${pattern}`);
+}
+
+function cacheMentionPatterns(cacheKey: string, regexes: RegExp[]): RegExp[] {
+  mentionPatternCompileCache.set(cacheKey, regexes);
+  if (mentionPatternCompileCache.size > MAX_MENTION_PATTERN_CACHE_KEYS) {
+    mentionPatternCompileCache.clear();
+    mentionPatternCompileCache.set(cacheKey, regexes);
+  }
+  return regexes;
+}
+
+function compileMentionPatterns(patterns: string[]): RegExp[] {
+  if (patterns.length === 0) {
+    return [];
+  }
+  const cacheKey = patterns.join("\u001f");
+  const cached = mentionPatternCompileCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const regexes: RegExp[] = [];
+  for (const pattern of patterns) {
+    const result = compileSafeRegexDetailed(pattern, MENTION_PATTERN_FLAGS);
+    if (result.reason === "empty") {
+      continue;
+    }
+    if (result.regex) {
+      regexes.push(result.regex);
+      continue;
+    }
+    warnRejectedMentionPattern(result.source, result.reason);
+  }
+  return cacheMentionPatterns(cacheKey, regexes);
+}
 
 export function detectWasMentioned(input: DetectWasMentionedInput): boolean {
   const { eventType, mentions, content, mentionPatterns } = input;
@@ -36,15 +95,10 @@ export function detectWasMentioned(input: DetectWasMentionedInput): boolean {
   }
 
   if (mentionPatterns?.length && content) {
-    for (const pattern of mentionPatterns) {
-      if (!pattern) {
-        continue;
+    for (const regex of compileMentionPatterns(mentionPatterns)) {
+      if (regex.test(content)) {
+        return true;
       }
-      try {
-        if (new RegExp(pattern, "i").test(content)) {
-          return true;
-        }
-      } catch {}
     }
   }
 

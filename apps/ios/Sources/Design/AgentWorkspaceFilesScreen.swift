@@ -7,20 +7,20 @@ import SwiftUI
 /// `agents.workspace.list` / `agents.workspace.get` gateway RPCs.
 struct AgentWorkspaceFilesScreen: View {
     let agentId: String
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
 
     var body: some View {
         ZStack {
             OpenClawProBackground()
             VStack(alignment: .leading, spacing: 0) {
-                if let headerLeadingAction {
+                if let headerSidebarAction {
                     OpenClawAdaptiveHeaderRow(
                         title: "Files",
-                        subtitle: self.agentId,
+                        subtitle: .verbatim(self.agentId),
                         titleFont: OpenClawType.title3SemiBold,
                         subtitleFont: OpenClawType.subheadMedium)
                     {
-                        OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                        OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
                     } accessory: {
                         EmptyView()
                     }
@@ -137,7 +137,10 @@ struct AgentWorkspaceDirectoryList: View {
                 if self.loadingMore {
                     ProgressView()
                 } else {
-                    Text("\(self.entries.count) of \(self.totalEntries)")
+                    Text(verbatim: String(
+                        format: String(localized: "%1$@ of %2$@"),
+                        self.entries.count.formatted(),
+                        self.totalEntries.formatted()))
                         .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                 }

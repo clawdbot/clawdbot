@@ -33,6 +33,7 @@ type SupportedOpenAICompatFields = Pick<
   | "supportsReasoningEffort"
   | "supportsUsageInStreaming"
   | "supportsStrictMode"
+  | "supportsJsonSchemaResponseFormat"
   | "maxTokensField"
   | "requiresToolResultName"
   | "requiresAssistantAfterToolResult"
@@ -48,7 +49,7 @@ type SupportedOpenAICompatFields = Pick<
 
 type SupportedOpenAIResponsesCompatFields = Pick<
   OpenAIResponsesCompat,
-  "sendSessionIdHeader" | "supportsLongCacheRetention"
+  "sendSessionIdHeader" | "supportsLongCacheRetention" | "supportsTemperature"
 >;
 
 type SupportedAnthropicMessagesCompatFields = Pick<
@@ -92,6 +93,8 @@ export type ModelCompatConfig = SupportedOpenAICompatFields &
     visibleReasoningDetailTypes?: string[];
     /** Whether this model supports tool/function calling. */
     supportsTools?: boolean;
+    /** Code-mode tier consumed by `tools.codeMode.enabled: "auto"`; absent means "capable". */
+    codeMode?: "preferred" | "capable";
     /** Whether provider accepts prompt-cache/session affinity keys. */
     supportsPromptCacheKey?: boolean;
     /** Whether all message parts must be coerced to plain strings. */
@@ -102,12 +105,8 @@ export type ModelCompatConfig = SupportedOpenAICompatFields &
     toolSchemaProfile?: string;
     /** JSON Schema keywords rejected by this provider's tool schema validator. */
     unsupportedToolSchemaKeywords?: string[];
-    /** Whether this model/provider exposes a native web search tool. */
-    nativeWebSearchTool?: boolean;
     /** Encoding expected for tool-call arguments in provider payloads. */
     toolCallArgumentsEncoding?: string;
-    /** Whether Mistral-compatible tool-call ids must be generated/normalized. */
-    requiresMistralToolIds?: boolean;
     /** Whether OpenAI-style calls must be reshaped to Anthropic-compatible tool payloads. */
     requiresOpenAiAnthropicToolPayload?: boolean;
   };
@@ -272,9 +271,11 @@ export type DiscoveryToggleConfig = {
   enabled?: boolean;
 };
 
-export type ModelPricingConfig = {
-  /** Enable external or generated pricing enrichment. */
+export type ModelCatalogRefreshConfig = {
+  /** Fetch model catalog updates from the hosted OpenClaw catalog. Default: true. */
   enabled?: boolean;
+  /** Override the hosted catalog URL (HTTPS mirrors, or localhost HTTP for testing). */
+  url?: string;
 };
 
 export type ModelsConfig = {
@@ -282,8 +283,8 @@ export type ModelsConfig = {
   mode?: "merge" | "replace";
   /** Configured provider catalog keyed by provider id. */
   providers?: Record<string, ModelProviderConfig>;
-  /** Pricing enrichment settings. */
-  pricing?: ModelPricingConfig;
+  /** Hosted model catalog refresh settings. */
+  catalogRefresh?: ModelCatalogRefreshConfig;
 };
 
 /** Top-level models config input before provider entries are normalized. */

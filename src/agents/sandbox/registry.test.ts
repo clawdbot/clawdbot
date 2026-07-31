@@ -43,6 +43,7 @@ import { hashTextSha256 } from "./hash.js";
 import {
   migrateLegacySandboxRegistryFiles,
   readBrowserRegistry,
+  readRegisteredSandboxRuntimeIds,
   readRegistry,
   readRegistryEntry,
   removeBrowserRegistryEntry,
@@ -181,6 +182,7 @@ describe("registry race safety", () => {
     await expect(readRegistry()).resolves.toEqual({ entries: [] });
     await expect(readRegistryEntry("legacy-container")).resolves.toBeNull();
     await expect(fs.access(SANDBOX_REGISTRY_PATH)).resolves.toBeUndefined();
+    await expectPathMissing(path.join(TEST_STATE_DIR, "state", "openclaw.sqlite"));
   });
 
   it("normalizes legacy registry entries after explicit migration", async () => {
@@ -337,6 +339,75 @@ describe("registry race safety", () => {
     expect(entry?.containerName).toBe("container-x");
     expect(entry?.sessionKey).toBe("sess:x");
     await expect(readRegistryEntry("missing-container")).resolves.toBeNull();
+  });
+
+  it("preserves a Podman target across registry usage updates", async () => {
+    await updateRegistry(
+      containerEntry({
+        backendId: "podman",
+        backendTarget: {
+          key: "machine:target-a",
+          globalArgs: ["--url", "ssh://core@127.0.0.1:60001/run/podman/podman.sock"],
+        },
+      }),
+    );
+    await updateRegistry(
+      containerEntry({
+        backendId: "podman",
+        lastUsedAtMs: 2,
+      }),
+    );
+
+    await expect(readRegistryEntry("container-a")).resolves.toMatchObject({
+      backendId: "podman",
+      backendTarget: {
+        key: "machine:target-a",
+        globalArgs: ["--url", "ssh://core@127.0.0.1:60001/run/podman/podman.sock"],
+      },
+      lastUsedAtMs: 2,
+    });
+  });
+
+  it("reads registered runtime IDs for one backend and scope newest first", async () => {
+    await updateRegistry(
+      containerEntry({
+        containerName: "openshell-older",
+        backendId: "openshell",
+        sessionKey: "agent:main",
+        lastUsedAtMs: 10,
+      }),
+    );
+    await updateRegistry(
+      containerEntry({
+        containerName: "openshell-newer",
+        backendId: "openshell",
+        sessionKey: "agent:main",
+        lastUsedAtMs: 20,
+      }),
+    );
+    await updateRegistry(
+      containerEntry({
+        containerName: "docker-same-scope",
+        backendId: "docker",
+        sessionKey: "agent:main",
+        lastUsedAtMs: 30,
+      }),
+    );
+    await updateRegistry(
+      containerEntry({
+        containerName: "openshell-other-scope",
+        backendId: "openshell",
+        sessionKey: "agent:other",
+        lastUsedAtMs: 40,
+      }),
+    );
+
+    await expect(
+      readRegisteredSandboxRuntimeIds({
+        backendId: "openshell",
+        scopeKey: "agent:main",
+      }),
+    ).resolves.toEqual(["openshell-newer", "openshell-older"]);
   });
 
   it("keeps both container updates under concurrent writes", async () => {

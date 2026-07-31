@@ -142,7 +142,8 @@ function createEmptyTaskFlowAuditSummary(): TaskFlowAuditSummary {
 export function listTaskFlowAuditFindings(
   options: TaskFlowAuditOptions = {},
 ): TaskFlowAuditFinding[] {
-  const flows = options.flows ?? listTaskFlowRecords();
+  const restoreFailure = getTaskFlowRegistryRestoreFailure();
+  const flows = options.flows ?? (restoreFailure ? [] : listTaskFlowRecords());
   const now = options.now ?? Date.now();
   const staleRunningMs = options.staleRunningMs ?? DEFAULT_STALE_RUNNING_MS;
   const staleWaitingMs = options.staleWaitingMs ?? DEFAULT_STALE_WAITING_MS;
@@ -150,7 +151,6 @@ export function listTaskFlowAuditFindings(
   const cancelStuckMs = options.cancelStuckMs ?? DEFAULT_CANCEL_STUCK_MS;
   const findings: TaskFlowAuditFinding[] = [];
 
-  const restoreFailure = getTaskFlowRegistryRestoreFailure();
   if (restoreFailure) {
     findings.push(
       createFinding({
@@ -191,7 +191,7 @@ export function listTaskFlowAuditFindings(
       );
     }
 
-    if (flow.status === "blocked" && ageMs >= staleBlockedMs) {
+    if (flow.status === "blocked" && flow.endedAt == null && ageMs >= staleBlockedMs) {
       findings.push(
         createFinding({
           severity: "warn",
@@ -246,7 +246,7 @@ export function listTaskFlowAuditFindings(
       );
     }
 
-    if (flow.blockedTaskId?.trim()) {
+    if (flow.endedAt == null && flow.blockedTaskId?.trim()) {
       const blockedTaskId = flow.blockedTaskId.trim();
       if (!linkedTasks.some((task) => task.taskId === blockedTaskId)) {
         findings.push(

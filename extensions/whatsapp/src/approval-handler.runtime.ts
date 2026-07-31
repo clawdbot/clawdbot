@@ -1,4 +1,5 @@
 // Whatsapp plugin module implements approval handler behavior.
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   buildChannelApprovalExpiredText,
   buildChannelApprovalResolvedText,
@@ -16,6 +17,7 @@ import type {
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { resolveDefaultWhatsAppAccountId } from "./accounts.js";
 import {
   registerWhatsAppApprovalReactionTarget,
   unregisterWhatsAppApprovalReactionTarget,
@@ -30,10 +32,10 @@ type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type WhatsAppPendingDelivery = ApprovalReactionPendingContent;
 type PreparedWhatsAppApprovalTarget = {
   to: string;
-  accountId?: string;
+  accountId: string;
 };
 type PendingWhatsAppApprovalEntry = {
-  accountId?: string;
+  accountId: string;
   to: string;
   remoteJid: string;
   messageId: string;
@@ -75,7 +77,7 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
     }),
   },
   transport: {
-    prepareTarget: ({ plannedTarget, accountId }) => {
+    prepareTarget: ({ cfg, plannedTarget, accountId }) => {
       const to = normalizeWhatsAppMessagingTarget(plannedTarget.target.to);
       if (!to) {
         return null;
@@ -85,6 +87,7 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         accountId: resolvePreparedApprovalAccountId({
           plannedAccountId: (plannedTarget.target as { accountId?: string | null }).accountId,
           contextAccountId: accountId,
+          fallbackAccountId: cfg ? resolveDefaultWhatsAppAccountId(cfg) : DEFAULT_ACCOUNT_ID,
         }),
       };
       return {
@@ -98,7 +101,7 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       const verbose = getWhatsAppRuntime().logging.shouldLogVerbose();
       await sendTypingWhatsApp(preparedTarget.to, {
         cfg,
-        ...(preparedTarget.accountId ? { accountId: preparedTarget.accountId } : {}),
+        accountId: preparedTarget.accountId,
       }).catch(() => {});
       const result = await sendMessageWhatsApp(
         preparedTarget.to,
@@ -106,8 +109,8 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         {
           cfg,
           verbose,
+          accountId: preparedTarget.accountId,
           preserveLeadingWhitespace: true,
-          ...(preparedTarget.accountId ? { accountId: preparedTarget.accountId } : {}),
         },
       );
       if (!result.messageId) {
@@ -125,8 +128,8 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       await sendMessageWhatsApp(entry.to, payload.text, {
         cfg,
         verbose,
+        accountId: entry.accountId,
         preserveLeadingWhitespace: true,
-        ...(entry.accountId ? { accountId: entry.accountId } : {}),
         quotedMessageKey: {
           id: entry.messageId,
           remoteJid: entry.remoteJid,
@@ -138,10 +141,11 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
   interactions: {
     bindPending: ({ entry, request, view, pendingPayload }) =>
       registerWhatsAppApprovalReactionTarget({
-        accountId: entry.accountId ?? "",
+        accountId: entry.accountId,
         remoteJid: entry.remoteJid,
         messageId: entry.messageId,
         approvalId: request.id,
+        approvalKind: view.approvalKind,
         allowedDecisions: pendingPayload.reactionPayload.allowedDecisions,
         ttlMs: Math.max(1, view.expiresAtMs - Date.now()),
       })
@@ -149,14 +153,14 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         : null,
     unbindPending: ({ entry }) => {
       unregisterWhatsAppApprovalReactionTarget({
-        accountId: entry.accountId ?? "",
+        accountId: entry.accountId,
         remoteJid: entry.remoteJid,
         messageId: entry.messageId,
       });
     },
     cancelDelivered: ({ entry }) => {
       unregisterWhatsAppApprovalReactionTarget({
-        accountId: entry.accountId ?? "",
+        accountId: entry.accountId,
         remoteJid: entry.remoteJid,
         messageId: entry.messageId,
       });

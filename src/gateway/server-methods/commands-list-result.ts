@@ -1,6 +1,7 @@
 // Command list serialization gathers chat, skill, and plugin commands into the
 // gateway protocol result while clamping names, descriptions, aliases, and args.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   CommandEntry,
   CommandsListResult,
@@ -36,7 +37,7 @@ type SerializedArg = NonNullable<CommandEntry["args"]>[number];
 type CommandNameSurface = "text" | "native";
 
 function clampString(value: string, maxLength: number): string {
-  return value.length > maxLength ? value.slice(0, maxLength) : value;
+  return value.length > maxLength ? truncateUtf16Safe(value, maxLength) : value;
 }
 
 function trimClampNonEmpty(value: string, maxLength: number): string | null {
@@ -218,7 +219,7 @@ export function buildCommandsListResult(params: {
 
   const skillCommands = listSkillCommandsForAgents({ cfg: params.cfg, agentIds: [params.agentId] });
   const chatCommands = listChatCommandsForConfig(params.cfg, { skillCommands });
-  const skillKeys = new Set(skillCommands.map((sc) => `skill:${sc.skillName}`));
+  const skillsByKey = new Map(skillCommands.map((skill) => [`skill:${skill.skillName}`, skill]));
 
   const commands: CommandEntry[] = [];
 
@@ -233,15 +234,11 @@ export function buildCommandsListResult(params: {
     ) {
       continue;
     }
-    commands.push(
-      mapCommand(
-        cmd,
-        skillKeys.has(cmd.key) ? "skill" : "native",
-        includeArgs,
-        nameSurface,
-        provider,
-      ),
-    );
+    const skill = skillsByKey.get(cmd.key);
+    commands.push({
+      ...mapCommand(cmd, skill ? "skill" : "native", includeArgs, nameSurface, provider),
+      ...(skill ? { skillModelVisible: skill.modelVisible !== false } : {}),
+    });
   }
 
   commands.push(...buildPluginCommandEntries({ provider, nameSurface, cfg: params.cfg }));
