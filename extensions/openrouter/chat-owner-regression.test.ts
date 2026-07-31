@@ -1,4 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import openrouterPlugin from "./index.js";
@@ -9,10 +10,10 @@ async function captureProviderPayload(
   payload: Record<string, unknown>,
 ) {
   const provider = await registerSingleProviderPlugin(openrouterPlugin);
-  const baseStreamFn = vi.fn(((model, _context, options) => {
-    void options?.onPayload?.(payload, model);
-    return { async *[Symbol.asyncIterator]() {} };
-  }) as StreamFn);
+  const baseStreamFn = vi.fn((...args: Parameters<StreamFn>): ReturnType<StreamFn> => {
+    void args[2]?.onPayload?.(payload, args[0]);
+    return createAssistantMessageEventStream();
+  });
   const wrapped = provider.wrapStreamFn?.({
     provider: "openrouter",
     modelId,
@@ -20,7 +21,7 @@ async function captureProviderPayload(
     streamFn: baseStreamFn,
   } as never);
 
-  wrapped?.(
+  void wrapped?.(
     {
       provider: "openrouter",
       api: "openai-completions",
