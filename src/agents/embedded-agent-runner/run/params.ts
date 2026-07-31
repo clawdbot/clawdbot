@@ -55,6 +55,11 @@ export type { ClientToolDefinition } from "../../command/shared-types.js";
 
 export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 
+export type ResolvedToolPromptFinalizer = (params: {
+  prompt: string;
+  messageToolAvailable: boolean;
+}) => string;
+
 type ReasoningStreamPayload = Pick<
   ReplyPayload,
   "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
@@ -196,6 +201,8 @@ export type RunEmbeddedAgentParams = {
   prompt: string;
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
+  /** Finalizes caller-owned guidance after the submitted tool surface is known. */
+  finalizePromptForResolvedTools?: ResolvedToolPromptFinalizer;
   currentInboundEventKind?: InboundEventKind;
   currentInboundContext?: CurrentInboundPromptContext;
   images?: ImageContent[];

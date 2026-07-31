@@ -34,8 +34,6 @@ import {
 import { buildCronAgentDefaultsConfig, resolveCronActiveRuntimeConfig } from "./run-config.js";
 import { buildCurrentConversationContextBlock } from "./run-current-context.js";
 import {
-  appendCronDeliveryInstruction,
-  canPromptForMessageTool,
   createCronToolsAllowPreflightDiagnostics,
   type ResolvedCronDeliveryTarget,
   resolveCronDeliveryContext,
@@ -114,7 +112,6 @@ export type PreparedCronRunContext = {
   resolvedDelivery: ResolvedCronDeliveryTarget;
   deliveryRequested: boolean;
   sourceDelivery: SourceDeliveryPlan;
-  messageToolPromptEnabled: boolean;
   suppressExecNotifyOnExit: boolean;
   skillsSnapshot: SkillSnapshot;
   liveSelection: CronLiveSelection;
@@ -586,18 +583,7 @@ export async function prepareCronRunContext(params: {
     } else {
       commandBody = `${base}\n${timeLine}`.trim();
     }
-    const messageToolPromptEnabled = canPromptForMessageTool({
-      sourceDelivery,
-      toolsAllow: agentPayload?.toolsAllow,
-    });
     commandBody = appendCronUnattendedRunPreamble(commandBody, { externalHook: isExternalHook });
-    commandBody = appendCronDeliveryInstruction({
-      commandBody,
-      deliveryRequested,
-      messageToolEnabled: messageToolPromptEnabled,
-      resolvedDeliveryOk: resolvedDelivery.ok,
-      requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
-    });
 
     const skillsSnapshot = await resolveCronSkillsSnapshot({
       workspaceDir,
@@ -713,7 +699,6 @@ export async function prepareCronRunContext(params: {
         resolvedDelivery,
         deliveryRequested,
         sourceDelivery,
-        messageToolPromptEnabled,
         suppressExecNotifyOnExit: deliveryPlan.mode === "none",
         skillsSnapshot,
         liveSelection,

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { FileHandle } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
 
@@ -145,4 +146,61 @@ export function writeByteHeaders(res: ServerResponse, plan: ByteResponsePlan): v
   } else if (plan.kind === "unsatisfiable") {
     res.setHeader("Content-Range", `bytes */${plan.size}`);
   }
+}
+
+export function createGatewayByteStream(
+  res: ServerResponse,
+  handle: Pick<FileHandle, "close" | "createReadStream">,
+  onReadError: () => void,
+) {
+  let stream: ReturnType<FileHandle["createReadStream"]> | undefined;
+  let closed = false;
+  const close = async () => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    if (stream) {
+      stream.destroy();
+      return;
+    }
+    await handle.close().catch(() => {});
+  };
+  const release = () => {
+    void close();
+  };
+  // The ReadStream owns the FileHandle after creation; destroying it closes the descriptor once.
+  res.once("close", release);
+
+  return {
+    close,
+    async pipe(plan: ByteResponsePlan, method: string | undefined) {
+      if (method === "HEAD" || !("contentLength" in plan) || plan.contentLength === 0) {
+        await close();
+        res.end();
+        return;
+      }
+      if (closed || res.destroyed || res.writableEnded) {
+        await close();
+        return;
+      }
+      stream = handle.createReadStream({
+        start: plan.kind === "partial" ? plan.range.start : 0,
+        end: plan.kind === "partial" ? plan.range.end : plan.contentLength - 1,
+        autoClose: true,
+      });
+      stream.once("end", release).once("close", release);
+      stream.once("error", () => {
+        release();
+        if (!res.destroyed && !res.writableEnded) {
+          if (res.headersSent) {
+            res.destroy();
+          } else {
+            onReadError();
+          }
+        }
+      });
+      stream.pipe(res);
+    },
+  };
 }

@@ -404,6 +404,70 @@ describe("presentation capability limits", () => {
     ]);
   });
 
+  it("keeps dropped command buttons actionable without exposing private callbacks", () => {
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Keep", value: "keep" },
+              { label: "Deploy", action: { type: "command", command: "/deploy production" } },
+              {
+                label: "Approval",
+                action: {
+                  type: "approval",
+                  approvalId: "approval:private-transport-token",
+                  approvalKind: "exec",
+                  decision: "allow-once",
+                },
+              },
+              {
+                label: "Opaque",
+                action: { type: "callback", value: "private-callback-token" },
+              },
+            ],
+          },
+        ],
+      },
+      capabilities: { limits: { actions: { maxActions: 1 } } },
+    });
+
+    expect(presentation.blocks).toEqual([
+      { type: "buttons", buttons: [{ label: "Keep", value: "keep" }] },
+      {
+        type: "context",
+        text: "Actions:\n- Deploy: `/deploy production`\n- Approval\n- Opaque",
+      },
+    ]);
+  });
+
+  it("keeps unavailable typed select commands actionable without exposing callback values", () => {
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: {
+        blocks: [
+          {
+            type: "select",
+            placeholder: "Environment",
+            options: [
+              { label: "Canary", action: { type: "command", command: "/deploy canary" } },
+              { label: "Production", action: { type: "command", command: "/deploy production" } },
+              { label: "Opaque", action: { type: "callback", value: "private-callback-token" } },
+            ],
+          },
+        ],
+      },
+      capabilities: { selects: false },
+    });
+
+    expect(presentation.blocks).toEqual([
+      {
+        type: "context",
+        text: "Environment:\n- Canary: `/deploy canary`\n- Production: `/deploy production`\n- Opaque",
+      },
+    ]);
+  });
+
   it("keeps fallback labels for invalid buttons in mixed button blocks", () => {
     const presentation = adaptMessagePresentationForChannel({
       presentation: {

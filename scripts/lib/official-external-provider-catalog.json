@@ -913,6 +913,119 @@
       }
     },
     {
+      "name": "@openclaw/novita-provider",
+      "description": "OpenClaw NovitaAI provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "novita",
+          "label": "NovitaAI"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "novita-native",
+            "hosts": ["api.novita.ai"]
+          }
+        ],
+        "providers": [
+          {
+            "id": "novita",
+            "aliases": ["novita-ai", "novitaai"],
+            "name": "NovitaAI",
+            "docs": "/providers/novita",
+            "categories": ["cloud", "llm"],
+            "envVars": ["NOVITA_API_KEY"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "novita-api-key",
+                "choiceLabel": "NovitaAI API key",
+                "choiceHint": "OpenAI-compatible NovitaAI endpoint",
+                "groupId": "novita",
+                "groupLabel": "NovitaAI",
+                "groupHint": "OpenAI-compatible NovitaAI endpoint",
+                "optionKey": "novitaApiKey",
+                "cliFlag": "--novita-api-key",
+                "cliOption": "--novita-api-key <key>",
+                "cliDescription": "NovitaAI API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/novita-provider",
+          "npmSpec": "@openclaw/novita-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/opencode-provider",
+      "description": "OpenClaw OpenCode Zen provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "opencode",
+          "label": "OpenCode Zen"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "opencode-native",
+            "hostSuffixes": [
+              "opencode.ai"
+            ]
+          }
+        ],
+        "providers": [
+          {
+            "id": "opencode",
+            "name": "OpenCode Zen",
+            "docs": "/providers/opencode",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "OPENCODE_API_KEY",
+              "OPENCODE_ZEN_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "opencode-zen",
+                "choiceLabel": "OpenCode Zen catalog",
+                "groupId": "opencode",
+                "groupLabel": "OpenCode",
+                "groupHint": "Shared API key for Zen + Go catalogs",
+                "optionKey": "opencodeZenApiKey",
+                "cliFlag": "--opencode-zen-api-key",
+                "cliOption": "--opencode-zen-api-key <key>",
+                "cliDescription": "OpenCode API key (Zen catalog)",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "mediaUnderstandingProviders": [
+            "opencode"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/opencode-provider",
+          "npmSpec": "@openclaw/opencode-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/groq-provider",
       "description": "OpenClaw Groq media-understanding provider.",
       "source": "official",

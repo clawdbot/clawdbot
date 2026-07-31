@@ -1088,6 +1088,26 @@ export function renderMessagePresentationTableFallbackText(
   return lines.join("\n");
 }
 
+/** Keep only operator-visible navigation and public command text in control fallbacks. */
+export function renderMessagePresentationControlFallbackLabel(
+  control: Pick<
+    MessagePresentationButton,
+    "label" | "action" | "value" | "url" | "webApp" | "web_app" | "disabled"
+  >,
+): string {
+  if (control.disabled) {
+    return control.label;
+  }
+  const action = resolveMessagePresentationButtonAction(control);
+  if (action?.type === "url" || (action?.type === "web-app" && action.url)) {
+    return `${control.label}: ${action.url}`;
+  }
+  if (action?.type === "command") {
+    return `${control.label}: \`${action.command}\``;
+  }
+  return control.label;
+}
+
 export function renderMessagePresentationFallbackText(params: {
   presentation?: MessagePresentation;
   emptyFallback?: string | null;
@@ -1121,19 +1141,7 @@ export function renderMessagePresentationFallbackText(params: {
     }
     if (block.type === "buttons") {
       const labels = block.buttons
-        .map((button) => {
-          if (button.disabled) {
-            return button.label;
-          }
-          const action = resolveMessagePresentationButtonAction(button);
-          if (action?.type === "url" || (action?.type === "web-app" && action.url)) {
-            return `${button.label}: ${action.url}`;
-          }
-          if (action?.type === "command") {
-            return `${button.label}: \`${action.command}\``;
-          }
-          return button.label;
-        })
+        .map(renderMessagePresentationControlFallbackLabel)
         .filter(Boolean);
       if (labels.length > 0) {
         lines.push(labels.map((label) => `- ${label}`).join("\n"));
@@ -1149,7 +1157,9 @@ export function renderMessagePresentationFallbackText(params: {
       continue;
     }
     if (block.type === "select") {
-      const labels = block.options.map((option) => option.label).filter(Boolean);
+      const labels = block.options
+        .map(renderMessagePresentationControlFallbackLabel)
+        .filter(Boolean);
       if (labels.length > 0) {
         const heading = block.placeholder ? `${block.placeholder}:` : "Options:";
         lines.push(`${heading}\n${labels.map((label) => `- ${label}`).join("\n")}`);

@@ -540,6 +540,18 @@ function findNotesHumanBlock(page: string): { start: number; end: number } | nul
   return { start, end: endMarker + HUMAN_END_MARKER.length };
 }
 
+export function extractHumanNotesBlock(page: string): string | null {
+  const block = findNotesHumanBlock(page);
+  if (!block) {
+    return null;
+  }
+  const notes = page.slice(
+    block.start + HUMAN_START_MARKER.length,
+    block.end - HUMAN_END_MARKER.length,
+  );
+  return notes.trim() ? page.slice(block.start, block.end) : null;
+}
+
 export function preserveHumanNotesBlock(rendered: string, existing: string): string {
   const existingBlock = findNotesHumanBlock(existing);
   const renderedBlock = findNotesHumanBlock(rendered);

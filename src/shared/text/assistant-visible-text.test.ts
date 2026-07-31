@@ -5,6 +5,7 @@ import {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
   stripAssistantInternalScaffolding,
+  stripDowngradedToolCallText,
   stripMinimaxToolCallXml,
   stripToolCallXmlTags,
 } from "./assistant-visible-text.js";
@@ -858,6 +859,21 @@ describe("sanitizeAssistantVisibleText", () => {
     );
   });
 
+  it("preserves fenced log lines quoting tool markers through delivery", () => {
+    const input = [
+      "Log format explainer:",
+      "",
+      "```text",
+      "[Tool Result for ID abc]",
+      "stdout: hello",
+      "```",
+      "",
+      "Then we continue the answer with important details.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
   it("strips minimax, tool XML, downgraded tool markers, and think tags in one pass", () => {
     const input = [
       '<invoke name="read">payload</invoke></minimax:tool_call>',
@@ -1016,5 +1032,70 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
     expect(sanitizeAssistantVisibleTextWithProfile(input, "tool-progress")).toBe(
       "🛠️ run git status",
     );
+  });
+});
+
+describe("stripDowngradedToolCallText", () => {
+  it("preserves fenced log lines that quote [Tool Result for ID ...]", () => {
+    const input = [
+      "Log format explainer:",
+      "",
+      "```text",
+      "[Tool Result for ID abc]",
+      "stdout: hello",
+      "```",
+      "",
+      "Then we continue the answer with important details.",
+    ].join("\n");
+
+    expect(stripDowngradedToolCallText(input)).toBe(input);
+  });
+
+  it("preserves fenced log lines that quote [Tool Call: ...] and Arguments", () => {
+    const input = [
+      "Log format explainer:",
+      "",
+      "```text",
+      "[Tool Call: bash (ID: 7)]",
+      'Arguments: {"cmd":"ls"}',
+      "```",
+      "",
+      "Then we continue the answer with important details.",
+    ].join("\n");
+
+    expect(stripDowngradedToolCallText(input)).toBe(input);
+  });
+
+  it("preserves fenced log lines that quote [Historical context: ...]", () => {
+    const input = [
+      "Log format explainer:",
+      "",
+      "```text",
+      "[Historical context: earlier run]",
+      "stdout: hello",
+      "```",
+      "",
+      "Then we continue the answer with important details.",
+    ].join("\n");
+
+    expect(stripDowngradedToolCallText(input)).toBe(input);
+  });
+
+  it("strips real [Tool Result for ID ...] blocks outside code", () => {
+    const input = ["[Tool Result for ID abc]", "stdout: hello"].join("\n");
+
+    expect(stripDowngradedToolCallText(input)).toBe("");
+  });
+
+  it("strips real [Tool Call: ...] blocks outside code", () => {
+    const input = ["[Tool Call: read (ID: toolu_1)]", 'Arguments: {"path":"/tmp/x"}'].join("\n");
+
+    expect(stripDowngradedToolCallText(input)).toBe("");
+  });
+
+  it("strips real [Historical context: ...] markers outside code", () => {
+    const input = "[Historical context: earlier run]\nVisible answer";
+
+    expect(stripDowngradedToolCallText(input)).toBe("Visible answer");
   });
 });

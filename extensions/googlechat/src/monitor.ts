@@ -20,7 +20,11 @@ import {
   createGoogleChatIngressMonitor,
   type GoogleChatIngressLifecycle,
 } from "./monitor-ingress.js";
-import { deliverGoogleChatReply, type GoogleChatTypingMessage } from "./monitor-reply-delivery.js";
+import {
+  createGoogleChatTypingMessage,
+  deliverGoogleChatReply,
+  type GoogleChatTypingMessage,
+} from "./monitor-reply-delivery.js";
 import {
   registerGoogleChatWebhookTarget,
   setGoogleChatWebhookEventProcessor,
@@ -380,7 +384,11 @@ async function processMessageWithPipeline(params: {
         thread: typingMessageThreadName,
       });
       if (result?.messageName) {
-        typingMessage = { name: result.messageName, thread: typingMessageThreadName };
+        typingMessage = createGoogleChatTypingMessage({
+          messageName: result.messageName,
+          requestedThreadName: typingMessageThreadName,
+          deliveredThreadName: result.threadName,
+        });
       }
     } catch (err) {
       runtime.error?.(`Failed sending typing message: ${String(err)}`);

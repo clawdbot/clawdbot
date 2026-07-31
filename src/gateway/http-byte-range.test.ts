@@ -1,6 +1,13 @@
-import type { ServerResponse } from "node:http";
+import fs from "node:fs/promises";
+import http, { type ServerResponse } from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { resolveByteResponse, writeByteHeaders } from "./http-byte-range.js";
+import {
+  createGatewayByteStream,
+  resolveByteResponse,
+  writeByteHeaders,
+} from "./http-byte-range.js";
 
 const FILE = { size: 10, mtimeMs: 1_752_000_000_123.5 };
 
@@ -152,5 +159,93 @@ describe("byte ETag generation", () => {
       etag,
     );
     expect(etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
+  });
+});
+
+describe("Gateway byte response descriptor lifecycle", () => {
+  it("destroys the real file stream and closes its descriptor once when its HTTP client disconnects", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-byte-stream-"));
+    const filePath = path.join(directory, "media.bin");
+    const body = Buffer.alloc(8 * 1024 * 1024, 7);
+    await fs.writeFile(filePath, body);
+    const handle = await fs.open(filePath, "r");
+    const closeHandle = vi.spyOn(handle, "close");
+    const createReadStream = vi.spyOn(handle, "createReadStream");
+    let resolveResponseClose!: () => void;
+    const responseClosed = new Promise<void>((resolve) => {
+      resolveResponseClose = resolve;
+    });
+    const server = http.createServer((_request, response) => {
+      const owner = createGatewayByteStream(response, handle, () => {
+        response.statusCode = 404;
+        response.end("not found");
+      });
+      const byteResponse = resolveByteResponse({
+        file: { size: body.byteLength, mtimeMs: 1 },
+        method: "GET",
+      });
+      writeByteHeaders(response, byteResponse);
+      void owner.pipe(byteResponse, "GET");
+      response.once("close", resolveResponseClose);
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected test HTTP server to bind to a TCP port");
+    }
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const request = http.get({ host: "127.0.0.1", port: address.port }, (response) => {
+          response.once("data", () => {
+            response.destroy();
+            resolve();
+          });
+        });
+        request.once("error", reject);
+      });
+      await responseClosed;
+      await vi.waitFor(() => {
+        expect(closeHandle).toHaveBeenCalledOnce();
+        expect(handle.fd).toBe(-1);
+      });
+
+      const streamedFile = createReadStream.mock.results[0]?.value;
+      expect(streamedFile?.destroyed).toBe(true);
+      expect(streamedFile?.readableEnded).toBe(false);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("closes a newly opened descriptor when its response ended before streaming began", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-byte-ended-"));
+    const filePath = path.join(directory, "media.bin");
+    await fs.writeFile(filePath, "media");
+    const handle = await fs.open(filePath, "r");
+    const closeHandle = vi.spyOn(handle, "close");
+    const response = new http.ServerResponse({ method: "GET" } as http.IncomingMessage);
+    response.end();
+    const owner = createGatewayByteStream(response, handle, () => {});
+
+    try {
+      await owner.pipe(
+        resolveByteResponse({ file: { size: 5, mtimeMs: 1 }, method: "GET" }),
+        "GET",
+      );
+      expect(closeHandle).toHaveBeenCalledOnce();
+      expect(handle.fd).toBe(-1);
+    } finally {
+      if (handle.fd >= 0) {
+        await handle.close();
+      }
+      await fs.rm(directory, { recursive: true, force: true });
+    }
   });
 });

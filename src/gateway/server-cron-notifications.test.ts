@@ -261,6 +261,48 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     expect(cleanupOrder).toEqual(["cancel", "release"]);
   });
 
+  it("releases Gateway admission when webhook response cancellation never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const release = vi.fn(async () => {});
+      const response = new Response(
+        new ReadableStream({ cancel: () => new Promise<void>(() => {}) }),
+      );
+      mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response,
+        finalUrl: "https://example.invalid/cron",
+        release,
+      });
+
+      const delivery = sendGatewayCronFailureAlert({
+        deps: {} as CliDeps,
+        logger: { warn: vi.fn() },
+        resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+        job: createWebhookJob({
+          mode: "webhook",
+          to: "https://example.invalid/cron",
+        }),
+        text: "cron failed",
+        channel: "last",
+        mode: "webhook",
+        to: "https://example.invalid/cron",
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(release).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(delivery).resolves.toBeUndefined();
+      expect(release).toHaveBeenCalledOnce();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("adds the run start time to immediate chat alerts in the agent timezone", async () => {
     const job = createWebhookJob({
       mode: "announce",

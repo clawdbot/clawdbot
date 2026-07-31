@@ -1,6 +1,10 @@
 // Line plugin module implements bot handlers behavior.
 import type { webhook } from "@line/bot-sdk";
-import { buildMentionRegexes, matchesMentionPatterns } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildMentionRegexes,
+  isChannelPartialDeliveryError,
+  matchesMentionPatterns,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
@@ -136,6 +140,10 @@ async function sendLinePairingReply(params: {
           return;
         } catch (err) {
           logVerbose(`line pairing reply failed for ${senderId}: ${String(err)}`);
+          // A visible reply survived failed bookkeeping; a fallback push would duplicate it.
+          if (isChannelPartialDeliveryError(err)) {
+            return;
+          }
         }
       }
       try {
