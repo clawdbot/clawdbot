@@ -2436,8 +2436,8 @@ describe("mattermost inbound user posts", () => {
     await monitor;
 
     // The warning must not have been edited into the streaming draft post.
-    const warningEdited = mockState.updateMattermostPost.mock.calls.some(([, , body]) =>
-      String(body?.message ?? "").includes("Bash failed"),
+    const warningEdited = mockState.updateMattermostPost.mock.calls.some((args) =>
+      String(args[2]?.message ?? "").includes("Bash failed"),
     );
     expect(warningEdited).toBe(false);
   });

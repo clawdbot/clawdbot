@@ -405,7 +405,6 @@ export async function dispatchMattermostInboundTurn(
       if (info.kind === "final") {
         progressDraft.markFinalReplyDelivered();
       }
-      return result;
     },
     onError: (err, info) => {
       runtime.error?.(`mattermost ${info.kind} reply failed: ${String(err)}`);
