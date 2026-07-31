@@ -1201,6 +1201,25 @@ describe("setLegacyChannelDmPolicyWithAllowFrom", () => {
     expect(next.channels?.slack?.dmPolicy).toBe("pairing");
     expect(next.channels?.slack?.allowFrom).toEqual(["U1"]);
   });
+
+  it("strips a stale wildcard when tightening to a non-open policy via legacy fallback", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        discord: {
+          dm: { enabled: false, allowFrom: ["123", "*"] },
+        },
+      },
+    };
+
+    const next = setLegacyChannelDmPolicyWithAllowFrom({
+      cfg,
+      channel: "discord",
+      dmPolicy: "allowlist",
+    });
+
+    expect(next.channels?.discord?.dmPolicy).toBe("allowlist");
+    expect(next.channels?.discord?.allowFrom).toEqual(["123"]);
+  });
 });
 
 describe("setLegacyChannelAllowFrom", () => {
@@ -1260,7 +1279,7 @@ describe("setChannelDmPolicyWithAllowFrom", () => {
     expect(next.channels?.signal?.allowFrom).toEqual(["+15555550123", "*"]);
   });
 
-  it("sets dmPolicy without changing allowFrom for non-open policies", () => {
+  it("strips a stale wildcard from allowFrom when tightening to a non-open policy", () => {
     const cfg: OpenClawConfig = {
       channels: {
         imessage: {
@@ -1277,7 +1296,49 @@ describe("setChannelDmPolicyWithAllowFrom", () => {
     });
 
     expect(next.channels?.imessage?.dmPolicy).toBe("pairing");
-    expect(next.channels?.imessage?.allowFrom).toEqual(["*"]);
+    // The runtime DM gate admits every sender while "*" is present, so tightening away from
+    // "open" must remove a stale wildcard rather than leaving the agent reachable by anyone.
+    expect(next.channels?.imessage?.allowFrom).toEqual([]);
+  });
+
+  it("preserves real allowFrom entries while stripping the wildcard on a non-open tighten", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        signal: {
+          dmPolicy: "open",
+          allowFrom: ["+15555550123", "*"],
+        },
+      },
+    };
+
+    const next = setChannelDmPolicyWithAllowFrom({
+      cfg,
+      channel: "signal",
+      dmPolicy: "allowlist",
+    });
+
+    expect(next.channels?.signal?.dmPolicy).toBe("allowlist");
+    expect(next.channels?.signal?.allowFrom).toEqual(["+15555550123"]);
+  });
+
+  it("does not write an allowFrom patch on a non-open tighten when there is no wildcard", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        slack: {
+          dmPolicy: "open",
+          allowFrom: ["U1"],
+        },
+      },
+    };
+
+    const next = setChannelDmPolicyWithAllowFrom({
+      cfg,
+      channel: "slack",
+      dmPolicy: "pairing",
+    });
+
+    expect(next.channels?.slack?.dmPolicy).toBe("pairing");
+    expect(next.channels?.slack?.allowFrom).toEqual(["U1"]);
   });
 
   it("supports telegram channel dmPolicy updates", () => {
@@ -1338,6 +1399,26 @@ describe("setTopLevelChannelDmPolicyWithAllowFrom", () => {
         normalizeAllowFromEntries([...(inputCfg.channels?.["nextcloud-talk"]?.allowFrom ?? [])]),
     });
     expect(next.channels?.["nextcloud-talk"]?.allowFrom).toEqual(["alice", "*"]);
+  });
+
+  it("strips a stale wildcard when tightening to a non-open policy", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        zalo: {
+          dmPolicy: "open",
+          allowFrom: ["12345", "*"],
+        },
+      },
+    };
+
+    const next = setTopLevelChannelDmPolicyWithAllowFrom({
+      cfg,
+      channel: "zalo",
+      dmPolicy: "pairing",
+    });
+
+    expect(next.channels?.zalo?.dmPolicy).toBe("pairing");
+    expect(next.channels?.zalo?.allowFrom).toEqual(["12345"]);
   });
 });
 
@@ -1508,6 +1589,28 @@ describe("setNestedChannelDmPolicyWithAllowFrom", () => {
     expect(next.channels?.matrix?.enabled).toBe(true);
     expect(next.channels?.matrix?.dm?.policy).toBe("open");
     expect(next.channels?.matrix?.dm?.allowFrom).toEqual(["@alice:example.org", "*"]);
+  });
+
+  it("strips a stale wildcard when tightening to a non-open policy inside a nested section", () => {
+    const next = setNestedChannelDmPolicyWithAllowFrom({
+      cfg: {
+        channels: {
+          matrix: {
+            dm: {
+              policy: "open",
+              allowFrom: ["@alice:example.org", "*"],
+            },
+          },
+        },
+      },
+      channel: "matrix",
+      section: "dm",
+      dmPolicy: "allowlist",
+      enabled: true,
+    });
+
+    expect(next.channels?.matrix?.dm?.policy).toBe("allowlist");
+    expect(next.channels?.matrix?.dm?.allowFrom).toEqual(["@alice:example.org"]);
   });
 });
 

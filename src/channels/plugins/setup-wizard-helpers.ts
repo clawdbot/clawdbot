@@ -88,6 +88,22 @@ export function addWildcardAllowFrom(allowFrom?: ReadonlyArray<string | number> 
   return next;
 }
 
+/**
+ * Returns `allowFrom` with any wildcard (`"*"`) entry removed, or `undefined` when the
+ * input has no wildcard. Tightening a DM policy away from `"open"` (to `"allowlist"`,
+ * `"pairing"`, or `"disabled"`) must strip a stale `"*"` left by the prior open setting:
+ * the runtime DM admission gate admits every sender while `"*"` is present, so leaving it
+ * in place silently keeps the agent reachable by arbitrary DM senders. Returns `undefined`
+ * when there is nothing to strip so a tighten does not write a spurious allowFrom patch
+ * (and clobber unrelated config) in the common no-wildcard case.
+ */
+export function removeWildcardAllowFrom(
+  allowFrom?: ReadonlyArray<string | number> | null,
+): string[] | undefined {
+  const next = normalizeStringEntries(allowFrom ?? []);
+  return next.includes("*") ? next.filter((value) => value !== "*") : undefined;
+}
+
 export function mergeAllowFromEntries(
   current: Array<string | number> | null | undefined,
   additions: Array<string | number>,
@@ -368,7 +384,9 @@ export function setTopLevelChannelDmPolicyWithAllowFrom(params: {
     (channelConfig.allowFrom as Array<string | number> | undefined) ??
     undefined;
   const allowFrom =
-    params.dmPolicy === "open" ? addWildcardAllowFrom(existingAllowFrom) : undefined;
+    params.dmPolicy === "open"
+      ? addWildcardAllowFrom(existingAllowFrom)
+      : removeWildcardAllowFrom(existingAllowFrom);
   return patchTopLevelChannelConfigSection({
     cfg: params.cfg,
     channel: params.channel,
@@ -396,7 +414,9 @@ export function setNestedChannelDmPolicyWithAllowFrom(params: {
     (sectionConfig.allowFrom as Array<string | number> | undefined) ??
     undefined;
   const allowFrom =
-    params.dmPolicy === "open" ? addWildcardAllowFrom(existingAllowFrom) : undefined;
+    params.dmPolicy === "open"
+      ? addWildcardAllowFrom(existingAllowFrom)
+      : removeWildcardAllowFrom(existingAllowFrom);
   return patchNestedChannelConfigSection({
     cfg: params.cfg,
     channel: params.channel,
@@ -553,10 +573,11 @@ export function setChannelDmPolicyWithAllowFrom(params: {
 }): OpenClawConfig {
   const { cfg, channel, dmPolicy } = params;
   const channelConfig = asRecord(cfg.channels?.[channel]);
+  const existingAllowFrom = asAllowFromList(channelConfig?.allowFrom);
   const allowFrom =
     dmPolicy === "open"
-      ? addWildcardAllowFrom(asAllowFromList(channelConfig?.allowFrom))
-      : undefined;
+      ? addWildcardAllowFrom(existingAllowFrom)
+      : removeWildcardAllowFrom(existingAllowFrom);
   return {
     ...cfg,
     channels: {
@@ -588,7 +609,9 @@ function setCompatChannelDmPolicyWithAllowFrom(params: {
     account: channelConfig as Record<string, unknown>,
   });
   const allowFrom =
-    params.dmPolicy === "open" ? addWildcardAllowFrom(existingAllowFrom) : undefined;
+    params.dmPolicy === "open"
+      ? addWildcardAllowFrom(existingAllowFrom)
+      : removeWildcardAllowFrom(existingAllowFrom);
   return patchCompatDmChannelConfig({
     cfg: params.cfg,
     channel: params.channel,
