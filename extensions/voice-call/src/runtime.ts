@@ -131,7 +131,7 @@ function createRuntimeResourceLifecycle(params: {
   stop: (opts?: { suppressErrors?: boolean }) => Promise<void>;
 } {
   let tunnelResult: TunnelResult | null = null;
-  let stopped = false;
+  let stopPromise: Promise<void> | null = null;
 
   const runStep = async (step: () => Promise<void>, suppressErrors: boolean) => {
     if (suppressErrors) {
@@ -145,23 +145,25 @@ function createRuntimeResourceLifecycle(params: {
     setTunnelResult: (result) => {
       tunnelResult = result;
     },
-    stop: async (opts) => {
-      if (stopped) {
-        return;
+    stop: (opts) => {
+      if (stopPromise) {
+        return stopPromise;
       }
-      stopped = true;
       const suppressErrors = opts?.suppressErrors ?? false;
-      await runStep(async () => {
-        if (tunnelResult) {
-          await tunnelResult.stop();
-        }
-      }, suppressErrors);
-      await runStep(async () => {
-        await cleanupTailscaleExposure(params.config);
-      }, suppressErrors);
-      await runStep(async () => {
-        await params.webhookServer.stop();
-      }, suppressErrors);
+      stopPromise = (async () => {
+        await runStep(async () => {
+          if (tunnelResult) {
+            await tunnelResult.stop();
+          }
+        }, suppressErrors);
+        await runStep(async () => {
+          await cleanupTailscaleExposure(params.config);
+        }, suppressErrors);
+        await runStep(async () => {
+          await params.webhookServer.stop();
+        }, suppressErrors);
+      })();
+      return stopPromise;
     },
   };
 }
@@ -556,7 +558,7 @@ export async function createVoiceCallRuntime(params: {
 
     await manager.initialize(provider, webhookUrl);
 
-    const stop = async () => await lifecycle.stop();
+    const stop = () => lifecycle.stop();
 
     log.info("[voice-call] Runtime initialized");
     log.info(`[voice-call] Webhook URL: ${webhookUrl}`);

@@ -322,6 +322,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { ownsProtocolStdout: true },
   },
   { commandPath: ["approvals"], policy: { networkProxy: "bypass" } },
+  // automations is a commander alias for cron; argv-derived command paths keep the typed token.
+  { commandPath: ["automations"], policy: { networkProxy: "bypass" } },
   { commandPath: ["backup"], policy: { bypassConfigGuard: true, networkProxy: "bypass" } },
   { commandPath: ["chat"], policy: { networkProxy: "bypass" } },
   { commandPath: ["config"], policy: { networkProxy: "bypass" } },

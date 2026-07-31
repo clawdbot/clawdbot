@@ -2,12 +2,34 @@ import {
   normalizeLowercaseStringOrEmpty,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { inferToolMetaFromArgs } from "../../agents/embedded-agent-utils.js";
 import type { GetReplyOptions } from "../types.js";
 
 function readRecordValue(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+/**
+ * CLI backends report a tool result as its raw content: a string, or the text
+ * blocks the harness streamed. Structured runners send a record instead, so the
+ * command projection has to read both or every CLI command result is dropped.
+ */
+function readToolResultText(value: unknown): string | undefined {
+  const direct = readStringValue(value);
+  if (direct !== undefined) {
+    return direct;
+  }
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const text = value
+    .map((block) => readStringValue(readRecordValue(block)?.text))
+    .filter((part): part is string => part !== undefined)
+    .join("\n")
+    .trim();
+  return text || undefined;
 }
 
 function readFiniteNumberValue(value: unknown): number | undefined {
@@ -35,7 +57,7 @@ export function buildCommandOutputFromToolResultEvent(evt: {
     return undefined;
   }
   const name = readStringValue(evt.data.name);
-  if (!isCommandToolName(name)) {
+  if (!name || !isCommandToolName(name)) {
     return undefined;
   }
   const result = readRecordValue(evt.data.result);
@@ -43,7 +65,8 @@ export function buildCommandOutputFromToolResultEvent(evt: {
   const output =
     readStringValue(evt.data.output) ??
     readStringValue(result?.output) ??
-    readStringValue(details?.output);
+    readStringValue(details?.output) ??
+    readToolResultText(evt.data.result);
   const explicitStatus =
     readStringValue(evt.data.status) ??
     readStringValue(result?.status) ??
@@ -55,6 +78,12 @@ export function buildCommandOutputFromToolResultEvent(evt: {
     result?.durationMs ?? details?.durationMs ?? evt.data.durationMs,
   );
   const cwd = readStringValue(evt.data.cwd);
+  const errorStatus =
+    evt.data.isError === true ? "failed" : evt.data.isError === false ? "completed" : undefined;
+  // A bare result carries no outcome of its own: runners that report one send a
+  // separate command_output event, and synthesizing here would duplicate it.
+  // A CLI result is different because its content *is* the outcome, which
+  // readToolResultText surfaces as output above.
   const hasConcreteCommandResult =
     output !== undefined ||
     explicitStatus !== undefined ||
@@ -65,12 +94,16 @@ export function buildCommandOutputFromToolResultEvent(evt: {
   if (!hasConcreteCommandResult) {
     return undefined;
   }
-  const errorStatus =
-    evt.data.isError === true ? "failed" : evt.data.isError === false ? "completed" : undefined;
+  // Keep the line describing the command, not its output: without a title the
+  // terminal line would replace the request with whatever the tool printed.
+  const args = readRecordValue(evt.data.args);
+  const title =
+    readStringValue(evt.data.title) ??
+    (args ? inferToolMetaFromArgs(name, args, { detailMode: "explain" }) : undefined);
   return {
     itemId: readStringValue(evt.data.itemId),
     phase: "end",
-    title: readStringValue(evt.data.title),
+    title,
     toolCallId: readStringValue(evt.data.toolCallId),
     name,
     output,

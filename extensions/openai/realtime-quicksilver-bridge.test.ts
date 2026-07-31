@@ -370,6 +370,31 @@ describe("OpenAIQuicksilverVoiceBridge", () => {
     });
   });
 
+  it("bounds direct tool results before sideband sends", async () => {
+    const harness = createHarness();
+    await harness.bridge.connect();
+
+    harness.socket.serverEvent({
+      type: "delegation.created",
+      item: {
+        type: "delegation",
+        target: "client",
+        id: "delegation-large",
+        content: [{ type: "input_text", text: "summarize everything" }],
+      },
+    });
+    harness.bridge.submitToolResult("delegation-large", { text: "x".repeat(10_000) });
+
+    const appends = sentEvents(harness.socket).filter(
+      (event) => event.type === "delegation.context.append",
+    );
+    expect(appends.length).toBeGreaterThan(0);
+    expect(appends.length).toBeLessThanOrEqual(11);
+    expect(
+      appends.map((event) => (event.content as Array<{ text: string }>)[0]?.text ?? "").join(""),
+    ).toMatch(/^x+ \[truncated\]$/);
+  });
+
   it("normalizes assistant completion to the shared response lifecycle", async () => {
     const harness = createHarness();
     await harness.bridge.connect();

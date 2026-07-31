@@ -31,6 +31,7 @@ import {
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
+import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
@@ -128,6 +129,30 @@ export async function runCliFallbackCandidate(params: {
       await turn.opts?.onToolResult?.(payload);
     },
   });
+  // CLI backends report a tool's outcome on the result event and never repeat it,
+  // so the terminal fact has to be projected here. The embedded path gets this
+  // from the shared agent-event handler; without it a failed CLI command renders
+  // exactly like one that succeeded.
+  const deliverCliCommandOutcome = async (payload: {
+    name: string | undefined;
+    phase: "start" | "update" | "result";
+    args: Record<string, unknown> | undefined;
+    toolCallId?: string;
+    isError?: boolean;
+    result?: unknown;
+  }) => {
+    const onCommandOutput = turn.opts?.onCommandOutput;
+    if (!onCommandOutput) {
+      return;
+    }
+    const commandOutput = buildCommandOutputFromToolResultEvent({
+      stream: "tool",
+      data: { ...payload },
+    });
+    if (commandOutput) {
+      await onCommandOutput(commandOutput);
+    }
+  };
   const bridgeCliPreambleProgress =
     Boolean(turn.opts?.onItemEvent) && shouldBridgeCliPreambleEvents(turn.opts);
   const bridgeCliDurableCommentary =
@@ -212,12 +237,14 @@ export async function runCliFallbackCandidate(params: {
             if (!params.preserveProgressCallbackStartOrder) {
               await cliToolSummaryTracker.noteToolEvent(payload);
               if (payload.phase === "result") {
+                await deliverCliCommandOutcome(payload);
                 return;
               }
-              const { name, phase, args } = payload;
+              const { name, phase, args, toolCallId } = payload;
               await Promise.all([
                 turn.typingSignals.signalToolStart(),
                 turn.opts?.onToolStart?.({
+                  ...(toolCallId ? { toolCallId } : {}),
                   name,
                   phase,
                   args,
@@ -229,9 +256,10 @@ export async function runCliFallbackCandidate(params: {
             const summaryPromise = cliToolSummaryTracker.noteToolEvent(payload);
             if (payload.phase === "result") {
               await summaryPromise;
+              await deliverCliCommandOutcome(payload);
               return;
             }
-            const { name, phase, args } = payload;
+            const { name, phase, args, toolCallId } = payload;
             // Tool and assistant bridges drain independently. Preserve source order.
             await Promise.all([
               summaryPromise,
@@ -239,6 +267,7 @@ export async function runCliFallbackCandidate(params: {
                 turn.typingSignals.signalToolStart(),
                 () =>
                   turn.opts?.onToolStart?.({
+                    ...(toolCallId ? { toolCallId } : {}),
                     name,
                     phase,
                     args,

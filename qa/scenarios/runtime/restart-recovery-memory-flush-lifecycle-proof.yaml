@@ -1,0 +1,124 @@
+title: Restart recovery memory-flush lifecycle proof
+
+scenario:
+  id: restart-recovery-memory-flush-lifecycle-proof
+  surface: runtime
+  coverage:
+    primary:
+      - session-memory.recovery-delivery
+    secondary:
+      - session-memory.recovery-restart-recovery
+      - session-memory.compaction
+  objective: Prove a forced pre-admission memory flush cannot own the parent session lifecycle and the channel turn still receives a reply.
+  successCriteria:
+    - A synthetic channel turn creates the parent session.
+    - The next turn forces a pre-admission memory flush through the real Gateway child and mock provider.
+    - The parent session remains terminally healthy and the second turn receives a visible reply.
+  gatewayConfigPatch:
+    agents:
+      defaults:
+        compaction:
+          memoryFlush:
+            enabled: true
+            forceFlushTranscriptBytes: 1
+  docsRefs:
+    - docs/channels/qa-channel.md
+    - docs/reference/session-management-compaction.md
+  codeRefs:
+    - src/auto-reply/reply/agent-runner-memory.ts
+    - src/gateway/server-chat.ts
+    - src/auto-reply/reply/restart-recovery-claim.ts
+  execution:
+    kind: flow
+    runtime: openclaw
+    summary: Force a memory-flush child before a synthetic channel turn, then verify parent lifecycle and delivery.
+    channel: qa-channel
+    config:
+      conversationPrefix: restart-recovery-memory-flush
+      senderId: qa-recovery-operator
+      seedPrompt: "RESTART-RECOVERY-MEMORY-FLUSH-SEED retain this context for the next turn."
+      proofPrompt: "RESTART-RECOVERY-MEMORY-FLUSH-PROOF reply with one short sentence."
+
+flow:
+  steps:
+    - name: keeps the parent healthy and delivers the turn after memory flush
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - resetTransport: true
+        - set: conversationId
+          value:
+            expr: "`${config.conversationPrefix}-${randomUUID().slice(0, 8)}`"
+        - set: sessionKey
+          value:
+            expr: "'agent:qa:main'"
+        - set: seedOutboundIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId:
+              ref: config.senderId
+            senderName: QA Recovery Operator
+            text:
+              ref: config.seedPrompt
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            sinceIndex:
+              ref: seedOutboundIndex
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+        - set: proofOutboundIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId:
+              ref: config.senderId
+            senderName: QA Recovery Operator
+            text:
+              ref: config.proofPrompt
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            sinceIndex:
+              ref: proofOutboundIndex
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+          saveAs: proofReply
+        - call: readRawQaSessionStore
+          saveAs: store
+          args:
+            - ref: env
+        - set: sessionEntry
+          value:
+            expr: "store[sessionKey]"
+        - assert:
+            expr: "sessionEntry?.memoryFlush?.kind === 'succeeded'"
+            message:
+              expr: "`forced memory flush did not succeed: ${JSON.stringify({ sessionKey, storeKeys: Object.keys(store), sessionEntry })}`"
+        - assert:
+            expr: "sessionEntry?.status === 'done' && sessionEntry?.abortedLastRun !== true"
+            message:
+              expr: "`parent session was not healthy after memory flush: ${JSON.stringify({ status: sessionEntry?.status, abortedLastRun: sessionEntry?.abortedLastRun })}`"
+        - assert:
+            expr: "typeof proofReply.text === 'string' && proofReply.text.length > 0"
+            message: second channel turn did not receive a visible reply
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', channel: 'qa-channel', provider: env.providerMode, gateway: 'ephemeral-child', memoryFlush: sessionEntry.memoryFlush, parent: { sessionId: sessionEntry.sessionId, status: sessionEntry.status, abortedLastRun: sessionEntry.abortedLastRun ?? false }, replyDelivered: Boolean(proofReply.text) })"

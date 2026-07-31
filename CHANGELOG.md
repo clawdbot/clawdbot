@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Local model setup:** advertise provider-owned Ollama, llama.cpp, and LM Studio setup choices to Control UI and macOS, retry unavailable LM Studio services in place, and verify the exact prepared model before showing success.
 - **Control UI first-run setup:** continue verified model setup into Custodian, explain that the web app is ready without a channel, and offer an optional dismissible path to Channels.
 - **Fish Audio speech:** add hosted S2.1 synthesis with streaming, voice notes, voice discovery, and telephony, plus local Fish S2 Pro reference-voice streaming in native macOS Talk. Thanks @Conan-Scott for the earlier community-plugin implementation.
 - **Control UI cloud workspace conflicts:** surface staged-ref guidance, bounded conflicted paths, structured transcript events, and sidebar attention for cloud worker results that kept local versions.

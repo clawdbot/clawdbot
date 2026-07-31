@@ -2,6 +2,7 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
+import { coerceConfigFormNumberString } from "../../components/config-form.constraints.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../clipboard.ts";
@@ -386,21 +387,6 @@ function asJsonSchema(value: unknown): JsonSchema | null {
   return value as JsonSchema;
 }
 
-function coerceNumberString(value: string, integer: boolean): number | undefined | string {
-  const trimmed = value.trim();
-  if (trimmed === "") {
-    return undefined;
-  }
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed)) {
-    return value;
-  }
-  if (integer && !Number.isInteger(parsed)) {
-    return value;
-  }
-  return parsed;
-}
-
 function coerceBooleanString(value: string): boolean | string {
   const trimmed = value.trim();
   if (trimmed === "true") {
@@ -418,8 +404,9 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
   }
 
   if (schema.allOf && schema.allOf.length > 0) {
-    let next: unknown = value;
-    for (const segment of schema.allOf) {
+    const { allOf, ...baseSchema } = schema;
+    let next: unknown = coerceFormValues(value, baseSchema);
+    for (const segment of allOf) {
       next = coerceFormValues(next, segment);
     }
     return next;
@@ -443,7 +430,7 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
       for (const variant of variants) {
         const variantType = schemaType(variant);
         if (variantType === "number" || variantType === "integer") {
-          const coerced = coerceNumberString(value, variantType === "integer");
+          const coerced = coerceConfigFormNumberString(value, variantType === "integer");
           if (coerced === undefined || typeof coerced === "number") {
             return coerced;
           }
@@ -470,7 +457,7 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
 
   if (type === "number" || type === "integer") {
     if (typeof value === "string") {
-      const coerced = coerceNumberString(value, type === "integer");
+      const coerced = coerceConfigFormNumberString(value, type === "integer");
       if (coerced === undefined || typeof coerced === "number") {
         return coerced;
       }

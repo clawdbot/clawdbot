@@ -15,6 +15,7 @@ import {
   resolveSessionLifecycleTimestamps,
 } from "../../config/sessions/lifecycle.js";
 import {
+  canonicalizeMainSessionAlias,
   resolveAgentIdFromSessionKey,
   resolveExplicitAgentSessionKey,
 } from "../../config/sessions/main-session.js";
@@ -264,7 +265,13 @@ export function resolveSessionKeyForRequest(opts: {
 
   const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
   let sessionKey: string | undefined =
-    explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey, storeAgentId) : undefined);
+    (explicitSessionKey
+      ? canonicalizeMainSessionAlias({
+          cfg: opts.cfg,
+          agentId: storeAgentId,
+          sessionKey: explicitSessionKey,
+        })
+      : undefined) ?? (ctx ? resolveSessionKey(scope, ctx, mainKey, storeAgentId) : undefined);
 
   // Entrypoint migration owners canonicalize legacy state before runtime reads. A missing target
   // row is not evidence that another agent's main session belongs to the configured default agent.

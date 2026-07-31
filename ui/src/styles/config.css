@@ -614,6 +614,53 @@
   color: var(--danger);
 }
 
+.cfg-structured-draft {
+  display: contents;
+}
+
+.cfg-structured-draft__error .settings-row__control {
+  width: 100%;
+}
+
+.cfg-json-editor {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+
+.cfg-json-editor > .settings-input,
+.cfg-json-editor > .settings-secret {
+  width: 100%;
+}
+
+.cfg-array .settings-row--stacked .settings-row__control {
+  width: 100%;
+}
+
+.cfg-array .settings-row--stacked .settings-row__control > input[type="number"] {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+.cfg-collection-draft__controls {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.cfg-collection-draft__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.config-content :is(input, textarea, select)[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
 /* Redacted click-to-reveal inputs/textareas. */
 .cfg-redacted {
   opacity: 0.7;

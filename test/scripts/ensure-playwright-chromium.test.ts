@@ -6,6 +6,7 @@ import {
   resolvePlaywrightInstallRunner,
   shouldEnsureFfmpegFromArgv,
   shouldInstallPlaywrightSystemDependencies,
+  shouldRequirePlaywrightChromiumFromArgv,
 } from "../../scripts/ensure-playwright-chromium.mjs";
 
 describe("ensurePlaywrightChromium", () => {
@@ -75,6 +76,46 @@ describe("ensurePlaywrightChromium", () => {
       stdio: "ignore",
     });
     expect(logs.join("\n")).toContain("Using system Chromium at /usr/bin/chromium-browser");
+  });
+
+  it("installs Playwright Chromium when the lane requires its pinned browser", () => {
+    let managedChromiumInstalled = false;
+    const spawnSync = vi.fn((command: string, args: string[]) => {
+      if (command === "pnpm" && args.includes("chromium")) {
+        managedChromiumInstalled = true;
+        return { status: 0 };
+      }
+      if (command === "/cache/chromium/chrome") {
+        return { status: managedChromiumInstalled ? 0 : 127 };
+      }
+      if (command === "/usr/bin/chromium-browser") {
+        return { status: 0 };
+      }
+      return { status: 1 };
+    });
+
+    expect(
+      ensurePlaywrightChromium({
+        cwd: "/repo",
+        env: { PATH: "/bin" },
+        executablePath: "/cache/chromium/chrome",
+        existsSync: (path: string) =>
+          path === "/usr/bin/chromium-browser" ||
+          (managedChromiumInstalled && path === "/cache/chromium/chrome"),
+        requirePlaywrightChromium: true,
+        spawnSync,
+        stdio: "pipe",
+        systemExecutablePath: "/usr/bin/chromium-browser",
+      }),
+    ).toBe(0);
+    expect(spawnSync).toHaveBeenCalledWith(
+      "pnpm",
+      ["--dir", "ui", "exec", "playwright", "install", "chromium"],
+      expect.objectContaining({ cwd: "/repo", stdio: "pipe" }),
+    );
+    expect(spawnSync).not.toHaveBeenCalledWith("/usr/bin/chromium-browser", ["--version"], {
+      stdio: "ignore",
+    });
   });
 
   it("installs Playwright ffmpeg when recorded UI tests request it", () => {
@@ -495,6 +536,19 @@ describe("ensurePlaywrightChromium", () => {
         "scripts/ensure-playwright-chromium.mjs",
         "--skip-ffmpeg",
       ]),
+    ).toBe(false);
+  });
+
+  it("parses the pinned Playwright Chromium requirement", () => {
+    expect(
+      shouldRequirePlaywrightChromiumFromArgv([
+        "node",
+        "scripts/ensure-playwright-chromium.mjs",
+        "--require-playwright-chromium",
+      ]),
+    ).toBe(true);
+    expect(
+      shouldRequirePlaywrightChromiumFromArgv(["node", "scripts/ensure-playwright-chromium.mjs"]),
     ).toBe(false);
   });
 });

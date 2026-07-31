@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   activateSwarmRun,
   enqueueSwarmRun,
+  isSwarmRunQueued,
   releaseSwarmRun,
   removeQueuedSwarmRun,
   reserveSwarmRun,
@@ -125,6 +126,66 @@ describe("swarm scheduler", () => {
     await vi.waitFor(() => expect(started).toEqual(["one"]));
     releaseSwarmRun("one");
     await vi.waitFor(() => expect(started).toEqual(["one", "three"]));
+  });
+
+  it("tracks restored active and queued runs across independent groups", () => {
+    expect(
+      reserveSwarmRun({
+        groupId: "restored-group",
+        runId: "queued",
+        maxConcurrent: 1,
+        activeRunIds: ["restored-active"],
+      }),
+    ).toBe(true);
+    expect(
+      reserveSwarmRun({
+        groupId: "other-group",
+        runId: "other-queued",
+        maxConcurrent: 1,
+        activeRunIds: [],
+      }),
+    ).toBe(true);
+
+    expect(isSwarmRunQueued("queued")).toBe(true);
+    expect(isSwarmRunQueued("other-queued")).toBe(true);
+    expect(releaseSwarmRun("restored-active")).toBe(true);
+    expect(removeQueuedSwarmRun("other-queued")).toBe(true);
+    expect(isSwarmRunQueued("queued")).toBe(true);
+    expect(isSwarmRunQueued("other-queued")).toBe(false);
+    expect(removeQueuedSwarmRun("queued")).toBe(true);
+  });
+
+  it("keeps a live reservation queued when a later snapshot reports it active", async () => {
+    expect(
+      reserveSwarmRun({
+        groupId: "group",
+        runId: "queued",
+        maxConcurrent: 1,
+        activeRunIds: [],
+      }),
+    ).toBe(true);
+    expect(
+      reserveSwarmRun({
+        groupId: "group",
+        runId: "next",
+        maxConcurrent: 1,
+        activeRunIds: ["queued"],
+      }),
+    ).toBe(true);
+
+    const started: string[] = [];
+    expect(
+      activateSwarmRun({
+        groupId: "group",
+        runId: "queued",
+        start: async () => {
+          started.push("queued");
+        },
+        onStartFailure: vi.fn(() => true),
+      }),
+    ).toBe("started");
+    await vi.waitFor(() => expect(started).toEqual(["queued"]));
+    expect(isSwarmRunQueued("next")).toBe(true);
   });
 
   it("retries the same queued run when failure persistence throws", async () => {
@@ -272,6 +333,140 @@ describe("swarm scheduler", () => {
     expect(started).toEqual(["one", "two"]);
     releaseSwarmRun("two");
     await vi.waitFor(() => expect(started).toEqual(["one", "two", "three"]));
+  });
+
+  it("refreshes the lane limit before rejecting a duplicate reservation", async () => {
+    const started: string[] = [];
+    const enqueue = (runId: string) =>
+      enqueueSwarmRun({
+        groupId: "group",
+        runId,
+        maxConcurrent: 2,
+        activeRunIds: [],
+        start: async () => {
+          started.push(runId);
+        },
+        onStartFailure: vi.fn(() => true),
+      });
+
+    enqueue("one");
+    enqueue("two");
+    enqueue("three");
+    await vi.waitFor(() => expect(started).toEqual(["one", "two"]));
+
+    expect(
+      reserveSwarmRun({
+        groupId: "group",
+        runId: "one",
+        maxConcurrent: 1,
+        activeRunIds: ["one", "two"],
+      }),
+    ).toBe(false);
+    expect(releaseSwarmRun("one")).toBe(true);
+    await Promise.resolve();
+    expect(started).toEqual(["one", "two"]);
+    expect(releaseSwarmRun("two")).toBe(true);
+    await vi.waitFor(() => expect(started).toEqual(["one", "two", "three"]));
+  });
+
+  it("does not retry a failed start after its scheduler slot was released", async () => {
+    vi.useFakeTimers();
+    let finishCleanup: (() => void) | undefined;
+    const cleanup = new Promise<void>((resolve) => {
+      finishCleanup = resolve;
+    });
+    let failedAttempts = 0;
+    const started: string[] = [];
+    enqueueSwarmRun({
+      groupId: "group",
+      runId: "failed",
+      maxConcurrent: 1,
+      activeRunIds: [],
+      start: async () => {
+        failedAttempts += 1;
+        throw new Error("launch failed");
+      },
+      onStartFailure: async () => {
+        await cleanup;
+        throw new Error("persistence failed");
+      },
+    });
+    await flushMicrotasks();
+    expect(failedAttempts).toBe(1);
+    expect(releaseSwarmRun("failed")).toBe(true);
+
+    enqueueSwarmRun({
+      groupId: "group",
+      runId: "replacement",
+      maxConcurrent: 1,
+      activeRunIds: [],
+      start: async () => {
+        started.push("replacement");
+      },
+      onStartFailure: vi.fn(() => true),
+    });
+    await flushMicrotasks();
+    expect(started).toEqual(["replacement"]);
+
+    finishCleanup?.();
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(failedAttempts).toBe(1);
+  });
+
+  it("does not let stale failed-start cleanup mutate a reused run id", async () => {
+    vi.useFakeTimers();
+    let finishCleanup: (() => void) | undefined;
+    const cleanup = new Promise<void>((resolve) => {
+      finishCleanup = resolve;
+    });
+    let reusedAttempts = 0;
+    enqueueSwarmRun({
+      groupId: "group",
+      runId: "reused",
+      maxConcurrent: 2,
+      activeRunIds: [],
+      start: async () => {
+        reusedAttempts += 1;
+        throw new Error("launch failed");
+      },
+      onStartFailure: async () => {
+        await cleanup;
+        throw new Error("persistence failed");
+      },
+    });
+    enqueueSwarmRun({
+      groupId: "group",
+      runId: "holder",
+      maxConcurrent: 2,
+      activeRunIds: [],
+      start: async () => {},
+      onStartFailure: vi.fn(() => true),
+    });
+    await flushMicrotasks();
+    expect(reusedAttempts).toBe(1);
+    expect(releaseSwarmRun("reused")).toBe(true);
+
+    expect(
+      enqueueSwarmRun({
+        groupId: "group",
+        runId: "reused",
+        maxConcurrent: 2,
+        activeRunIds: [],
+        start: async () => {
+          reusedAttempts += 1;
+        },
+        onStartFailure: vi.fn(() => true),
+      }),
+    ).toBe("started");
+    await flushMicrotasks();
+    expect(reusedAttempts).toBe(2);
+
+    finishCleanup?.();
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reusedAttempts).toBe(2);
+    expect(releaseSwarmRun("reused")).toBe(true);
   });
 
   it("fills increased capacity from the existing FIFO queue", async () => {

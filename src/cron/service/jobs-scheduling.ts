@@ -384,7 +384,7 @@ export function recordScheduleComputeError(params: {
       "cron: auto-disabled job after repeated schedule errors",
     );
 
-    const notifyText = `⚠️ Cron job "${job.name}" has been auto-disabled after ${errorCount} consecutive schedule errors. Last error: ${errText}`;
+    const notifyText = `⚠️ Automation "${job.name}" has been auto-disabled after ${errorCount} consecutive schedule errors. Last error: ${errText}`;
     const notify = () => {
       state.deps.enqueueSystemEvent(notifyText, {
         agentId: job.agentId,

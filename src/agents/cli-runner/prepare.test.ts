@@ -3363,6 +3363,83 @@ describe("prepareCliRunContext", () => {
     await context.preparedBackend.cleanup?.();
   });
 
+  it("privately forwards isolated-completion system prompts to bundled preparation", async () => {
+    const { dir } = fixture.session;
+    const prepareExecution = vi.fn(async () => ({
+      isolatedCompletionEnforced: true as const,
+      toolAvailabilityEnforced: true as const,
+    }));
+    setRawCliBackendForPrepareTest({
+      id: "google-gemini-cli",
+      pluginId: "google",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "prepare-execution",
+      prepareExecution,
+      config: {
+        command: "gemini",
+        args: ["--prompt", "{prompt}"],
+        output: "jsonl",
+        input: "arg",
+        sessionMode: "existing",
+      },
+    });
+
+    await fixture.prepare({
+      provider: "google-gemini-cli",
+      executionMode: "side-question",
+      isolatedCompletion: true,
+      extraSystemPrompt: "Return only valid JSON.",
+      cliToolAvailability: { native: [], openClaw: [] },
+    });
+
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isolatedCompletionCwd: dir,
+        isolatedCompletionModelId: "test-model",
+        isolatedCompletionPrompt: "latest ask",
+        isolatedCompletionSystemPrompt: "Return only valid JSON.",
+      }),
+    );
+  });
+
+  it("rejects a CLI backend that does not adopt isolated completion", async () => {
+    const cleanup = vi.fn(async () => {});
+    const prepareExecution = vi.fn(async () => ({
+      cleanup,
+      toolAvailabilityEnforced: true as const,
+    }));
+    setRawCliBackendForPrepareTest({
+      id: "external-cli",
+      pluginId: "external",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "prepare-execution",
+      prepareExecution,
+      config: {
+        command: "external-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "none",
+      },
+    });
+
+    await expect(
+      fixture.prepare({
+        provider: "external-cli",
+        executionMode: "side-question",
+        isolatedCompletion: true,
+        cliToolAvailability: { native: [], openClaw: [] },
+      }),
+    ).rejects.toMatchObject({
+      code: "unsupported",
+      message:
+        'CLI backend "external-cli" does not support isolated completion; OpenClaw did not start the run.',
+    });
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
   it("projects node-placed Claude availability before prepared-execution enforcement", async () => {
     const prepareExecution = vi.fn(async () => ({ toolAvailabilityEnforced: true as const }));
     setRawCliBackendForPrepareTest({

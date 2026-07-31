@@ -4645,6 +4645,7 @@ describe("scripts/test-projects full-suite sharding", () => {
   it("keeps CI=1 full-suite runs on aggregate shard configs", () => {
     vi.stubEnv("CI", "1");
     vi.stubEnv("GITHUB_ACTIONS", "");
+    vi.stubEnv("OPENCLAW_TESTBOX_REMOTE_RUN", "");
     vi.stubEnv("OPENCLAW_TEST_PROJECTS_LEAF_SHARDS", "");
     vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "");
     try {
@@ -4708,6 +4709,24 @@ describe("scripts/test-projects full-suite sharding", () => {
     ]);
 
     expect(specs[0]?.env.NODE_OPTIONS).toBe("--max-old-space-size=12288 --max_old_space_size=8192");
+  });
+
+  it("splits the Testbox agentic and extension shards into bounded processes", () => {
+    vi.stubEnv("CI", "1");
+    vi.stubEnv("GITHUB_ACTIONS", "");
+    vi.stubEnv("OPENCLAW_TESTBOX_REMOTE_RUN", "1");
+    vi.stubEnv("OPENCLAW_TEST_PROJECTS_LEAF_SHARDS", "");
+    vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "");
+    try {
+      const configs = buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config);
+
+      expect(configs).not.toContain("test/vitest/vitest.full-agentic.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.full-extensions.config.ts");
+      expect(configs).toContain("test/vitest/vitest.agents-core.config.ts");
+      expect(configs).toContain("test/vitest/vitest.extension-telegram.config.ts");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("keeps explicit parallel overrides ahead of the host-aware profile", () => {

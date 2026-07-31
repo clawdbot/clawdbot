@@ -10,12 +10,18 @@ type QueuedSwarmRun = {
 };
 
 type SwarmGroupLane = {
+  groupId: string;
   limit: number;
   active: Set<string>;
   queue: QueuedSwarmRun[];
 };
 
 const lanes = new Map<string, SwarmGroupLane>();
+const runLocations = new Map<
+  string,
+  | { lane: SwarmGroupLane; state: "active"; item?: QueuedSwarmRun }
+  | { lane: SwarmGroupLane; state: "queued"; item: QueuedSwarmRun }
+>();
 
 function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun) {
   const start = item.start;
@@ -24,6 +30,7 @@ function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun) {
     return;
   }
   lane.active.add(item.runId);
+  runLocations.set(item.runId, { lane, state: "active", item });
   queueMicrotask(() => {
     void start().catch(async (error: unknown) => {
       let failurePersisted = false;
@@ -32,6 +39,15 @@ function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun) {
       } catch {
         // A durable queued row still owns this work; retry after a short backoff.
       }
+      const location = runLocations.get(item.runId);
+      if (
+        !location ||
+        location.state !== "active" ||
+        location.lane !== lane ||
+        location.item !== item
+      ) {
+        return;
+      }
       if (failurePersisted) {
         releaseSwarmRun(item.runId);
         return;
@@ -39,6 +55,7 @@ function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun) {
       lane.active.delete(item.runId);
       item.retryReady = false;
       lane.queue.unshift(item);
+      runLocations.set(item.runId, { lane, state: "queued", item });
       const timer = setTimeout(
         () => {
           item.retryReady = true;
@@ -68,6 +85,7 @@ function ensureLane(params: {
   activeRunIds: readonly string[];
 }): SwarmGroupLane {
   const lane = lanes.get(params.groupId) ?? {
+    groupId: params.groupId,
     limit: params.maxConcurrent,
     active: new Set<string>(),
     queue: [],
@@ -75,9 +93,21 @@ function ensureLane(params: {
   lanes.set(params.groupId, lane);
   lane.limit = params.maxConcurrent;
   for (const runId of params.activeRunIds) {
+    // A live reservation is newer than a restored active snapshot. Reclassifying
+    // it here would leave its queue node behind and block FIFO admission.
+    if (runLocations.has(runId)) {
+      continue;
+    }
     lane.active.add(runId);
+    runLocations.set(runId, { lane, state: "active" });
   }
   return lane;
+}
+
+function deleteLaneIfIdle(lane: SwarmGroupLane): void {
+  if (lanes.get(lane.groupId) === lane && lane.active.size === 0 && lane.queue.length === 0) {
+    lanes.delete(lane.groupId);
+  }
 }
 
 /** Reserve FIFO position before asynchronous spawn preparation begins. */
@@ -88,10 +118,13 @@ export function reserveSwarmRun(params: {
   activeRunIds: readonly string[];
 }): boolean {
   const lane = ensureLane(params);
-  if (lane.active.has(params.runId) || lane.queue.some((item) => item.runId === params.runId)) {
+  if (runLocations.has(params.runId)) {
+    deleteLaneIfIdle(lane);
     return false;
   }
-  lane.queue.push({ runId: params.runId, ready: false, retryReady: true });
+  const item = { runId: params.runId, ready: false, retryReady: true };
+  lane.queue.push(item);
+  runLocations.set(params.runId, { lane, state: "queued", item });
   return true;
 }
 
@@ -102,11 +135,11 @@ export function activateSwarmRun(params: {
   start: () => Promise<void>;
   onStartFailure: (error: unknown) => boolean | Promise<boolean>;
 }): "started" | "queued" {
-  const lane = lanes.get(params.groupId);
-  const item = lane?.queue.find((candidate) => candidate.runId === params.runId);
-  if (!lane || !item) {
+  const location = runLocations.get(params.runId);
+  if (!location || location.state !== "queued" || location.lane.groupId !== params.groupId) {
     throw new Error(`swarm scheduler reservation missing for run ${params.runId}`);
   }
+  const { lane, item } = location;
   item.start = params.start;
   item.onStartFailure = params.onStartFailure;
   item.ready = true;
@@ -141,47 +174,40 @@ export function enqueueSwarmRun(params: {
 }
 
 export function releaseSwarmRun(runId: string): boolean {
-  for (const [groupId, lane] of lanes) {
-    if (!lane.active.delete(runId)) {
-      continue;
-    }
-    pumpLane(lane);
-    if (lane.active.size === 0 && lane.queue.length === 0) {
-      lanes.delete(groupId);
-    }
-    return true;
+  const location = runLocations.get(runId);
+  if (!location || location.state !== "active" || !location.lane.active.delete(runId)) {
+    return false;
   }
-  return false;
+  runLocations.delete(runId);
+  pumpLane(location.lane);
+  deleteLaneIfIdle(location.lane);
+  return true;
 }
 
 export function removeQueuedSwarmRun(runId: string): boolean {
-  for (const [groupId, lane] of lanes) {
-    const index = lane.queue.findIndex((item) => item.runId === runId);
-    if (index < 0) {
-      continue;
-    }
-    lane.queue.splice(index, 1);
-    pumpLane(lane);
-    if (lane.active.size === 0 && lane.queue.length === 0) {
-      lanes.delete(groupId);
-    }
-    return true;
+  const location = runLocations.get(runId);
+  if (!location || location.state !== "queued") {
+    return false;
   }
-  return false;
+  const index = location.lane.queue.indexOf(location.item);
+  if (index < 0) {
+    return false;
+  }
+  location.lane.queue.splice(index, 1);
+  runLocations.delete(runId);
+  pumpLane(location.lane);
+  deleteLaneIfIdle(location.lane);
+  return true;
 }
 
 export function isSwarmRunQueued(runId: string): boolean {
-  for (const lane of lanes.values()) {
-    if (lane.queue.some((item) => item.runId === runId)) {
-      return true;
-    }
-  }
-  return false;
+  return runLocations.get(runId)?.state === "queued";
 }
 
 const testing = {
   reset() {
     lanes.clear();
+    runLocations.clear();
   },
 };
 

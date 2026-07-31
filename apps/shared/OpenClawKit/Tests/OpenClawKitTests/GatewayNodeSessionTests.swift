@@ -1321,6 +1321,30 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
+    func `completed snapshot timeout cannot release a later route waiter`() async throws {
+        let gateway = GatewayNodeSession()
+        let firstWait = Task {
+            await gateway._test_waitForSnapshot(timeoutMs: 1000)
+        }
+        try await waitUntil("initial snapshot waiter registered") {
+            await gateway._test_snapshotWaiterCount() == 1
+        }
+        await gateway._test_markSnapshotReceived()
+        #expect(await firstWait.value)
+
+        await gateway._test_resetConnectionState()
+        let replacementWait = Task {
+            await gateway._test_waitForSnapshot(timeoutMs: 3000)
+        }
+        try await waitUntil("replacement snapshot waiter registered") {
+            await gateway._test_snapshotWaiterCount() == 1
+        }
+        try await Task.sleep(nanoseconds: 1_200_000_000)
+        await gateway._test_markSnapshotReceived()
+        #expect(await replacementWait.value)
+    }
+
+    @Test
     func `concurrent replacements wait for route invalidation before installing a channel`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
