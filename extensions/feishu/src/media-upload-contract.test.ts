@@ -30,6 +30,16 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
 
 let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
 const emptyConfig: ClawdbotConfig = {};
+const pngImage = Buffer.from(
+  "89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de",
+  "hex",
+);
+const svgImage = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+const avifImage = Buffer.from("00000018667479706176696600000000617669666d696631", "hex");
+const heicImage = Buffer.from("00000018667479706865696300000000686569636d696631", "hex");
+const tiffImage = Buffer.from("49492a000800000000000000", "hex");
+const jpegImage = Buffer.from("ffd8ffe000104a46494600010100000100010000ffdb0043", "hex");
+const icoImage = Buffer.from("00000100010010100000010020006804000016000000", "hex");
 
 function resolvedAccount(mediaMaxMb?: number) {
   return {
@@ -75,14 +85,20 @@ describe("Feishu upload contracts", () => {
   });
 
   it.each([
-    { fileName: "diagram.svg", contentType: "image/svg+xml" },
-    { fileName: "photo.avif", contentType: "image/avif" },
-    { fileName: "diagram.png", contentType: "image/svg+xml" },
-    { fileName: "photo.png", contentType: "image/avif" },
-    { fileName: "photo.heic", contentType: "image/avif" },
+    { fileName: "diagram.svg", contentType: "image/svg+xml", buffer: svgImage },
+    { fileName: "photo.avif", contentType: "image/avif", buffer: avifImage },
+    { fileName: "diagram.png", contentType: "image/svg+xml", buffer: svgImage },
+    { fileName: "diagram.png", contentType: undefined, buffer: svgImage },
+    { fileName: "diagram.png", contentType: "application/octet-stream", buffer: svgImage },
+    { fileName: "diagram.png", contentType: "image/png", buffer: svgImage },
+    { fileName: "photo.png", contentType: "image/avif", buffer: avifImage },
+    { fileName: "photo.png", contentType: undefined, buffer: avifImage },
+    { fileName: "photo.png", contentType: "application/octet-stream", buffer: avifImage },
+    { fileName: "photo.png", contentType: "image/png", buffer: avifImage },
+    { fileName: "photo.heic", contentType: "image/avif", buffer: avifImage },
   ])("sends unsupported image format $contentType as a file attachment", async (media) => {
     mocks.loadWebMedia.mockResolvedValueOnce({
-      buffer: Buffer.from("image bytes"),
+      buffer: media.buffer,
       fileName: media.fileName,
       kind: "image",
       contentType: media.contentType,
@@ -101,7 +117,7 @@ describe("Feishu upload contracts", () => {
 
   it("uses the supported image MIME when the filename has no recognized extension", async () => {
     mocks.loadWebMedia.mockResolvedValueOnce({
-      buffer: Buffer.from("png image"),
+      buffer: pngImage,
       fileName: "download",
       kind: "image",
       contentType: "image/png",
@@ -119,12 +135,13 @@ describe("Feishu upload contracts", () => {
   });
 
   it.each([
-    { fileName: "photo.heic", contentType: "image/heic" },
-    { fileName: "download", contentType: "image/heic" },
-    { fileName: "photo.jpg", contentType: "image/heic" },
+    { fileName: "photo.heic", contentType: "image/heic", buffer: heicImage },
+    { fileName: "download", contentType: "image/heic", buffer: heicImage },
+    { fileName: "photo.jpg", contentType: "image/heic", buffer: heicImage },
+    { fileName: "download", contentType: "image/heic", buffer: Buffer.from("heic image") },
   ])("uploads supported HEIC image $fileName as a native image", async (media) => {
     mocks.loadWebMedia.mockResolvedValueOnce({
-      buffer: Buffer.from("heic image"),
+      buffer: media.buffer,
       fileName: media.fileName,
       kind: "image",
       contentType: media.contentType,
@@ -141,27 +158,52 @@ describe("Feishu upload contracts", () => {
     expect(mockCallData(mocks.messageCreate).msg_type).toBe("image");
   });
 
-  it.each(["scan.tif", "photo.heic"])(
-    "recognizes supported image filename %s",
-    async (fileName) => {
-      await sendMediaFeishu({
-        cfg: emptyConfig,
-        to: "user:ou_target",
-        mediaBuffer: Buffer.from("image"),
-        fileName,
-      });
+  it.each([
+    { fileName: "scan.tif", buffer: tiffImage },
+    { fileName: "photo.heic", buffer: heicImage },
+    { fileName: "photo.png", buffer: pngImage },
+  ])("recognizes actual supported image bytes in $fileName", async ({ fileName, buffer }) => {
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaBuffer: buffer,
+      fileName,
+    });
 
-      expect(mocks.imageCreate).toHaveBeenCalledOnce();
-      expect(mockCallData(mocks.messageCreate).msg_type).toBe("image");
-    },
-  );
+    expect(mocks.imageCreate).toHaveBeenCalledOnce();
+    expect(mockCallData(mocks.messageCreate).msg_type).toBe("image");
+  });
+
+  it.each([
+    { fileName: "photo.bin", contentType: "image/jpg", buffer: jpegImage },
+    { fileName: "scan.bin", contentType: "image/tif", buffer: tiffImage },
+    { fileName: "icon.bin", contentType: "image/ico", buffer: icoImage },
+    { fileName: "download", contentType: "application/octet-stream", buffer: pngImage },
+  ])("routes supported image bytes with $contentType metadata natively", async (media) => {
+    mocks.loadWebMedia.mockResolvedValueOnce({
+      ...media,
+      kind: "image",
+    });
+
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaUrl: `https://example.com/${media.fileName}`,
+    });
+
+    expect(mocks.fileCreate).not.toHaveBeenCalled();
+    expect(mocks.imageCreate).toHaveBeenCalledOnce();
+    expect(mockCallData(mocks.messageCreate).msg_type).toBe("image");
+  });
 
   it("rejects images exceeding the platform image-upload limit before contacting Feishu", async () => {
+    const oversizedImage = Buffer.alloc(10 * 1024 * 1024 + 1);
+    pngImage.copy(oversizedImage);
     await expect(
       sendMediaFeishu({
         cfg: emptyConfig,
         to: "user:ou_target",
-        mediaBuffer: Buffer.alloc(10 * 1024 * 1024 + 1),
+        mediaBuffer: oversizedImage,
         fileName: "oversized.png",
       }),
     ).rejects.toThrow("Feishu image exceeds its 10485760-byte upload limit");
@@ -213,7 +255,7 @@ describe("Feishu upload contracts", () => {
       sendMediaFeishu({
         cfg: emptyConfig,
         to: "user:ou_target",
-        mediaBuffer: Buffer.from("attachment"),
+        mediaBuffer: media.name === "image" ? pngImage : Buffer.from("attachment"),
         fileName: media.fileName,
       }),
     ).rejects.toThrow(`${media.prefix}: no message_id returned`);

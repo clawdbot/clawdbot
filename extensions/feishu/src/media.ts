@@ -5,7 +5,7 @@ import { Readable } from "node:stream";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-import { mediaKindFromMime } from "openclaw/plugin-sdk/media-mime";
+import { detectMime, mediaKindFromMime, normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
 import {
   MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
   runFfmpeg,
@@ -42,29 +42,20 @@ const FEISHU_VOICE_FILE_NAME = "voice.ogg";
 const FEISHU_VOICE_SAMPLE_RATE_HZ = 48_000;
 const FEISHU_VOICE_BITRATE = "64k";
 
-const FEISHU_SUPPORTED_IMAGE_EXTENSIONS = new Set([
-  ".jpg",
-  ".jpeg",
-  ".png",
-  ".gif",
-  ".webp",
-  ".bmp",
-  ".ico",
-  ".heic",
-  ".tif",
-  ".tiff",
-]);
 const FEISHU_SUPPORTED_IMAGE_CONTENT_TYPES = new Set([
   "image/jpeg",
+  "image/jpg",
   "image/png",
   "image/gif",
   "image/webp",
   "image/bmp",
   "image/x-ms-bmp",
   "image/tiff",
+  "image/tif",
   // The platform accepts HEIC even though older generated SDK comments omit it.
   "image/heic",
   "image/x-icon",
+  "image/ico",
   "image/vnd.microsoft.icon",
 ]);
 
@@ -713,21 +704,23 @@ function detectFileType(
   }
 }
 
-function resolveFeishuOutboundMediaKind(params: { fileName: string; contentType?: string }): {
+async function resolveFeishuOutboundMediaKind(params: {
+  buffer: Buffer;
+  fileName: string;
+  contentType?: string;
+}): Promise<{
   fileType?: "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream";
   msgType: "image" | "file" | "audio" | "media";
-} {
-  const { fileName, contentType } = params;
+}> {
+  const { buffer, fileName, contentType } = params;
   const ext = normalizeLowercaseStringOrEmpty(path.extname(fileName));
-  const normalizedContentType = normalizeLowercaseStringOrEmpty(contentType?.split(";", 1)[0]);
-  const hasUnsupportedImageContentType =
-    normalizedContentType.startsWith("image/") &&
-    !FEISHU_SUPPORTED_IMAGE_CONTENT_TYPES.has(normalizedContentType);
-
+  const normalizedContentType = normalizeMimeType(contentType) ?? "";
+  // Never pass a filename to signature detection: an image-looking name must not
+  // disguise SVG, AVIF, documents, or unrecognized bytes as native Feishu images.
+  const detectedContentType = normalizeMimeType(await detectMime({ buffer })) ?? "";
   if (
-    !hasUnsupportedImageContentType &&
-    (FEISHU_SUPPORTED_IMAGE_EXTENSIONS.has(ext) ||
-      FEISHU_SUPPORTED_IMAGE_CONTENT_TYPES.has(normalizedContentType))
+    FEISHU_SUPPORTED_IMAGE_CONTENT_TYPES.has(detectedContentType) ||
+    (!detectedContentType && normalizedContentType === "image/heic")
   ) {
     return { msgType: "image" };
   }
@@ -1029,7 +1022,9 @@ export async function sendMediaFeishu(params: {
   name = loaded.name;
   contentType = loaded.contentType;
 
-  const loadedRouting = resolveFeishuOutboundMediaKind({ fileName: name, contentType });
+  const loadedRouting = await runBeforeFeishuMessageDispatch(() =>
+    resolveFeishuOutboundMediaKind({ buffer, fileName: name, contentType }),
+  );
   await runBeforeFeishuMessageDispatch(() =>
     assertFeishuUploadWithinEnvelope({
       buffer,
@@ -1050,7 +1045,14 @@ export async function sendMediaFeishu(params: {
   name = prepared.fileName;
   contentType = prepared.contentType;
 
-  const routing = resolveFeishuOutboundMediaKind({ fileName: name, contentType });
+  const routing =
+    prepared.buffer === loaded.buffer &&
+    prepared.fileName === loaded.name &&
+    prepared.contentType === loaded.contentType
+      ? loadedRouting
+      : await runBeforeFeishuMessageDispatch(() =>
+          resolveFeishuOutboundMediaKind({ buffer, fileName: name, contentType }),
+        );
   const voiceIntentDegradedToFile = audioAsVoice === true && routing.msgType !== "audio";
 
   await runBeforeFeishuMessageDispatch(() =>
