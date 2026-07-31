@@ -826,6 +826,35 @@ describe("getMessageFeishu", () => {
     expect(result.at(-1)?.messageId).toBe("om_51");
   });
 
+  it("deduplicates overlapping continuation pages without consuming the history limit", async () => {
+    mockClientList
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          has_more: true,
+          page_token: "overlapping-page",
+          items: [{ message_id: "om_newer", body: { content: '{"text":"newer"}' } }],
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [
+            { message_id: "om_newer", body: { content: '{"text":"duplicate"}' } },
+            { message_id: "om_older", body: { content: '{"text":"older"}' } },
+          ],
+        },
+      });
+
+    const result = await listFeishuThreadMessages({
+      cfg: {} as ClawdbotConfig,
+      threadId: "omt_1",
+      limit: 2,
+    });
+
+    expect(result.map((message) => message.messageId)).toEqual(["om_older", "om_newer"]);
+  });
+
   it.each([
     { name: "missing", firstToken: undefined, secondToken: undefined },
     { name: "repeated", firstToken: "same-page", secondToken: "same-page" },

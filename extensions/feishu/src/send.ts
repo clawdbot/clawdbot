@@ -356,6 +356,7 @@ export async function listFeishuThreadMessages(params: {
   const client = createFeishuClient(account);
 
   const results: FeishuThreadMessageInfo[] = [];
+  const seenMessageIds = new Set<string>();
   const seenPageTokens = new Set<string>();
   let pageToken: string | undefined;
 
@@ -395,12 +396,16 @@ export async function listFeishuThreadMessages(params: {
     for (const item of response.data?.items ?? []) {
       if (
         (currentMessageId && item.message_id === currentMessageId) ||
-        (rootMessageId && item.message_id === rootMessageId)
+        (rootMessageId && item.message_id === rootMessageId) ||
+        (item.message_id && seenMessageIds.has(item.message_id))
       ) {
         continue;
       }
 
       const parsed = parseFeishuMessageItem(item);
+      if (parsed.messageId) {
+        seenMessageIds.add(parsed.messageId);
+      }
       results.push({
         messageId: parsed.messageId,
         senderId: parsed.senderId,

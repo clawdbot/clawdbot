@@ -1,5 +1,6 @@
 // Feishu plugin module implements outbound behavior.
 import path from "node:path";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createReplyToFanout } from "openclaw/plugin-sdk/channel-outbound";
 import {
   attachChannelToResult,
@@ -788,6 +789,10 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             mediaLocalRoots,
           });
         } catch (err) {
+          if (isChannelPartialDeliveryError(err)) {
+            // The image already reached Feishu; fallback text would duplicate a visible send.
+            throw err;
+          }
           console.error(`[feishu] local image path auto-send failed:`, err);
           return await sendOutboundText({
             cfg,
@@ -928,6 +933,10 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
           });
         } catch (err) {
+          if (isChannelPartialDeliveryError(err)) {
+            // Accepted media is not an upload failure and must never trigger a second send.
+            throw err;
+          }
           // Log the error for debugging
           console.error(`[feishu] sendMediaFeishu failed:`, err);
           const fallbackText = await buildFeishuMediaFallbackText({
