@@ -115,8 +115,8 @@ function createSaveState(): {
   const { state, request } = createState();
   const configState = {
     configFormDirty: true,
-    configForm: { agents: { list: [{ id: "main" }] } },
-    configFormOriginal: { agents: { list: [{ id: "main" }] } },
+    configForm: { agents: { entries: { main: {} } } },
+    configFormOriginal: { agents: { entries: { main: {} } } },
   };
   const config = {
     state: configState,
@@ -498,8 +498,8 @@ describe("setDefaultAgent", () => {
   it("stages the default agent and persists a clean draft", async () => {
     const { config } = createSaveState();
     const refreshAgents = vi.fn(async () => null);
-    config.state.configForm = { agents: { list: [{ id: "main" }, { id: "kimi" }] } };
-    config.state.configFormOriginal = { agents: { list: [{ id: "main" }, { id: "kimi" }] } };
+    config.state.configForm = { agents: { entries: { main: {}, kimi: {} } } };
+    config.state.configFormOriginal = { agents: { entries: { main: {}, kimi: {} } } };
     config.state.configFormDirty = false;
     vi.mocked(config.stageDefaultAgent).mockImplementation(() => {
       config.state.configFormDirty = true;
@@ -515,7 +515,7 @@ describe("setDefaultAgent", () => {
   it("does not persist when the agent is absent from the config list", async () => {
     const { config } = createSaveState();
     const refreshAgents = vi.fn(async () => null);
-    config.state.configForm = { agents: { list: [{ id: "main" }] } };
+    config.state.configForm = { agents: { entries: { main: {} } } };
     vi.mocked(config.stageDefaultAgent).mockReturnValue(false);
 
     await setDefaultAgent(config, "ghost", refreshAgents);
@@ -529,19 +529,19 @@ describe("setDefaultAgent", () => {
     const { config } = createSaveState();
     const refreshAgents = vi.fn(async () => null);
     config.state.configFormDirty = true;
-    config.state.configFormOriginal = { agents: { list: [{ id: "main" }, { id: "kimi" }] } };
+    config.state.configFormOriginal = { agents: { entries: { main: {}, kimi: {} } } };
     config.state.configForm = {
       agents: {
-        list: [{ id: "main", model: "gpt-5.5" }, { id: "kimi" }],
+        entries: { main: { model: "gpt-5.5" }, kimi: {} },
       },
     };
     vi.mocked(config.stageDefaultAgent).mockImplementation(() => {
       config.state.configForm = {
         agents: {
-          list: [
-            { id: "main", model: "gpt-5.5" },
-            { id: "kimi", default: true },
-          ],
+          entries: {
+            main: { model: "gpt-5.5" },
+            kimi: { default: true },
+          },
         },
       };
       config.state.configFormDirty = true;
@@ -555,10 +555,10 @@ describe("setDefaultAgent", () => {
     expect(refreshAgents).not.toHaveBeenCalled();
     expect(config.state.configForm).toEqual({
       agents: {
-        list: [
-          { id: "main", model: "gpt-5.5" },
-          { id: "kimi", default: true },
-        ],
+        entries: {
+          main: { model: "gpt-5.5" },
+          kimi: { default: true },
+        },
       },
     });
     expect(config.state.configFormDirty).toBe(true);

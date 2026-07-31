@@ -1,5 +1,6 @@
 // Control UI runtime config capability and shared config-domain mutations.
 import { ErrorCodes } from "@openclaw/gateway-client/browser";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
@@ -15,6 +16,7 @@ import {
   setPathValue,
 } from "../config-form-utils.ts";
 import { parseJson5Text, warmJson5 } from "../json5-runtime.ts";
+import { normalizeAgentId } from "../sessions/session-key.ts";
 import { createAppliedConfigRefreshController } from "./applied-refresh.ts";
 
 export type ConfigAutoSaveStatus = "idle" | "saving" | "saved" | "error" | "conflict";
@@ -126,7 +128,8 @@ export type RuntimeConfigCapability = {
   save: () => Promise<boolean>;
   apply: () => Promise<boolean>;
   openFile: () => Promise<void>;
-  ensureAgentEntry: (agentId: string) => number;
+  /** Resolves the authored keyed entry; ensure returns a writable target without mutating. */
+  agentEntry: (agentId: string, options?: { ensure?: boolean }) => AgentConfigEntryTarget | null;
   stageDefaultAgent: (agentId: string) => boolean;
   patch: (options: ConfigPatchOptions) => Promise<boolean>;
   patchFromSnapshot: (build: ConfigPatchBuilder) => Promise<boolean>;
@@ -1133,68 +1136,97 @@ function removeConfigFormValue(state: ConfigState, path: Array<string | number>)
   mutateConfigForm(state, (draft) => removePathValue(draft, path));
 }
 
-export function findAgentConfigEntryIndex(
-  config: Record<string, unknown> | null,
-  agentId: string,
-): number {
-  const normalizedAgentId = agentId.trim();
-  if (!normalizedAgentId) {
-    return -1;
+export type AgentConfigEntryTarget = {
+  path: ["agents", "entries", string];
+  entry: Record<string, unknown>;
+};
+
+const AGENT_CONFIG_ENTRY_ID_PATTERN = /^[a-z0-9_][a-z0-9_-]{0,63}$/i;
+const BLOCKED_AGENT_CONFIG_ENTRY_IDS = new Set(["__proto__", "prototype", "constructor"]);
+
+function normalizeAgentConfigEntryId(agentId: string): string | null {
+  const trimmedAgentId = agentId.trim();
+  if (
+    !AGENT_CONFIG_ENTRY_ID_PATTERN.test(trimmedAgentId) ||
+    BLOCKED_AGENT_CONFIG_ENTRY_IDS.has(trimmedAgentId)
+  ) {
+    return null;
   }
-  const list = (config as { agents?: { list?: unknown[] } } | null)?.agents?.list;
-  if (!Array.isArray(list)) {
-    return -1;
-  }
-  return list.findIndex(
-    (entry) =>
-      entry &&
-      typeof entry === "object" &&
-      "id" in entry &&
-      (entry as { id?: string }).id === normalizedAgentId,
-  );
+  const normalizedAgentId = normalizeAgentId(trimmedAgentId);
+  return BLOCKED_AGENT_CONFIG_ENTRY_IDS.has(normalizedAgentId) ? null : normalizedAgentId;
 }
 
-function ensureAgentConfigEntry(state: ConfigState, agentId: string): number {
-  const normalizedAgentId = agentId.trim();
+export function resolveAgentConfigEntryTarget(
+  config: Record<string, unknown> | null,
+  agentId: string,
+): AgentConfigEntryTarget | null {
+  const normalizedAgentId = normalizeAgentConfigEntryId(agentId);
   if (!normalizedAgentId) {
-    return -1;
+    return null;
+  }
+  const agents = isRecord(config?.agents) ? config.agents : null;
+  const entries = isRecord(agents?.entries) ? agents.entries : null;
+  const authoredAgentId = Object.keys(entries ?? {}).find(
+    (candidate) =>
+      AGENT_CONFIG_ENTRY_ID_PATTERN.test(candidate) &&
+      !BLOCKED_AGENT_CONFIG_ENTRY_IDS.has(candidate) &&
+      normalizeAgentId(candidate) === normalizedAgentId,
+  );
+  if (!entries || !authoredAgentId || !Object.hasOwn(entries, authoredAgentId)) {
+    return null;
+  }
+  const entry = entries[authoredAgentId];
+  if (!isRecord(entry)) {
+    return null;
+  }
+  return {
+    path: ["agents", "entries", authoredAgentId],
+    entry,
+  };
+}
+
+function agentConfigEntry(
+  state: ConfigState,
+  agentId: string,
+  options: { ensure?: boolean } = {},
+): AgentConfigEntryTarget | null {
+  const normalizedAgentId = normalizeAgentConfigEntryId(agentId);
+  if (!normalizedAgentId) {
+    return null;
   }
   const source = state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot);
-  const existingIndex = findAgentConfigEntryIndex(source, normalizedAgentId);
-  if (existingIndex >= 0) {
-    return existingIndex;
+  const existing = resolveAgentConfigEntryTarget(source, normalizedAgentId);
+  if (existing) {
+    return existing;
   }
-  const list = (source as { agents?: { list?: unknown[] } } | null)?.agents?.list;
-  const nextIndex = Array.isArray(list) ? list.length : 0;
-  updateConfigFormValue(state, ["agents", "list", nextIndex, "id"], normalizedAgentId);
-  return nextIndex;
+  if (!options.ensure) {
+    return null;
+  }
+  const path = ["agents", "entries", normalizedAgentId] as const;
+  return { path: [...path], entry: {} };
 }
 
 function stageDefaultAgentConfigEntry(state: ConfigState, agentId: string): boolean {
-  const normalizedAgentId = agentId.trim();
-  if (!normalizedAgentId) {
-    return false;
-  }
   const source = state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot);
-  const targetIndex = findAgentConfigEntryIndex(source, normalizedAgentId);
-  if (targetIndex < 0) {
+  const target = resolveAgentConfigEntryTarget(source, agentId);
+  if (!target) {
     return false;
   }
+  const authoredAgentId = target.path[2];
   mutateConfigForm(state, (draft) => {
-    const list = (draft as { agents?: { list?: unknown[] } } | null)?.agents?.list;
-    if (!Array.isArray(list)) {
+    const agents = isRecord(draft.agents) ? draft.agents : null;
+    const entries = isRecord(agents?.entries) ? agents.entries : null;
+    if (!entries) {
       return;
     }
-    for (let i = 0; i < list.length; i++) {
-      const entry = list[i];
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    for (const [id, entry] of Object.entries(entries)) {
+      if (!isRecord(entry)) {
         continue;
       }
-      const record = entry as Record<string, unknown>;
-      if (i === targetIndex) {
-        record.default = true;
+      if (id === authoredAgentId) {
+        entry.default = true;
       } else {
-        delete record.default;
+        delete entry.default;
       }
     }
   });
@@ -1843,12 +1875,7 @@ export function createRuntimeConfigCapability(
         }
       }, false),
     openFile: () => run(() => openConfigFile(state)),
-    ensureAgentEntry: (agentId) => {
-      const index = ensureAgentConfigEntry(state, agentId);
-      publish();
-      scheduleAutoSave();
-      return index;
-    },
+    agentEntry: (agentId, options) => agentConfigEntry(state, agentId, options),
     stageDefaultAgent: (agentId) => {
       const changed = stageDefaultAgentConfigEntry(state, agentId);
       publish();

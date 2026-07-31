@@ -445,8 +445,14 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
               this.context.runtimeConfig.removeFormValue(["tools", "exec", "node"]);
             }
           },
-          onBindAgent: (agentIndex, nodeId) => {
-            const path = ["agents", "list", agentIndex, "tools", "exec", "node"];
+          onBindAgent: (agentId, nodeId) => {
+            const target = this.context.runtimeConfig.agentEntry(agentId, {
+              ensure: Boolean(nodeId),
+            });
+            if (!target) {
+              return;
+            }
+            const path = [...target.path, "tools", "exec", "node"];
             if (nodeId) {
               this.context.runtimeConfig.patchForm(path, nodeId);
             } else {
