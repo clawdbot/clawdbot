@@ -6,7 +6,12 @@ import type { BuzzReplayDispatchReservation } from "./replay-dispatch.js";
 const HISTORY_PAGE_TIMEOUT_MS = 10_000;
 const HISTORY_PAGE_COMPLETE_REASON = "buzz room history page loaded";
 
-export type BuzzRoomHistoryCatchUp = "complete" | "aborted" | "stalled";
+type BuzzRoomHistoryCatchUp = "complete" | "aborted" | "stalled" | "over-limit";
+
+type BuzzRoomHistoryPage = {
+  events: Event[];
+  overLimit: boolean;
+};
 
 async function queryBuzzRoomHistoryPage(params: {
   relay: Relay;
@@ -15,13 +20,16 @@ async function queryBuzzRoomHistoryPage(params: {
   until: number;
   limit: number;
   signal?: AbortSignal;
-}): Promise<Event[]> {
+}): Promise<BuzzRoomHistoryPage> {
   const events: Event[] = [];
-  return await new Promise<Event[]>((resolve, reject) => {
+  let overLimit = false;
+  return await new Promise<BuzzRoomHistoryPage>((resolve, reject) => {
     let settled = false;
     let receivedEose = false;
     const timeout = setTimeout(() => {
-      finish(new Error(`Timed out loading Buzz room history for ${params.channelId}`));
+      const error = new Error(`Timed out loading Buzz room history for ${params.channelId}`);
+      finish(error);
+      params.relay.close();
     }, HISTORY_PAGE_TIMEOUT_MS);
     const subscriptionRef: { current?: ReturnType<Relay["prepareSubscription"]> } = {};
     const finish = (error?: unknown) => {
@@ -35,7 +43,7 @@ async function queryBuzzRoomHistoryPage(params: {
         subscriptionRef.current?.close(HISTORY_PAGE_COMPLETE_REASON);
       }
       if (error === undefined) {
-        resolve(events);
+        resolve({ events, overLimit });
       } else {
         reject(
           error instanceof Error
@@ -61,7 +69,11 @@ async function queryBuzzRoomHistoryPage(params: {
         ],
         {
           onevent: (event) => {
-            events.push(event);
+            if (events.length < params.limit) {
+              events.push(event);
+            } else {
+              overLimit = true;
+            }
           },
           oneose: () => {
             receivedEose = true;
@@ -109,9 +121,9 @@ export async function catchUpBuzzRoomHistory(params: {
     if (!reservation) {
       return "aborted";
     }
-    let events: Event[];
+    let page: BuzzRoomHistoryPage;
     try {
-      events = await queryBuzzRoomHistoryPage({
+      page = await queryBuzzRoomHistoryPage({
         relay: params.relay,
         channelId: params.channelId,
         since: params.since,
@@ -119,20 +131,23 @@ export async function catchUpBuzzRoomHistory(params: {
         limit: params.limit,
         signal: params.signal,
       });
-      if (events.length === 0) {
+      if (page.events.length === 0) {
         return "complete";
       }
-      for (const event of events) {
+      for (const event of page.events) {
         params.onEvent(event, reservation);
       }
     } finally {
       reservation.release();
     }
+    if (page.overLimit) {
+      return "over-limit";
+    }
     let oldest = until;
-    for (const event of events) {
+    for (const event of page.events) {
       oldest = Math.min(oldest, event.created_at);
     }
-    if (events.length < params.limit) {
+    if (page.events.length < params.limit) {
       return "complete";
     }
     if (oldest >= until) {

@@ -382,16 +382,23 @@ export async function createBuzzRoomMembershipTracker(params: {
                 `Buzz room ${channelId} kept more than ${params.messageLimit} messages at one timestamp; older history was not recovered`,
               ),
             );
+          } else if (outcome === "over-limit") {
+            params.onHistoryError?.(
+              new Error(
+                `Buzz room ${channelId} returned more than the requested ${params.messageLimit} history messages; older history was not recovered`,
+              ),
+            );
           }
         } catch (error) {
           if (params.signal?.aborted) {
             return;
           }
-          params.onHistoryError?.(
+          reportSystemEventError(
             error instanceof Error
               ? error
               : new Error(`Buzz room history recovery failed for ${channelId}`, { cause: error }),
           );
+          return;
         }
       }
     },
