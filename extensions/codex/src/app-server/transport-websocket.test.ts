@@ -84,7 +84,7 @@ describe("Codex app-server websocket transport", () => {
   });
 
   it("keeps an idle remote websocket healthy with protocol-level ping frames", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     servers.push(server);
     let resolveConnected: (() => void) | undefined;
@@ -116,6 +116,9 @@ describe("Codex app-server websocket transport", () => {
     });
     transports.push(transport);
     await connected;
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     await vi.advanceTimersByTimeAsync(20_000);
     await expect(receivedPing).resolves.toBeUndefined();
@@ -125,7 +128,7 @@ describe("Codex app-server websocket transport", () => {
   });
 
   it("closes a remote websocket only after five consecutive unanswered pings", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0, autoPong: false });
     servers.push(server);
     let resolveConnected: (() => void) | undefined;
@@ -160,6 +163,9 @@ describe("Codex app-server websocket transport", () => {
       transport.once("exit", (code) => resolve(code));
     });
     await connected;
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     await vi.advanceTimersByTimeAsync(20_000);
     await expect(receivedPing).resolves.toBeUndefined();
