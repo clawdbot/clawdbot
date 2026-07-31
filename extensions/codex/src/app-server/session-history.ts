@@ -3,10 +3,7 @@
  * image payloads before replaying messages into the app-server projector.
  */
 import fs from "node:fs/promises";
-import type {
-  AgentMessage,
-  EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SessionEntry } from "openclaw/plugin-sdk/agent-sessions";
 import {
   buildSessionContext,
@@ -19,7 +16,10 @@ import {
   resolveTranscriptSessionKeyBySessionId,
   type SqliteSessionFileMarker,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  readSessionTranscriptEvents,
+  type SessionTranscriptTargetParams,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { sanitizeCodexHistoryImagePayloads } from "./image-payload-sanitizer.js";
 
 function isMissingFileError(error: unknown): boolean {
@@ -31,7 +31,7 @@ export type CodexMirroredSessionHistoryTarget = {
   sessionFile: string;
   sessionId: string;
   sessionKey?: string;
-  sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
+  sessionTarget?: Partial<SessionTranscriptTargetParams>;
 };
 
 /** Returns sanitized session-context messages for a Codex mirrored session file. */
