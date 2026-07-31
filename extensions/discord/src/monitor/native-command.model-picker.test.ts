@@ -361,6 +361,51 @@ describe("Discord model picker interactions", () => {
     expect(interaction.update).not.toHaveBeenCalled();
   });
 
+  it.each(["back", "nav", "bucket"] as const)(
+    "preserves the selected provider bucket for %s interactions",
+    async (action) => {
+      const context = createModelPickerContext();
+      const providers = Object.fromEntries(
+        Array.from({ length: 30 }, (_, index) => [
+          `provider-${String(index + 1).padStart(2, "0")}`,
+          ["model"],
+        ]),
+      );
+      vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(
+        createModelsProviderData(providers),
+      );
+      const selectingBucket = action === "bucket";
+      const interaction = createInteraction({
+        userId: "owner",
+        ...(selectingBucket ? { values: ["21-30"] } : {}),
+      });
+      const data = {
+        cmd: "model",
+        act: action,
+        view: "providers",
+        u: "owner",
+        pg: "3",
+        pb: selectingBucket ? "1-20" : "21-30",
+      };
+
+      if (selectingBucket) {
+        await createModelPickerFallbackSelect(context).run(
+          interaction as unknown as PickerSelectInteraction,
+          data,
+        );
+      } else {
+        await createModelPickerFallbackButton(context).run(
+          interaction as unknown as PickerButtonInteraction,
+          data,
+        );
+      }
+
+      const rendered = JSON.stringify(firstMockArg(interaction.editReply, "interaction.editReply"));
+      expect(rendered).toContain('"value":"provider-21"');
+      expect(rendered).not.toContain('"value":"provider-01"');
+    },
+  );
+
   it("uses the hot-reloaded runtime config when old components reset to default", async () => {
     const context = createModelPickerContext();
     (context.cfg as { agents?: OpenClawConfig["agents"] }).agents = {
