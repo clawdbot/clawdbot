@@ -431,9 +431,9 @@ async function runLoop(
         }
       }
 
+      stripOrphanedToolCalls(currentContext.messages);
       await emit({ type: "turn_end", message, toolResults });
       turnOpen = false;
-      stripOrphanedToolCalls(currentContext.messages);
       if (await stopIfAborted()) {
         return;
       }
