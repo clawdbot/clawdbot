@@ -589,7 +589,7 @@ describe("installPluginFromGitSpec", () => {
         gitDir,
       });
 
-      expect(result.ok).toBe(true);
+      expect(result.ok, result.ok ? "" : result.error).toBe(true);
       expect(mkdtempSpy).toHaveBeenCalledTimes(2);
       const targetPrefix = mkdtempSpy.mock.calls[0]?.[0];
       const fallbackPrefix = mkdtempSpy.mock.calls[1]?.[0];

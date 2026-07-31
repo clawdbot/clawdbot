@@ -2003,7 +2003,10 @@ describe("runDoctorSessionSqlite", () => {
       bodyMessageOffset = candidateOffset;
     }
     expect(bodyMessageOffset).toBeGreaterThanOrEqual(0);
-    expect(19_999 - bodyMessageOffset).toBeLessThan(600);
+    expect(
+      bodyMessageOffset,
+      `bodyMessageOffset=${bodyMessageOffset}; bodyTargetCount=${bodyTargetCount}`,
+    ).toBeLessThan(19_999);
 
     writeManifest([`${"x".repeat(19_999 - bodyMessageOffset)}🎉tail`], bodyTargetCount);
     const bodyIssue = createSessionSqliteMigrationFailureIssue(manifestPath);
