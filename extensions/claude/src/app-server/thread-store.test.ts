@@ -94,3 +94,19 @@ describe("claude app-server binding store", () => {
     expect(await store.read({ sessionId: "sess-other" })).toBeNull();
   });
 });
+
+describe("recordTurnSummary usage sanitization", () => {
+  it("stores finite usage when the bridge reports a non-finite total", async () => {
+    const store = createClaudeTestBindingStore();
+    const identity = { sessionKey: "agent:main:direct:tester", sessionId: "sess-1" };
+    await store.write(identity, { threadId: "thr_1", cwd: "/tmp/ws" });
+    await store.recordTurnSummary(identity, {
+      stopReason: "stop",
+      usage: { input: 100, output: 20, total: Number.NaN },
+    });
+    const binding = await store.read(identity);
+    // The whole summary write must survive; total falls back to input+output.
+    expect(binding?.turnCount).toBe(1);
+    expect(binding?.lastTurnUsage).toEqual({ input: 100, output: 20, total: 120 });
+  });
+});

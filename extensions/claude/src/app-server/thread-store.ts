@@ -146,6 +146,19 @@ export function claudeBindingStoreKey(identity: ClaudeBindingSessionIdentity): s
 
 const ASSISTANT_PREVIEW_MAX_CHARS = 200;
 
+/** Coerces bridge-reported usage into finite numbers; drops the field when unusable. */
+function sanitizeTurnUsage(
+  usage: ClaudeThreadTurnSummary["usage"],
+): ClaudeThreadTurnSummary["usage"] {
+  if (!usage) {
+    return undefined;
+  }
+  const input = Number.isFinite(usage.input) ? usage.input : 0;
+  const output = Number.isFinite(usage.output) ? usage.output : 0;
+  const total = Number.isFinite(usage.total) ? usage.total : input + output;
+  return { input, output, total };
+}
+
 export function createClaudeAppServerBindingStore(
   state: Pick<
     PluginStateSyncKeyedStore<StoredClaudeAppServerBinding>,
@@ -239,6 +252,12 @@ export function createClaudeAppServerBindingStore(
 
     async recordTurnSummary(identity, summary) {
       const trimmedPreview = summary.assistantPreview?.trim();
+      // Bridge usage numbers are untrusted at this boundary: NaN/Infinity
+      // (e.g. a missing addend upstream) fails plugin-state JSON
+      // serialization and would void the WHOLE summary write, not just the
+      // usage field (seen live: "value.lastTurnUsage.total must be
+      // JSON-serializable" on every turn).
+      const usage = sanitizeTurnUsage(summary.usage);
       mutate(identity, (existing) => {
         // No-op if no binding exists yet (e.g. the write raced ahead of
         // thread-lifecycle's initial write, or the binding was cleared
@@ -254,7 +273,7 @@ export function createClaudeAppServerBindingStore(
         return {
           ...existing,
           lastTurnStopReason: summary.stopReason ?? existing.lastTurnStopReason,
-          lastTurnUsage: summary.usage ?? existing.lastTurnUsage,
+          lastTurnUsage: usage ?? existing.lastTurnUsage,
           lastAssistantPreview: preview,
           turnCount: (existing.turnCount ?? 0) + 1,
           updatedAt: Date.now(),
