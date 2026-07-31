@@ -244,7 +244,7 @@ impl AuthenticatedSidecarChannel {
         if generation == 0 {
             return Err(SidecarProtocolError::InvalidGeneration);
         }
-        if max_frame_bytes < MIN_FRAME_BYTES {
+        if (max_frame_bytes as usize) < minimum_frame_bytes(session_id.len()) {
             return Err(SidecarProtocolError::InvalidLimit("maxFrameBytes"));
         }
 
@@ -281,7 +281,7 @@ impl AuthenticatedSidecarChannel {
         &mut self,
         negotiated_max_frame_bytes: u32,
     ) -> Result<(), SidecarProtocolError> {
-        if negotiated_max_frame_bytes < MIN_FRAME_BYTES {
+        if (negotiated_max_frame_bytes as usize) < minimum_frame_bytes(self.session_id.len()) {
             return Err(SidecarProtocolError::InvalidLimit("maxFrameBytes"));
         }
         if negotiated_max_frame_bytes > self.max_frame_bytes {
@@ -456,6 +456,10 @@ impl AuthenticatedSidecarChannel {
         self.receive_sequence = sequence;
         Ok(decoded)
     }
+}
+
+const fn minimum_frame_bytes(session_id_bytes: usize) -> usize {
+    FIXED_HEADER_BYTES + session_id_bytes + AUTH_TAG_BYTES + 1
 }
 
 struct BoundedFrameWriter<'a> {
@@ -734,6 +738,36 @@ mod tests {
             4096,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn frame_limit_must_fit_the_specific_session_identifier() {
+        let session_id = "longer-session-id";
+        assert!(matches!(
+            AuthenticatedSidecarChannel::new(
+                SidecarPeerRole::Runtime,
+                session_id.into(),
+                1,
+                SidecarSessionKey::from_bytes(KEY),
+                MIN_FRAME_BYTES,
+            ),
+            Err(SidecarProtocolError::InvalidLimit("maxFrameBytes"))
+        ));
+
+        let exact_minimum = u32::try_from(minimum_frame_bytes(session_id.len())).unwrap();
+        let mut channel = AuthenticatedSidecarChannel::new(
+            SidecarPeerRole::Runtime,
+            session_id.into(),
+            1,
+            SidecarSessionKey::from_bytes(KEY),
+            exact_minimum,
+        )
+        .unwrap();
+        assert!(matches!(
+            channel.lower_frame_limit(exact_minimum - 1),
+            Err(SidecarProtocolError::InvalidLimit("maxFrameBytes"))
+        ));
+        assert_eq!(channel.seal(&0_u8).unwrap().len(), exact_minimum as usize);
     }
 
     #[test]
