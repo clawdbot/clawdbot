@@ -570,7 +570,7 @@ export async function executeNodeHostCommand(
             nodeInvocationStarted = true;
             const raw = await callGatewayTool(
               "node.invoke",
-              { timeoutMs: target.invokeTimeoutMs },
+              { timeoutMs: target.invokeWaitMs },
               buildNodeSystemRunInvoke({
                 target,
                 command: prepared.argv,
@@ -693,15 +693,15 @@ export async function executeNodeHostCommand(
   params.signal?.throwIfAborted();
   const raw =
     (inlineApprovedByAsk || inlineApprovalSource) && inlineApprovalId
-      ? await callGatewayTool("node.invoke", { timeoutMs: target.invokeTimeoutMs }, invoke, {
+      ? await callGatewayTool("node.invoke", { timeoutMs: target.invokeWaitMs }, invoke, {
           scopes: APPROVED_NODE_INVOKE_SCOPES,
           ...(params.signal ? { signal: params.signal } : {}),
         })
       : params.signal
-        ? await callGatewayTool("node.invoke", { timeoutMs: target.invokeTimeoutMs }, invoke, {
+        ? await callGatewayTool("node.invoke", { timeoutMs: target.invokeWaitMs }, invoke, {
             signal: params.signal,
           })
-        : await callGatewayTool("node.invoke", { timeoutMs: target.invokeTimeoutMs }, invoke);
+        : await callGatewayTool("node.invoke", { timeoutMs: target.invokeWaitMs }, invoke);
   return formatNodeRunToolResult({
     raw,
     startedAt,
