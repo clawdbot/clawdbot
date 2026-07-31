@@ -294,6 +294,7 @@
     "!dist/extensions/nextcloud-talk/**",
     "!dist/extensions/nostr/**",
     "!dist/extensions/novita/**",
+    "!dist/extensions/opencode/**",
     "!dist/extensions/parallel/**",
     "!dist/extensions/perplexity/**",
     "!dist/extensions/qianfan/**",

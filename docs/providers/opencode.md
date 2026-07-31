@@ -90,7 +90,7 @@ one OpenCode setup.
 }
 ```
 
-## Built-in catalogs
+## Provider catalogs
 
 ### Zen
 
