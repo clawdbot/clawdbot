@@ -1960,6 +1960,18 @@ describe("official external plugin catalog", () => {
     });
   });
 
+  it("lists Synthetic as an official external provider", () => {
+    const synthetic = expectCatalogEntry("synthetic");
+
+    expect(resolveOfficialExternalPluginId(synthetic)).toBe("synthetic");
+    expect(resolveOfficialExternalPluginInstall(synthetic)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/synthetic-provider",
+      npmSpec: "@openclaw/synthetic-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+  });
+
   it.each([
     ["teams-meetings", "@openclaw/teams-meetings", "teams_meetings", "teams"],
     ["zoom-meetings", "@openclaw/zoom-meetings", "zoom_meetings", "zoom"],

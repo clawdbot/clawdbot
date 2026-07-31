@@ -359,6 +359,14 @@ describe("bundled plugin build entries", () => {
     }
   });
 
+  it("excludes the externalized Synthetic provider from bundled artifacts", () => {
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expectNoPrefixMatches(Object.keys(entries), "extensions/synthetic/");
+    expectNoPrefixMatches(artifacts, "dist/extensions/synthetic/");
+  });
+
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {
     const artifacts = listBundledPluginPackArtifacts();
     const excludedPackageDirs = collectRootPackageExcludedExtensionDirs();
