@@ -14,7 +14,7 @@ type WaitForNoOutboundOptions = {
 
 function findFailureOutboundMessage(
   state: QaTransportState,
-  options?: { sinceIndex?: number; cursorSpace?: "all" | "outbound" },
+  options?: { accountId?: string; sinceIndex?: number; cursorSpace?: "all" | "outbound" },
 ) {
   return findTransportFailureOutboundMessage(state, options);
 }
@@ -23,7 +23,7 @@ async function waitForOutboundMessage(
   state: QaTransportState,
   predicate: (message: QaBusMessage) => boolean,
   timeoutMs = 15_000,
-  options?: { sinceIndex?: number },
+  options?: { accountId?: string; sinceIndex?: number },
 ) {
   return await waitForQaTransportCondition(() => {
     const failureMessage = findFailureOutboundMessage(state, options);
@@ -34,7 +34,12 @@ async function waitForOutboundMessage(
       .getSnapshot()
       .messages.filter((message: QaBusMessage) => message.direction === "outbound")
       .slice(options?.sinceIndex ?? 0)
-      .find(predicate);
+      .find(
+        (message) =>
+          !message.deleted &&
+          (!options?.accountId || message.accountId === options.accountId) &&
+          predicate(message),
+      );
     if (!match) {
       return undefined;
     }

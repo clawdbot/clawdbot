@@ -303,7 +303,15 @@ describe("qa suite runtime flow", () => {
     expect(call.scenario).toBe(scenario);
     expect(call.deps.runScenario).toBe(runScenario);
     expect(call.deps.waitForQaChannelReady).toBe(waitForQaChannelReady);
-    expect(call.deps.waitForOutboundMessage).toBe(waitForOutboundMessage);
+    expect(call.deps.waitForOutboundMessage).toBeTypeOf("function");
+    const outboundPredicate = vi.fn();
+    call.deps.waitForOutboundMessage(env.transport.state, outboundPredicate, 123);
+    expect(waitForOutboundMessage).toHaveBeenCalledWith(
+      env.transport.state,
+      outboundPredicate,
+      123,
+      { accountId: "qa-channel" },
+    );
     expect(call.deps.markGatewayLogCursor()).toBe(0);
     expect(() => call.deps.assertNoGatewayLogSentinels()).not.toThrow();
     expect(call.deps.readSessionTranscriptSummary).toBe(readSessionTranscriptSummary);

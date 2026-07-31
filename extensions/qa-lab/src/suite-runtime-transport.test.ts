@@ -124,6 +124,48 @@ describe("qa suite transport helpers", () => {
     );
   });
 
+  it("waits for a live final instead of accepting a deleted matching preview", async () => {
+    const state = createQaBusState();
+    const preview = state.addOutboundMessage({
+      to: "dm:qa-operator",
+      text: "QA-VISIBLE-FINAL-OK",
+    });
+    state.deleteMessage({ messageId: preview.id });
+    const final = state.addOutboundMessage({
+      to: "dm:qa-operator",
+      text: "QA-VISIBLE-FINAL-OK",
+    });
+
+    await expect(
+      waitForOutboundMessage(state, (message) => message.text.includes("QA-VISIBLE-FINAL-OK"), 50),
+    ).resolves.toMatchObject({ id: final.id });
+  });
+
+  it("filters foreign account replies and failures from account-scoped waits", async () => {
+    const state = createQaBusState();
+    state.addOutboundMessage({
+      accountId: "other",
+      to: "dm:qa-operator",
+      text: "QA-ACCOUNT-OK",
+    });
+    state.addOutboundMessage({
+      accountId: "other",
+      to: "dm:qa-operator",
+      text: "⚠️ agent failed before reply: foreign account failure",
+    });
+    const expected = state.addOutboundMessage({
+      accountId: "default",
+      to: "dm:qa-operator",
+      text: "QA-ACCOUNT-OK",
+    });
+
+    await expect(
+      waitForOutboundMessage(state, (message) => message.text.includes("QA-ACCOUNT-OK"), 50, {
+        accountId: "default",
+      }),
+    ).resolves.toMatchObject({ accountId: "default", id: expected.id });
+  });
+
   it("fails raw scenario waitForCondition calls when a classified failure reply arrives", async () => {
     const state = createQaBusState();
     const waitForCondition = createQaChannelTransport(state).waitForCondition;
