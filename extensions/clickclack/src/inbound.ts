@@ -243,7 +243,7 @@ export async function handleClickClackInbound(params: {
         }
       : {}),
   };
-  progress.start();
+  progress?.start();
   const dispatch = () =>
     runtime.channel.inbound.dispatch({
       cfg: params.config as OpenClawConfig,
