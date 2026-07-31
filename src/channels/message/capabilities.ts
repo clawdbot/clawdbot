@@ -92,7 +92,10 @@ export function deriveDurableFinalDeliveryRequirementsForBatch(params: {
   silent?: boolean;
   reconcileUnknownSend?: boolean;
 }): DurableFinalDeliveryRequirementMap {
-  const requirements: DurableFinalDeliveryRequirementMap = {};
+  // Preserve the public preflight diagnostic: exact delivery first reports
+  // missing reconciliation before secondary transport capabilities.
+  const requirements: DurableFinalDeliveryRequirementMap =
+    params.reconcileUnknownSend && params.payloads.length > 0 ? { reconcileUnknownSend: true } : {};
   for (const payload of params.payloads) {
     const current = deriveDurableFinalDeliveryRequirements({
       payload,
