@@ -55,3 +55,30 @@ export function buildSignalTransportHttpUrl(host: string, port: number): string 
   const authorityHost = normalizedHost.includes(":") ? `[${normalizedHost}]` : normalizedHost;
   return normalizeSignalTransportUrl(`http://${authorityHost}:${port}`);
 }
+
+/**
+ * Infer httpPort from httpUrl when httpPort is absent.
+ * Extracts the port number from the httpUrl if one is explicitly set.
+ */
+export function resolveHttpPortFromLegacyHttpUrl(
+  entry: Record<string, unknown>,
+  parent: Record<string, unknown>,
+): number | undefined {
+  const rawUrl = Object.hasOwn(entry, "httpUrl") ? entry["httpUrl"] : parent["httpUrl"];
+  const httpUrl = typeof rawUrl === "string" ? rawUrl : undefined;
+  if (!httpUrl) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(httpUrl);
+    if (parsed.port) {
+      const portNum = Number.parseInt(parsed.port, 10);
+      if (!Number.isNaN(portNum) && portNum >= 1 && portNum <= 65535) {
+        return portNum;
+      }
+    }
+  } catch {
+    // Invalid URL — can't extract port
+  }
+  return undefined;
+}

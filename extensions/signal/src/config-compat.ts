@@ -12,7 +12,11 @@ import {
   isValidSignalManagedNativePort,
   resolveLocalSignalTransportPort,
 } from "./transport-policy.js";
-import { buildSignalTransportHttpUrl, normalizeSignalTransportUrl } from "./transport-url.js";
+import {
+  buildSignalTransportHttpUrl,
+  normalizeSignalTransportUrl,
+  resolveHttpPortFromLegacyHttpUrl,
+} from "./transport-url.js";
 
 const LEGACY_TRANSPORT_FIELDS = [
   "configPath",
@@ -226,7 +230,13 @@ function buildManagedNativeTransport(
   const cliPath = optionalString(value("cliPath"));
   const url = resolveManagedConnectionUrl(entry, parent);
   const httpHost = optionalString(value("httpHost"));
-  const httpPort = value("httpPort");
+  const rawHttpPort = value("httpPort");
+  // When httpUrl is set but httpPort is absent, infer port from the URL
+  // so the managed daemon binds to the same port the client probes.
+  const httpPort =
+    typeof rawHttpPort === "number"
+      ? rawHttpPort
+      : (resolveHttpPortFromLegacyHttpUrl(entry, parent) ?? rawHttpPort);
   const startupTimeoutMs = value("startupTimeoutMs");
   const receiveMode = value("receiveMode");
   const ignoreStories = value("ignoreStories");
