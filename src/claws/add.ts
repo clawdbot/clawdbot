@@ -392,7 +392,7 @@ export async function applyClawAddPlan(
     );
   } catch (error) {
     let installStatus: ClawInstallStatus = "workspace_ready";
-    if (!configCommitted) {
+    if (!configCommitted && !workspaceAdoption) {
       const removedWorkspace = await rmdir(workspace)
         .then(() => true)
         .catch(() => false);

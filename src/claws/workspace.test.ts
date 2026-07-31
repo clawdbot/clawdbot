@@ -478,6 +478,28 @@ describe("workspace files in the consented add lifecycle", () => {
     );
   });
 
+  it("preserves an adopted workspace when config commit rolls back", async () => {
+    const { root, workspace, plan } = await makeAdoptionPlan();
+
+    const result = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: stateEnv(root),
+      nowMs: 35,
+      commitConfig: async () => {
+        throw new Error("config unavailable");
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "partial",
+      workspaceCreated: true,
+      configCommitted: false,
+      installRecord: { status: "workspace_ready" },
+      error: { code: "config_commit_failed", message: "config unavailable" },
+    });
+    await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).resolves.toBe("# Agent\n");
+  });
+
   it("marks the root install complete after every declared file is created", async () => {
     const { root, plan } = await makePlan({ createWorkspace: false });
     let config: OpenClawConfig = {};
