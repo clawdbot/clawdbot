@@ -11,8 +11,8 @@ export function isOpenClawEntryScriptPath(value: string | undefined): boolean {
   );
 }
 
-function globPatternToRegExp(pattern: string): RegExp {
-  let source = "^";
+function globPatternSource(pattern: string): string {
+  let source = "";
   for (let index = 0; index < pattern.length; index += 1) {
     const char = pattern[index] ?? "";
     if (char === "*") {
@@ -52,7 +52,7 @@ function globPatternToRegExp(pattern: string): RegExp {
                     offset * (range[1]!.charCodeAt(0) <= range[2]!.charCodeAt(0) ? 1 : -1),
                 ),
             )
-          : body.split(",").map((choice) => choice.replace(/[\\^$.*+?()[\]{}|]/gu, "\\$&"));
+          : body.split(",").map(globPatternSource);
         source += choices.length === 1 ? (choices[0] ?? "") : `(?:${choices.join("|")})`;
         index = end;
         continue;
@@ -60,7 +60,11 @@ function globPatternToRegExp(pattern: string): RegExp {
     }
     source += /[\\^$.*+?()[\]{}|]/u.test(char) ? `\\${char}` : char;
   }
-  return new RegExp(`${source}$`, "iu");
+  return source;
+}
+
+function globPatternToRegExp(pattern: string): RegExp {
+  return new RegExp(`^${globPatternSource(pattern)}$`, "iu");
 }
 
 /** Return true when an executable token is or can glob-expand to OpenClaw. */

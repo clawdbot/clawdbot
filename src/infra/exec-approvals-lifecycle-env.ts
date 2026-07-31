@@ -429,14 +429,18 @@ export function unresolvedEnvironmentMayHideLifecycle(argv: readonly string[]): 
   return lifecycleDynamicArgvMayHideLifecycle(argv, isVariableReference);
 }
 
-function readEnvironmentValue(env: NodeJS.ProcessEnv | undefined, key: string): string | undefined {
+function readEnvironmentValue(
+  env: NodeJS.ProcessEnv | undefined,
+  key: string,
+  platform: NodeJS.Platform,
+): string | undefined {
   if (!env) {
     return undefined;
   }
   if (Object.hasOwn(env, key)) {
     return env[key];
   }
-  if (process.platform !== "win32") {
+  if (platform !== "win32") {
     return undefined;
   }
   const matchedKey = Object.keys(env).find(
@@ -450,9 +454,12 @@ function expandKnownEnvironmentReferences(
   env: NodeJS.ProcessEnv | undefined,
   shadowedKeys: ReadonlySet<string>,
   dialect: LifecycleShellDialect,
+  platform: NodeJS.Platform,
 ): string {
   const replaceKnown = (match: string, key: string): string =>
-    shadowedKeys.has(key.toLowerCase()) ? match : (readEnvironmentValue(env, key) ?? match);
+    shadowedKeys.has(key.toLowerCase())
+      ? match
+      : (readEnvironmentValue(env, key, platform) ?? match);
   if (dialect === "powershell") {
     return value.replace(POWERSHELL_VARIABLE_RE, replaceKnown);
   }
@@ -474,16 +481,19 @@ export function expandKnownLifecycleEnvironmentCommand(
   env: NodeJS.ProcessEnv | undefined,
   shadowedKeys: ReadonlySet<string> = new Set(),
   dialect: LifecycleShellDialect = "posix",
+  platform: NodeJS.Platform = process.platform,
 ): string {
   if (dialect === "cmd") {
-    return expandKnownEnvironmentReferences(command, env, shadowedKeys, dialect);
+    return expandKnownEnvironmentReferences(command, env, shadowedKeys, dialect, platform);
   }
   // POSIX shells and PowerShell both suppress environment expansion inside
   // single-quoted strings. cmd.exe does not and is handled above.
   return command
     .split(/('[^']*')/u)
     .map((part, index) =>
-      index % 2 === 0 ? expandKnownEnvironmentReferences(part, env, shadowedKeys, dialect) : part,
+      index % 2 === 0
+        ? expandKnownEnvironmentReferences(part, env, shadowedKeys, dialect, platform)
+        : part,
     )
     .join("");
 }
@@ -494,6 +504,7 @@ export function expandLifecycleEnvironmentArgv(params: {
   env?: NodeJS.ProcessEnv;
   envComplete: boolean;
   dialect?: LifecycleShellDialect;
+  platform?: NodeJS.Platform;
   shadowedKeys?: ReadonlySet<string>;
 }): LifecycleEnvironmentExpansion {
   let fieldSplitUncertain = false;
@@ -508,7 +519,7 @@ export function expandLifecycleEnvironmentArgv(params: {
       unresolved = true;
       return "";
     }
-    const value = readEnvironmentValue(params.env, key);
+    const value = readEnvironmentValue(params.env, key, params.platform ?? process.platform);
     if (value !== undefined) {
       fieldSplitUncertain ||= /\s/u.test(value);
       return value;

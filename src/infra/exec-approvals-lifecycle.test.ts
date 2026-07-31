@@ -34,6 +34,7 @@ const mutationCases: Array<[string, string[]]> = [
   ["openclaw daemon stop", ["openclaw", "daemon", "stop"]],
   ["/usr/bin/opencla? gateway restart", ["/usr/bin/opencla?", "gateway", "restart"]],
   ["open{c..c}law gateway restart", ["open{c..c}law", "gateway", "restart"]],
+  ["open{cla?,noop} gateway restart", ["open{cla?,noop}", "gateway", "restart"]],
   ["openclaw gateway call update.run", ["openclaw", "gateway", "call", "update.run"]],
   [
     "openclaw gateway call --url ws://127.0.0.1:18789 update.run",
@@ -294,6 +295,7 @@ const mutationCases: Array<[string, string[]]> = [
     ["npm", "exec", "--", "openclaw", "config", "set", "gateway.auth.token", "--", "-c"],
   ],
   ["npm install -g openclaw@latest", ["npm", "install", "-g", "openclaw@latest"]],
+  ["npm install -p openclaw", ["npm", "install", "-p", "openclaw"]],
   ["npm rebuild openclaw", ["npm", "rebuild", "openclaw"]],
   ["npm it openclaw", ["npm", "it", "openclaw"]],
   ["npm install-test openclaw", ["npm", "install-test", "openclaw"]],
@@ -407,6 +409,7 @@ const mutationCases: Array<[string, string[]]> = [
   ["pgrep openclaw | xargs kill", ["xargs", "kill"]],
   ["pgrep openclaw | xargs --no-run-if-empty kill", ["xargs", "--no-run-if-empty", "kill"]],
   ["xargs -I{} {} gateway restart", ["xargs", "-I{}", "{}", "gateway", "restart"]],
+  ["xargs -0I{} {} gateway restart", ["xargs", "-0I{}", "{}", "gateway", "restart"]],
   ["xargs -i{} {} gateway restart", ["xargs", "-i{}", "{}", "gateway", "restart"]],
   ["xargs -J{} {} gateway restart", ["xargs", "-J{}", "{}", "gateway", "restart"]],
   ["xargs -I{} dash -c {}", ["xargs", "-I{}", "dash", "-c", "{}"]],

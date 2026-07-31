@@ -146,30 +146,15 @@ export function resolveLifecycleXargsArgv(argv: readonly string[]): LifecycleXar
     if (!token.startsWith("-") || token === "-") {
       return commandPlan(argv.slice(index));
     }
-    if (token === "-I") {
-      replacementToken = argv[index + 1]?.trim();
-      index += 1;
+    const clusteredReplacement = /^-[0oprtx]*([IJi])(.*)$/u.exec(token);
+    if (clusteredReplacement) {
+      const mode = clusteredReplacement[1] ?? "";
+      const attached = clusteredReplacement[2] ?? "";
+      replacementToken = attached || (mode === "i" ? "{}" : argv[++index]?.trim());
       continue;
     }
-    if (token.startsWith("-I") && token.length > 2) {
-      replacementToken = token.slice(2);
-      continue;
-    }
-    if (token === "-i" || token === "--replace") {
+    if (token === "--replace") {
       replacementToken = "{}";
-      continue;
-    }
-    if (token.startsWith("-i") && token.length > 2) {
-      replacementToken = token.slice(2);
-      continue;
-    }
-    if (token === "-J") {
-      replacementToken = argv[index + 1]?.trim();
-      index += 1;
-      continue;
-    }
-    if (token.startsWith("-J") && token.length > 2) {
-      replacementToken = token.slice(2);
       continue;
     }
     if (token.startsWith("--replace=")) {

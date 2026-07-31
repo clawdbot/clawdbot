@@ -53,6 +53,19 @@ describe("OpenClaw lifecycle environment data positions", () => {
     ).toBe(true);
   });
 
+  it("uses target-platform environment name semantics", () => {
+    const command = `$tool gateway restart`;
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command,
+        env: { TOOL: "echo" },
+        envComplete: false,
+        platform: "linux",
+        segments: [{ raw: command, argv: ["$tool", "gateway", "restart"] }],
+      }),
+    ).toBe(true);
+  });
+
   it("keeps unresolved variables in non-lifecycle data positions non-blocking", () => {
     const cases: Array<{ command: string; argv: string[]; platform?: NodeJS.Platform }> = [
       {

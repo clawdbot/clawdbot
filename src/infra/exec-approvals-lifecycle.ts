@@ -295,6 +295,7 @@ function commandHasLifecycleSubstitution(
         env: environment.env,
         envComplete: environment.envComplete,
         dialect,
+        platform: environment.platform,
         shadowedKeys: environment.shadowedKeys,
       });
       return (
@@ -432,6 +433,7 @@ function classifyArgv(
                 env: environment.env,
                 envComplete: environment.envComplete,
                 dialect: "powershell",
+                platform: environment.platform,
                 shadowedKeys: nestedShadowedKeys,
               });
               return expanded.unresolved ? pipelineArgv : expanded.argv;
@@ -461,6 +463,7 @@ function classifyArgv(
             env: environment.env,
             envComplete: environment.envComplete,
             dialect: nestedDialect,
+            platform: environment.platform,
             shadowedKeys: nestedShadowedKeys,
           })
         : { argv: rawNestedArgv, fieldSplitUncertain: false, unresolved: false };
@@ -581,6 +584,7 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
       env: params.env,
       envComplete,
       dialect: "powershell",
+      platform,
       shadowedKeys,
     });
     return expanded.unresolved ? argv : expanded.argv;
@@ -649,6 +653,7 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
           env: params.env,
           envComplete,
           dialect: candidateDialect,
+          platform,
           shadowedKeys,
         });
         return (
@@ -695,6 +700,7 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
       env: params.env,
       envComplete,
       dialect: partDialect,
+      platform,
       shadowedKeys,
     });
     return (

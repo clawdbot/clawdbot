@@ -25,10 +25,14 @@ const PACKAGE_GLOBAL_OPTIONS_WITH_VALUE = new Set([
   "--userconfig",
   "--workspace",
 ]);
-const PACKAGE_OPTIONS_WITH_VALUE = new Set(["-p", "--package"]);
+const PACKAGE_OPTIONS_WITH_VALUE = new Set(["--package"]);
 const PACKAGE_TARGET_OPTIONS_WITH_VALUE = new Set([
   ...PACKAGE_GLOBAL_OPTIONS_WITH_VALUE,
   ...PACKAGE_OPTIONS_WITH_VALUE,
+]);
+const PACKAGE_EXEC_TARGET_OPTIONS_WITH_VALUE = new Set([
+  ...PACKAGE_TARGET_OPTIONS_WITH_VALUE,
+  "-p",
 ]);
 const PACKAGE_MUTATION_ALIASES = new Set([
   "add",
@@ -136,8 +140,12 @@ function resolveInlineCommand(argv: readonly string[], start: number): string[] 
   return null;
 }
 
-function packageTarget(argv: readonly string[], start: number): string[] | null {
-  const index = scanFirstPositional(argv, start, PACKAGE_TARGET_OPTIONS_WITH_VALUE);
+function packageTarget(
+  argv: readonly string[],
+  start: number,
+  optionsWithValue: ReadonlySet<string> = PACKAGE_TARGET_OPTIONS_WITH_VALUE,
+): string[] | null {
+  const index = scanFirstPositional(argv, start, optionsWithValue);
   return index < argv.length ? [argv[index] ?? "", ...argv.slice(index + 1)] : null;
 }
 
@@ -265,7 +273,7 @@ export function resolveLifecyclePackageRunnerArgv(
   }
   if (["bunx", "npx"].includes(executable)) {
     const inline = resolveInlineCommand(argv, 1);
-    const resolved = inline ?? packageTarget(argv, 1);
+    const resolved = inline ?? packageTarget(argv, 1, PACKAGE_EXEC_TARGET_OPTIONS_WITH_VALUE);
     if (resolved?.length) {
       if (isOpenClawPackageTarget(resolved[0] ?? "")) {
         return { kind: "argv", argv: ["openclaw", ...resolved.slice(1)] };
@@ -303,7 +311,8 @@ export function resolveLifecyclePackageRunnerArgv(
     }
   } else if (executable === "npm" && ["exec", "x"].includes(subcommand)) {
     const inline = resolveInlineCommand(argv, subcommandIndex + 1);
-    const resolved = inline ?? packageTarget(argv, subcommandIndex + 1);
+    const resolved =
+      inline ?? packageTarget(argv, subcommandIndex + 1, PACKAGE_EXEC_TARGET_OPTIONS_WITH_VALUE);
     if (resolved?.length) {
       return { kind: "argv", argv: resolved };
     }
