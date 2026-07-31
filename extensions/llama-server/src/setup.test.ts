@@ -14,11 +14,11 @@ import {
 
 const discoverMock = vi.hoisted(() => vi.fn());
 const runtimeApiKeyMock = vi.hoisted(() => vi.fn());
-const removeAuthProfilesMock = vi.hoisted(() => vi.fn());
+const updateAuthProfileStoreMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
-  removeAuthProfilesWithLock: removeAuthProfilesMock,
+  updateAuthProfileStoreWithLock: updateAuthProfileStoreMock,
 }));
 
 vi.mock("./discovery.js", async (importOriginal) => ({
@@ -86,8 +86,8 @@ describe("llama-server setup", () => {
     discoverMock.mockReset();
     runtimeApiKeyMock.mockReset();
     runtimeApiKeyMock.mockResolvedValue(undefined);
-    removeAuthProfilesMock.mockReset();
-    removeAuthProfilesMock.mockResolvedValue({ version: 1, profiles: {} });
+    updateAuthProfileStoreMock.mockReset();
+    updateAuthProfileStoreMock.mockResolvedValue({ version: 1, profiles: {} });
   });
 
   it("detects a running local server without writing config", async () => {
@@ -191,9 +191,9 @@ describe("llama-server setup", () => {
       result.configPatch?.models?.providers?.[LLAMA_SERVER_PROVIDER_ID]?.apiKey,
     ).toBeUndefined();
     expect(result.defaultModel).toBe("llama-server/qwen/model:Q4_K_M");
-    expect(removeAuthProfilesMock).toHaveBeenCalledWith({
-      profileIds: ["llama-server:default"],
+    expect(updateAuthProfileStoreMock).toHaveBeenCalledWith({
       agentDir: undefined,
+      updater: expect.any(Function),
     });
     expect(result.configPatch?.auth).toEqual({
       profiles: { "llama-server:default": undefined },
@@ -257,6 +257,8 @@ describe("llama-server setup", () => {
           providers: {
             "llama-server": {
               baseUrl: "http://localhost:8080/v1",
+              auth: "api-key",
+              apiKey: "stale-inline-key",
               headers: { authorization: "Bearer stale-key", "X-Tenant": "one" },
               models: [],
             },
@@ -285,9 +287,10 @@ describe("llama-server setup", () => {
     expect(discoverMock).toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: "secret-key", cacheTtlMs: 0 }),
     );
-    expect(result.configPatch?.models?.providers?.[LLAMA_SERVER_PROVIDER_ID]?.headers).toEqual({
-      "X-Tenant": "one",
-    });
+    const provider = result.configPatch?.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
+    expect(provider?.auth).toBeUndefined();
+    expect(provider?.apiKey).toBeUndefined();
+    expect(provider?.headers).toEqual({ "X-Tenant": "one" });
   });
 
   it("validates and configures non-interactively without requiring an API key", async () => {
@@ -315,9 +318,9 @@ describe("llama-server setup", () => {
     expect(configured?.agents?.defaults?.model).toEqual(
       expect.objectContaining({ primary: "llama-server/qwen/model:Q4_K_M" }),
     );
-    expect(removeAuthProfilesMock).toHaveBeenCalledWith({
-      profileIds: ["llama-server:default"],
+    expect(updateAuthProfileStoreMock).toHaveBeenCalledWith({
       agentDir: undefined,
+      updater: expect.any(Function),
     });
     expect(configured?.auth).toEqual({ profiles: {}, order: undefined });
   });
@@ -361,6 +364,8 @@ describe("llama-server setup", () => {
         providers: {
           "llama-server": {
             baseUrl: "http://localhost:8080/v1",
+            auth: "api-key",
+            apiKey: "stale-inline-key",
             headers: { Authorization: "Bearer stale-key", "X-Tenant": "one" },
             models: [],
           },
@@ -376,9 +381,10 @@ describe("llama-server setup", () => {
 
     const configured = await configureLlamaServerNonInteractive(ctx);
 
-    expect(configured?.models?.providers?.[LLAMA_SERVER_PROVIDER_ID]?.headers).toEqual({
-      "X-Tenant": "one",
-    });
+    const provider = configured?.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
+    expect(provider?.auth).toBeUndefined();
+    expect(provider?.apiKey).toBeUndefined();
+    expect(provider?.headers).toEqual({ "X-Tenant": "one" });
   });
 
   it("preserves Authorization when non-interactive auth came from the environment", async () => {

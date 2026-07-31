@@ -9,7 +9,7 @@ import {
   buildApiKeyCredential,
   ensureApiKeyFromEnvOrPrompt,
   normalizeOptionalSecretInput,
-  removeAuthProfilesWithLock,
+  updateAuthProfileStoreWithLock,
   upsertAuthProfileWithLock,
   type OpenClawConfig,
   type SecretInput,
@@ -61,17 +61,21 @@ function describeDiscoveryFailure(
   }
 }
 
-function stripAuthorizationHeader(
+function stripCredentialOverrides(
   provider: ModelProviderConfig | undefined,
 ): ModelProviderConfig | undefined {
-  if (!provider?.headers) {
+  if (!provider) {
     return provider;
   }
   const headers = Object.fromEntries(
-    Object.entries(provider.headers).filter(([name]) => name.toLowerCase() !== "authorization"),
+    Object.entries(provider.headers ?? {}).filter(
+      ([name]) => name.toLowerCase() !== "authorization",
+    ),
   );
   return {
     ...provider,
+    auth: undefined,
+    apiKey: undefined,
     headers: Object.keys(headers).length > 0 ? headers : undefined,
   };
 }
@@ -162,7 +166,7 @@ function buildSetupResult(params: {
     ? stripEndpointCredentials(configuredProvider)
     : configuredProvider;
   const existingProvider = params.useApiKey
-    ? stripAuthorizationHeader(endpointSafeProvider)
+    ? stripCredentialOverrides(endpointSafeProvider)
     : endpointSafeProvider;
   return {
     profiles: params.credentialInput
@@ -199,9 +203,47 @@ function buildSetupResult(params: {
 }
 
 async function removeDefaultAuthProfile(agentDir?: string): Promise<void> {
-  const updated = await removeAuthProfilesWithLock({
-    profileIds: [PROFILE_ID],
+  const updated = await updateAuthProfileStoreWithLock({
     agentDir,
+    updater: (store) => {
+      let changed = false;
+      if (store.profiles[PROFILE_ID]) {
+        delete store.profiles[PROFILE_ID];
+        changed = true;
+      }
+      if (store.usageStats?.[PROFILE_ID]) {
+        delete store.usageStats[PROFILE_ID];
+        changed = true;
+      }
+      for (const [provider, order] of Object.entries(store.order ?? {})) {
+        const next = order.filter((profileId) => profileId !== PROFILE_ID);
+        if (next.length === order.length) {
+          continue;
+        }
+        changed = true;
+        if (next.length > 0) {
+          store.order![provider] = next;
+        } else {
+          delete store.order![provider];
+        }
+      }
+      for (const [provider, profileId] of Object.entries(store.lastGood ?? {})) {
+        if (profileId === PROFILE_ID) {
+          delete store.lastGood![provider];
+          changed = true;
+        }
+      }
+      if (store.order && Object.keys(store.order).length === 0) {
+        store.order = undefined;
+      }
+      if (store.lastGood && Object.keys(store.lastGood).length === 0) {
+        store.lastGood = undefined;
+      }
+      if (store.usageStats && Object.keys(store.usageStats).length === 0) {
+        store.usageStats = undefined;
+      }
+      return changed;
+    },
   });
   if (!updated) {
     throw new Error(
@@ -455,7 +497,7 @@ export async function configureLlamaServerNonInteractive(
     ? stripEndpointCredentials(configuredProvider)
     : configuredProvider;
   const existingProvider = validated.resolvedApiKey
-    ? stripAuthorizationHeader(endpointSafeProvider)
+    ? stripCredentialOverrides(endpointSafeProvider)
     : endpointSafeProvider;
   const providerConfig = buildLlamaServerProviderConfig({
     configured: {
