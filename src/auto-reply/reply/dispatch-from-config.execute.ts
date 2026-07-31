@@ -247,6 +247,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       (ctx.InboundEventKind !== "room_event" ||
                         state.operationalReplyPolicy.policy === "redirect" ||
                         state.operationalReplyPolicy.policy === "silent");
+                    const shouldBypassProgressSuppressionForOperationalPolicy =
+                      shouldEvaluateOperationalPayload &&
+                      state.operationalReplyPolicy.policy !== "always";
                     const progressCallbackForwarded = shouldForwardToolResultProgressCallback(
                       payload,
                       isFastModeAutoProgress,
@@ -269,7 +272,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     }
                     if (
                       shouldSuppressProgressDelivery() &&
-                      !shouldEvaluateOperationalPayload &&
+                      !shouldBypassProgressSuppressionForOperationalPolicy &&
                       !isFastModeAutoProgressDelivery &&
                       !isForcedToolProgress &&
                       !hasAskUserPayload(payload)
@@ -303,21 +306,21 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     }
                     if (
                       shouldSuppressLateTextOnlyToolProgress(deliveryPayload) &&
-                      !shouldEvaluateOperationalPayload &&
+                      !shouldBypassProgressSuppressionForOperationalPolicy &&
                       !isFastModeAutoProgressPayload(deliveryPayload) &&
                       !isForcedToolProgress
                     ) {
                       return;
                     }
                     if (
-                      !shouldEvaluateOperationalPayload &&
+                      !shouldBypassProgressSuppressionForOperationalPolicy &&
                       shouldSuppressMessageToolOnlyTextErrorProgress(deliveryPayload)
                     ) {
                       return;
                     }
                     if (
                       shouldSuppressDefaultToolProgressMessages() &&
-                      !shouldEvaluateOperationalPayload &&
+                      !shouldBypassProgressSuppressionForOperationalPolicy &&
                       !isFastModeAutoProgressPayload(deliveryPayload) &&
                       !isForcedToolProgress
                     ) {
