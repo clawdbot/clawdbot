@@ -19,6 +19,7 @@ import type {
 } from "../../plugins/types.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { classifyProviderRuntimeFailureKind as realClassifyProviderRuntimeFailureKind } from "../embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
@@ -307,6 +308,13 @@ export const mockedClassifyAssistantFailoverReason = vi.fn(
   (assistant?: { errorMessage?: string | null }): FailoverReason | null =>
     mockedClassifyFailoverReason(assistant?.errorMessage ?? ""),
 );
+export const mockedClassifyProviderRuntimeFailureKind = vi.fn((signal: unknown): string =>
+  realClassifyProviderRuntimeFailureKind(
+    typeof signal === "string"
+      ? signal
+      : { message: (signal as { message?: string })?.message ?? "" },
+  ),
+);
 export const mockedExtractObservedOverflowTokenCount = vi.fn((msg?: string) => {
   const match = msg?.match(/prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i);
   return match?.[1] ? Number(match[1].replaceAll(",", "")) : undefined;
@@ -536,6 +544,7 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
     (assistant?: { errorMessage?: string | null }): FailoverReason | null =>
       mockedClassifyFailoverReason(assistant?.errorMessage ?? ""),
   );
+  mockedClassifyProviderRuntimeFailureKind.mockClear();
   mockedFormatBillingErrorMessage.mockReset();
   mockedFormatBillingErrorMessage.mockReturnValue("");
   mockedFormatAssistantErrorText.mockReset();
@@ -864,6 +873,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     formatBillingErrorMessage: mockedFormatBillingErrorMessage,
     classifyFailoverReason: mockedClassifyFailoverReason,
     classifyAssistantFailoverReason: mockedClassifyAssistantFailoverReason,
+    classifyProviderRuntimeFailureKind: mockedClassifyProviderRuntimeFailureKind,
     extractObservedOverflowTokenCount: mockedExtractObservedOverflowTokenCount,
     formatAssistantErrorText: mockedFormatAssistantErrorText,
     isAuthAssistantError: mockedIsAuthAssistantError,

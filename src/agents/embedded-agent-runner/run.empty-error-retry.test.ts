@@ -138,6 +138,31 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(result.payloads).toBeUndefined();
   });
 
+  it("does not empty-error retry thinking-signature replay-invalid rejections (#116967)", async () => {
+    // A replay-invalid thinking-signature rejection is an invalid_request_error
+    // on payload shape: byte-identical resubmits fail identically, so it must
+    // be terminal instead of amplified by the silent-error retry path.
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      emptyErrorAttempt(
+        "anthropic",
+        "claude-sonnet-4-6",
+        0,
+        [],
+        '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
+      ),
+    );
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      runId: "run-empty-error-retry-replay-invalid",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
   it("does not intercept recognized timeout failover errors", async () => {
     mockedClassifyAssistantFailoverReason.mockReturnValue("timeout");
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
