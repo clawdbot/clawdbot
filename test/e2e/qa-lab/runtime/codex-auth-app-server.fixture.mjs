@@ -18,8 +18,8 @@ runFakeCodexAppServer({
       sendResult(
         createFakeInitializeResponse({
           name: "openclaw-qa-codex-auth",
-          version: "0.143.0",
-          userAgent: "openclaw/0.143.0 (test)",
+          version: "0.146.0",
+          userAgent: "openclaw/0.146.0 (test)",
         }),
       ),
     "account/login/start": ({ params, sendResult }) => sendResult({ type: params?.type }),
@@ -54,7 +54,7 @@ runFakeCodexAppServer({
           params,
           threadId: "thread-qa-codex-auth",
           sessionId: "session-qa-codex-auth",
-          version: "0.143.0",
+          version: "0.146.0",
         }),
       ),
     "turn/start": ({ notify, params, sendResult }) => {

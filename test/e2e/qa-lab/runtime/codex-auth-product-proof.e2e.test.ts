@@ -38,9 +38,15 @@ afterEach(async () => {
 function waitForRequest(requestLog: AppServerRequestLog, method: string) {
   return vi.waitFor(
     () => {
-      const request = requestLog.read().find((entry) => entry.method === method);
+      const entries = requestLog.read();
+      const request = entries.find((entry) => entry.method === method);
       if (!request) {
-        throw new Error(`waiting for Codex app-server method ${method}`);
+        const observedMethods = entries.flatMap((entry) =>
+          typeof entry.method === "string" ? [entry.method] : [],
+        );
+        throw new Error(
+          `waiting for Codex app-server method ${method}; observed ${observedMethods.join(", ") || "no methods"}`,
+        );
       }
       return request;
     },
