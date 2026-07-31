@@ -1,5 +1,5 @@
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 
 export function insertLegacySession(params: {
