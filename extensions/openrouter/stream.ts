@@ -8,7 +8,7 @@ import {
   normalizeOpenAICompatibleReasoningReplay,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { isOpenRouterDeepSeekV4ModelId } from "./models.js";
+import { isOpenRouterDeepSeekV4ModelId, normalizeOpenRouterModelFamilyId } from "./models.js";
 import {
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
@@ -20,14 +20,6 @@ const openRouterThinkingStreamHooks = buildProviderStreamFamilyHooks("openrouter
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim() : undefined;
-}
-
-function isOpenRouterAnthropicModelId(modelId: unknown): boolean {
-  const normalized = readString(modelId)?.toLowerCase();
-  return (
-    normalized?.startsWith("anthropic/") === true ||
-    normalized?.startsWith("openrouter/anthropic/") === true
-  );
 }
 
 function isVerifiedOpenRouterRoute(model: Parameters<StreamFn>[0]): boolean {
@@ -43,7 +35,7 @@ function shouldPatchAnthropicOpenRouterPayload(model: Parameters<StreamFn>[0]): 
   const api = readString(model.api);
   return (
     (api === undefined || api === "openai-completions") &&
-    isOpenRouterAnthropicModelId(model.id) &&
+    normalizeOpenRouterModelFamilyId(model.id)?.startsWith("anthropic/") === true &&
     isVerifiedOpenRouterRoute(model)
   );
 }
@@ -154,7 +146,11 @@ function isEnabledReasoningValue(value: unknown): boolean {
     return normalized !== "" && normalized !== "off" && normalized !== "none";
   }
   if (typeof value === "object" && !Array.isArray(value)) {
-    const effort = (value as Record<string, unknown>).effort;
+    const reasoning = value as Record<string, unknown>;
+    if (reasoning.enabled === false) {
+      return false;
+    }
+    const effort = reasoning.effort;
     if (typeof effort === "string") {
       const normalized = effort.trim().toLowerCase();
       return normalized !== "" && normalized !== "off" && normalized !== "none";
