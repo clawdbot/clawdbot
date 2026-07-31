@@ -431,12 +431,20 @@ function validateEntry(
 ): void {
   const sourceParsed = parseBoundedMessage(source);
   const candidateParsed = parseBoundedMessage(candidate);
-  if (typeof sourceParsed === "string" || typeof candidateParsed === "string") {
-    const detail =
-      typeof sourceParsed === "string"
-        ? `Source message is outside the bounded ICU profile: ${sourceParsed}`
-        : `Candidate message is outside the bounded ICU profile: ${candidateParsed}`;
-    issues.push({ code: "invalid-selector", key, detail });
+  if (typeof sourceParsed === "string") {
+    issues.push({
+      code: "invalid-selector",
+      key,
+      detail: `Source message is outside the bounded ICU profile: ${sourceParsed}`,
+    });
+    return;
+  }
+  if (typeof candidateParsed === "string") {
+    issues.push({
+      code: "invalid-selector",
+      key,
+      detail: `Candidate message is outside the bounded ICU profile: ${candidateParsed}`,
+    });
     return;
   }
 
