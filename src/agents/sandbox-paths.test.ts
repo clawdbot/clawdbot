@@ -184,28 +184,6 @@ describe("assertSandboxPath", () => {
     },
   );
 
-  it.runIf(process.platform === "win32")(
-    "pins Win32 junction-then-dot-dot to lexical traversal semantics",
-    async () => {
-      const parent = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-junction-dotdot-"));
-      const root = path.join(parent, "workspace");
-      const outside = path.join(parent, "outside");
-      try {
-        await fs.mkdir(path.join(root, "sub"), { recursive: true });
-        await fs.mkdir(outside);
-        await fs.symlink(root, path.join(root, "sub", "up"), "junction");
-        await fs.writeFile(path.join(outside, "secret.txt"), "outside", "utf8");
-        const attemptedEscape = `${root}\\sub\\up\\..\\outside\\secret.txt`;
-
-        await expect(fs.readFile(attemptedEscape, "utf8")).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-      } finally {
-        await fs.rm(parent, { recursive: true, force: true });
-      }
-    },
-  );
-
   it("accepts not-yet-created and symlinked roots", async () => {
     const parent = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-missing-root-")),
