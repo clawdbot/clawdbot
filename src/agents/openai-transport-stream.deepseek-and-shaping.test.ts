@@ -280,6 +280,39 @@ describe("openai transport stream", () => {
     expect(JSON.stringify(events)).not.toContain("DSML");
   });
 
+  it("recovers double-bar DeepSeek DSML tool calls emitted as text", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        makeCompletionsChunk(
+          {
+            content:
+              '<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="session_status"><｜｜DSML｜｜parameter name="sessionKey">current</｜｜DSML｜｜parameter></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>',
+          },
+          "stop",
+        ),
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
+        name: "session_status",
+        arguments: { sessionKey: "current" },
+        partialArgs: '{"sessionKey":"current"}',
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("DSML");
+  });
+
   it.each([
     { finishReason: "length", stopReason: "length" },
     { finishReason: "content_filter", stopReason: "error" },

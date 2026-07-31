@@ -5,6 +5,7 @@ import type {
   CronDeliveryTrace,
   CronFailureNotificationDelivery,
   CronRunDiagnostics,
+  CronAssistantCompletion,
   CronRunStatus,
   CronRunTelemetry,
 } from "./types.js";
@@ -19,6 +20,7 @@ export type CronRunLogEntry = {
   errorReason?: FailoverReason;
   summary?: string;
   diagnostics?: CronRunDiagnostics;
+  assistantCompletion?: CronAssistantCompletion;
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
   deliveryError?: string;

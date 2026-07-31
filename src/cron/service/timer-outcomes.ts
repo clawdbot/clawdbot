@@ -628,6 +628,7 @@ function emitJobFinished(
     status: result.status,
     error: result.error,
     summary: result.summary,
+    assistantCompletion: result.assistantCompletion,
     diagnostics: result.diagnostics,
     delivered: job.state.lastDelivered,
     deliveryStatus: job.state.lastDeliveryStatus,

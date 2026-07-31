@@ -51,6 +51,36 @@ function normalizeCronRunLogErrorReason(value: unknown): FailoverReason | undefi
     : undefined;
 }
 
+function normalizeCronAssistantCompletion(value: unknown): CronRunLogEntry["assistantCompletion"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const entry = value as Record<string, unknown>;
+  if (
+    entry.contractVersion !== "openclaw.cron-assistant-completion.v1" ||
+    typeof entry.toolCallDetected !== "boolean" ||
+    typeof entry.toolResultAccepted !== "boolean" ||
+    typeof entry.finalAssistantVisible !== "boolean" ||
+    typeof entry.finalUserVisibleResult !== "boolean" ||
+    !Number.isSafeInteger(entry.toolCallCount) ||
+    (entry.toolCallCount as number) < 0 ||
+    !Number.isSafeInteger(entry.toolFailureCount) ||
+    (entry.toolFailureCount as number) < 0 ||
+    (entry.toolFailureCount as number) > (entry.toolCallCount as number)
+  ) {
+    return undefined;
+  }
+  return {
+    contractVersion: "openclaw.cron-assistant-completion.v1",
+    toolCallDetected: entry.toolCallDetected,
+    toolResultAccepted: entry.toolResultAccepted,
+    finalAssistantVisible: entry.finalAssistantVisible,
+    finalUserVisibleResult: entry.finalUserVisibleResult,
+    toolCallCount: entry.toolCallCount as number,
+    toolFailureCount: entry.toolFailureCount as number,
+  };
+}
+
 /** Parses stored or migrated cron history while preserving the stable wire shape. */
 export function parseCronRunLogEntryObject(
   obj: unknown,
@@ -92,6 +122,7 @@ export function parseCronRunLogEntryObject(
     error: normalizedError,
     errorReason: normalizeCronRunLogErrorReason(entryObj.errorReason) ?? undefined,
     summary: entryObj.summary,
+    assistantCompletion: normalizeCronAssistantCompletion(entryObj.assistantCompletion),
     runId: typeof entryObj.runId === "string" && entryObj.runId.trim() ? entryObj.runId : undefined,
     diagnostics: normalizeCronRunDiagnostics(entryObj.diagnostics),
     runAtMs: entryObj.runAtMs,
@@ -179,6 +210,7 @@ export function cronRunLogEntryToTaskDetail(
     storeKey: options.storeKey,
     errorReason: entry.errorReason,
     diagnostics: entry.diagnostics,
+    assistantCompletion: entry.assistantCompletion,
     delivered: entry.delivered,
     deliveryStatus: entry.deliveryStatus,
     deliveryError: entry.deliveryError,

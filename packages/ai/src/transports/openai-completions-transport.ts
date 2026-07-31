@@ -866,13 +866,13 @@ type RecoveredDeepSeekDsmlToolCall = {
 
 type DeepSeekDsmlRecoveredPart = { kind: "text"; text: string } | RecoveredDeepSeekDsmlToolCall;
 
-const DEEPSEEK_DSML_BARS = ["|", "｜"] as const;
+const DEEPSEEK_DSML_DELIMITERS = ["|", "||", "｜", "｜｜"] as const;
 const DEEPSEEK_DSML_TOOL_KINDS = ["tool_calls", "tool_call", "function_calls"] as const;
-const DEEPSEEK_DSML_TOOL_OPEN_TOKENS = DEEPSEEK_DSML_BARS.flatMap((bar) =>
-  DEEPSEEK_DSML_TOOL_KINDS.map((kind) => `<${bar}DSML${bar}${kind}>`),
+const DEEPSEEK_DSML_TOOL_OPEN_TOKENS = DEEPSEEK_DSML_DELIMITERS.flatMap((delimiter) =>
+  DEEPSEEK_DSML_TOOL_KINDS.map((kind) => `<${delimiter}DSML${delimiter}${kind}>`),
 );
-const DEEPSEEK_DSML_TOOL_CLOSE_TOKENS = DEEPSEEK_DSML_BARS.flatMap((bar) =>
-  DEEPSEEK_DSML_TOOL_KINDS.map((kind) => `</${bar}DSML${bar}${kind}>`),
+const DEEPSEEK_DSML_TOOL_CLOSE_TOKENS = DEEPSEEK_DSML_DELIMITERS.flatMap((delimiter) =>
+  DEEPSEEK_DSML_TOOL_KINDS.map((kind) => `</${delimiter}DSML${delimiter}${kind}>`),
 );
 const DEEPSEEK_DSML_TOOL_MAX_OPEN_TOKEN_LEN = Math.max(
   ...DEEPSEEK_DSML_TOOL_OPEN_TOKENS.map((token) => token.length),
@@ -941,7 +941,7 @@ function createDeepSeekDsmlToolCallRecoverer() {
 
 function parseDeepSeekDsmlToolCallBlock(body: string): RecoveredDeepSeekDsmlToolCall[] {
   const toolCalls: RecoveredDeepSeekDsmlToolCall[] = [];
-  const invokeOpenRegex = /<[|｜]DSML[|｜]invoke\b([^>]*)>/g;
+  const invokeOpenRegex = /<(?:\|\||\||｜｜|｜)DSML(?:\|\||\||｜｜|｜)invoke\b([^>]*)>/g;
   let openMatch: RegExpExecArray | null;
   while ((openMatch = invokeOpenRegex.exec(body)) !== null) {
     const invokeName = parseXmlAttribute(openMatch[1] ?? "", "name");
@@ -951,7 +951,9 @@ function parseDeepSeekDsmlToolCallBlock(body: string): RecoveredDeepSeekDsmlTool
     const invokeBodyStart = openMatch.index + openMatch[0].length;
     const invokeClose = findEarliestStringToken(body.slice(invokeBodyStart), [
       "</|DSML|invoke>",
+      "</||DSML||invoke>",
       "</｜DSML｜invoke>",
+      "</｜｜DSML｜｜invoke>",
     ]);
     if (!invokeClose) {
       continue;
@@ -974,7 +976,8 @@ function parseDeepSeekDsmlToolCallBlock(body: string): RecoveredDeepSeekDsmlTool
 
 function parseDeepSeekDsmlInvokeArguments(body: string): Record<string, unknown> | null {
   const args: Record<string, unknown> = {};
-  const parameterRegex = /<[|｜]DSML[|｜]parameter\b([^>]*)>([\s\S]*?)<\/[|｜]DSML[|｜]parameter>/g;
+  const parameterRegex =
+    /<(?:\|\||\||｜｜|｜)DSML(?:\|\||\||｜｜|｜)parameter\b([^>]*)>([\s\S]*?)<\/(?:\|\||\||｜｜|｜)DSML(?:\|\||\||｜｜|｜)parameter>/g;
   let parameterMatch: RegExpExecArray | null;
   while ((parameterMatch = parameterRegex.exec(body)) !== null) {
     const name = parseXmlAttribute(parameterMatch[1] ?? "", "name");

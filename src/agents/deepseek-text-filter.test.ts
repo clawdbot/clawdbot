@@ -46,6 +46,16 @@ describe("createDeepSeekTextFilter", () => {
       ],
       expected: "abc",
     },
+    {
+      name: "double full-width bars",
+      chunks: ["before <｜｜DSML｜｜tool_calls>body</｜｜DSML｜｜tool_calls> after"],
+      expected: "before  after",
+    },
+    {
+      name: "split double ASCII bars",
+      chunks: ["before <||DSM", "L||tool_calls>body</||DSML||tool_calls> after"],
+      expected: "before  after",
+    },
   ])("drops DSML: $name", ({ chunks, expected }) => {
     const text = filteredText(chunks);
     expect(text).toBe(expected);

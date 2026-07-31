@@ -703,6 +703,17 @@ export const CronRunLogEntrySchema = closedObject({
   error: Type.Optional(Type.String()),
   errorReason: Type.Optional(CronFailoverReasonSchema),
   summary: Type.Optional(Type.String()),
+  assistantCompletion: Type.Optional(
+    closedObject({
+      contractVersion: Type.Literal("openclaw.cron-assistant-completion.v1"),
+      toolCallDetected: Type.Boolean(),
+      toolResultAccepted: Type.Boolean(),
+      finalAssistantVisible: Type.Boolean(),
+      finalUserVisibleResult: Type.Boolean(),
+      toolCallCount: Type.Integer({ minimum: 0 }),
+      toolFailureCount: Type.Integer({ minimum: 0 }),
+    }),
+  ),
   diagnostics: Type.Optional(CronRunDiagnosticsSchema),
   delivered: Type.Optional(Type.Boolean()),
   deliveryStatus: Type.Optional(CronDeliveryStatusSchema),

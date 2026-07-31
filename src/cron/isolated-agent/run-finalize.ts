@@ -2,6 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { deriveContextPromptTokens } from "../../agents/usage.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -17,7 +18,7 @@ import {
   createCronRunDiagnosticsFromError,
   mergeCronRunDiagnostics,
 } from "../run-diagnostics.js";
-import type { CronDeliveryTrace, CronRunTelemetry } from "../types.js";
+import type { CronAssistantCompletion, CronDeliveryTrace, CronRunTelemetry } from "../types.js";
 import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
 import {
   isHeartbeatOnlyResponse,
@@ -57,6 +58,66 @@ async function loadUsageFormatRuntime() {
   return await import("../../utils/usage-format.js");
 }
 
+const NON_FINAL_ASSISTANT_STOP_REASONS = new Set([
+  "aborted",
+  "error",
+  "length",
+  "restart",
+  "timeout",
+  "tool_calls",
+  "tooluse",
+]);
+
+/** Builds the content-free public proof consumed by cron observers. */
+export function buildCronAssistantCompletion(
+  result: Pick<EmbeddedAgentRunResult, "meta" | "payloads">,
+): CronAssistantCompletion {
+  const calls = result.meta.toolSummary?.calls;
+  const failures = result.meta.toolSummary?.failures;
+  const observedToolCallCount =
+    Number.isSafeInteger(calls) && (calls ?? -1) >= 0 ? (calls ?? 0) : 0;
+  const toolFailureCount =
+    Number.isSafeInteger(failures) && (failures ?? -1) >= 0 ? (failures ?? 0) : 0;
+  const pendingToolCallCount = Array.isArray(result.meta.pendingToolCalls)
+    ? result.meta.pendingToolCalls.length
+    : 0;
+  const toolCallCount = Math.max(observedToolCallCount, pendingToolCallCount);
+  const stopReason = normalizeOptionalString(
+    result.meta.stopReason ?? result.meta.completion?.stopReason,
+  )?.toLowerCase();
+  const finalAssistantText = normalizeOptionalString(result.meta.finalAssistantVisibleText);
+  const finalAssistantVisible =
+    finalAssistantText !== undefined && !isSilentReplyPayloadText(finalAssistantText);
+  const hasStructuredError = (result.payloads ?? []).some((payload) => payload.isError === true);
+  const stoppedBeforeFinal = stopReason ? NON_FINAL_ASSISTANT_STOP_REASONS.has(stopReason) : false;
+  const toolCallDetected = toolCallCount > 0 || pendingToolCallCount > 0;
+  const toolResultAccepted =
+    toolCallDetected &&
+    toolCallCount > 0 &&
+    toolFailureCount === 0 &&
+    pendingToolCallCount === 0 &&
+    !hasStructuredError &&
+    !stoppedBeforeFinal &&
+    finalAssistantVisible;
+  const finalUserVisibleResult =
+    finalAssistantVisible &&
+    !hasStructuredError &&
+    !stoppedBeforeFinal &&
+    pendingToolCallCount === 0 &&
+    toolFailureCount === 0 &&
+    (!toolCallDetected || toolResultAccepted);
+
+  return {
+    contractVersion: "openclaw.cron-assistant-completion.v1",
+    toolCallDetected,
+    toolResultAccepted,
+    finalAssistantVisible,
+    finalUserVisibleResult,
+    toolCallCount,
+    toolFailureCount,
+  };
+}
+
 export async function finalizeCronRun(params: {
   prepared: PreparedCronRunContext;
   execution: CronExecutionResult;
@@ -68,6 +129,7 @@ export async function finalizeCronRun(params: {
   const { prepared, execution } = params;
   const finalRunResult = execution.runResult;
   const payloads = finalRunResult.payloads ?? [];
+  const assistantCompletion = buildCronAssistantCompletion(finalRunResult);
   let telemetry: CronRunTelemetry | undefined;
 
   // Late aborted results may still contain billable usage. Recheck before each
@@ -312,6 +374,7 @@ export async function finalizeCronRun(params: {
       deliveryAttempted: result?.deliveryAttempted,
       deliveryError: result?.deliveryError,
       delivery: result?.delivery,
+      assistantCompletion,
       diagnostics: mergeCronRunDiagnostics(
         runDiagnostics,
         hasFatalErrorPayload
@@ -379,6 +442,7 @@ export async function finalizeCronRun(params: {
       outputText: error,
       delivered: false,
       deliveryAttempted: false,
+      assistantCompletion,
       diagnostics: mergeCronRunDiagnostics(
         runDiagnostics,
         createCronRunDiagnosticsFromError("agent-run", error),
@@ -471,6 +535,7 @@ export async function finalizeCronRun(params: {
         deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
       deliveryError,
       delivery: deliveryTrace,
+      assistantCompletion,
       diagnostics: mergeCronRunDiagnostics(
         runDiagnostics,
         deliveryResult.result.diagnostics,

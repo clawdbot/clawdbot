@@ -2,6 +2,29 @@ import { describe, expect, it } from "vitest";
 import { cronRunLogEntryFromEvent } from "./task-run-event-codec.js";
 
 describe("cronRunLogEntryFromEvent", () => {
+  it("preserves sanitized assistant completion evidence in run history", () => {
+    const assistantCompletion = {
+      contractVersion: "openclaw.cron-assistant-completion.v1" as const,
+      toolCallDetected: true,
+      toolResultAccepted: true,
+      finalAssistantVisible: true,
+      finalUserVisibleResult: true,
+      toolCallCount: 1,
+      toolFailureCount: 0,
+    };
+    const entry = cronRunLogEntryFromEvent(
+      {
+        jobId: "cron-job",
+        action: "finished",
+        status: "ok",
+        assistantCompletion,
+      },
+      1,
+    );
+
+    expect(entry.assistantCompletion).toEqual(assistantCompletion);
+  });
+
   it("keeps permanent script failures out of run-history timeout classification", () => {
     const entry = cronRunLogEntryFromEvent(
       {

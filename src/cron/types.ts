@@ -202,6 +202,17 @@ export type CronRunErrorClassification =
   | { kind: "reason"; reason: FailoverReason }
   | { kind: "permanent" };
 
+/** Sanitized public proof that an agent run reached a user-visible terminal assistant turn. */
+export type CronAssistantCompletion = {
+  contractVersion: "openclaw.cron-assistant-completion.v1";
+  toolCallDetected: boolean;
+  toolResultAccepted: boolean;
+  finalAssistantVisible: boolean;
+  finalUserVisibleResult: boolean;
+  toolCallCount: number;
+  toolFailureCount: number;
+};
+
 /** Execution result persisted on cron state, run logs, and isolated turn results. */
 export type CronRunOutcome = {
   status: CronRunStatus;
@@ -215,6 +226,7 @@ export type CronRunOutcome = {
   sessionId?: string;
   sessionKey?: string;
   diagnostics?: CronRunDiagnostics;
+  assistantCompletion?: CronAssistantCompletion;
 };
 
 /** One run's requested delay before the same paced job runs again. */

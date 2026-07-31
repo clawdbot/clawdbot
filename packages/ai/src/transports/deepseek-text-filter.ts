@@ -4,13 +4,13 @@
  * across streamed chunks.
  */
 const DSML_KINDS = ["tool_use_error", "tool_calls", "tool_call", "function_calls"] as const;
-const DSML_BARS = ["|", "｜"] as const;
+const DSML_DELIMITERS = ["|", "||", "｜", "｜｜"] as const;
 
-const DSML_OPEN_TOKENS = DSML_BARS.flatMap((bar) =>
-  DSML_KINDS.map((kind) => `<${bar}DSML${bar}${kind}>`),
+const DSML_OPEN_TOKENS = DSML_DELIMITERS.flatMap((delimiter) =>
+  DSML_KINDS.map((kind) => `<${delimiter}DSML${delimiter}${kind}>`),
 );
-const DSML_CLOSE_TOKENS = DSML_BARS.flatMap((bar) =>
-  DSML_KINDS.map((kind) => `</${bar}DSML${bar}${kind}>`),
+const DSML_CLOSE_TOKENS = DSML_DELIMITERS.flatMap((delimiter) =>
+  DSML_KINDS.map((kind) => `</${delimiter}DSML${delimiter}${kind}>`),
 );
 const MAX_OPEN_TOKEN_LEN = Math.max(...DSML_OPEN_TOKENS.map((token) => token.length));
 const MAX_CLOSE_TOKEN_LEN = Math.max(...DSML_CLOSE_TOKENS.map((token) => token.length));
