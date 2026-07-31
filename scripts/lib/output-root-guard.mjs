@@ -11,9 +11,12 @@ export function assertRealOutputRoot(rootPath, params = {}) {
   let stat;
   try {
     stat = fsImpl.lstatSync(rootPath);
-  } catch {
+  } catch (error) {
     // Missing roots are normal on a first build; the build recreates them.
-    return;
+    if (error?.code === "ENOENT") {
+      return;
+    }
+    throw error;
   }
   if (!stat.isSymbolicLink()) {
     return;

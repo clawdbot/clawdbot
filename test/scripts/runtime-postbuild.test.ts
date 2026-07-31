@@ -229,6 +229,28 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
+  it("validates every postbuild root before running any phase", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-roots-");
+    const distFile = path.join(rootDir, "dist", "keep.js");
+    const targetDir = path.join(rootDir, "gateway-runtime");
+    await fs.mkdir(path.dirname(distFile), { recursive: true });
+    await fs.mkdir(targetDir);
+    await fs.writeFile(distFile, "keep\n");
+    await fs.symlink(targetDir, path.join(rootDir, "dist-runtime"), "dir");
+
+    expect(() =>
+      runRuntimePostBuild({
+        cwd: rootDir,
+        repoRoot: rootDir,
+        rootDir,
+        timings: false,
+      }),
+    ).toThrow(/symbolic link/u);
+
+    await expect(fs.readdir(path.join(rootDir, "dist"))).resolves.toEqual(["keep.js"]);
+    await expect(fs.readFile(distFile, "utf8")).resolves.toBe("keep\n");
+  });
+
   it("preserves restored dist static assets when plugin sources are absent", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const output = "assets/viewer-runtime.js";

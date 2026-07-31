@@ -98,6 +98,12 @@ export function cleanTsdownOutputRoots(params = {}) {
   const fsImpl = params.fs ?? fs;
   const env = params.env ?? process.env;
   const roots = params.roots ?? listTsdownOutputRoots();
+  const rootPaths = roots.map((root) => path.join(cwd, root));
+  // Validate the complete mutation set before traversing protected children or
+  // cleaning any earlier root; otherwise a later symlink can leave a partial build.
+  for (const rootPath of rootPaths) {
+    assertRealOutputRoot(rootPath, { fs: fsImpl });
+  }
   const protectedDeclarationPaths =
     env[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1"
       ? listExistingDeclarationOutputPaths({
@@ -110,11 +116,7 @@ export function cleanTsdownOutputRoots(params = {}) {
     ...protectedDeclarationPaths,
     ...listExistingPreservedOutputPaths({ cwd, env, fs: fsImpl }),
   ]);
-  for (const root of roots) {
-    const rootPath = path.join(cwd, root);
-    // The guard throws outside the best-effort catch below: a symlinked root
-    // must abort the build, not be swallowed as a skippable cleanup error.
-    assertRealOutputRoot(rootPath, { fs: fsImpl });
+  for (const rootPath of rootPaths) {
     try {
       if (hasProtectedChild({ rootPath, protectedPaths })) {
         cleanOutputRootExcept(rootPath, protectedPaths, fsImpl);
@@ -214,6 +216,8 @@ export function pruneStaleRootChunkFiles(params = {}) {
   const roots = listTsdownOutputRoots({ cwd, fs: fsImpl }).map((root) => path.join(cwd, root));
   for (const root of roots) {
     assertRealOutputRoot(root, { fs: fsImpl });
+  }
+  for (const root of roots) {
     let entries;
     try {
       entries = fsImpl.readdirSync(root, { withFileTypes: true });

@@ -725,6 +725,44 @@ describe("resolveTsdownBuildInvocation", () => {
     );
   });
 
+  it("rejects a symlink before traversing protected output children", () => {
+    const readdirSync = vi.fn(fs.readdirSync);
+    const fsImpl = {
+      ...fs,
+      lstatSync: () => ({ isSymbolicLink: () => true }),
+      readdirSync,
+    } as unknown as typeof fs;
+
+    expect(() =>
+      cleanTsdownOutputRoots({
+        cwd: "/workspace",
+        roots: ["dist"],
+        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+        fs: fsImpl,
+      }),
+    ).toThrow(/symbolic link/u);
+    expect(readdirSync).not.toHaveBeenCalled();
+  });
+
+  it("validates every clean root before mutating any output", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-clean-roots-");
+    const firstRootFile = path.join(rootDir, "dist", "keep.js");
+    const targetDir = path.join(rootDir, "gateway-runtime");
+    await fsPromises.mkdir(path.dirname(firstRootFile), { recursive: true });
+    await fsPromises.mkdir(targetDir);
+    await fsPromises.writeFile(firstRootFile, "keep\n");
+    await fsPromises.symlink(targetDir, path.join(rootDir, "dist-runtime"), "dir");
+
+    expect(() =>
+      cleanTsdownOutputRoots({
+        cwd: rootDir,
+        roots: ["dist", "dist-runtime"],
+      }),
+    ).toThrow(/symbolic link/u);
+
+    await expect(fsPromises.readFile(firstRootFile, "utf8")).resolves.toBe("keep\n");
+  });
+
   it("refuses a symlinked output root even without protected children", async () => {
     const rootDir = createTempDir("openclaw-tsdown-clean-symlink-plain-");
     const targetDir = path.join(rootDir, "gateway-dist");
@@ -755,6 +793,20 @@ describe("resolveTsdownBuildInvocation", () => {
 
     expect(fs.readlinkSync(distLink)).toBe(targetDir);
     await expect(fsPromises.readFile(hashedFile, "utf8")).resolves.toBe("old delegate\n");
+  });
+
+  it("validates every chunk root before pruning any output", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-prune-roots-");
+    const firstRootFile = path.join(rootDir, "dist", "delegate-OldHash.js");
+    const targetDir = path.join(rootDir, "gateway-runtime");
+    await fsPromises.mkdir(path.dirname(firstRootFile), { recursive: true });
+    await fsPromises.mkdir(targetDir);
+    await fsPromises.writeFile(firstRootFile, "keep\n");
+    await fsPromises.symlink(targetDir, path.join(rootDir, "dist-runtime"), "dir");
+
+    expect(() => pruneStaleRootChunkFiles({ cwd: rootDir })).toThrow(/symbolic link/u);
+
+    await expect(fsPromises.readFile(firstRootFile, "utf8")).resolves.toBe("keep\n");
   });
 
   it("refuses to prune runtime overlay symlinks through a symlinked output root", async () => {
