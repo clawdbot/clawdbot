@@ -31,7 +31,7 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "../button-types.js";
-import { splitTelegramCaption } from "../caption.js";
+import { resolveTelegramPlainCaption, splitTelegramCaption } from "../caption.js";
 import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,
@@ -449,16 +449,19 @@ async function deliverMediaReply(params: {
     });
     const fileName = media.fileName ?? (isGif ? "animation.gif" : "file");
     const file = new InputFile(media.buffer, fileName);
-    const { caption, followUpText } = splitTelegramCaption(
-      isFirstMedia ? (params.reply.text ?? undefined) : undefined,
-    );
-    const htmlCaption = caption
+    const captionText = isFirstMedia ? (params.reply.text ?? undefined) : undefined;
+    const trimmedCaption = captionText?.trim();
+    const renderedCaption = trimmedCaption
       ? params.textMode === "html"
-        ? caption
-        : renderTelegramHtmlText(caption, { tableMode: params.tableMode })
+        ? trimmedCaption
+        : renderTelegramHtmlText(trimmedCaption, { tableMode: params.tableMode })
       : undefined;
-    const plainCaption =
-      caption && params.textMode === "html" ? telegramHtmlToPlainTextFallback(caption) : caption;
+    const { caption, followUpText } = splitTelegramCaption(captionText, renderedCaption);
+    const htmlCaption = caption ? renderedCaption : undefined;
+    const plainCaption = resolveTelegramPlainCaption(
+      caption && params.textMode === "html" ? telegramHtmlToPlainTextFallback(caption) : caption,
+      htmlCaption,
+    );
     if (followUpText) {
       pendingFollowUpText = followUpText;
     }

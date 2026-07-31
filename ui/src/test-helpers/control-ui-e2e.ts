@@ -207,6 +207,8 @@ export type ControlUiMockGatewayScenario = {
     name: string;
     provider: string;
     available?: boolean;
+    contextWindow?: number;
+    supportsTools?: boolean;
   }>;
   /** Operator scopes returned by the mocked connect handshake. */
   operatorScopes?: string[];

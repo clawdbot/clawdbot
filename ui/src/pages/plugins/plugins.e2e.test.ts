@@ -405,8 +405,10 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await workboardCard.getByRole("button", { name: "Enable", exact: true }).waitFor();
       await captureScreenshot(page, "01-installed-desktop.png");
 
-      // Rows open a detail overlay; close it before continuing.
-      await workboardCard.click();
+      // The row's primary action is a real named button, so keyboard users can inspect plugins.
+      const detailsButton = workboardCard.getByRole("button", { name: "Workboard", exact: true });
+      await detailsButton.focus();
+      await page.keyboard.press("Enter");
       const detail = page.locator(".plugins-detail");
       await detail.waitFor({ state: "visible" });
       expect(await detail.textContent()).toContain("Workboard");

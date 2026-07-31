@@ -161,6 +161,8 @@ export async function deliverMattermostReplyWithDraftPreview(
         resolveFinalizedId: (previewPostId) => finalizedPreviewPost?.id ?? previewPostId,
         onPreviewFinalized: (_previewPostId, receipt) => {
           params.previewState.finalizedViaPreviewPost = true;
+          // Supplemental retries must not repost text already committed by the preview edit.
+          previewFinalTextAlreadyDelivered = true;
           previewDeliveryResult = {
             outcome: "text",
             messageIds: listMessageReceiptPlatformIds(receipt),
@@ -237,6 +239,8 @@ export async function deliverMattermostReplyWithDraftPreview(
         confirmedPreviewDelivery,
         previewDeliveryResult,
         supplementalDeliveryResult,
+        // Supplemental retries use the normal sender; retain its durable receipt too.
+        normalDeliveryResult,
       ]) ?? previewDeliveryResult
     );
   } catch (error: unknown) {

@@ -9,7 +9,10 @@ import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcript
 
 let cleanup: (() => Promise<void>) | undefined;
 
-async function createRealtimeServer(onRequest: (url: URL) => void) {
+async function createRealtimeServer(
+  onRequest: (url: URL) => void,
+  transcriptionEvents: readonly Record<string, unknown>[] = [],
+) {
   const server = createServer();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const clients = new Set<WebSocket>();
@@ -19,6 +22,19 @@ async function createRealtimeServer(onRequest: (url: URL) => void) {
       clients.add(ws);
       ws.on("close", () => {
         clients.delete(ws);
+      });
+      ws.on("message", (data) => {
+        const bytes = Buffer.isBuffer(data)
+          ? data
+          : Array.isArray(data)
+            ? Buffer.concat(data)
+            : Buffer.from(data);
+        const message = JSON.parse(bytes.toString("utf8")) as { type?: unknown };
+        if (message.type === "session.update") {
+          for (const event of transcriptionEvents) {
+            ws.send(JSON.stringify(event));
+          }
+        }
       });
       ws.send(JSON.stringify({ type: "session.created" }));
     });
@@ -121,5 +137,204 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     expect(requests[0]?.pathname).toBe("/v1/audio/transcriptions/realtime");
     expect(requests[0]?.searchParams.get("model")).toBe("voxtral-mini-transcribe-realtime-2602");
     expect(requests[0]?.searchParams.get("target_streaming_delay_ms")).toBe("800");
+  });
+
+  it.each([
+    {
+      name: "delivers terminal-only transcription text",
+      events: [{ type: "transcription.done", text: "final transcript" }],
+      partials: [],
+      transcripts: ["final transcript"],
+    },
+    {
+      name: "prefers corrected final text over streamed deltas",
+      events: [
+        { type: "transcription.text.delta", text: "draft" },
+        { type: "transcription.text.delta", text: " words" },
+        { type: "transcription.done", text: "corrected final transcript" },
+      ],
+      partials: ["draft", "draft words"],
+      transcripts: ["corrected final transcript"],
+    },
+    {
+      name: "does not repeat an already emitted final segment",
+      events: [
+        { type: "transcription.text.delta", text: "draft" },
+        { type: "transcription.segment", text: "final transcript", start: 0, end: 1 },
+        { type: "transcription.done", text: "final transcript" },
+      ],
+      partials: ["draft"],
+      transcripts: ["final transcript"],
+    },
+    {
+      name: "delivers identical text from independently timed segments",
+      events: [
+        { type: "transcription.segment", text: "echo", start: 0, end: 1, speaker_id: "first" },
+        { type: "transcription.segment", text: "echo", start: 1, end: 2, speaker_id: "second" },
+        { type: "transcription.done", text: "echo echo" },
+      ],
+      partials: [],
+      transcripts: ["echo", "echo"],
+    },
+    {
+      name: "does not replay a terminal aggregate after multiple final segments",
+      events: [
+        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
+        { type: "transcription.segment", text: "world", start: 1, end: 2 },
+        { type: "transcription.done", text: "hello world" },
+      ],
+      partials: [],
+      transcripts: ["hello", "world"],
+    },
+    {
+      name: "flushes new deltas after a finalized segment without replaying its aggregate",
+      events: [
+        { type: "transcription.text.delta", text: "hello" },
+        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
+        { type: "transcription.text.delta", text: " new" },
+        { type: "transcription.text.delta", text: " speech" },
+        { type: "transcription.done", text: "hello new speech" },
+      ],
+      partials: ["hello", " new", " new speech"],
+      transcripts: ["hello", " new speech"],
+    },
+    {
+      name: "flushes new deltas after multiple finalized segments without replaying them",
+      events: [
+        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
+        { type: "transcription.segment", text: "world", start: 1, end: 2 },
+        { type: "transcription.text.delta", text: " again" },
+        { type: "transcription.done", text: "hello world again" },
+      ],
+      partials: [" again"],
+      transcripts: ["hello", "world", " again"],
+    },
+    {
+      name: "does not finalize whitespace-only deltas after a final segment",
+      events: [
+        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
+        { type: "transcription.text.delta", text: "  \t" },
+        { type: "transcription.done", text: "hello  " },
+      ],
+      partials: ["  \t"],
+      transcripts: ["hello"],
+    },
+    {
+      name: "does not finalize a punctuation-only period delta after a final segment",
+      events: [
+        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
+        { type: "transcription.text.delta", text: "." },
+        { type: "transcription.done", text: "hello." },
+      ],
+      partials: ["."],
+      transcripts: ["hello"],
+    },
+    {
+      name: "does not finalize a punctuation-only comma delta after a final segment",
+      events: [
+        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
+        { type: "transcription.text.delta", text: ", " },
+        { type: "transcription.done", text: "hello," },
+      ],
+      partials: [", "],
+      transcripts: ["hello"],
+    },
+    {
+      name: "preserves multilingual speech with leading punctuation after a final segment",
+      events: [
+        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
+        { type: "transcription.text.delta", text: ", 你好" },
+        { type: "transcription.done", text: "hello, 你好" },
+      ],
+      partials: [", 你好"],
+      transcripts: ["hello", ", 你好"],
+    },
+    {
+      name: "preserves numeric speech after a final segment",
+      events: [
+        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
+        { type: "transcription.text.delta", text: " 42" },
+        { type: "transcription.done", text: "hello 42" },
+      ],
+      partials: [" 42"],
+      transcripts: ["hello", " 42"],
+    },
+    {
+      name: "does not replay terminal suffixes after final segments already own the stream",
+      events: [
+        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
+        { type: "transcription.segment", text: "world", start: 1, end: 2 },
+        { type: "transcription.done", text: "hello world again" },
+      ],
+      partials: [],
+      transcripts: ["hello", "world"],
+    },
+    {
+      name: "does not replay terminal corrections after final segments already own the stream",
+      events: [
+        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
+        { type: "transcription.segment", text: "world", start: 1, end: 2 },
+        { type: "transcription.done", text: "hello corrected world" },
+      ],
+      partials: [],
+      transcripts: ["hello", "world"],
+    },
+    {
+      name: "does not turn terminal sentence punctuation into a transcript",
+      events: [
+        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
+        { type: "transcription.segment", text: "world", start: 1, end: 2 },
+        { type: "transcription.done", text: "hello world." },
+      ],
+      partials: [],
+      transcripts: ["hello", "world"],
+    },
+    {
+      name: "does not turn terminal separator punctuation into a transcript",
+      events: [
+        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
+        { type: "transcription.segment", text: "world", start: 1, end: 2 },
+        { type: "transcription.done", text: "hello, world" },
+      ],
+      partials: [],
+      transcripts: ["hello", "world"],
+    },
+    {
+      name: "does not replay terminal whitespace normalization as a transcript",
+      events: [
+        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
+        { type: "transcription.segment", text: "world", start: 1, end: 2 },
+        { type: "transcription.done", text: "  hello\t\n  world  " },
+      ],
+      partials: [],
+      transcripts: ["hello", "world"],
+    },
+    {
+      name: "does not replay a rewritten terminal aggregate after final segments",
+      events: [
+        { type: "transcription.segment", text: "hello", start: 0, end: 1 },
+        { type: "transcription.segment", text: "world", start: 1, end: 2 },
+        { type: "transcription.done", text: "greetings earth" },
+      ],
+      partials: [],
+      transcripts: ["hello", "world"],
+    },
+  ])("$name", async ({ events, partials, transcripts }) => {
+    const baseUrl = await createRealtimeServer(() => {}, events);
+    const onPartial = vi.fn();
+    const onTranscript = vi.fn();
+    const session = buildMistralRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "fixture-value", baseUrl },
+      onPartial,
+      onTranscript,
+    });
+
+    await session.connect();
+    await vi.waitFor(() => {
+      expect(onTranscript.mock.calls.map(([text]) => text)).toEqual(transcripts);
+      expect(session.isConnected()).toBe(false);
+    });
+
+    expect(onPartial.mock.calls.map(([text]) => text)).toEqual(partials);
   });
 });

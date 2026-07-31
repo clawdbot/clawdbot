@@ -14,6 +14,7 @@ type FormatChannelPrimerLine = typeof import("../channels/registry.js").formatCh
 type FormatChannelSelectionLine =
   typeof import("../channels/registry.js").formatChannelSelectionLine;
 type IsChannelConfigured = typeof import("../config/channel-configured.js").isChannelConfigured;
+type ChannelSetupPlugin = import("../channels/plugins/setup-wizard-types.js").ChannelSetupPlugin;
 type NoteChannelPrimerChannels = Parameters<
   typeof import("./channel-setup.status.js").noteChannelPrimer
 >[1];
@@ -258,6 +259,111 @@ describe("resolveChannelSetupSelectionContributions", () => {
       "Matrix\\nPlugin: installed",
       "Zalo\\nPlugin: install plugin to enable",
     ]);
+  });
+
+  it.each(["rejected status check", "synchronous status check", "adapter resolution"] as const)(
+    "keeps healthy channels selectable after a %s failure",
+    async (failurePoint) => {
+      const installedPlugins = [
+        {
+          id: "matrix",
+          meta: makeMeta("matrix", "Matrix"),
+          capabilities: { chatTypes: [] },
+          config: {} as ChannelSetupPlugin["config"],
+        },
+        {
+          id: "telegram",
+          meta: makeMeta("telegram", "Telegram"),
+          capabilities: { chatTypes: [] },
+          config: {} as ChannelSetupPlugin["config"],
+        },
+      ] satisfies ChannelSetupPlugin[];
+      listChatChannels.mockReturnValue([
+        makeMeta("matrix", "Matrix"),
+        makeMeta("telegram", "Telegram"),
+      ]);
+      isChannelConfigured.mockImplementation((_, channelId) => channelId === "matrix");
+
+      const failure = new Error("lazy Matrix setup module unavailable");
+      const summary = await collectChannelStatus({
+        cfg: {} as never,
+        accountOverrides: {},
+        installedPlugins,
+        resolveAdapter: (channel) => {
+          if (channel === "matrix" && failurePoint === "adapter resolution") {
+            throw failure;
+          }
+          return {
+            channel,
+            getStatus:
+              channel === "matrix"
+                ? failurePoint === "synchronous status check"
+                  ? () => {
+                      throw failure;
+                    }
+                  : async () => {
+                      throw failure;
+                    }
+                : async () => ({
+                    channel: "telegram",
+                    configured: true,
+                    statusLines: ["Telegram: configured"],
+                    selectionHint: "configured",
+                    quickstartScore: 5,
+                  }),
+          } as never;
+        },
+      });
+
+      expect(summary.statusByChannel.get("matrix")).toEqual({
+        channel: "matrix",
+        configured: true,
+        statusLines: ["Matrix: status unavailable (lazy Matrix setup module unavailable)"],
+        selectionHint: "status unavailable",
+      });
+      expect(summary.statusByChannel.get("telegram")).toEqual({
+        channel: "telegram",
+        configured: true,
+        statusLines: ["Telegram: configured"],
+        selectionHint: "configured",
+        quickstartScore: 5,
+      });
+      expect(summary.statusLines).toEqual([
+        "Matrix: status unavailable (lazy Matrix setup module unavailable)",
+        "Telegram: configured",
+      ]);
+    },
+  );
+
+  it("redacts credentials and terminal controls in failed channel status checks", async () => {
+    const token = "sk-abcdefghijklmnopqrstuv";
+    const summary = await collectChannelStatus({
+      cfg: {} as never,
+      accountOverrides: {},
+      installedPlugins: [
+        {
+          id: "matrix",
+          meta: makeMeta("matrix", "Matrix"),
+          capabilities: { chatTypes: [] },
+          config: {} as ChannelSetupPlugin["config"],
+        },
+      ],
+      resolveAdapter: (channel) =>
+        ({
+          channel,
+          getStatus: async () => {
+            throw new Error(`\u001B[31mloader failed\nAuthorization: Bearer ${token}`);
+          },
+        }) as never,
+    });
+
+    const statusLine = summary.statusLines[0];
+    expect(statusLine).toContain(
+      "Matrix: status unavailable (loader failed\\nAuthorization: Bearer",
+    );
+    expect(statusLine).not.toContain(token);
+    expect(statusLine).not.toContain("\u001B");
+    expect(statusLine).not.toContain("\n");
   });
 
   it("localizes channel status note labels", async () => {

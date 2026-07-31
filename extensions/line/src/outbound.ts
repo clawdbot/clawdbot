@@ -275,35 +275,13 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
   },
   ...createAttachedChannelResultAdapter({
     channel: "line",
-    sendText: async ({ cfg, to, text, accountId }) => {
-      const outboundRuntime = await loadLineOutboundRuntime();
-      const sendText = outboundRuntime.pushMessageLine;
-      const sendFlex = outboundRuntime.pushFlexMessage;
-      const processed = outboundRuntime.processLineMessage(text);
-      let result: LineSendResult;
-      if (processed.text.trim()) {
-        result = await sendText(to, processed.text, {
-          verbose: false,
-          cfg,
-          accountId: accountId ?? undefined,
-        });
-      } else {
-        result = {
-          messageId: "processed",
-          chatId: to,
-          receipt: createLineSendReceipt({ messageId: "processed", chatId: to, kind: "card" }),
-        };
-      }
-      for (const flexMsg of processed.flexMessages) {
-        const flexContents = flexMsg.contents;
-        await sendFlex(to, flexMsg.altText, flexContents, {
-          verbose: false,
-          cfg,
-          accountId: accountId ?? undefined,
-        });
-      }
-      return result;
-    },
+    // The payload owner records each physical send before the next fallible step;
+    // bypassing it fabricates Flex-only ids and loses partial-delivery evidence.
+    sendText: async (ctx) =>
+      await lineOutboundAdapter.sendPayload!({
+        ...ctx,
+        payload: { text: ctx.text },
+      }),
     sendMedia: async ({ cfg, to, text, mediaUrl, accountId }) =>
       await (
         await loadLineOutboundRuntime()

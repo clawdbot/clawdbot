@@ -12,9 +12,10 @@ import {
   resolveOpenAISystemPromptContribution,
 } from "./prompt-overlay.js";
 import {
-  createOpenAIQuicksilverBrowserSessionBroker,
-  OPENAI_QUICKSILVER_OFFER_PATH,
-} from "./realtime-quicksilver-session.js";
+  acquireOpenAIQuicksilverBrowserSessionBroker,
+  releaseOpenAIQuicksilverBrowserSessionBroker,
+} from "./realtime-quicksilver-session-owner.js";
+import { OPENAI_QUICKSILVER_OFFER_PATH } from "./realtime-quicksilver-session.js";
 import { buildOpenAIRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
@@ -27,7 +28,7 @@ export default definePluginEntry({
   register(api) {
     const quicksilverSession =
       api.registrationMode === "full"
-        ? createOpenAIQuicksilverBrowserSessionBroker({
+        ? acquireOpenAIQuicksilverBrowserSessionBroker({
             getConfig: () => api.runtime.config.current() as OpenClawConfig,
             logger: api.logger,
           })
@@ -42,7 +43,12 @@ export default definePluginEntry({
       api.lifecycle.registerRuntimeLifecycle({
         id: "openai-quicksilver-realtime-browser-session",
         description: "Close GPT-Live browser sidebands when the OpenAI plugin stops",
-        cleanup: () => quicksilverSession.cleanup(),
+        cleanup: (ctx) => {
+          if (ctx.reason !== "disable") {
+            return undefined;
+          }
+          return releaseOpenAIQuicksilverBrowserSessionBroker(quicksilverSession);
+        },
       });
     }
     const openAIToolCompatHooks = buildProviderToolCompatFamilyHooks("openai");

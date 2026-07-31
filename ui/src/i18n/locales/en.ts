@@ -1968,18 +1968,18 @@ export const en: TranslationMap = {
     plugin: "Plugin-provided panel.",
   },
   modelSetup: {
-    heading: "Connect your AI",
+    heading: "Connect a verified AI model",
     intro:
-      "OpenClaw reuses AI access you already have — a CLI login, an API key, or a provider sign-in.",
+      "OpenClaw checks the AI access available on this Gateway and verifies the exact model before it enables conversations.",
     required: {
       title: "No AI provider configured",
-      body: "OpenClaw couldn't find a provider and model configured for this agent. Add one before starting a conversation.",
-      action: "Configure a provider",
+      body: "We couldn't find a provider and model configured for this agent. Choose a supported connection; OpenClaw will test it before enabling chat.",
+      action: "Connect an AI provider",
     },
     connectionFailure: {
-      title: "OpenClaw couldn't use your configured AI",
-      body: "This agent has a provider and model selected, but the connection failed. Check the provider login or API key, model access, and service status, then try again.",
-      action: "Check provider settings",
+      title: "Configured AI needs attention",
+      body: "OpenClaw found the provider and model selected for this agent, but the live check failed. Your configuration is still intact. Review the credential, model access, or provider status, then verify again.",
+      action: "Review connection",
     },
     loading: "Checking this Gateway for available AI access…",
     retry: "Retry",
@@ -3930,7 +3930,7 @@ export const en: TranslationMap = {
     },
     readiness: {
       title: "AI setup",
-      heading: "Connect your AI",
+      heading: "Connect a verified AI model",
       signedInNoModels:
         "You're signed in, but this account exposes no usable models. Choose another provider or account to continue.",
       notConfigured: "Choose a provider and verify the model OpenClaw will use.",
@@ -4902,6 +4902,9 @@ export const en: TranslationMap = {
       fastHelp: "Fast responses finish sooner and can use more of your usage limits.",
       speedUnsupported: "Speed control is not supported for this model.",
       contextWindow: "{count} context",
+      chatOnly: "Chat only",
+      chatOnlyHelp:
+        "This model can chat, but it cannot use tools. Choose another model for files, commands, web, or media tasks.",
       providerModels: "{provider} models",
       resetReasoning: "Reset to default ({level})",
       useDefaultReasoning: "Use default reasoning ({level})",

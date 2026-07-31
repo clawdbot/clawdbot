@@ -902,12 +902,18 @@ describe("handleTelegramAction", () => {
         expect(entries[0]).toMatchObject({
           channel: "telegram",
           to: "12345",
-          payloads: [
-            {
-              text: "times out after queue write",
-              delivery: { pin: { enabled: true, required: true } },
-            },
-          ],
+          preparedBatch: {
+            sourcePayloadCount: 1,
+            entries: [
+              {
+                status: "accepted",
+                payload: {
+                  text: "times out after queue write",
+                  delivery: { pin: { enabled: true, required: true } },
+                },
+              },
+            ],
+          },
           session: { key: "agent:main:telegram:direct:12345", agentId: "main" },
           gatewayClientScopes: ["operator.write"],
           retryCount: 0,
@@ -917,12 +923,20 @@ describe("handleTelegramAction", () => {
       .mockImplementationOnce(async () => {
         const entries = readDurableQueueEntries();
         const liveEntry = entries.find((entry) =>
-          JSON.stringify(entry.payloads).includes("delivers after queue write"),
+          JSON.stringify(entry.preparedBatch).includes("delivers after queue write"),
         );
         expect(liveEntry).toMatchObject({
           channel: "telegram",
           to: "12345",
-          payloads: [{ text: "delivers after queue write" }],
+          preparedBatch: {
+            sourcePayloadCount: 1,
+            entries: [
+              {
+                status: "accepted",
+                payload: { text: "delivers after queue write" },
+              },
+            ],
+          },
           retryCount: 0,
         });
         return { channel: "telegram", messageId: "tg-ok" };
@@ -978,12 +992,18 @@ describe("handleTelegramAction", () => {
       const retryableEntries = readDurableQueueEntries();
       expect(retryableEntries).toHaveLength(1);
       expect(retryableEntries[0]).toMatchObject({
-        payloads: [
-          {
-            text: "times out after queue write",
-            delivery: { pin: { enabled: true, required: true } },
-          },
-        ],
+        preparedBatch: {
+          sourcePayloadCount: 1,
+          entries: [
+            {
+              status: "accepted",
+              payload: {
+                text: "times out after queue write",
+                delivery: { pin: { enabled: true, required: true } },
+              },
+            },
+          ],
+        },
         retryCount: 1,
       });
       expect(String(retryableEntries[0]?.lastError)).toContain("telegram timeout");
@@ -1004,12 +1024,18 @@ describe("handleTelegramAction", () => {
       });
       expect(readDurableQueueEntries()).toHaveLength(1);
       expect(readDurableQueueEntries()[0]).toMatchObject({
-        payloads: [
-          {
-            text: "times out after queue write",
-            delivery: { pin: { enabled: true, required: true } },
-          },
-        ],
+        preparedBatch: {
+          sourcePayloadCount: 1,
+          entries: [
+            {
+              status: "accepted",
+              payload: {
+                text: "times out after queue write",
+                delivery: { pin: { enabled: true, required: true } },
+              },
+            },
+          ],
+        },
         retryCount: 1,
       });
     } finally {

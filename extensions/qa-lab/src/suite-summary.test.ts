@@ -94,6 +94,60 @@ describe("qa suite summary helpers", () => {
     ).resolves.toBe(1);
   });
 
+  it.each([
+    {
+      name: "required skip",
+      summary: {
+        counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
+        scenarios: [{ name: "required scenario", status: "skip" }],
+      },
+    },
+    {
+      name: "required skipped",
+      summary: {
+        counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
+        scenarios: [{ name: "required scenario", status: "skipped" }],
+      },
+    },
+    {
+      name: "blocked scenario",
+      summary: {
+        counts: { total: 1, passed: 0, failed: 0, skipped: 0 },
+        scenarios: [{ name: "required scenario", status: "blocked" }],
+      },
+    },
+    {
+      name: "blocked evidence",
+      summary: {
+        counts: { total: 1, passed: 0, failed: 0, skipped: 0 },
+        entries: [{ result: { status: "blocked" } }],
+      },
+    },
+  ])("requires a completed scenario before tolerating $name", async ({ summary }) => {
+    await expect(
+      readSummary(summary, (summaryPath) =>
+        readQaSuiteFailedOrSkippedScenarioCountFromFile(summaryPath, {
+          requireExecutedScenario: true,
+        }),
+      ),
+    ).rejects.toThrow("did not include any executed scenarios");
+  });
+
+  it("still permits a genuinely executed failed scenario in failure-tolerant gates", async () => {
+    await expect(
+      readSummary(
+        {
+          counts: { total: 1, passed: 0, failed: 1, skipped: 0 },
+          scenarios: [{ name: "required scenario", status: "fail" }],
+        },
+        (summaryPath) =>
+          readQaSuiteFailedOrSkippedScenarioCountFromFile(summaryPath, {
+            requireExecutedScenario: true,
+          }),
+      ),
+    ).resolves.toBe(1);
+  });
+
   it("rejects a suite containing only catalog-confirmed report-only skips", async () => {
     await expect(
       readSummary(

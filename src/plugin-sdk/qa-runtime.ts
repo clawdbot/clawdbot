@@ -4,16 +4,26 @@ import { createServer } from "node:net";
 import path from "node:path";
 // QA runtime helpers register and execute plugin QA scenarios from local files.
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import type { Command } from "commander";
 import { formatErrorMessage } from "./error-runtime.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 import { resolvePrivateQaBundledPluginsEnv } from "./private-qa-bundled-env.js";
 import { runExec } from "./process-runtime.js";
-import type { QaRunnerCliRegistration } from "./qa-runner-runtime.js";
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
 import { normalizeStringEntries } from "./string-coerce-runtime.js";
 
 export { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
+export {
+  createLazyCliRuntimeLoader,
+  createLiveTransportQaCliRegistration,
+  runLiveTransportQaSuiteCommand,
+} from "./qa-runner-runtime.js";
+export type {
+  LiveTransportQaCliRegistration,
+  LiveTransportQaCliRegistrationOptions,
+  LiveTransportQaCommandOptions,
+  LiveTransportQaCredentialCliOptions,
+  LiveTransportQaSuiteCommandOptions,
+} from "./qa-runner-runtime.js";
 
 type QaRuntimeSurface = {
   defaultQaRuntimeModelForMode: (
@@ -24,7 +34,6 @@ type QaRuntimeSurface = {
     },
   ) => string;
   startQaLiveLaneGateway: (...args: unknown[]) => Promise<unknown>;
-  runLiveTransportQaSuiteCommand: (params: LiveTransportQaSuiteCommandOptions) => Promise<unknown>;
 };
 
 function isMissingQaRuntimeError(error: unknown) {
@@ -56,198 +65,6 @@ export function isQaRuntimeAvailable(): boolean {
     }
     throw error;
   }
-}
-
-/** Normalized options passed from live-transport QA CLIs into lane runners. */
-export type LiveTransportQaCommandOptions = {
-  repoRoot?: string;
-  outputDir?: string;
-  providerMode?: string;
-  primaryModel?: string;
-  alternateModel?: string;
-  fastMode?: boolean;
-  allowFailures?: boolean;
-  failFast?: boolean;
-  profile?: string;
-  scenarioIds?: string[];
-  listScenarios?: boolean;
-  sutAccountId?: string;
-  credentialFile?: string;
-  credentialSource?: string;
-  credentialRole?: string;
-};
-
-export type LiveTransportQaSuiteCommandOptions = {
-  channelId: string;
-  credentialMode?: "env-only" | "shared-lease";
-  defaultProviderMode: string;
-  envCredentialReason?: string;
-  laneLabel?: string;
-  options: LiveTransportQaCommandOptions;
-  selectScenarioIds: (params: {
-    profile?: string;
-    primaryModel: string;
-    providerMode: string;
-    scenarioIds?: readonly string[];
-  }) => string[];
-};
-
-/** Run a plugin-owned transport adapter through QA Lab's shared suite host. */
-export async function runLiveTransportQaSuiteCommand(params: LiveTransportQaSuiteCommandOptions) {
-  return await loadQaRuntimeModule().runLiveTransportQaSuiteCommand(params);
-}
-
-type LiveTransportQaCommanderOptions = {
-  repoRoot?: string;
-  outputDir?: string;
-  providerMode?: string;
-  model?: string;
-  altModel?: string;
-  scenario?: string[];
-  listScenarios?: boolean;
-  fast?: boolean;
-  allowFailures?: boolean;
-  failFast?: boolean;
-  profile?: string;
-  sutAccount?: string;
-  credentialFile?: string;
-  credentialSource?: string;
-  credentialRole?: string;
-};
-
-/** Commander registration hook for one live-transport QA subcommand. */
-export type LiveTransportQaCliRegistration = QaRunnerCliRegistration;
-
-/** Help text customizations for live credential source and role flags. */
-export type LiveTransportQaCredentialCliOptions = {
-  sourceDescription?: string;
-  roleDescription?: string;
-};
-
-/** Declarative command metadata and runner used to install a live-transport QA CLI. */
-export type LiveTransportQaCliRegistrationOptions = {
-  commandName: string;
-  credentialFileHelp?: string;
-  credentialOptions?: LiveTransportQaCredentialCliOptions;
-  defaultProviderMode: string;
-  description: string;
-  providerModeHelp: string;
-  listScenariosHelp?: string;
-  outputDirHelp: string;
-  profileHelp?: string;
-  failFastHelp?: string;
-  allowFailuresHelp?: string;
-  scenarioHelp: string;
-  sutAccountHelp: string;
-  adapterFactory?: QaRunnerCliRegistration["adapterFactory"];
-  run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
-};
-
-/** Memoize a lazy CLI runtime import so repeated command paths share one loaded module. */
-export function createLazyCliRuntimeLoader<T>(load: () => Promise<T>) {
-  let promise: Promise<T> | null = null;
-  return async () => {
-    promise ??= load();
-    return await promise;
-  };
-}
-
-function collectLiveTransportQaStringOption(value: string, previous: string[]) {
-  const trimmed = value.trim();
-  return trimmed ? [...previous, trimmed] : previous;
-}
-
-function mapLiveTransportQaCommanderOptions(
-  opts: LiveTransportQaCommanderOptions,
-): LiveTransportQaCommandOptions {
-  return {
-    repoRoot: opts.repoRoot,
-    outputDir: opts.outputDir,
-    providerMode: opts.providerMode,
-    primaryModel: opts.model,
-    alternateModel: opts.altModel,
-    fastMode: opts.fast,
-    allowFailures: opts.allowFailures,
-    failFast: opts.failFast,
-    profile: opts.profile,
-    scenarioIds: opts.scenario,
-    listScenarios: opts.listScenarios,
-    sutAccountId: opts.sutAccount,
-    credentialFile: opts.credentialFile,
-    credentialSource: opts.credentialSource,
-    credentialRole: opts.credentialRole,
-  };
-}
-
-function registerLiveTransportQaCli(
-  params: LiveTransportQaCliRegistrationOptions & {
-    qa: Command;
-    run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
-  },
-) {
-  const command = params.qa
-    .command(params.commandName)
-    .description(params.description)
-    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
-    .option("--output-dir <path>", params.outputDirHelp)
-    .option("--provider-mode <mode>", params.providerModeHelp, params.defaultProviderMode)
-    .option("--model <ref>", "Primary provider/model ref")
-    .option("--alt-model <ref>", "Alternate provider/model ref")
-    .option("--scenario <id>", params.scenarioHelp, collectLiveTransportQaStringOption, [])
-    .option("--fast", "Enable provider fast mode where supported", false);
-
-  if (params.allowFailuresHelp) {
-    command.option("--allow-failures", params.allowFailuresHelp, false);
-  }
-
-  command.option("--sut-account <id>", params.sutAccountHelp, "sut");
-
-  if (params.credentialFileHelp) {
-    command.option("--credential-file <path>", params.credentialFileHelp);
-  }
-
-  if (params.listScenariosHelp) {
-    command.option("--list-scenarios", params.listScenariosHelp, false);
-  }
-
-  if (params.profileHelp) {
-    command.option("--profile <profile>", params.profileHelp);
-  }
-
-  if (params.failFastHelp) {
-    command.option("--fail-fast", params.failFastHelp, false);
-  }
-
-  if (params.credentialOptions) {
-    command.option(
-      "--credential-source <source>",
-      params.credentialOptions.sourceDescription ??
-        "Credential source for live lanes: env or convex (default: env)",
-    );
-    if (params.credentialOptions.roleDescription) {
-      command.option("--credential-role <role>", params.credentialOptions.roleDescription);
-    }
-  }
-
-  command.action(async (opts: LiveTransportQaCommanderOptions) => {
-    await params.run(mapLiveTransportQaCommanderOptions(opts));
-  });
-}
-
-/** Build a Commander registration object for one live-transport QA command. */
-export function createLiveTransportQaCliRegistration(
-  params: LiveTransportQaCliRegistrationOptions,
-): LiveTransportQaCliRegistration {
-  return {
-    commandName: params.commandName,
-    adapterFactory: params.adapterFactory,
-    register(qa: Command) {
-      registerLiveTransportQaCli({
-        ...params,
-        qa,
-      });
-    },
-  };
 }
 
 /** Docker command runner abstraction used by QA Docker helpers and tests. */

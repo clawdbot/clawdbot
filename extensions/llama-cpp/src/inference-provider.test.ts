@@ -364,6 +364,100 @@ describe("llama.cpp inference provider", () => {
     expect(mocks.llama.createGrammarForJsonSchema).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      format: "Harmony",
+      text: '<|channel|>commentary to=weather code<|message|>{"city":"Paris"}<|call|>',
+    },
+    {
+      format: "bracketed",
+      text: '[weather]\n{"city":"Paris"}\n[END_TOOL_REQUEST]',
+    },
+  ])("promotes $format plaintext tool calls into native tool events", async ({ text }) => {
+    mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
+      options.onTextChunk(text.slice(0, 12));
+      options.onTextChunk(text.slice(12));
+      return {
+        response: text,
+        functionCalls: undefined,
+        metadata: { stopReason: "eogToken" },
+      };
+    });
+
+    const stream = await createLlamaCppStreamFn({})(model, {
+      messages: [{ role: "user", content: "Weather?", timestamp: 1 }],
+      tools: [
+        {
+          name: "weather",
+          description: "Get weather",
+          parameters: { type: "object", properties: { city: { type: "string" } } },
+        },
+      ],
+    });
+
+    const events = await collectEvents(stream);
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "toolcall_start",
+      "toolcall_delta",
+      "toolcall_end",
+      "done",
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      reason: "toolUse",
+      message: {
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "toolCall",
+            name: "weather",
+            arguments: { city: "Paris" },
+          },
+        ],
+      },
+    });
+  });
+
+  it("preserves plaintext calls for tools that are not registered", async () => {
+    const text = '[tool:calendar] {"city":"Paris"}';
+    mocks.generateResponse.mockImplementationOnce(async (_history, options) => {
+      options.onTextChunk(text);
+      return {
+        response: text,
+        functionCalls: undefined,
+        metadata: { stopReason: "eogToken" },
+      };
+    });
+
+    const stream = await createLlamaCppStreamFn({})(model, {
+      messages: [{ role: "user", content: "Weather?", timestamp: 1 }],
+      tools: [
+        {
+          name: "weather",
+          description: "Get weather",
+          parameters: { type: "object", properties: { city: { type: "string" } } },
+        },
+      ],
+    });
+
+    const events = await collectEvents(stream);
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "done",
+    ]);
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      reason: "stop",
+      message: { content: [{ type: "text", text }] },
+    });
+  });
+
   it("lets tools win when responseFormat is also present", async () => {
     const stream = await createLlamaCppStreamFn({})(
       model,

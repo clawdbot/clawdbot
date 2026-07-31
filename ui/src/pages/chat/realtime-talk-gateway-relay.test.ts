@@ -26,8 +26,17 @@ const inputSinks: Array<{
   disconnect: ReturnType<typeof vi.fn>;
   gain: { value: number };
 }> = [];
+const createdSources: MockAudioBufferSource[] = [];
 let getUserMedia: ReturnType<typeof vi.fn>;
 let audioCurrentTime = 0;
+
+class MockAudioBufferSource {
+  buffer: unknown = null;
+  readonly addEventListener = vi.fn();
+  readonly connect = vi.fn();
+  readonly start = vi.fn();
+  readonly stop = vi.fn();
+}
 
 class MockAudioContext {
   get currentTime(): number {
@@ -81,13 +90,9 @@ class MockAudioContext {
   }
 
   createBufferSource() {
-    return {
-      addEventListener: vi.fn(),
-      buffer: null,
-      connect: vi.fn(),
-      start: vi.fn(),
-      stop: vi.fn(),
-    };
+    const source = new MockAudioBufferSource();
+    createdSources.push(source);
+    return source;
   }
 }
 
@@ -162,6 +167,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     listeners.clear();
     processors.length = 0;
     inputSinks.length = 0;
+    createdSources.length = 0;
     audioCurrentTime = 0;
     vi.stubGlobal("AudioContext", MockAudioContext);
     getUserMedia = vi.fn(async () => ({
@@ -181,6 +187,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     listeners.clear();
     processors.length = 0;
     inputSinks.length = 0;
+    createdSources.length = 0;
   });
 
   it("preserves audio processing while selecting the exact microphone", async () => {
@@ -322,6 +329,79 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       .mocked(client["request"])
       .mock.calls.find((call) => call[0] === "talk.session.appendAudio");
     expect((appendCall?.[1] as { sessionId?: string } | undefined)?.sessionId).toBe("relay-1");
+    transport.stop();
+  });
+
+  it("cancels overflowing playback and ignores late audio until provider clear", async () => {
+    const client = createClient();
+    const transport = createTransport({ client });
+
+    await transport.start();
+    for (let index = 0; index < 321; index += 1) {
+      emitTalkEvent({
+        relaySessionId: "relay-1",
+        type: "audio",
+        audioBase64: "AAAA",
+      });
+    }
+
+    await waitForFast(() =>
+      expect(requestCallsFor(client, "talk.session.cancelOutput")).toEqual([
+        [
+          "talk.session.cancelOutput",
+          {
+            sessionId: "relay-1",
+            reason: "playback-overflow",
+          },
+        ],
+      ]),
+    );
+    expect(createdSources).toHaveLength(320);
+    expect(createdSources.every((source) => source.stop.mock.calls.length === 1)).toBe(true);
+
+    emitTalkEvent({
+      relaySessionId: "relay-1",
+      type: "audio",
+      audioBase64: "AAAA",
+    });
+    expect(createdSources).toHaveLength(320);
+
+    emitTalkEvent({ relaySessionId: "relay-1", type: "clear" });
+    emitTalkEvent({
+      relaySessionId: "relay-1",
+      type: "audio",
+      audioBase64: "AAAA",
+    });
+    expect(createdSources).toHaveLength(321);
+    expect(createdSources.at(-1)?.start).toHaveBeenCalledOnce();
+
+    transport.stop();
+  });
+
+  it("cancels provider output when the first audio chunk exceeds the time budget", async () => {
+    const client = createClient();
+    const transport = createTransport({ client });
+
+    await transport.start();
+    emitTalkEvent({
+      relaySessionId: "relay-1",
+      type: "audio",
+      audioBase64: zeroPcmBase64(24000 * 11),
+    });
+
+    await waitForFast(() =>
+      expect(requestCallsFor(client, "talk.session.cancelOutput")).toEqual([
+        [
+          "talk.session.cancelOutput",
+          {
+            sessionId: "relay-1",
+            reason: "playback-overflow",
+          },
+        ],
+      ]),
+    );
+    expect(createdSources).toHaveLength(0);
+
     transport.stop();
   });
 

@@ -1,7 +1,12 @@
 // Whatsapp tests cover extract plugin behavior.
 import type { proto } from "baileys";
 import { describe, expect, it } from "vitest";
-import { describeReplyContext, extractMentionedJids, hasInboundUserContent } from "./extract.js";
+import {
+  describeReplyContext,
+  extractMentionedJids,
+  extractText,
+  hasInboundUserContent,
+} from "./extract.js";
 
 describe("extractMentionedJids", () => {
   const botJid = "5511999999999@s.whatsapp.net";
@@ -150,6 +155,121 @@ describe("describeReplyContext", () => {
         },
       }),
     ).toBeNull();
+  });
+});
+
+describe("extractText", () => {
+  it.each([
+    {
+      name: "button display text",
+      message: {
+        buttonsResponseMessage: { selectedButtonId: "yes", selectedDisplayText: "Yes" },
+      },
+      expected: "Yes",
+    },
+    {
+      name: "button identifier when display text is unavailable",
+      message: { buttonsResponseMessage: { selectedButtonId: "yes" } },
+      expected: "yes",
+    },
+    {
+      name: "button identifier when display text is blank",
+      message: {
+        buttonsResponseMessage: { selectedButtonId: "yes", selectedDisplayText: "   " },
+      },
+      expected: "yes",
+    },
+    {
+      name: "list selection title",
+      message: {
+        listResponseMessage: { title: "Option A", singleSelectReply: { selectedRowId: "a" } },
+      },
+      expected: "Option A",
+    },
+    {
+      name: "list row identifier when its title is unavailable",
+      message: { listResponseMessage: { singleSelectReply: { selectedRowId: "a" } } },
+      expected: "a",
+    },
+    {
+      name: "template button display text",
+      message: {
+        templateButtonReplyMessage: { selectedId: "button-1", selectedDisplayText: "Confirm" },
+      },
+      expected: "Confirm",
+    },
+    {
+      name: "template button identifier when display text is unavailable",
+      message: { templateButtonReplyMessage: { selectedId: "button-1" } },
+      expected: "button-1",
+    },
+    {
+      name: "interactive response body",
+      message: {
+        interactiveResponseMessage: {
+          body: { text: "Continue" },
+          nativeFlowResponseMessage: { name: "single_select", paramsJson: "{}" },
+        },
+      },
+      expected: "Continue",
+    },
+    {
+      name: "native-flow selection title when the interactive body is unavailable",
+      message: {
+        interactiveResponseMessage: {
+          nativeFlowResponseMessage: {
+            name: "single_select",
+            paramsJson: '{"id":"shipping-express","title":"Express shipping"}',
+          },
+        },
+      },
+      expected: "Express shipping",
+    },
+    {
+      name: "native-flow selection identifier when its title is unavailable",
+      message: {
+        interactiveResponseMessage: {
+          nativeFlowResponseMessage: {
+            name: "single_select",
+            paramsJson: '{"id":"shipping-express"}',
+          },
+        },
+      },
+      expected: "shipping-express",
+    },
+    {
+      name: "ephemeral button response",
+      message: {
+        ephemeralMessage: {
+          message: {
+            buttonsResponseMessage: { selectedButtonId: "ok", selectedDisplayText: "OK" },
+          },
+        },
+      },
+      expected: "OK",
+    },
+  ])("preserves $name as inbound message text", ({ message, expected }) => {
+    expect(extractText(message as proto.IMessage)).toBe(expected);
+  });
+
+  it("ignores malformed native-flow response JSON", () => {
+    expect(
+      extractText({
+        interactiveResponseMessage: {
+          nativeFlowResponseMessage: { name: "single_select", paramsJson: "{" },
+        },
+      } as proto.IMessage),
+    ).toBeUndefined();
+  });
+
+  it("ignores non-record native-flow response JSON", () => {
+    expect(
+      extractText({
+        interactiveResponseMessage: {
+          nativeFlowResponseMessage: { name: "single_select", paramsJson: "[]" },
+        },
+      } as proto.IMessage),
+    ).toBeUndefined();
   });
 });
 

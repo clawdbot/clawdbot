@@ -21999,14 +21999,14 @@
       "translated": "로컬 모델 설정"
     },
     {
-      "id": "native.apple.506a932536c642c2",
-      "source": "Download or prepare a local model on this Gateway.",
-      "translated": "이 Gateway에서 로컬 모델을 다운로드하거나 준비합니다."
+      "id": "native.apple.780c1aa1c8868cc4",
+      "source": "Connect a local model service, or prepare a model on this Gateway.",
+      "translated": "로컬 모델 서비스를 연결하거나 이 Gateway에서 모델을 준비하세요."
     },
     {
-      "id": "native.apple.d31411a9f3c68c33",
-      "source": "Set up / Download model",
-      "translated": "모델 설정 / 다운로드"
+      "id": "native.apple.c218bd844ba8a0ac",
+      "source": "Connect / Set up",
+      "translated": "연결 / 설정"
     },
     {
       "id": "native.apple.7fc409b6aaa6d3b9",
@@ -22039,9 +22039,9 @@
       "translated": "로그인"
     },
     {
-      "id": "native.apple.b62dfd708d5cfb14",
-      "source": "The model is downloaded and prepared on this Gateway.",
-      "translated": "이 Gateway에서 모델이 다운로드되고 준비되었습니다."
+      "id": "native.apple.97b24c854f768998",
+      "source": "OpenClaw will detect and verify the prepared model before using it.",
+      "translated": "OpenClaw는 준비된 모델을 사용하기 전에 이를 감지하고 검증합니다."
     },
     {
       "id": "native.apple.869fe436119bb8a6",

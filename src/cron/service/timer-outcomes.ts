@@ -554,22 +554,14 @@ export function applyOutcomeToStoredJob(
       tryFinishCronTaskRunWithoutHistory(state, result);
       return undefined;
     }
-    if (result.status === "ok") {
-      // A manual/queued run may finish after the job was removed. Preserve the
-      // successful run-history state without resurrecting the job in the store.
-      applyJobResult(state, result.job, result);
-      emitJobFinished(state, result.job, result, result.startedAt);
-      state.deps.log.info(
-        { jobId: result.jobId },
-        "cron: finalized successful run after job was removed during execution",
-      );
-      return undefined;
-    }
-    state.deps.log.warn(
-      { jobId: result.jobId },
-      "cron: applyOutcomeToStoredJob — job not found after forceReload, result discarded",
+    // A run may finish after its job disappears; finalize the admitted job
+    // snapshot so operator history survives without reviving the stored job.
+    applyJobResult(state, result.job, result);
+    emitJobFinished(state, result.job, result, result.startedAt);
+    state.deps.log.info(
+      { jobId: result.jobId, status: result.status },
+      "cron: finalized run after job was removed during execution",
     );
-    tryFinishCronTaskRunWithoutHistory(state, result);
     return undefined;
   }
 

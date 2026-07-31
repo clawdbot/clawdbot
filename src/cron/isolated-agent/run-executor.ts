@@ -7,9 +7,11 @@ import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
+import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
+import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -55,6 +57,7 @@ import type {
   PersistCronSessionEntry,
 } from "./run-session-state.js";
 import { syncCronSessionLiveSelection } from "./run-session-state.js";
+import { resolveEffectiveAgentRuntime, resolveThinkingDefault } from "./run.runtime.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 type AgentTurnPayload = Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
@@ -204,8 +207,9 @@ function createCronPromptExecutor(params: {
   workspaceDir: string;
   lane?: string;
   resolvedVerboseLevel: VerboseLevel;
-  thinkLevel: ThinkLevel | undefined;
+  immutableThinkLevel: ThinkLevel | undefined;
   thinkingCatalog?: ModelCatalogEntry[];
+  loadThinkingCatalog: (provider: string, model: string) => Promise<ModelCatalogEntry[]>;
   timeoutMs: number;
   /** Set when the cron payload's `timeoutSeconds` was explicitly configured. */
   runTimeoutOverrideMs?: number;
@@ -285,6 +289,8 @@ function createCronPromptExecutor(params: {
       }
     | undefined;
   let attemptMediaTaskIds: ReadonlySet<string> = new Set();
+  let thinkingCatalog = params.thinkingCatalog;
+  let attemptedThinkingCatalogHydration = false;
   const currentAttemptCommittedMedia = () =>
     hasNewGeneratedMediaTaskForSessionKey(params.runSessionKey, attemptMediaTaskIds);
 
@@ -365,15 +371,55 @@ function createCronPromptExecutor(params: {
           entry: params.cronSession.sessionEntry,
           cfg: params.cfgWithAgentDefaults,
         });
+        const candidateRuntime = resolveEffectiveAgentRuntime({
+          cfg: params.cfgWithAgentDefaults,
+          provider: providerOverride,
+          modelId: modelOverride,
+          agentId: params.agentId,
+          sessionKey: params.runSessionKey,
+          sessionEntry: params.cronSession.sessionEntry,
+        });
+        const candidateConfiguredThinkLevel =
+          params.immutableThinkLevel ??
+          resolveConfiguredThinkingDefault({
+            cfg: params.cfgWithAgentDefaults,
+            provider: providerOverride,
+            model: modelOverride,
+          });
+        if (
+          candidateConfiguredThinkLevel !== "off" &&
+          !attemptedThinkingCatalogHydration &&
+          !hasResolvedThinkingCatalogEntry({
+            catalog: thinkingCatalog,
+            provider: providerOverride,
+            model: modelOverride,
+          })
+        ) {
+          attemptedThinkingCatalogHydration = true;
+          const runtimeCatalog = await params.loadThinkingCatalog(providerOverride, modelOverride);
+          if (runtimeCatalog.length > 0) {
+            thinkingCatalog = runtimeCatalog;
+          }
+        }
+        const candidateRequestedThinkLevel =
+          candidateConfiguredThinkLevel ??
+          resolveThinkingDefault({
+            cfg: params.cfgWithAgentDefaults,
+            provider: providerOverride,
+            model: modelOverride,
+            catalog: thinkingCatalog,
+            agentRuntime: candidateRuntime,
+          });
         const candidateThinkLevel = resolveCandidateThinkingLevel({
           cfg: params.cfgWithAgentDefaults,
           provider: providerOverride,
           modelId: modelOverride,
-          level: params.thinkLevel,
-          catalog: params.thinkingCatalog,
+          level: candidateRequestedThinkLevel,
+          catalog: thinkingCatalog,
           agentId: params.agentId,
           sessionKey: params.runSessionKey,
           sessionEntry: params.cronSession.sessionEntry,
+          agentRuntime: candidateRuntime,
         });
         const executionProvider =
           (sessionRuntimeOverride &&
@@ -650,8 +696,9 @@ export async function executeCronRun(params: {
       Partial<Omit<CronAgentExecutionPhaseUpdate, "jobId" | "phase">>,
   ) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
-  thinkLevel: ThinkLevel | undefined;
+  immutableThinkLevel: ThinkLevel | undefined;
   thinkingCatalog?: ModelCatalogEntry[];
+  loadThinkingCatalog: (provider: string, model: string) => Promise<ModelCatalogEntry[]>;
   timeoutMs: number;
   /** Set when the cron payload's `timeoutSeconds` was explicitly configured. */
   runTimeoutOverrideMs?: number;
@@ -679,8 +726,9 @@ export async function executeCronRun(params: {
     workspaceDir: params.workspaceDir,
     lane: params.lane,
     resolvedVerboseLevel,
-    thinkLevel: params.thinkLevel,
+    immutableThinkLevel: params.immutableThinkLevel,
     thinkingCatalog: params.thinkingCatalog,
+    loadThinkingCatalog: params.loadThinkingCatalog,
     timeoutMs: params.timeoutMs,
     runTimeoutOverrideMs: params.runTimeoutOverrideMs,
     suppressExecNotifyOnExit: params.suppressExecNotifyOnExit,

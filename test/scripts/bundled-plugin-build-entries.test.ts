@@ -339,14 +339,28 @@ describe("bundled plugin build entries", () => {
     }
   });
 
-  it("excludes externalized Cohere and Meta providers from bundled artifacts", () => {
+  it("excludes externalized model providers from bundled artifacts", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
-    for (const pluginId of ["cohere", "meta"]) {
+    for (const pluginId of ["byteplus", "cohere", "meta", "xiaomi"]) {
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/index.js`);
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/openclaw.plugin.json`);
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/package.json`);
     }
+  });
+
+  it("excludes the externalized Vydra provider from bundled artifacts", () => {
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expect(artifacts).not.toContain("dist/extensions/vydra/index.js");
+    expect(artifacts).not.toContain("dist/extensions/vydra/openclaw.plugin.json");
+    expect(artifacts).not.toContain("dist/extensions/vydra/package.json");
+  });
+
+  it("excludes the externalized ComfyUI provider from bundled artifacts", () => {
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expectNoPrefixMatches(artifacts, "dist/extensions/comfy/");
   });
 
   it("excludes externalized meeting plugins from bundled artifacts", () => {
@@ -357,6 +371,38 @@ describe("bundled plugin build entries", () => {
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/openclaw.plugin.json`);
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/package.json`);
     }
+  });
+
+  it("excludes the externalized Synthetic provider from bundled artifacts", () => {
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expectNoPrefixMatches(Object.keys(entries), "extensions/synthetic/");
+    expectNoPrefixMatches(artifacts, "dist/extensions/synthetic/");
+  });
+
+  it("excludes the externalized DuckDuckGo plugin from bundled artifacts", () => {
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expect(artifacts).not.toContain("dist/extensions/duckduckgo/index.js");
+    expect(artifacts).not.toContain("dist/extensions/duckduckgo/openclaw.plugin.json");
+    expect(artifacts).not.toContain("dist/extensions/duckduckgo/package.json");
+  });
+
+  it("excludes the externalized Voyage provider from bundled artifacts", () => {
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expect(artifacts).not.toContain("dist/extensions/voyage/index.js");
+    expect(artifacts).not.toContain("dist/extensions/voyage/openclaw.plugin.json");
+    expect(artifacts).not.toContain("dist/extensions/voyage/package.json");
+  });
+
+  it("excludes the externalized Volcengine provider from bundled artifacts", () => {
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expect(artifacts).not.toContain("dist/extensions/volcengine/index.js");
+    expect(artifacts).not.toContain("dist/extensions/volcengine/openclaw.plugin.json");
+    expect(artifacts).not.toContain("dist/extensions/volcengine/package.json");
   });
 
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {

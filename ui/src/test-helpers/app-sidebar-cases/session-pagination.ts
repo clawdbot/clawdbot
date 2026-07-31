@@ -14,6 +14,93 @@ import "../../components/app-sidebar.ts";
 
 describe("AppSidebar gateway session pagination", () => {
   it.each(["archived", "all"] as const)(
+    "refreshes the %s sidebar once when another client changes sessions",
+    async (statusFilter) => {
+      const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
+      const firstResult = createSessionState("main", ["agent:main:before-remote-change"]).result;
+      const changedResult = createSessionState("main", ["agent:main:after-remote-change"]).result;
+      if (!firstResult || !changedResult) {
+        throw new Error("expected filtered session results");
+      }
+      harness.list.mockResolvedValue(firstResult);
+      const gateway = createGatewayHarness({} as GatewayBrowserClient);
+      const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+      (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
+        statusFilter;
+      sidebar.sessionData.resetForStatusFilter(statusFilter);
+      await sidebar.sessionData.refreshSidebarSessions("main");
+      harness.list.mockClear();
+      harness.list.mockResolvedValue(changedResult);
+
+      gateway.publishEvent("sessions.changed", {
+        sessionKey: "agent:main:after-remote-change",
+        reason: "archive",
+      });
+      gateway.publishEvent("sessions.changed", {
+        sessionKey: "agent:main:after-remote-change",
+        reason: "archive",
+      });
+
+      await waitForFast(() => {
+        expect(harness.list).toHaveBeenCalledTimes(1);
+        expect(sidebar.sessionData.sessionsResult?.sessions.map((row) => row.key)).toEqual([
+          "agent:main:after-remote-change",
+        ]);
+      });
+      expect(harness.list).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "main", archivedFilter: statusFilter }),
+      );
+    },
+  );
+
+  it.each(["archived", "all"] as const)(
+    "keeps every loaded %s sidebar page after another client's session event",
+    async (statusFilter) => {
+      const keys = Array.from({ length: 120 }, (_, index) => `agent:main:session-${index}`);
+      const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
+      harness.list.mockImplementation(async (options) => {
+        const offset = options?.offset ?? 0;
+        const limit = options?.limit ?? 60;
+        const sessions = createSessionState("main", keys.slice(offset, offset + limit)).result;
+        if (!sessions) {
+          throw new Error("expected a paginated filtered session result");
+        }
+        const nextOffset = offset + sessions.sessions.length;
+        const hasMore = nextOffset < keys.length;
+        return {
+          ...sessions,
+          totalCount: keys.length,
+          nextOffset: hasMore ? nextOffset : null,
+          hasMore,
+        };
+      });
+      const gateway = createGatewayHarness({} as GatewayBrowserClient);
+      const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+      (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
+        statusFilter;
+      sidebar.sessionData.resetForStatusFilter(statusFilter);
+      await sidebar.sessionData.refreshSidebarSessions("main");
+      await sidebar.sessionData.loadMoreSidebarSessions();
+      expect(sidebar.sessionData.sessionsResult?.sessions).toHaveLength(120);
+      harness.list.mockClear();
+
+      gateway.publishEvent("sessions.changed", {
+        sessionKey: keys[0],
+        agentId: "main",
+        reason: "archive",
+      });
+
+      await waitForFast(() => {
+        expect(harness.list).toHaveBeenCalledOnce();
+        expect(sidebar.sessionData.sessionsResult?.sessions).toHaveLength(120);
+      });
+      expect(harness.list).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "main", archivedFilter: statusFilter, limit: 120 }),
+      );
+    },
+  );
+
+  it.each(["archived", "all"] as const)(
     "keeps a pending %s first page across a stable same-client Gateway notification",
     async (statusFilter) => {
       const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);

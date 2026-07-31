@@ -567,6 +567,44 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it.each(["GET", "HEAD"] as const)(
+    "revalidates assistant media ETags before ranges for %s",
+    async (method) => {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-conditional-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "photo.png");
+          await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+          const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
+          const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
+          const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
+          const etag = initial.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1];
+          expect(etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
+
+          const conditional = await runAssistantMediaRequest({
+            url,
+            method,
+            auth,
+            headers: {
+              "if-none-match": `W/${String(etag)}`,
+              range: "bytes=0-3",
+              "if-range": '"stale"',
+            },
+          });
+
+          expect(conditional.handled).toBe(true);
+          expect(conditional.res.statusCode).toBe(304);
+          expect(conditional.setHeader).toHaveBeenCalledWith("ETag", etag);
+          expect(conditional.setHeader).not.toHaveBeenCalledWith(
+            "Content-Length",
+            expect.anything(),
+          );
+          expect(conditional.end).toHaveBeenCalledWith();
+        },
+      });
+    },
+  );
+
   it("returns 202 while assistant playback media is preparing", async () => {
     resolvePlaybackTranscodeMock.mockResolvedValueOnce({ kind: "preparing" });
     await withAllowedAssistantMediaRoot({

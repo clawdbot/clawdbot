@@ -345,6 +345,15 @@ function stripTelegramHtmlForPlainText(html: string): string {
   );
 }
 
+export function countTelegramHtmlVisibleCharacters(html: string): number {
+  // Telegram limits UTF-16 caption characters after stripping markup and decoding entities.
+  return stripTelegramHtmlForPlainText(html).length;
+}
+
+export function resolveTelegramHtmlVisibleText(html: string): string {
+  return stripTelegramHtmlForPlainText(html);
+}
+
 function encodePlainTextForTelegramHtmlStrip(text: string): string {
   return text.replace(/[&<>]/g, (char) => {
     switch (char) {

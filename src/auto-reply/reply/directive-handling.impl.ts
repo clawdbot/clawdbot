@@ -37,6 +37,7 @@ import {
 } from "./directive-handling.model-runtime.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import { maybeHandleModelDirectiveInfo } from "./directive-handling.model.js";
+import { maybeHandleUnexpectedNativeDirectiveArguments } from "./directive-handling.native.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import { maybeHandleQueueDirective } from "./directive-handling.queue-validation.js";
 import {
@@ -348,6 +349,10 @@ export async function handleDirectiveOnly(
         text: "Exec node requires a value.",
       };
     }
+    const unexpectedExecArguments = maybeHandleUnexpectedNativeDirectiveArguments(directives);
+    if (unexpectedExecArguments) {
+      return unexpectedExecArguments;
+    }
     if (!directives.hasExecOptions) {
       const execDefaults = resolveExecDefaults({
         cfg: params.cfg,
@@ -373,6 +378,11 @@ export async function handleDirectiveOnly(
   });
   if (queueAck) {
     return queueAck;
+  }
+
+  const unexpectedNativeArguments = maybeHandleUnexpectedNativeDirectiveArguments(directives);
+  if (unexpectedNativeArguments) {
+    return unexpectedNativeArguments;
   }
 
   if (

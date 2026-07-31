@@ -346,7 +346,7 @@ describe("executeCronRun sourceDelivery mapping", () => {
       },
       liveSelection: { provider: "openai", model: "gpt-5.6-luna" },
       cronSession,
-      thinkLevel: "ultra",
+      immutableThinkLevel: "ultra",
     });
 
     await executor.runPrompt("run an Ultra task");
@@ -395,7 +395,8 @@ function makeExecuteCronRunParams(overrides: Record<string, unknown> = {}) {
     persistSessionEntry: vi.fn().mockResolvedValue(undefined),
     abortReason: () => "aborted",
     isAborted: () => false,
-    thinkLevel: undefined,
+    immutableThinkLevel: undefined,
+    loadThinkingCatalog: async () => [],
     timeoutMs: 60_000,
     suppressExecNotifyOnExit: true,
     resolvedDelivery,

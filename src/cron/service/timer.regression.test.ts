@@ -27,6 +27,8 @@ import {
 import * as schedule from "../schedule.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import { cronStoreKey } from "../store/key.js";
+import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronAgentExecutionPhaseUpdate, CronJob } from "../types.js";
 import { cancelActiveCronTaskRun } from "./active-run-cancellation.js";
 import { resetActiveCronTaskRunsForTests } from "./active-run-cancellation.test-support.js";
@@ -2712,8 +2714,8 @@ describe("cron service timer regressions", () => {
       ),
     ).toBe(false);
     expect(log.info).toHaveBeenCalledWith(
-      { jobId: selfRemovingJob.id },
-      "cron: finalized successful run after job was removed during execution",
+      { jobId: selfRemovingJob.id, status: "ok" },
+      "cron: finalized run after job was removed during execution",
     );
     const event = events.find(
       (candidate) => candidate.jobId === selfRemovingJob.id && candidate.action === "finished",
@@ -2728,54 +2730,92 @@ describe("cron service timer regressions", () => {
     expect(event.deliveryStatus).toBe("delivered");
   });
 
-  it("keeps missing-job discard semantics for failed isolated outcomes", async () => {
-    const store = timerRegressionFixtures.makeStorePath();
-    const dueAt = Date.parse("2026-02-06T10:05:01.000Z");
-    const failedJob = createDueIsolatedJob({
-      id: "self-removing-failure",
-      nowMs: dueAt,
-      nextRunAtMs: dueAt,
-    });
-    await saveCronStore(store.storePath, { version: 1, jobs: [failedJob] });
+  it.each([
+    {
+      outcome: "failure",
+      status: "error",
+      error: "agent failed after removal",
+      taskStatus: "failed",
+    },
+    {
+      outcome: "timeout",
+      status: "error",
+      error: "cron: job execution timed out",
+      taskStatus: "timed_out",
+    },
+    {
+      outcome: "skip",
+      status: "skipped",
+      error: "agent skipped after removal",
+      taskStatus: "succeeded",
+    },
+  ] as const)(
+    "finalizes a removed job's $outcome outcome in operator history",
+    async ({ outcome, status, error, taskStatus }) => {
+      const store = timerRegressionFixtures.makeStorePath();
+      const dueAt = Date.parse("2026-02-06T10:05:01.000Z");
+      const failedJob = createDueIsolatedJob({
+        id: `self-removing-${outcome}`,
+        nowMs: dueAt,
+        nextRunAtMs: dueAt,
+      });
+      await saveCronStore(store.storePath, { version: 1, jobs: [failedJob] });
 
-    const events: CronEvent[] = [];
-    const log = {
-      ...noopLogger,
-      warn: vi.fn(),
-    };
-    const state = createCronServiceState({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log,
-      nowMs: () => dueAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      onEvent: (evt) => {
-        events.push(evt);
-      },
-      runIsolatedAgentJob: vi.fn(async () => {
-        const persisted = await loadCronStore(store.storePath);
-        await saveCronStore(store.storePath, {
-          ...persisted,
-          jobs: persisted.jobs.filter((job) => job.id !== failedJob.id),
-        });
-        return { status: "error" as const, error: "agent failed after removal" };
-      }),
-    });
+      const events: CronEvent[] = [];
+      const log = {
+        ...noopLogger,
+        warn: vi.fn(),
+      };
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log,
+        nowMs: () => dueAt,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        onEvent: (evt) => {
+          events.push(evt);
+        },
+        runIsolatedAgentJob: vi.fn(async () => {
+          const persisted = await loadCronStore(store.storePath);
+          await saveCronStore(store.storePath, {
+            ...persisted,
+            jobs: persisted.jobs.filter((job) => job.id !== failedJob.id),
+          });
+          return { status, error };
+        }),
+      });
 
-    await onTimer(state);
+      await onTimer(state);
 
-    expect(state.store?.jobs).toStrictEqual([]);
-    expect(log.warn).toHaveBeenCalledWith(
-      { jobId: failedJob.id },
-      "cron: applyOutcomeToStoredJob — job not found after forceReload, result discarded",
-    );
-    expect(
-      events.some(
-        (evt) => evt.jobId === failedJob.id && evt.action === "finished" && evt.status === "error",
-      ),
-    ).toBe(false);
-  });
+      expect(state.store?.jobs).toStrictEqual([]);
+      expect(
+        log.warn.mock.calls.some(
+          ([, message]) =>
+            message ===
+            "cron: applyOutcomeToStoredJob — job not found after forceReload, result discarded",
+        ),
+      ).toBe(false);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          jobId: failedJob.id,
+          action: "finished",
+          status,
+          error,
+        }),
+      );
+      const history = readCronTaskRunHistoryPage({
+        storeKey: cronStoreKey(store.storePath),
+        jobId: failedJob.id,
+      });
+      expect(history.entries).toEqual([
+        expect.objectContaining({ jobId: failedJob.id, status, error }),
+      ]);
+      expect(listTaskRecords().find((task) => task.sourceId === failedJob.id)?.status).toBe(
+        taskStatus,
+      );
+    },
+  );
 
   it("keeps state updates when cron next-run computation throws after a successful run (#30905)", () => {
     const startedAt = Date.parse("2026-03-02T12:00:00.000Z");

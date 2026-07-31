@@ -307,6 +307,14 @@ function resolveDoctorStateMigrationAgentId(cfg: OpenClawConfig): string {
   }
 }
 
+function resolveConcreteBindingAccountId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const accountId = value.trim();
+  return accountId && accountId !== "*" ? accountId : undefined;
+}
+
 export async function detectLegacyStateMigrations(params: {
   cfg: OpenClawConfig;
   pluginDoctorConfig?: OpenClawConfig;
@@ -547,11 +555,13 @@ export async function detectLegacyStateMigrations(params: {
         ...(typeof channelConfig?.defaultAccount === "string"
           ? [channelConfig.defaultAccount]
           : []),
-        ...(params.cfg.bindings ?? []).flatMap((binding) =>
-          binding.match?.channel === channelId && typeof binding.match.accountId === "string"
-            ? [binding.match.accountId]
-            : [],
-        ),
+        ...(params.cfg.bindings ?? []).flatMap((binding) => {
+          const accountId =
+            binding.match?.channel === channelId
+              ? resolveConcreteBindingAccountId(binding.match.accountId)
+              : undefined;
+          return accountId ? [accountId] : [];
+        }),
       ];
       return [
         channelId,
@@ -568,10 +578,11 @@ export async function detectLegacyStateMigrations(params: {
           (binding) =>
             normalizeAgentId(binding.agentId) === targetAgentId &&
             binding.match?.channel === channelId &&
-            typeof binding.match.accountId === "string",
+            resolveConcreteBindingAccountId(binding.match.accountId) !== undefined,
         )?.match.accountId;
-        if (typeof boundAccountId === "string" && boundAccountId.trim()) {
-          return [[channelId, boundAccountId.trim()]];
+        const concreteBoundAccountId = resolveConcreteBindingAccountId(boundAccountId);
+        if (concreteBoundAccountId) {
+          return [[channelId, concreteBoundAccountId]];
         }
         const defaultAccount =
           value && typeof value === "object" && !Array.isArray(value)

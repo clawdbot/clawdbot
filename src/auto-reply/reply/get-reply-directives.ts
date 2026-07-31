@@ -18,6 +18,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
+import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
 import type {
@@ -35,7 +36,11 @@ import {
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands-context.js";
-import { type InlineDirectives, parseInlineDirectives } from "./directive-handling.parse.js";
+import {
+  type InlineDirectives,
+  parseInlineDirectives,
+  resolveNativeReplyDirectiveCommand,
+} from "./directive-handling.parse.js";
 import {
   reserveSkillCommandNames,
   resolveConfiguredDirectiveAliases,
@@ -271,9 +276,23 @@ export async function resolveReplyDirectives(params: {
     (alias) => !reservedCommands.has(normalizeLowercaseStringOrEmpty(alias)),
   );
   const allowStatusDirective = allowTextCommands && command.isAuthorizedSender;
+  const commandTurn = resolveCommandTurnContext(ctx);
+  const nativeDirectiveCommand =
+    command.isAuthorizedSender && isNativeCommandTurn(commandTurn) && commandTurn.commandName
+      ? resolveNativeReplyDirectiveCommand(
+          (await loadCommandsRegistry()).findCommandByNativeName(
+            commandTurn.commandName,
+            command.channel,
+            {
+              includeBundledChannelFallback: false,
+            },
+          )?.key,
+        )
+      : undefined;
   let parsedDirectives = parseInlineDirectives(commandText, {
     modelAliases: configuredAliases,
     allowStatusDirective,
+    nativeCommand: nativeDirectiveCommand,
   });
   const hasInlineStatus =
     parsedDirectives.hasStatusDirective && parsedDirectives.cleaned.trim().length > 0;
@@ -308,7 +327,7 @@ export async function resolveReplyDirectives(params: {
     parsedDirectives.hasExecDirective ||
     parsedDirectives.hasModelDirective ||
     parsedDirectives.hasQueueDirective;
-  if (hasInlineDirective) {
+  if (hasInlineDirective && !parsedDirectives.nativeCommand) {
     const stripped = stripStructuralPrefixes(parsedDirectives.cleaned);
     const noMentions = isGroup ? stripMentions(stripped, ctx, cfg, agentId) : stripped;
     if (noMentions.trim().length > 0) {

@@ -14,7 +14,6 @@ import type {
   ChannelOutboundTargetRef,
 } from "../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeMessagePresentation } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { formatErrorMessage } from "../errors.js";
@@ -296,7 +295,8 @@ function createPluginHandler(
     presentationCapabilities: outbound?.presentationCapabilities,
     renderPresentation: outbound?.renderPresentation
       ? async (payload) => {
-          const presentation = normalizeMessagePresentation(payload.presentation);
+          // The delivery owner already normalized/adapted this; cloning drops fallback fragments.
+          const presentation = payload.presentation;
           if (!presentation) {
             return payload;
           }

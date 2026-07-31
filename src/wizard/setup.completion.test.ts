@@ -68,6 +68,49 @@ describe("setupWizardShellCompletion", () => {
     expect(prompter.note).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      description: "upgrading a slow shell profile",
+      profileInstalled: true,
+      usesSlowPattern: true,
+    },
+    {
+      description: "repairing a missing completion cache",
+      profileInstalled: true,
+      usesSlowPattern: false,
+    },
+    {
+      description: "installing a new completion profile",
+      profileInstalled: false,
+      usesSlowPattern: false,
+    },
+  ])(
+    "reports cache generation failure when $description",
+    async ({ profileInstalled, usesSlowPattern }) => {
+      const prompter = createPrompter();
+      const deps = createDeps();
+      vi.mocked(deps.checkShellCompletionStatus!).mockResolvedValue({
+        shell: "zsh",
+        profileInstalled,
+        cacheExists: false,
+        cachePath: "/tmp/openclaw.zsh",
+        usesSlowPattern,
+      });
+      vi.mocked(deps.ensureCompletionCacheExists!).mockResolvedValue(false);
+
+      await setupWizardShellCompletion({ flow: "quickstart", prompter, deps });
+
+      expect(deps.ensureCompletionCacheExists).toHaveBeenCalledWith("openclaw", {
+        generationMode: "full",
+      });
+      expect(prompter.note).toHaveBeenCalledWith(
+        "Failed to generate completion cache. Run `openclaw completion --write-state --install` later.",
+        "Shell completion",
+      );
+      expect(deps.installCompletion).not.toHaveBeenCalled();
+    },
+  );
+
   it("localizes advanced prompts and install notes", async () => {
     await withLocale("zh-CN", async () => {
       const prompter = createPrompter(true);

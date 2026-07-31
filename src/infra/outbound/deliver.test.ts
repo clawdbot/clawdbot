@@ -15,6 +15,7 @@ import type {
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
+import { renderMessagePresentationFallbackText } from "../../interactive/payload.js";
 import * as mediaCapabilityModule from "../../media/read-capability.js";
 import { createHookRunner } from "../../plugins/hooks.js";
 import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
@@ -3186,7 +3187,7 @@ describe("deliverOutboundPayloads", () => {
         },
         {
           type: "context",
-          text: "Actions:\n- Reje\n- Too",
+          text: "Actions:\n- Reject\n- Too long",
         },
       ],
     });
@@ -3260,6 +3261,96 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(requireMockCallArg(sendText, "send text").text).toBe("Question\n1. Yes\n2. No");
+  });
+
+  it("preserves full presentation labels when bounded native rendering declines", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "full-labels",
+      roomId: "!room",
+    });
+    setTestOutbound({
+      presentationCapabilities: {
+        supported: true,
+        buttons: true,
+        selects: true,
+        limits: {
+          actions: { maxLabelLength: 4 },
+          selects: { maxLabelLength: 4 },
+          text: { maxLength: 18, encoding: "characters" },
+        },
+      },
+      renderPresentation: vi.fn(() => null),
+      sendText,
+    });
+
+    await deliverMatrix({
+      to: "!room",
+      payloads: [
+        {
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Approve production", value: "approve" }],
+              },
+              {
+                type: "select",
+                placeholder: "Deployment target",
+                options: [{ label: "Production cluster", value: "production" }],
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(requireMockCallArg(sendText, "send text").text).toBe(
+      "- Approve production\n\nDeployment target:\n- Production cluster",
+    );
+  });
+
+  it("reassembles bounded fallback fragments when native presentation rendering succeeds", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "joined-labels",
+      roomId: "!room",
+    });
+    setTestOutbound({
+      presentationCapabilities: {
+        supported: true,
+        buttons: false,
+        limits: { text: { maxLength: 18, encoding: "characters" } },
+      },
+      renderPresentation: ({ payload, presentation }) => ({
+        ...payload,
+        text: renderMessagePresentationFallbackText({ presentation }),
+      }),
+      sendText,
+    });
+
+    await deliverMatrix({
+      to: "!room",
+      payloads: [
+        {
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [
+                  { label: "Approve production", value: "approve" },
+                  { label: "Rollback release", value: "rollback" },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(requireMockCallArg(sendText, "send text").text).toBe(
+      "Actions:\n- Approve production\n- Rollback release",
+    );
   });
 
   it("runs adapter after-delivery hooks with the payload delivery results", async () => {

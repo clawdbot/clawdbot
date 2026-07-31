@@ -174,6 +174,17 @@ export async function startPluginServices(params: {
     stop?: () => void | Promise<void>;
     revokeGatewayEvents: () => void;
   }> = [];
+  const stopService = async (entry: (typeof running)[number]) => {
+    try {
+      if (entry.stop) {
+        await withPluginHttpRouteRegistry(params.registry, () => entry.stop?.());
+      }
+    } catch (err) {
+      log.warn(`plugin service stop failed (${entry.id}): ${String(err)}`);
+    } finally {
+      entry.revokeGatewayEvents();
+    }
+  };
   let failedCount = 0;
   for (const entry of params.registry.services) {
     const service = entry.service;
@@ -189,6 +200,11 @@ export async function startPluginServices(params: {
       service: entry,
       gatewayEvents: scopedGatewayEvents.gatewayEvents,
     });
+    const runningService = {
+      id: service.id,
+      stop: service.stop ? () => service.stop?.(serviceContext) : undefined,
+      revokeGatewayEvents: scopedGatewayEvents.revoke,
+    };
     try {
       const startService = () =>
         withPluginHttpRouteRegistry(params.registry, () => service.start(serviceContext));
@@ -197,18 +213,15 @@ export async function startPluginServices(params: {
       } else {
         await startService();
       }
-      running.push({
-        id: service.id,
-        stop: service.stop ? () => service.stop?.(serviceContext) : undefined,
-        revokeGatewayEvents: scopedGatewayEvents.revoke,
-      });
+      running.push(runningService);
     } catch (err) {
-      scopedGatewayEvents.revoke();
       failedCount += 1;
       const error = err as Error;
       log.error(
         `plugin service failed (${service.id}, plugin=${entry.pluginId}, root=${entry.rootDir ?? "unknown"}): ${error?.message ?? String(err)}`,
       );
+      // A failed start can already own resources; revoke events only after its cleanup runs.
+      await stopService(runningService);
     }
   }
   params.startupTrace?.detail?.("sidecars.plugin-services.summary", [
@@ -217,19 +230,14 @@ export async function startPluginServices(params: {
     ["failedCount", failedCount],
   ]);
 
+  let stopPromise: Promise<void> | undefined;
   return {
-    stop: async () => {
-      for (const entry of running.toReversed()) {
-        try {
-          if (entry.stop) {
-            await withPluginHttpRouteRegistry(params.registry, () => entry.stop?.());
-          }
-        } catch (err) {
-          log.warn(`plugin service stop failed (${entry.id}): ${String(err)}`);
-        } finally {
-          entry.revokeGatewayEvents();
+    stop: () =>
+      // Store the shared promise before plugin cleanup runs so shutdown cannot start twice.
+      (stopPromise ??= Promise.resolve().then(async () => {
+        for (const entry of running.toReversed()) {
+          await stopService(entry);
         }
-      }
-    },
+      })),
   };
 }

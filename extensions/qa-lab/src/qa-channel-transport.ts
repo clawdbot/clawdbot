@@ -184,6 +184,7 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
   }
   async waitForOutboundSequence(input: QaTransportOutboundSequenceMatch) {
     return await waitForQaTransportOutboundSequence({
+      accountId: this.accountId,
       input,
       readEvents: () => this.state.getSnapshot().events,
     });

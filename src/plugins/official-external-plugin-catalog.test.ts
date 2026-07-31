@@ -1960,6 +1960,193 @@ describe("official external plugin catalog", () => {
     });
   });
 
+  it("lists Synthetic as an official external provider", () => {
+    const synthetic = expectCatalogEntry("synthetic");
+
+    expect(resolveOfficialExternalPluginId(synthetic)).toBe("synthetic");
+    expect(resolveOfficialExternalPluginInstall(synthetic)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/synthetic-provider",
+      npmSpec: "@openclaw/synthetic-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+  });
+
+  it("preserves DuckDuckGo's keyless web search setup contract", () => {
+    const duckduckgo = expectCatalogEntry("duckduckgo");
+    const manifest = getOfficialExternalPluginCatalogManifest(duckduckgo);
+
+    expect(resolveOfficialExternalPluginInstall(duckduckgo)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/duckduckgo-plugin",
+      npmSpec: "@openclaw/duckduckgo-plugin",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(manifest?.contracts?.webSearchProviders).toEqual(["duckduckgo"]);
+    expect(manifest?.webSearchProviders).toEqual([
+      {
+        id: "duckduckgo",
+        label: "DuckDuckGo Search (experimental)",
+        hint: "Free web search fallback with no API key required",
+        onboardingScopes: ["text-inference"],
+        requiresCredential: false,
+        envVars: [],
+        placeholder: "(no key needed)",
+        signupUrl: "https://duckduckgo.com/",
+        docsUrl: "https://docs.openclaw.ai/tools/duckduckgo-search",
+        credentialPath: "",
+        autoDetectOrder: 100,
+      },
+    ]);
+  });
+
+  it("lists Voyage as an official external memory embedding provider", () => {
+    const voyage = expectCatalogEntry("voyage");
+    const manifest = getOfficialExternalPluginCatalogManifest(voyage);
+
+    expect(resolveOfficialExternalPluginId(voyage)).toBe("voyage");
+    expect(resolveOfficialExternalPluginInstall(voyage)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/voyage-provider",
+      npmSpec: "@openclaw/voyage-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(manifest?.contracts?.memoryEmbeddingProviders).toEqual(["voyage"]);
+    expect(manifest?.providers).toEqual([
+      expect.objectContaining({
+        id: "voyage",
+        envVars: ["VOYAGE_API_KEY"],
+      }),
+    ]);
+  });
+
+  it("lists Vydra as an official external media provider", () => {
+    const vydra = expectCatalogEntry("vydra");
+    const manifest = getOfficialExternalPluginCatalogManifest(vydra);
+
+    expect(resolveOfficialExternalPluginId(vydra)).toBe("vydra");
+    expect(resolveOfficialExternalPluginInstall(vydra)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/vydra-provider",
+      npmSpec: "@openclaw/vydra-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(manifest?.providers?.map((provider) => provider.id)).toEqual(["vydra"]);
+    expect(manifest?.contracts).toMatchObject({
+      speechProviders: ["vydra"],
+      imageGenerationProviders: ["vydra"],
+      videoGenerationProviders: ["vydra"],
+    });
+  });
+
+  it("lists Volcengine model and speech providers as one official external plugin", () => {
+    const entry = expectCatalogEntry("volcengine");
+    const manifest = getOfficialExternalPluginCatalogManifest(entry);
+    const volcengine = manifest?.providers?.find((provider) => provider.id === "volcengine");
+
+    expect(resolveOfficialExternalPluginId(entry)).toBe("volcengine");
+    expect(getOfficialExternalPluginCatalogEntry("volcengine-plan")).toBe(entry);
+    expect(resolveOfficialExternalPluginInstall(entry)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/volcengine-provider",
+      npmSpec: "@openclaw/volcengine-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(volcengine?.aliases).toEqual(["volcengine-plan"]);
+    expect(volcengine?.authChoices?.[0]).toMatchObject({
+      choiceId: "volcengine-api-key",
+      optionKey: "volcengineApiKey",
+      onboardingScopes: ["text-inference"],
+    });
+    expect(manifest?.providers?.map((provider) => provider.id)).toEqual([
+      "volcengine",
+      "volcengine-plan",
+    ]);
+    expect(manifest?.contracts?.speechProviders).toEqual(["volcengine"]);
+  });
+
+  it("lists Xiaomi's model, speech, and usage surfaces as one official external provider", () => {
+    const xiaomi = expectCatalogEntry("xiaomi");
+    const manifest = getOfficialExternalPluginCatalogManifest(xiaomi);
+
+    expect(resolveOfficialExternalPluginId(xiaomi)).toBe("xiaomi");
+    expect(getOfficialExternalPluginCatalogEntry("xiaomi-token-plan")).toBe(xiaomi);
+    expect(resolveOfficialExternalPluginInstall(xiaomi)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/xiaomi-provider",
+      npmSpec: "@openclaw/xiaomi-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(manifest?.providers?.map((provider) => provider.id)).toEqual([
+      "xiaomi",
+      "xiaomi-token-plan",
+    ]);
+    expect(manifest?.providers?.[0]?.authChoices?.map((choice) => choice.choiceId)).toEqual([
+      "xiaomi-api-key",
+    ]);
+    expect(manifest?.providers?.[1]?.authChoices?.map((choice) => choice.choiceId)).toEqual([
+      "xiaomi-token-plan-ams",
+      "xiaomi-token-plan-cn",
+      "xiaomi-token-plan-sgp",
+    ]);
+    expect(manifest?.contracts).toMatchObject({
+      speechProviders: ["xiaomi"],
+      usageProviders: ["xiaomi", "xiaomi-token-plan"],
+    });
+    expect(manifest?.providerEndpoints).toEqual([
+      {
+        endpointClass: "xiaomi-native",
+        hosts: [
+          "api.xiaomimimo.com",
+          "token-plan-ams.xiaomimimo.com",
+          "token-plan-cn.xiaomimimo.com",
+          "token-plan-sgp.xiaomimimo.com",
+        ],
+      },
+    ]);
+  });
+
+  it("lists BytePlus and its paired plan route as an official external provider", () => {
+    const byteplus = expectCatalogEntry("byteplus");
+    const manifest = getOfficialExternalPluginCatalogManifest(byteplus);
+
+    expect(getOfficialExternalPluginCatalogEntry("byteplus-plan")).toBe(byteplus);
+    expect(resolveOfficialExternalPluginInstall(byteplus)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/byteplus-provider",
+      npmSpec: "@openclaw/byteplus-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(manifest?.contracts?.videoGenerationProviders).toEqual(["byteplus"]);
+    expect(manifest?.providers?.[0]?.aliases).toEqual(["byteplus-plan"]);
+    expect(
+      resolveOfficialExternalProviderPluginIds({
+        providerIds: new Set(["byteplus-plan"]),
+      }),
+    ).toEqual(["byteplus"]);
+    expect(resolveOfficialExternalProviderPluginIdsForEnv({ BYTEPLUS_API_KEY: "key" })).toEqual([
+      "byteplus",
+    ]);
+  });
+
+  it("lists ComfyUI as an official external media provider", () => {
+    const comfy = expectCatalogEntry("comfy");
+    const manifest = getOfficialExternalPluginCatalogManifest(comfy);
+
+    expect(resolveOfficialExternalPluginId(comfy)).toBe("comfy");
+    expect(resolveOfficialExternalPluginInstall(comfy)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/comfy-provider",
+      npmSpec: "@openclaw/comfy-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(manifest?.contracts).toMatchObject({
+      imageGenerationProviders: ["comfy"],
+      musicGenerationProviders: ["comfy"],
+      videoGenerationProviders: ["comfy"],
+    });
+  });
+
   it.each([
     ["teams-meetings", "@openclaw/teams-meetings", "teams_meetings", "teams"],
     ["zoom-meetings", "@openclaw/zoom-meetings", "zoom_meetings", "zoom"],
@@ -2012,9 +2199,9 @@ describe("official external plugin catalog", () => {
     expect(
       resolveOfficialExternalProviderContractPluginIds({
         contract: "speechProviders",
-        providerIds: new Set(["gradium", "inworld"]),
+        providerIds: new Set(["gradium", "inworld", "xiaomi"]),
       }),
-    ).toEqual(["gradium", "inworld"]);
+    ).toEqual(["gradium", "inworld", "xiaomi"]);
     expect(
       resolveOfficialExternalProviderContractPluginIds({
         contract: "webFetchProviders",
@@ -2027,6 +2214,12 @@ describe("official external plugin catalog", () => {
         providerIds: new Set(["groq", "moonshot", "zai"]),
       }),
     ).toEqual(["groq", "moonshot", "zai"]);
+    expect(
+      resolveOfficialExternalProviderContractPluginIds({
+        contract: "memoryEmbeddingProviders",
+        providerIds: new Set(["voyage"]),
+      }),
+    ).toEqual(["voyage"]);
   });
 
   it("maps env-only web-fetch credentials to external plugin owners", () => {
@@ -2076,6 +2269,9 @@ describe("official external plugin catalog", () => {
         TOKENPLAN_API_KEY: "tokenplan-key",
         VENICE_API_KEY: "venice-key",
         AI_GATEWAY_API_KEY: "gateway-key",
+        VOYAGE_API_KEY: "voyage-key",
+        XIAOMI_API_KEY: "xiaomi-key",
+        XIAOMI_TOKEN_PLAN_API_KEY: "xiaomi-token-plan-key",
         ZAI_API_KEY: "zai-key",
       }),
     ).toEqual([
@@ -2098,6 +2294,8 @@ describe("official external plugin catalog", () => {
       "tencent",
       "venice",
       "vercel-ai-gateway",
+      "voyage",
+      "xiaomi",
       "zai",
     ]);
     expect(resolveOfficialExternalProviderPluginIdsForEnv({ GROQ_API_KEY: " " })).toEqual([]);

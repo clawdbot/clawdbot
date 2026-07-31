@@ -691,6 +691,45 @@ describe("state migrations", () => {
     detectionCase = { ...detected, stateDir, env };
   });
 
+  it("does not treat wildcard route bindings as pairing account ids", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    cfg.bindings = [
+      {
+        agentId: "worker-1",
+        match: { channel: "chatapp", accountId: "*" },
+      },
+    ];
+    const credentialsDir = path.join(stateDir, "credentials");
+    await fs.mkdir(credentialsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(credentialsDir, "chatapp-allowFrom.json"),
+      '["default-user"]\n',
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(credentialsDir, "chatapp-alpha-allowFrom.json"),
+      '["scoped-user"]\n',
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({ detected, config: cfg, now: () => 1234 });
+
+    expect(result.warnings).toEqual([]);
+    expect(readChannelPairingStateSnapshot("chatapp", env).allowFrom).toEqual({
+      alpha: ["default-user", "scoped-user"],
+    });
+    await expectMissingPath(path.join(credentialsDir, "chatapp-allowFrom.json"));
+    await expectMissingPath(path.join(credentialsDir, "chatapp-alpha-allowFrom.json"));
+  });
+
   it("keeps automatic migration read-only when the shared schema is current", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");

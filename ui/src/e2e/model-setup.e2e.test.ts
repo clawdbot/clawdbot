@@ -116,7 +116,7 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
     try {
       const response = await page.goto(`${server.baseUrl}settings/model-setup?firstRun=1`);
       expect(response?.status()).toBe(200);
-      await page.getByRole("heading", { name: "Connect your AI" }).waitFor();
+      await page.getByRole("heading", { name: "Connect a verified AI model" }).waitFor();
       const candidate = page.locator('[data-candidate-kind="codex-cli"]');
       await expect.poll(() => candidate.locator('[data-provider-icon="codex"]').count()).toBe(1);
       await candidate.getByRole("button", { name: "Test & use" }).click();
@@ -510,7 +510,7 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
     }
   });
 
-  it("turns an unverifiable Gemini CLI login into direct recovery actions", async () => {
+  it("offers supported Google setup in an accessible provider picker", async () => {
     const context = await browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -524,24 +524,12 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
         "chat.startup",
         "openclaw.setup.detect",
         "openclaw.setup.activate",
-        "openclaw.setup.auth.start",
         "openclaw.setup.prepare.start",
       ],
       methodResponses: {
         "openclaw.setup.detect": {
           candidates: [],
-          unavailableCandidates: [
-            {
-              id: "gemini-cli",
-              brandId: "google-gemini-cli",
-              label: "Gemini CLI",
-              detail: "installed; login status unavailable",
-              reason:
-                "OpenClaw cannot confirm whether this private Gemini CLI login works without starting a session that may expose tools. Sign in through OpenClaw or use a Gemini API key to create a connection it can verify.",
-              authOptionId: "google-gemini-cli",
-              manualProviderId: "gemini-api-key",
-            },
-          ],
+          unavailableCandidates: [],
           manualProviders: [
             {
               id: "qwen-cn",
@@ -567,20 +555,11 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
               id: "gemini-api-key",
               brandId: "google",
               groupLabel: "Google",
-              label: "Google Gemini API key",
-              hint: "Use an AI Studio API key.",
+              label: "Google AI Studio API key",
+              hint: "Supported API-key access from aistudio.google.com/apikey",
             },
           ],
-          authOptions: [
-            {
-              id: "google-gemini-cli",
-              brandId: "google-gemini-cli",
-              label: "Gemini CLI OAuth",
-              groupLabel: "Google",
-              kind: "oauth",
-              featured: true,
-            },
-          ],
+          authOptions: [],
           workspace: "/tmp/openclaw-e2e",
           setupComplete: false,
         },
@@ -590,20 +569,15 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
           latencyMs: 412,
           lines: ["Model ready"],
         },
-        "openclaw.setup.auth.start": {
-          sessionId: "gemini-oauth-session",
-          done: false,
-          status: "running",
-        },
       },
     });
 
     try {
       const response = await page.goto(`${server.baseUrl}settings/model-setup`);
       expect(response?.status()).toBe(200);
-      await page.getByRole("heading", { name: "Found, but needs attention" }).waitFor();
-      await page.getByRole("button", { name: "Sign in with Google" }).waitFor();
-      await page.getByRole("button", { name: "Use API key" }).waitFor();
+      await page.getByRole("heading", { name: "Connect a verified AI model" }).waitFor();
+      await expect.poll(() => page.getByText("Gemini CLI OAuth").count()).toBe(0);
+      await expect.poll(() => page.getByText("Found, but needs attention").count()).toBe(0);
 
       const providerPicker = page.locator(".model-setup-provider-select");
       const providerTrigger = providerPicker.locator(".model-setup-provider-select__trigger");
@@ -727,11 +701,16 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
         .toBe(true);
 
       await accessValue.fill("sk-old-provider-secret");
-      await page.getByRole("button", { name: "Use API key" }).click();
+      await providerTrigger.click();
+      await expect.poll(manualProviderMenuReady).toBe(true);
+      const googleProviderHidden = waitForProviderHide();
+      await page.locator('[data-manual-provider="gemini-api-key"]').click();
+      await googleProviderHidden;
       await expect.poll(() => providerTrigger.textContent()).toContain("Google");
+      await expect.poll(() => providerTrigger.textContent()).toContain("AI Studio API key");
       await expect.poll(() => accessValue.inputValue()).toBe("");
       await expect
-        .poll(() => accessValue.evaluate((element) => element === document.activeElement))
+        .poll(() => providerTrigger.evaluate((element) => element === document.activeElement))
         .toBe(true);
 
       await providerTrigger.click();
@@ -793,21 +772,13 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
       await expect
         .poll(async () => (await gateway.getRequests("openclaw.setup.detect")).length)
         .toBe(detectCountBeforeDismiss + 1);
-      await page.getByRole("button", { name: "Use API key" }).click();
+      await providerTrigger.click();
+      await expect.poll(manualProviderMenuReady).toBe(true);
+      const googleProviderHiddenAfterDismiss = waitForProviderHide();
+      await page.locator('[data-manual-provider="gemini-api-key"]').click();
+      await googleProviderHiddenAfterDismiss;
       await expect.poll(() => providerTrigger.textContent()).toContain("Google");
-
-      const detectCount = (await gateway.getRequests("openclaw.setup.detect")).length;
-      await page
-        .locator('[data-unavailable-candidate="gemini-cli"]')
-        .getByRole("button", { name: "Check again" })
-        .click();
-      await expect
-        .poll(async () => (await gateway.getRequests("openclaw.setup.detect")).length)
-        .toBe(detectCount + 1);
-
-      await page.getByRole("button", { name: "Sign in with Google" }).click();
-      const start = await gateway.waitForRequest("openclaw.setup.auth.start");
-      expect(start.params).toMatchObject({ authChoice: "google-gemini-cli" });
+      await expect.poll(() => page.getByText("Gemini CLI OAuth").count()).toBe(0);
     } finally {
       await context.close();
     }
