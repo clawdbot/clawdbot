@@ -1,4 +1,5 @@
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   buildAgentRunTerminalOutcome,
@@ -107,7 +108,7 @@ export function createAgentCommandLifecycle(params: {
         ...(livenessState ? { livenessState } : {}),
         ...(timeoutPhase ? { timeoutPhase } : {}),
         ...(providerStarted !== undefined ? { providerStarted } : {}),
-        ...(error ? { error } : {}),
+        ...(error ? { error: formatErrorMessage(error) } : {}),
         ...(fallbackExhausted ? { fallbackExhaustedFailure: true } : {}),
         ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
       },
@@ -167,7 +168,7 @@ export function createAgentCommandLifecycle(params: {
           phase: "error",
           startedAt: params.startedAt,
           endedAt: Date.now(),
-          error: error instanceof Error ? error.message : "Agent run failed",
+          error: formatErrorMessage(error),
           ...resolveAgentRunErrorLifecycleFields(error, params.abortSignal),
         },
       });

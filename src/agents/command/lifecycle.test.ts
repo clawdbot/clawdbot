@@ -78,6 +78,49 @@ describe("createAgentCommandLifecycle", () => {
     },
   );
 
+  it.each(["lifecycle callback", "fallback payload", "post-turn error"] as const)(
+    "redacts credentials from a %s before publishing the lifecycle event",
+    (source) => {
+      emitAgentEvent.mockClear();
+      const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
+      const error = `The provider failed. Authorization: Bearer ${secret}`;
+      const state = {
+        currentTurnUserMessagePersisted: true,
+        lifecycleFinishing: false,
+        lifecycleEnded: false,
+        ...(source === "lifecycle callback" ? { lifecycleError: error } : {}),
+      };
+      const lifecycle = createAgentCommandLifecycle({
+        runId: "secret-safe-terminal-owner",
+        lifecycleGeneration: () => "test-generation",
+        startedAt: 100,
+        state,
+      });
+      const terminal = {
+        metadata: {},
+        outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+      };
+
+      if (source === "post-turn error") {
+        lifecycle.emitPostTurnError(new Error(error));
+      } else {
+        lifecycle.emitResultError(
+          {
+            payloads: source === "fallback payload" ? [{ isError: true, text: error }] : [],
+            meta: {},
+          } as Parameters<typeof lifecycle.emitResultError>[0],
+          source === "fallback payload",
+          terminal,
+        );
+      }
+
+      const event = emitAgentEvent.mock.calls[0]?.[0];
+      expect(event.data.error).toContain("The provider failed.");
+      expect(event.data.error).toContain("Authorization: Bearer");
+      expect(JSON.stringify(event)).not.toContain(secret);
+    },
+  );
+
   it.each(["finishing", "end", "error"] as const)(
     "rejects malformed canonical metadata on %s events",
     (phase) => {
