@@ -41,6 +41,7 @@ describe("mime detection", () => {
   }
 
   it.each([
+    { format: "avif", expected: "image/avif" },
     { format: "jpg", expected: "image/jpeg" },
     { format: "jpeg", expected: "image/jpeg" },
     { format: "png", expected: "image/png" },
@@ -275,6 +276,22 @@ describe("mime detection", () => {
     });
   });
 
+  it.each([
+    { brand: "avif", expected: "image/avif" },
+    { brand: "avis", expected: "image/avif" },
+    { brand: "M4B ", expected: "audio/mp4" },
+    { brand: "M4V ", expected: "video/x-m4v" },
+    { brand: "hevc", expected: "image/heic-sequence" },
+    { brand: "msf1", expected: "image/heif-sequence" },
+  ] as const)("preserves the file-type MIME for ISO-BMFF $brand media", async (testCase) => {
+    const buffer = Buffer.alloc(24);
+    buffer.writeUInt32BE(buffer.length, 0);
+    buffer.write("ftyp", 4, "ascii");
+    buffer.write(testCase.brand, 8, "ascii");
+
+    await expectDetectedMime({ input: { buffer }, expected: testCase.expected });
+  });
+
   it("does not let conflicting audio metadata override MPEG video bytes", async () => {
     const mpegProgramStream = Buffer.from([0x00, 0x00, 0x01, 0xba, 0x00, 0x00, 0x00, 0x00]);
 
@@ -369,15 +386,20 @@ describe("getFileExtension", () => {
 
 describe("mimeTypeFromFilePath", () => {
   it.each([
+    { filePath: "photo.avif", expected: "image/avif" },
     { filePath: "image.bmp", expected: "image/bmp" },
+    { filePath: "photo.heic", expected: "image/heic" },
+    { filePath: "photo.heif", expected: "image/heif" },
     { filePath: "photo.jpg", expected: "image/jpeg" },
     { filePath: "photo.JPG", expected: "image/jpeg" },
     { filePath: "voice.mp3", expected: "audio/mpeg" },
     { filePath: "voice.m2a", expected: "audio/mpeg" },
+    { filePath: "audiobook.m4b", expected: "audio/mp4" },
     { filePath: "voice.oga", expected: "audio/ogg" },
     { filePath: "voice.amr", expected: "audio/amr" },
     { filePath: "voice.wav", expected: "audio/wav" },
     { filePath: "clip.avi", expected: "video/x-msvideo" },
+    { filePath: "clip.m4v", expected: "video/x-m4v" },
     { filePath: "clip.mkv", expected: "video/x-matroska" },
     { filePath: "clip.webm", expected: "video/webm" },
     {
@@ -415,6 +437,7 @@ describe("extensionForMime", () => {
   }
 
   it.each([
+    { mime: "image/avif", expected: ".avif" },
     { mime: "image/jpeg", expected: ".jpg" },
     { mime: "image/jpg", expected: ".jpg" },
     { mime: "image/bmp", expected: ".bmp" },
@@ -423,6 +446,9 @@ describe("extensionForMime", () => {
     { mime: "image/webp", expected: ".webp" },
     { mime: "image/gif", expected: ".gif" },
     { mime: "image/heic", expected: ".heic" },
+    { mime: "image/heic-sequence", expected: ".heic" },
+    { mime: "image/heif", expected: ".heif" },
+    { mime: "image/heif-sequence", expected: ".heif" },
     { mime: "audio/mpeg", expected: ".mp3" },
     { mime: "audio/mp3", expected: ".mp3" },
     { mime: "audio/ogg", expected: ".ogg" },
@@ -433,6 +459,7 @@ describe("extensionForMime", () => {
     { mime: "audio/m4a", expected: ".m4a" },
     { mime: "audio/mp4", expected: ".m4a" },
     { mime: "video/x-msvideo", expected: ".avi" },
+    { mime: "video/x-m4v", expected: ".m4v" },
     { mime: "video/mp4", expected: ".mp4" },
     { mime: "video/x-matroska", expected: ".mkv" },
     { mime: "video/webm", expected: ".webm" },
@@ -465,6 +492,7 @@ describe("isAudioFileName", () => {
   }
 
   it.each([
+    { fileName: "audiobook.M4B", expected: true },
     { fileName: "voice.mp3", expected: true },
     { fileName: "voice.caf", expected: true },
     { fileName: "voice.M2A", expected: true },

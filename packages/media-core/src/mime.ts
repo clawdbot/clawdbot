@@ -8,8 +8,11 @@ export const FILE_TYPE_SNIFF_MAX_BYTES = 1024 * 1024;
 
 // Map common mimes to preferred file extensions.
 const EXT_BY_MIME: Record<string, string> = {
+  "image/avif": ".avif",
   "image/heic": ".heic",
+  "image/heic-sequence": ".heic",
   "image/heif": ".heif",
+  "image/heif-sequence": ".heif",
   "image/bmp": ".bmp",
   "image/jpg": ".jpg",
   "image/jpeg": ".jpg",
@@ -33,6 +36,7 @@ const EXT_BY_MIME: Record<string, string> = {
   "audio/mp4": ".m4a",
   "audio/x-caf": ".caf",
   "video/x-msvideo": ".avi",
+  "video/x-m4v": ".m4v",
   "video/mp4": ".mp4",
   "video/x-matroska": ".mkv",
   "video/webm": ".webm",
@@ -75,6 +79,7 @@ const MIME_BY_EXT: Record<string, string> = {
   // Canonical extension mappings for common MIME aliases
   ".jpg": "image/jpeg",
   ".m2a": "audio/mpeg",
+  ".m4b": "audio/mp4",
   ".mp3": "audio/mpeg",
   ".oga": "audio/ogg",
   ".wav": "audio/wav",
@@ -283,6 +288,8 @@ export function imageMimeFromFormat(format?: string | null): string | undefined 
     return undefined;
   }
   switch (format.toLowerCase()) {
+    case "avif":
+      return "image/avif";
     case "jpg":
     case "jpeg":
       return "image/jpeg";

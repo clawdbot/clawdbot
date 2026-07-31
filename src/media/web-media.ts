@@ -1000,10 +1000,7 @@ export async function optimizeImageBufferForWebMedia(params: {
     buffer: optimized.buffer,
     contentType: optimized.mimeType,
     kind: "image",
-    fileName:
-      optimized.format === "jpeg" && isHeicSource(params)
-        ? toJpegFileName(params.fileName)
-        : params.fileName,
+    fileName: optimized.format === "jpeg" ? toJpegFileName(params.fileName) : params.fileName,
   };
 }
 
@@ -1063,10 +1060,7 @@ async function loadWebMediaInternal(
       throw new Error(formatCapReduce("Media", cap, optimized.buffer.length));
     }
 
-    const fileName =
-      optimized.format === "jpeg" && meta && isHeicSource(meta)
-        ? toJpegFileName(meta.fileName)
-        : meta?.fileName;
+    const fileName = optimized.format === "jpeg" ? toJpegFileName(meta?.fileName) : meta?.fileName;
 
     return {
       buffer: optimized.buffer,
