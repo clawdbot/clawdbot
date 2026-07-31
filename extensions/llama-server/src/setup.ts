@@ -9,7 +9,7 @@ import {
   buildApiKeyCredential,
   ensureApiKeyFromEnvOrPrompt,
   normalizeOptionalSecretInput,
-  removeProviderAuthProfilesWithLock,
+  removeAuthProfilesWithLock,
   upsertAuthProfileWithLock,
   type OpenClawConfig,
   type SecretInput,
@@ -198,6 +198,18 @@ function buildSetupResult(params: {
   };
 }
 
+async function removeDefaultAuthProfile(agentDir?: string): Promise<void> {
+  const updated = await removeAuthProfilesWithLock({
+    profileIds: [PROFILE_ID],
+    agentDir,
+  });
+  if (!updated) {
+    throw new Error(
+      "Failed to remove the previous llama-server auth profile; wait a moment and retry.",
+    );
+  }
+}
+
 async function discoverForSetup(params: {
   config: OpenClawConfig;
   baseUrl: string;
@@ -347,10 +359,7 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
     throw new Error(`No llama-server text models were found at ${discovery.endpoint.origin}.`);
   }
   if (!credentialInput) {
-    await removeProviderAuthProfilesWithLock({
-      provider: LLAMA_SERVER_PROVIDER_ID,
-      agentDir: ctx.agentDir,
-    });
+    await removeDefaultAuthProfile(ctx.agentDir);
   }
   return buildSetupResult({
     config: ctx.config,
@@ -487,10 +496,7 @@ export async function configureLlamaServerNonInteractive(
       mode: "api_key",
     });
   } else {
-    await removeProviderAuthProfilesWithLock({
-      provider: LLAMA_SERVER_PROVIDER_ID,
-      agentDir: ctx.agentDir,
-    });
+    await removeDefaultAuthProfile(ctx.agentDir);
     config = removeLlamaServerAuthProfileConfig(config);
   }
 

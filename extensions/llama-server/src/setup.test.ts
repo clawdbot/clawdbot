@@ -14,11 +14,11 @@ import {
 
 const discoverMock = vi.hoisted(() => vi.fn());
 const runtimeApiKeyMock = vi.hoisted(() => vi.fn());
-const removeProviderAuthProfilesMock = vi.hoisted(() => vi.fn());
+const removeAuthProfilesMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
-  removeProviderAuthProfilesWithLock: removeProviderAuthProfilesMock,
+  removeAuthProfilesWithLock: removeAuthProfilesMock,
 }));
 
 vi.mock("./discovery.js", async (importOriginal) => ({
@@ -86,8 +86,8 @@ describe("llama-server setup", () => {
     discoverMock.mockReset();
     runtimeApiKeyMock.mockReset();
     runtimeApiKeyMock.mockResolvedValue(undefined);
-    removeProviderAuthProfilesMock.mockReset();
-    removeProviderAuthProfilesMock.mockResolvedValue({ version: 1, profiles: {} });
+    removeAuthProfilesMock.mockReset();
+    removeAuthProfilesMock.mockResolvedValue({ version: 1, profiles: {} });
   });
 
   it("detects a running local server without writing config", async () => {
@@ -173,8 +173,9 @@ describe("llama-server setup", () => {
         auth: {
           profiles: {
             "llama-server:default": { provider: "llama-server", mode: "api_key" },
+            "llama-server:custom": { provider: "llama-server", mode: "api_key" },
           },
-          order: { "llama-server": ["llama-server:default"] },
+          order: { "llama-server": ["llama-server:default", "llama-server:custom"] },
         },
       },
       env: {},
@@ -190,13 +191,13 @@ describe("llama-server setup", () => {
       result.configPatch?.models?.providers?.[LLAMA_SERVER_PROVIDER_ID]?.apiKey,
     ).toBeUndefined();
     expect(result.defaultModel).toBe("llama-server/qwen/model:Q4_K_M");
-    expect(removeProviderAuthProfilesMock).toHaveBeenCalledWith({
-      provider: LLAMA_SERVER_PROVIDER_ID,
+    expect(removeAuthProfilesMock).toHaveBeenCalledWith({
+      profileIds: ["llama-server:default"],
       agentDir: undefined,
     });
     expect(result.configPatch?.auth).toEqual({
       profiles: { "llama-server:default": undefined },
-      order: { "llama-server": undefined },
+      order: { "llama-server": ["llama-server:custom"] },
     });
   });
 
@@ -314,8 +315,8 @@ describe("llama-server setup", () => {
     expect(configured?.agents?.defaults?.model).toEqual(
       expect.objectContaining({ primary: "llama-server/qwen/model:Q4_K_M" }),
     );
-    expect(removeProviderAuthProfilesMock).toHaveBeenCalledWith({
-      provider: LLAMA_SERVER_PROVIDER_ID,
+    expect(removeAuthProfilesMock).toHaveBeenCalledWith({
+      profileIds: ["llama-server:default"],
       agentDir: undefined,
     });
     expect(configured?.auth).toEqual({ profiles: {}, order: undefined });
