@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createAbortError } from "../../infra/abort-signal.js";
 import { onSubagentRegistryPersisted } from "../subagent-registry-state.js";
 import { getSubagentRunsByRunIds } from "../subagent-registry.js";
 import type { SubagentRunRecord } from "../subagent-registry.types.js";
@@ -165,24 +166,33 @@ async function waitForCollector(params: {
 }) {
   const deadline = Date.now() + params.timeoutMs;
   for (;;) {
+    if (params.signal?.aborted) {
+      throw createAbortError("agents_wait aborted.");
+    }
     // Recovery can replace a registry row while preserving its stable swarm id.
     // Re-resolve ownership and completion on every poll instead of retaining old objects.
     const state = readWaitState(params.ids, params.currentSessionKeys);
     if (state.completed.length > 0 || state.pending.length === 0 || Date.now() >= deadline) {
       return state;
     }
-    await new Promise<void>((resolve) => {
-      const finish = () => {
+    await new Promise<void>((resolve, reject) => {
+      const finish = (error?: Error) => {
         clearTimeout(timer);
-        params.signal?.removeEventListener("abort", finish);
+        params.signal?.removeEventListener("abort", onAbort);
+        if (error) {
+          reject(error);
+          return;
+        }
         resolve();
       };
+      const onAbort = () => finish(createAbortError("agents_wait aborted."));
       const timer = setTimeout(finish, Math.min(25, Math.max(0, deadline - Date.now())));
-      params.signal?.addEventListener("abort", finish, { once: true });
+      params.signal?.addEventListener("abort", onAbort, { once: true });
+      // Abort can race listener registration; never turn that cancellation into a successful poll.
+      if (params.signal?.aborted) {
+        onAbort();
+      }
     });
-    if (params.signal?.aborted) {
-      return readWaitState(params.ids, params.currentSessionKeys);
-    }
   }
 }
 
@@ -206,6 +216,9 @@ export function createAgentsWaitTool(opts: {
         throw new ToolInputError(`agents_wait supports at most ${MAX_WAIT_IDS} ids.`);
       }
       const ids = [...new Set(params.ids.map((id) => id.trim()).filter(Boolean))];
+      if (ids.length === 0) {
+        throw new ToolInputError("agents_wait requires at least one non-empty run id.");
+      }
       const currentSessionKeys = new Set(
         [opts.runSessionKey, opts.agentSessionKey].filter((key): key is string =>
           Boolean(key?.trim()),
@@ -222,7 +235,11 @@ export function createAgentsWaitTool(opts: {
         timeoutMs: timeoutSeconds * 1_000,
         signal,
       });
-      return jsonResult(result);
+      const noAuthorizedTargets =
+        result.completed.length === 0 &&
+        result.pending.length === 0 &&
+        Boolean(result.errors?.length);
+      return jsonResult(noAuthorizedTargets ? { ...result, success: false } : result);
     },
   };
 }
