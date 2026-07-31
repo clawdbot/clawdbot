@@ -67,6 +67,12 @@ const BODY_SECRET_KEYS = new Set([
   "credential",
   "private_key",
   "authorization",
+  // Mirror packages/net-policy SENSITIVE_URL_QUERY_PARAM_NAMES and copilot provider-bridge.ts
+  // CREDENTIAL_QUERY_PARAM_NAMES so `sig` and `x-*` auth params redact in bodies too.
+  "sig",
+  "x_api_key",
+  "x_access_token",
+  "x_auth_token",
   "key",
   "card_number",
   "card_cvc",
