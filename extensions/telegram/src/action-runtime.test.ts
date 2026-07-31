@@ -1854,21 +1854,26 @@ describe("handleTelegramAction", () => {
     expect(requireRecord(call[3], "reply markup edit options").token).toBe("tok");
   });
 
-  it("uses Telegram caption edits when editMessage receives a caption", async () => {
+  it.each([
+    { description: "non-empty", caption: "Updated caption", richMessages: false },
+    { description: "empty", caption: "", richMessages: false },
+    { description: "non-empty rich", caption: "Updated caption", richMessages: true },
+    { description: "empty rich", caption: "", richMessages: true },
+  ])("uses Telegram caption edits for $description captions", async ({ caption, richMessages }) => {
     await handleTelegramAction(
       {
         action: "editMessage",
         chatId: "123456",
         messageId: 321,
-        caption: "Updated caption",
+        caption,
       },
-      telegramConfig(),
+      telegramConfig(richMessages ? { richMessages: true } : undefined),
     );
 
     const call = mockCall(editMessageTelegram, 0, "caption edit");
     expect(call[0]).toBe("123456");
     expect(call[1]).toBe(321);
-    expect(call[2]).toBe("Updated caption");
+    expect(call[2]).toBe(caption);
     expect(requireRecord(call[3], "caption edit options").editMode).toBe("caption");
   });
 
