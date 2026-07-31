@@ -127,7 +127,6 @@ extensions/google/transport-stream.ts
 extensions/imessage/src/actions.test.ts
 extensions/imessage/src/actions.ts
 extensions/imessage/src/approval-reactions.test.ts
-extensions/imessage/src/approval-reactions.ts
 extensions/imessage/src/monitor.last-route.test.ts
 extensions/imessage/src/monitor/inbound-processing.ts
 extensions/imessage/src/monitor/monitor-provider.ts
