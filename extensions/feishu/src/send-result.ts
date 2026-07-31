@@ -1,4 +1,5 @@
 // Feishu plugin module implements send result behavior.
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -75,7 +76,11 @@ export function toFeishuSendResult(
 } {
   const messageId = response.data?.message_id?.trim();
   if (!messageId) {
-    throw new Error(`${errorPrefix}: no message_id returned`);
+    // Feishu already accepted this send; an ordinary error would invite a duplicate retry.
+    throw createChannelPartialDeliveryError(new Error(`${errorPrefix}: no message_id returned`), {
+      messageIds: [],
+      visibleReplySent: true,
+    });
   }
   return {
     messageId,

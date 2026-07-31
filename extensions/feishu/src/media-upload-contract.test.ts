@@ -1,3 +1,4 @@
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
@@ -249,17 +250,28 @@ describe("Feishu upload contracts", () => {
   it.each([
     { name: "image", fileName: "photo.png", prefix: "Feishu image send failed" },
     { name: "file", fileName: "notes.pdf", prefix: "Feishu file send failed" },
-  ])("rejects acknowledged $name sends without a platform message identifier", async (media) => {
+  ])("retains accepted $name visibility when its platform identifier is missing", async (media) => {
     mocks.messageCreate.mockResolvedValueOnce({ code: 0, data: {} });
 
-    await expect(
-      sendMediaFeishu({
+    let caught: unknown;
+    try {
+      await sendMediaFeishu({
         cfg: emptyConfig,
         to: "user:ou_target",
         mediaBuffer: media.name === "image" ? pngImage : Buffer.from("attachment"),
         fileName: media.fileName,
-      }),
-    ).rejects.toThrow(`${media.prefix}: no message_id returned`);
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    if (!isChannelPartialDeliveryError(caught)) {
+      throw new Error("expected an accepted Feishu media delivery without an identity");
+    }
+    expect(caught.message).toBe(`${media.prefix}: no message_id returned`);
+    expect(caught.deliveryResult).toEqual({ messageIds: [], visibleReplySent: true });
+    expect(mocks.messageCreate).toHaveBeenCalledOnce();
   });
 
   it("rejects empty image and file attachments before contacting Feishu", async () => {
