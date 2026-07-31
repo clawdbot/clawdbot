@@ -32,7 +32,9 @@ function gate() {
 
 async function settle(): Promise<void> {
   for (let i = 0; i < 5; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
   }
 }
 
@@ -78,7 +80,9 @@ describe("command lane capacity groups", () => {
 
     hookGate.release();
     await hookRun;
-    for (const g of gates) g.release();
+    for (const g of gates) {
+      g.release();
+    }
     extra.release();
     await Promise.all([...cronRuns, blockedCron]);
   });
@@ -102,7 +106,9 @@ describe("command lane capacity groups", () => {
     // Not vacuous: the group must actually be saturated, not merely under cap.
     expect(cron.activeCount + hook.activeCount).toBe(8);
 
-    for (const g of gates) g.release();
+    for (const g of gates) {
+      g.release();
+    }
     await Promise.all(runs);
   });
 
@@ -174,7 +180,9 @@ describe("command lane capacity groups", () => {
     // A borrowable reservation would show 4 here and starve the hook.
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(3);
 
-    for (const g of gates) g.release();
+    for (const g of gates) {
+      g.release();
+    }
     await Promise.all(runs);
   });
 
@@ -209,7 +217,9 @@ describe("command lane capacity groups", () => {
     // rather than always-truthy.
     expect(getCommandLaneSnapshot(HOOK).blockedBy).toBeNull();
 
-    for (const g of gates) g.release();
+    for (const g of gates) {
+      g.release();
+    }
     await Promise.all(runs);
   });
 
@@ -243,7 +253,9 @@ describe("command lane capacity groups", () => {
     expect(getCommandLaneSnapshot("unpooled").blockedBy).toBe("lane");
     expect(getCommandLaneSnapshot("unpooled").group).toBeUndefined();
 
-    for (const g of gates) g.release();
+    for (const g of gates) {
+      g.release();
+    }
     await Promise.all(runs);
   });
 

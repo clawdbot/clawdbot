@@ -35,7 +35,9 @@ function gate() {
 
 async function settle(): Promise<void> {
   for (let i = 0; i < 5; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
   }
 }
 
@@ -72,7 +74,9 @@ describe("cron+hook capacity group", () => {
       DEFAULT_CRON_MAX_CONCURRENT_RUNS,
     );
 
-    for (const g of gates) g.release();
+    for (const g of gates) {
+      g.release();
+    }
     await Promise.all(runs);
   });
 
@@ -115,7 +119,9 @@ describe("cron+hook capacity group", () => {
 
     hookGate.release();
     await hookRun;
-    for (const g of gates) g.release();
+    for (const g of gates) {
+      g.release();
+    }
     await Promise.all(runs);
   });
 
@@ -153,7 +159,9 @@ describe("cron+hook capacity group", () => {
     );
     expect(getCommandLaneSnapshot(CommandLane.CronNested).queuedCount).toBe(0);
 
-    for (const g of gates) g.release();
+    for (const g of gates) {
+      g.release();
+    }
     await Promise.all(runs);
   });
 

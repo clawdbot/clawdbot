@@ -43,7 +43,9 @@ function gate() {
 
 async function settle(): Promise<void> {
   for (let i = 0; i < 5; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
   }
 }
 
@@ -83,7 +85,9 @@ describe("group-blocked lane waits are reported", () => {
     // suppresses its setup timeout and the run fails spuriously.
     expect(shouldNoteLaneWait(snapshot)).toBe(true);
 
-    for (const g of gates) g.release();
+    for (const g of gates) {
+      g.release();
+    }
     await Promise.all(runs);
   });
 
@@ -100,7 +104,9 @@ describe("group-blocked lane waits are reported", () => {
 
     hookGate.release();
     await hookRun;
-    for (const g of cronGates) g.release();
+    for (const g of cronGates) {
+      g.release();
+    }
     await Promise.all(cronRuns);
   });
 

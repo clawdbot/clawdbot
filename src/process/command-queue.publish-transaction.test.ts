@@ -36,7 +36,9 @@ function gate() {
 
 async function settle(): Promise<void> {
   for (let i = 0; i < 5; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
   }
 }
 
@@ -77,8 +79,12 @@ describe("publishLaneConfiguration", () => {
         }),
       );
     };
-    for (let i = 0; i < 12; i++) park(CRON);
-    for (let i = 0; i < 6; i++) park(HOOK);
+    for (let i = 0; i < 12; i++) {
+      park(CRON);
+    }
+    for (let i = 0; i < 6; i++) {
+      park(HOOK);
+    }
     await settle();
     expect(active).toBe(0); // nothing may run before publication
 
@@ -99,7 +105,9 @@ describe("publishLaneConfiguration", () => {
     // And not vacuous — publication must actually have dispatched to the cap.
     expect(peak).toBe(8);
 
-    for (const g of gates) g.release();
+    for (const g of gates) {
+      g.release();
+    }
     await Promise.all(runs);
   });
 
@@ -127,7 +135,9 @@ describe("publishLaneConfiguration", () => {
 
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(0);
 
-    for (const g of gates) g.release();
+    for (const g of gates) {
+      g.release();
+    }
     // The lane never opened, so this work is still queued. resetAllLanes
     // PRESERVES queued entries by design, so it would never settle these —
     // clearCommandLane rejects them instead.
@@ -172,7 +182,9 @@ describe("publishLaneConfiguration", () => {
     await settle();
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(0);
 
-    for (const g of gates) g.release();
+    for (const g of gates) {
+      g.release();
+    }
     extra.release();
     clearCommandLane(CRON);
     await Promise.allSettled([...runs, extraRun]);
@@ -235,7 +247,9 @@ describe("publishLaneConfiguration", () => {
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(5);
     expect(getCommandLaneSnapshot(CRON).queuedCount).toBe(0);
 
-    for (const g of gates) g.release();
+    for (const g of gates) {
+      g.release();
+    }
     await Promise.all(runs);
   });
 
@@ -267,7 +281,9 @@ describe("publishLaneConfiguration", () => {
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(3);
     expect(getCommandLaneSnapshot(CRON).blockedBy).toBe("group-budget");
 
-    for (const g of gates) g.release();
+    for (const g of gates) {
+      g.release();
+    }
     extra.release();
     clearCommandLane(CRON);
     await Promise.allSettled([...runs, blocked]);
