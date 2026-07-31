@@ -308,7 +308,7 @@ export const mockedClassifyAssistantFailoverReason = vi.fn(
   (assistant?: { errorMessage?: string | null }): FailoverReason | null =>
     mockedClassifyFailoverReason(assistant?.errorMessage ?? ""),
 );
-export const mockedClassifyProviderRuntimeFailureKind = vi.fn((signal: unknown): string =>
+const mockedClassifyProviderRuntimeFailureKind = vi.fn((signal: unknown): string =>
   realClassifyProviderRuntimeFailureKind(
     typeof signal === "string"
       ? signal
