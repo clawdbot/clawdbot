@@ -573,6 +573,52 @@ describe("sendMessageIMessage receipts", () => {
     expect(client["request"]).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { name: "media", audioAsVoice: false, sendTransport: "bridge" },
+    { name: "media", audioAsVoice: false, sendTransport: "applescript" },
+    { name: "voice", audioAsVoice: true, sendTransport: "bridge" },
+    { name: "voice", audioAsVoice: true, sendTransport: "applescript" },
+  ] as const)(
+    "honors the configured $sendTransport transport for $name attachment sends",
+    async ({ audioAsVoice, sendTransport }) => {
+      const client = createClient({ message_id: 12345 });
+      const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/configured-media-guid" });
+      const mediaPath = audioAsVoice ? "/tmp/voice.caf" : "/tmp/image.png";
+
+      await sendMessageIMessage("chat_guid:chat-1", "", {
+        config: {
+          channels: {
+            imessage: {
+              sendTransport: sendTransport === "bridge" ? "applescript" : "bridge",
+              accounts: { work: { sendTransport } },
+            },
+          },
+        },
+        accountId: "work",
+        client,
+        mediaUrl: mediaPath,
+        audioAsVoice,
+        resolveAttachmentImpl: async () => ({
+          path: mediaPath,
+          contentType: audioAsVoice ? "audio/x-caf" : "image/png",
+        }),
+        runCliJson,
+      });
+
+      expect(runCliJson).toHaveBeenCalledWith([
+        "send-attachment",
+        "--chat",
+        "chat-1",
+        "--file",
+        mediaPath,
+        ...(audioAsVoice ? ["--audio"] : []),
+        "--transport",
+        sendTransport,
+      ]);
+      expect(getClientMocks(client).request).not.toHaveBeenCalled();
+    },
+  );
+
   it("preserves audioAsVoice media when replying to an iMessage thread", async () => {
     const client = createClient({ message_id: 12345 });
     const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/threaded-voice-guid" });
@@ -608,6 +654,59 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.replyToId).toBe("p:0/reply-guid");
     expect(result.receipt.parts.map((part) => part.kind)).toEqual(["voice"]);
     expect(client["request"]).not.toHaveBeenCalled();
+  });
+
+  it("falls back to an unthreaded AppleScript voice send when threaded replies are unsupported", async () => {
+    const unsupportedReply = new Error(
+      "reply_to requires bridge transport; AppleScript fallback cannot send threaded replies",
+    );
+    const client = createClient({ guid: "p:0/unthreaded-voice-guid" });
+    const clientMocks = getClientMocks(client);
+    clientMocks.request.mockRejectedValueOnce(unsupportedReply);
+    const runCliJson = vi.fn().mockRejectedValueOnce(unsupportedReply);
+
+    const result = await sendMessageIMessage("chat_guid:chat-1", "", {
+      config: { channels: { imessage: { sendTransport: "applescript" } } },
+      client,
+      conversationReadOrigin: "direct-operator",
+      mediaUrl: "/tmp/voice.caf",
+      audioAsVoice: true,
+      replyToId: "p:0/reply-guid",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/voice.caf", contentType: "audio/x-caf" }),
+      runCliJson,
+    });
+
+    expect(runCliJson).toHaveBeenCalledWith([
+      "send-attachment",
+      "--chat",
+      "chat-1",
+      "--file",
+      "/tmp/voice.caf",
+      "--audio",
+      "--reply-to",
+      "p:0/reply-guid",
+      "--transport",
+      "applescript",
+    ]);
+    expect(clientMocks.request).toHaveBeenNthCalledWith(
+      1,
+      "send",
+      expect.objectContaining({
+        chat_guid: "chat-1",
+        file: "/tmp/voice.caf",
+        reply_to: "p:0/reply-guid",
+        transport: "applescript",
+      }),
+      expect.any(Object),
+    );
+    expect(clientMocks.request).toHaveBeenNthCalledWith(
+      2,
+      "send",
+      expect.not.objectContaining({ reply_to: expect.anything() }),
+      expect.any(Object),
+    );
+    expect(result.messageId).toBe("p:0/unthreaded-voice-guid");
+    expect(result.receipt.replyToId).toBeUndefined();
   });
 
   it("drops reply metadata from media sends when reply actions are disabled", async () => {

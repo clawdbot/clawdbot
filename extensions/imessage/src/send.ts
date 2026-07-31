@@ -506,10 +506,14 @@ function resolvePendingPersistedEchoTtlMs(timeoutMs: number): number {
   );
 }
 
-function isAttachmentCommandFallbackError(error: unknown): boolean {
+function isAttachmentCommandFallbackError(error: unknown, replyToId?: string): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /(?:unknown|unrecognized|invalid|unsupported)\s+(?:command|subcommand)|not a recognized command|send-attachment.*(?:not found|unsupported|unavailable)|private api bridge.*unavailable|requires the imsg private api bridge|run imsg launch/iu.test(
-    message,
+  return (
+    /(?:unknown|unrecognized|invalid|unsupported)\s+(?:command|subcommand)|not a recognized command|send-attachment.*(?:not found|unsupported|unavailable)|private api bridge.*unavailable|requires the imsg private api bridge|run imsg launch/iu.test(
+      message,
+    ) ||
+    // Let threaded voice rejection reach the existing RPC owner's unthreaded retry.
+    (Boolean(replyToId) && isThreadedReplyUnsupportedError(error))
   );
 }
 
@@ -560,6 +564,7 @@ async function trySendAttachmentForTarget(params: {
   dbPath?: string;
   target: ReturnType<typeof parseIMessageTarget>;
   service?: IMessageService;
+  sendTransport: IMessageSendTransport;
   filePath: string;
   audioAsVoice?: boolean;
   replyToId?: string;
@@ -611,11 +616,11 @@ async function trySendAttachmentForTarget(params: {
       ...(params.audioAsVoice ? ["--audio"] : []),
       ...(params.replyToId ? ["--reply-to", params.replyToId] : []),
       "--transport",
-      "auto",
+      params.sendTransport,
     ]);
   } catch (error) {
     forgetPersistedIMessageEchoKey(pendingEchoKey);
-    if (isAttachmentCommandFallbackError(error)) {
+    if (isAttachmentCommandFallbackError(error, params.replyToId)) {
       return null;
     }
     throw error;
@@ -624,7 +629,7 @@ async function trySendAttachmentForTarget(params: {
   if (failure) {
     const error = new Error(failure);
     forgetPersistedIMessageEchoKey(pendingEchoKey);
-    if (isAttachmentCommandFallbackError(error)) {
+    if (isAttachmentCommandFallbackError(error, params.replyToId)) {
       return null;
     }
     throw error;
@@ -789,6 +794,7 @@ export async function sendMessageIMessage(
       dbPath: chatDbLookupPath,
       target,
       service,
+      sendTransport,
       filePath,
       audioAsVoice: opts.audioAsVoice,
       ...(resolvedReplyToId ? { replyToId: resolvedReplyToId } : {}),
