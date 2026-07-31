@@ -5,7 +5,6 @@ import type {
   GatewaySessionRow,
   SessionBranch,
   SessionCompactionCheckpoint,
-  SessionRunStatus,
   SessionsBranchesSwitchResult,
   SessionsCompactionBranchResult,
   SessionsCompactionRestoreResult,
@@ -21,7 +20,11 @@ import type { GatewayConnectionScope } from "../gateway-connection-lifecycle.ts"
 import type { SessionCreateOutcome, SessionCreateParams } from "./create.ts";
 import type { SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatchRoute } from "./patch.ts";
-import type { SessionChangedResult, SessionReconcileOptions } from "./reconcile.ts";
+import type {
+  SessionChangedResult,
+  SessionReconcileOptions,
+  SessionRunTerminal,
+} from "./reconcile.ts";
 
 export type SessionState = {
   result: SessionsListResult | null;
@@ -59,14 +62,6 @@ export type SessionRefreshOptions = SessionListOptions & {
   force?: boolean;
   // Sidebar startup hydration must not block session creation or drop the open session.
   backgroundHydrate?: boolean;
-};
-
-export type SessionRunTerminal = {
-  sessionKeys: readonly string[];
-  runId?: string | null;
-  /** Latest session status after this owned model run leaves the active registry. */
-  status: SessionRunStatus;
-  endedAt: number;
 };
 
 export type SessionDeleteOptions = {

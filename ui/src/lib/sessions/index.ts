@@ -10,13 +10,9 @@ import {
   reconcileSessionRunTerminal,
   type SessionChangedResult,
   type SessionReconcileOptions,
+  type SessionRunTerminal,
 } from "./reconcile.ts";
-import type {
-  SessionCapability,
-  SessionGateway,
-  SessionRunTerminal,
-  SessionState,
-} from "./session-capability.ts";
+import type { SessionCapability, SessionGateway, SessionState } from "./session-capability.ts";
 import { createSessionEventSubscriptionOwner } from "./session-event-subscription.ts";
 import { createSessionGroupCatalog } from "./session-group-catalog.ts";
 import {
@@ -40,11 +36,10 @@ export type {
   SessionCapability,
   SessionListOptions,
   SessionMessageSubscription,
-  SessionRunTerminal,
 } from "./session-capability.ts";
 export type { SessionPatch } from "./patch.ts";
 export { DEFAULT_SESSION_LIST_QUERY } from "./session-requests.ts";
-export { reconcileSessionRunTerminal } from "./reconcile.ts";
+export { reconcileSessionRunTerminal, type SessionRunTerminal } from "./reconcile.ts";
 export { requestSessionCreate } from "./create.ts";
 export { resolveSessionKey } from "./navigation.ts";
 export {

@@ -6,7 +6,6 @@ import {
   sessionMatchesArchivedFilter,
   type SessionArchivedFilter,
 } from "./navigation.ts";
-import type { SessionRunTerminal } from "./session-capability.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -32,6 +31,14 @@ export type SessionChangedResult = {
   row?: GatewaySessionRow;
   deletedKey?: string;
   result: SessionsListResult | null;
+};
+
+export type SessionRunTerminal = {
+  sessionKeys: readonly string[];
+  runId?: string | null;
+  /** Latest session status after this owned model run leaves the active registry. */
+  status: SessionRunStatus;
+  endedAt: number;
 };
 
 type SessionChangedEventInfo = {
