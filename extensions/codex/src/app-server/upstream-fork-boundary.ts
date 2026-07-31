@@ -2,6 +2,7 @@ import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
 import { projectImportedHistoryTextParts } from "./imported-history-text.js";
 import type { CodexThreadItem, CodexTurn } from "./protocol.js";
+import { isImportedHistoryMessage } from "./upstream-prompt-provenance.js";
 
 type CodexUpstreamForkBoundaryFailureCode =
   | "steer-message"
@@ -123,6 +124,9 @@ function resolveCodexUpstreamForkBoundaryFromTurns(params: {
   /** Canonical text for every visible local user message through the target ordinal;
    * undefined marks content (images/attachments) whose identity cannot be verified. */
   localPrefixTexts: readonly (string | undefined)[];
+  /** Whether each prefix row was written by bounded history import, which stores a
+   * lossy projection of the upstream text. Only those rows may match the projection. */
+  localPrefixImported: readonly boolean[];
 }): CodexUpstreamForkBoundaryResult {
   let visibleUserMessagesSeen = 0;
   let reviewMode = false;
@@ -171,11 +175,14 @@ function resolveCodexUpstreamForkBoundaryFromTurns(params: {
           "A message before the fork point contains images or attachments that cannot be verified across OpenClaw and Codex. Fork from a text-only span instead.",
         );
       }
-      // Accept the raw upstream text or the projection history import would have stored
-      // (trim + per-message cap). The transcript does not guarantee one stored shape for
-      // user text, and comparing raw alone makes an imported prefix read as divergence,
-      // failing this fork point and every later one.
-      if (localText !== display.text && localText !== display.importProjectedText) {
+      // Rows written by history import store a lossy projection (trim + per-message cap),
+      // so comparing them raw reads as divergence and fails this fork point and every
+      // later one. Every other row is stored as-is and must still match exactly, or a
+      // locally altered row could pass this fail-closed drift check.
+      const matches = params.localPrefixImported[ordinal]
+        ? localText === display.text || localText === display.importProjectedText
+        : localText === display.text;
+      if (!matches) {
         return failure(
           "drift-mismatch",
           "The local conversation no longer matches the Codex thread. Refresh the session and try again.",
@@ -287,16 +294,19 @@ export async function resolveCodexUpstreamForkBoundary(params: {
         "The local message could not be mapped to the Codex thread. Refresh the session and try again.",
       );
     }
-    const localPrefixTexts = visibleUserEntries
-      .slice(0, userMessageOrdinal + 1)
-      .map((entry) =>
-        localMessageText("content" in entry.message ? entry.message.content : undefined),
-      );
+    const prefixEntries = visibleUserEntries.slice(0, userMessageOrdinal + 1);
+    const localPrefixTexts = prefixEntries.map((entry) =>
+      localMessageText("content" in entry.message ? entry.message.content : undefined),
+    );
+    const localPrefixImported = prefixEntries.map((entry) =>
+      isImportedHistoryMessage(entry.message),
+    );
     const turns = await listCodexUpstreamTurns(params.control, params.threadId);
     const resolved = resolveCodexUpstreamForkBoundaryFromTurns({
       turns,
       userMessageOrdinal,
       localPrefixTexts,
+      localPrefixImported,
     });
     return resolved.ok
       ? { ...resolved, editorText: localPrefixTexts[userMessageOrdinal] }

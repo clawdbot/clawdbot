@@ -29,6 +29,7 @@ import {
 } from "./transcript-mirror-attestation.js";
 import {
   attachCodexMirrorIdentity,
+  attachImportedHistoryProvenance,
   attachUpstreamUserText,
   readMirrorIdentity,
   readUpstreamUserText,
@@ -205,7 +206,12 @@ function projectCodexThreadHistory(params: {
               } satisfies AssistantMessage,
               identity,
             )
-          : attachCodexMirrorIdentity({ role, content: text, timestamp } as AgentMessage, identity);
+          : attachImportedHistoryProvenance(
+              attachCodexMirrorIdentity(
+                { role, content: text, timestamp } as AgentMessage,
+                identity,
+              ),
+            );
       const phase =
         item.phase === "commentary" || item.phase === "final_answer" ? item.phase : undefined;
       projected.push({

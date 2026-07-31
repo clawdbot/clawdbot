@@ -3,6 +3,7 @@ import type { SessionTranscriptMessageEntry } from "openclaw/plugin-sdk/session-
 import { describe, expect, it, vi } from "vitest";
 import type { CodexThreadItem, CodexTurn } from "./protocol.js";
 import { resolveCodexUpstreamForkBoundary } from "./upstream-fork-boundary.js";
+import { attachImportedHistoryProvenance } from "./upstream-prompt-provenance.js";
 
 const transcriptMocks = vi.hoisted(() => ({
   readVisibleEntries: vi.fn(),
@@ -28,18 +29,28 @@ async function resolveFromTurns(params: {
   turns: readonly CodexTurn[];
   userMessageOrdinal: number;
   localPrefixTexts: readonly (string | undefined)[];
+  /** Which prefix rows came from bounded history import. Defaults to all of them, since
+   * most cases here model an adopted thread; pass false to model a live local row. */
+  localPrefixImported?: readonly boolean[];
 }) {
-  const entries: SessionTranscriptMessageEntry[] = params.localPrefixTexts.map((text, index) => ({
-    entryId: `entry-${index}`,
-    parentId: index > 0 ? `entry-${index - 1}` : null,
-    seq: index,
-    role: "user",
-    message: {
-      role: "user",
+  const entries: SessionTranscriptMessageEntry[] = params.localPrefixTexts.map((text, index) => {
+    const message = {
+      role: "user" as const,
       content: text ?? [{ type: "image", data: "", mimeType: "image/png" }],
       timestamp: index,
-    },
-  }));
+    };
+    return {
+      entryId: `entry-${index}`,
+      parentId: index > 0 ? `entry-${index - 1}` : null,
+      seq: index,
+      role: "user",
+      // Mark through the real producer so this cannot drift from what import writes.
+      message:
+        (params.localPrefixImported?.[index] ?? true)
+          ? attachImportedHistoryProvenance(message as never)
+          : message,
+    } as SessionTranscriptMessageEntry;
+  });
   transcriptMocks.readVisibleEntries.mockResolvedValue(entries);
   const result = await resolveCodexUpstreamForkBoundary({
     agentId: "main",
@@ -223,6 +234,17 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
         retainedMarker: { turnId: null, userMessageCount: 0 },
       },
     });
+  });
+
+  it("keeps exact matching for a live row that history import did not write", async () => {
+    const result = await resolveFromTurns({
+      turns: [turn("turn-1", [user("  deploy  ")])],
+      userMessageOrdinal: 0,
+      localPrefixTexts: ["deploy"],
+      localPrefixImported: [false],
+    });
+
+    expect(result).toMatchObject({ ok: false, code: "drift-mismatch" });
   });
 
   it("still rejects drift that trimming cannot explain", async () => {
