@@ -394,6 +394,7 @@ function runReleaseChecksSummary(params: {
       QA_LAB_PARITY_LANE_RELEASE_CHECKS_RESULT: "skipped",
       QA_LAB_PARITY_REPORT_RELEASE_CHECKS_RESULT: "skipped",
       QA_LAB_RUNTIME_PARITY_RELEASE_CHECKS_RESULT: "skipped",
+      QA_LIVE_BUZZ_RELEASE_CHECKS_RESULT: "skipped",
       QA_LIVE_DISCORD_RELEASE_CHECKS_RESULT: "skipped",
       QA_LIVE_RELEASE_CHECKS_RESULT: "skipped",
       QA_LIVE_SLACK_RELEASE_CHECKS_RESULT: "skipped",
@@ -2590,7 +2591,7 @@ describe("package artifact reuse", () => {
       fail_fast: "${{ fromJSON(needs.resolve_target.outputs.fail_fast) }}",
       run_matrix: true,
     });
-    for (const lane of ["mock_parity", "telegram", "discord", "whatsapp", "slack"]) {
+    for (const lane of ["mock_parity", "buzz", "telegram", "discord", "whatsapp", "slack"]) {
       expect(releaseJob.with?.[`run_${lane}`]).toBeUndefined();
     }
     expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_mock_parity").if).toBe(
@@ -2645,6 +2646,30 @@ describe("package artifact reuse", () => {
     );
   });
 
+  it("routes release Buzz through the QA Lab selector", () => {
+    const releaseJob = workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_live_buzz_release_checks");
+
+    expect(releaseJob.uses).toBe("./.github/workflows/qa-live-transports-convex.yml");
+    expect(releaseJob.secrets).toBeUndefined();
+    expect(releaseJob.permissions).toEqual({ contents: "read", "pull-requests": "read" });
+    expect(releaseJob.if).toContain('contains(fromJSON(\'["all","qa","qa-live"]\')');
+    expect(releaseJob.if).toContain("needs.resolve_target.outputs.qa_live_buzz_enabled == 'true'");
+    expect(releaseJob.with).toMatchObject({
+      buzz_scenario: "channel-canary,channel-mention-gating",
+      expected_sha: "${{ needs.resolve_target.outputs.revision }}",
+      run_buzz: true,
+    });
+    expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_buzz").if).toBe("inputs.run_buzz");
+    expect(
+      workflowStep(
+        workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_buzz"),
+        "Upload Buzz QA artifacts",
+      ).with?.name,
+    ).toBe(
+      "${{ inputs.expected_sha != '' && format('release-qa-live-buzz-{0}-{1}', inputs.expected_sha, github.run_attempt) || format('qa-live-buzz-{0}-{1}', github.run_id, github.run_attempt) }}",
+    );
+  });
+
   it("runs live transport lanes nightly while release checks stay gated", () => {
     const releaseWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
     const qaWorkflow = readFileSync(QA_LIVE_TRANSPORTS_WORKFLOW, "utf8");
@@ -2674,6 +2699,7 @@ describe("package artifact reuse", () => {
         "always() && steps.run_lane.outputs.output_dir != ''",
       ],
       ["run_live_matrix", "Upload Matrix QA artifacts", "always()"],
+      ["run_live_buzz", "Upload Buzz QA artifacts", "always()"],
       ["run_live_telegram", "Upload Telegram QA artifacts", "always()"],
       ["run_live_discord", "Upload Discord QA artifacts", "always()"],
       ["run_live_whatsapp", "Upload WhatsApp QA artifacts", "always()"],
@@ -3431,6 +3457,7 @@ describe("package artifact reuse", () => {
 
     const verifyStep = workflowStep(summary, "Verify release check results");
     expect(verifyStep.env).toMatchObject({
+      QA_LIVE_BUZZ_RELEASE_CHECKS_RESULT: "${{ needs.qa_live_buzz_release_checks.result }}",
       QA_LIVE_RELEASE_CHECKS_RESULT: "${{ needs.qa_live_release_checks.result }}",
       RELEASE_CHECK_RUN_ATTEMPT: "${{ github.run_attempt }}",
       RELEASE_CHECK_RUN_ID: "${{ github.run_id }}",
@@ -3454,6 +3481,7 @@ describe("package artifact reuse", () => {
       "::warning::${name} ended with ${result}; Tideclaw alpha treats non-package-safety release-check lanes as advisory.",
       "::error::${name} ended with ${result}",
       '"qa_live_release_checks=${QA_LIVE_RELEASE_CHECKS_RESULT}"',
+      '"qa_live_buzz_release_checks=${QA_LIVE_BUZZ_RELEASE_CHECKS_RESULT}"',
     ]);
     expect(verifyStep.run).not.toContain("qa_live_matrix_release_checks");
     expect(verifyStep.run).not.toContain(

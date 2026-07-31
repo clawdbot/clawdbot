@@ -313,6 +313,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Manual configuration
   - H3: Bot key storage
   - H2: Verify the connection
+  - H3: QA Lab round trip
   - H2: Rotate the bot identity
   - H2: Current limits and roadmap
   - H2: Troubleshooting
@@ -2955,8 +2956,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Mantis Slack desktop and visual-task runners
   - H3: Credential pool health check
   - H2: Canonical scenario coverage
-  - H2: Discord, Slack, Telegram, and WhatsApp QA reference
+  - H2: Buzz, Discord, Slack, Telegram, and WhatsApp QA reference
   - H3: Shared CLI flags
+  - H3: Buzz QA
   - H3: Telegram QA
   - H3: Discord QA
   - H3: Slack QA

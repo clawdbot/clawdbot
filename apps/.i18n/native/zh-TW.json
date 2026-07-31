@@ -2229,6 +2229,61 @@
       "translated": "僅限在受信任的私人網路上使用。"
     },
     {
+      "id": "native.android.903b94dca2caaa56",
+      "source": "Connected (node offline)",
+      "translated": "已連線（節點離線）"
+    },
+    {
+      "id": "native.android.cc51d76c73c98f21",
+      "source": "Connected (operator offline)",
+      "translated": "已連線（操作員離線）"
+    },
+    {
+      "id": "native.android.1312170581219544",
+      "source": "Ready",
+      "translated": "就緒"
+    },
+    {
+      "id": "native.android.dfa7a374e2c6b10f",
+      "source": "Connecting...",
+      "translated": "連線中..."
+    },
+    {
+      "id": "native.android.530b4ba5717efdd0",
+      "source": "Pairing needed",
+      "translated": "需要配對"
+    },
+    {
+      "id": "native.android.bd735f74888467d0",
+      "source": "Authentication needed",
+      "translated": "需要驗證"
+    },
+    {
+      "id": "native.android.4d6c4830e8297779",
+      "source": "TLS timed out",
+      "translated": "TLS 逾時"
+    },
+    {
+      "id": "native.android.724ae153c20bede5",
+      "source": "No TLS endpoint",
+      "translated": "無 TLS 端點"
+    },
+    {
+      "id": "native.android.7220032e6ee66c7f",
+      "source": "Certificate review needed",
+      "translated": "需要審核憑證"
+    },
+    {
+      "id": "native.android.e7b3a991683cfc5b",
+      "source": "Cannot reach gateway",
+      "translated": "無法連線至 Gateway"
+    },
+    {
+      "id": "native.android.b882dd8f5bb2e7a0",
+      "source": "Not connected",
+      "translated": "未連線"
+    },
+    {
       "id": "native.android.b331b5b54e147e41",
       "source": "Setup code expired",
       "translated": "設定代碼已過期"
@@ -3769,6 +3824,11 @@
       "translated": "請連線至您的 Gateway，以開啟此工作階段的儀表板。"
     },
     {
+      "id": "native.android.a38380662bac2210",
+      "source": "Show Sidebar",
+      "translated": "顯示側邊欄"
+    },
+    {
       "id": "native.android.a5845742daecb4ba",
       "source": "Threads",
       "translated": "討論串"
@@ -5069,41 +5129,6 @@
       "translated": "永遠"
     },
     {
-      "id": "native.android.448831898efda6c2",
-      "source": "Connecting...",
-      "translated": "連線中..."
-    },
-    {
-      "id": "native.android.a4f0ff7a2cc989d2",
-      "source": "Pairing needed",
-      "translated": "需要配對"
-    },
-    {
-      "id": "native.android.ed5aa7f6cceb466c",
-      "source": "Authentication needed",
-      "translated": "需要驗證"
-    },
-    {
-      "id": "native.android.3c96aa987f267692",
-      "source": "TLS timed out",
-      "translated": "TLS 逾時"
-    },
-    {
-      "id": "native.android.0eef5fbe3a7c83b3",
-      "source": "No TLS endpoint",
-      "translated": "沒有 TLS 端點"
-    },
-    {
-      "id": "native.android.0273578a6d9e3a48",
-      "source": "Certificate review needed",
-      "translated": "需要審查憑證"
-    },
-    {
-      "id": "native.android.9256c686d6616406",
-      "source": "Cannot reach gateway",
-      "translated": "無法連線至 Gateway"
-    },
-    {
       "id": "native.android.2df2dec704f91977",
       "source": "About",
       "translated": "關於"
@@ -5934,9 +5959,9 @@
       "translated": "開啟討論串"
     },
     {
-      "id": "native.android.ede6f2717ca8e267",
-      "source": "Back",
-      "translated": "返回"
+      "id": "native.android.3d8b4fbefc3bed01",
+      "source": "Show Sidebar",
+      "translated": "顯示側邊欄"
     },
     {
       "id": "native.android.ed7e1e2e97bfdd0a",
@@ -6407,6 +6432,96 @@
       "id": "native.android.ca180f1e4dd6f138",
       "source": "Not connected",
       "translated": "未連線"
+    },
+    {
+      "id": "native.android.0c2501a6c5ddca09",
+      "source": "Search sessions",
+      "translated": "搜尋工作階段"
+    },
+    {
+      "id": "native.android.590e8e370944beee",
+      "source": "Clear session search",
+      "translated": "清除工作階段搜尋"
+    },
+    {
+      "id": "native.android.5409a13f0c35e1ae",
+      "source": "Working",
+      "translated": "運作中"
+    },
+    {
+      "id": "native.android.ba8628561f3d7c81",
+      "source": "Needs attention",
+      "translated": "需要注意"
+    },
+    {
+      "id": "native.android.7371ad8f117e08ff",
+      "source": "Selected",
+      "translated": "已選取"
+    },
+    {
+      "id": "native.android.4e2f2b168d8402e5",
+      "source": "Home",
+      "translated": "首頁"
+    },
+    {
+      "id": "native.android.411af820e8607155",
+      "source": "Overview",
+      "translated": "總覽"
+    },
+    {
+      "id": "native.android.82ebfe54bfbfd385",
+      "source": "Usage",
+      "translated": "使用量"
+    },
+    {
+      "id": "native.android.24fff115bd302167",
+      "source": "Automations",
+      "translated": "自動化"
+    },
+    {
+      "id": "native.android.cf5241cd358243fd",
+      "source": "Threads",
+      "translated": "討論串"
+    },
+    {
+      "id": "native.android.aa57a340615c6acc",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.0a6327687ccfbfdb",
+      "source": "Open Settings",
+      "translated": "開啟設定"
+    },
+    {
+      "id": "native.android.a52860ece0b7e03c",
+      "source": "Hide Sidebar",
+      "translated": "隱藏側邊欄"
+    },
+    {
+      "id": "native.android.e2d9151fcb89115a",
+      "source": "Agents",
+      "translated": "代理程式"
+    },
+    {
+      "id": "native.android.8561b4bd41836a1d",
+      "source": "More Agents",
+      "translated": "更多代理程式"
+    },
+    {
+      "id": "native.android.a96adb01ce2f2dbe",
+      "source": "Pages",
+      "translated": "頁面"
+    },
+    {
+      "id": "native.android.a5eca2d258c332b5",
+      "source": "Recent sessions",
+      "translated": "最近的工作階段"
+    },
+    {
+      "id": "native.android.6d00f84c795947ed",
+      "source": "No recent sessions",
+      "translated": "沒有最近的工作階段"
     },
     {
       "id": "native.android.7c6f9feb2c16785f",
@@ -8002,6 +8117,11 @@
       "id": "native.android.b73c79389a8cff07",
       "source": "All",
       "translated": "全部"
+    },
+    {
+      "id": "native.android.5771a93c0a100be9",
+      "source": "Show Sidebar",
+      "translated": "顯示側邊欄"
     },
     {
       "id": "native.android.4a198e67719b8e83",
