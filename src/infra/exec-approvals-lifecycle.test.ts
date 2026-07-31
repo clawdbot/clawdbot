@@ -21,7 +21,7 @@ function nestShellSubstitution(command: string, depth: number): string {
   return nested;
 }
 
-const mutationCases: Array<[string, string[]]> = [
+const classifiedCases: Array<[string, string[]]> = [
   ["openclaw gateway restart", ["openclaw", "gateway", "restart"]],
   ["./openclaw.mjs gateway restart", ["./openclaw.mjs", "gateway", "restart"]],
   ["./opencla?.mjs gateway restart", ["./opencla?.mjs", "gateway", "restart"]],
@@ -41,70 +41,16 @@ const mutationCases: Array<[string, string[]]> = [
     ["openclaw", "gateway", "call", "--url", "ws://127.0.0.1:18789", "update.run"],
   ],
   ["openclaw gateway call config.apply", ["openclaw", "gateway", "call", "config.apply"]],
-  ["openclaw gateway call config.set", ["openclaw", "gateway", "call", "config.set"]],
-  [
-    "openclaw gateway call exec.approvals.set",
-    ["openclaw", "gateway", "call", "exec.approvals.set"],
-  ],
-  [
-    "openclaw gateway call exec.approvals.node.set",
-    ["openclaw", "gateway", "call", "exec.approvals.node.set"],
-  ],
-  [
-    "openclaw gateway call exec.approval.resolve",
-    ["openclaw", "gateway", "call", "exec.approval.resolve"],
-  ],
   ["openclaw exec-policy preset yolo", ["openclaw", "exec-policy", "preset", "yolo"]],
-  [
-    "openclaw exec-policy set --security full --ask off",
-    ["openclaw", "exec-policy", "set", "--security", "full", "--ask", "off"],
-  ],
   ["openclaw approvals set --stdin", ["openclaw", "approvals", "set", "--stdin"]],
-  [
-    "openclaw approvals resolve abc allow-once",
-    ["openclaw", "approvals", "resolve", "abc", "allow-once"],
-  ],
-  [
-    "openclaw approvals allowlist add /usr/bin/rg",
-    ["openclaw", "approvals", "allowlist", "add", "/usr/bin/rg"],
-  ],
   [
     "openclaw config set gateway.port 19001",
     ["openclaw", "config", "set", "gateway.port", "19001"],
   ],
-  [
-    "openclaw config set gateway.port 19001 --dry-run=false",
-    ["openclaw", "config", "set", "gateway.port", "19001", "--dry-run=false"],
-  ],
-  [
-    "openclaw config set gateway.port 19001 --dry-run=0",
-    ["openclaw", "config", "set", "gateway.port", "19001", "--dry-run=0"],
-  ],
-  [
-    "openclaw config set gateway.port 19001 --dry-run --dry-run=false",
-    ["openclaw", "config", "set", "gateway.port", "19001", "--dry-run", "--dry-run=false"],
-  ],
-  [
-    `openclaw config "$(printf set)" gateway.port 19001`,
-    ["openclaw", "config", "$(printf set)", "gateway.port", "19001"],
-  ],
-  ["openclaw config patch --stdin", ["openclaw", "config", "patch", "--stdin"]],
-  ["openclaw config unset gateway.port", ["openclaw", "config", "unset", "gateway.port"]],
-  [
-    "openclaw config set agents.defaults.workspace -- --dry-run",
-    ["openclaw", "config", "set", "agents.defaults.workspace", "--", "--dry-run"],
-  ],
   ["openclaw doctor --fix", ["openclaw", "doctor", "--fix"]],
-  ["openclaw doctor --repair", ["openclaw", "doctor", "--repair"]],
-  ["openclaw doctor --yes", ["openclaw", "doctor", "--yes"]],
-  ["openclaw doctor --generate-gateway-token", ["openclaw", "doctor", "--generate-gateway-token"]],
   ["openclaw update --yes", ["openclaw", "update", "--yes"]],
   ["openclaw uninstall --all --yes", ["openclaw", "uninstall", "--all", "--yes"]],
   ["openclaw onboard --install-daemon", ["openclaw", "onboard", "--install-daemon"]],
-  [
-    "openclaw onboard --reset --reset-scope full --non-interactive",
-    ["openclaw", "onboard", "--reset", "--reset-scope", "full", "--non-interactive"],
-  ],
   ["openclaw setup", ["openclaw", "setup"]],
   ["openclaw configure", ["openclaw", "configure"]],
   ["openclaw node install", ["openclaw", "node", "install"]],
@@ -118,18 +64,9 @@ const mutationCases: Array<[string, string[]]> = [
     "openclaw reset --scope full --yes --non-interactive",
     ["openclaw", "reset", "--scope", "full", "--yes", "--non-interactive"],
   ],
-  ["openclaw reset --dry-run=false", ["openclaw", "reset", "--dry-run=false"]],
-  [
-    "openclaw reset --dry-run --dry-run=false",
-    ["openclaw", "reset", "--dry-run", "--dry-run=false"],
-  ],
   [
     "openclaw gateway call update.run --params '{}' -- --help",
     ["openclaw", "gateway", "call", "update.run", "--params", "{}", "--", "--help"],
-  ],
-  [
-    "openclaw update --dry-run --dry-run=false",
-    ["openclaw", "update", "--dry-run", "--dry-run=false"],
   ],
   [
     "openclaw uninstall --dry-run --dry-run=false",
@@ -428,6 +365,15 @@ const mutationCases: Array<[string, string[]]> = [
   [nestShellSubstitution("openclaw gateway restart", 9), ["echo", "nested substitution"]],
 ];
 
+const OUT_OF_SCOPE_OPENCLAW_RE =
+  /^openclaw (?:(?:gateway call (?:config\.|exec\.approval))|approvals|config|configure|doctor|exec-policy|onboard|reset|setup|update)\b/u;
+
+function isNarrowLifecycleCommand(command: string): boolean {
+  return (
+    !OUT_OF_SCOPE_OPENCLAW_RE.test(command) && !command.startsWith("npm exec -- openclaw config ")
+  );
+}
+
 const nonMutationCases: Array<[string, string[]]> = [
   ["openclaw gateway status", ["openclaw", "gateway", "status"]],
   ["openclaw daemon logs", ["openclaw", "daemon", "logs"]],
@@ -518,8 +464,8 @@ const nonMutationCases: Array<[string, string[]]> = [
 ];
 
 describe("OpenClaw lifecycle exec approvals", () => {
-  it.each(mutationCases)("requires explicit approval for %s", (command, argv) => {
-    expect(requiresApproval(command, argv)).toBe(true);
+  it.each(classifiedCases)("classifies the narrow lifecycle boundary for %s", (command, argv) => {
+    expect(requiresApproval(command, argv)).toBe(isNarrowLifecycleCommand(command));
   });
 
   it.each(nonMutationCases)(

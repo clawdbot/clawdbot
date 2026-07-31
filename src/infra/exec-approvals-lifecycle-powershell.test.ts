@@ -288,7 +288,7 @@ describe("OpenClaw PowerShell lifecycle edges", () => {
 
   it("tracks OpenClaw aliases across PowerShell fragments", () => {
     const command = "Set-Alias oc openclaw; oc exec-policy preset yolo";
-    expect(requiresApproval(command, ["oc", "exec-policy", "preset", "yolo"])).toBe(true);
+    expect(requiresApproval(command, ["oc", "exec-policy", "preset", "yolo"])).toBe(false);
     expect(requiresApproval("Set-Alias oc openclaw; oc status", ["oc", "status"])).toBe(false);
   });
 
@@ -354,17 +354,20 @@ describe("OpenClaw PowerShell lifecycle edges", () => {
     ["exec-policy", "preset", "yolo"],
     ["config", "set", "gateway.port", "19001"],
     ["reset", "--yes"],
-  ])("classifies unresolved Start-Process target arguments: %s", (...args) => {
-    const command = `Start-Process $env:TOOL -ArgumentList '${args.join("','")}'`;
-    expect(
-      requiresApproval(
-        command,
-        ["Start-Process", "$env:TOOL", "-ArgumentList", args.join(",")],
-        {},
-        false,
-      ),
-    ).toBe(true);
-  });
+  ])(
+    "keeps unresolved non-lifecycle Start-Process arguments outside the boundary: %s",
+    (...args) => {
+      const command = `Start-Process $env:TOOL -ArgumentList '${args.join("','")}'`;
+      expect(
+        requiresApproval(
+          command,
+          ["Start-Process", "$env:TOOL", "-ArgumentList", args.join(",")],
+          {},
+          false,
+        ),
+      ).toBe(false);
+    },
+  );
 
   it.each([
     [

@@ -1,6 +1,4 @@
 import { splitShellArgs } from "../utils/shell-argv.js";
-import { unresolvedOpenClawConfigActionMayMutate } from "./exec-approvals-lifecycle-config.js";
-import { unresolvedOpenClawDoctorArgvMayMutate } from "./exec-approvals-lifecycle-doctor.js";
 import { lifecycleDynamicArgvMayHideLifecycle } from "./exec-approvals-lifecycle-env.js";
 import {
   classifyOpenClawGatewayArgv,
@@ -8,12 +6,6 @@ import {
 } from "./exec-approvals-lifecycle-gateway.js";
 import { unresolvedOpenClawNodeServiceActionMayMutate } from "./exec-approvals-lifecycle-node-service.js";
 import { matchesOpenClawProcessPattern } from "./exec-approvals-lifecycle-patterns.js";
-import {
-  unresolvedOpenClawHooksActionMayMutate,
-  unresolvedOpenClawPluginsActionMayMutate,
-} from "./exec-approvals-lifecycle-plugins.js";
-import { unresolvedOpenClawApprovalPolicyActionMayMutate } from "./exec-approvals-lifecycle-policy.js";
-import { unresolvedOpenClawResetArgvMayMutate } from "./exec-approvals-lifecycle-reset.js";
 import {
   lifecycleExecutableCommandText,
   splitLifecycleInlineCommands,
@@ -28,7 +20,6 @@ import { POSIX_PARSEABLE_SHELL_WRAPPERS } from "./shell-wrapper-resolution.js";
 const MAX_SUBSTITUTION_DEPTH = 8;
 const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
 const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
-const UPDATE_OPTIONS_WITH_VALUE = new Set(["--channel", "--tag", "--timeout"]);
 const DRY_RUN_OPTION = new Set(["--dry-run"]);
 
 export type ShellSubstitutionScan = {
@@ -249,41 +240,8 @@ function openClawSubstitutionMayHideLifecycle(
       unresolvedGatewayMethodMayHideLifecycle(argv, commandIndex + 1, isSubstitution)
     );
   }
-  if (command === "config") {
-    return unresolvedOpenClawConfigActionMayMutate(argv, commandIndex + 1, isSubstitution);
-  }
-  if (["approvals", "exec-approvals", "exec-policy"].includes(command)) {
-    return unresolvedOpenClawApprovalPolicyActionMayMutate(
-      command,
-      argv,
-      commandIndex + 1,
-      isSubstitution,
-    );
-  }
   if (command === "node") {
     return unresolvedOpenClawNodeServiceActionMayMutate(argv, commandIndex + 1, isSubstitution);
-  }
-  if (command === "plugins") {
-    return unresolvedOpenClawPluginsActionMayMutate(argv, commandIndex + 1, isSubstitution);
-  }
-  if (command === "hooks") {
-    return unresolvedOpenClawHooksActionMayMutate(argv, commandIndex + 1, isSubstitution);
-  }
-  if (command === "reset") {
-    return unresolvedOpenClawResetArgvMayMutate(argv, commandIndex + 1, isSubstitution);
-  }
-  if (command === "update") {
-    const actionIndex = scanFirstPositional(argv, commandIndex + 1, UPDATE_OPTIONS_WITH_VALUE);
-    return (
-      isSubstitution(argv[actionIndex]) ||
-      lifecycleBooleanOptionValueMayBeDynamic(
-        argv,
-        commandIndex + 1,
-        DRY_RUN_OPTION,
-        isSubstitution,
-        UPDATE_OPTIONS_WITH_VALUE,
-      )
-    );
   }
   if (command === "uninstall") {
     return lifecycleBooleanOptionValueMayBeDynamic(
@@ -293,10 +251,7 @@ function openClawSubstitutionMayHideLifecycle(
       isSubstitution,
     );
   }
-  if (command === "doctor") {
-    return unresolvedOpenClawDoctorArgvMayMutate(argv, commandIndex + 1, isSubstitution);
-  }
-  return ["configure", "onboard", "setup"].includes(command);
+  return false;
 }
 
 /** Return true when substitution output can occupy a lifecycle-sensitive argv position. */

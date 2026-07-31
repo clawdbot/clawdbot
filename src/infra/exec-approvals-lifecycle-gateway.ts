@@ -32,19 +32,9 @@ const GATEWAY_READ_ONLY = new Set([
   "usage-cost",
 ]);
 const LIFECYCLE_RPC_METHODS = new Set([
-  "config.apply",
-  "config.patch",
-  "config.set",
-  "exec.approval.resolve",
-  "exec.approvals.node.set",
-  "exec.approvals.set",
   "gateway.restart.request",
   "gateway.suspend.prepare",
   "gateway.suspend.resume",
-  "plugins.install",
-  "plugins.refresh",
-  "plugins.setenabled",
-  "plugins.uninstall",
   "update.run",
 ]);
 

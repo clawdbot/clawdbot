@@ -212,7 +212,7 @@ describe("OpenClaw lifecycle environment data positions", () => {
     ).toBe(true);
   });
 
-  it("fails closed for unresolved plugin and hook actions", () => {
+  it("keeps unresolved plugin and hook actions outside the lifecycle boundary", () => {
     for (const family of ["plugins", "hooks"]) {
       const command = `ACTION=install; openclaw ${family} "$ACTION" memory`;
       expect(
@@ -228,7 +228,7 @@ describe("OpenClaw lifecycle environment data positions", () => {
           ],
         }),
         family,
-      ).toBe(true);
+      ).toBe(false);
     }
     expect(
       commandRequiresOpenClawLifecycleApproval({
@@ -242,29 +242,36 @@ describe("OpenClaw lifecycle environment data positions", () => {
           },
         ],
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it.each([
-    [`openclaw update --dry-run="$DRY"`, ["openclaw", "update", "--dry-run=$DRY"]],
+    [`openclaw update --dry-run="$DRY"`, ["openclaw", "update", "--dry-run=$DRY"], false],
     [
       `openclaw config set gateway.port 19001 --dry-run="$DRY"`,
       ["openclaw", "config", "set", "gateway.port", "19001", "--dry-run=$DRY"],
+      false,
     ],
-    [`openclaw reset --dry-run="$DRY"`, ["openclaw", "reset", "--dry-run=$DRY"]],
+    [`openclaw reset --dry-run="$DRY"`, ["openclaw", "reset", "--dry-run=$DRY"], false],
     [
       `openclaw plugins update memory --dry-run="$DRY"`,
       ["openclaw", "plugins", "update", "memory", "--dry-run=$DRY"],
+      false,
     ],
     [
       `openclaw hooks update audit --dry-run="$DRY"`,
       ["openclaw", "hooks", "update", "audit", "--dry-run=$DRY"],
+      false,
     ],
-    [`openclaw uninstall --dry-run="$DRY"`, ["openclaw", "uninstall", "--dry-run=$DRY"]],
-    [`npm install openclaw --dry-run="$DRY"`, ["npm", "install", "openclaw", "--dry-run=$DRY"]],
-  ] as Array<[string, string[]]>)(
-    "fails closed when runtime expansion can disable preview mode: %s",
-    (payload, argv) => {
+    [`openclaw uninstall --dry-run="$DRY"`, ["openclaw", "uninstall", "--dry-run=$DRY"], true],
+    [
+      `npm install openclaw --dry-run="$DRY"`,
+      ["npm", "install", "openclaw", "--dry-run=$DRY"],
+      true,
+    ],
+  ] as Array<[string, string[], boolean]>)(
+    "classifies dynamic preview flags within the lifecycle boundary: %s",
+    (payload, argv, expected) => {
       const command = `DRY=false; export DRY; ${payload}`;
       expect(
         commandRequiresOpenClawLifecycleApproval({
@@ -273,7 +280,7 @@ describe("OpenClaw lifecycle environment data positions", () => {
           platform: "linux",
           segments: [{ raw: payload, argv }],
         }),
-      ).toBe(true);
+      ).toBe(expected);
     },
   );
 
@@ -535,14 +542,14 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
   });
 
   it.each([
-    ["nodejs", ["gateway", "restart"]],
-    ["tsx", ["gateway", "restart"]],
-    ["bun", ["gateway", "restart"]],
-    ["node", ["exec-policy", "preset", "yolo"]],
-    ["nodejs", ["config", "set", "gateway.port", "19001"]],
-  ] as Array<[string, string[]]>)(
-    "fails closed for an unresolved %s entry script",
-    (runner, args) => {
+    ["nodejs", ["gateway", "restart"], true],
+    ["tsx", ["gateway", "restart"], true],
+    ["bun", ["gateway", "restart"], true],
+    ["node", ["exec-policy", "preset", "yolo"], false],
+    ["nodejs", ["config", "set", "gateway.port", "19001"], false],
+  ] as Array<[string, string[], boolean]>)(
+    "classifies an unresolved %s entry script by its lifecycle argv",
+    (runner, args, expected) => {
       const command = `${runner} "$ENTRY" ${args.join(" ")}`;
       expect(
         commandRequiresOpenClawLifecycleApproval({
@@ -552,7 +559,7 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
           platform: "linux",
           segments: [{ raw: command, argv: [runner, "$ENTRY", ...args] }],
         }),
-      ).toBe(true);
+      ).toBe(expected);
     },
   );
 
@@ -751,7 +758,7 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
         "preset",
         "yolo",
       ]),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       requiresApproval(`sh -c 'f(){ echo "$@"; }; f openclaw gateway restart' sh`, [
         "sh",

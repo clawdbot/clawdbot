@@ -2,20 +2,13 @@
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { resolveCarrierCommandArgv } from "./command-carriers.js";
 import { resolveLifecycleXargsArgv } from "./exec-approvals-lifecycle-carriers.js";
-import { unresolvedOpenClawConfigActionMayMutate } from "./exec-approvals-lifecycle-config.js";
 import {
   classifyOpenClawGatewayArgv,
   unresolvedGatewayMethodMayHideLifecycle,
 } from "./exec-approvals-lifecycle-gateway.js";
 import { unresolvedOpenClawNodeServiceActionMayMutate } from "./exec-approvals-lifecycle-node-service.js";
 import { unresolvedNodeEntryMayHideLifecycle } from "./exec-approvals-lifecycle-node.js";
-import {
-  unresolvedOpenClawHooksActionMayMutate,
-  unresolvedOpenClawPluginsActionMayMutate,
-} from "./exec-approvals-lifecycle-plugins.js";
-import { unresolvedOpenClawApprovalPolicyActionMayMutate } from "./exec-approvals-lifecycle-policy.js";
 import { unresolvedPowerShellStartProcessMayHideLifecycle } from "./exec-approvals-lifecycle-powershell.js";
-import { unresolvedOpenClawResetArgvMayMutate } from "./exec-approvals-lifecycle-reset.js";
 import {
   resolveLifecyclePackageRunnerArgv,
   unresolvedPackageMutationMayTargetOpenClaw,
@@ -42,7 +35,6 @@ const ASSIGNMENT_TOKEN_RE = /^(?:\$env:)?([A-Za-z_][A-Za-z0-9_]*)=/iu;
 const POWERSHELL_ENV_NAME_RE = /^\$env:([A-Za-z_][A-Za-z0-9_]*)$/iu;
 const OPENCLAW_GLOBAL_FLAGS = new Set(["--dev", "--no-color"]);
 const OPENCLAW_GLOBAL_OPTIONS = new Set(["--container", "--log-level", "--profile"]);
-const UPDATE_OPTIONS_WITH_VALUE = new Set(["--channel", "--tag", "--timeout"]);
 const DRY_RUN_OPTION = new Set(["--dry-run"]);
 const SYSTEMCTL_OPTIONS_WITH_VALUE = new Set([
   "-h",
@@ -310,41 +302,8 @@ export function lifecycleDynamicArgvMayHideLifecycle(
         unresolvedGatewayMethodMayHideLifecycle(argv, commandIndex + 1, isDynamic)
       );
     }
-    if (command === "config") {
-      return unresolvedOpenClawConfigActionMayMutate(argv, commandIndex + 1, isDynamic);
-    }
-    if (["approvals", "exec-approvals", "exec-policy"].includes(command)) {
-      return unresolvedOpenClawApprovalPolicyActionMayMutate(
-        command,
-        argv,
-        commandIndex + 1,
-        isDynamic,
-      );
-    }
     if (command === "node") {
       return unresolvedOpenClawNodeServiceActionMayMutate(argv, commandIndex + 1, isDynamic);
-    }
-    if (command === "plugins") {
-      return unresolvedOpenClawPluginsActionMayMutate(argv, commandIndex + 1, isDynamic);
-    }
-    if (command === "hooks") {
-      return unresolvedOpenClawHooksActionMayMutate(argv, commandIndex + 1, isDynamic);
-    }
-    if (command === "reset") {
-      return unresolvedOpenClawResetArgvMayMutate(argv, commandIndex + 1, isDynamic);
-    }
-    if (command === "update") {
-      const actionIndex = scanFirstPositional(argv, commandIndex + 1, UPDATE_OPTIONS_WITH_VALUE);
-      return (
-        isDynamic(argv[actionIndex]) ||
-        lifecycleBooleanOptionValueMayBeDynamic(
-          argv,
-          commandIndex + 1,
-          DRY_RUN_OPTION,
-          isDynamic,
-          UPDATE_OPTIONS_WITH_VALUE,
-        )
-      );
     }
     if (command === "uninstall") {
       return lifecycleBooleanOptionValueMayBeDynamic(
@@ -354,7 +313,7 @@ export function lifecycleDynamicArgvMayHideLifecycle(
         isDynamic,
       );
     }
-    return ["configure", "doctor", "onboard", "setup"].includes(command);
+    return false;
   }
   if (
     ["ash", "bash", "cmd", "dash", "fish", "ksh", "powershell", "pwsh", "sh", "zsh"].includes(
