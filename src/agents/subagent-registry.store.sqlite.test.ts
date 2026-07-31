@@ -14,6 +14,7 @@ import {
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForControllerFromSqlite,
   loadSubagentRegistryFromSqlite,
+  loadSubagentSessionListRunsFromSqlite,
   saveSubagentRegistryChangesToSqlite,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry.store.sqlite.js";
@@ -150,6 +151,46 @@ describe("subagent registry sqlite store", () => {
       saveSubagentRegistryToSqlite(new Map([[second.runId, second]]));
 
       expect([...loadSubagentRegistryFromSqlite().keys()]).toEqual(["run-two"]);
+    });
+  });
+
+  it("loads a canonical lightweight session-list projection", async () => {
+    await withTempStateEnv(async () => {
+      const run = createRun({
+        model: "openai/gpt-5.6",
+        generation: 3,
+        sessionStartedAt: 105,
+        accumulatedRuntimeMs: 90,
+        runTimeoutSeconds: 7_200,
+        endedReason: "subagent-error",
+        cleanupCompletedAt: 300,
+        outcome: { status: "error", error: "full payload detail" },
+        delivery: {
+          status: "suspended",
+          suspendedAt: 275,
+          suspendedReason: "retry-limit",
+        },
+        task: "x".repeat(8_192),
+      });
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+
+      expect(loadSubagentSessionListRunsFromSqlite().get(run.runId)).toEqual({
+        runId: run.runId,
+        childSessionKey: run.childSessionKey,
+        requesterSessionKey: run.requesterSessionKey,
+        model: "openai/gpt-5.6",
+        generation: 3,
+        createdAt: 100,
+        startedAt: 110,
+        sessionStartedAt: 105,
+        accumulatedRuntimeMs: 90,
+        endedAt: 250,
+        runTimeoutSeconds: 7_200,
+        endedReason: "subagent-error",
+        outcome: { status: "error" },
+        cleanupCompletedAt: 300,
+        delivery: { status: "suspended", suspendedAt: 275 },
+      });
     });
   });
 
@@ -315,6 +356,7 @@ describe("subagent registry sqlite store", () => {
       );
 
       expect(loadSubagentRegistryFromSqlite()).toEqual(new Map());
+      expect(loadSubagentSessionListRunsFromSqlite()).toEqual(new Map());
 
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
       db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?").run(
@@ -322,6 +364,7 @@ describe("subagent registry sqlite store", () => {
         run.runId,
       );
       expect(loadSubagentRegistryFromSqlite()).toEqual(new Map());
+      expect(loadSubagentSessionListRunsFromSqlite()).toEqual(new Map());
     });
   });
 

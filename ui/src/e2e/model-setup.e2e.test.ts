@@ -16,6 +16,28 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const localPrepareOptions = [
+  {
+    id: "ollama",
+    brandId: "ollama",
+    label: "Ollama",
+    hint: "Connect to an Ollama server and select a cloud or local model",
+  },
+  {
+    id: "llama-cpp",
+    brandId: "llama-cpp",
+    label: "Local model (llama.cpp)",
+    hint: "Download and run a private GGUF model",
+  },
+  {
+    id: "lmstudio",
+    brandId: "lmstudio",
+    label: "LM Studio",
+    hint: "Connect to a running LM Studio server and use an already loaded model",
+    icon: "https://cdn.simpleicons.org/lmstudio",
+    website: "https://lmstudio.ai/download",
+  },
+];
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -246,6 +268,7 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
     const initialDetection = {
       candidates: [],
       manualProviders: [],
+      prepareOptions: localPrepareOptions,
       recommendedInstalls: [
         {
           id: "ollama",
@@ -263,6 +286,7 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
         "chat.metadata",
         "chat.startup",
         "openclaw.setup.detect",
+        "openclaw.setup.activate",
         "openclaw.setup.prepare.start",
         "wizard.next",
       ],
@@ -272,6 +296,12 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
           sessionId: "ollama-prepare-session",
           done: false,
           status: "running",
+        },
+        "openclaw.setup.activate": {
+          ok: true,
+          modelRef: "ollama/qwen3:0.6b",
+          latencyMs: 284,
+          lines: ["Model ready"],
         },
         "wizard.next": {
           sequence: [
@@ -338,6 +368,19 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
     try {
       const response = await page.goto(`${server.baseUrl}settings/model-setup`);
       expect(response?.status()).toBe(200);
+      const localProviderIcons = page.locator(
+        [
+          '[data-prepare-choice="ollama"] [data-provider-icon="ollama"]',
+          '[data-prepare-choice="llama-cpp"] [data-provider-icon="llamacpp"]',
+          '[data-prepare-choice="lmstudio"] [data-provider-icon="lmstudio"]',
+        ].join(","),
+      );
+      await expect.poll(() => localProviderIcons.count()).toBe(3);
+      const localProviderIconColors = await localProviderIcons.evaluateAll((icons) =>
+        icons.map((icon) => getComputedStyle(icon).color),
+      );
+      expect(localProviderIconColors).toHaveLength(3);
+      expect(new Set(localProviderIconColors).size).toBe(1);
       await page
         .locator('[data-prepare-choice="ollama"]')
         .getByRole("button", { name: "Check & set up" })
@@ -345,10 +388,29 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
 
       const start = await gateway.waitForRequest("openclaw.setup.prepare.start");
       expect(start.params).toMatchObject({ authChoice: "ollama" });
+
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "ollama-mode-select-desktop.png"),
+        });
+      }
+
       await page.getByRole("radio", { name: /Local only/u }).check();
       await page.getByRole("button", { name: "Continue" }).click();
       const baseUrl = page.getByLabel("Ollama base URL");
       await expect.poll(() => baseUrl.inputValue()).toBe("http://127.0.0.1:11434");
+
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "ollama-host-desktop.png"),
+        });
+      }
+
       await page.getByRole("button", { name: "Submit" }).click();
       await page.getByText("Ollama could not be reached at http://127.0.0.1:11434.").waitFor();
       await page
@@ -383,14 +445,49 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
         recommendedInstalls: [],
       });
       await page.getByRole("button", { name: "Yes" }).click();
-      await page.getByText("qwen3:0.6b at http://127.0.0.1:11434").waitFor();
-      await expect.poll(() => page.locator('[data-prepare-choice="ollama"]').count()).toBe(0);
+      await page.getByRole("heading", { name: "Connection verified" }).waitFor();
+      await expect
+        .poll(() => page.locator(".model-setup-success").textContent())
+        .toContain("ollama/qwen3:0.6b");
+      await expect
+        .poll(() => page.locator(".model-setup-success").textContent())
+        .toContain("Verified in 284 ms");
+      await expect
+        .poll(() => page.locator('.model-setup-success [data-provider-icon="ollama"]').count())
+        .toBe(1);
+
+      const activate = await gateway.waitForRequest("openclaw.setup.activate");
+      expect(activate.params).toEqual({
+        kind: "provider-auto:ollama",
+        modelRef: "ollama/qwen3:0.6b",
+      });
 
       if (artifactDir) {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
           path: path.join(artifactDir, "ollama-ready-desktop.png"),
+        });
+      }
+
+      await gateway.setMethodResponse("openclaw.setup.detect", {
+        ...initialDetection,
+        candidates: [],
+        configuredModel: "ollama/qwen3:0.6b",
+        recommendedInstalls: [],
+        setupComplete: true,
+      });
+      await page.getByRole("button", { name: "Stay in settings" }).click();
+      const currentConnection = page.locator(".model-setup__current");
+      await currentConnection.getByText("ollama/qwen3:0.6b", { exact: true }).waitFor();
+      await expect
+        .poll(() => currentConnection.locator('[data-provider-icon="ollama"]').count())
+        .toBe(1);
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "ollama-main-desktop.png"),
         });
       }
 

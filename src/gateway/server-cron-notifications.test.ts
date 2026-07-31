@@ -612,7 +612,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       "main",
       announceJob.id,
       expect.anything(),
-      '⚠️ Cron job "notification admission" failed: provider unavailable\nRun started: 2026-01-15 10:30 EST',
+      '⚠️ Automation "notification admission" failed: provider unavailable\nRun started: 2026-01-15 10:30 EST',
     );
 
     vi.clearAllMocks();
@@ -642,7 +642,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
 
     await waitForFast(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce());
     expect(webhookRequestBody()).toMatchObject({
-      message: 'Cron job "notification admission" failed: provider unavailable',
+      message: 'Automation "notification admission" failed: provider unavailable',
       runAtMs,
     });
   });
@@ -813,7 +813,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         sessionKey: undefined,
         inheritSessionThread: false,
       },
-      '⚠️ Cron job "channel fd no mode" failed: boom',
+      '⚠️ Automation "channel fd no mode" failed: boom',
     );
     expect(logger.warn).not.toHaveBeenCalledWith(
       expect.objectContaining({ jobId: job.id }),

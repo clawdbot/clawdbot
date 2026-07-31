@@ -313,6 +313,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Manual configuration
   - H3: Bot key storage
   - H2: Verify the connection
+  - H3: QA Lab round trip
   - H2: Rotate the bot identity
   - H2: Current limits and roadmap
   - H2: Troubleshooting
@@ -352,6 +353,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Command menu
   - H2: Durable media delivery
   - H2: Agent activity rows
+  - H2: Group mention gating
+  - H3: Mention detection
+  - H3: Configuration example
+  - H3: Migration warning
   - H2: Targets
   - H2: Permissions
   - H2: Troubleshooting
@@ -2951,8 +2956,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Mantis Slack desktop and visual-task runners
   - H3: Credential pool health check
   - H2: Canonical scenario coverage
-  - H2: Discord, Slack, Telegram, and WhatsApp QA reference
+  - H2: Buzz, Discord, Slack, Telegram, and WhatsApp QA reference
   - H3: Shared CLI flags
+  - H3: Buzz QA
   - H3: Telegram QA
   - H3: Discord QA
   - H3: Slack QA
@@ -7628,6 +7634,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Verified setup runtime artifacts
   - H3: Request-transport contract
   - H2: Register a harness
+  - H3: Isolated completion
   - H3: Delegated execution
   - H2: Selection policy
   - H2: Provider plus harness pairing

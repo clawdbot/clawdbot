@@ -181,6 +181,9 @@ struct MenuContent: View {
         .task {
             VoicePushToTalkHotkey.shared.setEnabled(voiceWakeSupported && self.state.voicePushToTalkEnabled)
         }
+        .task {
+            await self.nodesStore.prepareLocalNodeIdentity()
+        }
         .onChange(of: self.state.voicePushToTalkEnabled) { _, enabled in
             VoicePushToTalkHotkey.shared.setEnabled(voiceWakeSupported && enabled)
         }
@@ -353,12 +356,15 @@ struct MenuContent: View {
         guard self.state.connectionMode != .unconfigured else { return nil }
         guard case .connected = self.controlChannel.state else { return nil }
 
-        guard let identity = DeviceIdentityStore.loadOrCreatePersisted(
-            profile: MacNodeModeCoordinator.nodeIdentityProfile)
-        else {
+        let deviceId: String
+        switch self.nodesStore.localNodeIdentityState {
+        case .loading:
+            return nil
+        case let .available(id):
+            deviceId = id
+        case .unavailable:
             return ("Mac identity unavailable", .red)
         }
-        let deviceId = identity.deviceId
         if let entry = self.nodesStore.nodes.first(where: { $0.nodeId == deviceId }) {
             guard entry.isConnected else {
                 return ("Mac capabilities offline", .orange)

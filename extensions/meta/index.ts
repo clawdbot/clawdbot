@@ -14,7 +14,7 @@ const PROVIDER_ID = "meta";
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Meta Provider",
-  description: "Bundled Meta provider plugin",
+  description: "Meta provider plugin",
   manifest,
   provider: {
     label: "Meta",

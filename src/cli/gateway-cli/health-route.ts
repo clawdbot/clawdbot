@@ -12,6 +12,7 @@ type GatewayHealthRouteDependencies = {
   callGateway?: typeof import("./call.js").callGatewayCli;
   readBestEffortConfig?: () => Promise<OpenClawConfig>;
   emitReachableGatewayAuthDiagnostic?: typeof import("../../commands/health.js").emitReachableGatewayAuthDiagnostic;
+  formatGatewayAuthErrorJson?: typeof import("../../gateway/call.js").formatGatewayAuthErrorJson;
   formatGatewayClientRequestErrorJson?: typeof import("../../gateway/call.js").formatGatewayClientRequestErrorJson;
   formatGatewayTransportErrorJson?: typeof import("../../gateway/call.js").formatGatewayTransportErrorJson;
 };
@@ -63,7 +64,9 @@ export async function runGatewayHealthJsonRoute(
       deps.readBestEffortConfig
         ? undefined
         : import("../../config/read-best-effort-config.runtime.js"),
-      deps.formatGatewayClientRequestErrorJson && deps.formatGatewayTransportErrorJson
+      deps.formatGatewayAuthErrorJson &&
+      deps.formatGatewayClientRequestErrorJson &&
+      deps.formatGatewayTransportErrorJson
         ? undefined
         : import("../../gateway/call.js"),
     ]);
@@ -86,12 +89,16 @@ export async function runGatewayHealthJsonRoute(
     if (handled) {
       return;
     }
+    const formatGatewayAuthErrorJson =
+      deps.formatGatewayAuthErrorJson ?? callModule?.formatGatewayAuthErrorJson;
     const formatGatewayClientRequestErrorJson =
       deps.formatGatewayClientRequestErrorJson ?? callModule?.formatGatewayClientRequestErrorJson;
     const formatGatewayTransportErrorJson =
       deps.formatGatewayTransportErrorJson ?? callModule?.formatGatewayTransportErrorJson;
     const payload =
-      formatGatewayClientRequestErrorJson?.(error) ?? formatGatewayTransportErrorJson?.(error);
+      formatGatewayAuthErrorJson?.(error) ??
+      formatGatewayClientRequestErrorJson?.(error) ??
+      formatGatewayTransportErrorJson?.(error);
     if (payload) {
       writeRuntimeJson(runtime, payload);
       runtime.exit(1);

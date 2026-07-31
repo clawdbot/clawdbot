@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => {
   const state = {
     queuedSessionDeliveries: new Map<string, Record<string, unknown>>(),
     nextSessionDeliveryId: 1,
+    initialOutboundDelivery: null as Record<string, unknown> | null,
   };
 
   return {
@@ -42,6 +43,14 @@ const mocks = vi.hoisted(() => {
         state.queuedSessionDeliveries.set("session-delivery-1", value);
         state.nextSessionDeliveryId = 2;
       }
+    },
+    setInitialOutboundDelivery(value: Record<string, unknown> | null) {
+      state.initialOutboundDelivery = value;
+    },
+    takeInitialOutboundDelivery() {
+      const value = state.initialOutboundDelivery;
+      state.initialOutboundDelivery = null;
+      return value;
     },
     dispatchGatewayMethodInProcess: vi.fn<InProcessDispatchMock>(async () => ({
       status: "ok",
@@ -107,8 +116,16 @@ const mocks = vi.hoisted(() => {
       ok: true as const,
       to: "+15550002",
     })) as (params?: { to?: string }) => { ok: true; to: string } | { ok: false; error: Error }),
-    deliverOutboundPayloads: vi.fn(async () => [{ channel: "whatsapp", messageId: "msg-1" }]),
+    deliverOutboundPayloads: vi.fn(async (_params?: Record<string, unknown>) => [
+      { channel: "whatsapp", messageId: "msg-1" },
+    ]),
     enqueueDeliveryOnce: vi.fn(async (_payload: unknown, id: string) => ({ id, created: true })),
+    findDeliveryIntentOwner: vi.fn<
+      () => {
+        namespace: "prepared" | "preparing" | "migration" | "legacy-preparing" | "legacy";
+        status: "pending" | "failed" | "completed";
+      } | null
+    >(() => null),
     ackDelivery: vi.fn(async () => {}),
     failDelivery: vi.fn(async () => {}),
     failDeliveryAfterPlatformSend: vi.fn(async () => {}),
@@ -124,6 +141,7 @@ const mocks = vi.hoisted(() => {
       status: "claimed" as const,
       value: await fn(),
     })),
+    withStableDeliveryPreparation: vi.fn(),
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
     enqueueSessionDelivery: vi.fn(async (payload: Record<string, unknown>) => {
@@ -366,8 +384,63 @@ vi.mock("../infra/outbound/delivery-queue.js", () => ({
 
 vi.mock("../infra/outbound/delivery-queue-storage.js", () => ({
   failPendingDelivery: mocks.failPendingDelivery,
-  loadPendingDelivery: mocks.loadPendingDelivery,
+  findDeliveryIntentOwner: mocks.findDeliveryIntentOwner,
+  loadPendingDelivery: async () =>
+    mocks.takeInitialOutboundDelivery() ?? (await mocks.loadPendingDelivery()),
   reserveDeliveryAttempt: mocks.reserveDeliveryAttempt,
+}));
+
+vi.mock("../infra/outbound/delivery-queue-preparation.js", () => ({
+  withStableDeliveryPreparation: mocks.withStableDeliveryPreparation,
+}));
+
+vi.mock("../infra/outbound/deliver-prepare.js", () => ({
+  prepareOutboundPayloadBatch: vi.fn(async (params: { payloads: unknown[] }) => ({
+    schemaVersion: 1,
+    sourcePayloadCount: params.payloads.length,
+    channelNormalized: true,
+    entries: params.payloads.map((payload, sourceIndex) => ({
+      sourceIndex,
+      status: "accepted",
+      payload,
+      replyHookChanged: false,
+      messageHookChanged: false,
+      preparedMediaCount: 0,
+    })),
+  })),
+}));
+
+vi.mock("../infra/outbound/deliver-queue-admission.js", () => ({
+  stageAndEnqueueOutboundDelivery: vi.fn(
+    async (
+      params: { deliveryIntentId?: string; payloads: unknown[] },
+      preparedBatch: Record<string, unknown>,
+    ) => {
+      const queued = await mocks.enqueueDeliveryOnce(params, params.deliveryIntentId ?? "");
+      if (queued.created) {
+        mocks.setInitialOutboundDelivery({
+          ...params,
+          id: queued.id,
+          enqueuedAt: 1,
+          retryCount: 0,
+          attemptCount: 0,
+          preparedBatch,
+        });
+      }
+      return queued;
+    },
+  ),
+}));
+
+vi.mock("../channels/message/runtime.js", () => ({
+  sendDurableMessageBatch: vi.fn(async (params: Record<string, unknown>) => {
+    try {
+      const results = await mocks.deliverOutboundPayloads(params);
+      return { status: "sent", results };
+    } catch (error) {
+      return { status: "failed", error };
+    }
+  }),
 }));
 
 vi.mock("../infra/system-events.js", () => ({
@@ -535,6 +608,7 @@ describe("scheduleRestartSentinelWake", () => {
     resetGatewayWorkAdmission();
     vi.useRealTimers();
     mocks.queuedSessionDelivery = null;
+    mocks.setInitialOutboundDelivery(null);
     mocks.dispatchGatewayMethodInProcess.mockReset();
     mocks.dispatchGatewayMethodInProcess.mockResolvedValue({
       status: "ok",
@@ -585,6 +659,28 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.deliverOutboundPayloads.mockResolvedValue([{ channel: "whatsapp", messageId: "msg-1" }]);
     mocks.enqueueDeliveryOnce.mockReset();
     mocks.enqueueDeliveryOnce.mockImplementation(async (_payload, id) => ({ id, created: true }));
+    mocks.findDeliveryIntentOwner.mockReset();
+    mocks.findDeliveryIntentOwner.mockReturnValue(null);
+    mocks.withStableDeliveryPreparation.mockReset();
+    mocks.withStableDeliveryPreparation.mockImplementation(
+      async (params: {
+        id: string;
+        run: (owner: {
+          current: () => Record<string, unknown>;
+          beforeFirstModifier: () => void;
+          markPrepared: () => void;
+          markPublished: () => void;
+        }) => Promise<unknown>;
+      }) => ({
+        status: "claimed",
+        value: await params.run({
+          current: () => ({ id: params.id }),
+          beforeFirstModifier: () => {},
+          markPrepared: () => {},
+          markPublished: () => {},
+        }),
+      }),
+    );
     mocks.ackDelivery.mockClear();
     mocks.failDelivery.mockClear();
     mocks.failDeliveryAfterPlatformSend.mockClear();
@@ -711,17 +807,16 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("does not resend a restart notice whose stable queue id is already owned", async () => {
-    mocks.enqueueDeliveryOnce.mockImplementationOnce(async (_payload, id) => ({
-      id,
-      created: false,
-    }));
+    mocks.withStableDeliveryPreparation.mockResolvedValueOnce({ status: "existing" });
+    mocks.findDeliveryIntentOwner.mockReturnValueOnce({
+      namespace: "prepared",
+      status: "pending",
+    });
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
     expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledWith(123);
-    expect(mocks.enqueueDeliveryOnce.mock.calls[0]?.[1]).toBe(
-      "restart-sentinel-notice:agent:main:main:123",
-    );
+    expect(mocks.enqueueDeliveryOnce).not.toHaveBeenCalled();
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(mocks.ackDelivery).not.toHaveBeenCalled();
     expect(mocks.failDelivery).not.toHaveBeenCalled();
@@ -860,15 +955,13 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("continues exact-id recovery after another owner releases the notice", async () => {
-    mocks.withActiveDeliveryClaim.mockResolvedValueOnce({
-      status: "claimed-by-other-owner",
-    } as never);
-    mocks.loadPendingDelivery
-      .mockResolvedValueOnce({
-        id: "restart-sentinel-notice:agent:main:main:123",
-        retryCount: 0,
-      } as never)
-      .mockResolvedValue(null);
+    mocks.withActiveDeliveryClaim
+      .mockImplementationOnce(async (_id, fn) => ({
+        status: "claimed" as const,
+        value: await fn(),
+      }))
+      .mockResolvedValueOnce({ status: "claimed-by-other-owner" } as never);
+    mocks.loadPendingDelivery.mockResolvedValue(null);
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 

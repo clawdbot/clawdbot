@@ -26,6 +26,7 @@ import {
 } from "./realtime-quicksilver-sideband.js";
 import {
   boundOpenAIQuicksilverContextItems,
+  boundOpenAIQuicksilverDelegationResult,
   buildOpenAIQuicksilverSession,
   chunkOpenAIQuicksilverAppendText,
   createOpenAIQuicksilverCall,
@@ -479,7 +480,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       if (params.signal.aborted) {
         return;
       }
-      text = result.text;
+      text = boundOpenAIQuicksilverDelegationResult(result.text);
     } catch (error) {
       // Host steering aborts the runner's registered chat signal, not this bridge-owned signal.
       // Abort-shaped rejection is therefore the runner boundary's cancellation marker.

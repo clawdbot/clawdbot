@@ -271,6 +271,7 @@ export function createSlackMessageHandler(params: {
                 ...lastOpts
               } = last.opts;
               let prepared: Awaited<ReturnType<typeof prepareSlackMessage>>;
+              let visibleDrop = false;
               let settlementHandedOff = false;
               try {
                 prepared = await prepareSlackMessage({
@@ -280,9 +281,18 @@ export function createSlackMessageHandler(params: {
                   opts: {
                     ...lastOpts,
                     wasMentioned: combinedMentioned || last.opts.wasMentioned,
+                    onVisibleDrop: () => {
+                      visibleDrop = true;
+                    },
                   },
                 });
                 if (!prepared) {
+                  if (visibleDrop) {
+                    // The gate already produced a sender-visible notice. Commit the
+                    // logical claim so a later message/app_mention twin cannot repeat it.
+                    await commitClaims();
+                    return;
+                  }
                   // Gated before dispatch: release so the surviving twin can run the
                   // same gate; nothing visible was produced, so no duplicate risk.
                   releaseClaims();

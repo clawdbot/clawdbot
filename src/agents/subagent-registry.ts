@@ -31,7 +31,11 @@ import {
 } from "./subagent-registry-helpers.js";
 import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
+import {
+  getSubagentRunsForChildSession,
+  getSubagentRunsForCollectorGroup,
+  subagentRuns,
+} from "./subagent-registry-memory.js";
 import { createSubagentRegistryPublicApi } from "./subagent-registry-public-api.js";
 import { createSubagentRegistryRestorer } from "./subagent-registry-restore.js";
 import {
@@ -93,7 +97,7 @@ function persistSubagentRunsOrThrow(...runIds: string[]) {
 }
 
 function findSubagentTaskForRun(entry: SubagentRunRecord) {
-  return resolveSubagentTaskForRun(subagentRuns, entry);
+  return resolveSubagentTaskForRun(getSubagentRunsForChildSession(entry.childSessionKey), entry);
 }
 
 export function scheduleSubagentOrphanRecovery(params?: { delayMs?: number; maxRetries?: number }) {
@@ -404,6 +408,8 @@ const subagentSweeper = createSubagentRegistrySweeper({
   runContextEngineSubagentEnded: contextCleanup.runContextEngineSubagentEnded,
   notifyContextEngineSubagentEnded: contextCleanup.notifyContextEngineSubagentEnded,
   retireSupersededRun: retireSupersededSubagentRun,
+  getRunsForChildSession: getSubagentRunsForChildSession,
+  getRunsForCollectorGroup: getSubagentRunsForCollectorGroup,
   warn: (message, meta) => log.warn(message, meta),
 });
 

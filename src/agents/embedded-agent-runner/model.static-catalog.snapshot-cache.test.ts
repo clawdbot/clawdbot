@@ -179,7 +179,16 @@ describe("bundled static model catalog snapshot cache", () => {
 
   it("pins lifecycle lookups to the supplied plugin generation", () => {
     const cfg = {};
-    const capturedPlugin = createMistralManifestPlugin();
+    const capturedPlugin = {
+      ...createMistralManifestPlugin(),
+      modelIdNormalization: {
+        providers: {
+          mistral: {
+            aliases: { latest: "mistral-medium-3-5" },
+          },
+        },
+      },
+    };
     const capturedSnapshot = {
       plugins: [capturedPlugin],
       manifestRegistry: { plugins: [capturedPlugin] },
@@ -189,7 +198,16 @@ describe("bundled static model catalog snapshot cache", () => {
       metadataSnapshot: capturedSnapshot,
     });
 
-    const replacementPlugin = createMistralManifestPlugin();
+    const replacementPlugin = {
+      ...createMistralManifestPlugin(),
+      modelIdNormalization: {
+        providers: {
+          mistral: {
+            aliases: { latest: "mistral-medium-next" },
+          },
+        },
+      },
+    };
     replacementPlugin.modelCatalog.providers.mistral.models =
       replacementPlugin.modelCatalog.providers.mistral.models.map((model) => ({
         ...model,
@@ -201,7 +219,9 @@ describe("bundled static model catalog snapshot cache", () => {
     expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-3-5" })?.id).toBe(
       "mistral-medium-3-5",
     );
+    expect(resolveModel({ provider: "mistral", modelId: "latest" })?.id).toBe("mistral-medium-3-5");
     expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-next" })).toBeUndefined();
+    expect(manifestMocks.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
     expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
     expect(manifestMocks.loadPluginManifest).not.toHaveBeenCalled();
   });

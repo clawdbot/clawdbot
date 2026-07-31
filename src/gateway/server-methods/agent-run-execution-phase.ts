@@ -376,6 +376,7 @@ export function startAgentRunExecution(params: {
           swarmCollector: params.request.swarmCollector,
           swarmOutputSchema: params.request.swarmOutputSchema,
           forceRestartSafeTools: params.request.forceRestartSafeTools,
+          forceCodeModeTools: params.request.forceCodeModeTools,
           internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
           internalDeliverySuppressText: params.client?.internal?.internalDeliverySuppressText,
           suppressPromptPersistence:
