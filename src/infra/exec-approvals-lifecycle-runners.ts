@@ -1,4 +1,5 @@
 // Resolves package-runner argv without letting supported option layouts hide commands.
+import { classifyOpenClawArgv } from "./exec-approvals-lifecycle-cli.js";
 import { isOpenClawEntryScriptPath } from "./exec-approvals-lifecycle-patterns.js";
 import {
   lifecycleBooleanOptionValueMayBeDynamic,
@@ -202,6 +203,10 @@ function packageTargets(argv: readonly string[], start: number): string[] {
 }
 
 function looksLikeUnresolvedLifecycleRunner(argv: readonly string[]): boolean {
+  const targetIndex = argv.findIndex(isOpenClawPackageTarget);
+  if (targetIndex !== -1 && classifyOpenClawArgv(["openclaw", ...argv.slice(targetIndex + 1)])) {
+    return true;
+  }
   const text = argv.join(" ").toLowerCase();
   return (
     text.includes("openclaw") &&

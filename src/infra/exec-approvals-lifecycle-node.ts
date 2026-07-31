@@ -1,5 +1,6 @@
 // Resolves an OpenClaw Node entry script without confusing Node option values for the script.
 import path from "node:path";
+import { classifyOpenClawArgv } from "./exec-approvals-lifecycle-cli.js";
 import { isOpenClawEntryScriptPath } from "./exec-approvals-lifecycle-patterns.js";
 import { lifecycleIsJavaScriptExecutableRunner } from "./exec-approvals-lifecycle-runners.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
@@ -127,20 +128,14 @@ export function unresolvedNodeEntryMayHideLifecycle(
   if (["node", "nodejs"].includes(executable)) {
     const run = resolveNodeRunArgv(argv);
     if (run) {
-      return (
-        isUnresolved(run.scriptToken) &&
-        /\b(?:daemon|gateway|uninstall|update)\b/iu.test(run.args.join(" "))
-      );
+      return isUnresolved(run.scriptToken) && classifyOpenClawArgv(["openclaw", ...run.args]);
     }
     const scriptIndex = nodeScriptIndex(argv);
     return (
       isUnresolved(argv[scriptIndex]) &&
-      /\b(?:daemon|gateway|uninstall|update)\b/iu.test(argv.slice(scriptIndex + 1).join(" "))
+      classifyOpenClawArgv(["openclaw", ...argv.slice(scriptIndex + 1)])
     );
   }
   const scriptIndex = argv.findIndex((token, index) => index > 0 && isUnresolved(token));
-  return (
-    scriptIndex !== -1 &&
-    /\b(?:daemon|gateway|uninstall|update)\b/iu.test(argv.slice(scriptIndex + 1).join(" "))
-  );
+  return scriptIndex !== -1 && classifyOpenClawArgv(["openclaw", ...argv.slice(scriptIndex + 1)]);
 }

@@ -729,10 +729,7 @@ export function unresolvedPowerShellStartProcessMayHideLifecycle(
     return false;
   }
   return (
-    (isUnresolved(parsed.filePath) &&
-      /\b(?:daemon|gateway|hooks|plugins|uninstall|update)\b/iu.test(
-        parsed.argumentList.join(" "),
-      )) ||
+    (isUnresolved(parsed.filePath) && classifyOpenClawArgv(["openclaw", ...parsed.argumentList])) ||
     (isOpenClawExecutablePattern(parsed.filePath) && parsed.argumentList.some(isUnresolved))
   );
 }

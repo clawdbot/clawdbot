@@ -534,18 +534,27 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
     expect(requiresApproval(command, argv)).toBe(true);
   });
 
-  it.each(["nodejs", "tsx", "bun"])("fails closed for an unresolved %s entry script", (runner) => {
-    const command = `${runner} "$ENTRY" gateway restart`;
-    expect(
-      commandRequiresOpenClawLifecycleApproval({
-        command,
-        env: {},
-        envComplete: false,
-        platform: "linux",
-        segments: [{ raw: command, argv: [runner, "$ENTRY", "gateway", "restart"] }],
-      }),
-    ).toBe(true);
-  });
+  it.each([
+    ["nodejs", ["gateway", "restart"]],
+    ["tsx", ["gateway", "restart"]],
+    ["bun", ["gateway", "restart"]],
+    ["node", ["exec-policy", "preset", "yolo"]],
+    ["nodejs", ["config", "set", "gateway.port", "19001"]],
+  ] as Array<[string, string[]]>)(
+    "fails closed for an unresolved %s entry script",
+    (runner, args) => {
+      const command = `${runner} "$ENTRY" ${args.join(" ")}`;
+      expect(
+        commandRequiresOpenClawLifecycleApproval({
+          command,
+          env: {},
+          envComplete: false,
+          platform: "linux",
+          segments: [{ raw: command, argv: [runner, "$ENTRY", ...args] }],
+        }),
+      ).toBe(true);
+    },
+  );
 
   it.each([
     [
@@ -730,6 +739,17 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
         "openclaw",
         "gateway",
         "restart",
+      ]),
+    ).toBe(true);
+    expect(
+      requiresApproval(`corepack "$MANAGER" dlx openclaw exec-policy preset yolo`, [
+        "corepack",
+        "$MANAGER",
+        "dlx",
+        "openclaw",
+        "exec-policy",
+        "preset",
+        "yolo",
       ]),
     ).toBe(true);
     expect(

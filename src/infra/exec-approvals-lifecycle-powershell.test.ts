@@ -351,6 +351,22 @@ describe("OpenClaw PowerShell lifecycle edges", () => {
   });
 
   it.each([
+    ["exec-policy", "preset", "yolo"],
+    ["config", "set", "gateway.port", "19001"],
+    ["reset", "--yes"],
+  ])("classifies unresolved Start-Process target arguments: %s", (...args) => {
+    const command = `Start-Process $env:TOOL -ArgumentList '${args.join("','")}'`;
+    expect(
+      requiresApproval(
+        command,
+        ["Start-Process", "$env:TOOL", "-ArgumentList", args.join(",")],
+        {},
+        false,
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
     [
       "openclaw onboard --install-daemon --help",
       ["openclaw", "onboard", "--install-daemon", "--help"],
