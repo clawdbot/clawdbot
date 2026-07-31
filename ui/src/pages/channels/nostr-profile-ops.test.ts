@@ -150,6 +150,15 @@ describe("Nostr profile HTTP operations", () => {
 
     expect(
       mergeNostrProfileDraft(
+        { name: "relay-two", about: "relay-two bio" },
+        { name: "relay-one", about: "" },
+        original,
+        firstImport,
+      ),
+    ).toEqual({ name: "relay-two", about: "" });
+
+    expect(
+      mergeNostrProfileDraft(
         { name: "relay-three" },
         { name: "relay-two", about: "existing bio" },
         { name: "relay-two", about: "existing bio" },

@@ -53,7 +53,10 @@ export function mergeNostrProfileDraft(
 ): NostrProfile {
   const draft = { ...values, ...merged };
   for (const field of Object.keys(values) as Array<keyof NostrProfile>) {
-    if (values[field] !== original[field] && values[field] !== importedBaseline[field]) {
+    const baseline = Object.hasOwn(importedBaseline, field)
+      ? importedBaseline[field]
+      : original[field];
+    if (values[field] !== baseline) {
       draft[field] = values[field];
     }
   }
