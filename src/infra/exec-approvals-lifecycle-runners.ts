@@ -74,10 +74,10 @@ const PACKAGE_DRY_RUN_OPTION = new Set(["--dry-run"]);
 const PACKAGE_DRY_RUN_SCAN_OPTIONS = new Set(["--dry-run", "--no-dry-run"]);
 const PACKAGE_HELP_OPTIONS = new Set(["-h", "--help"]);
 const PACKAGE_VERSION_OPTIONS = new Set(["-v", "--version"]);
+const PACKAGE_INFO_ONLY_OPTIONS = new Set([...PACKAGE_HELP_OPTIONS, ...PACKAGE_VERSION_OPTIONS]);
 const PACKAGE_NO_EXECUTE_SCAN_OPTIONS = new Set([
   ...PACKAGE_DRY_RUN_SCAN_OPTIONS,
-  ...PACKAGE_HELP_OPTIONS,
-  ...PACKAGE_VERSION_OPTIONS,
+  ...PACKAGE_INFO_ONLY_OPTIONS,
 ]);
 const JAVASCRIPT_EXECUTABLE_RUNNERS = new Set([
   "babel-node",
@@ -259,25 +259,31 @@ function hasEffectivePackageNoExecute(argv: readonly string[], start: number): b
   );
 }
 
-function packageNoExecuteOptionMayBeConsumed(argv: readonly string[], start: number): boolean {
-  for (let index = start; index < argv.length; index += 1) {
+function packageNoExecuteOptionMayBeConsumed(
+  argv: readonly string[],
+  start: number,
+  end = argv.length,
+  optionsWithValue: ReadonlySet<string> = PACKAGE_TARGET_OPTIONS_WITH_VALUE,
+  noExecuteOptions: ReadonlySet<string> = PACKAGE_NO_EXECUTE_SCAN_OPTIONS,
+): boolean {
+  for (let index = start; index < end; index += 1) {
     const token = argv[index]?.trim() ?? "";
     if (token === "--") {
       break;
     }
     const name = optionName(token);
-    if (PACKAGE_TARGET_OPTIONS_WITH_VALUE.has(name)) {
+    if (optionsWithValue.has(name)) {
       if (!token.includes("=")) {
         index += 1;
       }
       continue;
     }
-    const nextName = optionName(argv[index + 1] ?? "");
+    const nextName = index + 1 < end ? optionName(argv[index + 1] ?? "") : "";
     if (
       token.startsWith("-") &&
       !token.includes("=") &&
-      !PACKAGE_NO_EXECUTE_SCAN_OPTIONS.has(name) &&
-      PACKAGE_NO_EXECUTE_SCAN_OPTIONS.has(nextName)
+      !noExecuteOptions.has(name) &&
+      noExecuteOptions.has(nextName)
     ) {
       return true;
     }
@@ -312,10 +318,15 @@ function packageRunnerHasInfoOnlyBeforeTarget(
   start: number,
   optionsWithValue: ReadonlySet<string> = PACKAGE_TARGET_OPTIONS_WITH_VALUE,
 ): boolean {
-  return hasEffectivePackageInfoOnly(
-    argv,
-    start,
-    scanFirstPositional(argv, start, optionsWithValue),
+  const targetIndex = scanFirstPositional(argv, start, optionsWithValue);
+  return (
+    !packageNoExecuteOptionMayBeConsumed(
+      argv,
+      start,
+      targetIndex,
+      optionsWithValue,
+      PACKAGE_INFO_ONLY_OPTIONS,
+    ) && hasEffectivePackageInfoOnly(argv, start, targetIndex)
   );
 }
 
@@ -408,7 +419,16 @@ export function resolveLifecyclePackageRunnerArgv(
   const subcommandScan = scanPackageSubcommand(argv, 1);
   const subcommandIndex = subcommandScan.index;
   const subcommand = normalizedToken(argv[subcommandIndex]);
-  if (hasEffectivePackageInfoOnly(argv, 1, subcommandIndex)) {
+  if (
+    hasEffectivePackageInfoOnly(argv, 1, subcommandIndex) &&
+    !packageNoExecuteOptionMayBeConsumed(
+      argv,
+      1,
+      subcommandIndex,
+      PACKAGE_GLOBAL_OPTIONS_WITH_VALUE,
+      PACKAGE_INFO_ONLY_OPTIONS,
+    )
+  ) {
     return { kind: "not-runner" };
   }
   if (subcommandScan.ambiguousOption && looksLikeUnresolvedLifecycleRunner(argv)) {

@@ -570,6 +570,41 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
     ).toBe(false);
   });
 
+  it("does not trust package-runner info flags after ambiguous options", () => {
+    expect(
+      requiresApproval("npx --user-agent --help openclaw gateway restart", [
+        "npx",
+        "--user-agent",
+        "--help",
+        "openclaw",
+        "gateway",
+        "restart",
+      ]),
+    ).toBe(true);
+    expect(
+      requiresApproval("npm exec --user-agent --help -- openclaw gateway restart", [
+        "npm",
+        "exec",
+        "--user-agent",
+        "--help",
+        "--",
+        "openclaw",
+        "gateway",
+        "restart",
+      ]),
+    ).toBe(true);
+    expect(
+      requiresApproval("npx --user-agent=agent --help openclaw gateway restart", [
+        "npx",
+        "--user-agent=agent",
+        "--help",
+        "openclaw",
+        "gateway",
+        "restart",
+      ]),
+    ).toBe(false);
+  });
+
   it("does not inspect an uninvoked shell function body", () => {
     const command = "sh -c 'f(){ openclaw gateway restart; }'";
     expect(requiresApproval(command, ["sh", "-c", "f(){ openclaw gateway restart; }"])).toBe(false);
