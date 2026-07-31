@@ -27,10 +27,12 @@ its local hard ceiling to the prefix before allocating or reading the frame.
 The prefix is not security authority: all internal lengths and fields are
 covered by the authentication tag.
 
-The first frame uses the same pre-negotiation ceiling and finite deadline as
-every bootstrap frame. Negotiated limits are the minimum of both valid local
-offers and can never raise a local ceiling. The active authenticated channel
-lowers its frame limit in place after negotiation so directional sequence
+The bootstrap exchange always uses protocol minor `0`, the same
+pre-negotiation ceiling, and a finite deadline. This lets an older peer read a
+newer peer's offer before minor-version negotiation. Negotiated limits are the
+minimum of both valid local offers and can never raise a local ceiling. After
+the final bootstrap frame, both peers apply the independently verified minor
+and frame limit to the active authenticated channel so directional sequence
 numbers are not reset.
 
 ## Authenticated frame
@@ -41,7 +43,7 @@ All integers are unsigned and big-endian.
 | ------------------ | -------: | ---------------------------------------------------- |
 | Magic              |        4 | ASCII `OCSC`                                         |
 | Protocol major     |        2 | `1`                                                  |
-| Protocol minor     |        2 | `0`                                                  |
+| Protocol minor     |        2 | `0` during bootstrap; negotiated minor afterward     |
 | Direction          |        1 | `1` supervisor-to-runtime, `2` runtime-to-supervisor |
 | Generation         |        8 | Nonzero process/session generation                   |
 | Sequence           |        8 | Strictly increasing per direction, starting at `1`   |

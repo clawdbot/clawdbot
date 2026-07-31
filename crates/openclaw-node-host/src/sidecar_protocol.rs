@@ -17,6 +17,7 @@ use zeroize::Zeroize;
 
 pub const SIDECAR_PROTOCOL_MAJOR: u16 = 1;
 pub const SIDECAR_PROTOCOL_MINOR: u16 = 0;
+const SIDECAR_BOOTSTRAP_MINOR: u16 = 0;
 
 const FRAME_MAGIC: [u8; 4] = *b"OCSC";
 const AUTH_TAG_BYTES: usize = 32;
@@ -215,6 +216,7 @@ impl Drop for SidecarSessionKey {
 /// high-water mark.
 pub struct AuthenticatedSidecarChannel {
     role: SidecarPeerRole,
+    protocol_minor: u16,
     session_id: String,
     generation: u64,
     key: SidecarSessionKey,
@@ -250,6 +252,7 @@ impl AuthenticatedSidecarChannel {
 
         Ok(Self {
             role,
+            protocol_minor: SIDECAR_BOOTSTRAP_MINOR,
             session_id,
             generation,
             key,
@@ -294,6 +297,36 @@ impl AuthenticatedSidecarChannel {
         Ok(())
     }
 
+    /// Apply the authenticated protocol selection after the bootstrap exchange.
+    ///
+    /// Bootstrap frames always use minor zero so an older peer can read the
+    /// offer. Both peers apply the independently verified selection only after
+    /// the final bootstrap frame, without resetting directional sequence state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the selection is unsupported or would raise the
+    /// channel's local frame ceiling.
+    pub fn apply_negotiated_protocol(
+        &mut self,
+        negotiated: &NegotiatedSidecarProtocol,
+    ) -> Result<(), SidecarProtocolError> {
+        if negotiated.protocol_major != SIDECAR_PROTOCOL_MAJOR {
+            return Err(SidecarProtocolError::UnsupportedMajor {
+                local: SIDECAR_PROTOCOL_MAJOR,
+                remote: negotiated.protocol_major,
+            });
+        }
+        if negotiated.protocol_minor > SIDECAR_PROTOCOL_MINOR {
+            return Err(SidecarProtocolError::UnsupportedLocalMinor(
+                negotiated.protocol_minor,
+            ));
+        }
+        self.lower_frame_limit(negotiated.limits.max_frame_bytes)?;
+        self.protocol_minor = negotiated.protocol_minor;
+        Ok(())
+    }
+
     /// Serialize and authenticate the next outgoing payload.
     ///
     /// # Errors
@@ -327,7 +360,7 @@ impl AuthenticatedSidecarChannel {
         let mut frame = Vec::with_capacity(minimum_capacity);
         frame.extend_from_slice(&FRAME_MAGIC);
         frame.extend_from_slice(&SIDECAR_PROTOCOL_MAJOR.to_be_bytes());
-        frame.extend_from_slice(&SIDECAR_PROTOCOL_MINOR.to_be_bytes());
+        frame.extend_from_slice(&self.protocol_minor.to_be_bytes());
         frame.push(self.role.outgoing_direction().wire_value());
         frame.extend_from_slice(&self.generation.to_be_bytes());
         frame.extend_from_slice(&sequence.to_be_bytes());
@@ -414,7 +447,7 @@ impl AuthenticatedSidecarChannel {
         }
         let major = u16::from_be_bytes(take::<2>(authenticated, &mut cursor)?);
         let minor = u16::from_be_bytes(take::<2>(authenticated, &mut cursor)?);
-        if major != SIDECAR_PROTOCOL_MAJOR || minor > SIDECAR_PROTOCOL_MINOR {
+        if major != SIDECAR_PROTOCOL_MAJOR || minor != self.protocol_minor {
             return Err(SidecarFrameError::UnsupportedVersion { major, minor });
         }
         let direction = SidecarDirection::from_wire(take::<1>(authenticated, &mut cursor)?[0])?;
@@ -913,6 +946,48 @@ mod tests {
                 received: 1
             })
         ));
+    }
+
+    #[test]
+    fn negotiated_protocol_updates_active_header_without_resetting_sequence() {
+        let local = offer(
+            SidecarPeerRole::Supervisor,
+            SidecarLimits {
+                max_frame_bytes: 4096,
+                max_in_flight: 8,
+                bootstrap_timeout_ms: 1_000,
+            },
+        );
+        let remote = offer(
+            SidecarPeerRole::Runtime,
+            SidecarLimits {
+                max_frame_bytes: 2048,
+                max_in_flight: 4,
+                bootstrap_timeout_ms: 500,
+            },
+        );
+        let negotiated = negotiate_sidecar_protocol(&local, &remote).unwrap();
+        let mut supervisor = channel(SidecarPeerRole::Supervisor, 7);
+        let mut runtime = channel(SidecarPeerRole::Runtime, 7);
+
+        let bootstrap = supervisor.seal(&json!({"type":"offer"})).unwrap();
+        assert_eq!(
+            runtime.open::<Value>(&bootstrap).unwrap(),
+            json!({"type":"offer"})
+        );
+        supervisor.apply_negotiated_protocol(&negotiated).unwrap();
+        runtime.apply_negotiated_protocol(&negotiated).unwrap();
+
+        let active = supervisor.seal(&json!({"type":"active"})).unwrap();
+        assert_eq!(
+            u16::from_be_bytes(active[6..8].try_into().unwrap()),
+            negotiated.protocol_minor
+        );
+        assert_eq!(u64::from_be_bytes(active[17..25].try_into().unwrap()), 2);
+        assert_eq!(
+            runtime.open::<Value>(&active).unwrap(),
+            json!({"type":"active"})
+        );
     }
 
     #[test]
