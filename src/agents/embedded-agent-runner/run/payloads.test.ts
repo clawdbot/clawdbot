@@ -567,6 +567,28 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("marks non-middleware mutating tool-error warnings after assistant output as non-terminal", () => {
+    // Regression for #116571: mutating non-exec tool errors after a visible assistant
+    // reply were previously not marked non-terminal (only middlewareError: true was).
+    // Channel delivery uses this flag to preserve the streamed answer.
+    const payloads = buildPayloads({
+      assistantTexts: ["The answer is 42."],
+      lastToolError: {
+        toolName: "write",
+        error: "permission denied",
+        mutatingAction: true,
+      },
+      verboseLevel: "off",
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe("The answer is 42.");
+    expect(payloads[1]).toMatchObject({ isError: true });
+    expect(getReplyPayloadMetadata(payloads[1] as object)).toMatchObject({
+      nonTerminalToolErrorWarning: true,
+    });
+  });
+
   it("surfaces concise bash tool errors when verbose mode is off", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "bash", error: "command failed" },
