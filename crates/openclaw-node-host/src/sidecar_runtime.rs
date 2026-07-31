@@ -1705,63 +1705,69 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retired_channel_cancels_and_blocks_native_work() {
-        let (mut exchange, mut channel, _configuration) =
-            validated_runtime_exchange(&configuration());
-        let invoked = Arc::new(Notify::new());
-        let cancelled = Arc::new(Notify::new());
-        let adapter = Arc::new(CancellationAdapter {
-            invoked: Arc::clone(&invoked),
-            cancelled: Arc::clone(&cancelled),
-        });
-        let bridge = Arc::new(
-            SidecarRuntimeBridge::activate(&mut exchange, &mut channel, &adapter).unwrap(),
-        );
-        let evaluation_bridge = Arc::clone(&bridge);
-        let evaluation = tokio::spawn(async move {
-            evaluation_bridge
-                .runtime()
-                .evaluate(NodeInvocation::new(
-                    "invoke-retired",
-                    "node-1",
-                    "product.status",
-                    Value::Null,
-                ))
-                .await
-        });
-        invoked.notified().await;
-        channel.retire();
+    async fn retired_or_dropped_channel_cancels_and_blocks_native_work() {
+        for drop_channel in [false, true] {
+            let (mut exchange, mut channel, _configuration) =
+                validated_runtime_exchange(&configuration());
+            let invoked = Arc::new(Notify::new());
+            let cancelled = Arc::new(Notify::new());
+            let adapter = Arc::new(CancellationAdapter {
+                invoked: Arc::clone(&invoked),
+                cancelled: Arc::clone(&cancelled),
+            });
+            let bridge = Arc::new(
+                SidecarRuntimeBridge::activate(&mut exchange, &mut channel, &adapter).unwrap(),
+            );
+            let evaluation_bridge = Arc::clone(&bridge);
+            let evaluation = tokio::spawn(async move {
+                evaluation_bridge
+                    .runtime()
+                    .evaluate(NodeInvocation::new(
+                        "invoke-retired",
+                        "node-1",
+                        "product.status",
+                        Value::Null,
+                    ))
+                    .await
+            });
+            invoked.notified().await;
+            if drop_channel {
+                drop(channel);
+            } else {
+                channel.retire();
+            }
 
-        assert_eq!(
-            evaluation.await.unwrap(),
-            InvocationResult::failure(
-                "SIDECAR_CHANNEL_RETIRED",
-                "authenticated sidecar channel is no longer live"
-            )
-        );
-        tokio::time::timeout(Duration::from_secs(1), cancelled.notified())
-            .await
-            .unwrap();
-        assert_eq!(
-            bridge
-                .runtime()
-                .evaluate(NodeInvocation::new(
-                    "invoke-after-retire",
-                    "node-1",
-                    "product.status",
-                    Value::Null,
-                ))
-                .await,
-            InvocationResult::failure(
-                "SIDECAR_CHANNEL_RETIRED",
-                "authenticated sidecar channel is no longer live"
-            )
-        );
-        assert!(
-            tokio::time::timeout(Duration::from_millis(20), invoked.notified())
+            assert_eq!(
+                evaluation.await.unwrap(),
+                InvocationResult::failure(
+                    "SIDECAR_CHANNEL_RETIRED",
+                    "authenticated sidecar channel is no longer live"
+                )
+            );
+            tokio::time::timeout(Duration::from_secs(1), cancelled.notified())
                 .await
-                .is_err()
-        );
+                .unwrap();
+            assert_eq!(
+                bridge
+                    .runtime()
+                    .evaluate(NodeInvocation::new(
+                        "invoke-after-retire",
+                        "node-1",
+                        "product.status",
+                        Value::Null,
+                    ))
+                    .await,
+                InvocationResult::failure(
+                    "SIDECAR_CHANNEL_RETIRED",
+                    "authenticated sidecar channel is no longer live"
+                )
+            );
+            assert!(
+                tokio::time::timeout(Duration::from_millis(20), invoked.notified())
+                    .await
+                    .is_err()
+            );
+        }
     }
 
     #[test]
