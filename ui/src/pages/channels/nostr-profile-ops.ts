@@ -3,6 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 // publishing and importing the relay profile, plus validation-error parsing.
 import type { NostrProfile } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { NostrProfileFormState } from "./view.nostr-profile-form.ts";
 
 export type NostrOperation = {
   generation: number;
@@ -57,6 +58,24 @@ export function mergeNostrProfileDraft(
     }
   }
   return draft;
+}
+
+export type NostrProfileImportResponse = {
+  imported?: NostrProfile;
+  merged?: NostrProfile;
+};
+
+export function mergeNostrProfileImportDraft(
+  data: NostrProfileImportResponse,
+  form: Pick<NostrProfileFormState, "values" | "original" | "importedBaseline">,
+) {
+  const imported = data.merged ?? data.imported;
+  return {
+    values: imported
+      ? mergeNostrProfileDraft(imported, form.values, form.original, form.importedBaseline)
+      : form.values,
+    importedBaseline: imported ? { ...form.importedBaseline, ...imported } : form.importedBaseline,
+  };
 }
 
 export function isCurrentNostrOperation(
@@ -172,13 +191,13 @@ export async function importNostrProfile(params: {
   headers: Record<string, string>;
   signal?: AbortSignal;
 }) {
-  return await requestNostrProfile<{
-    ok?: boolean;
-    error?: string;
-    imported?: NostrProfile;
-    merged?: NostrProfile;
-    saved?: boolean;
-  }>(buildNostrProfileUrl(params.accountId, "/import"), {
+  return await requestNostrProfile<
+    NostrProfileImportResponse & {
+      ok?: boolean;
+      error?: string;
+      saved?: boolean;
+    }
+  >(buildNostrProfileUrl(params.accountId, "/import"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

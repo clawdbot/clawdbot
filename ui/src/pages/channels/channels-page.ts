@@ -22,7 +22,7 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
   importNostrProfile,
   isCurrentNostrOperation,
-  mergeNostrProfileDraft,
+  mergeNostrProfileImportDraft,
   NostrOperationController,
   parseValidationErrors,
   putNostrProfile,
@@ -355,15 +355,21 @@ class ChannelsPage extends OpenClawLightDomElement {
     };
   }
 
-  private currentNostrForm(operation: NostrOperation): NonNullable<NostrProfileFormState> | null {
-    const current = isCurrentNostrOperation(
+  private currentNostrForm(operation: NostrOperation) {
+    return isCurrentNostrOperation(
       operation,
       this.isConnected,
       this.nostrOperationGeneration,
       this.nostrProfileAccountId,
       this.context,
-    );
-    return this.nostrProfileFormState && current ? this.nostrProfileFormState : null;
+    )
+      ? this.nostrProfileFormState
+      : null;
+  }
+
+  private getIdleNostrForm() {
+    const form = this.nostrProfileFormState;
+    return form && !form.saving && !form.importing ? form : null;
   }
 
   private editNostrProfile(accountId: string, profile: NostrProfile | null) {
@@ -373,13 +379,9 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.nostrProfileFormState = createNostrProfileFormState(profile ?? undefined);
   }
 
-  private cancelNostrProfile() {
-    this.invalidateNostrForm();
-  }
-
   private changeNostrProfileField(field: keyof NostrProfile, value: string) {
-    const form = this.nostrProfileFormState;
-    if (!form || form.saving || form.importing) {
+    const form = this.getIdleNostrForm();
+    if (!form) {
       return;
     }
     this.nostrProfileFormState = {
@@ -390,16 +392,16 @@ class ChannelsPage extends OpenClawLightDomElement {
   }
 
   private toggleNostrProfileAdvanced() {
-    const form = this.nostrProfileFormState;
-    if (!form || form.saving || form.importing) {
+    const form = this.getIdleNostrForm();
+    if (!form) {
       return;
     }
     this.nostrProfileFormState = { ...form, showAdvanced: !form.showAdvanced };
   }
 
   private async saveNostrProfile() {
-    const form = this.nostrProfileFormState;
-    if (!form || form.saving || form.importing) {
+    const form = this.getIdleNostrForm();
+    if (!form) {
       return;
     }
     const operation = this.beginNostrOperation();
@@ -480,8 +482,8 @@ class ChannelsPage extends OpenClawLightDomElement {
   }
 
   private async importNostrProfile() {
-    const form = this.nostrProfileFormState;
-    if (!form || form.importing || form.saving) {
+    const form = this.getIdleNostrForm();
+    if (!form) {
       return;
     }
     const operation = this.beginNostrOperation();
@@ -519,22 +521,12 @@ class ChannelsPage extends OpenClawLightDomElement {
         return;
       }
 
-      const imported = data.merged ?? data.imported;
-      const values = imported
-        ? mergeNostrProfileDraft(
-            imported,
-            currentForm.values,
-            currentForm.original,
-            currentForm.importedBaseline,
-          )
-        : currentForm.values;
+      const { values, importedBaseline } = mergeNostrProfileImportDraft(data, currentForm);
       this.nostrProfileFormState = {
         ...currentForm,
         importing: false,
         values,
-        importedBaseline: imported
-          ? { ...currentForm.importedBaseline, ...imported }
-          : currentForm.importedBaseline,
+        importedBaseline,
         error: null,
         success: t("channels.nostr.notices.importedFromRelays"),
         showAdvanced: Boolean(values.banner || values.website || values.nip05 || values.lud16),
@@ -743,7 +735,7 @@ class ChannelsPage extends OpenClawLightDomElement {
           onConfigSave: () => void this.saveChannelConfig(),
           onConfigReload: () => void this.reloadChannelConfig(),
           onNostrProfileEdit: (accountId, profile) => this.editNostrProfile(accountId, profile),
-          onNostrProfileCancel: () => this.cancelNostrProfile(),
+          onNostrProfileCancel: () => this.invalidateNostrForm(),
           onNostrProfileFieldChange: (field, value) => this.changeNostrProfileField(field, value),
           onNostrProfileSave: () => void this.saveNostrProfile(),
           onNostrProfileImport: () => void this.importNostrProfile(),
