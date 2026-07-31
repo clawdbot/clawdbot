@@ -33,10 +33,7 @@ type FakeSocket = { unref: () => void };
 // Keep stopAndWait timeouts comfortably above it so the race doesn't time out.
 const SETTLE_TIMEOUT_MS = 1000;
 
-function attachFakeWs(
-  client: GatewayClient,
-  { unref }: { unref?: () => void },
-): void {
+function attachFakeWs(client: GatewayClient, { unref }: { unref?: () => void }): void {
   const ws: Record<string, unknown> = {
     readyState: WebSocket.OPEN,
     send: vi.fn(),
