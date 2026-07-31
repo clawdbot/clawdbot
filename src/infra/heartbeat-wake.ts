@@ -19,7 +19,6 @@ import type {
   HeartbeatWakeHandler,
   HeartbeatWakeIntent,
   HeartbeatWakeOverride,
-  HeartbeatWakeRequest,
   HeartbeatWakeSource,
 } from "./heartbeat-wake-contracts.js";
 import {
