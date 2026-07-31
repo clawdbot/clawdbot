@@ -110,7 +110,7 @@ export async function resolveCronModelSelectionOwner(params: {
   return owner;
 }
 
-export async function resolveCronThinkingCatalog(params: {
+async function resolveCronThinkingCatalog(params: {
   owner: ResolvedPublishedModelCatalogOwner;
   provider: string;
   model: string;
