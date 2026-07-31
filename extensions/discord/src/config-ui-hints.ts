@@ -77,6 +77,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Component TTL (ms)",
     help: "How long sent Discord component callbacks remain registered. Default is 1800000 (30 minutes); maximum is 86400000 (24 hours).",
   },
+  "intents.messageContent": {
+    label: "Discord Message Content Intent",
+    help: "Request the privileged Message Content intent (default: true). Set false only for mention-only guild operation when Discord cannot grant the intent; DMs and explicit mentions still include message content.",
+  },
   "intents.presence": {
     label: "Discord Presence Intent",
     help: "Enable the Guild Presences privileged intent. Must also be enabled in the Discord Developer Portal. Allows tracking user activities (e.g. Spotify). Default: false.",
