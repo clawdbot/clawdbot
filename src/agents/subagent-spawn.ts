@@ -591,7 +591,7 @@ export async function spawnSubagentDirect(
       retainAdmissionSlotAfterReturn =
         admissionSlot !== undefined &&
         failureCleanupOutcome === "indeterminate" &&
-        !recordIndeterminateFailedSubagentSpawn({
+        !recordIndeterminateFailedSubagentSpawn(admissionSlot, {
           runId,
           childSessionKey,
           ...(ownership.controllerSessionKey

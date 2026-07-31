@@ -480,6 +480,58 @@ describe("subagent registry seam flow", () => {
     );
   });
 
+  it("preserves failed-spawn quarantine when session inspection throws before true absence", async () => {
+    const childSessionKey = "agent:worker:subagent:failed-spawn-inspection-throws-child";
+    const runId = "failed-spawn-inspection-throws-run";
+    mocks.loadSessionStore.mockImplementationOnce(() => {
+      throw new Error("sqlite read temporarily unavailable");
+    });
+    mocks.loadSessionStore.mockReturnValue({});
+
+    expect(quarantineFailedSpawn({ runId, childSessionKey })).toBe("recorded");
+    const entry = expectDefined(mod.getSubagentRunByRunId(runId), "quarantined run");
+    const cleanup = expectDefined(entry.spawnFailureCleanup, "failed-spawn cleanup");
+    cleanup.status = "exhausted";
+    cleanup.attempts = cleanup.maxAttempts;
+    cleanup.nextAttemptAt = undefined;
+
+    await mod.testing.sweepOnceForTests();
+
+    const retainedEntry = expectDefined(
+      mod.getSubagentRunByRunId(runId),
+      "retained quarantined run",
+    );
+    expect(retainedEntry).toMatchObject({
+      spawnFailureCleanup: {
+        status: "exhausted",
+        attempts: cleanup.maxAttempts,
+        sessionDeletion: "indeterminate",
+        lastError: "sqlite read temporarily unavailable",
+      },
+    });
+    expect(retainedEntry.cleanupCompletedAt).toBeUndefined();
+    expect(retainedEntry.endedAt).toBeUndefined();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.emitSessionLifecycleEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: childSessionKey,
+        reason: "delete",
+      }),
+    );
+
+    await mod.testing.sweepOnceForTests();
+
+    expect(mod.getSubagentRunByRunId(runId)).toMatchObject({
+      spawnFailureCleanup: {
+        status: "deleted",
+        attempts: cleanup.maxAttempts,
+        sessionDeletion: "indeterminate",
+        lastError: null,
+      },
+      cleanupHandled: true,
+    });
+  });
+
   it("keeps a sweeper archive mutation root-admitted until deletion settles", async () => {
     const now = Date.now();
     let releaseDelete: (() => void) | undefined;

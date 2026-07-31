@@ -44,6 +44,7 @@ const hoisted = vi.hoisted(() => ({
 
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
+let spawnFailureQuarantine: typeof import("./subagent-spawn-failure-quarantine.js");
 
 function createConfigOverride(overrides?: Record<string, unknown>) {
   return createSubagentSpawnTestConfig(os.tmpdir(), {
@@ -270,10 +271,12 @@ describe("spawnSubagentDirect seam flow", () => {
       },
       sessionStorePath: "/tmp/subagent-spawn-session-store.json",
     }));
+    spawnFailureQuarantine = await import("./subagent-spawn-failure-quarantine.js");
   });
 
   beforeEach(() => {
     swarmSchedulerTesting.reset();
+    spawnFailureQuarantine.resetRetainedFailedSpawnAdmissionsForTests();
     resetSubagentSpawnAdmissionForTests();
     resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockReset();
@@ -316,6 +319,7 @@ describe("spawnSubagentDirect seam flow", () => {
   });
 
   afterEach(() => {
+    spawnFailureQuarantine.resetRetainedFailedSpawnAdmissionsForTests();
     swarmSchedulerTesting.reset();
     vi.unstubAllEnvs();
   });
@@ -698,6 +702,76 @@ describe("spawnSubagentDirect seam flow", () => {
     const secondResult = await spawnOrdinaryWorker("after-quarantined-failure");
     expect(secondResult.status).toBe("forbidden");
     expect(secondResult.error).toContain("max active children");
+  });
+
+  it("retains requester admission until deletion proof when quarantine persistence fails", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: { allowAgents: ["worker"], maxChildrenPerAgent: 1 },
+        },
+        list: [
+          { id: "main", workspace: "/tmp/workspace-main" },
+          { id: "worker", workspace: "/tmp/workspace-worker" },
+        ],
+      },
+    });
+    installActiveCountFromRegisteredRuns();
+    hoisted.quarantineFailedSubagentSpawnMock.mockImplementation(() => {
+      throw new Error("registry persistence unavailable");
+    });
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    const holderDeleteStarted = deferred<void>();
+    const holderDelete = deferred<Record<string, unknown>>();
+    let deleteCalls = 0;
+    let failAgentLaunch = true;
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      if (method === "sessions.delete") {
+        deleteCalls += 1;
+        if (deleteCalls <= 3) {
+          throw new Error("session deletion did not settle");
+        }
+        holderDeleteStarted.resolve();
+        return await holderDelete.promise;
+      }
+      if (method.startsWith("sessions.")) {
+        return { ok: true };
+      }
+      if (method === "agent") {
+        if (failAgentLaunch) {
+          throw new Error("ambiguous dispatch failure");
+        }
+        return { runId: "after-deletion-proof-run" };
+      }
+      return {};
+    });
+
+    const firstResult = await spawnReservedWorker("quarantine-persist-fails");
+    expect(firstResult).toMatchObject({
+      status: "error",
+      reservedCleanup: { sessionDeletion: "indeterminate" },
+    });
+    expect(hoisted.quarantineFailedSubagentSpawnMock).toHaveBeenCalledTimes(1);
+
+    const blockedResult = await spawnOrdinaryWorker("while-proof-missing");
+    expect(blockedResult.status).toBe("forbidden");
+    expect(blockedResult.error).toContain("max active children");
+
+    const reconciliation = spawnFailureQuarantine.reconcileRetainedFailedSpawnAdmissionsForTests();
+    await holderDeleteStarted.promise;
+    const stillBlockedResult = await spawnOrdinaryWorker("while-proof-pending");
+    expect(stillBlockedResult.status).toBe("forbidden");
+    expect(stillBlockedResult.error).toContain("max active children");
+
+    failAgentLaunch = false;
+    holderDelete.resolve({ ok: true });
+    await reconciliation;
+
+    const admittedResult = await spawnOrdinaryWorker("after-deletion-proof");
+    expect(admittedResult.status).toBe("accepted");
+    expect(deleteCalls).toBe(4);
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledTimes(1);
   });
 
   it("ignores caller-supplied provisional-count fields outside the shared admission owner", async () => {

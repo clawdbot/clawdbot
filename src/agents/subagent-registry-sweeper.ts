@@ -201,12 +201,14 @@ export function createSubagentRegistrySweeper(params: {
         storeCache,
       });
     } catch (error) {
+      cleanup.lastAttemptAt = now;
+      cleanup.lastError = error instanceof Error ? error.message : String(error);
       params.warn("failed to inspect quarantined failed-spawn child session", {
         runId,
         childSessionKey: entry.childSessionKey,
         error,
       });
-      sessionEntry = undefined;
+      return true;
     }
     const completion = resolveCompletionFromSessionEntry(sessionEntry, now, {
       notBeforeMs: entry.createdAt,
