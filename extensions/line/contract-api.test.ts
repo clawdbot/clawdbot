@@ -71,6 +71,42 @@ describe("LINE doctor state migration", () => {
     });
   });
 
+  it("detects and migrates pre-drain rows for the default account absent from config", async () => {
+    await withStateDir(async (stateDir) => {
+      // Pre-drain rows outlive the account config that admitted them, so the
+      // default account is swept even when the config no longer names it.
+      const legacySeed = createChannelIngressQueue<{
+        version: number;
+        destination: string;
+        event: webhook.Event;
+      }>({ channelId: "line", accountId: "default", stateDir });
+      await legacySeed.enqueue(
+        "legacy-doctor-default",
+        { version: 1, destination: "destination-1", event: legacyEvent("legacy-doctor-default") },
+        { laneKey: "user:user-1" },
+      );
+
+      const detected = await migration.detectLegacyState(migrationParams(stateDir, {}));
+      expect(detected?.preview).toEqual([
+        '- LINE pre-drain spool rows (account "default"): 1 row(s) -> canonical ingress contract',
+      ]);
+
+      const result = await migration.migrateLegacyState(migrationParams(stateDir, {}));
+      expect(result.changes).toEqual([
+        'Migrated LINE pre-drain spool rows (account "default"): 1 delivered to the canonical queue, 0 dead-lettered at the identity fence',
+      ]);
+      expect(result.warnings).toEqual([]);
+
+      const queue = createChannelIngressQueue<{
+        version: number;
+        rawEvent: string;
+        destination: string;
+      }>({ channelId: "line", accountId: "default", stateDir });
+      const pending = await queue.listPending({ limit: "all" });
+      expect(pending.map((record) => record.id)).toEqual(["message:message-legacy-doctor-default"]);
+    });
+  });
+
   it("detects and migrates pre-drain rows for a configured account", async () => {
     await withStateDir(async (stateDir) => {
       const legacySeed = createChannelIngressQueue<{

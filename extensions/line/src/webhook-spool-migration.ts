@@ -33,6 +33,8 @@ function parseLegacySpoolPayload(
 
 type LineLegacySpoolMigrationResult = {
   migrated: number;
+  /** Rows whose canonical id was already terminal, so no delivery is owed. */
+  reconciled: number;
   deadLettered: number;
   recovered: number;
   failures: string[];
@@ -78,6 +80,7 @@ export async function migrateLineLegacySpoolRows(
 ): Promise<LineLegacySpoolMigrationResult> {
   const result: LineLegacySpoolMigrationResult = {
     migrated: 0,
+    reconciled: 0,
     deadLettered: 0,
     recovered: 0,
     failures: [],
@@ -131,7 +134,7 @@ export async function migrateLineLegacySpoolRows(
       continue;
     }
     try {
-      await queue.enqueue(
+      const admitted = await queue.enqueue(
         eventId,
         {
           version: LINE_WEBHOOK_SPOOL_VERSION,
@@ -144,13 +147,19 @@ export async function migrateLineLegacySpoolRows(
         { receivedAt: record.receivedAt, laneKey: laneKeyFor(legacy.event, eventId) },
       );
       await queue.complete(record.id);
+      // A canonical id that is already completed or dead-lettered owes no delivery,
+      // so retiring the legacy row reconciles the keyspace rather than migrating a
+      // message. Counting it as migrated would report a delivery that never happens.
+      if (admitted.kind === "completed" || admitted.kind === "failed") {
+        result.reconciled += 1;
+      } else {
+        result.migrated += 1;
+      }
     } catch (error) {
       // One failed rewrite must not abandon the remaining rows; the leftover row
       // stays pending and the idempotent migration retries it on the next run.
       result.failures.push(`row ${record.id}: ${errorText(error)}`);
-      continue;
     }
-    result.migrated += 1;
   }
   return result;
 }

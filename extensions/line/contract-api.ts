@@ -53,13 +53,22 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         const result = await migrateLineLegacySpoolRows(
           openLineSpoolQueue(accountId, params.stateDir),
         );
-        if (result.migrated > 0 || result.deadLettered > 0 || result.recovered > 0) {
+        if (
+          result.migrated > 0 ||
+          result.reconciled > 0 ||
+          result.deadLettered > 0 ||
+          result.recovered > 0
+        ) {
           const recovered =
             result.recovered > 0
               ? ` (${result.recovered} recovered from the dead-letter table)`
               : "";
+          const reconciled =
+            result.reconciled > 0
+              ? `, ${result.reconciled} already settled under the canonical id`
+              : "";
           changes.push(
-            `Migrated LINE pre-drain spool rows (account "${accountId}"): ${result.migrated} delivered to the canonical queue, ${result.deadLettered} dead-lettered at the identity fence${recovered}`,
+            `Migrated LINE pre-drain spool rows (account "${accountId}"): ${result.migrated} delivered to the canonical queue, ${result.deadLettered} dead-lettered at the identity fence${reconciled}${recovered}`,
           );
         }
         for (const failure of result.failures) {
