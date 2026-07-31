@@ -21,6 +21,31 @@ function splitLinesWithEndings(content: string): string[] {
   return content.match(/[^\n]*\n|[^\n]+/g) ?? [];
 }
 
+/**
+ * Map a normalized-space offset within a line back to the original-space
+ * offset of the same line. NFKC normalization can expand or combine
+ * characters (e.g. ligature ﬁ → "fi", or "e" + combining acute → "é"),
+ * so normalized and original UTF-16 offsets diverge within a line. This
+ * returns the largest original prefix whose NFKC length is <= normOffset,
+ * which places the mapping at the start of the original character(s) that
+ * produced the normalized character at normOffset.
+ */
+function mapNormOffsetToOriginal(originalLine: string, normOffset: number): number {
+  let lo = 0;
+  let hi = originalLine.length;
+  // Find the largest i such that originalLine.slice(0, i).normalize("NFKC").length <= normOffset.
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    const prefixNormLen = originalLine.slice(0, mid).normalize("NFKC").length;
+    if (prefixNormLen <= normOffset) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return lo;
+}
+
 function getLineSpans(content: string): LineSpan[] {
   let offset = 0;
   return splitLinesWithEndings(content).map((line) => {
@@ -135,6 +160,12 @@ export function applyReplacementsPreservingUnchangedLines(
           r.matchIndex < l.end,
       );
       const withinLineOffset = r.matchIndex - baseLines[normLine].start;
+      // Map the normalized-space in-line offset back to original space:
+      // NFKC-expanding characters earlier in the same line shift offsets.
+      const origWithinLineOffset = mapNormOffsetToOriginal(
+        originalLines[normLine]!,
+        withinLineOffset,
+      );
       const origLineStart = originalLines
         .slice(0, normLine)
         .reduce((sum, l) => sum + l.length, 0);
@@ -155,19 +186,23 @@ export function applyReplacementsPreservingUnchangedLines(
             .slice(0, endNormLine + 1)
             .reduce((sum, l) => sum + l.length, 0);
         } else {
-          // Match ends mid-line — same within-line position
+          // Match ends mid-line — same within-line position, mapped to original space
           const lastLineOrigStart = originalLines
             .slice(0, endNormLine)
             .reduce((sum, l) => sum + l.length, 0);
           const withinLastLine = normMatchEnd - baseLines[endNormLine].start;
-          origEndOfMatch = lastLineOrigStart + withinLastLine;
+          const origWithinLastLine = mapNormOffsetToOriginal(
+            originalLines[endNormLine]!,
+            withinLastLine,
+          );
+          origEndOfMatch = lastLineOrigStart + origWithinLastLine;
         }
-        origMatchLen = origEndOfMatch - (origLineStart + withinLineOffset);
+        origMatchLen = origEndOfMatch - (origLineStart + origWithinLineOffset);
       }
 
       return {
         ...r,
-        matchIndex: origLineStart + withinLineOffset,
+        matchIndex: origLineStart + origWithinLineOffset,
         matchLength: origMatchLen,
       };
     });
