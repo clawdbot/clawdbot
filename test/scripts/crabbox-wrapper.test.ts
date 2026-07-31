@@ -1110,6 +1110,29 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("managed Crabbox broker auth unavailable");
   });
 
+  it("does not treat an injected Azure Windows default as direct intent", () => {
+    const result = runWrapper(
+      "provider: aws, azure, blacksmith-testbox, or daytona\n",
+      ["run", "--target", "windows", "--", "echo ok"],
+      {
+        configJson: {
+          provider: "blacksmith-testbox",
+          coordinator: "",
+          brokerMode: "",
+          brokerAuth: "missing",
+        },
+        env: {
+          OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0",
+        },
+      },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("provider=azure requires a configured managed Crabbox broker");
+  });
+
   it("keeps workload configuration away from administrative commands", () => {
     const result = runDefaultWrapper(["--version"], {
       env: { OPENCLAW_CRABBOX_WORKLOAD: "ci-fast" },

@@ -933,7 +933,7 @@ function formatProviderReadiness(readiness) {
     .join(",");
 }
 
-function shouldRequireBrokeredCloud(commandArgs, providerName) {
+function shouldRequireBrokeredCloud(commandArgs, providerName, explicitProviderRequested = false) {
   const canonicalProvider = canonicalProviderName(providerName);
   if (!["aws", "azure", "daytona"].includes(canonicalProvider)) {
     // Blacksmith Testbox is provider-owned and does not use the managed
@@ -944,8 +944,7 @@ function shouldRequireBrokeredCloud(commandArgs, providerName) {
   if (requestedWorkload(commandArgs)) {
     return true;
   }
-  const explicitProvider = Boolean(commandProvider(commandArgs));
-  if (explicitProvider && directCloudOverrideEnabled(providerName)) {
+  if (explicitProviderRequested && directCloudOverrideEnabled(providerName)) {
     return false;
   }
   return (
@@ -979,10 +978,15 @@ function managedBrokerAuthConfigured() {
   return managedBrokerAuthConfiguredCache;
 }
 
-function enforceBrokeredDaytonaVersion(commandArgs, providerName, versionText) {
+function enforceBrokeredDaytonaVersion(
+  commandArgs,
+  providerName,
+  versionText,
+  explicitProviderRequested,
+) {
   if (
     canonicalProviderName(providerName) !== "daytona" ||
-    !shouldRequireBrokeredCloud(commandArgs, providerName) ||
+    !shouldRequireBrokeredCloud(commandArgs, providerName, explicitProviderRequested) ||
     satisfiesMinimumCrabboxVersion(versionText, minimumBrokeredDaytonaCrabboxVersion)
   ) {
     return;
@@ -997,8 +1001,11 @@ function enforceBrokeredDaytonaVersion(commandArgs, providerName, versionText) {
   process.exit(2);
 }
 
-function enforceBrokeredCloud(commandArgs, providerName) {
-  if (!shouldRequireBrokeredCloud(commandArgs, providerName) || managedBrokerAuthConfigured()) {
+function enforceBrokeredCloud(commandArgs, providerName, explicitProviderRequested) {
+  if (
+    !shouldRequireBrokeredCloud(commandArgs, providerName, explicitProviderRequested) ||
+    managedBrokerAuthConfigured()
+  ) {
     return;
   }
   const canonicalProvider = canonicalProviderName(providerName);
@@ -3843,8 +3850,9 @@ if (canonicalProvider === "blacksmith-testbox") {
   }
 }
 
-enforceBrokeredDaytonaVersion(normalizedArgs, provider, version.text);
-enforceBrokeredCloud(normalizedArgs, provider);
+const explicitProviderRequested = Boolean(commandProviderValue);
+enforceBrokeredDaytonaVersion(normalizedArgs, provider, version.text, explicitProviderRequested);
+enforceBrokeredCloud(normalizedArgs, provider, explicitProviderRequested);
 
 if (canonicalProvider === "blacksmith-testbox") {
   const envProviderLocal = process.env.CRABBOX_PROVIDER?.trim();
