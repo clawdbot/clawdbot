@@ -13,6 +13,7 @@ import { detectModelSetup } from "./rpc.ts";
 async function loadModelSetupRouteData(
   context: ApplicationContext,
   location: RouteLocation,
+  allowReconnectRetry = true,
 ): Promise<ModelSetupRouteData> {
   const firstRun = new URLSearchParams(location.search).get("firstRun") === "1";
   const snapshot = context.gateway.snapshot;
@@ -29,19 +30,37 @@ async function loadModelSetupRouteData(
   if (cached) {
     return { state: { phase: "ready", result: cached }, connection, firstRun };
   }
+  let state: ModelSetupRouteData["state"];
   try {
-    return {
-      state: { phase: "ready", result: await detectModelSetup(client) },
-      connection,
-      firstRun,
-    };
+    state = { phase: "ready", result: await detectModelSetup(client) };
   } catch (error) {
     const message =
       error instanceof Error && error.message.trim()
         ? error.message
         : t("modelSetup.errors.requestFailed");
-    return { state: { phase: "detect-error", message }, connection, firstRun };
+    state = { phase: "detect-error", message };
   }
+
+  const current = context.gateway.snapshot;
+  if (
+    current.phase === "connected" &&
+    current.client === connection.client &&
+    current.hello === connection.hello
+  ) {
+    return { state, connection, firstRun };
+  }
+  if (
+    allowReconnectRetry &&
+    current.phase === "connected" &&
+    current.client &&
+    hasOperatorAdminAccess(current.hello?.auth ?? null) &&
+    isGatewayMethodAdvertised(current, "openclaw.setup.detect") === true
+  ) {
+    return loadModelSetupRouteData(context, location, false);
+  }
+  // Keep the producer's stale generation so the mounted page owns a fresh
+  // detection instead of accepting an unresolved current-generation result.
+  return { state: { phase: "loading" }, connection, firstRun };
 }
 
 export const page = definePage({

@@ -226,7 +226,9 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     }
     const connection: CatalogConnection = { client, connected };
     this.connection = connection;
+    this.engineBusy = false;
     this.engineOutcome = null;
+    this.addonBusy = new Set();
     this.overviewRequest = null;
     this.probingEmbeddings = false;
     if (!client || !connected) {
@@ -517,9 +519,11 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         this.addonErrors = new Map(this.addonErrors).set(pluginId, errorMessage(error));
       }
     } finally {
-      const busy = new Set(this.addonBusy);
-      busy.delete(pluginId);
-      this.addonBusy = busy;
+      if (this.connection === connection) {
+        const busy = new Set(this.addonBusy);
+        busy.delete(pluginId);
+        this.addonBusy = busy;
+      }
     }
   }
 
@@ -566,7 +570,9 @@ class MemorySettingsPage extends OpenClawLightDomElement {
         this.engineOutcome = { kind: "error", message: errorMessage(error) };
       }
     } finally {
-      this.engineBusy = false;
+      if (this.connection === connection) {
+        this.engineBusy = false;
+      }
     }
   }
 

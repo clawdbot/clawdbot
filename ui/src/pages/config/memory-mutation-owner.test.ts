@@ -204,6 +204,97 @@ describe("Memory plugin mutation ownership", () => {
     }
   });
 
+  it("keeps the replacement add-on busy after an older connection finishes", async () => {
+    const firstMutation = createMemoryTestDeferred<unknown>();
+    const secondMutation = createMemoryTestDeferred<unknown>();
+    let mutationCalls = 0;
+    const setEnabled = vi.fn(() =>
+      mutationCalls++ === 0 ? firstMutation.promise : secondMutation.promise,
+    );
+    const { element, request, runExternalMutation, setPhase } = createMemoryPage({
+      configObject: {},
+      catalog: [createMemoryTestAddon("active-memory", true)],
+      setEnabled,
+    });
+    const owner = element as unknown as { addonBusy: Set<string> };
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+      toggleAddon(element, "Active memory", false);
+      await waitForFast(() => expect(setEnabled).toHaveBeenCalledOnce());
+
+      setPhase("disconnected");
+      expect(owner.addonBusy.has("active-memory")).toBe(false);
+      setPhase("connected");
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+      toggleAddon(element, "Active memory", false);
+      await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
+
+      firstMutation.resolve({});
+      await waitForFast(() => expect(setEnabled).toHaveBeenCalledTimes(2));
+      await waitForFast(() =>
+        expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(3),
+      );
+      await element.updateComplete;
+      expect(owner.addonBusy.has("active-memory")).toBe(true);
+
+      secondMutation.resolve({});
+      await waitForFast(() => expect(owner.addonBusy.has("active-memory")).toBe(false));
+    } finally {
+      firstMutation.resolve({});
+      secondMutation.resolve({});
+      await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
+      element.remove();
+    }
+  });
+
+  it("keeps the replacement engine busy after an older connection finishes", async () => {
+    const firstMutation = createMemoryTestDeferred<unknown>();
+    const secondMutation = createMemoryTestDeferred<unknown>();
+    let mutationCalls = 0;
+    const setEnabled = vi.fn(() =>
+      mutationCalls++ === 0 ? firstMutation.promise : secondMutation.promise,
+    );
+    const { element, request, runExternalMutation, setPhase } = createMemoryPage({
+      configObject: {},
+      catalog: [
+        createMemoryTestEngine("memory-core", true),
+        createMemoryTestEngine("other", false),
+      ],
+      setEnabled,
+    });
+    const owner = element as unknown as { engineBusy: boolean };
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
+      selectEngine(element, "other");
+      await waitForFast(() => expect(setEnabled).toHaveBeenCalledOnce());
+
+      setPhase("disconnected");
+      expect(owner.engineBusy).toBe(false);
+      setPhase("connected");
+      await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
+      selectEngine(element, "other");
+      await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
+
+      firstMutation.resolve({});
+      await waitForFast(() => expect(setEnabled).toHaveBeenCalledTimes(2));
+      await waitForFast(() =>
+        expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(3),
+      );
+      await element.updateComplete;
+      expect(owner.engineBusy).toBe(true);
+
+      secondMutation.resolve({});
+      await waitForFast(() => expect(owner.engineBusy).toBe(false));
+    } finally {
+      firstMutation.resolve({});
+      secondMutation.resolve({});
+      await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
+      element.remove();
+    }
+  });
+
   it("reloads the replacement connection after an older engine change commits", async () => {
     const pendingMutation = createMemoryTestDeferred<unknown>();
     const { element, request, runExternalMutation, setPhase } = createMemoryPage({
