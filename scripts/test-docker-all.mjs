@@ -1538,6 +1538,7 @@ async function main() {
       upgradeSurvivorScenarios: process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
       upgradeSurvivorTargetRoot: process.env.OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT,
       allowFrozenTargetScenarioOmissions,
+      candidatePackageRoot: ROOT_DIR,
     });
   if (omittedUnsupportedLaneNames.length > 0 && !allowFrozenTargetScenarioOmissions) {
     throw new Error(

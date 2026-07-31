@@ -1960,6 +1960,26 @@ describe("official external plugin catalog", () => {
     });
   });
 
+  it.each([
+    ["teams-meetings", "@openclaw/teams-meetings", "teams_meetings", "teams"],
+    ["zoom-meetings", "@openclaw/zoom-meetings", "zoom_meetings", "zoom"],
+  ] as const)(
+    "lists %s as an official external meeting plugin",
+    (id, npmSpec, toolId, transcriptSourceProviderId) => {
+      const entry = expectCatalogEntry(id);
+      const contracts = getOfficialExternalPluginCatalogManifest(entry)?.contracts;
+
+      expect(resolveOfficialExternalPluginInstall(entry)).toEqual({
+        clawhubSpec: `clawhub:${npmSpec}`,
+        npmSpec,
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.7.2",
+      });
+      expect(contracts?.tools).toEqual([toolId]);
+      expect(contracts?.transcriptSourceProviders).toEqual([transcriptSourceProviderId]);
+    },
+  );
+
   it("lists LongCat as an official external provider", () => {
     const longcat = expectCatalogEntry("longcat");
 

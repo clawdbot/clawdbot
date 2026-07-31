@@ -17,6 +17,16 @@ content otherwise match the cited upstream files.
 
 Provider names and marks remain the property of their respective owners.
 
+## LM Studio icon
+
+`ProviderIcon-lmstudio.svg` is the official monochrome outline icon published
+by LM Studio:
+
+- Source:
+  https://lmstudio.ai/assets/marketing/brand/download/logos/lm-studio-icon-outline-white.svg
+- Brand guidelines:
+  https://lmstudio.ai/brand
+
 ## llama.cpp icon
 
 `ProviderIcon-llamacpp.svg` is a metadata-cleaned copy of

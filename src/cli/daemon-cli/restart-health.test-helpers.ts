@@ -5,7 +5,8 @@ import type { PortUsage } from "../../infra/ports.js";
 
 type PortListenerKind = ReturnType<typeof import("../../infra/ports.js").classifyPortListener>;
 
-export const inspectPortUsage = vi.fn<(port: number) => Promise<PortUsage>>();
+export const inspectPortUsage =
+  vi.fn<(port: number, options?: { probeHosts?: readonly string[] }) => Promise<PortUsage>>();
 export const monotonicClock = { nowMs: 0 };
 export const sleep = vi.fn(async (ms: number) => {
   monotonicClock.nowMs += ms;
@@ -21,11 +22,16 @@ export const resolveGatewayProbeAuthSafeWithSecretInputs = vi.fn<
 >(async () => ({ auth: {} }));
 const hasActiveStartupMigrationLease = vi.fn<(_params?: unknown) => boolean>(() => false);
 export const readActiveGatewayLockIdentity = vi.fn();
+export const resolveGatewayServiceProbeHosts = vi.fn<
+  (_params?: unknown) => Promise<readonly string[]>
+>(async () => ["127.0.0.1"]);
 
 vi.mock("../../infra/ports.js", () => ({
   classifyPortListener: (listener: unknown, port: number) => classifyPortListener(listener, port),
   formatPortDiagnostics: vi.fn(() => []),
-  inspectPortUsage: (port: number) => inspectPortUsage(port),
+  inspectPortUsage: (port: number, options?: { probeHosts?: readonly string[] }) =>
+    inspectPortUsage(port, options),
+  LOOPBACK_PORT_PROBE_HOSTS: ["127.0.0.1"],
 }));
 
 vi.mock("../../gateway/probe.js", () => ({
@@ -59,6 +65,10 @@ vi.mock("../../infra/gateway-lock.js", () => ({
         previous.startTime === current.startTime,
 }));
 
+vi.mock("../../daemon/gateway-service-probe-hosts.js", () => ({
+  resolveGatewayServiceProbeHosts: (params: unknown) => resolveGatewayServiceProbeHosts(params),
+}));
+
 vi.mock("../../utils.js", async () => {
   const actual = await vi.importActual<typeof import("../../utils.js")>("../../utils.js");
   return {
@@ -74,6 +84,7 @@ export function makeGatewayService(
 ): GatewayService {
   return {
     readRuntime: vi.fn(async () => runtime),
+    readCommand: vi.fn(async () => null),
   } as unknown as GatewayService;
 }
 
@@ -115,6 +126,7 @@ export async function inspectGatewayRestartWithSnapshot(params: {
   return inspectGatewayRestart({
     service,
     port: 18789,
+    probeHosts: ["127.0.0.1"],
     ...(params.expectedVersion === undefined ? {} : { expectedVersion: params.expectedVersion }),
     ...(params.includeUnknownListenersAsStale === undefined
       ? {}
@@ -213,6 +225,8 @@ export function resetRestartHealthMocks() {
   hasActiveStartupMigrationLease.mockReturnValue(false);
   readActiveGatewayLockIdentity.mockReset();
   readActiveGatewayLockIdentity.mockResolvedValue(undefined);
+  resolveGatewayServiceProbeHosts.mockReset();
+  resolveGatewayServiceProbeHosts.mockResolvedValue(["127.0.0.1"]);
 }
 
 export function restoreRestartHealthMocks() {

@@ -2027,8 +2027,8 @@ export const en: TranslationMap = {
       ollamaLabel: "Ollama",
       ollamaHint: "Connect to the Ollama service on this Gateway and prepare a tools-capable model",
       llamaCppLabel: "llama.cpp",
-      llamaCppNotReady:
-        "llama.cpp did not produce a usable local model. Review the setup result, then retry.",
+      providerNotReady:
+        "{provider} did not expose a usable local model. Review the setup result, then retry.",
     },
     manual: {
       title: "Connect with an API key or token",

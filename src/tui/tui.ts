@@ -430,8 +430,26 @@ export function beginTuiShutdown(params: {
   // Stop referenced animations before transport teardown can stall or redraw.
   params.disposeStatus();
   void Promise.resolve()
-    .then(params.stopClient)
-    .then(params.stopTui)
+    .then(async () => {
+      const errors: unknown[] = [];
+      try {
+        await params.stopClient();
+      } catch (error) {
+        errors.push(error);
+      }
+      // Terminal ownership must be released even when transport teardown fails.
+      try {
+        await params.stopTui();
+      } catch (error) {
+        errors.push(error);
+      }
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "TUI shutdown failed");
+      }
+    })
     .finally(() => {
       if (params.keepHardExitArmed !== true) {
         const clearTimeoutFn =

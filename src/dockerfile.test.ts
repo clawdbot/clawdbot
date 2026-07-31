@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
+const dockerComposePath = join(repoRoot, "docker-compose.yml");
 const dockerInstallDocsPath = join(repoRoot, "docs/install/docker.md");
 const dockerReleaseWorkflowPath = join(repoRoot, ".github/workflows/docker-release.yml");
 const fullReleaseValidationWorkflowPath = join(
@@ -35,6 +36,16 @@ function resolveOptionalAptPackages(dockerfile: string, env: NodeJS.ProcessEnv):
 }
 
 describe("Dockerfile", () => {
+  it("runs the built port-aware Gateway liveness probe", async () => {
+    const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
+    const compose = await readFile(dockerComposePath, "utf8");
+
+    expect(dockerfile).toContain('CMD ["node", "dist/docker-healthcheck.js"]');
+    expect(dockerfile).not.toContain("127.0.0.1:18789/healthz");
+    expect(compose).toContain('"dist/docker-healthcheck.js"');
+    expect(compose).not.toContain("127.0.0.1:18789/healthz");
+  });
+
   it("does not force an external Dockerfile frontend pull", async () => {
     for (const path of dockerSetupDockerfilePaths) {
       const dockerfile = await readFile(join(repoRoot, path), "utf8");

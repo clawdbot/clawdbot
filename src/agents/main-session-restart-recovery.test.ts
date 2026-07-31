@@ -4752,7 +4752,10 @@ describe("main-session-restart-recovery", () => {
     ]);
 
     await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
-    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+    expect(gatewayParams()).toMatchObject({
+      forceRestartSafeTools: true,
+      forceCodeModeTools: true,
+    });
   });
 
   it.each([
@@ -5178,7 +5181,55 @@ describe("main-session-restart-recovery", () => {
     ]);
 
     await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
-    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+    expect(gatewayParams()).toMatchObject({
+      forceRestartSafeTools: true,
+      forceCodeModeTools: true,
+    });
+  });
+
+  it("resumes through the current Code Mode abort persisted for an interrupted wait", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, mainSessionStore());
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      codeModeCheckpointMessage(),
+      codeModeWaitCallMessage(),
+      {
+        role: "toolResult",
+        toolName: "wait",
+        toolCallId: "call-wait-1",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "failed",
+              code: "aborted",
+              error: "code mode execution aborted",
+            }),
+          },
+        ],
+        details: {
+          status: "failed",
+          code: "aborted",
+          error: "code mode execution aborted",
+          replaySafe: true,
+        },
+        isError: true,
+      },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "aborted",
+        errorCode: "OPENCLAW_RESTART_ABORT",
+        errorMessage: "agent run aborted for restart",
+      },
+    ]);
+
+    await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
+    expect(gatewayParams()).toMatchObject({
+      forceRestartSafeTools: true,
+      forceCodeModeTools: true,
+    });
   });
 
   it("keeps an unmatched failed wait restricted when its checkpoint is replay-safe", async () => {
@@ -5203,7 +5254,10 @@ describe("main-session-restart-recovery", () => {
     ]);
 
     await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
-    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+    expect(gatewayParams()).toMatchObject({
+      forceRestartSafeTools: true,
+      forceCodeModeTools: true,
+    });
   });
 
   it.each([

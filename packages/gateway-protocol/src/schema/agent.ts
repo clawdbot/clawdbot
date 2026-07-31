@@ -335,6 +335,7 @@ export const AgentParamsSchema = closedObject({
   // Host-owned recovery turns can force every Code Mode exec onto the
   // restart-safe path even if the model omits or clears the tool argument.
   forceRestartSafeTools: Type.Optional(Type.Boolean()),
+  forceCodeModeTools: Type.Optional(Type.Boolean()),
   voiceWakeTrigger: Type.Optional(Type.String()),
   idempotencyKey: NonEmptyString,
   label: Type.Optional(SessionLabelString),

@@ -75,6 +75,30 @@ const detected: SystemAgentSetupDetectResult = {
       featured: false,
     },
   ],
+  prepareOptions: [
+    {
+      id: "ollama",
+      brandId: "ollama",
+      label: "Ollama",
+      hint: "Connect to an Ollama server and select a cloud or local model",
+      icon: "https://cdn.simpleicons.org/ollama",
+      website: "https://ollama.com/download",
+    },
+    {
+      id: "lmstudio",
+      brandId: "lmstudio",
+      label: "LM Studio",
+      hint: "Connect to a running LM Studio server and use an already loaded model",
+      icon: "https://cdn.simpleicons.org/lmstudio",
+      website: "https://lmstudio.ai/download",
+    },
+    {
+      id: "llama-cpp",
+      brandId: "llama-cpp",
+      label: "Local model (llama.cpp)",
+      hint: "Download and run a private GGUF model",
+    },
+  ],
   recommendedInstalls: [
     {
       id: "ollama",
@@ -183,6 +207,7 @@ describe("renderModelSetup", () => {
     expect(text(container)).toContain("OpenClaw could not confirm a usable login");
     expect(text(container)).toContain("Sign in with a provider");
     expect(text(container)).toContain("Run a model locally");
+    expect(text(container)).toContain("LM Studio");
     expect(text(container)).toContain("Connect with an API key or token");
     expect(
       container.querySelector('[data-manual-provider="openai"][data-selected]'),
@@ -203,6 +228,9 @@ describe("renderModelSetup", () => {
     ).not.toBeNull();
     expect(
       container.querySelector('.model-setup__manual [data-provider-icon="codex"]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[data-prepare-choice="lmstudio"] [data-provider-icon="lmstudio"]'),
     ).not.toBeNull();
     expect(
       container.querySelector('[data-auth-choice="other-device"] .provider-brand-icon--fallback')
@@ -755,9 +783,25 @@ describe("renderModelSetup", () => {
     );
     expect(text(container)).toContain("Connection verified");
     expect(text(container)).toContain("Verified in 91 ms");
+    expect(
+      container.querySelector('.model-setup-success [data-provider-icon="codex"]'),
+    ).not.toBeNull();
+    expect(container.querySelector(".model-setup-success__status-badge")).not.toBeNull();
     container.querySelector<HTMLButtonElement>(".model-setup-success .primary")?.click();
     expect(onOpenChat).toHaveBeenCalledOnce();
     expect(container.querySelector(".settings-section")).not.toBeNull();
+  });
+
+  it("keeps the success shield for providers without a bundled mark", () => {
+    const container = mount(
+      props({
+        activation: { phase: "success", modelRef: "custom-provider/model" },
+      }),
+    );
+    const successIcon = container.querySelector(".model-setup-success__icon");
+    expect(successIcon?.classList.contains("model-setup-success__icon--provider")).toBe(false);
+    expect(successIcon?.querySelector(":scope > svg")).not.toBeNull();
+    expect(successIcon?.querySelector(".model-setup-success__status-badge")).toBeNull();
   });
 
   it("continues first-run setup after the model is ready", () => {
@@ -782,6 +826,7 @@ describe("renderModelSetup", () => {
     const current = container.querySelector(".model-setup__current");
     expect(container.querySelector(".settings-section")).toBe(current);
     expect(text(current!)).toContain("Current connection openai/gpt-5 Verify connection");
+    expect(current?.querySelector('[data-provider-icon="codex"]')).not.toBeNull();
     current?.querySelector<HTMLButtonElement>("button")?.click();
     expect(onVerify).toHaveBeenCalledOnce();
   });
@@ -850,6 +895,7 @@ describe("renderModelSetup", () => {
     const current = container.querySelector(".model-setup__current");
     expect(current?.textContent).toContain("anthropic/claude-opus-4-8");
     expect(current?.querySelector("strong")?.textContent).not.toContain("openai/gpt-5");
+    expect(current?.querySelector('[data-provider-icon="claude"]')).not.toBeNull();
   });
 
   it("renders failed connection verification", () => {

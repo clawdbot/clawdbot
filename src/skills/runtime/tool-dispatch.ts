@@ -16,6 +16,7 @@ import {
   mergeAlsoAllowPolicy,
   replaceWithEffectiveToolAllowlist,
   resolveToolProfilePolicy,
+  type ToolPolicyLike,
 } from "../../agents/tool-policy.js";
 import {
   replaceWithEffectiveCronCreatorToolAllowlist,
@@ -25,6 +26,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { getPluginToolMeta } from "../../plugins/tools.js";
+import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import type { SkillCommandSpec } from "../types.js";
 
@@ -45,8 +47,8 @@ type SkillDispatchMessageContext = {
 
 /**
  * Policy-enforcement seam for skill `command-dispatch: tool` invocations.
- * Keep this aligned with the normal tool surfaces so GHSA-mhm4-93fw-4qr2
- * stays closed across allow/deny, group, sandbox, and subagent policy layers.
+ * Keep this aligned with normal tool surfaces across sender, group, sandbox,
+ * and subagent policy layers.
  */
 export function resolveSkillDispatchTools(params: {
   message: SkillDispatchMessageContext;
@@ -58,6 +60,7 @@ export function resolveSkillDispatchTools(params: {
   workspaceDir: string;
   provider: string;
   model: string;
+  senderIsOwner: boolean;
   senderId?: string;
   currentChannelId?: string;
   skillCommand?: Pick<SkillCommandSpec, "name" | "skillFile" | "skillName" | "skillSource"> & {
@@ -116,7 +119,10 @@ export function resolveSkillDispatchTools(params: {
     sessionKey: params.sessionKey,
   });
   const sandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
-  const explicitPolicyList = [
+  const ownerOnlyCoreToolPolicy = !params.senderIsOwner
+    ? { deny: [...GATEWAY_OWNER_ONLY_CORE_TOOLS] }
+    : undefined;
+  const explicitPolicyList: Array<ToolPolicyLike | undefined> = [
     profilePolicy,
     providerProfilePolicy,
     globalPolicy,
@@ -128,6 +134,7 @@ export function resolveSkillDispatchTools(params: {
     sandboxPolicy,
     subagentPolicy,
     inheritedToolPolicy,
+    ownerOnlyCoreToolPolicy,
   ];
   const explicitDenylist = collectExplicitDenylist(explicitPolicyList);
   const inheritedToolAllowlist: string[] = [];
@@ -166,6 +173,7 @@ export function resolveSkillDispatchTools(params: {
     sandboxed: sandboxRuntime.sandboxed,
     requesterAgentIdOverride: params.agentId,
     requesterSenderId: params.senderId,
+    senderIsOwner: params.senderIsOwner,
     sessionId: params.sessionEntry?.sessionId,
     currentChannelId: params.currentChannelId,
     ...(beforeToolCallHookContext ? { beforeToolCallHookContext } : {}),
@@ -200,6 +208,7 @@ export function resolveSkillDispatchTools(params: {
       { policy: sandboxPolicy, label: "sandbox tools.allow" },
       { policy: subagentPolicy, label: "subagent tools.allow" },
       { policy: inheritedToolPolicy, label: "inherited tools" },
+      { policy: ownerOnlyCoreToolPolicy, label: "gateway sender owner-only tools" },
     ],
     declaredToolAllowlist: buildDeclaredToolAllowlistContext({
       config: params.cfg,

@@ -1025,6 +1025,24 @@ function deleteOwnedWebSocketSession(sessionId: string, entry: CachedWebSocketCo
   }
 }
 
+// An acquire that awaited connectWebSocket() must not clobber a newer lease a
+// concurrent request installed during the await. Install the fresh entry only
+// when the cache still matches what this acquire left behind before the await:
+// the stale entry it observed (and did not remove), or undefined once it removed
+// its own stale entry (or for a first connect with no prior entry). A different
+// cached entry means a concurrent request already won this session.
+function setOwnedWebSocketSession(
+  sessionId: string,
+  entry: CachedWebSocketConnection,
+  expected: CachedWebSocketConnection | undefined,
+): boolean {
+  if (websocketSessionCache.get(sessionId) === expected) {
+    websocketSessionCache.set(sessionId, entry);
+    return true;
+  }
+  return false;
+}
+
 function scheduleSessionWebSocketExpiry(sessionId: string, entry: CachedWebSocketConnection): void {
   if (entry.idleTimer) {
     clearTimeout(entry.idleTimer);
@@ -1142,6 +1160,12 @@ async function acquireWebSocket(
   }
 
   const cached = websocketSessionCache.get(sessionId);
+  // Track what the cache is expected to hold after this acquire's own cleanup,
+  // so the post-await install only proceeds when no concurrent request installed
+  // a newer entry. Starts as the observed entry; reset to undefined once this
+  // acquire removes its own stale entry, since owner-checked delete leaves the
+  // cache empty (and a concurrent winner would fill it with a different entry).
+  let expectedCacheValue: CachedWebSocketConnection | undefined = cached;
   if (cached) {
     if (cached.idleTimer) {
       clearTimeout(cached.idleTimer);
@@ -1149,7 +1173,8 @@ async function acquireWebSocket(
     }
     if (!cached.busy && isWebSocketSessionExpired(cached)) {
       closeWebSocketSilently(cached.socket, 1000, "connection_age_limit");
-      websocketSessionCache.delete(sessionId);
+      deleteOwnedWebSocketSession(sessionId, cached);
+      expectedCacheValue = undefined;
     } else if (!cached.busy && isWebSocketReusable(cached.socket)) {
       cached.busy = true;
       return {
@@ -1177,18 +1202,23 @@ async function acquireWebSocket(
     }
     if (!isWebSocketReusable(cached.socket)) {
       closeWebSocketSilently(cached.socket);
-      websocketSessionCache.delete(sessionId);
+      deleteOwnedWebSocketSession(sessionId, cached);
+      expectedCacheValue = undefined;
     }
   }
 
   const socket = await connectWebSocket(url, headers, signal);
   const entry: CachedWebSocketConnection = { socket, busy: true, createdAt: Date.now() };
-  websocketSessionCache.set(sessionId, entry);
+  // Install only if the cache still matches what this acquire left behind (the
+  // stale entry it removed, or empty for a first connect). A different cached
+  // entry means a concurrent request already won this session during the await;
+  // let it keep the lease and leave this socket transient.
+  const ownsCache = setOwnedWebSocketSession(sessionId, entry, expectedCacheValue);
   return {
     socket,
-    entry,
+    entry: ownsCache ? entry : undefined,
     release: ({ keep } = {}) => {
-      if (!keep || !isWebSocketReusable(entry.socket)) {
+      if (!ownsCache || !keep || !isWebSocketReusable(entry.socket)) {
         closeWebSocketSilently(entry.socket);
         if (entry.idleTimer) {
           clearTimeout(entry.idleTimer);

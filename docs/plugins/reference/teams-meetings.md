@@ -12,7 +12,7 @@ Join Microsoft Teams meetings as a Chrome browser guest.
 ## Distribution
 
 - Package: `@openclaw/teams-meetings`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/teams-meetings`
 
 ## Surface
 

@@ -23,7 +23,10 @@ struct AppStateVoiceEarsTests {
 
         #expect(state.earBoostActive)
 
-        try await Task.sleep(for: .milliseconds(60))
+        let deadline = ContinuousClock.now + .seconds(1)
+        while state.earBoostActive, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
         #expect(!state.earBoostActive)
     }
 }

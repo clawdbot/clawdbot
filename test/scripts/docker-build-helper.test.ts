@@ -2969,6 +2969,12 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
 
     expectTextToIncludeAll(runner, [
       "docker_e2e_print_log /tmp/openclaw-codex-plugin-pack.log",
+      "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+      'CODEX_PLUGIN_SPEC="npm:${CODEX_PLUGIN_REGISTRY_PACKAGE}@${CODEX_PLUGIN_REGISTRY_VERSION}"',
+      'export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$registry_port_file")"',
+      "trap cleanup_scenario EXIT",
+      'openclaw_e2e_stop_process "${registry_pid:-}"',
+      'if [ "$status" -ne 0 ] && [ "$debug_logs_dumped" -eq 0 ]; then',
       "assert-agent-error",
       "assert-followthrough",
       "followthrough-turn.mjs",
@@ -2979,8 +2985,20 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
       '--timeout "$AGENT_TURN_TIMEOUT_SECONDS"',
     ]);
     expect(runner).not.toContain("cat /tmp/openclaw-codex-plugin-pack.log");
+    expect(runner).not.toContain('CODEX_PLUGIN_SPEC="npm-pack:$container_path"');
+    expect(runner).not.toContain("trap 'openclaw_e2e_stop_process \"${registry_pid:-}\"' EXIT");
     expect(runner).not.toContain("final=false");
     expect(runner).not.toContain("--timeout 420");
+  });
+
+  it("prints the OpenAI chat-tools gateway log when startup exits early", () => {
+    const scenario = readFileSync(OPENAI_CHAT_TOOLS_SCENARIO_PATH, "utf8");
+
+    expectTextToIncludeAll(scenario, [
+      'if ! kill -0 "$gateway_pid" 2>/dev/null',
+      'echo "gateway exited before listening" >&2',
+      'openclaw_e2e_print_log "$GATEWAY_LOG" >&2',
+    ]);
   });
 
   it("writes the packaged Codex follow-through result independently of stdout logs", () => {
@@ -4413,7 +4431,7 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
       scenario.match(/unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH/gu),
     ).toHaveLength(1);
     expect(scenario.match(/export USERPROFILE="\$account_home"/gu)).toHaveLength(1);
-    expect(scenario.match(/^  use_default_service_identity$/gmu)).toHaveLength(3);
+    expect(scenario.match(/^ {2}use_default_service_identity$/gmu)).toHaveLength(3);
     expect(scenario).not.toMatch(/^\s*if ! timeout "\$command_timeout"/mu);
   });
 
