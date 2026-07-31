@@ -49,8 +49,11 @@ describe("createAgentCommandLifecycle", () => {
         lifecycle.emitResultError(
           {
             payloads: [],
-            meta: { error: { message: "internal provider diagnostic" } },
-          } as Parameters<typeof lifecycle.emitResultError>[0],
+            meta: {
+              durationMs: 0,
+              error: { kind: "retry_limit", message: "internal provider diagnostic" },
+            },
+          },
           true,
           terminal,
         );
@@ -107,8 +110,8 @@ describe("createAgentCommandLifecycle", () => {
         lifecycle.emitResultError(
           {
             payloads: source === "fallback payload" ? [{ isError: true, text: error }] : [],
-            meta: {},
-          } as Parameters<typeof lifecycle.emitResultError>[0],
+            meta: { durationMs: 0 },
+          },
           source === "fallback payload",
           terminal,
         );
@@ -157,11 +160,7 @@ describe("createAgentCommandLifecycle", () => {
       } else if (phase === "end") {
         lifecycle.emitEnd(terminal);
       } else {
-        lifecycle.emitResultError(
-          { payloads: [], meta: {} } as Parameters<typeof lifecycle.emitResultError>[0],
-          false,
-          terminal,
-        );
+        lifecycle.emitResultError({ payloads: [], meta: { durationMs: 0 } }, false, terminal);
       }
 
       const event = emitAgentEvent.mock.calls[0]?.[0];
