@@ -191,6 +191,63 @@
       }
     },
     {
+      "name": "@openclaw/byteplus-provider",
+      "description": "OpenClaw BytePlus provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "byteplus",
+          "label": "BytePlus"
+        },
+        "providers": [
+          {
+            "id": "byteplus",
+            "aliases": [
+              "byteplus-plan"
+            ],
+            "name": "BytePlus",
+            "docs": "/concepts/model-providers#byteplus-international",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "BYTEPLUS_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "byteplus-api-key",
+                "choiceLabel": "BytePlus API key",
+                "groupId": "byteplus",
+                "groupLabel": "BytePlus",
+                "groupHint": "API key",
+                "optionKey": "byteplusApiKey",
+                "cliFlag": "--byteplus-api-key",
+                "cliOption": "--byteplus-api-key <key>",
+                "cliDescription": "BytePlus API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "videoGenerationProviders": [
+            "byteplus"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/byteplus-provider",
+          "npmSpec": "@openclaw/byteplus-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/cerebras-provider",
       "description": "OpenClaw Cerebras provider plugin.",
       "source": "official",

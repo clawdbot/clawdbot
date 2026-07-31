@@ -2106,6 +2106,29 @@ describe("official external plugin catalog", () => {
     ]);
   });
 
+  it("lists BytePlus and its paired plan route as an official external provider", () => {
+    const byteplus = expectCatalogEntry("byteplus");
+    const manifest = getOfficialExternalPluginCatalogManifest(byteplus);
+
+    expect(getOfficialExternalPluginCatalogEntry("byteplus-plan")).toBe(byteplus);
+    expect(resolveOfficialExternalPluginInstall(byteplus)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/byteplus-provider",
+      npmSpec: "@openclaw/byteplus-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(manifest?.contracts?.videoGenerationProviders).toEqual(["byteplus"]);
+    expect(manifest?.providers?.[0]?.aliases).toEqual(["byteplus-plan"]);
+    expect(
+      resolveOfficialExternalProviderPluginIds({
+        providerIds: new Set(["byteplus-plan"]),
+      }),
+    ).toEqual(["byteplus"]);
+    expect(resolveOfficialExternalProviderPluginIdsForEnv({ BYTEPLUS_API_KEY: "key" })).toEqual([
+      "byteplus",
+    ]);
+  });
+
   it.each([
     ["teams-meetings", "@openclaw/teams-meetings", "teams_meetings", "teams"],
     ["zoom-meetings", "@openclaw/zoom-meetings", "zoom_meetings", "zoom"],
