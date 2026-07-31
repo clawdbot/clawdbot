@@ -247,12 +247,12 @@ describe("scripts/lib/docker-e2e-plan", () => {
       liveImage: true,
       package: true,
     });
-    expect(plan.credentials).toEqual(["anthropic", "openai"]);
-    expect(plan.lanes.map((lane) => lane.name)).toContain("install-e2e-openai");
+    expect(plan.credentials).toEqual(["openai"]);
+    expect(plan.lanes.map((lane) => lane.name)).not.toContain("install-e2e-openai");
     expect(plan.lanes.map((lane) => lane.name)).toContain("openai-chat-tools");
     expect(plan.lanes.map((lane) => lane.name)).toContain("live-codex-npm-plugin");
     expect(plan.lanes.map((lane) => lane.name)).toContain("codex-on-demand");
-    expect(plan.lanes.map((lane) => lane.name)).toContain("install-e2e-anthropic");
+    expect(plan.lanes.map((lane) => lane.name)).not.toContain("install-e2e-anthropic");
     expect(plan.lanes.map((lane) => lane.name)).toContain("mcp-channels");
     expect(plan.lanes.map((lane) => lane.name)).toContain("plugin-binding-command-escape");
     expect(plan.lanes.map((lane) => lane.name)).toContain("live-plugin-tool");
@@ -261,7 +261,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-23");
     const countLane = (name: string) =>
       plan.lanes.reduce((count, lane) => count + (lane.name === name ? 1 : 0), 0);
-    expect(countLane("install-e2e-openai")).toBe(1);
+    expect(countLane("install-e2e-openai")).toBe(0);
     expect(countLane("bundled-plugin-install-uninstall-0")).toBe(1);
     expect(plan.lanes.map((lane) => lane.name)).not.toContain("bundled-plugin-install-uninstall");
     expect(plan.lanes.map((lane) => lane.name)).not.toContain("bundled-channel-deps");
@@ -316,11 +316,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
 
     const laneNames = plan.lanes.map((lane) => lane.name);
     expect(plan.releaseProfile).toBe("beta");
-    expect(laneNames).toContain("install-e2e-openai");
+    expect(laneNames).not.toContain("install-e2e-openai");
     expect(laneNames).toContain("openai-chat-tools");
     expect(laneNames).toContain("live-codex-npm-plugin");
     expect(laneNames).toContain("release-typed-onboarding");
-    expect(laneNames).toContain("install-e2e-anthropic");
+    expect(laneNames).not.toContain("install-e2e-anthropic");
     expect(laneNames).toContain("update-channel-switch");
     expect(laneNames).not.toContain("plugins");
     expect(laneNames).not.toContain("live-plugin-tool");
@@ -367,11 +367,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
       includeOpenWebUI: true,
       profile: RELEASE_PATH_PROFILE,
       releaseChunk: "package-update-openai",
-    });
-    const packageInstallAnthropic = planFor({
-      includeOpenWebUI: true,
-      profile: RELEASE_PATH_PROFILE,
-      releaseChunk: "package-update-anthropic",
     });
     const packageUpdateCore = planFor({
       includeOpenWebUI: true,
@@ -436,7 +431,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
 
     expect(core.lanes.map((lane) => lane.name)).toContain("plugin-binding-command-escape");
     expect(packageInstallOpenAi.lanes.map((lane) => lane.name)).toEqual([
-      "install-e2e-openai",
       "openai-chat-tools",
       "live-codex-npm-plugin",
       "codex-on-demand",
@@ -457,9 +451,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
         timeoutMs: 1_200_000,
         weight: 3,
       },
-    ]);
-    expect(packageInstallAnthropic.lanes.map((lane) => lane.name)).toEqual([
-      "install-e2e-anthropic",
     ]);
     expect(packageUpdateCore.lanes.map(summarizeLane)).toEqual([
       {
@@ -551,7 +542,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 3,
       },
       {
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-restart-auth",
+        command:
+          'OPENCLAW_DOCKER_E2E_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} OPENCLAW_SKIP_DOCKER_BUILD=1 bash .release-harness/scripts/e2e/upgrade-survivor-docker.sh',
         imageKind: "bare",
         live: false,
         name: "update-restart-auth",
@@ -713,12 +705,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
     );
 
     expect(packageUpdate.lanes.map((lane) => lane.name)).toEqual([
-      "install-e2e-openai",
       "openai-chat-tools",
       "live-codex-npm-plugin",
       "codex-on-demand",
       "release-typed-onboarding",
-      "install-e2e-anthropic",
       "npm-onboard-channel-agent",
       "npm-onboard-discord-channel-agent",
       "npm-onboard-slack-channel-agent",
@@ -1497,10 +1487,17 @@ describe("scripts/lib/docker-e2e-plan", () => {
     const plan = planFor({ selectedLaneNames });
 
     expect(selectedLaneNames).toEqual(["install-e2e-openai", "install-e2e-anthropic"]);
-    expect(plan.lanes.map(summarizeLane)).toEqual([
+    expect(
+      plan.lanes.map((lane) => ({
+        imageKind: lane.imageKind,
+        live: lane.live,
+        name: lane.name,
+        resources: lane.resources,
+        timeoutMs: lane.timeoutMs,
+        weight: lane.weight,
+      })),
+    ).toEqual([
       {
-        command:
-          'OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=120 OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=120 bash -c \'harness="${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-.}"; OPENCLAW_LIVE_DOCKER_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/test-install-sh-e2e-docker.sh"\'',
         imageKind: "bare",
         live: true,
         name: "install-e2e-openai",
@@ -1509,8 +1506,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 3,
       },
       {
-        command:
-          'OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local bash -c \'harness="${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-.}"; OPENCLAW_LIVE_DOCKER_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/test-install-sh-e2e-docker.sh"\'',
         imageKind: "bare",
         live: true,
         name: "install-e2e-anthropic",

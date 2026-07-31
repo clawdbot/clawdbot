@@ -2813,7 +2813,7 @@ describe("launchd install", () => {
     expect(launchctlCommandNames()).not.toContain("bootout");
   });
 
-  it("surfaces the original kickstart failure when the service is still loaded", async () => {
+  it("surfaces kickstart failure without re-bootstrap when the service stays loaded (#52208)", async () => {
     const env = createDefaultLaunchdEnv();
     state.kickstartError = "Input/output error";
     state.kickstartFailuresRemaining = 1;
@@ -2834,17 +2834,6 @@ describe("launchd install", () => {
 
     expect(launchctlCommandNames()).toContain("enable");
     expect(launchctlCommandNames()).toContain("bootstrap");
-  });
-
-  it("skips re-bootstrap when kickstart fails but service is still loaded (#52208)", async () => {
-    const env = createDefaultLaunchdEnv();
-    state.kickstartError = "Input/output error";
-    state.kickstartFailuresRemaining = 1;
-
-    await expectRestartLaunchAgentKickstartFailure(env);
-
-    expect(launchctlCommandNames()).toContain("enable");
-    expect(launchctlCommandNames()).not.toContain("bootstrap");
   });
 
   it("hands restart off to a detached helper when invoked from the current LaunchAgent", async () => {

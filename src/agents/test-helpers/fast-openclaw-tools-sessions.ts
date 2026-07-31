@@ -16,7 +16,7 @@ vi.mock("../tools/computer-tool.js", () => ({
 }));
 
 vi.mock("../tools/cron-tool.js", () => ({
-  createCronTool: () => stubTool("cron"),
+  createCronTool: () => stubTool("automations"),
 }));
 
 vi.mock("../tools/gateway-tool.js", () => ({

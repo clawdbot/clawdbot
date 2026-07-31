@@ -1,7 +1,7 @@
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import { emitDiagnosticEventWithTrustedTraceContext } from "../infra/diagnostic-events.js";
 import {
   type EventSessionRoutingPolicy,
   resolveEventSessionKeyForPolicy,
@@ -174,7 +174,9 @@ function emitExecProcessCompleted(params: {
   target: "host" | "sandbox";
 }): void {
   const exitSignal = normalizeExecExitSignal(params.outcome.exitSignal);
-  emitDiagnosticEvent({
+  // Payload stays untrusted, but the ambient trace context is the OpenClaw run
+  // scope, so exporters may use it to nest the exec span under its run.
+  emitDiagnosticEventWithTrustedTraceContext({
     type: "exec.process.completed",
     target: params.target,
     mode: params.mode,

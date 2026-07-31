@@ -244,8 +244,8 @@ describe("security audit trust model findings", () => {
           );
           expect(finding?.severity).toBe("critical");
           expect(finding?.detail).toContain("channels.whatsapp.groupPolicy");
-          expect(finding?.detail).toContain("controlPlane=[cron]");
-          expect(finding?.detail).not.toContain("controlPlane=[gateway, cron]");
+          expect(finding?.detail).toContain("controlPlane=[automations]");
+          expect(finding?.detail).not.toContain("controlPlane=[automations, gateway]");
         },
       },
       {
@@ -278,7 +278,7 @@ describe("security audit trust model findings", () => {
             (entry) => entry.checkId === "security.exposure.open_groups_with_control_plane_tools",
           );
           expect(finding?.detail).toContain(
-            "agents.defaults (profile=messaging; controlPlane=[cron])",
+            "agents.defaults (profile=messaging; controlPlane=[automations])",
           );
         },
       },

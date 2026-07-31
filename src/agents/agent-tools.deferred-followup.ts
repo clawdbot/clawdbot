@@ -9,6 +9,7 @@ import { describeExecTool, describeProcessTool } from "./bash-tools.descriptions
 import { copyBeforeToolCallHookMarker } from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
+import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
 function replaceDescription(tool: AnyAgentTool, description: string): AnyAgentTool {
   const updated = { ...tool, description };
@@ -24,7 +25,7 @@ export function applyDeferredFollowupToolDescriptions(
   tools: AnyAgentTool[],
   params?: { agentId?: string },
 ): AnyAgentTool[] {
-  const hasCronTool = tools.some((tool) => tool.name === "cron");
+  const hasCronTool = tools.some((tool) => isAutomationsToolName(tool.name));
   return tools.map((tool) => {
     if (tool.name === "exec") {
       return replaceDescription(tool, describeExecTool({ agentId: params?.agentId, hasCronTool }));

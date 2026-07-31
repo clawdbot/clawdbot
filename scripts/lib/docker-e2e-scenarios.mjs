@@ -20,7 +20,7 @@ const upgradeSurvivorCommand = "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:up
 const rootManagedVpsUpgradeCommand =
   "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:root-managed-vps-upgrade";
 const updateRestartAuthCommand =
-  "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-restart-auth";
+  'OPENCLAW_DOCKER_E2E_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} OPENCLAW_SKIP_DOCKER_BUILD=1 bash .release-harness/scripts/e2e/upgrade-survivor-docker.sh';
 const updateRunPackageSelfUpgradeCommand =
   "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-self-upgrade";
 const CODEX_HARNESS_API_KEY_ENV = "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key";
@@ -781,7 +781,9 @@ const releasePathBundledChannelLanes = [
   }),
 ];
 
-const releasePathPackageInstallOpenAiLanes = [
+// Public installer smoke needs a published, immutable package version. Keep it
+// selectable for post-publish verification, but out of frozen-candidate CI.
+export const publicInstallerLanes = [
   liveLane(
     "install-e2e-openai",
     liveDockerScriptCommand(
@@ -798,18 +800,6 @@ const releasePathPackageInstallOpenAiLanes = [
       weight: 3,
     },
   ),
-  liveOpenAiChatToolsLane(),
-  liveCodexNpmPluginLane(),
-  npmLane("codex-on-demand", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:codex-on-demand", {
-    resources: ["service"],
-    stateScenario: "empty",
-    timeoutMs: 30 * 60 * 1000,
-    weight: 3,
-  }),
-  releaseTypedOnboardingLane(),
-];
-
-const releasePathPackageInstallAnthropicLanes = [
   liveLane(
     "install-e2e-anthropic",
     liveDockerScriptCommand(
@@ -825,6 +815,18 @@ const releasePathPackageInstallAnthropicLanes = [
       weight: 3,
     },
   ),
+];
+
+const releasePathPackageUpdateOpenAiLanes = [
+  liveOpenAiChatToolsLane(),
+  liveCodexNpmPluginLane(),
+  npmLane("codex-on-demand", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:codex-on-demand", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 30 * 60 * 1000,
+    weight: 3,
+  }),
+  releaseTypedOnboardingLane(),
 ];
 
 const releasePathPackageUpdateCoreLanes = [
@@ -885,8 +887,7 @@ const primaryReleasePathChunks = {
     }),
     mcpCodeModeGatewayLane(),
   ],
-  "package-update-openai": releasePathPackageInstallOpenAiLanes,
-  "package-update-anthropic": releasePathPackageInstallAnthropicLanes,
+  "package-update-openai": releasePathPackageUpdateOpenAiLanes,
   "package-update-core": releasePathPackageUpdateCoreLanes,
   "plugins-runtime-plugins": releasePathPluginRuntimePluginLanes,
   "plugins-runtime-services": releasePathPluginRuntimeServiceLanes,
@@ -904,7 +905,6 @@ const primaryReleasePathChunks = {
 const primaryReleasePathChunkProfiles = {
   core: ["stable", "full"],
   "package-update-openai": ["beta", "stable", "full"],
-  "package-update-anthropic": ["beta", "stable", "full"],
   "package-update-core": ["beta", "stable", "full"],
   "plugins-runtime-plugins": ["stable", "full"],
   "plugins-runtime-services": ["stable", "full"],
@@ -920,11 +920,7 @@ const primaryReleasePathChunkProfiles = {
 };
 
 const legacyReleasePathChunks = {
-  "package-update": [
-    ...releasePathPackageInstallOpenAiLanes,
-    ...releasePathPackageInstallAnthropicLanes,
-    ...releasePathPackageUpdateCoreLanes,
-  ],
+  "package-update": [...releasePathPackageUpdateOpenAiLanes, ...releasePathPackageUpdateCoreLanes],
   "plugins-runtime-core": releasePathPluginRuntimeCoreLanes,
   "plugins-runtime": releasePathPluginRuntimeLanes,
   "plugins-integrations": [...releasePathPluginRuntimeLanes, ...releasePathBundledChannelLanes],

@@ -12,6 +12,7 @@ import { normalizePluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { discoverConfiguredPluginLoadPaths, type PluginDiscoveryResult } from "./discovery.js";
+import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import { fileSignatureMatches, hashJson } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
@@ -135,6 +136,7 @@ function resolvePluginRegistrySnapshotMemoKey(
     config: params.config ?? null,
     cwd: process.cwd(),
     env: pickRegistrySnapshotMemoEnv(env),
+    installRoots: resolveActivePluginInstallRoots(env),
     hostContractVersion: resolveCompatibilityHostVersion(env),
     preferPersisted: params.preferPersisted ?? null,
     // Install, reload, and persisted-index writes clear this memo explicitly.

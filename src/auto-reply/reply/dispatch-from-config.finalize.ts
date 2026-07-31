@@ -44,6 +44,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     ctx,
     deliveryChannel,
     deliverySuppressionReason,
+    deliberateSilentTerminalReply,
     dispatcher,
     emptyFinalAllowedAsSilent,
     explicitCommandTurnCtx,
@@ -388,6 +389,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !sendPolicyDenied &&
     sourceReplyDeliveryMode !== "message_tool_only" &&
     !emptyFinalAllowedAsSilent &&
+    !deliberateSilentTerminalReply &&
     !getObservedReplyDelivery() &&
     !replyAcceptedByActiveRun &&
     operationalPolicyPendingFinalCount === 0 &&
@@ -405,8 +407,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   }
   let counts = dispatcher.getQueuedCounts();
   let noVisibleReplyFallbackDelivered = false;
-  // Visible agent turns must never end silently: empty model completions get a
-  // core fallback final. emptyFinalAllowedAsSilent is the only sanctioned silence.
+  // The agent-result classifier owns terminal silence; carry that fact here
+  // because reply payloads are filtered projections and cannot safely rederive it.
   // An aborted or timed-out settle leaves delivery state unknown; admission
   // then keeps its legacy trust and the turn ends without a fallback.
   if (queuedSettleResult === "settled" && noVisibleReplyFallbackAllowed()) {
@@ -491,7 +493,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       !replyAcceptedByActiveRun &&
       !emptyFinalAllowedAsSilent &&
       operationalPolicyPendingFinalCount === 0 &&
-      !allFinalsSuppressedByOperationalPolicy
+      !allFinalsSuppressedByOperationalPolicy &&
+      !deliberateSilentTerminalReply
         ? { noVisibleReplyFallbackEligible: true }
         : {}),
       ...(noVisibleReplyFallbackDelivered ? { noVisibleReplyFallbackDelivered: true } : {}),

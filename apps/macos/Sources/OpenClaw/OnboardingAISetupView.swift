@@ -510,7 +510,7 @@ struct OnboardingAISetupView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Set up a local model")
                     .font(.headline)
-                Text("Download or prepare a local model on this Gateway.")
+                Text("Connect a local model service, or prepare a model on this Gateway.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 ForEach(self.model.prepareOptions) { option in
@@ -534,7 +534,7 @@ struct OnboardingAISetupView: View {
                                 }
                             }
                             Spacer(minLength: 0)
-                            Text("Set up / Download model")
+                            Text("Connect / Set up")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(Color.accentColor)
                         }
@@ -660,7 +660,7 @@ struct OnboardingAISetupView: View {
                     Text(self.model.activeAuthOption?.label ?? "Provider setup")
                         .font(.title3.weight(.semibold))
                     Text(self.model.isPreparingModel
-                        ? "The model is downloaded and prepared on this Gateway."
+                        ? "OpenClaw will detect and verify the prepared model before using it."
                         : "Credentials stay on this Gateway and are saved only after the live test succeeds.")
                         .font(.caption)
                         .foregroundStyle(.secondary)

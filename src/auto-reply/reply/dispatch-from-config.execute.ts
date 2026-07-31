@@ -120,6 +120,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     waitForPendingDirectBlockReplyDelivery,
     wrapProgressCallback,
   } = state;
+  let deliberateSilentTerminalReply = false;
   const replyResult = await runWithDispatchLifecycleAdmission(
     async () =>
       await runWithDispatchAbortSignal(
@@ -133,8 +134,13 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 [REPLY_OPERATION_RUN_STATE]: replyOperationRunState,
                 sourceReplyDeliveryMode,
                 sessionPromptSourceReplyDeliveryMode: sessionStableSourceReplyDeliveryMode,
-                onSessionMetadataChanges: notifySessionMetadataChanges,
-                onSessionPrepared: notePreparedSession,
+                ...({
+                  onDeliberateSilentTerminalReply: () => {
+                    deliberateSilentTerminalReply = true;
+                  },
+                  onSessionMetadataChanges: notifySessionMetadataChanges,
+                  onSessionPrepared: notePreparedSession,
+                } satisfies InternalReplyResolverOptions),
                 onObservedReplyDelivery: markObservedReplyDelivery,
                 suppressToolErrorWarnings,
                 shouldSuppressToolErrorWarnings,
@@ -719,6 +725,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
       }
     }
   }
-  const nextState = extendPreparedDispatchState(state, { replyResult }, {});
+  const nextState = extendPreparedDispatchState(
+    state,
+    { deliberateSilentTerminalReply, replyResult },
+    {},
+  );
   return { status: "ready" as const, state: nextState };
 }

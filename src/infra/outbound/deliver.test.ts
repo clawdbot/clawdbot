@@ -4359,7 +4359,7 @@ describe("deliverOutboundPayloads", () => {
         [{ config?: unknown; idempotencyKey?: unknown; text?: unknown }]
       >
     )[0]?.[0];
-    expect(appendOptions?.text).toBe("report.pdf");
+    expect(appendOptions?.text).toBe("caption\nreport.pdf");
     expect(appendOptions?.idempotencyKey).toBe("idem-deliver-1");
     expect(appendOptions?.config).toBe(cfg);
   });

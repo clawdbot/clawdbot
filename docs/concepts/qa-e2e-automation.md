@@ -47,6 +47,7 @@ script aliases; both forms work.
 | `qa aimock`                                         | Start only the AIMock provider server.                                                                                                                                                                                                                              |
 | `qa mock-openai`                                    | Start only the scenario-aware `mock-openai` provider server.                                                                                                                                                                                                        |
 | `qa credentials doctor` / `add` / `list` / `remove` | Manage the shared Convex credential pool.                                                                                                                                                                                                                           |
+| `qa buzz`                                           | Live transport lane against a real Buzz relay room with dedicated driver and SUT identities.                                                                                                                                                                        |
 | `qa discord`                                        | Live transport lane against a real private Discord guild channel.                                                                                                                                                                                                   |
 | `qa matrix`                                         | QA Lab Matrix catalog scenarios against a disposable Tuwunel homeserver. See [Matrix live lane](#matrix-live-lane).                                                                                                                                                 |
 | `qa slack`                                          | Live transport lane against a real private Slack channel.                                                                                                                                                                                                           |
@@ -213,12 +214,19 @@ explicit subset, including portable scenarios with no channel restriction.
 Matrix live implementations live under
 `extensions/qa-lab/src/live-transports/matrix/scenarios/`.
 
-The adapter provisions a disposable Tuwunel homeserver in Docker (default
-image `ghcr.io/matrix-construct/tuwunel:v1.5.1`, server name `matrix-qa.test`,
-port `28008`), registers temporary driver, SUT, and observer users, seeds the
-required rooms, and records the redacted request/response boundary. It then
-runs the real Matrix plugin inside a child QA gateway scoped to that transport
-(no `qa-channel`) and tears the environment down.
+The adapter provisions a disposable Tuwunel homeserver in Docker (default image
+`ghcr.io/matrix-construct/tuwunel:v1.8.2`, pinned to its multi-architecture OCI
+index digest; server name `matrix-qa.test`, port `28008`), registers temporary
+driver, SUT, and observer users, seeds the required rooms, and records the
+redacted request/response boundary. It then runs the real Matrix plugin inside
+a child QA gateway scoped to that transport (no `qa-channel`) and tears the
+environment down.
+
+The v1.8.2 GHCR index resolves to
+`sha256:6f950bb139411a7964781e986321e395e045e4a6a52240a4dda9d23d04075f78`.
+`docker buildx imagetools inspect ghcr.io/matrix-construct/tuwunel:v1.8.2`
+reports manifests for `linux/arm64`, `linux/amd64`, `linux/amd64/v2`, and
+`linux/amd64/v3`.
 
 Common options:
 
@@ -284,6 +292,7 @@ decision still comes from the Discord REST oracle.
 For the other transport-real smoke lanes:
 
 ```bash
+pnpm openclaw qa buzz
 pnpm openclaw qa discord
 pnpm openclaw qa slack
 pnpm openclaw qa telegram
@@ -292,8 +301,8 @@ pnpm openclaw qa whatsapp
 
 They target a pre-existing real channel with two bots or accounts (driver +
 SUT). Required env vars, scenario lists, output artifacts, and the Convex
-credential pool for those four transports are documented in
-[Discord, Slack, Telegram, and WhatsApp QA reference](#discord-slack-telegram-and-whatsapp-qa-reference)
+credential pool for those five transports are documented in
+[Buzz, Discord, Slack, Telegram, and WhatsApp QA reference](#buzz-discord-slack-telegram-and-whatsapp-qa-reference)
 below.
 
 ### Mantis Slack desktop and visual-task runners
@@ -446,16 +455,16 @@ guest: env-based provider keys, the QA live provider config path, and
 `CODEX_HOME` when present. Keep `--output-dir` under the repo root so the
 guest can write back through the mounted workspace.
 
-## Discord, Slack, Telegram, and WhatsApp QA reference
+## Buzz, Discord, Slack, Telegram, and WhatsApp QA reference
 
 The Matrix adapter uses the disposable Docker-backed lane documented above.
-Discord, Slack, Telegram, and WhatsApp run against pre-existing real
+Buzz, Discord, Slack, Telegram, and WhatsApp run against pre-existing real
 transports, so their reference lives here.
 
 ### Shared CLI flags
 
-These lanes register through
-`extensions/qa-lab/src/live-transports/shared/live-transport-cli.ts` and
+These lanes register through the shared QA runner CLI contract. Transport
+plugins may own the registration while QA Lab remains the suite host. They
 accept the same flags:
 
 | Flag                                  | Default                                            | Description                                                                                                                                     |
@@ -464,17 +473,52 @@ accept the same flags:
 | `--output-dir <path>`                 | `<repo>/.artifacts/qa-e2e/<transport>-<timestamp>` | Where reports, summaries, evidence, transport-specific artifacts, and the output log are written. Relative paths resolve against `--repo-root`. |
 | `--repo-root <path>`                  | `process.cwd()`                                    | Repository root when invoking from a neutral cwd.                                                                                               |
 | `--sut-account <id>`                  | `sut`                                              | Temporary account id inside the QA gateway config.                                                                                              |
-| `--provider-mode <mode>`              | `live-frontier`                                    | `mock-openai`, `aimock`, or `live-frontier`.                                                                                                    |
+| `--provider-mode <mode>`              | `live-frontier` (Buzz: `mock-openai`)              | `mock-openai`, `aimock`, or `live-frontier`.                                                                                                    |
 | `--model <ref>` / `--alt-model <ref>` | provider default                                   | Primary/alternate model refs.                                                                                                                   |
 | `--fast`                              | off                                                | Provider fast mode where supported.                                                                                                             |
-| `--credential-source <env\|convex>`   | `env`                                              | See [Convex credential pool](#convex-credential-pool).                                                                                          |
+| `--credential-source <source>`        | `env` (Buzz: `file`)                               | Existing lanes use `env` or `convex`; Buzz uses `file` or `convex`. See [Convex credential pool](#convex-credential-pool).                      |
 | `--credential-role <maintainer\|ci>`  | `ci` in CI, `maintainer` otherwise                 | Role used when `--credential-source convex`.                                                                                                    |
+| `--credential-file <path>`            | -                                                  | Buzz-only JSON credential file for local runs.                                                                                                  |
 | `--allow-failures`                    | off                                                | Write artifacts without returning a failing exit code when scenarios fail.                                                                      |
 
 Each lane exits non-zero on any failed scenario. `--allow-failures` writes
 artifacts without setting a failing exit code. Telegram also accepts
 `--list-scenarios` to print available scenario ids and exit; the other lanes
 do not expose that flag.
+
+### Buzz QA
+
+```bash
+pnpm openclaw qa buzz \
+  --credential-file /secure/path/buzz-qa-credentials.json
+```
+
+Targets one real Buzz room with two dedicated Nostr identities. The driver
+publishes inbound room events; the SUT identity is configured in the child
+OpenClaw Gateway and its outbound events are observed from the relay. The
+default `mock-openai` provider proves the real Buzz transport without requiring
+a model-provider credential.
+
+Local runs use `--credential-file <path>` with a private JSON file containing
+`relayUrl`, `roomId`, `driverPrivateKey`, and `sutPrivateKey`. Closed relays may
+also need `driverAuthTag` and `sutAuthTag`. Relative paths resolve from
+`--repo-root`. Hosted relays must use `wss://`; plaintext `ws://` is accepted
+only for loopback development relays.
+
+Both identities must be members of the dedicated room, and the SUT public key
+must have the **Bot** role. A hosted closed relay may also require both public
+keys to be enrolled as relay members. Use dedicated QA identities only; never
+use a human owner or admin private key. Keep all private keys and authorization
+values out of logs, command lines, artifacts, screenshots, and source control.
+
+The default scenarios are:
+
+- `channel-canary`
+- `channel-mention-gating`
+
+Each run writes `qa-suite-report.md`, `qa-suite-summary.json`, and
+`qa-evidence.json` under the selected output directory. The report identifies
+the real Buzz relay path but omits credential values.
 
 ### Telegram QA
 
@@ -493,37 +537,17 @@ Required env when `--credential-source env`:
 - `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`
 - `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`
 
-The `release` profile selects the maintained Telegram YAML scenarios; `all`
-adds opt-in session, usage, reply-chain, and streaming stress checks. Explicit
-`--scenario` values override the profile.
+The `release` profile selects taxonomy-owned Telegram scenarios that declare
+the channel, use the flow execution kind, and match the requested provider and
+model lane. Explicit `--scenario` values narrow that same selection instead of
+bypassing its constraints. Use `pnpm openclaw qa telegram --list-scenarios
+--provider-mode mock-openai` to print the current selection with regression
+refs. Supplying `--model` applies the same model constraint to listing and
+execution.
 
-- `channel-canary`
-- `channel-mention-gating`
-- `telegram-help-command`
-- `telegram-commands-command`
-- `telegram-tools-compact-command`
-- `telegram-whoami-command`
-- `telegram-status-command`
-- `telegram-repeated-command-authorization`
-- `telegram-other-bot-command-gating`
-- `telegram-context-command`
-- `telegram-current-session-status-tool`
-- `telegram-tool-only-usage-footer`
-- `telegram-reply-chain-exact-marker`
-- `telegram-stream-final-single-message`
-- `telegram-long-final-reuses-preview`
-- `telegram-long-final-three-chunks`
-
-The `release` profile always covers canary, mention gating, native command
-replies, command addressing, and bot-to-bot group replies. `mock-openai`
-also includes the deterministic long-final preview check.
-`telegram-current-session-status-tool` and
-`telegram-tool-only-usage-footer` remain opt-in: the former is only stable
-when threaded directly after canary, and the latter is a real-Telegram proof
-of the `/usage` footer on tool-only replies. Use `pnpm openclaw qa telegram
---list-scenarios --provider-mode mock-openai` to print the current
-default/optional split with regression refs. Use `--profile all` for every
-Telegram live-adapter scenario.
+`telegram-startup-getme-live` is a catalog script producer, not a live-adapter
+flow. Run it through `qa suite --scenario telegram-startup-getme-live`; the
+dedicated `qa telegram` command and `--list-scenarios` intentionally omit it.
 
 Output artifacts:
 
@@ -1007,11 +1031,10 @@ WhatsApp YAML scenarios (`qa/scenarios/channels/whatsapp-*.yaml`):
 - Status reactions: `whatsapp-status-reactions`,
   `whatsapp-status-reaction-lifecycle`.
 
-The catalog currently contains 52 scenarios. The `live-frontier` default lane
-is kept small at 8 scenarios for fast smoke coverage. The `mock-openai`
-default lane runs 39 scenarios deterministically through the real WhatsApp
-transport while mocking only model output; approval scenarios and a few
-heavier/blocking checks remain explicit by scenario id.
+WhatsApp defaults are derived from the selected taxonomy profile and lane
+constraints. `mock-openai` runs eligible scenarios deterministically through
+the real WhatsApp transport while mocking only model output; `live-frontier`
+excludes scenarios whose provider or model contract requires the mock lane.
 
 The WhatsApp QA driver observes structured live events (`text`, `media`,
 `location`, `reaction`, and `poll`) and can actively send media, polls,
@@ -1038,15 +1061,20 @@ Output artifacts:
 
 ### Convex credential pool
 
-Discord, Slack, Telegram, and WhatsApp lanes can lease credentials from a
+Buzz, Discord, Slack, Telegram, and WhatsApp lanes can lease credentials from a
 shared Convex pool instead of reading the env vars above. Pass
 `--credential-source convex` (or set `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`);
 QA Lab acquires an exclusive lease, heartbeats it for the duration of the
-run, and releases it on shutdown. Pool kinds are `"discord"`, `"slack"`,
-`"telegram"`, and `"whatsapp"`.
+run, and releases it on shutdown. Pool kinds are `"buzz"`, `"discord"`,
+`"slack"`, `"telegram"`, and `"whatsapp"`.
 
 Payload shapes the broker validates on `admin/add`:
 
+- Buzz (`kind: "buzz"`): `{ relayUrl: string, roomId: string,
+driverPrivateKey: string, sutPrivateKey: string, driverAuthTag?: string,
+sutAuthTag?: string }` - `relayUrl` must use `wss://`, with `ws://` allowed only
+  for loopback relays; `roomId` must be a channel UUID, and the identities must
+  be distinct.
 - Discord (`kind: "discord"`): `{ guildId: string, channelId: string,
 driverBotToken: string, sutBotToken: string, sutApplicationId: string }`.
 - Telegram (`kind: "telegram"`): `{ groupId: string, driverToken: string,

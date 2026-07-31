@@ -89,7 +89,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
   return {
     label: "Subagents",
     name: "subagents",
-    description: "Background work: subagents, media gen, cron runs. list/cancel.",
+    description: "Background work: subagents, media gen, automation runs. list/cancel.",
     parameters: SubagentsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

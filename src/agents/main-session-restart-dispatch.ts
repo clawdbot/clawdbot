@@ -353,6 +353,7 @@ export async function resumeMainSession(params: {
   sessionKey: string;
   pendingFinalDeliveryText?: string | null;
   forceRestartSafeTools?: boolean;
+  forceCodeModeTools?: boolean;
   sessionWorkAdmissionHandoffId?: string;
   lifecycleGeneration?: string;
   shouldContinue?: () => boolean;
@@ -482,6 +483,7 @@ export async function resumeMainSession(params: {
         ? { sourceReplyDeliveryMode: params.entry.restartRecoverySourceReplyDeliveryMode }
         : {}),
       ...(params.forceRestartSafeTools ? { forceRestartSafeTools: true } : {}),
+      ...(params.forceCodeModeTools ? { forceCodeModeTools: true } : {}),
       inputProvenance: {
         kind: "internal_system",
         sourceSessionKey: dispatchSessionKey,

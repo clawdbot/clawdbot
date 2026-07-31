@@ -15,6 +15,7 @@ import {
 } from "./agent-auth-discovery.js";
 import { resolveModelPluginMetadataSnapshot } from "./model-discovery-context.js";
 import type { PluginModelCatalogMetadataSnapshot } from "./plugin-model-catalog.js";
+import type { PersistedPluginModelCatalog } from "./plugin-model-catalog.js";
 import {
   AuthStorage,
   ModelRegistry,
@@ -30,12 +31,25 @@ type DiscoveredProviderRuntimeModelLike = Omit<ProviderRuntimeModelLike, "api"> 
   api?: string | null;
 };
 
+const CAPTURED_MODELS_JSON_SOURCE_PATH = "captured:models.json";
+
 type DiscoverModelsOptions = {
   config?: OpenClawConfig;
+  includePluginCatalogs?: boolean;
+  modelsJsonContents?: string | null;
+  pluginCatalogs?: readonly PersistedPluginModelCatalog[];
   providerFilter?: string;
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
   workspaceDir?: string;
   normalizeModels?: boolean;
+};
+
+type DiscoverCapturedModelsOptions = Omit<
+  DiscoverModelsOptions,
+  "modelsJsonContents" | "normalizeModels" | "pluginCatalogs"
+> & {
+  modelsJsonContents: string | null;
+  pluginCatalogs: readonly PersistedPluginModelCatalog[];
 };
 
 /** Applies plugin model normalization and transport hooks to discovered agent models. */
@@ -98,7 +112,7 @@ export function normalizeDiscoveredAgentModel<T>(
 function createOpenClawModelRegistry(
   authStorage: AgentAuthStorage,
   modelsJsonPath: string,
-  agentDir: string,
+  agentDir: string | undefined,
   options?: DiscoverModelsOptions,
 ): AgentModelRegistry {
   const pluginMetadataSnapshot = resolveModelPluginMetadataSnapshot({
@@ -110,7 +124,16 @@ function createOpenClawModelRegistry(
     allowWorkspaceScopedCurrent: options?.workspaceDir === undefined,
     useRuntimeConfig: options?.config === undefined,
   });
-  const registryOptions = pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {};
+  const registryOptions = {
+    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+    ...(options?.includePluginCatalogs !== undefined
+      ? { includePluginCatalogs: options.includePluginCatalogs }
+      : {}),
+    ...(options?.modelsJsonContents !== undefined
+      ? { modelsJsonContents: options.modelsJsonContents }
+      : {}),
+    ...(options?.pluginCatalogs !== undefined ? { pluginCatalogs: options.pluginCatalogs } : {}),
+  };
   const registry = ModelRegistry.create(authStorage, modelsJsonPath, registryOptions);
   const getAll = registry.getAll.bind(registry);
   const getAvailable = registry.getAvailable.bind(registry);
@@ -121,8 +144,15 @@ function createOpenClawModelRegistry(
     !providerFilter || normalizeProviderId(entry.provider) === providerFilter;
   const shouldNormalize = options?.normalizeModels !== false;
   const findCache = new Map<string, Model | undefined>();
-  const normalizeEntry = (entry: Model) =>
-    shouldNormalize ? normalizeDiscoveredAgentModel(entry, agentDir, options) : entry;
+  const normalizeEntry = (entry: Model) => {
+    if (!shouldNormalize) {
+      return entry;
+    }
+    if (!agentDir) {
+      throw new Error("agent directory is required for model normalization");
+    }
+    return normalizeDiscoveredAgentModel(entry, agentDir, options);
+  };
 
   registry.getAll = () => {
     const entries = getAll().filter((entry: Model) => matchesProviderFilter(entry));
@@ -151,7 +181,6 @@ function createOpenClawModelRegistry(
   return registry;
 }
 
-/** Creates auth storage for model discovery from stored and env-backed credentials. */
 /** Builds auth storage for model discovery without prompting for secrets. */
 export function discoverAuthStorage(
   agentDir: string,
@@ -175,4 +204,18 @@ export function discoverModels(
     agentDir,
     options,
   );
+}
+
+/**
+ * Parses complete lifecycle-captured sources without retaining an agent-directory dependency.
+ * Callers may share the resulting immutable catalog snapshot across exact source generations.
+ */
+export function discoverModelsFromCapturedSources(
+  authStorage: AgentAuthStorage,
+  options: DiscoverCapturedModelsOptions,
+): AgentModelRegistry {
+  return createOpenClawModelRegistry(authStorage, CAPTURED_MODELS_JSON_SOURCE_PATH, undefined, {
+    ...options,
+    normalizeModels: false,
+  });
 }

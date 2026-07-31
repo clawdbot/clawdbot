@@ -23,7 +23,7 @@ import type {
 
 export function createSubagentRegistryContextCleanup(config: {
   deps: () => SubagentRegistryDeps;
-  persist: () => void;
+  persist: (...runIds: string[]) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
   const { deps, persist, warn } = config;
@@ -93,7 +93,7 @@ export function createSubagentRegistryContextCleanup(config: {
     ]);
     if (!contextAlreadyEnded && contextEnded) {
       entry.contextEngineCleanupCompletedAt = Date.now();
-      persist();
+      persist(entry.runId);
     }
     return internalEffectsRemoved && attachmentsRemoved && contextEnded;
   }
