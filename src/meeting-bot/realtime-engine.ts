@@ -305,6 +305,10 @@ export async function startMeetingRealtimeEngine(params: {
   const clearOutputPlayback = (): void => {
     void queueOutputClear();
   };
+  const invalidateAndClearOutputPlayback = (): void => {
+    blockOutput();
+    clearOutputPlayback();
+  };
 
   const blockOutput = (): { blocked: boolean; token: symbol } => {
     if (outputBlocked) {
@@ -369,7 +373,7 @@ export async function startMeetingRealtimeEngine(params: {
       if (!playbackActive && (lastOutputAudioAt === undefined || now - lastOutputAudioAt > 1_000)) {
         return false;
       }
-      harness.handleBargeIn({ audioPlaybackActive: true }, clearOutputPlayback);
+      harness.handleBargeIn({ audioPlaybackActive: true }, invalidateAndClearOutputPlayback);
       return true;
     });
   };
