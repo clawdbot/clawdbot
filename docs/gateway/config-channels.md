@@ -13,7 +13,7 @@ For agents, tools, gateway runtime, and other top-level keys, see [Configuration
 
 ## Channels
 
-Each channel starts automatically when its config section exists (unless `enabled: false`). Telegram and iMessage ship inside the core `openclaw` package. Other official channels (Discord, Slack, WhatsApp, Matrix, Microsoft Teams, IRC, Google Chat, Signal, Mattermost, and more) install as separate plugins with `openclaw plugins install <spec>`; see [Channels](/channels) for the full list and install specs.
+Each channel starts automatically when its config section exists (unless `enabled: false`). Telegram ships inside the core `openclaw` package. Other official channels (iMessage, Discord, Slack, WhatsApp, Matrix, Microsoft Teams, IRC, Google Chat, Signal, Mattermost, and more) install as separate plugins with `openclaw plugins install <spec>`; see [Channels](/channels) for the full list and install specs.
 
 ### DM and group access
 
