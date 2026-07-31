@@ -105,24 +105,26 @@ export async function handleClickClackInbound(params: {
     return;
   }
   const { discussionRoute, isDirect, route, target } = access.preparedRoute;
-  const progress = createClickClackAgentProgressPublisher({
-    client: createClickClackClient({
-      baseUrl: params.account.apiEndpoint,
-      token: params.account.token,
-      correlationId: params.correlationId,
-    }),
-    target: message.channel_id
-      ? { workspaceId: message.workspace_id, channelId: message.channel_id }
-      : { workspaceId: message.workspace_id, conversationId },
-    turnId: message.id,
-    onError: (error) => {
-      runtime.logging
-        .getChildLogger({ plugin: "clickclack", feature: "agent-progress" })
-        .warn(`clickclack progress publish failed: ${String(error)}`);
-    },
-  });
+  const progress = params.account.nativeProgress
+    ? createClickClackAgentProgressPublisher({
+        client: createClickClackClient({
+          baseUrl: params.account.apiEndpoint,
+          token: params.account.token,
+          correlationId: params.correlationId,
+        }),
+        target: message.channel_id
+          ? { workspaceId: message.workspace_id, channelId: message.channel_id }
+          : { workspaceId: message.workspace_id, conversationId },
+        turnId: message.id,
+        onError: (error) => {
+          runtime.logging
+            .getChildLogger({ plugin: "clickclack", feature: "agent-progress" })
+            .warn(`clickclack progress publish failed: ${String(error)}`);
+        },
+      })
+    : undefined;
   if (params.account.replyMode === "model" && !discussionRoute) {
-    progress.start();
+    progress?.start();
     try {
       await dispatchModelReply({
         account: params.account,
@@ -133,7 +135,7 @@ export async function handleClickClackInbound(params: {
         correlationId: params.correlationId,
       });
     } finally {
-      await progress.finalize();
+      await progress?.finalize();
     }
     return;
   }
@@ -226,16 +228,20 @@ export async function handleClickClackInbound(params: {
           },
         }
       : {}),
-    onItemEvent: (payload: ClickClackItemEventPayload) => {
-      progress.onItemEvent(payload);
-      activity?.onItemEvent(payload);
-    },
-    commentaryProgressEnabled: true,
-    // ClickClack owns the native progress rendering, so item events must flow
-    // even when session verbose mode is off and default tool-progress texts
-    // stay suppressed.
-    suppressDefaultToolProgressMessages: true,
-    allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+    ...(progress || activity
+      ? {
+          onItemEvent: (payload: ClickClackItemEventPayload) => {
+            progress?.onItemEvent(payload);
+            activity?.onItemEvent(payload);
+          },
+          commentaryProgressEnabled: true,
+          // ClickClack owns the native progress rendering, so item events must flow
+          // even when session verbose mode is off and default tool-progress texts
+          // stay suppressed.
+          suppressDefaultToolProgressMessages: true,
+          allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+        }
+      : {}),
   };
   progress.start();
   const dispatch = () =>
@@ -311,7 +317,7 @@ export async function handleClickClackInbound(params: {
     // Clear transient UI before awaiting optional durable activity writes:
     // their transport has separate failure/latency characteristics and must
     // not leave the native progress indicator behind after final delivery.
-    await progress.finalize();
+    await progress?.finalize();
     await activity?.finalize();
   }
 }
