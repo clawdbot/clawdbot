@@ -14,6 +14,7 @@ extension CanvasWindowController {
                 defer: false)
             window.title = "OpenClaw Canvas"
             window.isReleasedWhenClosed = false
+            window.isRestorable = false
             window.contentView = contentView
             window.center()
             window.minSize = NSSize(width: 880, height: 680)
