@@ -137,7 +137,7 @@ describe("OpenAI provider Codex transport hooks", () => {
           baseUrl: "https://api.openai.com/v1",
           reasoning: true,
           input: ["text"],
-          cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
+          cost: { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 },
           contextWindow: 372_000,
           maxTokens: 128_000,
           ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
