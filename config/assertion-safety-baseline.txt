@@ -2276,7 +2276,7 @@ src/channels/message/adapter.ts	1
 src/channels/message/capabilities.ts	2
 src/channels/message/ingress-claim-owner.ts	1
 src/channels/message/ingress-drain.ts	1
-src/channels/message/ingress-monitor.ts	6
+src/channels/message/ingress-monitor.ts	4
 src/channels/message/ingress-queue.ts	6
 src/channels/message/outbound-bridge.ts	2
 src/channels/message/outbound-echo-state.ts	2
