@@ -136,9 +136,12 @@ describe("sweepTombstonedCronRunRemnants", () => {
   });
 
   it("never touches live sessions, cron or otherwise", async () => {
+    // Old but LIVE: entry identity stays valid (json updatedAt and the row
+    // column agree), only the age is far past the gate.
+    const backdated = Date.now() - 40 * DAY_MS;
     await replaceSessionEntry(
       { sessionKey: "agent:main:cron:job-2:run:run-2", storePath },
-      { sessionId: "live-cron-run", updatedAt: Date.now() - 40 * DAY_MS },
+      { sessionId: "live-cron-run", updatedAt: backdated },
     );
     const database = openDatabase();
     const db = getSessionKysely(database.db);
@@ -146,7 +149,7 @@ describe("sweepTombstonedCronRunRemnants", () => {
       database.db,
       db
         .updateTable("session_nodes")
-        .set({ updated_at: Date.now() - 40 * DAY_MS })
+        .set({ updated_at: backdated })
         .where("session_key", "=", "agent:main:cron:job-2:run:run-2"),
     );
     const applied = await sweepTombstonedCronRunRemnants({
@@ -155,7 +158,7 @@ describe("sweepTombstonedCronRunRemnants", () => {
       olderThanMs: 15 * DAY_MS,
       dryRun: false,
     });
-    // Old but LIVE (entry_json still has a sessionId): not a tombstone.
+    // Old but LIVE (valid entry identity): not a tombstone.
     expect(applied).toMatchObject({ candidates: 0, removedNodes: 0 });
   });
 });
