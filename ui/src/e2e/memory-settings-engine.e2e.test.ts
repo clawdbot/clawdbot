@@ -225,7 +225,9 @@ describeControlUiE2e("Control UI memory engine settings mocked Gateway E2E", () 
       await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("true");
       await page.getByText("Needs attention", { exact: true }).first().waitFor();
       await page
-        .getByText("Could not refresh Control UI configuration: authoritative snapshot unavailable")
+        .getByText(
+          "Could not refresh Control UI configuration: GatewayRequestError: authoritative snapshot unavailable",
+        )
         .waitFor();
       expect(await page.getByText("Could not update Active memory").count()).toBe(0);
       expect(pageErrors).toEqual([]);
