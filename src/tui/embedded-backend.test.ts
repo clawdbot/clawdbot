@@ -2089,6 +2089,42 @@ describe("EmbeddedTuiBackend", () => {
     },
   );
 
+  it("surfaces canonical error-only thrown outcomes without exposing the wrapped cause", async () => {
+    const { AgentRunTerminalOutcomeError } =
+      await import("../agents/agent-run-terminal-outcome.js");
+    const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
+    agentCommandFromIngressMock.mockRejectedValueOnce(
+      new AgentRunTerminalOutcomeError(new Error(`hidden provider credential ${secret}`), {
+        reason: "failed",
+        status: "error",
+      }),
+    );
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = ({ event, payload }) => events.push({ event, payload });
+    backend.start();
+
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "surface the canonical failure",
+      runId: "error-only-terminal",
+    });
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: {
+        runId: "error-only-terminal",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        state: "error",
+        errorMessage: "Agent run failed.",
+      },
+    });
+    expect(JSON.stringify(events)).not.toContain(secret);
+  });
+
   it("preserves a yielded parent turn in the embedded session projection", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const pending = deferred<{

@@ -1197,10 +1197,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private clearPendingLifecycleError(runId: string) {
-    const pending = this.pendingLifecycleErrors.get(runId);
-    if (pending) {
-      clearTimeout(pending);
-    }
+    clearTimeout(this.pendingLifecycleErrors.get(runId));
     this.pendingLifecycleErrors.delete(runId);
   }
 
@@ -1302,7 +1299,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
       status:
         stopReason === "timeout" || metadata.status === "timeout" || metadata.timeoutPhase
           ? "timeout"
-          : aborted || metadata.error || options.phase === "error" || stopReason === "error"
+          : aborted ||
+              metadata.error ||
+              [metadata.status, options.phase, stopReason].includes("error")
             ? "error"
             : "ok",
       error: terminalError ? formatTuiErrorMessage(terminalError) : undefined,
@@ -1323,7 +1322,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           outcome.error ||
           (outcome.reason === "hard_timeout"
             ? "The provider timed out. Please try again."
-            : undefined);
+            : "Agent run failed.");
     if (options.deferError && state === "error") {
       this.scheduleChatError(runId, run, diagnostic);
     } else {
