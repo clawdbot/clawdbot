@@ -679,7 +679,7 @@ describe("installContextEngineLoopHook", () => {
 
     expect(transformed).toBe(messages);
     expect(engine.afterTurn).not.toHaveBeenCalled();
-    expect(engine.assemble).not.toHaveBeenCalled();
+    expect(engine.assemble).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the pressure guard active around ownsCompaction loop assembly", async () => {
@@ -876,7 +876,7 @@ describe("installContextEngineLoopHook", () => {
     const afterTurnParams = recordMockArg(engine.afterTurn);
     expect(afterTurnParams?.prePromptMessageCount).toBe(2);
     expect(afterTurnParams?.messages).toBe(withNew);
-    expect(engine.assemble).toHaveBeenCalledTimes(1);
+    expect(engine.assemble).toHaveBeenCalledTimes(2);
   });
 
   it("advances the fence across multiple iterations", async () => {
@@ -925,7 +925,7 @@ describe("installContextEngineLoopHook", () => {
     await callTransform(agent, messages);
 
     expect(engine.afterTurn).not.toHaveBeenCalled();
-    expect(engine.assemble).not.toHaveBeenCalled();
+    expect(engine.assemble).toHaveBeenCalledTimes(3);
   });
 
   it("returns the assembled view when its length differs from the source", async () => {
@@ -991,7 +991,7 @@ describe("installContextEngineLoopHook", () => {
       firstResultText: "r",
     });
 
-    expect(recordMockArg(engine.assemble).messages).toBe(withNew);
+    expect(recordMockArg(engine.assemble, 1).messages).toBe(withNew);
     expect(transformed).not.toBe(withNew);
     expect(transformed).toEqual([expect.objectContaining({ role: "user", content: "first" })]);
     expect((transformed as AgentMessage[]).some((message) => message.role === "toolResult")).toBe(
@@ -1146,7 +1146,7 @@ describe("installContextEngineLoopHook", () => {
     expect(recordMockArg(ingestBatch).isHeartbeat).toBe(true);
     expect(recordMockArg(ingestBatch, 1).messages).toEqual(batch2.slice(4));
     expect(recordMockArg(ingestBatch, 1).isHeartbeat).toBe(true);
-    expect(engine.assemble).toHaveBeenCalledTimes(2);
+    expect(engine.assemble).toHaveBeenCalledTimes(3);
   });
 
   it("falls back to per-message ingest when ingestBatch is absent", async () => {
@@ -1255,7 +1255,7 @@ describe("installContextEngineLoopHook", () => {
     // Retry with same messages: should return cached assembled view, not raw
     const retryResult = await callTransform(agent, withNew);
     expect(retryResult).toBe(compactedView);
-    expect(engine.assemble).toHaveBeenCalledTimes(1);
+    expect(engine.assemble).toHaveBeenCalledTimes(2);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
