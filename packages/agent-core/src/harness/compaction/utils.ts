@@ -87,7 +87,7 @@ export function formatFileOperations(readFiles: string[], modifiedFiles: string[
 
 const TOOL_RESULT_MAX_CHARS = 2000;
 const IMPORTANT_TOOL_RESULT_TAIL =
-  /\b(error|exception|failed|fatal|traceback|panic|stack trace|errno|exit code)\b/i;
+  /(error|exception|failed|fatal|traceback|panic|stack trace|errno|exit code)/i;
 
 function safeJsonStringify(value: unknown): string {
   try {
@@ -105,10 +105,15 @@ function truncateForSummary(text: string, maxChars: number): string {
   const tail = sliceUtf16Safe(text, -tailChars);
   if (IMPORTANT_TOOL_RESULT_TAIL.test(tail)) {
     const head = truncateUtf16Safe(text, maxChars - tailChars);
-    const truncatedChars = text.length - head.length - tail.length;
-    // Commands usually report their actual failure last; preserve that tail
-    // so branch and ordinary compaction summaries can explain what failed.
-    return `${head}\n\n[... ${truncatedChars} more characters truncated]\n\n${tail}`;
+    const displacedHead = sliceUtf16Safe(text, Math.max(0, head.length - 32), maxChars);
+    // A routine footer can match failure words. Never shorten the original
+    // retained head when doing so would discard an existing diagnostic.
+    if (!IMPORTANT_TOOL_RESULT_TAIL.test(displacedHead)) {
+      const truncatedChars = text.length - head.length - tail.length;
+      // Commands usually report their actual failure last; preserve that tail
+      // so branch and ordinary compaction summaries can explain what failed.
+      return `${head}\n\n[... ${truncatedChars} more characters truncated]\n\n${tail}`;
+    }
   }
   const sliced = truncateUtf16Safe(text, maxChars);
   const truncatedChars = text.length - sliced.length;

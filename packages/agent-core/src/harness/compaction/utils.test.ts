@@ -93,8 +93,23 @@ describe("serializeConversation", () => {
     expect(serializeConversation(messages)).toContain("ERROR: earlier failure");
   });
 
-  it("does not let routine completion output evict an earlier failure", () => {
-    const output = `${"h".repeat(1500)}ERROR: deployment failed${"m".repeat(1500)}\ndone`;
+  it.each(["done", "exit code 0", "1 failed"])(
+    "does not let routine '%s' output evict an earlier failure",
+    (footer) => {
+      const output = `${"h".repeat(1500)}ERROR: deployment failed${"m".repeat(1500)}\n${footer}`;
+      const messages = [
+        {
+          role: "toolResult",
+          content: [{ type: "text", text: output }],
+        },
+      ] as unknown as Message[];
+
+      expect(serializeConversation(messages)).toContain("ERROR: deployment failed");
+    },
+  );
+
+  it("preserves a terminal failure when no earlier diagnostic would be displaced", () => {
+    const output = `${"h".repeat(1500)}${"m".repeat(1500)}\nERROR: terminal failure`;
     const messages = [
       {
         role: "toolResult",
@@ -102,6 +117,6 @@ describe("serializeConversation", () => {
       },
     ] as unknown as Message[];
 
-    expect(serializeConversation(messages)).toContain("ERROR: deployment failed");
+    expect(serializeConversation(messages)).toContain("ERROR: terminal failure");
   });
 });
