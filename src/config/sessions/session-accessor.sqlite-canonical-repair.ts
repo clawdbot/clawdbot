@@ -25,8 +25,8 @@ import {
   resolveSqliteStoreScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { bindSqliteSessionWindowEntryProjection } from "./session-accessor.sqlite-session-row.js";
+import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
 import {
