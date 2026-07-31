@@ -141,6 +141,7 @@ type QueuedProgressFrame = {
 };
 
 const CLICKCLACK_PROGRESS_UPDATE_INTERVAL_MS = 100;
+const CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS = 1_000;
 
 export function createClickClackAgentProgressPublisher(params: {
   client: ClickClackProgressClient;
@@ -209,6 +210,32 @@ export function createClickClackAgentProgressPublisher(params: {
       queue.push(frame);
     }
     void drain();
+  };
+
+  const discardQueuedLines = (): void => {
+    queuedLines.clear();
+    const controlFrames = queue.filter((frame) => !frame.lineId);
+    queue.splice(0, queue.length, ...controlFrames);
+  };
+
+  const waitForDrainWithinFinalizeGrace = async (pending: Promise<void>): Promise<boolean> => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let drained = false;
+    try {
+      await Promise.race([
+        pending.then(() => {
+          drained = true;
+        }),
+        new Promise<void>((resolve) => {
+          timeout = setTimeout(resolve, CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS);
+        }),
+      ]);
+      return drained;
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
   };
 
   const scheduleLineDrain = (): void => {
@@ -284,7 +311,13 @@ export function createClickClackAgentProgressPublisher(params: {
       }
       flushQueuedLines();
       enqueue({ op: "clear" });
-      await drain();
+      const drained = await waitForDrainWithinFinalizeGrace(drain());
+      if (!drained) {
+        // Once the durable reply has been sent and the grace period expires,
+        // stale detail frames no longer help the user. Keep only control frames
+        // so the background queue reaches the best-effort clear promptly.
+        discardQueuedLines();
+      }
     },
   };
 }

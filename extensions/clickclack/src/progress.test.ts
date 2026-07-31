@@ -137,4 +137,46 @@ describe("ClickClack native agent progress", () => {
       vi.useRealTimers();
     }
   });
+
+  it("does not let a stalled transport hold turn finalization", async () => {
+    vi.useFakeTimers();
+    let releaseFirstRequest: (() => void) | undefined;
+    try {
+      const firstRequest = new Promise<void>((resolve) => {
+        releaseFirstRequest = resolve;
+      });
+      const publishEphemeral = vi
+        .fn()
+        .mockImplementationOnce(() => firstRequest)
+        .mockResolvedValue(undefined);
+      const publisher = createClickClackAgentProgressPublisher({
+        client: { publishEphemeral },
+        target: { workspaceId: "ws_1", channelId: "chn_1" },
+        turnId: "msg_1",
+      });
+
+      publisher.start();
+      publisher.onItemEvent({ itemId: "tool_1", kind: "tool", progressText: "pending" });
+      const finalized = publisher.finalize();
+      const onFinalized = vi.fn();
+      void finalized.then(onFinalized);
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(onFinalized).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await finalized;
+
+      expect(onFinalized).toHaveBeenCalledOnce();
+      expect(publishEphemeral).toHaveBeenCalledTimes(1);
+
+      releaseFirstRequest();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(publishEphemeral).toHaveBeenCalledTimes(2);
+      expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({ op: "clear" });
+    } finally {
+      releaseFirstRequest?.();
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
+  });
 });
