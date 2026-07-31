@@ -176,12 +176,8 @@ function shouldIncludeToolErrorDetails(params: {
   );
 }
 
-function shouldMarkNonTerminalToolErrorWarning(_lastToolError: ToolErrorSummary): boolean {
-  // When the run produced a visible assistant reply, any trailing tool-error warning is
-  // secondary. The caller already gates on hasUserFacingAssistantReply; mark all such
-  // warnings non-terminal so channels can finalize the streaming answer instead of
-  // replacing it with the warning.
-  return true;
+function shouldMarkNonTerminalToolErrorWarning(lastToolError: ToolErrorSummary): boolean {
+  return lastToolError.middlewareError === true;
 }
 
 function formatToolErrorWarningText(params: {
