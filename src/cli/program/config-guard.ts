@@ -268,10 +268,12 @@ export async function ensureConfigReady(
     preflightSnapshot = await runStateMigrationPreflight();
   }
 
-  // Status reads its materialized/source pair; remote Gateway calls must not
-  // record config health in the state owned by the Gateway being queried.
+  // Read-only diagnostics must not record config health; remote Gateway calls
+  // must not write into the state owned by the Gateway being queried.
   const configSnapshotOptions =
-    commandName === "status" || (commandName === "gateway" && subcommandName === "call")
+    commandName === "logs" ||
+    commandName === "status" ||
+    (commandName === "gateway" && subcommandName === "call")
       ? ({ observe: false } as const)
       : undefined;
   let snapshot = preflightSnapshot ?? (await getConfigSnapshot(configSnapshotOptions));
