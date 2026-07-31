@@ -137,6 +137,7 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
       enqueueRun: vi.fn(async () => ({ ok: true, enqueued: true, runId: "run-1" })),
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn((id: string) => jobs.find((job) => job.id === id)),
+      prepareWake: vi.fn(async () => undefined),
       wake: vi.fn(() => ({ ok: true }) as const),
       readJob: vi.fn(async (id: string) => jobs.find((job) => job.id === id)),
       list: vi.fn(async () => jobs),
@@ -3480,6 +3481,10 @@ describe("cron method validation", () => {
         text: "ping",
         sessionKey: "agent:main:telegram:dm:42",
       });
+      expect(context.cron.prepareWake).toHaveBeenCalledOnce();
+      expect(context.cron.prepareWake.mock.invocationCallOrder[0]).toBeLessThan(
+        context.cron.wake.mock.invocationCallOrder[0]!,
+      );
       expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     });
 
@@ -3509,6 +3514,7 @@ describe("cron method validation", () => {
         sessionKey,
       });
       expect(context.cron.wake).not.toHaveBeenCalled();
+      expect(context.cron.prepareWake).not.toHaveBeenCalled();
       expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "sessionKey" });
     });
 

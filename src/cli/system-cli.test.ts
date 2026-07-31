@@ -69,6 +69,15 @@ describe("system-cli", () => {
     expect(runtimeLogs).toEqual([JSON.stringify({ id: "wake-1" }, null, 2)]);
   });
 
+  it("reports a rejected system event instead of claiming it was enqueued", async () => {
+    callGatewayFromCli.mockResolvedValueOnce({ ok: false, reason: "unwakeable-session-key" });
+
+    await runCli(["system", "event", "--text", "hello"]);
+
+    expect(runtimeLogs).toEqual([]);
+    expect(runtimeErrors[0]).toContain("unwakeable-session-key");
+  });
+
   it("handles invalid wake mode as runtime error", async () => {
     await runCli(["system", "event", "--text", "hello", "--mode", "later"]);
 
