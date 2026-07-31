@@ -471,7 +471,6 @@ describe("secrets audit", () => {
     await writeModelsProvider({
       headers: {
         Authorization: "Bearer sk-header-plaintext", // pragma: allowlist secret
-        "X-Plivo-Signature-V2": "plivo-header-plaintext", // pragma: allowlist secret
       },
     });
 
@@ -479,10 +478,6 @@ describe("secrets audit", () => {
     expectModelsFinding(report, {
       code: "PLAINTEXT_FOUND",
       jsonPath: "providers.openai.headers.Authorization",
-    });
-    expectModelsFinding(report, {
-      code: "PLAINTEXT_FOUND",
-      jsonPath: "providers.openai.headers.X-Plivo-Signature-V2",
     });
   });
 

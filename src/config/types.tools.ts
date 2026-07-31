@@ -464,9 +464,9 @@ export type ToolsConfig = {
       /** Override User-Agent header for fetch requests. */
       userAgent?: string;
       /**
-       * Extra request headers sent with direct web_fetch requests. Not a credential
-       * store: plain strings only, and entries a request cannot carry are dropped
-       * with a warning at request time.
+       * Extra request headers sent with direct web_fetch requests. Every value is
+       * treated as sensitive in exposed config. Entries a request cannot carry are
+       * dropped with a warning at request time.
        */
       headers?: Record<string, string>;
       /** Use Readability to extract main content (default: true). */

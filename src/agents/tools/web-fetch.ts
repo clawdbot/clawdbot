@@ -12,11 +12,9 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { sha256Hex, sha256HexPrefix } from "../../infra/crypto-digest.js";
-import { resolveOperatorRequestHeaders } from "../../infra/net/operator-request-headers.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug, logWarn } from "../../logger.js";
-import { createSensitiveRequestHeaderCaptureMeta } from "../../proxy-capture/sensitive-request-header-meta.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
@@ -75,17 +73,23 @@ const FETCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 
 // Accept and Accept-Language are part of the fetch/readability contract,
 // User-Agent has its own tools.web.fetch.userAgent key, and Undici owns
-// Sec-Fetch-Mode. Cookie headers are reserved here rather than by the shared
-// credential policy, which classifies model-provider auth headers.
-const FETCH_RESERVED_HEADER_NAMES = [
+// Sec-Fetch-Mode.
+const FETCH_BLOCKED_HEADER_NAMES = new Set([
   "accept",
   "accept-language",
   "user-agent",
   "sec-fetch-mode",
-  "cookie",
-  "cookie2",
-  "set-cookie",
-] as const;
+  "connection",
+  "content-length",
+  "expect",
+  "host",
+  "keep-alive",
+  "proxy-connection",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
 
 const WebFetchSchema = Type.Object({
   url: Type.String({ description: "HTTP(S) URL." }),
@@ -205,31 +209,40 @@ function resolveFetchUseTrustedEnvProxy(fetch?: WebFetchConfig): boolean {
  * Header names are safe to log; values are not.
  */
 function resolveFetchHeaders(fetch?: WebFetchConfig): Record<string, string> | undefined {
-  const resolution = resolveOperatorRequestHeaders({
-    configured: fetch && "headers" in fetch ? fetch.headers : undefined,
-    reservedNames: FETCH_RESERVED_HEADER_NAMES,
-  });
-  for (const name of resolution.ignored) {
-    logWarn(
-      `[web-fetch] dropped tools.web.fetch.headers entry a request cannot carry: ${JSON.stringify(name)}`,
-    );
+  const configured = fetch?.headers;
+  if (!configured) {
+    return undefined;
   }
-  for (const name of resolution.refused) {
-    logWarn(
-      `[web-fetch] dropped reserved, framing, or credential tools.web.fetch.headers entry: ${name}`,
-    );
+  const resolved = new Map<string, { name: string; value: string }>();
+  for (const [rawName, rawValue] of Object.entries(configured)) {
+    const name = rawName.trim();
+    const lowerName = name.toLowerCase();
+    const prior = resolved.get(lowerName);
+    if (prior) {
+      resolved.delete(lowerName);
+      logWarn(
+        `[web-fetch] dropped case-colliding tools.web.fetch.headers entry: ${JSON.stringify(prior.name)}`,
+      );
+    }
+    let value: string;
+    try {
+      value = new Headers([[name, rawValue]]).get(name) ?? "";
+    } catch {
+      logWarn(
+        `[web-fetch] dropped tools.web.fetch.headers entry a request cannot carry: ${JSON.stringify(rawName)}`,
+      );
+      continue;
+    }
+    if (FETCH_BLOCKED_HEADER_NAMES.has(lowerName)) {
+      logWarn(`[web-fetch] dropped reserved or framing tools.web.fetch.headers entry: ${name}`);
+      continue;
+    }
+    resolved.set(lowerName, { name, value });
   }
-  for (const name of resolution.collisions) {
-    logWarn(
-      `[web-fetch] dropped case-colliding tools.web.fetch.headers entry: ${JSON.stringify(name)}`,
-    );
-  }
-  for (const name of resolution.suspicious) {
-    logWarn(
-      `[web-fetch] tools.web.fetch.headers entry looks credential-bearing and is sent to every model-chosen URL: ${name}`,
-    );
-  }
-  return resolution.headers;
+  const entries = [...resolved.values()]
+    .map(({ name, value }) => [name, value] as const)
+    .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
 /**
@@ -241,7 +254,7 @@ function resolveFetchHeadersCacheKey(headers?: Record<string, string>): string |
   if (!headers) {
     return undefined;
   }
-  return sha256HexPrefix(JSON.stringify(Object.entries(headers)), 16);
+  return sha256Hex(JSON.stringify(Object.entries(headers)));
 }
 
 /**
@@ -729,7 +742,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       useEnvProxy: useTrustedEnvProxy,
       policy: ssrfPolicy,
       capture: params.headers
-        ? { meta: createSensitiveRequestHeaderCaptureMeta(Object.keys(params.headers)) }
+        ? { sensitiveRequestHeaderNames: Object.keys(params.headers) }
         : undefined,
       init: {
         headers: buildWebFetchRequestHeaders({

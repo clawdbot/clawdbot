@@ -10,7 +10,6 @@ import {
   initializeDebugProxyCapture,
   type DebugProxyCaptureRuntimeDeps,
 } from "./runtime.js";
-import { createSensitiveRequestHeaderCaptureMeta } from "./sensitive-request-header-meta.js";
 
 type StoreCall = { name: string; args: unknown[] };
 
@@ -175,7 +174,7 @@ describe("debug proxy runtime", () => {
           "X-Routing-Target": "staging-private-route",
           "x-safe": "visible",
         },
-        meta: createSensitiveRequestHeaderCaptureMeta(["x-routing-target"]),
+        meta: { sensitiveRequestHeaderNames: ["x-routing-target"] },
         response: new Response("{}", {
           status: 200,
           headers: {
