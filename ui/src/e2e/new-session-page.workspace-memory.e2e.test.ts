@@ -31,7 +31,7 @@ suite.define(() => {
       const footer = page.locator(".new-session-page__composer .agent-chat__composer-footer");
       const incognito = page.getByRole("switch", { name: "Incognito" });
       const model = page.locator(".new-session-page__composer .chat-composer-model-control");
-      await model.waitFor();
+      await Promise.all([footer.waitFor(), incognito.waitFor(), model.waitFor()]);
 
       const [footerBox, incognitoBox, modelBox] = await Promise.all([
         footer.boundingBox(),
