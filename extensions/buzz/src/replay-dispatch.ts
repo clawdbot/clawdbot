@@ -4,6 +4,7 @@ const REPLAY_HISTORY_MAX_PER_ROOM = 100;
 
 type BuzzReplayDispatchQueue = {
   enqueue: (task: () => Promise<void>) => "accepted" | "closed" | "overflow";
+  waitForCapacity: (slots: number) => Promise<boolean>;
   close: () => Promise<void>;
 };
 
@@ -23,6 +24,26 @@ export function createBuzzReplayDispatchQueue(params: {
     if (closed && active === 0) {
       resolveDrained?.();
       resolveDrained = undefined;
+    }
+  };
+
+  const capacityWaiters: Array<{ slots: number; resolve: (accepted: boolean) => void }> = [];
+  const availableCapacity = () => BUZZ_REPLAY_DISPATCH_MAX_PENDING - (pending.length - pendingHead);
+  const settleCapacityWaiters = () => {
+    for (let index = capacityWaiters.length - 1; index >= 0; index -= 1) {
+      const waiter = capacityWaiters[index];
+      if (!waiter) {
+        continue;
+      }
+      if (closed) {
+        capacityWaiters.splice(index, 1);
+        waiter.resolve(false);
+        continue;
+      }
+      if (availableCapacity() >= waiter.slots) {
+        capacityWaiters.splice(index, 1);
+        waiter.resolve(true);
+      }
     }
   };
 
@@ -54,6 +75,7 @@ export function createBuzzReplayDispatchQueue(params: {
           drain();
         });
     }
+    settleCapacityWaiters();
   };
 
   return {
@@ -72,10 +94,22 @@ export function createBuzzReplayDispatchQueue(params: {
       pending.push(task);
       return "accepted";
     },
+    async waitForCapacity(slots) {
+      if (closed) {
+        return false;
+      }
+      if (availableCapacity() >= slots) {
+        return true;
+      }
+      return await new Promise<boolean>((resolve) => {
+        capacityWaiters.push({ slots, resolve });
+      });
+    },
     async close() {
       closed = true;
       pending.length = 0;
       pendingHead = 0;
+      settleCapacityWaiters();
       settleDrained();
       await drained;
     },
