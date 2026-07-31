@@ -83,6 +83,7 @@ describe("redactTranscriptMessage", () => {
 
   it("redacts continue_delegate inline snapshots at the canonical transcript boundary", () => {
     const secret = "CANONICAL_TRANSCRIPT_CONTINUATION_ATTACHMENT_SECRET";
+    const attachmentName = "CANONICAL_TRANSCRIPT_ATTACHMENT_NAME_MUST_NOT_ECHO.md";
     const msg = {
       role: "assistant",
       content: [
@@ -92,15 +93,15 @@ describe("redactTranscriptMessage", () => {
           name: " continue_delegate ",
           partialArgs: {
             task: "carry the partial argument snapshot",
-            attachments: [{ name: "partial.md", content: secret }],
+            attachments: [{ name: attachmentName, content: secret }],
           },
           partialJson: JSON.stringify({
             task: "carry the streaming snapshot",
-            attachments: [{ name: "streaming.md", content: secret }],
+            attachments: [{ name: attachmentName, content: secret }],
           }),
           arguments: {
             task: "carry the snapshot",
-            attachments: [{ name: "brief.md", content: secret }],
+            attachments: [{ name: attachmentName, content: secret }],
           },
         },
         {
@@ -109,7 +110,7 @@ describe("redactTranscriptMessage", () => {
           name: "continue_delegate",
           input: {
             task: "carry the alternate snapshot",
-            attachments: [{ name: "alternate.md", content: secret }],
+            attachments: [{ name: attachmentName, content: secret }],
           },
         },
         {
@@ -118,7 +119,7 @@ describe("redactTranscriptMessage", () => {
           name: "continue_delegate",
           arguments: JSON.stringify({
             task: "carry the legacy snapshot",
-            attachments: [{ name: "legacy.md", content: secret }],
+            attachments: [{ name: attachmentName, content: secret }],
           }),
         },
       ],
@@ -127,6 +128,7 @@ describe("redactTranscriptMessage", () => {
     const result = redactTranscriptMessage(msg, cfg("tools"));
     const persistedBytes = JSON.stringify(result);
     expect(persistedBytes).not.toContain(secret);
+    expect(persistedBytes).not.toContain(attachmentName);
     expect(persistedBytes).toContain("__OPENCLAW_REDACTED__");
     const blocks = msgContent(result) as Array<{
       name: string;

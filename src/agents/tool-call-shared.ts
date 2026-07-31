@@ -8,7 +8,17 @@ import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 
 const TOOL_CALL_NAME_MAX_CHARS = 64;
 const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
-const CONTINUE_DELEGATE_ATTACHMENT_METADATA_KEYS = ["name", "encoding", "mimeType"] as const;
+// A continuation snapshot is private child input. Transcript repair can retain
+// only replay-safe descriptor metadata; the original filename is not needed to
+// replay the parent tool call and must not escape the handoff boundary.
+const CONTINUE_DELEGATE_ATTACHMENT_METADATA_KEYS = ["encoding", "mimeType"] as const;
+const LEGACY_CONTINUE_DELEGATE_ATTACHMENT_METADATA_KEYS = [
+  "name",
+  ...CONTINUE_DELEGATE_ATTACHMENT_METADATA_KEYS,
+] as const;
+type TranscriptToolCallSanitizeOptions = {
+  preserveLegacyContinueDelegateAttachmentName?: boolean;
+};
 const TRANSCRIPT_TOOL_CALL_BLOCK_TYPES = new Set([
   "toolCall",
   "toolUse",
@@ -69,14 +79,17 @@ export function isAllowedToolCallName(
   return allowedToolNames.has(normalizeLowercaseStringOrEmpty(trimmed));
 }
 
-function redactContinueDelegateAttachmentContent(value: unknown): unknown {
+function redactContinueDelegateAttachmentContent(
+  value: unknown,
+  options?: TranscriptToolCallSanitizeOptions,
+): unknown {
   if (typeof value === "string") {
     // Some providers persist function-call arguments as serialized JSON. Keep
     // the exact string when it is not a matching object, but redact before the
     // canonical transcript writer stores a JSON-encoded continuation snapshot.
     try {
       const parsed = JSON.parse(value) as unknown;
-      const redacted = redactContinueDelegateAttachmentContent(parsed);
+      const redacted = redactContinueDelegateAttachmentContent(parsed, options);
       return redacted === parsed ? value : JSON.stringify(redacted);
     } catch {
       return value;
@@ -94,7 +107,12 @@ function redactContinueDelegateAttachmentContent(value: unknown): unknown {
     } else {
       let changed = false;
       const attachments = input.attachments.map((attachment) => {
-        if (isRedactedContinueDelegateAttachment(attachment)) {
+        if (
+          isRedactedContinueDelegateAttachment(
+            attachment,
+            options?.preserveLegacyContinueDelegateAttachmentName === true,
+          )
+        ) {
           return attachment;
         }
         changed = true;
@@ -150,7 +168,7 @@ function projectContinueDelegateAttachAs(value: unknown): Record<string, unknown
   return Object.keys(input).length === 1 ? input : { [key]: input[key] };
 }
 
-function isRedactedContinueDelegateAttachment(value: unknown): boolean {
+function isRedactedContinueDelegateAttachment(value: unknown, allowLegacyName: boolean): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
@@ -162,7 +180,10 @@ function isRedactedContinueDelegateAttachment(value: unknown): boolean {
     if (key === "content") {
       continue;
     }
-    if (!(CONTINUE_DELEGATE_ATTACHMENT_METADATA_KEYS as readonly string[]).includes(key)) {
+    const allowedKeys = allowLegacyName
+      ? LEGACY_CONTINUE_DELEGATE_ATTACHMENT_METADATA_KEYS
+      : CONTINUE_DELEGATE_ATTACHMENT_METADATA_KEYS;
+    if (!(allowedKeys as readonly string[]).includes(key)) {
       return false;
     }
     const metadata = attachment[key];
@@ -204,7 +225,7 @@ export function sanitizeTranscriptToolCallBlock<
     partialArgs?: unknown;
     partialJson?: unknown;
   },
->(block: T): T {
+>(block: T, options?: TranscriptToolCallSanitizeOptions): T {
   // sessions_spawn payloads remain trusted transcript-owned state. Continuation
   // snapshots are durable queue input and are redacted once the call is recorded.
   const rawName = typeof block.name === "string" ? block.name : undefined;
@@ -213,10 +234,10 @@ export function sanitizeTranscriptToolCallBlock<
   const nameChanged = normalizedName !== undefined && rawName !== normalizedName;
   const isContinueDelegate = normalizedName?.toLowerCase() === "continue_delegate";
   const input = isContinueDelegate
-    ? redactContinueDelegateAttachmentContent(block.input)
+    ? redactContinueDelegateAttachmentContent(block.input, options)
     : block.input;
   const args = isContinueDelegate
-    ? redactContinueDelegateAttachmentContent(block.arguments)
+    ? redactContinueDelegateAttachmentContent(block.arguments, options)
     : block.arguments;
   const removePartialArgs = isContinueDelegate && Object.hasOwn(block, "partialArgs");
   const removePartialJson = isContinueDelegate && Object.hasOwn(block, "partialJson");

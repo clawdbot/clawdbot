@@ -1,5 +1,6 @@
 // Subagent spawn attachment tests cover strict base64 decoding, attachment name
 // validation, materialization paths, and cleanup after spawn failures.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -166,18 +167,20 @@ describe("spawnSubagentDirect filename validation", () => {
 
   it("duplicate name returns attachments_duplicate_name", async () => {
     const { spawnSubagentDirect } = subagentSpawnModule;
+    const duplicateName = "sessions-spawn-duplicate.txt";
     const result = await spawnSubagentDirect(
       {
         task: "test",
         attachments: [
-          { name: "file.txt", content: validContent, encoding: "base64" },
-          { name: "file.txt", content: validContent, encoding: "base64" },
+          { name: duplicateName, content: validContent, encoding: "base64" },
+          { name: duplicateName, content: validContent, encoding: "base64" },
         ],
       },
       ctx,
     );
     expect(result.status).toBe("error");
     expect(result.error).toMatch(/attachments_duplicate_name/);
+    expect(result.error).toContain(duplicateName);
   });
 
   it("case-folded and normalization-equivalent names return attachments_duplicate_name", async () => {
@@ -251,6 +254,90 @@ describe("spawnSubagentDirect filename validation", () => {
     expect(result.status).toBe("error");
     expect(result.error).toMatch(/attachments_invalid_member/);
     expect(JSON.stringify(result)).not.toContain("MATERIALIZER_SECRET");
+  });
+
+  async function spawnWithForcedMaterializationFailure(params: {
+    continuation: boolean;
+    attachmentNames?: string[];
+  }) {
+    const attachmentId = "00000000-0000-4000-8000-000000000001";
+    const attachmentNames = params.attachmentNames ?? [
+      "MATERIALIZATION_FILENAME_MUST_NOT_ECHO.txt",
+    ];
+    const collisionName = expectDefined(attachmentNames.at(-1), "collision attachment name");
+    const randomUuid = vi.spyOn(crypto, "randomUUID").mockReturnValue(attachmentId);
+    try {
+      fs.mkdirSync(
+        path.join(workspaceDirOverride, ".openclaw", "attachments", attachmentId, collisionName),
+        { recursive: true },
+      );
+
+      const result = await subagentSpawnModule.spawnSubagentDirect(
+        {
+          task: "test materialization failure redaction",
+          attachments: attachmentNames.map((name) => ({ name, content: "snapshot" })),
+          ...(params.continuation
+            ? {
+                drainsContinuationDelegateQueue: true,
+                continuationChainState: {
+                  count: 1,
+                  startedAt: Date.now(),
+                  tokens: 0,
+                  chainId: "materialization-failure",
+                },
+              }
+            : {}),
+        },
+        ctx,
+      );
+      return { result, attachmentId, attachmentNames };
+    } finally {
+      randomUuid.mockRestore();
+    }
+  }
+
+  it("keeps ordinary materialization failures actionable without exposing paths", async () => {
+    const { result, attachmentId, attachmentNames } = await spawnWithForcedMaterializationFailure({
+      continuation: false,
+    });
+
+    expect(result).toEqual({
+      status: "error",
+      error: "attachments_materialization_failed (stage=attachment_write reason=target_conflict)",
+    });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(attachmentNames[0]);
+    expect(serialized).not.toContain(attachmentId);
+    expect(serialized).not.toContain(workspaceDirOverride);
+  });
+
+  it("does not leak overlapping attachment name fragments from ordinary failures", async () => {
+    const overlappingFragment = "OVERLAP_FRAGMENT_MUST_NOT_ECHO";
+    const secretPrefix = "SECRET_PREFIX_MUST_NOT_ECHO";
+    const { result } = await spawnWithForcedMaterializationFailure({
+      continuation: false,
+      attachmentNames: [overlappingFragment, `${secretPrefix}-${overlappingFragment}`],
+    });
+
+    expect(result).toEqual({
+      status: "error",
+      error: "attachments_materialization_failed (stage=attachment_write reason=target_conflict)",
+    });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(overlappingFragment);
+    expect(serialized).not.toContain(secretPrefix);
+  });
+
+  it("fully redacts continuation materialization failures", async () => {
+    const { result, attachmentId, attachmentNames } = await spawnWithForcedMaterializationFailure({
+      continuation: true,
+    });
+
+    expect(result).toEqual({ status: "error", error: "attachments_materialization_failed" });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(attachmentNames[0]);
+    expect(serialized).not.toContain(attachmentId);
+    expect(serialized).not.toContain(workspaceDirOverride);
   });
 
   it("materializes attachments under explicit cwd when native subagent cwd is provided", async () => {

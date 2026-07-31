@@ -258,7 +258,11 @@ function canonicalizeDelegateAttachments(
     ...(attachment.encoding ? { encoding: attachment.encoding } : {}),
     ...(attachment.mimeType !== undefined ? { mimeType: attachment.mimeType.trim() } : {}),
   }));
-  const error = validateSubagentAttachments({ config, attachments: canonical });
+  const error = validateSubagentAttachments({
+    config,
+    attachments: canonical,
+    redactContinuationErrorDetails: true,
+  });
   if (error) {
     throw new Error(error);
   }
@@ -382,6 +386,7 @@ function decodeDelegateState(flow: TaskFlowRecord): PendingDelegateState | undef
   const attachmentError = validateSubagentAttachments({
     config: getRuntimeConfig(),
     attachments: parsed.data.attachments,
+    redactContinuationErrorDetails: true,
   });
   return attachmentError ? undefined : parsed.data;
 }

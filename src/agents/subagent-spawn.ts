@@ -312,6 +312,7 @@ export async function spawnSubagentDirect(
       workspaceDir: spawnedCwd ?? spawnedWorkspaceDir,
       attachments: params.attachments,
       mountPathHint,
+      redactContinuationErrorDetails: params.drainsContinuationDelegateQueue === true,
     });
     if (materializedAttachments && materializedAttachments.status !== "ok") {
       await cleanupProvisionalSession(childSessionKey, {

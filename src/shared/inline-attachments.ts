@@ -14,7 +14,10 @@ export type InlineAttachmentMount = {
 export type InlineAttachmentMountPathResult =
   | { status: "absent" }
   | { status: "valid"; mountPath: string }
-  | { status: "invalid" };
+  | {
+      status: "invalid";
+      reason: "invalid_type" | "too_long" | "unsupported_characters";
+    };
 
 export const MAX_INLINE_ATTACHMENT_MOUNT_PATH_BYTES = 1024;
 export const MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES = 256;
@@ -24,17 +27,17 @@ export function parseInlineAttachmentMountPath(value: unknown): InlineAttachment
     return { status: "absent" };
   }
   if (typeof value !== "string") {
-    return { status: "invalid" };
+    return { status: "invalid", reason: "invalid_type" };
   }
   if (Buffer.byteLength(value, "utf8") > MAX_INLINE_ATTACHMENT_MOUNT_PATH_BYTES) {
-    return { status: "invalid" };
+    return { status: "invalid", reason: "too_long" };
   }
   const mountPath = value.trim();
   if (!mountPath) {
     return { status: "absent" };
   }
   if (!/^[A-Za-z0-9._\-/:]+$/.test(mountPath)) {
-    return { status: "invalid" };
+    return { status: "invalid", reason: "unsupported_characters" };
   }
   return { status: "valid", mountPath };
 }
@@ -94,21 +97,22 @@ function isWellFormedAttachmentName(value: string): boolean {
   return true;
 }
 
-function validateInlineAttachmentName(name: string): void {
+function validateInlineAttachmentName(name: string, attachmentIndex: number): void {
+  const index = `attachmentIndex=${attachmentIndex}`;
   if (!name) {
-    throw new Error("attachments_invalid_name (empty)");
+    throw new Error(`attachments_invalid_name (${index} empty)`);
   }
   if (!isWellFormedAttachmentName(name) || name.includes("\uFFFD")) {
-    throw new Error("attachments_invalid_name (invalid Unicode)");
+    throw new Error(`attachments_invalid_name (${index} invalid Unicode)`);
   }
   if (name.trim() !== name) {
-    throw new Error("attachments_invalid_name (leading or trailing whitespace)");
+    throw new Error(`attachments_invalid_name (${index} leading or trailing whitespace)`);
   }
   if (
     name.includes("\u0000") ||
     Array.from(name).some((char) => PORTABLE_ATTACHMENT_NAME_FORBIDDEN.has(char))
   ) {
-    throw new Error(`attachments_invalid_name (${name})`);
+    throw new Error(`attachments_invalid_name (${index} name=${name})`);
   }
   if (
     Array.from(name).some((char) => {
@@ -116,15 +120,16 @@ function validateInlineAttachmentName(name: string): void {
       return code < 0x20 || code === 0x7f;
     })
   ) {
-    throw new Error(`attachments_invalid_name (${name})`);
+    throw new Error(`attachments_invalid_name (${index} name=${name})`);
   }
-  if (Buffer.byteLength(name, "utf8") > MAX_INLINE_ATTACHMENT_BASENAME_BYTES) {
+  const basenameBytes = Buffer.byteLength(name, "utf8");
+  if (basenameBytes > MAX_INLINE_ATTACHMENT_BASENAME_BYTES) {
     throw new Error(
-      `attachments_invalid_name (too long: ${MAX_INLINE_ATTACHMENT_BASENAME_BYTES} bytes)`,
+      `attachments_invalid_name (${index} basenameBytes=${basenameBytes} maxBasenameBytes=${MAX_INLINE_ATTACHMENT_BASENAME_BYTES})`,
     );
   }
   if (/[. ]$/u.test(name)) {
-    throw new Error(`attachments_invalid_name (${name})`);
+    throw new Error(`attachments_invalid_name (${index} name=${name})`);
   }
   const filesystemKey = name.toUpperCase().normalize("NFC");
   const preExtensionStem = (filesystemKey.split(".", 1)[0] ?? "").replace(/[. ]+$/u, "");
@@ -135,7 +140,7 @@ function validateInlineAttachmentName(name: string): void {
     isUnsafeDeviceReadPath(name, { platform: "win32" }) ||
     isUnsafeDeviceReadPath(preExtensionStem, { platform: "win32" })
   ) {
-    throw new Error(`attachments_invalid_name (${name})`);
+    throw new Error(`attachments_invalid_name (${index} name=${name})`);
   }
 }
 
@@ -156,7 +161,7 @@ export function prepareInlineAttachmentSnapshots(params: {
   const seen = new Set<string>();
   const attachments: PreparedInlineAttachmentSnapshot[] = [];
   let totalBytes = 0;
-  for (const raw of params.attachments) {
+  for (const [attachmentIndex, raw] of params.attachments.entries()) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
       throw new Error("attachments_invalid_member (expected object)");
     }
@@ -168,36 +173,58 @@ export function prepareInlineAttachmentSnapshots(params: {
       throw new Error("attachments_invalid_member (encoding must be utf8 or base64)");
     }
     if (item.mimeType !== undefined && typeof item.mimeType !== "string") {
-      throw new Error("attachments_invalid_member (mimeType must be a string)");
+      throw new Error(
+        `attachments_invalid_member (attachmentIndex=${attachmentIndex} reason=mime_type_not_string)`,
+      );
     }
     const rawMimeType = item.mimeType ?? "";
-    if (
-      Buffer.byteLength(rawMimeType, "utf8") > MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES ||
-      rawMimeType.trim() !== rawMimeType ||
-      /\p{Cc}/u.test(rawMimeType) ||
-      !isWellFormedAttachmentName(rawMimeType)
-    ) {
-      throw new Error("attachments_invalid_member (invalid mimeType metadata)");
+    if (Buffer.byteLength(rawMimeType, "utf8") > MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES) {
+      throw new Error(
+        `attachments_invalid_member (attachmentIndex=${attachmentIndex} reason=mime_type_too_long maxMimeTypeBytes=${MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES})`,
+      );
+    }
+    if (rawMimeType.trim() !== rawMimeType) {
+      throw new Error(
+        `attachments_invalid_member (attachmentIndex=${attachmentIndex} reason=mime_type_whitespace)`,
+      );
+    }
+    if (/\p{Cc}/u.test(rawMimeType)) {
+      throw new Error(
+        `attachments_invalid_member (attachmentIndex=${attachmentIndex} reason=mime_type_control_characters)`,
+      );
+    }
+    if (!isWellFormedAttachmentName(rawMimeType)) {
+      throw new Error(
+        `attachments_invalid_member (attachmentIndex=${attachmentIndex} reason=mime_type_invalid_unicode)`,
+      );
     }
 
     const rawName = item.name;
     if (!isWellFormedAttachmentName(rawName) || rawName.includes("\uFFFD")) {
-      throw new Error("attachments_invalid_name (invalid Unicode)");
+      throw new Error(
+        `attachments_invalid_name (attachmentIndex=${attachmentIndex} invalid Unicode)`,
+      );
     }
     if (rawName.trim() !== rawName) {
-      throw new Error("attachments_invalid_name (leading or trailing whitespace)");
+      throw new Error(
+        `attachments_invalid_name (attachmentIndex=${attachmentIndex} leading or trailing whitespace)`,
+      );
     }
     const name = rawName.normalize("NFC");
     const content = item.content;
     if (!isWellFormedAttachmentName(content)) {
-      throw new Error("attachments_invalid_content (invalid Unicode)");
+      throw new Error(
+        `attachments_invalid_content (attachmentIndex=${attachmentIndex} reason=invalid_unicode)`,
+      );
     }
     const encoding = item.encoding ?? "utf8";
     const mimeType = rawMimeType;
-    validateInlineAttachmentName(name);
+    validateInlineAttachmentName(name, attachmentIndex);
     const canonicalNameKey = name.toUpperCase().normalize("NFC");
     if (seen.has(canonicalNameKey)) {
-      throw new Error(`attachments_duplicate_name (${name})`);
+      throw new Error(
+        `attachments_duplicate_name (attachmentIndex=${attachmentIndex} name=${name})`,
+      );
     }
     seen.add(canonicalNameKey);
     if (params.requireImageMime && !mimeType.startsWith("image/")) {
@@ -211,7 +238,9 @@ export function prepareInlineAttachmentSnapshots(params: {
     if (encoding === "base64") {
       const decoded = decodeStrictBase64(content, params.limits.maxFileBytes);
       if (!decoded) {
-        throw new Error("attachments_invalid_base64_or_too_large");
+        throw new Error(
+          `attachments_invalid_base64_or_too_large (attachmentIndex=${attachmentIndex})`,
+        );
       }
       buf = decoded;
       bytes = decoded.byteLength;
@@ -219,25 +248,25 @@ export function prepareInlineAttachmentSnapshots(params: {
       bytes = Buffer.byteLength(content, "utf8");
       if (bytes > params.limits.maxFileBytes) {
         throw new Error(
-          `attachments_file_bytes_exceeded (name=${name} bytes=${bytes} maxFileBytes=${params.limits.maxFileBytes})`,
+          `attachments_file_bytes_exceeded (attachmentIndex=${attachmentIndex} name=${name} bytes=${bytes} maxFileBytes=${params.limits.maxFileBytes})`,
         );
       }
       if (totalBytes + bytes > params.limits.maxTotalBytes) {
         throw new Error(
-          `attachments_total_bytes_exceeded (totalBytes=${totalBytes + bytes} maxTotalBytes=${params.limits.maxTotalBytes})`,
+          `attachments_total_bytes_exceeded (attachmentIndex=${attachmentIndex} totalBytes=${totalBytes + bytes} maxTotalBytes=${params.limits.maxTotalBytes})`,
         );
       }
       buf = Buffer.from(content, "utf8");
     }
     if (bytes > params.limits.maxFileBytes) {
       throw new Error(
-        `attachments_file_bytes_exceeded (name=${name} bytes=${bytes} maxFileBytes=${params.limits.maxFileBytes})`,
+        `attachments_file_bytes_exceeded (attachmentIndex=${attachmentIndex} name=${name} bytes=${bytes} maxFileBytes=${params.limits.maxFileBytes})`,
       );
     }
     const nextTotalBytes = totalBytes + bytes;
     if (nextTotalBytes > params.limits.maxTotalBytes) {
       throw new Error(
-        `attachments_total_bytes_exceeded (totalBytes=${nextTotalBytes} maxTotalBytes=${params.limits.maxTotalBytes})`,
+        `attachments_total_bytes_exceeded (attachmentIndex=${attachmentIndex} totalBytes=${nextTotalBytes} maxTotalBytes=${params.limits.maxTotalBytes})`,
       );
     }
     totalBytes = nextTotalBytes;
