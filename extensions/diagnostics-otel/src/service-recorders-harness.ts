@@ -18,7 +18,6 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
     trustedTraceContext,
     activeTrustedParentContext,
     trackTrustedSpan,
-    takeTrackedTrustedSpan,
     setSpanAttrs,
     completeTrackedLifecycleSpan,
     addRunAttrs,
@@ -103,7 +102,7 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
       });
     }
     if (trackedSpan && trustedTrace?.spanId) {
-      completeTrackedLifecycleSpan(trustedTrace.spanId, trackedSpan, evt.ts);
+      completeTrackedLifecycleSpan(trustedTrace, trackedSpan, evt.ts);
       return;
     }
     span.end(evt.ts);
@@ -132,8 +131,12 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
       ...(redactedError ? { "openclaw.error": redactedError } : {}),
       ...(evt.cleanupFailed ? { "openclaw.harness.cleanup_failed": true } : {}),
     };
+    const trustedTrace = trustedTraceContext(evt, metadata);
+    const trackedSpan = trustedTrace?.spanId
+      ? activeTrustedSpans.get(trustedTrace.spanId)
+      : undefined;
     const span =
-      takeTrackedTrustedSpan(evt, metadata) ??
+      trackedSpan ??
       spanWithDuration("openclaw.harness.run", spanAttrs, evt.durationMs, {
         parentContext: activeTrustedParentContext(evt, metadata),
         endTimeMs: evt.ts,
@@ -143,6 +146,12 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
       code: SpanStatusCode.ERROR,
       message: redactedError ?? errorType,
     });
+    // Retain on the error path too: for the openclaw harness this span is the only
+    // ancestor a late child can attach to, and aborted turns emit no run.completed.
+    if (trackedSpan && trustedTrace?.spanId) {
+      completeTrackedLifecycleSpan(trustedTrace, trackedSpan, evt.ts);
+      return;
+    }
     span.end(evt.ts);
   };
 

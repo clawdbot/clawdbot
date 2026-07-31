@@ -56,6 +56,7 @@ describe("node PTY command", () => {
         file: "/usr/bin/codex",
         args: ["resume", "id"],
         cwd: "/missing/catalog/cwd",
+        pathEnv: "/shell/bin:/usr/bin",
         cols: 80,
         rows: 24,
       },
@@ -63,8 +64,11 @@ describe("node PTY command", () => {
       spawn,
     );
     await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
-    const spawnCalls = spawn.mock.calls as unknown as Array<[{ cwd?: string }]>;
+    const spawnCalls = spawn.mock.calls as unknown as Array<
+      [{ cwd?: string; env?: Record<string, string> }]
+    >;
     expect(spawnCalls[0]?.[0].cwd).toBe(os.homedir());
+    expect(spawnCalls[0]?.[0].env?.PATH).toBe("/shell/bin:/usr/bin");
 
     onData?.("output");
     await vi.waitFor(() => expect(emitChunk).toHaveBeenCalledWith("output"));

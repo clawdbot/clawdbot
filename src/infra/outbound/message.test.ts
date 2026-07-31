@@ -337,6 +337,52 @@ describe("sendMessage", () => {
     );
   });
 
+  it("can require queue persistence without provider unknown-send reconciliation", async () => {
+    const onDeliveryIntent = vi.fn();
+    const onDeliveryResult = vi.fn();
+
+    await sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "conversation delivery",
+      queuePolicy: "required",
+      requireUnknownSendReconciliation: false,
+      deliveryIntentId: "operation-1",
+      deliveryCompletion: {
+        kind: "conversation",
+        agentId: "main",
+        operationId: "operation-1",
+      },
+      onDeliveryIntent,
+      onDeliveryResult,
+    });
+
+    const deliveryParams = expectDeliveryCallFields({
+      queuePolicy: "required",
+      deliveryIntentId: "operation-1",
+      deliveryCompletion: {
+        kind: "conversation",
+        agentId: "main",
+        operationId: "operation-1",
+      },
+      onDeliveryResult,
+    });
+    const wrappedIntent = deliveryParams.onDeliveryIntent as
+      | ((intent: { id: string; channel: "forum"; to: string; queuePolicy: "required" }) => void)
+      | undefined;
+    wrappedIntent?.({
+      id: "queue-1",
+      channel: "forum",
+      to: "123456",
+      queuePolicy: "required",
+    });
+    expect(onDeliveryIntent).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "queue-1", durability: "required" }),
+    );
+    expect(mocks.resolveOutboundDurableFinalDeliverySupport).not.toHaveBeenCalled();
+  });
+
   it("rejects required durable sends before enqueue when replay safety is unsupported", async () => {
     mocks.resolveOutboundDurableFinalDeliverySupport.mockResolvedValueOnce({
       ok: false,

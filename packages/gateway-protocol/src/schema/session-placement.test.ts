@@ -4,7 +4,7 @@ import {
   SessionPlacementSchema,
   SessionPlacementStateSchema,
   validateSessionsDispatchParams,
-  validateSessionsDispatchResult,
+  validateSessionsReclaimParams,
 } from "../index.js";
 
 const placementStates = [
@@ -58,6 +58,15 @@ describe("session dispatch protocol schemas", () => {
         task: "run remotely",
       }),
     ).toBe(false);
+  });
+
+  it("accepts only a session selector for worker reclaim", () => {
+    expect(validateSessionsReclaimParams({ key: "agent:main:dispatch", agentId: "main" })).toBe(
+      true,
+    );
+    expect(validateSessionsReclaimParams({ key: "agent:main:dispatch", profileId: "dev" })).toBe(
+      false,
+    );
   });
 
   it("keeps placement states closed", () => {
@@ -194,8 +203,22 @@ describe("session dispatch protocol schemas", () => {
         state: "reclaimed",
         ...basePlacement,
         ...workerOwnedFields,
+        workspaceResultConflict: {
+          paths: ["src/local.ts"],
+          stagedResultRef: "refs/openclaw/worker-results/claim-1",
+        },
       }),
     ).toBe(true);
+    expect(
+      Value.Check(SessionPlacementSchema, {
+        state: "reclaimed",
+        ...basePlacement,
+        workspaceResultConflict: {
+          paths: [],
+          stagedResultRef: "refs/openclaw/worker-results/claim-1",
+        },
+      }),
+    ).toBe(false);
   });
 
   it("requires recovery evidence for failed placement", () => {
@@ -214,34 +237,6 @@ describe("session dispatch protocol schemas", () => {
     ).toBe(false);
   });
 
-  it("accepts only active worker ownership in successful dispatch results", () => {
-    const active = {
-      state: "active" as const,
-      ...basePlacement,
-      ...workerOwnedFields,
-    };
-    expect(
-      validateSessionsDispatchResult({
-        ok: true,
-        key: "agent:main:dispatch",
-        sessionId: "session-1",
-        placement: active,
-      }),
-    ).toBe(true);
-    expect(
-      validateSessionsDispatchResult({
-        ok: true,
-        key: "agent:main:dispatch",
-        sessionId: "session-1",
-        placement: {
-          state: "failed",
-          ...basePlacement,
-          recoveryError: "worker admission failed",
-        },
-      }),
-    ).toBe(false);
-  });
-
   it("rejects unknown placement fields", () => {
     expect(
       Value.Check(SessionPlacementSchema, {
@@ -249,6 +244,16 @@ describe("session dispatch protocol schemas", () => {
         ...basePlacement,
         ...workerOwnedFields,
         unexpected: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects extra fields in dispatch params", () => {
+    expect(
+      validateSessionsDispatchParams({
+        key: "agent:main:dispatch",
+        profileId: "development",
+        extra: true,
       }),
     ).toBe(false);
   });

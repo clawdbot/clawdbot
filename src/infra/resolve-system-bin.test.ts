@@ -176,6 +176,62 @@ describe("resolveSystemBin", () => {
       expect(resolveSystemBin("ffmpeg", { trust: "standard" })).toBe("/usr/bin/ffmpeg");
     });
   }
+
+  it.each([
+    { name: "Unix strict", platform: "linux", trust: "strict", extension: "" },
+    { name: "Unix standard", platform: "linux", trust: "standard", extension: "" },
+    { name: "Windows extensionless strict", platform: "win32", trust: "strict", extension: "" },
+    {
+      name: "Windows explicit-extension standard",
+      platform: "win32",
+      trust: "standard",
+      extension: ".exe",
+    },
+  ] as const)(
+    "bounds $name success entries with LRU eviction and retries failures",
+    ({ platform, trust, extension }) => {
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      const systemDir =
+        platform === "win32" ? path.win32.join("C:\\Windows", "System32") : "/usr/bin";
+      const commandFor = (label: string) => `${label}${extension}`;
+      const candidateFor = (command: string) =>
+        platform === "win32" && !extension
+          ? path.win32.join(systemDir, `${command}.exe`)
+          : path.join(systemDir, command);
+      const addCommand = (command: string) => {
+        const candidate = candidateFor(command);
+        addExecutables(path.resolve(candidate));
+        return candidate;
+      };
+      const cold = commandFor("cold");
+      const hot = commandFor("hot");
+
+      try {
+        expect(resolveSystemBin(cold, { trust })).toBeNull();
+        const coldCandidate = addCommand(cold);
+        const hotCandidate = addCommand(hot);
+        expect(resolveSystemBin(cold, { trust })).toBe(coldCandidate);
+        expect(resolveSystemBin(hot, { trust })).toBe(hotCandidate);
+        for (let index = 0; index < 510; index += 1) {
+          const filler = commandFor(`filler-${index}`);
+          const fillerCandidate = addCommand(filler);
+          expect(resolveSystemBin(filler, { trust })).toBe(fillerCandidate);
+        }
+
+        expect(resolveSystemBin(hot, { trust })).toBe(hotCandidate);
+        const newest = commandFor("newest");
+        const newestCandidate = addCommand(newest);
+        expect(resolveSystemBin(newest, { trust })).toBe(newestCandidate);
+        executables.delete(path.resolve(coldCandidate));
+        executables.delete(path.resolve(hotCandidate));
+
+        expect(resolveSystemBin(hot, { trust })).toBe(hotCandidate);
+        expect(resolveSystemBin(cold, { trust })).toBeNull();
+      } finally {
+        platformSpy.mockRestore();
+      }
+    },
+  );
 });
 
 describe("trusted directory list", () => {

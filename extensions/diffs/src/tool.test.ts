@@ -74,7 +74,7 @@ describe("diffs tool", () => {
       },
     });
     expect(screenshotHtml).not.toHaveBeenCalled();
-    await expect(fs.readdir(rootDir)).resolves.toEqual([]);
+    await expect(fs.stat(rootDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("uses configured viewerBaseUrl when tool input omits baseUrl", async () => {
@@ -163,7 +163,10 @@ describe("diffs tool", () => {
 
     expect(screenshotter["screenshotHtml"]).toHaveBeenCalledTimes(1);
     expect(readTextContent(result, 0)).toContain("Diff PNG generated at:");
-    expect(readTextContent(result, 0)).toContain("Use the `message` tool");
+    // Artifact text is model-visible, so it names the delivery capability rather
+    // than the `message` tool, which gating removes from many sessions.
+    expect(readTextContent(result, 0)).toContain("use an available file-sending tool");
+    expect(readTextContent(result, 0)).not.toMatch(/`message`|\bmessage tool\b/);
     expect(result?.content).toHaveLength(1);
     const details = readDetails(result);
     expect(requireString(details.filePath, "filePath")).toMatch(/preview\.png$/);
@@ -336,6 +339,7 @@ describe("diffs tool", () => {
     expect(result?.content).toHaveLength(1);
     expect(readTextContent(result, 0)).toContain("File rendering failed");
     expect((result.details as Record<string, unknown>).fileError).toBe("browser missing");
+    await expect(fs.readdir(rootDir)).resolves.toEqual([]);
   });
 
   it("rejects invalid base URLs as tool input errors", async () => {
@@ -449,7 +453,8 @@ describe("diffs tool", () => {
 
     const viewerPath = String((result.details as Record<string, unknown>).viewerPath);
     const id = extractViewerArtifactId(viewerPath);
-    const html = await store.readHtml(id);
+    const viewer = await store.readAuthorizedViewer(id, extractViewerArtifactToken(viewerPath));
+    const html = Buffer.from(viewer!.html).toString("utf8");
     expect(html).toContain('body data-theme="light"');
     expect(html).toContain("--diffs-font-size: 17px;");
     expect(html).toContain("JetBrains Mono");
@@ -496,7 +501,8 @@ describe("diffs tool", () => {
     expect((result.details as Record<string, unknown>).fileMaxWidth).toBe(1320);
     const viewerPath = String((result.details as Record<string, unknown>).viewerPath);
     const id = extractViewerArtifactId(viewerPath);
-    const html = await store.readHtml(id);
+    const viewer = await store.readAuthorizedViewer(id, extractViewerArtifactToken(viewerPath));
+    const html = Buffer.from(viewer!.html).toString("utf8");
     expect(html).toContain('body data-theme="dark"');
   });
 
@@ -520,6 +526,34 @@ describe("diffs tool", () => {
       sessionId: "session-456",
       messageChannel: "telegram",
       agentAccountId: "work",
+    });
+  });
+
+  it("stores partial tool context for viewer and rendered-file artifacts", async () => {
+    const screenshotter = createPngScreenshotter();
+    const tool = createToolWithScreenshotter(store, screenshotter, DEFAULT_DIFFS_TOOL_DEFAULTS, {
+      agentId: "reviewer",
+      sessionId: "session-partial",
+    });
+
+    const result = await tool.execute?.("tool-context-partial", {
+      before: "one\n",
+      after: "two\n",
+      mode: "both",
+    });
+
+    expect((result.details as Record<string, unknown>).context).toEqual({
+      agentId: "reviewer",
+      sessionId: "session-partial",
+    });
+    expect(screenshotter["screenshotHtml"]).toHaveBeenCalledTimes(1);
+
+    const viewerPath = String((result.details as Record<string, unknown>).viewerPath);
+    const id = extractViewerArtifactId(viewerPath);
+    const viewer = await store.readAuthorizedViewer(id, extractViewerArtifactToken(viewerPath));
+    expect(viewer?.artifact.context).toEqual({
+      agentId: "reviewer",
+      sessionId: "session-partial",
     });
   });
 });
@@ -643,6 +677,14 @@ function extractViewerArtifactId(viewerPath: string): string {
     throw new Error(`Missing artifact id in viewer path: ${viewerPath}`);
   }
   return previousSegment;
+}
+
+function extractViewerArtifactToken(viewerPath: string): string {
+  const token = viewerPath.split("/").findLast((segment) => segment.length > 0);
+  if (!token) {
+    throw new Error("expected viewer artifact token");
+  }
+  return token;
 }
 
 function readParametersProperties(parameters: unknown): Record<string, unknown> {

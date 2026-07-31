@@ -24,7 +24,7 @@ const SESSIONLESS_OWNER_CLEAR_COMMANDS = new Set<string>([
   "canvas.a2ui.reset",
 ]);
 
-export const LINUX_CANVAS_COMMANDS = [
+const LINUX_CANVAS_COMMANDS = [
   "canvas.present",
   "canvas.hide",
   "canvas.navigate",
@@ -188,5 +188,3 @@ export function createLinuxCanvasCommands(
     return registration;
   });
 }
-
-export const testing = { buildActionMessage } as const;

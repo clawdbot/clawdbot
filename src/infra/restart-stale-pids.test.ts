@@ -312,7 +312,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         (call) => call[0] === "ps" && Array.isArray(call[1]) && (call[1] as unknown[])[0] === "-ww",
       );
       expect(psCall?.[1]).toEqual(["-ww", "-p", String(stalePid), "-o", "command="]);
-      expect(psCall?.[2]).toEqual({ timeout: 2000, encoding: "utf8" });
+      expect(psCall?.[2]).toEqual({ encoding: "utf8", killSignal: "SIGKILL", timeout: 2000 });
     });
 
     it("skips malformed lsof pid tokens with trailing garbage", () => {
@@ -556,7 +556,11 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
           (call) =>
             call[0] === "ps" && Array.isArray(call[1]) && (call[1] as unknown[])[0] === "-o",
         );
-        expect(ancestorPsCall?.[2]).toEqual({ timeout: 400, encoding: "utf8" });
+        expect(ancestorPsCall?.[2]).toEqual({
+          encoding: "utf8",
+          killSignal: "SIGKILL",
+          timeout: 400,
+        });
       } finally {
         if (origDescriptor) {
           Object.defineProperty(process, "platform", origDescriptor);
@@ -836,6 +840,45 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
     });
 
+    it("continues cleanup and port polling when individual process signals fail", () => {
+      const termDeniedPid = process.pid + 198;
+      const killDeniedPid = process.pid + 199;
+      let lsofCall = 0;
+      mockSpawnSync.mockImplementation((command: unknown) => {
+        if (command !== "lsof") {
+          return createLsofResult();
+        }
+        lsofCall += 1;
+        return lsofCall === 1
+          ? createLsofResult({
+              stdout: lsofOutput([
+                { pid: termDeniedPid, cmd: "openclaw-gateway" },
+                { pid: killDeniedPid, cmd: "openclaw-gateway" },
+              ]),
+            })
+          : createLsofResult({ status: 1 });
+      });
+
+      const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (pid === termDeniedPid && signal === "SIGTERM") {
+          throw Object.assign(new Error("term permission denied"), { code: "EPERM" });
+        }
+        if (pid === killDeniedPid && signal === "SIGKILL") {
+          throw Object.assign(new Error("kill permission denied"), { code: "EACCES" });
+        }
+        return true;
+      });
+
+      expect(cleanStaleGatewayProcessesSync()).toEqual([killDeniedPid]);
+      expect(killSpy).toHaveBeenCalledWith(termDeniedPid, "SIGTERM");
+      expect(killSpy).toHaveBeenCalledWith(killDeniedPid, "SIGTERM");
+      expect(killSpy).toHaveBeenCalledWith(killDeniedPid, 0);
+      expect(killSpy).toHaveBeenCalledWith(killDeniedPid, "SIGKILL");
+      expectWarningContaining(`failed to send SIGTERM to stale gateway process ${termDeniedPid}`);
+      expectWarningContaining(`failed to send SIGKILL to stale gateway process ${killDeniedPid}`);
+      expect(lsofCall).toBe(2);
+    });
+
     it("does not kill a protected gateway pid after reparenting", () => {
       const protectedPid = process.pid + 4001;
       const stalePid = process.pid + 4002;
@@ -860,6 +903,91 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(result).toEqual([stalePid]);
       expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
       expect(killSpy).not.toHaveBeenCalledWith(protectedPid, expect.anything());
+    });
+
+    it("refreshes the protected pid after listener enumeration before filtering", () => {
+      const oldManagedPid = process.pid + 4100;
+      const replacementPid = process.pid + 4101;
+      const stalePid = process.pid + 4102;
+      let listenerSnapshotCaptured = false;
+      let lsofCall = 0;
+      mockSpawnSync.mockImplementation((command: unknown) => {
+        if (command !== "lsof") {
+          return createLsofResult({ status: 1 });
+        }
+        lsofCall += 1;
+        if (lsofCall === 1) {
+          listenerSnapshotCaptured = true;
+          return createLsofResult({
+            stdout: lsofOutput([
+              { pid: replacementPid, cmd: "openclaw-gateway" },
+              { pid: stalePid, cmd: "openclaw-gateway" },
+            ]),
+          });
+        }
+        return createLsofResult({ status: 1 });
+      });
+      const resolveProtectedPid = vi.fn(() => {
+        expect(listenerSnapshotCaptured).toBe(true);
+        return replacementPid;
+      });
+      const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+
+      const result = withStubbedPpid(0, () =>
+        cleanStaleGatewayProcessesSync(18789, {
+          protectedPid: oldManagedPid,
+          resolveProtectedPid,
+        }),
+      );
+
+      expect(result).toEqual([stalePid]);
+      expect(resolveProtectedPid).toHaveBeenCalledOnce();
+      expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(replacementPid, expect.anything());
+      expect(killSpy).not.toHaveBeenCalledWith(oldManagedPid, expect.anything());
+    });
+
+    it("does not signal the replacement when it is the only enumerated listener", () => {
+      const replacementPid = process.pid + 4201;
+      let listenerSnapshotCaptured = false;
+      mockSpawnSync.mockImplementation((command: unknown) => {
+        if (command !== "lsof") {
+          return createLsofResult({ status: 1 });
+        }
+        listenerSnapshotCaptured = true;
+        return createOpenClawBusyResult(replacementPid);
+      });
+      const resolveProtectedPid = vi.fn(() => {
+        expect(listenerSnapshotCaptured).toBe(true);
+        return replacementPid;
+      });
+      const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+
+      const result = withStubbedPpid(0, () =>
+        cleanStaleGatewayProcessesSync(18789, { resolveProtectedPid }),
+      );
+
+      expect(result).toEqual([]);
+      expect(resolveProtectedPid).toHaveBeenCalledOnce();
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(mockSpawnSync).toHaveBeenCalledTimes(1);
+    });
+
+    it("fails closed when the refreshed protected pid cannot be resolved", () => {
+      const listenerPid = process.pid + 4301;
+      mockSpawnSync.mockReturnValue(createOpenClawBusyResult(listenerPid));
+      const resolveProtectedPid = vi.fn(() => {
+        throw new Error("launchctl print failed");
+      });
+      const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+
+      const result = withStubbedPpid(0, () =>
+        cleanStaleGatewayProcessesSync(18789, { resolveProtectedPid }),
+      );
+
+      expect(result).toEqual([]);
+      expect(resolveProtectedPid).toHaveBeenCalledOnce();
+      expect(killSpy).not.toHaveBeenCalled();
     });
 
     it("escalates to SIGKILL when process survives the SIGTERM window", () => {

@@ -1,5 +1,6 @@
 // Resolves runtime group-policy settings for channels and sessions.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createDedupeCache } from "../infra/dedupe.js";
 import type { GroupPolicy } from "./types.base.js";
 
 type RuntimeGroupPolicyResolution = {
@@ -90,7 +91,13 @@ export function resolveAllowlistProviderRuntimeGroupPolicy(
   });
 }
 
-const warnedMissingProviderGroupPolicy = new Set<string>();
+const MAX_WARNED_MISSING_PROVIDER_GROUP_POLICY_KEYS = 4096;
+// Warn-once keys accumulate per provider/account for the process lifetime;
+// bounding them means evicted keys can re-warn instead of growing without limit.
+const warnedMissingProviderGroupPolicy = createDedupeCache({
+  ttlMs: 0,
+  maxSize: MAX_WARNED_MISSING_PROVIDER_GROUP_POLICY_KEYS,
+});
 
 /**
  * Log the missing-provider fail-closed fallback once per provider/account.
@@ -107,10 +114,9 @@ export function warnMissingProviderGroupPolicyFallbackOnce(params: {
     return false;
   }
   const key = `${params.providerKey}:${params.accountId ?? "*"}`;
-  if (warnedMissingProviderGroupPolicy.has(key)) {
+  if (warnedMissingProviderGroupPolicy.check(key)) {
     return false;
   }
-  warnedMissingProviderGroupPolicy.add(key);
   const blockedLabel = normalizeOptionalString(params.blockedLabel) || "group messages";
   params.log(
     `${params.providerKey}: channels.${params.providerKey} is missing; defaulting groupPolicy to "allowlist" (${blockedLabel} blocked until explicitly configured).`,

@@ -11,8 +11,8 @@ import {
 import {
   findDuplicateGuardMediaGenerationTaskForSession,
   recordRecentMediaGenerationTaskStartForSession,
-  resetRecentMediaGenerationDuplicateGuardsForTests,
 } from "./media-generation-task-status-shared.js";
+import { resetRecentMediaGenerationDuplicateGuardsForTests } from "./media-generation-task-status-shared.test-support.js";
 
 const taskRuntimeInternalMocks = vi.hoisted(() => {
   const mocks = {

@@ -5,16 +5,18 @@
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { vi } from "vitest";
 import WebSocket from "ws";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 type RpcResponse = {
   id: number;
   result?: unknown;
-  error?: { message: string };
+  error?: { code: number; message: string };
 };
 
 /** Builds a minimal enabled sandbox context with overridable backend and fs bridge hooks. */
 export function createSandboxContext(overrides: {
   buildExecSpec?: NonNullable<SandboxContext["backend"]>["buildExecSpec"];
+  copyFile?: NonNullable<SandboxContext["fsBridge"]>["copyFile"];
   finalizeExec?: NonNullable<SandboxContext["backend"]>["finalizeExec"];
   mkdirp?: NonNullable<SandboxContext["fsBridge"]>["mkdirp"];
   readFile?: NonNullable<SandboxContext["fsBridge"]>["readFile"];
@@ -61,6 +63,7 @@ export function createSandboxContext(overrides: {
         relativePath: filePath,
         containerPath: filePath,
       }),
+      copyFile: overrides.copyFile ?? (async () => undefined),
       readFile: overrides.readFile ?? (async () => Buffer.alloc(0)),
       writeFile: overrides.writeFile ?? (async () => undefined),
       mkdirp: overrides.mkdirp ?? (async () => undefined),
@@ -80,7 +83,7 @@ export function createSandboxContext(overrides: {
 /** Creates a fake Codex app-server client with a configurable server version. */
 export function createClient(options: { serverVersion?: string } = {}) {
   return {
-    getServerVersion: vi.fn(() => options.serverVersion ?? "0.132.0"),
+    getServerVersion: vi.fn(() => options.serverVersion ?? CODEX_APP_SERVER_VERSION),
     request: vi.fn(async (_method: string, _params?: unknown) => ({})),
   };
 }
@@ -115,7 +118,7 @@ export function codexFsSandboxContext(params: {
       },
       network: "restricted",
     },
-    cwd: params.cwd ?? "/workspace",
+    cwd: params.cwd ?? "file:///workspace",
     windowsSandboxLevel: "disabled",
     windowsSandboxPrivateDesktop: false,
     useLegacyLandlock: false,
@@ -214,7 +217,8 @@ export async function waitForHttpBodyDeltas(
   notifications: Array<{ method: string; params?: unknown }>,
   count: number,
 ): Promise<unknown[]> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  // Preserve the 500 ms failure budget while checking completed streams sooner.
+  for (let attempt = 0; attempt < 100; attempt += 1) {
     const deltas = notifications
       .filter((notification) => notification.method === "http/request/bodyDelta")
       .map((notification) => notification.params);
@@ -222,7 +226,7 @@ export async function waitForHttpBodyDeltas(
       return deltas;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 25);
+      setTimeout(resolve, 5);
     });
   }
   throw new Error(`expected ${count} http body deltas`);
@@ -239,7 +243,7 @@ export function rpc(socket: WebSocket, method: string, params: unknown): Promise
       }
       socket.off("message", onMessage);
       if (response.error) {
-        reject(new Error(response.error.message));
+        reject(Object.assign(new Error(response.error.message), { code: response.error.code }));
         return;
       }
       resolve(response.result);

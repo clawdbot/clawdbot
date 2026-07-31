@@ -72,7 +72,7 @@ function upstreamConnectionFingerprint(probe: SessionUpstreamProbe): string | un
     : undefined;
 }
 
-export function classifyCodexUpstreamTurns(params: {
+function classifyCodexUpstreamTurns(params: {
   probe: SessionUpstreamProbe;
   turns: CodexTurn[];
   now?: number;
@@ -149,7 +149,7 @@ function normalizeUserMessageTexts(item: CodexTurn["items"][number]): string[] {
   return contentTexts?.length ? contentTexts : [(typed.text ?? "").trim().replace(/\s+/g, " ")];
 }
 
-export async function checkCodexUpstreamActivity(
+async function checkCodexUpstreamActivity(
   probes: SessionUpstreamProbe[],
   control: CodexUpstreamControl,
   resolveThreadId: (probe: SessionUpstreamProbe) => Promise<string> = async (probe) =>

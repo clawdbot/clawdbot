@@ -5,14 +5,16 @@ import {
   buildTerminalEnv,
   createTerminalLaunchPolicy,
   resolveTerminalSpawnPlan,
-  shellQuote,
 } from "./launch.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+const disabled: OpenClawConfig = { gateway: { terminal: { enabled: false } } };
+
 describe("createTerminalLaunchPolicy", () => {
-  it("fails closed when disabled, fully sandboxed, or given an unknown agent", () => {
-    expect(createTerminalLaunchPolicy({}).resolve()).toEqual({
+  it("is enabled by default and fails closed when disabled, sandboxed, or unknown-agent", () => {
+    expect(createTerminalLaunchPolicy({}).isEnabled()).toBe(true);
+    expect(createTerminalLaunchPolicy(disabled).resolve()).toEqual({
       ok: false,
       block: { kind: "disabled" },
     });
@@ -42,12 +44,12 @@ describe("createTerminalLaunchPolicy", () => {
     } as OpenClawConfig;
     const policy = createTerminalLaunchPolicy(enabled);
 
-    policy.prepareConfig({}, { restartPending: true });
+    policy.prepareConfig(disabled, { restartPending: true });
     policy.prepareConfig(enabled, { restartPending: true });
     expect(policy.isEnabled()).toBe(false);
     expect(policy.resolve()).toEqual({ ok: false, block: { kind: "disabled" } });
 
-    const disabledPolicy = createTerminalLaunchPolicy({});
+    const disabledPolicy = createTerminalLaunchPolicy(disabled);
     disabledPolicy.prepareConfig(enabled, { restartPending: true });
     expect(disabledPolicy.isEnabled()).toBe(false);
     expect(disabledPolicy.resolve()).toEqual({ ok: false, block: { kind: "disabled" } });
@@ -193,7 +195,7 @@ describe("createTerminalLaunchPolicy", () => {
     };
     const policy = createTerminalLaunchPolicy(baseConfig);
 
-    policy.prepareConfig({}, { restartPending: true });
+    policy.prepareConfig(disabled, { restartPending: true });
     policy.prepareConfig(
       {
         ...baseConfig,
@@ -216,7 +218,7 @@ describe("createTerminalLaunchPolicy", () => {
     };
     const policy = createTerminalLaunchPolicy(baseConfig);
 
-    policy.prepareConfig({}, { restartPending: true });
+    policy.prepareConfig(disabled, { restartPending: true });
     policy.prepareConfig(
       {
         gateway: { terminal: { enabled: true } },
@@ -294,14 +296,14 @@ describe("createTerminalLaunchPolicy", () => {
     appliedPendingPolicy.commitConfig();
     expect(appliedPendingPolicy.resolve().ok).toBe(true);
 
-    policy.prepareConfig({}, { restartPending: true });
+    policy.prepareConfig(disabled, { restartPending: true });
     policy.acceptConfig({ retireRejectedRestart: false });
     policy.commitConfig();
     expect(policy.isEnabled()).toBe(false);
   });
 
   it("does not promote a terminal setting previously ignored by reload mode", () => {
-    const disabledPolicy = createTerminalLaunchPolicy({});
+    const disabledPolicy = createTerminalLaunchPolicy(disabled);
     disabledPolicy.prepareConfig(
       {
         gateway: { terminal: { enabled: true } },
@@ -331,7 +333,7 @@ describe("createTerminalLaunchPolicy", () => {
       expect(resolved.plan.shell).toBe("/bin/current-shell");
     }
 
-    enabledPolicy.prepareConfig({}, { restartPending: true });
+    enabledPolicy.prepareConfig(disabled, { restartPending: true });
     enabledPolicy.prepareConfig(
       {
         gateway: { terminal: { enabled: true } },
@@ -360,10 +362,6 @@ describe("buildTerminalEnv", () => {
 
 describe("resolveTerminalSpawnPlan", () => {
   it("quotes every command argument for a login shell", () => {
-    expect(shellQuote("plain")).toBe("'plain'");
-    expect(shellQuote("a b;$HOME")).toBe("'a b;$HOME'");
-    expect(shellQuote("it's")).toBe("'it'\"'\"'s'");
-
     const plan = resolveTerminalSpawnPlan({
       agentId: "main",
       cwd: "/work",

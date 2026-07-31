@@ -95,12 +95,16 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(card?.textContent).toContain("5m ago");
     expect(anchor.href).toBe(href);
     expect(anchor.getAttribute("aria-describedby")).toBe(card?.id);
-    expect(request).toHaveBeenCalledWith("controlUi.githubPreview", {
-      kind: "pull",
-      number: 99816,
-      owner: "openclaw",
-      repo: "openclaw",
-    });
+    expect(request).toHaveBeenCalledWith(
+      "controlUi.githubPreview",
+      {
+        kind: "pull",
+        number: 99816,
+        owner: "openclaw",
+        repo: "openclaw",
+      },
+      { signal: expect.any(AbortSignal) },
+    );
 
     leave(anchor);
     expect(document.querySelector(".github-link-hovercard")).toBeNull();
@@ -183,6 +187,43 @@ describe("openclaw-github-link-hovercard-provider", () => {
 
     expect(anchor.getAttribute("aria-describedby")).toBe("existing-description");
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("closes when route replacement removes its active link", async () => {
+    const provider = document.createElement(
+      GITHUB_LINK_HOVERCARD_ELEMENT_NAME,
+    ) as GitHubLinkHovercardProviderElement;
+    provider.client = {
+      request: vi.fn().mockResolvedValue({
+        closedAt: null,
+        comments: 1,
+        createdAt: "2026-07-05T08:00:00Z",
+        kind: "issue",
+        login: "octocat",
+        number: 99815,
+        owner: "openclaw",
+        repo: "openclaw",
+        state: "open",
+        stateReason: null,
+        title: "Keep hover previews compact",
+        updatedAt: "2026-07-05T09:55:00Z",
+      }),
+    } as unknown as GatewayBrowserClient;
+    const route = document.createElement("main");
+    const anchor = document.createElement("a");
+    anchor.href = "https://github.com/openclaw/openclaw/issues/99815";
+    route.append(anchor);
+    provider.append(route);
+    document.body.append(provider);
+
+    await hover(anchor);
+    expect(document.querySelector(".github-link-hovercard")).not.toBeNull();
+
+    route.replaceChildren(document.createElement("p"));
+    await Promise.resolve();
+
+    expect(document.querySelector(".github-link-hovercard")).toBeNull();
+    expect(anchor.hasAttribute("aria-describedby")).toBe(false);
   });
 
   it("rerenders an open preview when the locale changes", async () => {

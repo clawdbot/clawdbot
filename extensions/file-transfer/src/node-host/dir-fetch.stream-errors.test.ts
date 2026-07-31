@@ -54,6 +54,77 @@ describe("dir.fetch process wrapper", () => {
     );
   });
 
+  it("uses capped tar output for preflight-only requests without returning the archive", async () => {
+    runCommandBufferedMock.mockResolvedValueOnce(commandResult({ stdout: Buffer.from("archive") }));
+
+    await expect(
+      handleDirFetch({ path: tmpRoot, maxBytes: 1024, preflightOnly: true }),
+    ).resolves.toMatchObject({
+      ok: true,
+      entries: ["ok.txt"],
+      fileCount: 1,
+      preflightOnly: true,
+    });
+    expect(runCommandBufferedMock).toHaveBeenCalledOnce();
+    expect(runCommandBufferedMock).toHaveBeenCalledWith(
+      [process.platform !== "win32" ? "/usr/bin/tar" : "tar", "-czf", "-", "-C", tmpRoot, "."],
+      expect.objectContaining({
+        discardOutput: { stderr: true },
+        maxOutputBytes: { stdout: 1024, stderr: 64 * 1024 },
+      }),
+    );
+  });
+
+  it("rejects oversized preflight-only requests using the encoded tar limit", async () => {
+    runCommandBufferedMock.mockResolvedValueOnce(
+      commandResult({
+        code: null,
+        termination: "output-limit",
+        outputLimitStream: "stdout",
+      }),
+    );
+
+    await expect(
+      handleDirFetch({ path: tmpRoot, maxBytes: 1024, preflightOnly: true }),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: "TREE_TOO_LARGE",
+      message: "tarball exceeded 1024 byte limit during preflight",
+    });
+    expect(runCommandBufferedMock).toHaveBeenCalledOnce();
+  });
+
+  it("rejects preflight-only requests once filesystem listing crosses the entry cap", async () => {
+    await Promise.all(
+      Array.from({ length: 5001 }, (_, index) =>
+        fs.writeFile(path.join(tmpRoot, `file-${index}.txt`), ""),
+      ),
+    );
+
+    await expect(
+      handleDirFetch({ path: tmpRoot, maxBytes: 1024, preflightOnly: true }),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: "TREE_TOO_LARGE",
+      message: "directory tree exceeds 5000 entries during preflight",
+    });
+    expect(runCommandBufferedMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves filesystem classification when a preflight tar race removes the directory", async () => {
+    runCommandBufferedMock.mockImplementationOnce(async () => {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+      return commandResult({ code: 1 });
+    });
+
+    await expect(
+      handleDirFetch({ path: tmpRoot, maxBytes: 1024, preflightOnly: true }),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: "NOT_FOUND",
+    });
+  });
+
   it("fails tar entry listing closed on wrapper errors", async () => {
     runCommandBufferedMock
       .mockResolvedValueOnce(commandResult({ stdout: Buffer.from("1\tproject\n") }))

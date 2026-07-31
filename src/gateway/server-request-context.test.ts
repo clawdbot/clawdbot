@@ -2,6 +2,12 @@
  * Gateway request context construction tests.
  */
 import { describe, expect, it, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 
@@ -10,18 +16,24 @@ type GatewayRequestContextParams = Parameters<typeof createGatewayRequestContext
 function makeContextParams(
   overrides: Partial<GatewayRequestContextParams> = {},
 ): GatewayRequestContextParams {
+  const config = {} as never;
   const runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader"> = {
     cronState: {
       cron: { start: vi.fn(), stop: vi.fn() } as never,
       storePath: "/tmp/cron",
       cronEnabled: true,
     },
-    configReloader: { stop: vi.fn(async () => {}) },
+    configReloader: {
+      stop: vi.fn(async () => {}),
+      notifyPluginMetadataChanged: vi.fn(),
+    },
   };
   return {
     deps: {} as never,
     runtimeState,
-    getRuntimeConfig: vi.fn(() => ({}) as never),
+    getRuntimeConfig: vi.fn(() => config),
+    sessionCompanion: {} as never,
+    sessionObserver: {} as never,
     resolveTerminalLaunchPolicy: vi.fn(() => ({
       ok: false as const,
       block: { kind: "disabled" as const },
@@ -31,7 +43,14 @@ function makeContextParams(
     pluginApprovalManager: undefined,
     listSessionPendingApprovals: undefined,
     loadGatewayModelCatalog: vi.fn(async () => []),
-    loadGatewayModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
+    loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
+      agentId: "main",
+      agentDir: "/tmp/model-catalog-agent",
+      workspaceDir: "/tmp/model-catalog-workspace",
+      config,
+      entries: [],
+      routeVariants: [],
+    })),
     getHealthCache: vi.fn(() => null),
     refreshHealthSnapshot: vi.fn(async () => ({}) as never),
     logHealth: { error: vi.fn() },
@@ -45,21 +64,14 @@ function makeContextParams(
     nodeSubscribe: vi.fn(),
     nodeUnsubscribe: vi.fn(),
     nodeUnsubscribeAll: vi.fn(),
-    hasConnectedTalkNode: vi.fn(() => false),
+    hasConnectedTalkNode: vi.fn(async () => false),
     clients: new Set(),
     enforceSharedGatewayAuthGenerationForConfigWrite: vi.fn(),
-    nodeRegistry: {} as never,
+    nodeRegistry: { invalidateConnectionForPairingChange: vi.fn() } as never,
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
-    chatAbortedRuns: new Map(),
-    chatRunBuffers: new Map(),
-    chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
-    chatDeltaLastBroadcastText: new Map(),
-    agentDeltaSentAt: new Map(),
-    bufferedAgentEvents: new Map(),
-    clearChatRunState: vi.fn(),
+    chatRunState: createChatRunState(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
     subscribeSessionEvents: vi.fn(),
@@ -87,7 +99,56 @@ function makeContextParams(
   };
 }
 
+function makeGatewayClient(params: {
+  connId: string;
+  clientId: (typeof GATEWAY_CLIENT_IDS)[keyof typeof GATEWAY_CLIENT_IDS];
+  mode?: (typeof GATEWAY_CLIENT_MODES)[keyof typeof GATEWAY_CLIENT_MODES];
+  scopes?: string[];
+  caps?: string[];
+  approvalRuntime?: boolean;
+  invalidated?: boolean;
+}) {
+  return {
+    connId: params.connId,
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: {
+        id: params.clientId,
+        version: "test",
+        platform: "test",
+        mode: params.mode ?? GATEWAY_CLIENT_MODES.CLI,
+      },
+      scopes: params.scopes ?? [],
+      caps: params.caps ?? [],
+    },
+    socket: { close: vi.fn() },
+    ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
+    ...(params.invalidated ? { invalidated: true } : {}),
+  };
+}
+
 describe("createGatewayRequestContext", () => {
+  it("cleans connection-scoped replace-sets with the other session subscriptions", () => {
+    const unsubscribeAllSessionEvents = vi.fn();
+    const unsubscribePullRequests = vi.fn();
+    const unsubscribeViewerPresence = vi.fn();
+    const params = makeContextParams({ unsubscribeAllSessionEvents });
+    params.runtimeState.controlUiSessionPullRequests = {
+      unsubscribe: unsubscribePullRequests,
+    } as never;
+    params.runtimeState.sessionViewerPresence = {
+      unsubscribe: unsubscribeViewerPresence,
+    } as never;
+    const context = createGatewayRequestContext(params);
+
+    context.unsubscribeAllSessionEvents("conn-control-ui");
+
+    expect(unsubscribeAllSessionEvents).toHaveBeenCalledWith("conn-control-ui");
+    expect(unsubscribePullRequests).toHaveBeenCalledWith("conn-control-ui");
+    expect(unsubscribeViewerPresence).toHaveBeenCalledWith("conn-control-ui");
+  });
+
   it("reads cron state live from runtime state", () => {
     const cronA = { start: vi.fn(), stop: vi.fn() } as never;
     const cronB = { start: vi.fn(), stop: vi.fn() } as never;
@@ -97,7 +158,10 @@ describe("createGatewayRequestContext", () => {
         storePath: "/tmp/cron-a",
         cronEnabled: true,
       },
-      configReloader: { stop: vi.fn(async () => {}) },
+      configReloader: {
+        stop: vi.fn(async () => {}),
+        notifyPluginMetadataChanged: vi.fn(),
+      },
     };
 
     const context = createGatewayRequestContext(makeContextParams({ runtimeState }));
@@ -122,7 +186,10 @@ describe("createGatewayRequestContext", () => {
         storePath: "/tmp/cron",
         cronEnabled: true,
       },
-      configReloader: { stop: vi.fn(async () => {}) },
+      configReloader: {
+        stop: vi.fn(async () => {}),
+        notifyPluginMetadataChanged: vi.fn(),
+      },
     };
 
     const context = createGatewayRequestContext(makeContextParams({ runtimeState }));
@@ -132,14 +199,113 @@ describe("createGatewayRequestContext", () => {
     runtimeState.configReloader = {
       stop: vi.fn(async () => {}),
       hotReloadStatus: () => "active",
+      notifyPluginMetadataChanged: vi.fn(),
     };
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("active");
 
     runtimeState.configReloader = {
       stop: vi.fn(async () => {}),
       hotReloadStatus: () => "disabled",
+      notifyPluginMetadataChanged: vi.fn(),
     };
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("disabled");
+  });
+
+  it("does not treat scoped CLI or backend callers as approval delivery routes", () => {
+    const clients = new Set([
+      makeGatewayClient({
+        connId: "cli",
+        clientId: GATEWAY_CLIENT_IDS.CLI,
+        scopes: ["operator.admin"],
+      }),
+      makeGatewayClient({
+        connId: "backend",
+        clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+        scopes: ["operator.approvals"],
+      }),
+    ]) as never;
+    const context = createGatewayRequestContext(makeContextParams({ clients }));
+
+    expect(context.hasExecApprovalClients?.()).toBe(false);
+    expect(context.getApprovalClientConnIds?.()).toEqual(new Set());
+    expect(context.getApprovalClientConnIds?.({ approvalKind: "plugin" })).toEqual(new Set());
+  });
+
+  it("preserves only clients that handle each approval kind", () => {
+    const clients = new Set([
+      makeGatewayClient({
+        connId: "control-ui",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        scopes: ["operator.approvals"],
+      }),
+      makeGatewayClient({
+        connId: "ios",
+        clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+        mode: GATEWAY_CLIENT_MODES.UI,
+        scopes: ["operator.admin"],
+      }),
+      makeGatewayClient({
+        connId: "bridge",
+        clientId: GATEWAY_CLIENT_IDS.CLI,
+        scopes: ["operator.approvals"],
+        caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
+      }),
+      makeGatewayClient({
+        connId: "acp",
+        clientId: GATEWAY_CLIENT_IDS.CLI,
+        scopes: ["operator.approvals"],
+        caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS],
+      }),
+      makeGatewayClient({
+        connId: "tui",
+        clientId: GATEWAY_CLIENT_IDS.TUI,
+        scopes: ["operator.approvals"],
+      }),
+      makeGatewayClient({
+        connId: "plugin-bridge",
+        clientId: GATEWAY_CLIENT_IDS.CLI,
+        scopes: ["operator.approvals"],
+        caps: [GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS],
+      }),
+      makeGatewayClient({
+        connId: "runtime",
+        clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+        scopes: ["operator.approvals"],
+        approvalRuntime: true,
+      }),
+      makeGatewayClient({
+        connId: "invalidated-ui",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        scopes: ["operator.approvals"],
+        invalidated: true,
+      }),
+      makeGatewayClient({
+        connId: "unscoped-ui",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      }),
+    ]) as never;
+    const context = createGatewayRequestContext(makeContextParams({ clients }));
+
+    expect(context.hasExecApprovalClients?.()).toBe(true);
+    expect(context.getApprovalClientConnIds?.()).toEqual(
+      new Set(["control-ui", "ios", "bridge", "acp", "runtime"]),
+    );
+    expect(context.getApprovalClientConnIds?.({ approvalKind: "plugin" })).toEqual(
+      new Set(["control-ui", "bridge", "tui", "plugin-bridge", "runtime"]),
+    );
+    expect(context.getApprovalClientConnIds?.({ approvalKind: "system-agent" })).toEqual(
+      new Set(["control-ui", "bridge", "runtime"]),
+    );
+    expect(context.hasExecApprovalClients?.("control-ui")).toBe(true);
+    expect(
+      context.getApprovalClientConnIds?.({
+        excludeConnId: "control-ui",
+        filter: (client) => client.connect.client.id === GATEWAY_CLIENT_IDS.IOS_APP,
+      }),
+    ).toEqual(new Set(["ios"]));
   });
 
   it("invalidateClientsForDevice sets the flag on matching clients without closing the socket", () => {
@@ -155,9 +321,14 @@ describe("createGatewayRequestContext", () => {
     };
     const clients = new Set([target, unrelated]) as never;
     const invalidateDeviceTransports = vi.fn();
+    const invalidateConnectionForPairingChange = vi.fn();
 
     const context = createGatewayRequestContext(
-      makeContextParams({ clients, invalidateDeviceTransports }),
+      makeContextParams({
+        clients,
+        invalidateDeviceTransports,
+        nodeRegistry: { invalidateConnectionForPairingChange } as never,
+      }),
     );
     context.invalidateClientsForDevice?.("device-1", { reason: "device-token-rotated" });
 
@@ -166,6 +337,10 @@ describe("createGatewayRequestContext", () => {
       "device-token-rotated",
     );
     expect(target.socket.close).not.toHaveBeenCalled();
+    expect(invalidateConnectionForPairingChange).toHaveBeenCalledWith(
+      "conn-target",
+      "device-token-rotated",
+    );
 
     expect((unrelated as { invalidated?: boolean }).invalidated).toBeUndefined();
     expect(unrelated.socket.close).not.toHaveBeenCalled();

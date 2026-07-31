@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Type } from "typebox";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { defineToolPlugin, getToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
@@ -15,6 +16,8 @@ import {
   runPluginsInitCommand,
   validateToolPluginProject,
 } from "./plugins-authoring-command.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createDemoMetadata() {
   const entry = defineToolPlugin({
@@ -296,6 +299,22 @@ describe("plugin authoring commands", () => {
     await expect(
       loadToolPlugin({ rootDir: tmpDir, entryPath: path.join(tmpDir, "dist/index.js") }),
     ).rejects.toThrow("plugin entry not found: ./dist/index.js");
+  });
+
+  it("throws a user-friendly error when package.json is malformed JSON", async () => {
+    const tmpDir = tempDirs.make("openclaw-plugin-bad-json-");
+    const packagePath = path.join(tmpDir, "package.json");
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir,
+      packageName: "openclaw-plugin-bad-json",
+      pluginId: "bad-json",
+      toolName: "bad_json_echo",
+    });
+    fs.writeFileSync(packagePath, "{invalid json");
+
+    await expect(runPluginsBuildCommand({ root: tmpDir, entry: entryPath })).rejects.toThrow(
+      `Malformed JSON in ${packagePath}`,
+    );
   });
 
   it("loads source entries that import the OpenClaw plugin SDK package subpath", async () => {

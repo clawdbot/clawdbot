@@ -1,6 +1,7 @@
 // Control UI chat module implements input history behavior.
-import { CHAT_HISTORY_RENDER_LIMIT } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+
+const CHAT_INPUT_HISTORY_LIMIT = 100;
 
 type ChatLocalInputHistoryEntry = {
   text: string;
@@ -60,8 +61,8 @@ function collectUserInputHistory(
   if (messages.length === 0 && localEntries.length === 0) {
     return [];
   }
-  // Keep input recall aligned with what chat UI renders: only consider the visible history window.
-  const start = Math.max(0, messages.length - CHAT_HISTORY_RENDER_LIMIT);
+  // Bound input recall independently from the transcript's loaded rendering depth.
+  const start = Math.max(0, messages.length - CHAT_INPUT_HISTORY_LIMIT);
   const candidates: Array<{ text: string; ts: number }> = [...localEntries];
   for (let i = messages.length - 1; i >= start; i--) {
     const message = messages[i];
@@ -109,7 +110,7 @@ export function recordNonTranscriptInputHistory(state: ChatInputHistoryState, te
   state.chatLocalInputHistoryBySession[state.sessionKey] = [
     { text: trimmed, ts: Date.now() },
     ...sessionEntries,
-  ].slice(0, CHAT_HISTORY_RENDER_LIMIT);
+  ].slice(0, CHAT_INPUT_HISTORY_LIMIT);
 }
 
 export function resetChatInputHistoryNavigation(state: ChatInputHistoryState) {

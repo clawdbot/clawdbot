@@ -89,10 +89,13 @@ function createVoiceCallStateRuntimeForTests(): VoiceCallStateRuntime["state"] {
     openChannelIngressQueue: (() => {
       throw new Error("openChannelIngressQueue is not used by voice-call manager tests");
     }) as VoiceCallStateRuntime["state"]["openChannelIngressQueue"],
+    openChannelIngressDrain: (() => {
+      throw new Error("openChannelIngressDrain is not used by voice-call manager tests");
+    }) as VoiceCallStateRuntime["state"]["openChannelIngressDrain"],
   };
 }
 
-export function installVoiceCallStateRuntimeForTests(): void {
+function installVoiceCallStateRuntimeForTests(): void {
   setVoiceCallStateRuntime({ state: createVoiceCallStateRuntimeForTests() });
 }
 

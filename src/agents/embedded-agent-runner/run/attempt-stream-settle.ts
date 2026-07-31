@@ -3,11 +3,12 @@
  */
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import { projectToolSearchTargetTranscriptMessages } from "../../tool-search.js";
-import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
+import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
@@ -28,6 +29,7 @@ import {
 import {
   buildContextEnginePromptCacheInfo,
   findCurrentAttemptAssistantMessage,
+  findLatestUncompactedAttemptUsageSnapshot,
   resolvePromptCacheTouchTimestamp,
 } from "./attempt.context-engine-helpers.js";
 import type { createEmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
@@ -51,13 +53,14 @@ type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise
 
 type StreamSettleResult = {
   promptError: unknown;
-  promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"];
+  promptErrorSource: AgentRunAttemptFailureSource | null;
   timedOutDuringCompaction: boolean;
   compactionOccurredThisAttempt: boolean;
   messagesSnapshot: AgentMessage[];
   sessionIdUsed: string;
   lastAssistant: EmbeddedRunAttemptResult["lastAssistant"];
   currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
+  currentAttemptCompletedAssistant: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"];
   attemptUsage: EmbeddedRunAttemptResult["attemptUsage"];
   cacheBreak: PromptCacheBreak | null;
   lastCallUsage: NormalizedUsage | undefined;
@@ -73,7 +76,7 @@ export async function settleEmbeddedAttemptStream(input: {
   subscription: EmbeddedAttemptSubscription;
   state: {
     promptError: unknown;
-    promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"];
+    promptErrorSource: AgentRunAttemptFailureSource | null;
     yieldAborted: boolean;
     sessionIdUsed: string;
   };
@@ -141,7 +144,12 @@ export async function settleEmbeddedAttemptStream(input: {
         abortSignal: input.runAbortSignal,
       });
     } catch (err) {
-      if (!input.readLifecycleState().timedOut || !isRunnerAbortError(err)) {
+      // Timeouts AND user aborts must still settle so the attempt reaches
+      // after-turn (transcript flush, agent-end side effects). Rethrowing here
+      // unwinds the whole lane task and silently starves every agent_end
+      // consumer for aborted runs.
+      const lifecycle = input.readLifecycleState();
+      if ((!lifecycle.timedOut && !lifecycle.aborted) || !isRunnerAbortError(err)) {
         throw err;
       }
       asyncTaskWait = await waitForCompletionRequiredAsyncTasks({
@@ -150,15 +158,15 @@ export async function settleEmbeddedAttemptStream(input: {
         deadlineAtMs: Date.now(),
       });
     }
-    if (asyncTaskWait.timedOutRunIds.length > 0) {
+    // An aborted run legitimately leaves async tasks unfinished; stamping a
+    // timeout failure here would reclassify the abort as an errored completion.
+    if (asyncTaskWait.timedOutRunIds.length > 0 && !input.readLifecycleState().aborted) {
       promptError = new Error(
         `Timed out waiting for async task completion: ${asyncTaskWait.timedOutRunIds.join(", ")}`,
       );
       promptErrorSource = "prompt";
       state.promptError = promptError;
       state.promptErrorSource = promptErrorSource;
-    } else if (asyncTaskWait.waitedRunIds.length > 0) {
-      await input.sessionLockController.waitForSessionEvents(activeSession);
     }
   }
 
@@ -226,12 +234,12 @@ export async function settleEmbeddedAttemptStream(input: {
   let messagesSnapshot: AgentMessage[] = [];
   let lastAssistant: AssistantMessage | undefined;
   let currentAttemptAssistant: AssistantMessage | undefined;
+  let currentAttemptCompletedAssistant: AssistantMessage | undefined;
   let attemptUsage: EmbeddedRunAttemptResult["attemptUsage"];
   let cacheBreak: PromptCacheBreak | null = null;
   let lastCallUsage: NormalizedUsage | undefined;
   let promptCache: EmbeddedRunAttemptResult["promptCache"];
 
-  await input.sessionLockController.waitForSessionEvents(activeSession);
   await input.withOwnedSessionWriteLock(async () => {
     const { timedOutDuringCompaction } = input.readLifecycleState();
     compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
@@ -285,6 +293,7 @@ export async function settleEmbeddedAttemptStream(input: {
       messagesSnapshot,
       prePromptMessageCount: input.prePromptMessageCount,
     });
+    currentAttemptCompletedAssistant = subscription.getCurrentAttemptAssistant();
     attemptUsage = subscription.getUsageTotals();
     cacheBreak = input.cache.observabilityEnabled
       ? completePromptCacheObservation({
@@ -294,7 +303,22 @@ export async function settleEmbeddedAttemptStream(input: {
           usage: attemptUsage,
         })
       : null;
-    lastCallUsage = normalizeUsage(currentAttemptAssistant?.usage);
+    const transcriptUsageSnapshot = findLatestUncompactedAttemptUsageSnapshot({
+      messagesSnapshot,
+      prePromptMessageCount: input.prePromptMessageCount,
+      compactionOccurred: compactionOccurredThisAttempt,
+    });
+    const completedAssistantUsage = normalizeUsage(currentAttemptCompletedAssistant?.usage);
+    lastCallUsage =
+      subscription.getLastAssistantUsage() ??
+      (hasNonzeroUsage(completedAssistantUsage)
+        ? completedAssistantUsage
+        : transcriptUsageSnapshot?.usage);
+    // Keep cache timing bound to the assistant that supplied the exact usage.
+    // A terminal zero-usage abort must not advance TTL for the previous call.
+    const usageAssistant = hasNonzeroUsage(completedAssistantUsage)
+      ? currentAttemptCompletedAssistant
+      : transcriptUsageSnapshot?.assistant;
     const promptCacheObservation =
       input.cache.observabilityEnabled &&
       (cacheBreak || input.cache.changesForTurn || typeof attemptUsage?.cacheRead === "number")
@@ -321,7 +345,7 @@ export async function settleEmbeddedAttemptStream(input: {
       observation: promptCacheObservation,
       lastCacheTouchAt: resolvePromptCacheTouchTimestamp({
         lastCallUsage,
-        assistantTimestamp: currentAttemptAssistant?.timestamp,
+        assistantTimestamp: usageAssistant?.timestamp,
         fallbackLastCacheTouchAt,
       }),
     });
@@ -356,6 +380,7 @@ export async function settleEmbeddedAttemptStream(input: {
     sessionIdUsed,
     lastAssistant,
     currentAttemptAssistant,
+    currentAttemptCompletedAssistant,
     attemptUsage,
     cacheBreak,
     lastCallUsage,

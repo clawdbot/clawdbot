@@ -15,6 +15,7 @@ import {
   addTimerTimeoutGraceMs,
   finiteSecondsToTimerSafeMilliseconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import type { PluginHookToolContext } from "openclaw/plugin-sdk/types";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
@@ -40,6 +41,12 @@ const CODEX_NATIVE_HOOK_RELAY_COMMAND_MAX_PARENT_MARGIN_MS = 1_000;
 const CODEX_NATIVE_HOOK_RELAY_DEFAULT_TIMEOUT_SEC = 10;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS = 10_000;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS = 5_000;
+
+const CODEX_HOOK_MATCHER_NAMES_BY_TOOL_ID: Readonly<Record<string, readonly string[]>> = {
+  exec: ["Bash", "exec", "exec_command"],
+  apply_patch: ["apply_patch", "Write", "Edit"],
+  spawn_agent: ["spawn_agent", "Agent"],
+};
 
 type CodexHookEventName = "PreToolUse" | "PostToolUse" | "PermissionRequest" | "Stop";
 
@@ -136,9 +143,12 @@ export function createCodexNativeHookRelay(params: {
   config: EmbeddedRunAttemptParams["config"];
   runId: string;
   channelId?: string;
+  requester?: NonNullable<PluginHookToolContext["requester"]>;
+  approvalContext?: Parameters<typeof registerNativeHookRelay>[0]["approvalContext"];
   attemptTimeoutMs: number;
   startupTimeoutMs: number;
   turnStartTimeoutMs: number;
+  loopDetectionPreToolUseRelay: boolean;
   signal: AbortSignal;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void | Promise<void>;
 }): NativeHookRelayRegistrationHandle | undefined {
@@ -162,7 +172,10 @@ export function createCodexNativeHookRelay(params: {
     ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
+    ...(params.requester ? { requester: params.requester } : {}),
+    ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
     allowedEvents: params.events,
+    preToolUseLoopDetection: params.loopDetectionPreToolUseRelay,
     ttlMs: resolveCodexNativeHookRelayTtlMs({
       explicitTtlMs: params.options?.ttlMs,
       attemptTimeoutMs: params.attemptTimeoutMs,
@@ -255,6 +268,7 @@ export function buildCodexNativeHookRelayConfig(params: {
   events?: readonly NativeHookRelayEvent[];
   hookTimeoutSec?: number;
   clearOmittedEvents?: boolean;
+  loopDetectionPreToolUseRelay: boolean;
 }): JsonObject {
   const events = params.events?.length ? params.events : CODEX_NATIVE_HOOK_RELAY_EVENTS;
   const selectedEvents = new Set<NativeHookRelayEvent>(events);
@@ -266,9 +280,10 @@ export function buildCodexNativeHookRelayConfig(params: {
     const codexEvent = CODEX_HOOK_EVENT_BY_NATIVE_EVENT[event];
     const selected = selectedEvents.has(event);
     const shouldRelay = params.relay.shouldRelayEvent(event);
-    // Keep no-policy PreToolUse commands installed with an explicit no-op marker;
-    // otherwise a stale relay fallback cannot distinguish no policy from unknown policy.
-    const selectedNoopPreToolUse = selected && event === "pre_tool_use" && !shouldRelay;
+    // The no-policy marker is part of the shipped Codex fallback contract.
+    // Only the Codex-owned loop relay opt-out may omit it.
+    const selectedNoopPreToolUse =
+      selected && event === "pre_tool_use" && !shouldRelay && params.loopDetectionPreToolUseRelay;
     if (!selected || (!shouldRelay && !selectedNoopPreToolUse)) {
       if (selected || params.clearOmittedEvents) {
         config[`hooks.${codexEvent}`] = [] satisfies JsonValue;
@@ -286,8 +301,12 @@ export function buildCodexNativeHookRelayConfig(params: {
     const command = params.relay.commandForEvent(event, {
       timeoutMs: resolveCodexNativeHookRelayCommandTimeoutMs(timeout),
     });
+    const matcher = selectedNoopPreToolUse
+      ? undefined
+      : buildCodexNativeToolMatcher(params.relay.toolMatcherForEvent(event));
     config[`hooks.${codexEvent}`] = [
       {
+        ...(matcher ? { matcher } : {}),
         hooks: [
           {
             type: "command",
@@ -304,6 +323,7 @@ export function buildCodexNativeHookRelayConfig(params: {
       trusted_hash: codexCommandHookTrustedHash({
         event,
         command,
+        matcher,
         timeout,
         statusMessage: "OpenClaw native hook relay",
       }),
@@ -344,9 +364,42 @@ function resolveCodexNativeHookRelayCommandTimeoutMs(hookTimeoutSec: number | un
   return Math.max(1, parentTimeoutMs - parentMarginMs);
 }
 
+function buildCodexNativeToolMatcher(toolNames: readonly string[] | undefined): string | undefined {
+  if (toolNames === undefined) {
+    return undefined;
+  }
+  if (toolNames.length === 0) {
+    throw new TypeError("Codex native hook matcher requires at least one tool name");
+  }
+  const nativeNames = new Set<string>();
+  let hasCustomToolName = false;
+  for (const toolName of toolNames) {
+    const canonicalToolName = toolName.trim();
+    if (!canonicalToolName || canonicalToolName === "*") {
+      throw new TypeError("Codex native hook matcher requires canonical OpenClaw tool ids");
+    }
+    const nativeAliases = CODEX_HOOK_MATCHER_NAMES_BY_TOOL_ID[canonicalToolName];
+    if (!nativeAliases) {
+      hasCustomToolName = true;
+    }
+    for (const nativeName of nativeAliases ?? [canonicalToolName]) {
+      nativeNames.add(nativeName);
+    }
+  }
+  const sortedNames = Array.from(nativeNames).toSorted();
+  if (!hasCustomToolName && sortedNames.every((toolName) => /^[A-Za-z0-9_]+$/.test(toolName))) {
+    return sortedNames.join("|");
+  }
+  const escapedNames = sortedNames.map((toolName) =>
+    toolName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+  );
+  return `(?i)^(?:${escapedNames.join("|")})$`;
+}
+
 function codexCommandHookTrustedHash(params: {
   event: NativeHookRelayEvent;
   command: string;
+  matcher?: string;
   timeout: number;
   statusMessage: string;
 }): string {
@@ -355,6 +408,7 @@ function codexCommandHookTrustedHash(params: {
   // trust identity even though both forms match all tools.
   const identity = {
     event_name: CODEX_HOOK_KEY_LABEL_BY_NATIVE_EVENT[params.event],
+    ...(params.matcher ? { matcher: params.matcher } : {}),
     hooks: [
       {
         async: false,

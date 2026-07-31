@@ -16,7 +16,7 @@ Adds Synthetic model provider support to OpenClaw.
 
 ## Surface
 
-providers: synthetic
+providers: `synthetic`
 
 ## Related docs
 

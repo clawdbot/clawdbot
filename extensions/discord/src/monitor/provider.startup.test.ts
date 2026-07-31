@@ -239,6 +239,10 @@ describe("createDiscordMonitorClient", () => {
 
   it("configures internal Discord REST options explicitly", async () => {
     const createClient = vi.fn(createClientWithPlugins);
+    const commandDeployHashStore = {
+      lookup: vi.fn(async () => undefined),
+      register: vi.fn(async () => undefined),
+    };
 
     await createDiscordMonitorClient({
       accountId: "default",
@@ -250,6 +254,7 @@ describe("createDiscordMonitorClient", () => {
       voiceEnabled: false,
       discordConfig: {},
       runtime: createRuntime(),
+      commandDeployHashStore,
       createClient,
       createGatewayPlugin: () => ({ id: "gateway" }) as never,
       createGatewaySupervisor: () => ({ shutdown: vi.fn(), handleError: vi.fn() }) as never,
@@ -264,6 +269,9 @@ describe("createDiscordMonitorClient", () => {
       runtimeProfile: "persistent",
       maxQueueSize: 1000,
     });
+    expect((options as { commandDeployHashStore?: unknown }).commandDeployHashStore).toBe(
+      commandDeployHashStore,
+    );
     if (!handlers) {
       throw new Error("expected Discord client handlers");
     }

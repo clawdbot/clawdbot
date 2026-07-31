@@ -245,6 +245,7 @@ describe("device.pair.setupCode", () => {
           roles: ["node", "operator"],
           scopes: [
             "operator.approvals",
+            "operator.questions",
             "operator.read",
             "operator.talk.secrets",
             "operator.write",

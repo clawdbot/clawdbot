@@ -233,6 +233,63 @@ describe("check-max-lines-ratchet", () => {
     expect(main(root)).toBe(1);
   });
 
+  it("compares divergent worktrees against their main merge base", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-diverged-"));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\nsrc/b.ts\n");
+    fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable max-lines */\n");
+    fs.writeFileSync(path.join(root, "src/b.ts"), "/* oxlint-disable max-lines */\n");
+    for (const args of [
+      ["init"],
+      ["config", "user.email", "test@example.com"],
+      ["config", "user.name", "Test"],
+      ["add", "."],
+      ["commit", "-m", "base"],
+      ["branch", "release"],
+    ]) {
+      git(root, args);
+    }
+
+    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
+    fs.writeFileSync(path.join(root, "src/b.ts"), "export const b = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "shrink main debt"]);
+    git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(root, ["checkout", "release"]);
+
+    expect(main(root)).toBe(0);
+  });
+
+  it("falls back to main when no merge base is available", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-disconnected-"));
+    tempDirs.push(root);
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/a.ts\n");
+    fs.writeFileSync(path.join(root, "src/a.ts"), "/* oxlint-disable max-lines */\n");
+    for (const args of [
+      ["init"],
+      ["config", "user.email", "test@example.com"],
+      ["config", "user.name", "Test"],
+      ["add", "."],
+      ["commit", "-m", "release"],
+      ["branch", "-m", "release"],
+    ]) {
+      git(root, args);
+    }
+    git(root, ["checkout", "--orphan", "main"]);
+    fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "");
+    fs.writeFileSync(path.join(root, "src/a.ts"), "export const a = 1;\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "disconnected main"]);
+    git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(root, ["checkout", "release"]);
+
+    expect(main(root)).toBe(1);
+  });
+
   it("checks staged content instead of unstaged worktree edits", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-staged-"));
     tempDirs.push(root);

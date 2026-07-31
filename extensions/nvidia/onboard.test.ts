@@ -61,12 +61,12 @@ describe("nvidia onboard", () => {
       providerApi: "openai-completions",
       baseUrl: "https://integrate.api.nvidia.com/v1",
       legacyApi: "openai-completions",
-      legacyModelId: "moonshotai/kimi-k2.5",
-      legacyModelName: "Kimi K2.5",
+      legacyModelId: "minimaxai/minimax-m2.7",
+      legacyModelName: "MiniMax M2.7",
     });
 
     expect(provider?.models.map((model) => model.id)).toEqual([
-      "moonshotai/kimi-k2.5",
+      "minimaxai/minimax-m2.7",
       "nvidia/nemotron-3-ultra-550b-a55b",
       "nvidia/nemotron-3-super-120b-a12b",
       "z-ai/glm-5.2",

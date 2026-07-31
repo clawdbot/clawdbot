@@ -306,9 +306,23 @@ with open(sys.argv[1], "wb") as output:
     root.type = tarfile.DIRTYPE
     output.write(root.tobuf(format=tarfile.USTAR_FORMAT))
 
+    # Only the short ASCII name changes across these empty regular members.
+    # Reuse one stdlib-generated USTAR header and adjust its name/checksum so
+    # the 100k-member stress case spends its time in the reader under test.
+    member_header = bytearray(
+        tarfile.TarInfo("candidate/f000000").tobuf(format=tarfile.USTAR_FORMAT)
+    )
+    member_header[:100] = b"\0" * 100
+    member_header[148:156] = b" " * 8
+    member_base_checksum = sum(member_header)
+
     for index in range(member_count - 2):
-        member = tarfile.TarInfo(f"candidate/f{index:06d}")
-        output.write(member.tobuf(format=tarfile.USTAR_FORMAT))
+        name = f"candidate/f{index:06d}".encode("ascii")
+        header = member_header.copy()
+        header[:len(name)] = name
+        checksum = member_base_checksum + sum(name)
+        header[148:156] = f"{checksum:06o}\0 ".encode("ascii")
+        output.write(header)
 
     output.write(b"\0" * 1024)
 `;

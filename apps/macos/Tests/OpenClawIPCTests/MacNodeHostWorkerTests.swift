@@ -32,6 +32,49 @@ private actor StubMacNodeHostWorker: MacNodeHostWorking {
 
 @Suite(.serialized)
 struct MacNodeHostWorkerTests {
+    @Test func `worker crash retry budget is bounded and exponentially delayed`() throws {
+        let input = MacNodeHostWorkerRetryPolicy.Input(
+            command: ["/usr/local/bin/openclaw", "node", "worker"],
+            configurationGeneration: 4)
+        var policy = MacNodeHostWorkerRetryPolicy(maximumRetryCount: 5)
+
+        try policy.prepareForStart(input)
+        let dispositions = (0..<20).map { _ in policy.recordUnexpectedExit(for: input) }
+
+        #expect(dispositions.prefix(5) == [
+            .retry(attempt: 1, delayNanoseconds: 1_000_000_000),
+            .retry(attempt: 2, delayNanoseconds: 2_000_000_000),
+            .retry(attempt: 3, delayNanoseconds: 4_000_000_000),
+            .retry(attempt: 4, delayNanoseconds: 8_000_000_000),
+            .retry(attempt: 5, delayNanoseconds: 10_000_000_000),
+        ])
+        #expect(dispositions.dropFirst(5).allSatisfy {
+            $0 == .giveUp(unexpectedExitCount: 6)
+        })
+        #expect(throws: MacNodeHostWorkerRetryPolicy.RetryBudgetExhausted.self) {
+            try policy.prepareForStart(input)
+        }
+    }
+
+    @Test func `new worker input resets an exhausted crash retry budget`() throws {
+        let original = MacNodeHostWorkerRetryPolicy.Input(
+            command: ["/usr/local/bin/openclaw", "node", "worker"],
+            configurationGeneration: 4)
+        let updated = MacNodeHostWorkerRetryPolicy.Input(
+            command: original.command,
+            configurationGeneration: 5)
+        var policy = MacNodeHostWorkerRetryPolicy(maximumRetryCount: 1)
+
+        try policy.prepareForStart(original)
+        #expect(policy.recordUnexpectedExit(for: original) ==
+            .retry(attempt: 1, delayNanoseconds: 1_000_000_000))
+        #expect(policy.recordUnexpectedExit(for: original) == .giveUp(unexpectedExitCount: 2))
+
+        try policy.prepareForStart(updated)
+        #expect(policy.recordUnexpectedExit(for: updated) ==
+            .retry(attempt: 1, delayNanoseconds: 1_000_000_000))
+    }
+
     @Test func `worker allows a generous cold-start window`() async throws {
         #expect(MacNodeHostWorker.defaultStartupTimeout == 300)
 
@@ -79,7 +122,7 @@ struct MacNodeHostWorkerTests {
         test "$OPENCLAW_NODE_EXEC_HOST" = app || exit 42
         test "$OPENCLAW_NODE_EXEC_FALLBACK" = 0 || exit 43
         printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
-        printf '%s\\n' '{"type":"gateway-request","id":"gateway-1","method":"skills.bins","params":{},"timeoutMs":1000}'
+        printf '%s\\n' '{"type":"gateway-request","id":"gateway-1","method":"node.invoke.progress","params":{"invokeId":"terminal-1","nodeId":"node-1","seq":0,"chunk":"hello"},"timeoutMs":1000}'
         IFS= read -r unavailable
         printf '%s' "$unavailable" | grep -q '"type":"gateway-response"' || exit 44
         printf '%s' "$unavailable" | grep -q '"ok":false' || exit 45

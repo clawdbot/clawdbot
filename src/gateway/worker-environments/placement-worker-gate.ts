@@ -54,6 +54,9 @@ export function createWorkerSessionPlacementGate(
         claim,
         ...(binding.transcriptSeq === undefined ? {} : { transcript: binding.transcriptSeq }),
         ...(binding.liveSeq === undefined ? {} : { liveEvent: binding.liveSeq }),
+        ...(binding.workspaceResultPending === undefined
+          ? {}
+          : { workspaceResultPending: binding.workspaceResultPending }),
       });
     },
   };

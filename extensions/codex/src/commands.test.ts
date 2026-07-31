@@ -23,8 +23,9 @@ import {
   testCodexAppServerBindingStore,
 } from "./app-server/session-binding.test-helpers.js";
 import { resetSharedCodexAppServerClientForTests } from "./app-server/shared-client.js";
+import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 import { codexDiagnosticsFeedbackState } from "./command-diagnostics-state.js";
-import { handleCodexCommand } from "./command-dispatch.js";
+import { handleCodexCommand as dispatchCodexCommand } from "./command-dispatch.js";
 import type { CodexCommandDepsOverride } from "./command-handlers.js";
 import type {
   CodexPluginsConfigBlock,
@@ -113,6 +114,20 @@ function createDeps(overrides: Partial<CodexCommandDeps> = {}): CodexCommandDeps
   };
 }
 
+function runCommand(
+  args: string,
+  deps: Partial<CodexCommandDeps> = {},
+  context: Partial<PluginCommandContext> = {},
+  options: Omit<Parameters<typeof dispatchCodexCommand>[1], "deps"> = {},
+) {
+  return dispatchCodexCommand(createContext(args, undefined, context), {
+    ...options,
+    deps: createDeps(deps),
+  });
+}
+
+const handleCodexCommand = dispatchCodexCommand;
+
 function createThreadResumeResponse(params: {
   threadId: string;
   cwd?: string;
@@ -125,7 +140,7 @@ function createThreadResumeResponse(params: {
     thread: {
       id: params.threadId,
       sessionId: params.threadId,
-      cliVersion: "0.139.0",
+      cliVersion: CODEX_APP_SERVER_VERSION,
       createdAt: 1,
       updatedAt: 1,
       cwd,
@@ -387,7 +402,7 @@ describe("codex command", () => {
   });
 
   it("renders the top-level Codex menu as portable native slash commands", async () => {
-    const result = await handleCodexCommand(createContext(""), { deps: createDeps() });
+    const result = await runCommand("");
 
     expectResultTextContains(result, "/codex plugins menu");
     expect(buttonCommands(result)).toEqual([
@@ -403,9 +418,7 @@ describe("codex command", () => {
   it("routes /codex plugins menu to the Codex-owned plugin picker", async () => {
     const codexPluginsManagementIo = inMemoryCodexPluginsIO();
 
-    const result = await handleCodexCommand(createContext("plugins menu"), {
-      deps: createDeps({ codexPluginsManagementIo }),
-    });
+    const result = await runCommand("plugins menu", { codexPluginsManagementIo });
 
     expectResultTextContains(result, "/codex plugins enable");
     expect(buttonCommands(result)).toContain("/codex plugins list");
@@ -420,9 +433,7 @@ describe("codex command", () => {
       },
     });
 
-    const result = await handleCodexCommand(createContext("plugins list"), {
-      deps: createDeps({ codexPluginsManagementIo }),
-    });
+    const result = await runCommand("plugins list", { codexPluginsManagementIo });
 
     expectResultTextContains(result, "ON   google-calendar");
     expectResultTextContains(result, "openclaw.json");
@@ -437,14 +448,14 @@ describe("codex command", () => {
       },
     });
 
-    const disabled = await handleCodexCommand(createContext("plugins disable google-calendar"), {
-      deps: createDeps({ codexPluginsManagementIo }),
+    const disabled = await runCommand("plugins disable google-calendar", {
+      codexPluginsManagementIo,
     });
     expectResultTextContains(disabled, "google-calendar: disabled in openclaw.json");
     expect(codexPluginsManagementIo.current()["google-calendar"]?.enabled).toBe(false);
 
-    const enabled = await handleCodexCommand(createContext("plugins enable google-calendar"), {
-      deps: createDeps({ codexPluginsManagementIo }),
+    const enabled = await runCommand("plugins enable google-calendar", {
+      codexPluginsManagementIo,
     });
     expectResultTextContains(enabled, "google-calendar: enabled in openclaw.json");
     expect(codexPluginsManagementIo.currentConfig().enabled).toBe(true);
@@ -514,9 +525,7 @@ describe("codex command", () => {
       return response;
     });
 
-    const command = handleCodexCommand(createContext("resume thread-123"), {
-      deps: createDeps({ codexControlRequest }),
-    });
+    const command = runCommand("resume thread-123", { codexControlRequest });
     await vi.waitFor(() => expect(codexControlRequest).toHaveBeenCalledTimes(1));
     const competingOwner = testCodexAppServerBindingStore.withLease(identity, async () => {
       order.push("competing-owner");
@@ -722,6 +731,7 @@ describe("codex command", () => {
     "permissions yolo",
     "compact",
     "review",
+    "goal pause",
   ])("blocks /codex %s in sandboxed sessions before native Codex execution", async (args) => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const codexControlRequest = vi.fn();
@@ -764,6 +774,7 @@ describe("codex command", () => {
     "permissions yolo",
     "compact",
     "review",
+    "goal pause",
   ])("blocks /codex %s when exec host=node is active", async (args) => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const codexControlRequest = vi.fn();
@@ -904,6 +915,28 @@ describe("codex command", () => {
         deps: createDeps(),
       }),
     ).resolves.toEqual({ text: "Codex permissions: full access." });
+    await expect(
+      handleCodexCommand(createSandboxedContext("goal", sessionFile), {
+        deps: createDeps({
+          codexControlRequest: vi.fn(
+            async (): Promise<JsonValue> => ({
+              goal: {
+                threadId: "thread-status",
+                objective: "Inspect status",
+                status: "active",
+                tokenBudget: null,
+                tokensUsed: 0,
+                timeUsedSeconds: 0,
+                createdAt: 1,
+                updatedAt: 1,
+              },
+            }),
+          ),
+        }),
+      }),
+    ).resolves.toEqual({
+      text: "Codex goal: Inspect status\n- Status: active\n- Tokens: 0",
+    });
   });
 
   it("lists Codex CLI sessions from a requested node", async () => {
@@ -923,9 +956,7 @@ describe("codex command", () => {
       },
     }));
 
-    const result = await handleCodexCommand(createContext("sessions --host mb-m5 bridge"), {
-      deps: createDeps({ listCodexCliSessionsOnNode }),
-    });
+    const result = await runCommand("sessions --host mb-m5 bridge", { listCodexCliSessionsOnNode });
 
     expect(result.text).toContain("Codex CLI sessions on mb-m5 / mb-m5:");
     expect(result.text).toContain("019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd");
@@ -948,9 +979,7 @@ describe("codex command", () => {
       },
     }));
 
-    await handleCodexCommand(createContext("sessions --host mb-m5 --limit +05 bridge"), {
-      deps: createDeps({ listCodexCliSessionsOnNode }),
-    });
+    await runCommand("sessions --host mb-m5 --limit +05 bridge", { listCodexCliSessionsOnNode });
 
     expect(listCodexCliSessionsOnNode).toHaveBeenCalledWith({
       requestedNode: "mb-m5",
@@ -962,8 +991,8 @@ describe("codex command", () => {
   it("rejects partial Codex CLI session limits before node dispatch", async () => {
     const listCodexCliSessionsOnNode = vi.fn();
 
-    const result = await handleCodexCommand(createContext("sessions --host mb-m5 --limit 5x"), {
-      deps: createDeps({ listCodexCliSessionsOnNode }),
+    const result = await runCommand("sessions --host mb-m5 --limit 5x", {
+      listCodexCliSessionsOnNode,
     });
 
     expect(result.text).toBe("Usage: /codex sessions --host <node> [filter] [--limit <n>]");
@@ -973,8 +1002,8 @@ describe("codex command", () => {
   it("rejects fractional Codex CLI session limits before node dispatch", async () => {
     const listCodexCliSessionsOnNode = vi.fn();
 
-    const result = await handleCodexCommand(createContext("sessions --host mb-m5 --limit 5.5"), {
-      deps: createDeps({ listCodexCliSessionsOnNode }),
+    const result = await runCommand("sessions --host mb-m5 --limit 5.5", {
+      listCodexCliSessionsOnNode,
     });
 
     expect(result.text).toBe("Usage: /codex sessions --host <node> [filter] [--limit <n>]");
@@ -1532,9 +1561,7 @@ describe("codex command", () => {
         },
       });
 
-    const result = await handleCodexCommand(createContext("account"), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest });
 
     expect(result.text).toContain("Account: codex@example.com");
     expect(result.text).toContain("Codex is available.");
@@ -1556,9 +1583,7 @@ describe("codex command", () => {
       .mockResolvedValueOnce({ ok: false as const, error: unsafe })
       .mockResolvedValueOnce({ ok: false as const, error: unsafe });
 
-    const result = await handleCodexCommand(createContext("account"), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest });
 
     expect(result.text).toContain(
       "&lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
@@ -1605,9 +1630,7 @@ describe("codex command", () => {
         },
       });
 
-    const result = await handleCodexCommand(createContext("account"), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest });
 
     expect(result.text).toContain("Codex is paused until ");
     expect(result.text).toContain("Your weekly Codex usage limit is reached.");
@@ -1678,9 +1701,7 @@ describe("codex command", () => {
         }),
       });
 
-    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest }, { config });
 
     expect(result.text).toContain("Subscription  personal-email@gmail.com");
     expect(result.text).toContain("\n  Weekly 63% \u00b7 Short-term 12%");
@@ -1745,9 +1766,7 @@ describe("codex command", () => {
         }),
       });
 
-    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest }, { config });
 
     expect(result.text).toContain(
       "\n  1. personal-email@gmail.com   ChatGPT subscription   — active now",
@@ -1810,9 +1829,7 @@ describe("codex command", () => {
         }),
       });
 
-    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest }, { config });
 
     expect(result.text).toContain(
       "\n  1. personal-email@gmail.com   ChatGPT subscription   — active now",
@@ -2000,9 +2017,7 @@ describe("codex command", () => {
         }),
       });
 
-    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest }, { config });
 
     expect(result.text).toContain("Now using: api-key-backup");
     expect(result.text).toContain("subscription rate-limited");
@@ -2067,9 +2082,7 @@ describe("codex command", () => {
         }),
       });
 
-    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest }, { config });
 
     expect(result.text).toContain(
       "\n  1. fresh-email@example.com   ChatGPT subscription   — active now",
@@ -2122,9 +2135,7 @@ describe("codex command", () => {
         error: "usage data unavailable",
       });
 
-    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest }, { config });
 
     expect(result.text).toContain("\n  1. fresh-key   API key   — active now");
     expect(result.text).not.toContain("stale-key   API key   — active now");
@@ -2185,9 +2196,7 @@ describe("codex command", () => {
         error: "subscription limits unavailable",
       });
 
-    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest }, { config });
 
     // With all credentials expired, no profile is active — the display shows
     // "no working credential" and both profiles are labelled "sign-in expired".
@@ -2211,9 +2220,7 @@ describe("codex command", () => {
       .mockResolvedValueOnce({ ok: true as const, value: { account: { id: unsafe } } })
       .mockResolvedValueOnce({ ok: true as const, value: [] });
 
-    const result = await handleCodexCommand(createContext("account"), {
-      deps: createDeps({ safeCodexControlRequest }),
-    });
+    const result = await runCommand("account", { safeCodexControlRequest });
 
     expect(result.text).toContain(
       "&lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
@@ -2232,11 +2239,7 @@ describe("codex command", () => {
       })
       .mockResolvedValueOnce({ ok: true, value: [] });
 
-    await expect(
-      handleCodexCommand(createContext("account"), {
-        deps: createDeps({ safeCodexControlRequest }),
-      }),
-    ).resolves.toEqual({
+    await expect(runCommand("account", { safeCodexControlRequest })).resolves.toEqual({
       text: ["Account: Amazon Bedrock", "Rate limits: none returned"].join("\n\n"),
     });
   });
@@ -2413,9 +2416,7 @@ describe("codex command", () => {
         "Computer Use live test failed after 2 attempts: list_apps timed out Startup is allowed because computerUse.strictReadiness is false.",
     }));
 
-    const result = await handleCodexCommand(createContext("computer-use status"), {
-      deps: createDeps({ readCodexComputerUseStatus }),
-    });
+    const result = await runCommand("computer-use status", { readCodexComputerUseStatus });
 
     expectResultTextContains(result, "Computer Use: not ready");
     expectResultTextContains(result, "Live test: failed (2 attempts, 60000ms)");
@@ -2432,9 +2433,7 @@ describe("codex command", () => {
       message: "Computer Use is ready @here.",
     }));
 
-    const result = await handleCodexCommand(createContext("computer-use status"), {
-      deps: createDeps({ readCodexComputerUseStatus }),
-    });
+    const result = await runCommand("computer-use status", { readCodexComputerUseStatus });
 
     expect(result.text).toContain("Plugin: &lt;\uff20U123&gt; (installed)");
     expect(result.text).toContain(
@@ -2462,9 +2461,7 @@ describe("codex command", () => {
         "Computer Use is installed, but the computer-use plugin is disabled. Run /codex computer-use install or enable computerUse.autoInstall to re-enable it.",
     }));
 
-    const result = await handleCodexCommand(createContext("computer-use status"), {
-      deps: createDeps({ readCodexComputerUseStatus }),
-    });
+    const result = await runCommand("computer-use status", { readCodexComputerUseStatus });
 
     expectResultTextContains(result, "Plugin: computer-use (installed, disabled)");
   });
@@ -2497,9 +2494,7 @@ describe("codex command", () => {
   it("shows help when Computer Use option values are missing", async () => {
     const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
 
-    const result = await handleCodexCommand(createContext("computer-use install --source"), {
-      deps: createDeps({ installCodexComputerUse }),
-    });
+    const result = await runCommand("computer-use install --source", { installCodexComputerUse });
 
     expectResultTextContains(result, "Usage: /codex computer-use");
     expect(installCodexComputerUse).not.toHaveBeenCalled();
@@ -2566,8 +2561,9 @@ describe("codex command", () => {
     const readCodexComputerUseStatus = vi.fn(async () => computerUseReadyStatus());
     const installCodexComputerUse = vi.fn(async () => computerUseReadyStatus());
 
-    const result = await handleCodexCommand(createContext("computer-use status install"), {
-      deps: createDeps({ readCodexComputerUseStatus, installCodexComputerUse }),
+    const result = await runCommand("computer-use status install", {
+      readCodexComputerUseStatus,
+      installCodexComputerUse,
     });
 
     expectResultTextContains(result, "Usage: /codex computer-use");
@@ -4038,6 +4034,91 @@ describe("codex command", () => {
         startOptions: expect.objectContaining({ homeScope: "user" }),
       }),
     );
+  });
+
+  it("reads, updates, and clears goals through the bound native Codex thread", async () => {
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-goal", cwd: "/repo" },
+    );
+    const goal = {
+      threadId: "thread-goal",
+      objective: "Ship native goals",
+      status: "active",
+      tokenBudget: null,
+      tokensUsed: 120,
+      timeUsedSeconds: 30,
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const codexControlRequest = vi.fn(
+      async (_pluginConfig: unknown, method: string): Promise<JsonValue> => {
+        if (method === CODEX_CONTROL_METHODS.clearThreadGoal) {
+          return { cleared: true };
+        }
+        return { goal };
+      },
+    );
+    const deps = createDeps({ codexControlRequest });
+
+    await expect(handleCodexCommand(createContext("goal"), { deps })).resolves.toEqual({
+      text: "Codex goal: Ship native goals\n- Status: active\n- Tokens: 120",
+    });
+    await expect(
+      handleCodexCommand(createContext("goal set Ship native goals"), { deps }),
+    ).resolves.toEqual({
+      text: "Codex goal: Ship native goals\n- Status: active\n- Tokens: 120",
+    });
+    await expect(
+      handleCodexCommand(createContext("goal set Refine native goals"), { deps }),
+    ).resolves.toEqual({
+      text: "Codex goal: Ship native goals\n- Status: active\n- Tokens: 120",
+    });
+    await expect(handleCodexCommand(createContext("goal clear"), { deps })).resolves.toEqual({
+      text: "Cleared the Codex goal.",
+    });
+
+    expect(codexControlRequest).toHaveBeenNthCalledWith(
+      1,
+      undefined,
+      CODEX_CONTROL_METHODS.getThreadGoal,
+      { threadId: "thread-goal" },
+      expect.any(Object),
+    );
+    expect(codexControlRequest).toHaveBeenNthCalledWith(
+      2,
+      undefined,
+      CODEX_CONTROL_METHODS.setThreadGoal,
+      { threadId: "thread-goal", objective: "Ship native goals" },
+      expect.any(Object),
+    );
+    expect(codexControlRequest).toHaveBeenNthCalledWith(
+      3,
+      undefined,
+      CODEX_CONTROL_METHODS.setThreadGoal,
+      { threadId: "thread-goal", objective: "Refine native goals" },
+      expect.any(Object),
+    );
+    expect(codexControlRequest).toHaveBeenNthCalledWith(
+      4,
+      undefined,
+      CODEX_CONTROL_METHODS.clearThreadGoal,
+      { threadId: "thread-goal" },
+      expect.any(Object),
+    );
+  });
+
+  it("rejects inherited object names as goal actions", async () => {
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-goal", cwd: "/repo" },
+    );
+    const codexControlRequest = vi.fn();
+
+    await expect(runCommand("goal __proto__", { codexControlRequest })).resolves.toEqual({
+      text: "Usage: /codex goal [status|set <objective>|pause|resume|block|complete|clear]",
+    });
+    expect(codexControlRequest).not.toHaveBeenCalled();
   });
 
   it("formats every Codex skill as a code-styled bullet and tolerates malformed entries", async () => {

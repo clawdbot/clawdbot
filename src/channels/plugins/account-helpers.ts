@@ -18,57 +18,48 @@ import {
 import type { ChannelAccountSnapshot } from "./types.core.js";
 
 /**
- * Creates reusable account id listing and default-account resolution helpers for a channel.
+ * Creates reusable account listing, default selection, and merged config helpers for a channel.
  */
-export function createAccountListHelpers(
+export function createAccountListHelpers<
+  TConfig extends Record<string, unknown> = Record<string, unknown>,
+>(
   channelKey: string,
   options?: {
     normalizeAccountId?: (id: string) => string;
+    omitKeys?: Array<(keyof TConfig & string) | "defaultAccount">;
+    nestedObjectKeys?: Array<keyof TConfig & string>;
     allowUnlistedDefaultAccount?: boolean;
+    additionalAccountIds?: (cfg: OpenClawConfig) => Iterable<string>;
+    fallbackAccountIdWhenEmpty?: string | false;
     implicitDefaultAccount?: {
       channelKeys?: readonly string[];
       envVars?: readonly string[];
     };
     hasImplicitDefaultAccount?: (cfg: OpenClawConfig) => boolean;
+    resolveImplicitAccountId?: (cfg: OpenClawConfig) => string | undefined;
   },
 ) {
   function hasImplicitDefaultAccount(cfg: OpenClawConfig): boolean {
     // Legacy single-account configs and env-only setup imply the default account even when
     // channels.<id>.accounts is absent.
-    if (options?.hasImplicitDefaultAccount?.(cfg)) {
-      return true;
-    }
     const channel = cfg.channels?.[channelKey] as Record<string, unknown> | undefined;
-    for (const key of options?.implicitDefaultAccount?.channelKeys ?? []) {
-      if (hasConfiguredAccountValue(channel?.[key])) {
-        return true;
-      }
-    }
-    for (const key of options?.implicitDefaultAccount?.envVars ?? []) {
-      if (hasConfiguredAccountValue(process.env[key])) {
-        return true;
-      }
-    }
-    return false;
+    return Boolean(
+      options?.hasImplicitDefaultAccount?.(cfg) ||
+      options?.implicitDefaultAccount?.channelKeys?.some((key) =>
+        hasConfiguredAccountValue(channel?.[key]),
+      ) ||
+      options?.implicitDefaultAccount?.envVars?.some((key) =>
+        hasConfiguredAccountValue(process.env[key]),
+      ),
+    );
   }
 
   function resolveConfiguredDefaultAccountId(cfg: OpenClawConfig): string | undefined {
     const channel = cfg.channels?.[channelKey] as Record<string, unknown> | undefined;
-    const preferred = normalizeOptionalAccountId(
+    // The canonical default resolver validates this preference against the same listed ids.
+    return normalizeOptionalAccountId(
       typeof channel?.defaultAccount === "string" ? channel.defaultAccount : undefined,
     );
-    if (!preferred) {
-      return undefined;
-    }
-    const ids = listAccountIds(cfg);
-    if (options?.allowUnlistedDefaultAccount) {
-      return preferred;
-    }
-    // Reject stale defaultAccount values unless the channel explicitly supports external ids.
-    if (ids.some((id) => normalizeAccountId(id) === preferred)) {
-      return preferred;
-    }
-    return undefined;
   }
 
   function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
@@ -88,8 +79,16 @@ export function createAccountListHelpers(
   function listAccountIds(cfg: OpenClawConfig): string[] {
     return listCombinedAccountIds({
       configuredAccountIds: listConfiguredAccountIds(cfg),
-      implicitAccountId: hasImplicitDefaultAccount(cfg) ? DEFAULT_ACCOUNT_ID : undefined,
-      fallbackAccountIdWhenEmpty: DEFAULT_ACCOUNT_ID,
+      additionalAccountIds: options?.additionalAccountIds?.(cfg),
+      implicitAccountId: options?.resolveImplicitAccountId
+        ? options.resolveImplicitAccountId(cfg)
+        : hasImplicitDefaultAccount(cfg)
+          ? DEFAULT_ACCOUNT_ID
+          : undefined,
+      fallbackAccountIdWhenEmpty:
+        options?.fallbackAccountIdWhenEmpty === false
+          ? undefined
+          : (options?.fallbackAccountIdWhenEmpty ?? DEFAULT_ACCOUNT_ID),
     });
   }
 
@@ -101,7 +100,27 @@ export function createAccountListHelpers(
     });
   }
 
-  return { listConfiguredAccountIds, listAccountIds, resolveDefaultAccountId };
+  return {
+    listConfiguredAccountIds,
+    listAccountIds,
+    resolveDefaultAccountId,
+    // Channel owners destructure this resolver; an arrow keeps it independent of `this`.
+    resolveAccountConfig: (cfg: OpenClawConfig, accountId: string): TConfig => {
+      const channelConfig = cfg.channels?.[channelKey] as TConfig | undefined;
+      const accounts = (
+        channelConfig as (TConfig & { accounts?: Record<string, Partial<TConfig>> }) | undefined
+      )?.accounts;
+
+      return resolveMergedAccountConfig<TConfig>({
+        channelConfig,
+        accounts,
+        accountId,
+        omitKeys: options?.omitKeys,
+        normalizeAccountId: options?.normalizeAccountId,
+        nestedObjectKeys: options?.nestedObjectKeys,
+      });
+    },
+  };
 }
 
 /**
@@ -124,19 +143,16 @@ export function listCombinedAccountIds(params: {
   fallbackAccountIdWhenEmpty?: string | undefined;
 }): string[] {
   const ids = new Set<string>();
-
-  for (const id of params.configuredAccountIds) {
-    if (id) {
-      ids.add(id);
+  for (const accountIds of [
+    params.configuredAccountIds,
+    params.additionalAccountIds ?? [],
+    params.implicitAccountId ? [params.implicitAccountId] : [],
+  ]) {
+    for (const accountId of accountIds) {
+      if (accountId) {
+        ids.add(accountId);
+      }
     }
-  }
-  for (const id of params.additionalAccountIds ?? []) {
-    if (id) {
-      ids.add(id);
-    }
-  }
-  if (params.implicitAccountId) {
-    ids.add(params.implicitAccountId);
   }
 
   if (ids.size === 0 && params.fallbackAccountIdWhenEmpty) {

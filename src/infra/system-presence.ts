@@ -10,6 +10,7 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
+import { DARWIN_SYSTEM_PROBE_TIMEOUT_MS, resolveDarwinProductVersion } from "./os-summary.js";
 
 export type SystemPresence = {
   host?: string;
@@ -25,6 +26,13 @@ export type SystemPresence = {
   roles?: string[];
   scopes?: string[];
   instanceId?: string;
+  user?: {
+    id: string;
+    email?: string;
+    name?: string;
+    avatarUrl?: string;
+  };
+  watchedSessions?: string[];
   text: string;
   ts: number;
 };
@@ -59,24 +67,19 @@ function initSelfPresence() {
     if (p === "darwin") {
       const res = spawnSync("sysctl", ["-n", "hw.model"], {
         encoding: "utf-8",
+        timeout: DARWIN_SYSTEM_PROBE_TIMEOUT_MS,
+        killSignal: "SIGKILL",
       });
       const out = normalizeOptionalString(res.stdout) ?? "";
       return out.length > 0 ? out : undefined;
     }
     return os.arch();
   })();
-  const macOSVersion = () => {
-    const res = spawnSync("sw_vers", ["-productVersion"], {
-      encoding: "utf-8",
-    });
-    const out = normalizeOptionalString(res.stdout) ?? "";
-    return out.length > 0 ? out : os.release();
-  };
   const platform = (() => {
     const p = os.platform();
     const rel = os.release();
     if (p === "darwin") {
-      return `macos ${macOSVersion()}`;
+      return `macos ${resolveDarwinProductVersion()}`;
     }
     if (p === "win32") {
       return `windows ${rel}`;
@@ -179,7 +182,7 @@ type SystemPresencePayload = {
   platform?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
-  lastInputSeconds?: number;
+  lastInputSeconds?: number | null;
   mode?: string;
   reason?: string;
   roles?: string[];
@@ -227,7 +230,9 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
     modelIdentifier: payload.modelIdentifier ?? existing.modelIdentifier,
     mode: payload.mode ?? parsed.mode ?? existing.mode,
     lastInputSeconds:
-      payload.lastInputSeconds ?? parsed.lastInputSeconds ?? existing.lastInputSeconds,
+      payload.lastInputSeconds === null
+        ? undefined
+        : (payload.lastInputSeconds ?? parsed.lastInputSeconds ?? existing.lastInputSeconds),
     reason: payload.reason ?? parsed.reason ?? existing.reason,
     deviceId: payload.deviceId ?? existing.deviceId,
     roles: mergeStringList(existing.roles, payload.roles),
@@ -278,6 +283,20 @@ export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
       }`,
   };
   entries.set(normalizedKey, merged);
+}
+
+/** Renews an existing connection-owned presence row without recreating expired metadata. */
+export function touchPresence(key: string): boolean {
+  const normalizedKey = normalizePresenceKey(key);
+  if (!normalizedKey) {
+    return false;
+  }
+  const existing = entries.get(normalizedKey);
+  if (!existing) {
+    return false;
+  }
+  entries.set(normalizedKey, { ...existing, ts: Date.now() });
+  return true;
 }
 
 export function listSystemPresence(): SystemPresence[] {

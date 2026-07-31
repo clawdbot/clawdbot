@@ -76,6 +76,18 @@ export function isControlCommandMessage(
   return isAbortTrigger(normalized);
 }
 
+/** Returns true when a command starts a new transcript rather than resetting in place. */
+export function isSessionBoundaryCommandText(
+  text?: string,
+  options?: CommandNormalizeOptions,
+): boolean {
+  const stripped = stripInboundMetadata(text?.trim() ?? "");
+  const normalized = normalizeCommandBody(stripped, options);
+  return (
+    /^\/(?:new|reset)(?:\s|$)/i.test(normalized) && !/^\/reset\s+soft(?:\s|$)/i.test(normalized)
+  );
+}
+
 /**
  * Coarse detection for inline directives/shortcuts (e.g. "hey /status") so channel monitors
  * can decide whether to compute CommandAuthorized for a message.

@@ -36,8 +36,8 @@ function createMockContext(overrides?: {
       pendingMessagingTargets: new Map(),
       pendingMessagingMediaUrls: new Map(),
       pendingToolMediaUrls: [],
+      pendingToolMediaTrustByUrl: new Map(),
       pendingToolAudioAsVoice: false,
-      pendingToolTrustedLocalMedia: false,
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
@@ -61,6 +61,7 @@ function createMockContext(overrides?: {
     // Fill in remaining required fields with no-ops.
     blockChunker: null,
     noteLastAssistant: vi.fn(),
+    noteCompletedAssistant: vi.fn(),
     stripBlockTags: vi.fn((t: string) => t),
     emitBlockChunk: vi.fn(),
     flushBlockReplyBuffer: vi.fn(),
@@ -77,6 +78,7 @@ function createMockContext(overrides?: {
     recordAssistantUsage: vi.fn(),
     incrementCompactionCount: vi.fn(),
     getUsageTotals: vi.fn(() => undefined),
+    getLastAssistantUsage: vi.fn(() => undefined),
     getCompactionCount: vi.fn(() => 0),
   } as unknown as EmbeddedAgentSubscribeContext;
 }
@@ -677,7 +679,7 @@ describe("handleToolExecutionEnd media emission", () => {
 
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
-    expect(ctx.state.pendingToolTrustedLocalMedia).toBe(true);
+    expect(ctx.state.pendingToolMediaTrustByUrl.get("/tmp/reply.opus")).toBe(true);
   });
 
   it("queues trusted TTS local media when the exact built-in name is absent", async () => {
@@ -706,6 +708,6 @@ describe("handleToolExecutionEnd media emission", () => {
 
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
-    expect(ctx.state.pendingToolTrustedLocalMedia).toBe(true);
+    expect(ctx.state.pendingToolMediaTrustByUrl.get("/tmp/reply.opus")).toBe(true);
   });
 });

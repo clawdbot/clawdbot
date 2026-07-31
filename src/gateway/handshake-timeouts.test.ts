@@ -146,25 +146,6 @@ describe("gateway handshake timeouts", () => {
     ).toBeUndefined();
   });
 
-  test("caps connect challenge timeout env and explicit values to the safe timer range", () => {
-    expect(
-      getConnectChallengeTimeoutMsFromEnv({
-        OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "3000000000",
-      }),
-    ).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
-    expect(
-      resolveConnectChallengeTimeoutMs(3_000_000_000, {
-        env: {},
-        configuredTimeoutMs: 3_000_000_000,
-      }),
-    ).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
-    expect(
-      resolveConnectChallengeTimeoutMs(undefined, {
-        env: { OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "3000000000" },
-      }),
-    ).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
-  });
-
   test("resolveConnectChallengeTimeoutMs falls back to env override", () => {
     const original = process.env.OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS;
     const originalHandshake = process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;

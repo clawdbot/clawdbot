@@ -1,25 +1,33 @@
-// Sidebar agent-chip menu (switcher, filter, utility rows), split out of
-// app-sidebar.ts to keep that hot component inside the TS LOC ratchet.
+// Sidebar identity menus, split out of app-sidebar.ts to keep that hot
+// component inside the TS LOC ratchet.
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
+import type { AgentIdentityResult } from "../api/types.ts";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
+import { pathForAgentPanel } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
-import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
+import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { renderAgentSelectAvatar, renderAgentSelectCopy } from "./agent-select.ts";
 import { icons, type IconName } from "./icons.ts";
+import "./sidebar-build-chip.ts";
 import {
   consumeDropdownKeyboardDismissal,
   syncDropdownItemRadio,
   trackDropdownKeyboardDismissal,
 } from "./web-awesome.ts";
 
-// External rows of the footer agent menu. Docs-first: public docs pages over
+// External rows of the footer identity menu. Docs-first: public docs pages over
 // raw GitHub, matching the ClawSweeper docs-link policy for user-facing copy.
-const AGENT_MENU_LINKS: ReadonlyArray<{ href: string; icon: IconName; label: () => string }> = [
+const IDENTITY_MENU_LINKS: ReadonlyArray<{
+  href: string;
+  icon: IconName;
+  label: () => string;
+}> = [
   { href: "https://docs.openclaw.ai", icon: "book", label: () => t("common.docs") },
   {
     href: "https://docs.openclaw.ai/help",
@@ -40,29 +48,52 @@ const AGENT_VALUE_PREFIX = "agent:";
 const COMMAND_VALUE_PREFIX = "command:";
 const LINK_VALUE_PREFIX = "link:";
 
-type AgentMenuAgent = { id: string; name?: string; identity?: { name?: string; emoji?: string } };
+type AgentMenuAgent = {
+  id: string;
+  name?: string;
+  identity?: { name?: string; emoji?: string; avatar?: string; avatarUrl?: string };
+};
 
 type SidebarAgentMenuParams = {
-  position: { x: number; bottom: number } | null;
+  position: { x: number; top: number } | null;
+  basePath: string;
   activeId: string;
   activeName: string;
   agents: readonly AgentMenuAgent[];
+  identities: ReadonlyMap<string, AgentIdentityResult>;
   filter: string;
   pinnedAgentIds: readonly string[];
   connected: boolean;
-  canPairDevice: boolean;
-  basePath: string;
-  gatewayVersion: string | null;
-  themeMode: ThemeMode;
   agentUnreadCount: (agentId: string) => number;
+  agentApprovalCount: (agentId: string) => number;
   onFilterChange: (next: string) => void;
   onSwitchAgent: (agentId: string) => void;
   onAskCapabilities: (agentId: string) => void;
   onTabAway: () => void;
   onClose: (restoreFocus?: boolean) => void;
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
-  onPairMobile: () => void;
 };
+
+type SidebarIdentityMenuParams = {
+  position: { x: number; bottom: number; width: number } | null;
+  canPairDevice: boolean;
+  basePath: string;
+  gatewayVersion: string | null;
+  selfName?: string;
+  selfEmail?: string;
+  offline: boolean;
+  themeMode: ThemeMode;
+  triggerWidth: number;
+  onTabAway: () => void;
+  onClose: (restoreFocus?: boolean) => void;
+  onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
+  onPairMobile: () => void;
+  onRetryConnect?: () => void;
+};
+
+function isApplePlatform(): boolean {
+  return /Mac|iPhone|iPad|iPod/u.test(globalThis.navigator?.platform ?? "");
+}
 
 /** Rows for the chip switcher. Small rosters list everything; past
     QUICK_SWITCH_AGENT_LIMIT the menu shows pinned agents (plus the active
@@ -72,6 +103,7 @@ function sidebarAgentMenuRows(params: {
   activeId: string;
   filter: string;
   pinnedAgentIds: readonly string[];
+  identities: ReadonlyMap<string, AgentIdentityResult>;
 }) {
   const { agents, activeId } = params;
   const availableIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
@@ -94,7 +126,9 @@ function sidebarAgentMenuRows(params: {
       const agentId = normalizeAgentId(entry.id);
       return (
         agentId.toLowerCase().includes(query) ||
-        normalizeAgentLabel(entry).toLowerCase().includes(query)
+        (params.identities.get(agentId)?.name?.trim() || normalizeAgentLabel(entry))
+          .toLowerCase()
+          .includes(query)
       );
     });
     return { rows, showFilter: true };
@@ -120,21 +154,36 @@ function sidebarAgentMenuRows(params: {
 
 function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
   const agentId = normalizeAgentId(agent.id);
-  const label = normalizeAgentLabel(agent);
+  const identity = params.identities.get(agentId) ?? null;
+  const label = identity?.name?.trim() || normalizeAgentLabel(agent);
   const active = agentId === params.activeId;
   const unread = active ? 0 : params.agentUnreadCount(agentId);
-  const initial = resolveAgentTextAvatar(agent) ?? (label || agent.id).slice(0, 1).toUpperCase();
+  const approvals = params.agentApprovalCount(agentId);
+  const approvalLabel = t(
+    approvals === 1 ? "execApproval.agentPendingOne" : "execApproval.agentPending",
+    { count: String(approvals) },
+  );
+  const option = { value: agentId, label, agent };
   return html`
     <wa-dropdown-item
-      class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch"
+      class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch agent-select__option"
       value=${`${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId)}`}
       type="checkbox"
       role="menuitemradio"
       aria-checked=${String(active)}
       ${ref((element) => syncDropdownItemRadio(element, active))}
     >
-      <span slot="icon" class="sidebar-agent-section__avatar" aria-hidden="true">${initial}</span>
-      <span class="sidebar-customize-menu__text">${label}</span>
+      <span slot="icon">${renderAgentSelectAvatar(option, identity)}</span>
+      ${renderAgentSelectCopy(option)}
+      ${approvals > 0
+        ? html`<span
+            slot="details"
+            class="sidebar-agent-approval-count"
+            aria-label=${approvalLabel}
+            title=${approvalLabel}
+            >${approvals}</span
+          >`
+        : nothing}
       ${active
         ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
             >${icons.check}</span
@@ -152,9 +201,9 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
   `;
 }
 
-function renderAgentMenuHelpSubmenu() {
+function renderIdentityMenuHelpSubmenu() {
   return html`
-    ${AGENT_MENU_LINKS.map(
+    ${IDENTITY_MENU_LINKS.map(
       (link) => html`
         <wa-dropdown-item
           slot="submenu"
@@ -193,7 +242,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
       <wa-dropdown
         class="sidebar-customize-menu sidebar-agent-menu"
         .open=${true}
-        placement="top-start"
+        placement="bottom-start"
         .distance=${0}
         aria-label=${t("agentChip.menuLabel")}
         @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
@@ -213,22 +262,17 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
             params.onSwitchAgent(decodeURIComponent(value.slice(AGENT_VALUE_PREFIX.length)));
             return;
           }
-          if (value.startsWith(LINK_VALUE_PREFIX)) {
-            openExternalUrlSafe(decodeURIComponent(value.slice(LINK_VALUE_PREFIX.length)));
-            return;
-          }
           switch (value) {
             case `${COMMAND_VALUE_PREFIX}capabilities`:
               params.onAskCapabilities(activeId);
               break;
             case `${COMMAND_VALUE_PREFIX}agent-settings`:
-              params.onNavigate("agents", { search: `?agent=${encodeURIComponent(activeId)}` });
+              params.onNavigate("agents", {
+                pathname: pathForAgentPanel(activeId, null, params.basePath),
+              });
               break;
-            case `${COMMAND_VALUE_PREFIX}settings`:
-              params.onNavigate("config");
-              break;
-            case `${COMMAND_VALUE_PREFIX}pair-mobile`:
-              params.onPairMobile();
+            case `${COMMAND_VALUE_PREFIX}new-agent`:
+              params.onNavigate("custodian", { search: "?intent=new-agent" });
               break;
           }
         }}
@@ -249,7 +293,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
           tabindex="-1"
           aria-hidden="true"
           aria-label=${t("agentChip.menuLabel")}
-          style="position: fixed; left: ${position.x}px; bottom: ${position.bottom}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
+          style="position: fixed; left: ${position.x}px; top: ${position.top}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
         ${agents.length > 1
           ? html`
@@ -300,9 +344,13 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
                     ${t("agentChip.noAgentMatches")}
                   </div>`
                 : nothing}
-              <div class="sidebar-customize-menu__separator" role="separator"></div>
             `
           : nothing}
+        <wa-dropdown-item class="sidebar-customize-menu__item" value="command:new-agent">
+          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
+          <span class="sidebar-customize-menu__text">${t("custodian.newAgent")}</span>
+        </wa-dropdown-item>
+        <div class="sidebar-customize-menu__separator" role="separator"></div>
         <wa-dropdown-item
           class="sidebar-customize-menu__item"
           value="command:capabilities"
@@ -317,10 +365,92 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
           <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
           <span class="sidebar-customize-menu__text">${t("agentChip.agentSettings")}</span>
         </wa-dropdown-item>
-        <div class="sidebar-customize-menu__separator" role="separator"></div>
+      </wa-dropdown>
+    </openclaw-menu-surface>
+  `;
+}
+
+export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
+  const position = params.position;
+  if (!position) {
+    return nothing;
+  }
+  const profileLabel = params.selfEmail ?? params.selfName;
+  return html`
+    <openclaw-menu-surface>
+      <wa-dropdown
+        class="sidebar-customize-menu sidebar-identity-menu"
+        style=${`--sidebar-identity-menu-min-width: ${params.triggerWidth}px`}
+        .open=${true}
+        placement="top-start"
+        .distance=${0}
+        aria-label=${t("profilePage.identity.menuLabel")}
+        @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
+          event.preventDefault();
+          const item = event.detail.item;
+          if (item.dataset.nativeNavigation) {
+            delete item.dataset.nativeNavigation;
+            params.onClose(false);
+            return;
+          }
+          const value = item.value;
+          if (!value) {
+            return;
+          }
+          params.onClose(false);
+          if (value.startsWith(LINK_VALUE_PREFIX)) {
+            openExternalUrlSafe(decodeURIComponent(value.slice(LINK_VALUE_PREFIX.length)));
+            return;
+          }
+          switch (value) {
+            case `${COMMAND_VALUE_PREFIX}profile`:
+              params.onNavigate("profile", { hash: "#settings-profile-identity" });
+              break;
+            case `${COMMAND_VALUE_PREFIX}settings`:
+              params.onNavigate("appearance");
+              break;
+            case `${COMMAND_VALUE_PREFIX}usage`:
+              params.onNavigate("usage");
+              break;
+            case `${COMMAND_VALUE_PREFIX}pair-mobile`:
+              params.onPairMobile();
+              break;
+            case `${COMMAND_VALUE_PREFIX}apps`:
+              params.onNavigate("apps");
+              break;
+            case `${COMMAND_VALUE_PREFIX}retry-connect`:
+              params.onRetryConnect?.();
+              break;
+          }
+        }}
+        @keydown=${(event: KeyboardEvent) =>
+          trackDropdownKeyboardDismissal(event, params.onTabAway)}
+        @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
+      >
+        <button
+          slot="trigger"
+          type="button"
+          tabindex="-1"
+          aria-hidden="true"
+          aria-label=${t("profilePage.identity.menuLabel")}
+          style="position: fixed; left: ${position.x}px; bottom: ${position.bottom}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
+        ></button>
+        ${profileLabel
+          ? html`<wa-dropdown-item class="sidebar-identity-menu__header" value="command:profile">
+                ${profileLabel}
+              </wa-dropdown-item>
+              <div class="sidebar-customize-menu__separator" role="separator"></div>`
+          : nothing}
         <wa-dropdown-item class="sidebar-customize-menu__item" value="command:settings">
           <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.settings}</span>
-          <span class="sidebar-customize-menu__text">${titleForRoute("config")}</span>
+          <span class="sidebar-customize-menu__text">${t("nav.settings")}</span>
+          <span slot="details" class="session-menu__shortcut" aria-hidden="true"
+            >${isApplePlatform() ? "⌘⇧," : "Ctrl+Shift+,"}</span
+          >
+        </wa-dropdown-item>
+        <wa-dropdown-item class="sidebar-customize-menu__item" value="command:usage">
+          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.coins}</span>
+          <span class="sidebar-customize-menu__text">${titleForRoute("usage")}</span>
         </wa-dropdown-item>
         <wa-dropdown-item
           class="sidebar-customize-menu__item sidebar-pair-mobile"
@@ -331,18 +461,31 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
           <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.smartphone}</span>
           <span class="sidebar-customize-menu__text">${t("nodes.pairing.button")}</span>
         </wa-dropdown-item>
+        <wa-dropdown-item class="sidebar-customize-menu__item" value="command:apps">
+          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.layoutGrid}</span>
+          <span class="sidebar-customize-menu__text">${t("agentChip.getApps")}</span>
+        </wa-dropdown-item>
         <wa-dropdown-item
-          class="sidebar-customize-menu__item sidebar-agent-menu__help"
+          class="sidebar-customize-menu__item sidebar-identity-menu__help"
           value="command:help"
         >
           <span slot="icon" class="nav-item__icon" aria-hidden="true"
             >${icons.circleQuestionMark}</span
           >
           <span class="sidebar-customize-menu__text">${t("agentChip.help")}</span>
-          ${renderAgentMenuHelpSubmenu()}
+          ${renderIdentityMenuHelpSubmenu()}
         </wa-dropdown-item>
+        ${params.offline
+          ? html`<div class="sidebar-customize-menu__separator" role="separator"></div>
+              <wa-dropdown-item
+                class="sidebar-customize-menu__item sidebar-identity-menu__retry"
+                value="command:retry-connect"
+              >
+                <span class="sidebar-customize-menu__text">${t("connection.retryNow")}</span>
+              </wa-dropdown-item>`
+          : nothing}
         <div class="sidebar-customize-menu__separator" role="separator"></div>
-        <div class="sidebar-agent-menu__footer">
+        <div class="sidebar-identity-menu__footer">
           <openclaw-sidebar-build-chip
             .basePath=${params.basePath}
             .gatewayVersion=${params.gatewayVersion}

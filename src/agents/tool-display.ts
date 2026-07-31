@@ -94,10 +94,21 @@ export function formatToolDetail(display: ToolDisplay): string | undefined {
   return formatToolDetailText(detailRaw);
 }
 
+/**
+ * Shell-family tools render their command as the whole line instead of
+ * "Label: detail". Backends spell the same tool differently — the Claude CLI
+ * sends "Bash" where embedded runs send "bash"/"exec" — so every caller must
+ * compare the normalized name or the shell line silently loses its detail.
+ */
+export function isShellToolDisplayName(name: string | undefined): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(name);
+  return normalized === "bash" || normalized === "exec" || normalized === "shell";
+}
+
 /** Builds the compact one-line summary shown in transcripts and logs. */
 export function formatToolSummary(display: ToolDisplay): string {
   const detail = formatToolDetail(display);
-  if (detail && (display.name === "bash" || display.name === "exec")) {
+  if (detail && isShellToolDisplayName(display.name)) {
     return `${display.emoji} ${detail}`;
   }
   return detail

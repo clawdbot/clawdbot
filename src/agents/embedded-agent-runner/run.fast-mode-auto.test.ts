@@ -34,6 +34,7 @@ function successAttempt(provider: string, model: string): EmbeddedRunAttemptResu
 
 type FastModeAttemptParams = {
   fastMode?: unknown;
+  fastModeAutoOnSeconds?: number;
   fastModeAutoProgressState?: {
     offAnnounced: boolean;
     resetAnnounced: boolean;
@@ -66,6 +67,33 @@ describe("runEmbeddedAgent fast auto progress", () => {
   afterEach(() => {
     vi.useRealTimers();
     resetAgentEventsForTest();
+  });
+
+  it("uses the selected model's auto cutoff when the caller omits one", async () => {
+    let attemptParams: FastModeAttemptParams | undefined;
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+      attemptParams = params as FastModeAttemptParams;
+      resolveAttemptFastMode(params);
+      return successAttempt("ollama", "glm-5.1:cloud");
+    });
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "ollama",
+      model: "glm-5.1:cloud",
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "ollama/glm-5.1:cloud": { params: { fastAutoOnSeconds: 23 } },
+            },
+          },
+        },
+      },
+      fastMode: "auto",
+    });
+
+    expect(attemptParams?.fastModeAutoOnSeconds).toBe(23);
   });
 
   it("emits auto-off after a tool execution boundary crosses the threshold", async () => {

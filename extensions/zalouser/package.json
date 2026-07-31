@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.3",
+    "typebox": "1.3.6",
     "zca-js": "2.1.2",
     "zod": "4.4.3"
   },
@@ -31,6 +31,14 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "zalouser",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "ZALOUSER_PROFILE",
+            "ZCA_PROFILE"
+          ]
+        }
+      },
       "label": "Zalo Personal",
       "selectionLabel": "Zalo (Personal Account)",
       "docsPath": "/channels/zalouser",
@@ -46,7 +54,8 @@
         "groupModel": "hybrid",
         "groupAllowFromFallbackToAllowFrom": false,
         "warnOnEmptyGroupSenderAllowlist": false
-      }
+      },
+      "setup": { "fields": [] }
     },
     "install": {
       "npmSpec": "@openclaw/zalouser",

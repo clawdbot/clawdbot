@@ -819,7 +819,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   return withWarnings(normalizedResult, warnings);
 }
 
-export const testing = {
+const testing = {
   resolveDefaultNodeInstallStateDir,
   setDepsForTest(overrides?: Partial<SkillsInstallDeps>): void {
     skillsInstallDeps = {
@@ -828,4 +828,9 @@ export const testing = {
     };
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.skillsInstallTestApi")] =
+    testing;
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

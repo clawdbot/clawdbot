@@ -271,8 +271,3 @@ export function buildMistralRealtimeTranscriptionProvider(): RealtimeTranscripti
     },
   };
 }
-
-export const testing = {
-  normalizeProviderConfig,
-  toMistralRealtimeWsUrl,
-};

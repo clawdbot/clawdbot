@@ -1,6 +1,7 @@
 // Verifies GitHub Copilot profile token fallback and implicit provider planning.
 import { describe, expect, it, vi } from "vitest";
-import { planOpenClawModelsJson, planOpenClawModelsJsonWithDeps } from "./models-config.plan.js";
+import { planOpenClawModelsJson } from "./models-config.plan.js";
+import { planOpenClawModelsJsonWithDeps } from "./models-config.plan.test-support.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 

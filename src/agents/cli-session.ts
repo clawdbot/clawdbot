@@ -8,6 +8,8 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
 import { normalizeCliSessionReseedReceipt } from "../config/sessions/cli-session-binding.js";
+import { readErrorName } from "../infra/errors.js";
+import { isFailoverError } from "./failover-error.js";
 export { getCliSessionBinding, getCliSessionId } from "../config/sessions/cli-session-binding.js";
 
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
@@ -47,6 +49,9 @@ export function setCliSessionBinding(
     ...entry.cliSessionBindings,
     [normalized]: {
       sessionId: trimmed,
+      ...(normalizeOptionalString(binding.resumeCheckpointId)
+        ? { resumeCheckpointId: normalizeOptionalString(binding.resumeCheckpointId) }
+        : {}),
       ...(binding.forceReuse === true ? { forceReuse: true } : {}),
       ...(binding.forkNextResume === true ? { forkNextResume: true } : {}),
       ...(normalizeOptionalString(binding.authProfileId)
@@ -113,6 +118,31 @@ export function clearAllCliSessions(entry: Partial<MutableCliSessionFields>): vo
   entry.cliSessionBindings = undefined;
   entry.cliSessionIds = undefined;
   entry.claudeCliSessionId = undefined;
+}
+
+/** Decide whether a failed CLI turn invalidates the binding it tried to resume. */
+export function shouldClearFailedCliSessionBinding(params: {
+  error: unknown;
+  binding?: CliSessionBinding;
+  hasNewGeneratedMediaTask?: boolean;
+}): boolean {
+  if (!normalizeOptionalString(params.binding?.sessionId)) {
+    return false;
+  }
+  // Detached media delivers back into this run later and still needs the binding.
+  if (params.hasNewGeneratedMediaTask === true) {
+    return false;
+  }
+  if (isFailoverError(params.error)) {
+    return true;
+  }
+  // A pre-successor fork abort keeps its one-shot marker for the next turn.
+  return params.binding?.forkNextResume !== true && readErrorName(params.error) === "AbortError";
+}
+
+/** Stable reason used when recording why a failed reused CLI session was cleared. */
+export function resolveCliSessionClearReason(error: unknown): string {
+  return isFailoverError(error) ? error.reason : (readErrorName(error) ?? "error");
 }
 
 type CliSessionInvalidatedReason = "auth-profile" | "auth-epoch" | "message-policy" | "cwd" | "mcp";

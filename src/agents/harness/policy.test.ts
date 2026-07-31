@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveAgentHarnessPolicy } from "./policy.js";
+import { resolveAgentHarnessPolicy as resolveAgentHarnessPolicyBase } from "./policy.js";
+
+function resolveAgentHarnessPolicy(
+  params: Parameters<typeof resolveAgentHarnessPolicyBase>[0],
+): ReturnType<typeof resolveAgentHarnessPolicyBase> {
+  return resolveAgentHarnessPolicyBase({
+    ...params,
+    config: migratePersistedImplicitMainRoster(params.config).config as OpenClawConfig,
+  });
+}
 
 function openAIProviderConfig(overrides: Record<string, unknown>): OpenClawConfig {
   return {

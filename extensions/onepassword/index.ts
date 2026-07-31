@@ -6,7 +6,7 @@ import {
   resolveLivePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import type { AuditRow, StandingGrant } from "./src/broker.js";
+import type { AuditRow, PendingAuthorization, StandingGrant } from "./src/broker.js";
 import { OnePasswordBroker } from "./src/broker.js";
 import { MAX_REGISTERED_ITEMS, parseOnePasswordConfig } from "./src/config.js";
 import { OpClient } from "./src/op-client.js";
@@ -18,7 +18,8 @@ const MAX_STANDING_GRANTS = MAX_REGISTERED_ITEMS * 32;
 export default definePluginEntry({
   id: "onepassword",
   name: "1Password",
-  description: "Curated 1Password secrets broker with approval policy and SQLite audit history.",
+  description:
+    "1Password SecretRef resolver and curated agent broker with approval policy and SQLite audit history.",
   register(api) {
     const startupConfig = parseOnePasswordConfig(api.pluginConfig);
     const resolveCurrentConfig = () => {
@@ -54,6 +55,11 @@ export default definePluginEntry({
       maxEntries: MAX_AUDIT_ROWS,
       overflowPolicy: "evict-oldest",
     });
+    const pending = api.runtime.state.openSyncKeyedStore<PendingAuthorization>({
+      namespace: "pending",
+      maxEntries: 512,
+      overflowPolicy: "evict-oldest",
+    });
     const tokenFile = path.join(
       api.runtime.state.resolveStateDir(process.env),
       "credentials",
@@ -82,25 +88,28 @@ export default definePluginEntry({
           opClient: {
             getItem: (params) => resolveCurrentOpClient().getItem(params),
           },
-          stores: { audit, grants },
+          stores: { audit, grants, pending },
         })
       : undefined;
 
     api.registerCli(
-      async ({ program }) => {
+      async ({ program, config }) => {
         const { registerOnePasswordCommands } = await import("./src/cli.js");
+        const { registerOnePasswordSecretRefCommands } = await import("./src/secret-ref-cli.js");
         registerOnePasswordCommands({
           program,
           resolveConfig: resolveCurrentConfig,
           resolveOpClient: resolveCurrentOpClient,
           auditStore: audit,
+          registerAdditionalCommands: (command) =>
+            registerOnePasswordSecretRefCommands({ command, config, tokenFile }),
         });
       },
       {
         descriptors: [
           {
             name: "onepassword",
-            description: "Inspect the 1Password secrets broker",
+            description: "Manage the 1Password integration",
             hasSubcommands: true,
           },
         ],

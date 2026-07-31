@@ -63,11 +63,20 @@ function hiddenArgumentsLabel(count: number): string {
 }
 
 function buildEntrySummary(entry: ActivityEntry): string {
+  if (entry.entryKind === "answer_candidate") {
+    return t(`activity.answerCandidate.${entry.candidateStatus ?? "candidate"}`);
+  }
   return t("activity.entrySummary", {
     argumentSummary: hiddenArgumentsLabel(entry.hiddenArgumentCount),
     status: statusLabel(entry.status),
     tool: entry.toolName,
   });
+}
+
+function entryLabel(entry: ActivityEntry): string {
+  return entry.entryKind === "answer_candidate"
+    ? t("activity.answerCandidate.title")
+    : entry.toolName;
 }
 
 function matchesEntry(entry: ActivityEntry, needle: string): boolean {
@@ -77,6 +86,8 @@ function matchesEntry(entry: ActivityEntry, needle: string): boolean {
   const haystack = normalizeLowercaseStringOrEmpty(
     [
       entry.toolName,
+      entryLabel(entry),
+      entry.candidateStatus,
       entry.status,
       entry.summary,
       buildEntrySummary(entry),
@@ -150,7 +161,7 @@ function renderEntry(props: ActivityProps, entry: ActivityEntry) {
               kind: statusKind(entry.status),
               label: statusLabel(entry.status),
             })}
-            <span class="activity-entry__tool mono">${entry.toolName}</span>
+            <span class="activity-entry__tool mono">${entryLabel(entry)}</span>
           </span>
           <span class="activity-entry__text">${buildEntrySummary(entry)}</span>
         </span>
@@ -161,8 +172,14 @@ function renderEntry(props: ActivityProps, entry: ActivityEntry) {
       </summary>
       <div class="activity-entry__body">
         <div class="activity-entry__facts">
-          <span>${hiddenArgumentsLabel(entry.hiddenArgumentCount)}</span>
-          <span class="mono">${t("activity.toolCallId")}: ${entry.toolCallId}</span>
+          ${entry.entryKind === "answer_candidate"
+            ? html`<span class="mono"
+                >${t("activity.answerCandidate.itemId")}: ${entry.itemId}</span
+              >`
+            : html`
+                <span>${hiddenArgumentsLabel(entry.hiddenArgumentCount)}</span>
+                <span class="mono">${t("activity.toolCallId")}: ${entry.toolCallId}</span>
+              `}
           <span class="mono">${t("activity.runId")}: ${entry.runId}</span>
           ${entry.sessionKey
             ? html`<span class="mono">${t("activity.session")}: ${entry.sessionKey}</span>`

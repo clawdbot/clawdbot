@@ -1,3 +1,4 @@
+import OpenClawChatUI
 import SwiftUI
 import UIKit
 
@@ -26,18 +27,21 @@ struct OnboardingActivationCanvas<Content: View>: View {
 }
 
 private struct OnboardingHeroGlyph: View {
+    var mood: OpenClawMascotMood = .idle
+
     var body: some View {
-        OpenClawActivationGlyph(size: 78, interactive: true)
+        OpenClawActivationGlyph(size: 78, mood: self.mood, interactive: true)
     }
 }
 
 struct OnboardingHeroHeader: View {
     let title: LocalizedStringKey
     let subtitle: LocalizedStringKey?
+    var mood: OpenClawMascotMood = .idle
 
     var body: some View {
         VStack(spacing: 18) {
-            OnboardingHeroGlyph()
+            OnboardingHeroGlyph(mood: self.mood)
 
             VStack(spacing: 8) {
                 Text(self.title)
@@ -292,7 +296,8 @@ struct OnboardingWelcomeStep: View {
             VStack(alignment: .leading, spacing: 0) {
                 OnboardingHeroHeader(
                     title: "Connect Gateway",
-                    subtitle: nil)
+                    subtitle: nil,
+                    mood: self.isConnecting ? .working : .idle)
                     .padding(.top, 18)
 
                 VStack(spacing: 36) {
@@ -361,7 +366,7 @@ struct OnboardingSuccessStep: View {
                 Spacer(minLength: 54)
 
                 ZStack(alignment: .bottomTrailing) {
-                    OpenClawActivationGlyph(size: 86, interactive: true)
+                    OpenClawActivationGlyph(size: 86, mood: .celebrating, interactive: true)
                         .shadow(color: OpenClawBrand.activationGlow.opacity(0.18), radius: 12, x: 0, y: 6)
 
                     Image(systemName: "checkmark")

@@ -50,8 +50,13 @@ enum LaunchAgentManager {
         try? plist.write(to: self.plistURL, atomically: true, encoding: .utf8)
     }
 
-    static func plistContents(bundlePath: String) -> String {
-        """
+    static func plistContents(
+        bundlePath: String,
+        preferredPaths: [String] = CommandResolver.preferredPaths()) -> String
+    {
+        let path = self.escapePlistText(preferredPaths.joined(separator: ":"))
+        let profileEnvironment = self.profileEnvironmentPlistEntries()
+        return """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0">
@@ -69,7 +74,7 @@ enum LaunchAgentManager {
           <key>EnvironmentVariables</key>
           <dict>
             <key>PATH</key>
-            <string>\(CommandResolver.preferredPaths().joined(separator: ":"))</string>
+            <string>\(path)</string>\(profileEnvironment)
           </dict>
           <key>StandardOutPath</key>
           <string>\(LogLocator.launchdLogPath)</string>
@@ -80,21 +85,35 @@ enum LaunchAgentManager {
         """
     }
 
+    private static func profileEnvironmentPlistEntries() -> String {
+        ["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"].compactMap { key in
+            guard let value = OpenClawEnv.path(key) else { return nil }
+            return """
+
+                        <key>\(key)</key>
+                        <string>\(self.escapePlistText(value))</string>
+            """
+        }.joined()
+    }
+
+    private static func escapePlistText(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
+    }
+
     @discardableResult
     private static func runLaunchctl(_ args: [String]) async -> Int32 {
-        await Task.detached(priority: .utility) { () -> Int32 in
-            let process = Process()
-            process.launchPath = "/bin/launchctl"
-            process.arguments = args
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = pipe
-            do {
-                _ = try process.runAndReadToEnd(from: pipe)
-                return process.terminationStatus
-            } catch {
-                return -1
-            }
-        }.value
+        do {
+            return try await BoundedProcess.run(
+                path: "/bin/launchctl",
+                arguments: args,
+                timeout: 5).terminationStatus
+        } catch {
+            return -1
+        }
     }
 }

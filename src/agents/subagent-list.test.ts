@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { buildLatestSubagentRunIndex, buildSubagentList } from "./subagent-list.js";
+import { buildSubagentList } from "./subagent-list.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -32,34 +32,6 @@ afterAll(async () => {
 
 beforeEach(() => {
   resetSubagentRegistryForTests();
-});
-
-describe("buildLatestSubagentRunIndex", () => {
-  it("prefers the newer generation when runs share a creation timestamp", () => {
-    const childSessionKey = "agent:main:subagent:reused";
-    const makeRun = (runId: string, generation: number): SubagentRunRecord => ({
-      runId,
-      generation,
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: runId,
-      cleanup: "keep",
-      createdAt: 1_000,
-      startedAt: 1_000,
-    });
-    const older = makeRun("run-older", 1);
-    const newer = makeRun("run-newer", 2);
-
-    const index = buildLatestSubagentRunIndex(
-      new Map([
-        [older.runId, older],
-        [newer.runId, newer],
-      ]),
-    );
-
-    expect(index.latestByChildSessionKey.get(childSessionKey)).toBe(newer);
-  });
 });
 
 describe("buildSubagentList", () => {

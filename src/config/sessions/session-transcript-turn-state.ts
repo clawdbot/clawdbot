@@ -1,9 +1,12 @@
-import { mergeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
+import {
+  mergeRestartRecoveryTerminalRunIds,
+  sameRestartRecoveryTerminalRunIds,
+} from "./restart-recovery-state.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionEntry }>(
   selected: T | undefined,
@@ -21,14 +24,36 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
       selected.entry.lifecycleRevision === expected.expectedLifecycleRevision) &&
     (expectedState === undefined ||
       (selected.entry.abortedLastRun === expectedState.abortedLastRun &&
+        selected.entry.mainRestartRecovery?.cycleId === expectedState.mainRestartRecoveryCycleId &&
+        selected.entry.mainRestartRecovery?.revision ===
+          expectedState.mainRestartRecoveryRevision &&
+        selected.entry.restartRecoveryBeforeAgentReplyState ===
+          expectedState.restartRecoveryBeforeAgentReplyState &&
+        selected.entry.restartRecoveryDeliveryReceiptState ===
+          expectedState.restartRecoveryDeliveryReceiptState &&
+        selected.entry.restartRecoveryDeliveryToolCallId ===
+          expectedState.restartRecoveryDeliveryToolCallId &&
         selected.entry.restartRecoveryDeliveryRequestFingerprint ===
           expectedState.restartRecoveryDeliveryRequestFingerprint &&
         selected.entry.restartRecoveryDeliveryRunId ===
           expectedState.restartRecoveryDeliveryRunId &&
         selected.entry.restartRecoveryDeliverySourceRunId ===
           expectedState.restartRecoveryDeliverySourceRunId &&
-        selected.entry.status === expectedState.status &&
-        selected.entry.updatedAt === expectedState.updatedAt)),
+        selected.entry.restartRecoveryRequesterAccountId ===
+          expectedState.restartRecoveryRequesterAccountId &&
+        selected.entry.restartRecoveryRequesterSenderId ===
+          expectedState.restartRecoveryRequesterSenderId &&
+        selected.entry.restartRecoverySameChannelThreadRequired ===
+          expectedState.restartRecoverySameChannelThreadRequired &&
+        selected.entry.restartRecoverySourceIngress ===
+          expectedState.restartRecoverySourceIngress &&
+        selected.entry.restartRecoverySourceReplyDeliveryMode ===
+          expectedState.restartRecoverySourceReplyDeliveryMode &&
+        sameRestartRecoveryTerminalRunIds(
+          selected.entry.restartRecoveryTerminalRunIds,
+          expectedState.restartRecoveryTerminalRunIds,
+        ) &&
+        selected.entry.status === expectedState.status)),
   );
 }
 
@@ -55,9 +80,6 @@ export function buildExpectedTranscriptTurnSessionPatch(params: {
   return {
     ...(acceptedMessage ? params.sessionLifecyclePatch : undefined),
     ...(acceptedMessage && restartRecoveryTerminalRunIds ? { restartRecoveryTerminalRunIds } : {}),
-    ...(params.currentEntry.sessionFile === params.sessionFile
-      ? {}
-      : { sessionFile: params.sessionFile }),
     ...(touchUpdatedAt > 0
       ? {
           updatedAt: Math.max(

@@ -1,5 +1,8 @@
 // Models set e2e tests cover persisted model selection updates through command handlers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
+import { stampConfigWriteMetadata } from "../config/io.meta.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const mocks = vi.hoisted(() => ({
   currentConfig: {} as Record<string, unknown>,
@@ -39,11 +42,11 @@ function makeRuntime() {
   return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 }
 
-function getWrittenConfig() {
+function getWrittenConfig(): OpenClawConfig {
   if (!mocks.writtenConfig) {
     throw new Error("expected config write");
   }
-  return mocks.writtenConfig;
+  return mocks.writtenConfig as OpenClawConfig;
 }
 
 function expectWrittenPrimaryModel(model: string) {
@@ -69,6 +72,29 @@ describe("models set + fallbacks", () => {
     await modelsSetCommand("z.ai/glm-4.7", runtime);
 
     expectWrittenPrimaryModel("zai/glm-4.7");
+  });
+
+  it("does not make an unlisted model override invalid on a fresh config", async () => {
+    mockConfigSnapshot({});
+
+    await modelsSetCommand("clawrouter/google/gemini-3.5-flash", makeRuntime());
+
+    const written = getWrittenConfig();
+    const persisted = stampConfigWriteMetadata(
+      written,
+      "2026-07-18T00:00:00.000Z",
+      "test",
+      mocks.currentConfig,
+    );
+    const policy = createModelVisibilityPolicy({
+      cfg: persisted,
+      catalog: [],
+      defaultProvider: "clawrouter",
+      defaultModel: "google/gemini-3.5-flash",
+    });
+    expect(written.agents?.defaults?.modelPolicy).toBeUndefined();
+    expect(persisted.meta?.migrations?.modelPolicyAllowlist).toBe(true);
+    expect(policy.allows({ provider: "openai", model: "gpt-5.6-sol" })).toBe(true);
   });
 
   it("normalizes z-ai provider in models fallbacks add", async () => {

@@ -33,6 +33,9 @@ function installStateRuntime(): void {
       openChannelIngressQueue: (() => {
         throw new Error("openChannelIngressQueue is not used by voice-call store tests");
       }) as never,
+      openChannelIngressDrain: (() => {
+        throw new Error("openChannelIngressDrain is not used by voice-call store tests");
+      }) as never,
     },
   });
 }
@@ -92,6 +95,9 @@ describe("voice-call call record store", () => {
         }) as never,
         openChannelIngressQueue: (() => {
           throw new Error("openChannelIngressQueue is not used by voice-call store tests");
+        }) as never,
+        openChannelIngressDrain: (() => {
+          throw new Error("openChannelIngressDrain is not used by voice-call store tests");
         }) as never,
       },
     });

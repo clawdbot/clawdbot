@@ -1,9 +1,13 @@
+import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 // Telegram tests cover sticker cache plugin behavior.
 import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setTelegramRuntime } from "./runtime.js";
+import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
+import type { TelegramRuntime } from "./runtime.types.js";
 import * as stickerCache from "./sticker-cache-store.js";
 
 vi.mock("openclaw/plugin-sdk/state-paths", () => ({
@@ -11,19 +15,32 @@ vi.mock("openclaw/plugin-sdk/state-paths", () => ({
 }));
 
 describe("sticker-cache", () => {
+  type StickerEntry = NonNullable<ReturnType<typeof stickerCache.getCachedSticker>>;
+  let store: PluginStateSyncKeyedStore<StickerEntry>;
+
+  function installStore(nextStore: PluginStateSyncKeyedStore<StickerEntry>): void {
+    store = nextStore;
+    setTelegramRuntime({
+      state: {
+        openSyncKeyedStore: (() => store) as TelegramRuntime["state"]["openSyncKeyedStore"],
+      },
+      channel: {},
+    } as TelegramRuntime);
+  }
+
   beforeEach(() => {
     resetPluginStateStoreForTests({ closeDatabase: false });
-    stickerCache.setTelegramStickerCacheStoreForTest(
+    installStore(
       createPluginStateSyncKeyedStoreForTests("telegram", {
         namespace: stickerCache.TELEGRAM_STICKER_CACHE_NAMESPACE,
         maxEntries: stickerCache.TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
       }),
     );
-    stickerCache.clearTelegramStickerCacheForTest();
+    store.clear();
   });
 
   afterEach(() => {
-    stickerCache.setTelegramStickerCacheStoreForTest(undefined);
+    clearTelegramRuntimeForTest();
     resetPluginStateStoreForTests();
   });
 
@@ -64,13 +81,13 @@ describe("sticker-cache", () => {
       }
       expect(cachedSticker.fileUniqueId).toBe("unique123");
 
-      stickerCache.clearTelegramStickerCacheForTest();
+      store.clear();
 
       expect(stickerCache.getCachedSticker("unique123")).toBeNull();
     });
 
     it("treats plugin-state lookup failures as cache misses", () => {
-      stickerCache.setTelegramStickerCacheStoreForTest({
+      installStore({
         ...createPluginStateSyncKeyedStoreForTests("telegram", {
           namespace: stickerCache.TELEGRAM_STICKER_CACHE_NAMESPACE,
           maxEntries: stickerCache.TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
@@ -142,7 +159,7 @@ describe("sticker-cache", () => {
     });
 
     it("does not throw when plugin-state writes fail", () => {
-      stickerCache.setTelegramStickerCacheStoreForTest({
+      installStore({
         ...createPluginStateSyncKeyedStoreForTests("telegram", {
           namespace: stickerCache.TELEGRAM_STICKER_CACHE_NAMESPACE,
           maxEntries: stickerCache.TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
@@ -256,7 +273,7 @@ describe("sticker-cache", () => {
     });
 
     it("returns no matches when plugin-state search reads fail", () => {
-      stickerCache.setTelegramStickerCacheStoreForTest({
+      installStore({
         ...createPluginStateSyncKeyedStoreForTests("telegram", {
           namespace: stickerCache.TELEGRAM_STICKER_CACHE_NAMESPACE,
           maxEntries: stickerCache.TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
@@ -277,7 +294,7 @@ describe("sticker-cache", () => {
     });
 
     it("returns empty array when plugin-state list reads fail", () => {
-      stickerCache.setTelegramStickerCacheStoreForTest({
+      installStore({
         ...createPluginStateSyncKeyedStoreForTests("telegram", {
           namespace: stickerCache.TELEGRAM_STICKER_CACHE_NAMESPACE,
           maxEntries: stickerCache.TELEGRAM_STICKER_CACHE_MAX_ENTRIES,

@@ -1,10 +1,11 @@
 // Slack tests cover actions.blocks plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createSlackEditTestClient, createSlackSendTestClient } from "./blocks.test-helpers.js";
+import { countSlackTextUtf8Bytes } from "./truncate.js";
 
 const { editSlackMessage, sendSlackMessage } = await import("./actions.js");
 const SLACK_TEXT_LIMIT = 8000;
-const SLACK_EDIT_TEXT_LIMIT = 4000;
+const SLACK_EDIT_TEXT_MAX_BYTES = 4000;
 
 function readFirstChatUpdatePayload(client: ReturnType<typeof createSlackEditTestClient>): {
   text?: string;
@@ -67,9 +68,9 @@ describe("sendSlackMessage blocks", () => {
 });
 
 describe("editSlackMessage blocks", () => {
-  it("preserves long plain-text edits", async () => {
+  it("caps long plain-text edits at the live UTF-8 byte limit", async () => {
     const client = createSlackEditTestClient();
-    const text = "a".repeat(SLACK_TEXT_LIMIT + 500);
+    const text = `${"x".repeat(3_999)}…${"a".repeat(SLACK_TEXT_LIMIT)}`;
 
     await editSlackMessage("C123", "171234.567", text, {
       token: "xoxb-test",
@@ -79,7 +80,7 @@ describe("editSlackMessage blocks", () => {
     expect(client.chat.update).toHaveBeenCalledWith({
       channel: "C123",
       ts: "171234.567",
-      text,
+      text: `${"x".repeat(3_997)}…`,
     });
   });
 
@@ -317,7 +318,7 @@ describe("editSlackMessage blocks", () => {
         client,
         blocks,
       }),
-    ).rejects.toThrow("Slack native chart or table fallback exceeds the 4000-character edit limit");
+    ).rejects.toThrow("Slack native chart or table fallback exceeds the 4000-byte edit limit");
     expect(client.chat.update).not.toHaveBeenCalled();
   });
 
@@ -347,7 +348,7 @@ describe("editSlackMessage blocks", () => {
         client,
         blocks,
       }),
-    ).rejects.toThrow("Slack native chart or table fallback exceeds the 4000-character edit limit");
+    ).rejects.toThrow("Slack native chart or table fallback exceeds the 4000-byte edit limit");
     expect(client.chat.update).not.toHaveBeenCalled();
   });
 
@@ -374,10 +375,12 @@ describe("editSlackMessage blocks", () => {
     expect(client.chat.update).toHaveBeenCalledWith({
       channel: "C123",
       ts: "171234.567",
-      text: `${longContextText} ${longContextText} ${"a".repeat(SLACK_EDIT_TEXT_LIMIT - longContextText.length * 2 - 3)}…`,
+      text: expect.stringMatching(/…$/u),
       blocks,
     });
-    expect(readFirstChatUpdatePayload(client).text).toHaveLength(SLACK_EDIT_TEXT_LIMIT);
+    expect(countSlackTextUtf8Bytes(readFirstChatUpdatePayload(client).text ?? "")).toBe(
+      SLACK_EDIT_TEXT_MAX_BYTES,
+    );
   });
 
   it("rejects empty blocks arrays", async () => {
@@ -442,7 +445,7 @@ describe("editSlackMessage blocks", () => {
         client,
         blocks,
       }),
-    ).rejects.toThrow(/fallback exceeds the 4000-character edit limit/u);
+    ).rejects.toThrow(/fallback exceeds the 4000-byte edit limit/u);
 
     expect(client.chat.update).toHaveBeenCalledTimes(1);
   });

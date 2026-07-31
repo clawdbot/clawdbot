@@ -15,6 +15,18 @@ extension OnboardingAISetupModel {
         }
     }
 
+    struct CandidatePresentation: Equatable {
+        let icon: String?
+        let website: String?
+    }
+
+    struct UnavailableCandidate: Identifiable, Equatable, Decodable {
+        let id: String
+        let label: String
+        let detail: String
+        let reason: String
+    }
+
     enum CandidateStatus: Equatable {
         case untried
         case testing
@@ -50,6 +62,8 @@ extension OnboardingAISetupModel {
         let id: String
         let label: String
         let hint: String?
+        let icon: String?
+        let website: String?
     }
 
     struct AuthOption: Identifiable, Equatable, Decodable {
@@ -57,8 +71,71 @@ extension OnboardingAISetupModel {
         let label: String
         let hint: String?
         let groupLabel: String?
+        let icon: String?
+        let website: String?
         let kind: String
         let featured: Bool
+    }
+
+    struct RecommendedInstall: Identifiable, Equatable, Decodable {
+        let id: String
+        let label: String
+        let hint: String
+        let website: String
+        let icon: String
+    }
+
+    struct PrepareOption: Identifiable, Equatable, Decodable {
+        let id: String
+        let label: String
+        let hint: String?
+        let brandId: String?
+        let icon: String?
+        let website: String?
+    }
+
+    enum ProviderWizardKind: Equatable {
+        case auth
+        case prepare
+
+        var startMethod: String {
+            switch self {
+            case .auth: "openclaw.setup.auth.start"
+            case .prepare: "openclaw.setup.prepare.start"
+            }
+        }
+    }
+
+    static func prepareOptions(
+        candidates: [Candidate],
+        advertisedOptions: [PrepareOption]?) -> [PrepareOption]
+    {
+        // Released Gateways do not send prepareOptions. Preserve their two
+        // existing rows until the connected Gateway advertises provider-owned choices.
+        let legacyOptions = [
+            PrepareOption(
+                id: "ollama",
+                label: "Ollama",
+                hint: "Download a tools-capable model from your Ollama server",
+                brandId: "ollama",
+                icon: nil,
+                website: nil),
+            PrepareOption(
+                id: "llama-cpp",
+                label: "Local model (llama.cpp)",
+                hint: "Download an approximately 5.0 GB local model; requires 16 GB RAM",
+                brandId: "llama-cpp",
+                icon: nil,
+                website: nil),
+        ]
+        return (advertisedOptions ?? legacyOptions).filter { choice in
+            guard !candidates.contains(where: {
+                $0.credentials != false &&
+                    ($0.kind == "provider-auto:\(choice.id)" ||
+                        $0.modelRef.hasPrefix("\(choice.brandId ?? choice.id)/"))
+            }) else { return false }
+            return true
+        }
     }
 
     static func canAcceptProviderAuthReconciliation(

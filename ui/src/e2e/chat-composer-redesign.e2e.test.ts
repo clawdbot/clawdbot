@@ -1,8 +1,9 @@
 // Control UI E2E tests cover the redesigned chat composer.
-import { chromium } from "playwright";
+import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -15,18 +16,26 @@ const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM 
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 
 let server: ControlUiE2eServer;
+// Browser contexts preserve test isolation; keep one process warm for this file.
+let browser: Browser;
 
 describeControlUiE2e("Control UI chat composer redesign", () => {
   beforeAll(async () => {
-    server = await startControlUiE2eServer();
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    try {
+      server = await startControlUiE2eServer();
+    } catch (error) {
+      await browser.close();
+      throw error;
+    }
   });
 
   afterAll(async () => {
+    await browser?.close();
     await server?.close();
   });
 
   it("keeps model and settings in the bottom bar and switches the primary action with input state", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -103,8 +112,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.metadata");
-      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+      await gateway.waitForRequest("chat.startup");
 
       const composer = page.locator(".agent-chat__input");
       const composerShell = page.locator(".agent-chat__composer-shell");
@@ -122,18 +130,24 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       const settings = composer.getByRole("button", { name: "View", exact: true });
       const splitView = page.getByRole("button", { name: "Open split view" });
       const voice = page.getByRole("button", { name: "Start voice input" });
+      const microphonePicker = page.getByRole("button", { name: "Microphone input" });
 
       await expect.poll(() => model.isVisible()).toBe(true);
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
+      expect(await gateway.getRequests("models.list")).toHaveLength(0);
       await expect.poll(() => contextUsage.isVisible()).toBe(true);
       await expect.poll(() => usage.isVisible()).toBe(false);
       await expect.poll(() => settings.isVisible()).toBe(true);
       await expect.poll(() => splitView.isVisible()).toBe(true);
       await expect
-        .poll(() => splitView.evaluate((node) => node.closest(".chat-floating-toggles") != null))
+        .poll(() => splitView.evaluate((node) => node.closest(".chat-pane__header") != null))
         .toBe(true);
       await expect.poll(() => attach.isVisible()).toBe(true);
       await expect.poll(() => camera.isVisible()).toBe(false);
       await expect.poll(() => voice.isVisible()).toBe(true);
+      await expect
+        .poll(() => page.getByRole("button", { name: "Start video talk" }).count())
+        .toBe(0);
       await expect
         .poll(() =>
           attach.evaluate((node) => node.closest(".agent-chat__composer-input-row") != null),
@@ -168,7 +182,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect.poll(() => contextUsage.locator(".context-ring__detail").count()).toBe(0);
       await expect
         .poll(() => contextUsage.getAttribute("aria-label"))
-        .toBe("Session context usage: 46k of 200k (23%)");
+        .toBe("Thread context usage: 46k of 200k (23%)");
       await expect
         .poll(() =>
           contextUsage.evaluate((node) => node.closest(".agent-chat__composer-meta") != null),
@@ -363,8 +377,8 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         .poll(() => page.getByRole("button", { name: "Send message" }).isVisible())
         .toBe(true);
       await expect
-        .poll(() => page.getByRole("button", { name: "Start voice input" }).count())
-        .toBe(0);
+        .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
+        .toBe(true);
 
       await page.getByRole("button", { name: "Send message" }).click();
       const sendRequest = await gateway.waitForRequest("chat.send");
@@ -394,9 +408,9 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         sessionKey: "main",
         state: "delta",
       });
-      // Streaming content replaces the spark as the working signal.
+      // The working row stays attached with elapsed/token telemetry throughout streaming.
       await expect.poll(() => page.getByText("Working on it.").first().isVisible()).toBe(true);
-      await expect.poll(() => spark.count()).toBe(0);
+      await expect.poll(() => spark.isVisible()).toBe(true);
       await expect.poll(() => announcement.textContent()).toContain("Rosita is responding");
       const [activeSettingsBox, activeSplitViewBox, activeModelBox, activeChatContentBox] =
         await Promise.all([
@@ -415,19 +429,15 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       expect(activeModelBox.x).toBeGreaterThanOrEqual(
         activeSettingsBox.x + activeSettingsBox.width - 1,
       );
-      // The opener lives in the floating toggle cluster pinned to the
-      // top-right corner of the chat area. The cluster's right edge hugs the
-      // corner; the opener itself is the leftmost button in the row.
-      const toggleClusterBox = await page.locator(".chat-floating-toggles").boundingBox();
-      expect(toggleClusterBox).not.toBeNull();
-      if (!toggleClusterBox) {
-        throw new Error("expected the floating toggle cluster to have a layout box");
+      // The opener lives in the always-on pane header at the chat area's top edge.
+      const headerBox = await page.locator(".chat-pane__header").boundingBox();
+      expect(headerBox).not.toBeNull();
+      if (!headerBox) {
+        throw new Error("expected the pane header to have a layout box");
       }
       expect(
         Math.abs(
-          activeChatContentBox.x +
-            activeChatContentBox.width -
-            (toggleClusterBox.x + toggleClusterBox.width),
+          activeChatContentBox.x + activeChatContentBox.width - (headerBox.x + headerBox.width),
         ),
       ).toBeLessThanOrEqual(24);
       expect(Math.abs(activeSplitViewBox.y - activeChatContentBox.y)).toBeLessThanOrEqual(24);
@@ -529,17 +539,36 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect.poll(() => viewMenu.isVisible()).toBe(true);
       await settings.click();
       await expect.poll(() => viewMenu.isVisible()).toBe(false);
+
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await gateway.setOnline(false);
+      await expect.poll(() => voice.isDisabled()).toBe(true);
+      await expect
+        .poll(async () => {
+          const [voiceBackground, pickerBackground] = await Promise.all([
+            voice.evaluate((node) => getComputedStyle(node).backgroundColor),
+            microphonePicker.evaluate((node) => getComputedStyle(node).backgroundColor),
+          ]);
+          return voiceBackground === pickerBackground;
+        })
+        .toBe(true);
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await composerShell.screenshot({
+          animations: "disabled",
+          path: `${artifactDir}/voice-picker-disabled-background.png`,
+        });
+      }
     } finally {
       await context.close();
-      await browser.close();
     }
   });
 
   it("refreshes the configured usable catalog after advertised chat metadata", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      agentModel: "openai/gpt-5.3-codex-spark",
       models: [
         { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
         {
@@ -623,12 +652,10 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect.poll(() => composer.locator('[data-chat-model-option=""]').count()).toBe(0);
     } finally {
       await context.close();
-      await browser.close();
     }
   });
 
   it("refreshes agent-scoped models when the pane switches sessions", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -700,15 +727,11 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat?session=agent%3Awork%3Amain`);
-      await expect
-        .poll(async () => {
-          const requests = await gateway.getRequests("chat.metadata");
-          return requests.some(
-            (request) => (request.params as { agentId?: string } | undefined)?.agentId === "work",
-          );
-        })
-        .toBe(true);
+      await page.goto(controlUiSessionUrl(server.baseUrl, "agent:work:main"));
+      await gateway.waitForRequest("chat.startup");
+      // The initial work-agent catalog is complete in chat.startup, so only the
+      // later switch to the other agent should require chat.metadata.
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
 
       const composer = page.locator(".agent-chat__input");
       await expect
@@ -722,25 +745,28 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect
         .poll(async () => {
           const requests = await gateway.getRequests("chat.metadata");
-          return requests.some(
+          return requests.filter(
             (request) => (request.params as { agentId?: string } | undefined)?.agentId === "other",
-          );
+          ).length;
         })
-        .toBe(true);
+        .toBe(1);
       await expect
         .poll(() => composer.locator('[data-chat-model-option="anthropic/other-model"]').count())
         .toBe(1);
       await expect
         .poll(() => composer.locator('[data-chat-model-option="openai/work-model"]').count())
         .toBe(0);
+      const metadataRequests = await gateway.getRequests("chat.metadata");
+      expect(metadataRequests).toHaveLength(1);
+      expect((metadataRequests[0]?.params as { agentId?: string } | undefined)?.agentId).toBe(
+        "other",
+      );
     } finally {
       await context.close();
-      await browser.close();
     }
   });
 
-  it("keeps startup models when the metadata refresh fails", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+  it("keeps startup models when an explicit metadata refresh fails", async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -750,33 +776,55 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      const composer = page.locator(".agent-chat__input");
+      await expect
+        .poll(() => composer.locator('[data-chat-model-provider-group="openai"]').textContent())
+        .toContain("GPT-5.5");
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
+
+      // Startup metadata now owns the same-agent cache. A config change invalidates
+      // that cache, so the next pane refresh still exercises the failure fallback.
+      await gateway.emitGatewayEvent("config.changed", {});
+      await page.locator("openclaw-chat-pane").evaluate((pane) => {
+        (pane as HTMLElement & { sessionKey: string }).sessionKey = "agent:main:refreshed";
+      });
       await gateway.waitForRequest("chat.metadata");
       await gateway.rejectDeferred("chat.metadata", {
         code: "UNAVAILABLE",
         message: "metadata unavailable",
       });
-      const composer = page.locator(".agent-chat__input");
       await expect
         .poll(() => composer.locator('[data-chat-model-provider-group="openai"]').textContent())
         .toContain("GPT-5.5");
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
     } finally {
       await context.close();
-      await browser.close();
     }
   });
 
   it("does not substitute default-agent models when scoped metadata fails", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      deferredMethods: ["chat.startup", "chat.metadata"],
+      deferredMethods: ["chat.startup"],
+      methodResponses: {
+        "chat.metadata": {
+          cases: [
+            {
+              match: { agentId: "work" },
+              response: {
+                __mockError: { code: "UNAVAILABLE", message: "metadata unavailable" },
+              },
+            },
+          ],
+        },
+      },
       models: [{ id: "gpt-default", name: "GPT Default", provider: "openai", available: true }],
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat?session=agent%3Amain%3Amain`);
+      await page.goto(controlUiSessionUrl(server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("chat.startup");
       await page.locator("openclaw-chat-pane").evaluate((pane) => {
         (pane as HTMLElement & { sessionKey: string }).sessionKey = "agent:work:main";
@@ -789,9 +837,23 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
           );
         })
         .toBe(true);
-      await gateway.rejectDeferred("chat.metadata", {
-        code: "UNAVAILABLE",
-        message: "metadata unavailable",
+      await page.waitForFunction(() => {
+        const pane = document.querySelector("openclaw-chat-pane") as
+          | (HTMLElement & {
+              state?: {
+                sessionKey?: string;
+                chatMetadataRequestVersion?: number;
+                chatModelCatalog?: unknown[];
+                chatModelsLoading?: boolean;
+              };
+            })
+          | null;
+        return (
+          pane?.state?.sessionKey === "agent:work:main" &&
+          (pane.state.chatMetadataRequestVersion ?? 0) >= 2 &&
+          pane.state.chatModelsLoading === false &&
+          pane.state.chatModelCatalog?.length === 0
+        );
       });
       await gateway.resolveDeferred("chat.startup", {
         agentsList: {
@@ -811,28 +873,42 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         sessionId: "control-ui-e2e-session",
         thinkingLevel: null,
       });
-      await page.waitForTimeout(150);
-
-      const metadataRequests = await gateway.getRequests("chat.metadata");
-      expect(metadataRequests).toHaveLength(1);
-      expect((metadataRequests[0]?.params as { agentId?: string } | undefined)?.agentId).toBe(
-        "work",
-      );
+      await page.waitForFunction(() => {
+        const pane = document.querySelector("openclaw-chat-pane") as
+          | (HTMLElement & {
+              state?: { agentsList?: { defaultId?: string; agents?: Array<{ id?: string }> } };
+            })
+          | null;
+        return (
+          pane?.state?.agentsList?.defaultId === "main" &&
+          pane.state.agentsList.agents?.some((agent) => agent.id === "main") === true
+        );
+      });
       const composer = page.locator(".agent-chat__input");
       await expect
         .poll(async () =>
           (await composer.locator("[data-chat-model-option]").allTextContents()).join(" "),
         )
         .not.toContain("GPT Default");
+      const metadataRequests = await gateway.getRequests("chat.metadata");
+      expect(
+        metadataRequests.filter(
+          (request) => (request.params as { agentId?: string } | undefined)?.agentId === "work",
+        ),
+      ).toHaveLength(1);
+      expect(
+        metadataRequests.every(
+          (request) =>
+            typeof (request.params as { agentId?: string } | undefined)?.agentId === "string",
+        ),
+      ).toBe(true);
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
     } finally {
       await context.close();
-      await browser.close();
     }
   });
 
   it("does not request unscoped models when chat metadata is unavailable", async () => {
-    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -867,7 +943,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
           agentsList: {
             agents: [{ id: "work", name: "Work" }],
             defaultId: "main",
-            mainKey: "agent:work:main",
+            mainKey: "main",
             scope: "agent",
           },
           messages: [],
@@ -878,8 +954,14 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat?session=agent%3Awork%3Amain`);
-      await expect.poll(async () => (await gateway.getRequests("chat.startup")).length).toBe(1);
+      await page.goto(controlUiSessionUrl(server.baseUrl, "agent:work:main"));
+      const startupRequest = await gateway.waitForRequest("chat.startup");
+      expect(startupRequest.params).toEqual(
+        expect.objectContaining({ sessionKey: "agent:work:main" }),
+      );
+      for (const request of await gateway.getRequests("chat.startup")) {
+        expect(request.params).toEqual(expect.objectContaining({ sessionKey: "agent:work:main" }));
+      }
 
       const composer = page.locator(".agent-chat__input");
       await expect
@@ -891,7 +973,6 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
     } finally {
       await context.close();
-      await browser.close();
     }
   });
 });

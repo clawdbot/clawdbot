@@ -1,46 +1,37 @@
-import {
-  WHATSAPP_LIVE_DEFAULT_CANONICAL_SCENARIO_IDS,
-  WHATSAPP_ROUTING_CANONICAL_SCENARIO_IDS,
-} from "../shared/canonical-scenarios.js";
 // Qa Lab plugin module implements cli behavior.
 import {
+  createLiveTransportQaAdapterFactory,
   createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration,
+  loadLiveTransportQaSuiteRuntime,
   type LiveTransportQaCliRegistration,
   type LiveTransportQaCommandOptions,
 } from "../shared/live-transport-cli.js";
+import { resolveWhatsAppQaScenarioIds } from "./scenario-selection.js";
 
-type WhatsAppQaAdapterRuntime = typeof import("./adapter.runtime.js");
-type WhatsAppQaCliRuntime = typeof import("./cli.runtime.js");
-
-const loadWhatsAppQaAdapterRuntime = createLazyCliRuntimeLoader<WhatsAppQaAdapterRuntime>(
-  () => import("./adapter.runtime.js"),
-);
-const loadWhatsAppQaCliRuntime = createLazyCliRuntimeLoader<WhatsAppQaCliRuntime>(
-  () => import("./cli.runtime.js"),
-);
+const loadWhatsAppQaAdapterRuntime = createLazyCliRuntimeLoader<
+  typeof import("./adapter.runtime.js")
+>(() => import("./adapter.runtime.js"));
 
 async function runQaWhatsApp(opts: LiveTransportQaCommandOptions) {
-  await (await loadWhatsAppQaCliRuntime()).runQaWhatsAppCommand(opts);
+  const runtime = await loadLiveTransportQaSuiteRuntime();
+  await runtime.runLiveTransportQaSuiteCommand({
+    channelId: "whatsapp",
+    defaultProviderMode: "live-frontier",
+    options: opts,
+    selectScenarioIds: resolveWhatsAppQaScenarioIds,
+  });
 }
-
-const whatsappQaAdapterFactory: NonNullable<LiveTransportQaCliRegistration["adapterFactory"]> = {
-  id: "whatsapp",
-  scenarioIds: [
-    "dm-chat-baseline",
-    ...WHATSAPP_ROUTING_CANONICAL_SCENARIO_IDS,
-    ...WHATSAPP_LIVE_DEFAULT_CANONICAL_SCENARIO_IDS,
-  ],
-  matches: ({ channelId, driver }) => driver === "live" && channelId === "whatsapp",
-  async create(context) {
-    return await (await loadWhatsAppQaAdapterRuntime()).createWhatsAppQaTransportAdapter(context);
-  },
-};
 
 export const whatsappQaCliRegistration: LiveTransportQaCliRegistration =
   createLiveTransportQaCliRegistration({
     commandName: "whatsapp",
-    adapterFactory: whatsappQaAdapterFactory,
+    adapterFactory: createLiveTransportQaAdapterFactory({
+      id: "whatsapp",
+      async create(context) {
+        return (await loadWhatsAppQaAdapterRuntime()).createWhatsAppQaTransportAdapter(context);
+      },
+    }),
     credentialOptions: {
       sourceDescription: "Credential source for WhatsApp QA: env or convex (default: env)",
       roleDescription:

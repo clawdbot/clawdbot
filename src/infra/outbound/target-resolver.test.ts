@@ -609,6 +609,51 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(firstMockArg(mocks.resolveTarget, "target resolver").input).toBe("+15551234567");
   });
 
+  it("fails closed after directory and plugin misses unless normalized fallback is explicit", async () => {
+    mocks.listGroups.mockResolvedValue([]);
+    mocks.listGroupsLive.mockResolvedValue([]);
+    mocks.resolveTarget.mockResolvedValue(null);
+
+    const rejected = await resolveMessagingTarget({
+      cfg,
+      channel: "richchat",
+      input: "missing",
+    });
+    expect(rejected.ok).toBe(false);
+
+    const fallback = await expectOkResolution({
+      cfg,
+      channel: "richchat",
+      input: "missing",
+      unknownTargetMode: "normalized",
+    });
+    expect(fallback.target).toMatchObject({
+      to: "missing",
+      source: "normalized",
+      resolutionSource: "normalized",
+    });
+  });
+
+  it("fails closed when a name matches more than one directory destination", async () => {
+    mocks.listGroups.mockResolvedValue([
+      { kind: "group", id: "channel:1", name: "general" },
+      { kind: "group", id: "channel:2", name: "general-archive" },
+    ] satisfies ChannelDirectoryEntry[]);
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "richchat",
+      input: "general",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.candidates).toHaveLength(2);
+      expect(result.error.message).toContain("Ambiguous");
+    }
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
+  });
+
   it("keeps plugin-owned id casing when resolver returns a normalized target", async () => {
     mocks.getChannelPlugin.mockReturnValue({
       messaging: {

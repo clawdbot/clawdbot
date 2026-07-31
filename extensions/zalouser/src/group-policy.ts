@@ -65,8 +65,8 @@ export function resolveZalouserGroupScope(
   candidates: string[],
 ) {
   // Whole-entry selection: an exact candidate hides every wildcard field.
-  // Callers opt into the wildcard by including "*" in candidates
-  // (buildZalouserGroupCandidates honors includeWildcard: false).
+  // Candidate construction owns aliases, names, and wildcard opt-in; the monitor
+  // requests group:<id>, groupName, and "*" through buildZalouserGroupCandidates.
   const tree: ScopeTree = { scopes: groups ?? {} };
   const key =
     candidates.find((candidate) => candidate !== "*" && Object.hasOwn(tree.scopes, candidate)) ??

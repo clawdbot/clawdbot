@@ -12,14 +12,14 @@ import {
   type SlackQaCodexApprovalMethod,
   type SlackQaCodexApprovalScenarioRun,
   type SlackQaScenarioContext,
-  type SlackQaScenarioDefinition,
+  type SlackQaScenarioMetadata,
 } from "./slack-live.contracts.js";
 
 export function resolveCodexFileApprovalTargetPath(token: string) {
   return path.join(os.homedir(), `.openclaw-qa-codex-file-approval-${token.toLowerCase()}.txt`);
 }
 
-export function buildCodexApprovalInstruction(params: {
+function buildCodexApprovalInstruction(params: {
   appServerMethod: SlackQaCodexApprovalMethod;
   token: string;
 }) {
@@ -44,7 +44,7 @@ export function buildCodexApprovalInstruction(params: {
   ].join("\n");
 }
 
-export function readAcceptedAgentRunId(result: unknown) {
+function readAcceptedAgentRunId(result: unknown) {
   const started =
     typeof result === "object" && result !== null
       ? (result as { runId?: unknown; status?: unknown })
@@ -100,7 +100,7 @@ export async function waitForSlackReaction(params: {
   );
 }
 
-export function assertCodexApprovalTranscriptSucceeded(
+function assertCodexApprovalTranscriptSucceeded(
   messages: unknown,
   run: SlackQaCodexApprovalScenarioRun,
 ) {
@@ -150,7 +150,7 @@ export async function assertCodexApprovalOperationSucceeded(params: {
   }
 }
 
-export function findPendingCodexPluginApprovalRecord(params: {
+function findPendingCodexPluginApprovalRecord(params: {
   approvalId: string;
   appServerMethod: SlackQaCodexApprovalMethod;
   channelId: string;
@@ -224,7 +224,7 @@ export async function startCodexApprovalAgentRun(params: {
   primaryModel: string;
   run: SlackQaCodexApprovalScenarioRun;
   runId: string;
-  scenario: SlackQaScenarioDefinition;
+  scenario: SlackQaScenarioMetadata;
   sessionKey: string;
   sutAccountId: string;
 }) {
@@ -258,7 +258,7 @@ export async function startCodexApprovalAgentRun(params: {
 }
 
 export function buildCodexApprovalSessionKey(params: {
-  scenario: SlackQaScenarioDefinition;
+  scenario: SlackQaScenarioMetadata;
   token: string;
 }) {
   return `agent:qa:${params.scenario.id}-${params.token.toLowerCase()}`;

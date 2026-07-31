@@ -1,7 +1,7 @@
 // Imessage tests cover inbound processing plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadFreshIMessageReplyCacheForTest } from "../test-support/runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 
@@ -12,7 +12,7 @@ let buildIMessageInboundContext: InboundProcessingModule["buildIMessageInboundCo
 let resolveIMessageReactionContext: InboundProcessingModule["resolveIMessageReactionContext"];
 let resolveIMessageInboundDecision: InboundProcessingModule["resolveIMessageInboundDecision"];
 
-beforeEach(async () => {
+beforeAll(async () => {
   ({ rememberIMessageReplyCache } = await loadFreshIMessageReplyCacheForTest());
   ({ buildIMessageInboundContext, resolveIMessageReactionContext, resolveIMessageInboundDecision } =
     await import("./inbound-processing.js"));
@@ -98,10 +98,15 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(logVerbose).toHaveBeenCalledWith(expect.stringContaining("id=42"));
   });
 
-  it("matches attachment-only echoes by bodyText placeholder", async () => {
-    const echoHas = vi.fn((_scope: string, lookup: { text?: string; messageId?: string }) => {
-      return lookup.text === "<media:image>" && lookup.messageId === "42";
-    });
+  it("matches attachment-only echoes by structured media fact", async () => {
+    const echoHas = vi.fn(
+      (
+        _scope: string,
+        lookup: { text?: string; media?: { kind?: string | null }; messageId?: string },
+      ) => {
+        return lookup.media?.kind === "image" && lookup.messageId === "42";
+      },
+    );
 
     const decision = await resolveDecision({
       message: {
@@ -109,7 +114,8 @@ describe("resolveIMessageInboundDecision echo detection", () => {
         text: "",
       },
       messageText: "",
-      bodyText: "<media:image>",
+      bodyText: "",
+      mediaFacts: [{ contentType: "image/png", kind: "image" }],
       echoCache: { has: echoHas },
     });
 
@@ -121,7 +127,8 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       2,
       "default:imessage:+15555550123",
       {
-        text: "<media:image>",
+        text: undefined,
+        media: { contentType: "image/png", kind: "image" },
         messageId: "42",
       },
       {

@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -36,7 +37,7 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Pr
       return;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error("timed out waiting for condition");
@@ -103,7 +104,11 @@ async function waitForChildExit(
       child.once("exit", (status, signal) => resolve({ status, signal }));
     }),
     new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error("timed out waiting for child exit")), timeoutMs);
+      const timer = setTimeout(
+        () => reject(new Error("timed out waiting for child exit")),
+        timeoutMs,
+      );
+      timer.unref();
     }),
   ]);
 }
@@ -213,6 +218,10 @@ describe("dev tooling safety helpers", () => {
       "~/.openclaw/state.json",
     );
     expect(maskIdentifier("session-key-abcdef123456")).toBe("sessio...3456");
+  });
+
+  it("does not split boundary emoji in script log previews", () => {
+    expect(previewForDevToolLog("123456😀tail", 10)).toBe("123456...");
   });
 });
 
@@ -623,22 +632,78 @@ describe("script-specific dev tooling hardening", () => {
   it("formats OpenAI realtime smoke help without launching live checks", () => {
     expect(realtimeSmokeTesting.parseRealtimeSmokeArgs(["--help"])).toEqual({
       help: true,
+      openAIAudioCycles: 1,
       openAIOnly: false,
     });
     expect(realtimeSmokeTesting.parseRealtimeSmokeArgs(["--openai-only"])).toEqual({
       help: false,
+      openAIAudioCycles: 1,
       openAIOnly: true,
+    });
+    expect(realtimeSmokeTesting.parseRealtimeSmokeArgs(["--openai-audio-cycles", "3"])).toEqual({
+      help: false,
+      openAIAudioCycles: 3,
+      openAIOnly: false,
     });
     expect(realtimeSmokeTesting.usage()).toContain(
       "Usage: node --import tsx scripts/dev/realtime-talk-live-smoke.ts",
     );
     expect(realtimeSmokeTesting.usage()).toContain("--openai-only");
+    expect(realtimeSmokeTesting.usage()).toContain("--openai-audio-cycles");
   });
 
   it("rejects unknown OpenAI realtime smoke args before runtime setup", () => {
     expect(() => realtimeSmokeTesting.parseRealtimeSmokeArgs(["--wat"])).toThrow(
       "Unknown argument: --wat",
     );
+    expect(() => realtimeSmokeTesting.parseRealtimeSmokeArgs(["--openai-audio-cycles"])).toThrow(
+      "--openai-audio-cycles requires a value",
+    );
+    expect(() =>
+      realtimeSmokeTesting.parseRealtimeSmokeArgs(["--openai-audio-cycles", "0"]),
+    ).toThrow("--openai-audio-cycles must be an integer >= 1");
+    expect(() =>
+      realtimeSmokeTesting.parseRealtimeSmokeArgs(["--openai-audio-cycles", "11"]),
+    ).toThrow("--openai-audio-cycles must be <= 10");
+  });
+
+  it("chunks PCM input without copying or dropping bytes", async () => {
+    const sent: Buffer[] = [];
+    const chunkCount = await realtimeSmokeTesting.sendPcmAudioInChunks(
+      {
+        sendAudio: (audio: Buffer) => sent.push(audio),
+      } as never,
+      Buffer.from([1, 2, 3, 4, 5]),
+      { chunkBytes: 2, delayMs: 0 },
+    );
+
+    expect(chunkCount).toBe(3);
+    expect(Buffer.concat(sent)).toEqual(Buffer.from([1, 2, 3, 4, 5]));
+    expect(sent.map((chunk) => chunk.byteLength)).toEqual([2, 2, 1]);
+    await expect(
+      realtimeSmokeTesting.sendPcmAudioInChunks({ sendAudio: vi.fn() } as never, Buffer.alloc(1), {
+        chunkBytes: 0,
+        delayMs: 0,
+      }),
+    ).rejects.toThrow("PCM audio chunk size must be a positive integer");
+  });
+
+  it("matches normalized live audio transcript markers", () => {
+    expect(realtimeSmokeTesting.transcriptIncludesMarker(["Glacier."], "glacier")).toBe(true);
+    expect(
+      realtimeSmokeTesting.transcriptIncludesMarker(
+        ["Please reply with the single-word GLACIER!"],
+        "single word glacier",
+      ),
+    ).toBe(true);
+    expect(realtimeSmokeTesting.transcriptIncludesMarker(["ocean"], "glacier")).toBe(false);
+  });
+
+  it("resolves the realtime relay smoke to an existing Control UI module", () => {
+    const modulePath = realtimeSmokeTesting.resolveGatewayRelayModulePath(process.cwd());
+
+    expect(modulePath.endsWith("/ui/src/pages/chat/realtime-talk-gateway-relay.ts")).toBe(true);
+    expect(existsSync(modulePath.slice("/@fs/".length))).toBe(true);
   });
 
   it("bounds OpenAI realtime smoke response body reads by content-length", async () => {
@@ -1195,5 +1260,68 @@ describe("script-specific dev tooling hardening", () => {
         maxBytes,
       ),
     ).rejects.toThrow(`Claude usage test response body exceeded ${maxBytes} bytes`);
+  });
+
+  it.each([
+    { name: "before response headers", sendsHeaders: false },
+    { name: "during the response body", sendsHeaders: true },
+  ])("bounds an Anthropic upstream stall $name", async ({ sendsHeaders }) => {
+    const nativeFetch = globalThis.fetch;
+    const upstream = http.createServer((_request, response) => {
+      if (sendsHeaders) {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.flushHeaders();
+      }
+    });
+    await new Promise<void>((resolve, reject) => {
+      upstream.once("error", reject);
+      upstream.listen(0, "127.0.0.1", () => {
+        upstream.off("error", reject);
+        resolve();
+      });
+    });
+    const upstreamAddress = upstream.address();
+    if (!upstreamAddress || typeof upstreamAddress === "string") {
+      throw new Error("upstream did not bind to a TCP port");
+    }
+    const upstreamUrl = `http://127.0.0.1:${upstreamAddress.port}/v1/messages`;
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((_input, init) => nativeFetch(upstreamUrl, init));
+    let proxy: Awaited<ReturnType<typeof promptProbeTesting.startAnthropicProxy>> | undefined;
+
+    try {
+      proxy = await promptProbeTesting.startAnthropicProxy({
+        port: 0,
+        upstreamBaseUrl: "https://api.anthropic.com",
+        timeoutMs: 100,
+      });
+      const startedAt = Date.now();
+      const request = nativeFetch(`http://127.0.0.1:${proxy.port}/v1/messages`, {
+        method: "POST",
+        body: "{}",
+      }).then(async (response) => ({ status: response.status, body: await response.text() }));
+
+      if (sendsHeaders) {
+        await expect(request).rejects.toThrow();
+      } else {
+        await expect(request).resolves.toMatchObject({
+          status: 502,
+          body: expect.stringMatching(/TimeoutError/u),
+        });
+      }
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://api.anthropic.com/v1/messages",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    } finally {
+      fetchSpy.mockRestore();
+      await proxy?.stop();
+      upstream.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        upstream.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 });

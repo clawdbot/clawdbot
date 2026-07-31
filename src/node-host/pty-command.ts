@@ -99,6 +99,7 @@ export async function runNodePtyCommand(
     file: string;
     args: string[];
     cwd?: string;
+    pathEnv?: string;
     cols: number;
     rows: number;
   },
@@ -115,6 +116,9 @@ export async function runNodePtyCommand(
   );
   env.TERM ??= "xterm-256color";
   env.OPENCLAW_TERMINAL = "1";
+  if (params.pathEnv) {
+    env.PATH = params.pathEnv;
+  }
   const pty = await spawn({
     file: params.file,
     args: params.args,

@@ -5,11 +5,7 @@ import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { captureEnv } from "../test-utils/env.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
-import {
-  getDetachedTaskLifecycleRuntime,
-  resetDetachedTaskLifecycleRuntimeForTests,
-  setDetachedTaskLifecycleRuntime,
-} from "./detached-task-runtime.js";
+import { getDetachedTaskLifecycleRuntime } from "./detached-task-runtime.js";
 import {
   cancelFlowById,
   cancelFlowByIdForOwner,
@@ -27,22 +23,26 @@ import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   getTaskFlowById,
   listTaskFlowRecords,
-  resetTaskFlowRegistryForTests,
 } from "./task-flow-registry.js";
-import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
-  setTaskRegistryDeliveryRuntimeForTests,
   getTaskById,
   findTaskByRunId,
   listTasksForFlowId,
   markTaskTerminalById,
+} from "./task-registry.js";
+import type { TaskRecord } from "./task-registry.types.js";
+import {
+  configureTaskFlowRegistryRuntime,
+  resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
+  resetTaskFlowRegistryForTests,
+  setDetachedTaskLifecycleRuntime,
   setTaskRegistryControlRuntimeForTests,
-} from "./task-registry.js";
-import type { TaskRecord } from "./task-registry.types.js";
+  setTaskRegistryDeliveryRuntimeForTests,
+} from "./task-runtime.test-helpers.js";
 
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 

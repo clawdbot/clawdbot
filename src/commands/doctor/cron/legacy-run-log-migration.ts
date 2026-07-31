@@ -73,7 +73,7 @@ export async function migrateLegacyCronRunLogsToSqlite(
           entry_json TEXT NOT NULL,
           created_at INTEGER NOT NULL,
           PRIMARY KEY (store_key, job_id, seq)
-        );
+        ) STRICT;
       `);
       const insert = db.prepare(
         `INSERT INTO cron_run_logs

@@ -1,3 +1,5 @@
+import type { SessionToolOverrides } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 /**
  * Public native agent harness contracts and capability shapes.
  */
@@ -6,6 +8,7 @@ import type {
   ProviderModelRouteRuntimePolicy,
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
+import type { McpToolCatalog } from "../agent-bundle-mcp-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
 export type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
@@ -46,13 +49,98 @@ export type AgentHarnessSupport =
 
 type InternalEmbeddedRunAttemptParams =
   import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptParams;
+/** @deprecated Read `terminal` instead. Remove no earlier than the 2026.9 stable release. */
+type AgentHarnessDeprecatedAttemptTerminalFields = {
+  aborted?: boolean;
+  externalAbort?: boolean;
+  timedOut?: boolean;
+  idleTimedOut?: boolean;
+  timedOutDuringCompaction?: boolean;
+  timedOutDuringToolExecution?: boolean;
+  timedOutByRunBudget?: boolean;
+  promptError?: unknown;
+  promptErrorSource?:
+    | import("../agent-run-terminal-outcome.js").AgentRunAttemptFailureSource
+    | null;
+};
+type AgentHarnessCanonicalAttemptResult =
+  import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult &
+    AgentHarnessDeprecatedAttemptTerminalFields;
+
+/** @deprecated Return `terminal` instead. Remove no earlier than the 2026.9 stable release. */
+type AgentHarnessLegacyAttemptResult = Omit<
+  import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult,
+  "terminal"
+> &
+  AgentHarnessDeprecatedAttemptTerminalFields & {
+    aborted: boolean;
+    externalAbort: boolean;
+    timedOut: boolean;
+    idleTimedOut: boolean;
+    timedOutDuringCompaction: boolean;
+    timedOutDuringToolExecution?: boolean;
+    timedOutByRunBudget?: boolean;
+    promptError: unknown;
+    promptErrorSource:
+      | import("../agent-run-terminal-outcome.js").AgentRunAttemptFailureSource
+      | null;
+  };
 
 export type AgentHarnessAttemptParams = Omit<
   InternalEmbeddedRunAttemptParams,
   "trajectoryRecorder"
 >;
 export type AgentHarnessAttemptResult =
-  import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult;
+  | AgentHarnessCanonicalAttemptResult
+  | AgentHarnessLegacyAttemptResult;
+type AgentHarnessSettledTurnFinalizationParams = {
+  /** Fully prepared attempt context for the isolated finalization operation. */
+  attempt: AgentHarnessAttemptParams;
+  /** Settled result whose completed tool transcript needs a final visible answer. */
+  settledAttempt: AgentHarnessCanonicalAttemptResult;
+};
+export type AgentHarnessSettledTurnFinalizationResult = {
+  /** The single completed assistant answer produced by the isolated operation. */
+  assistant: import("../../llm/types.js").AssistantMessage;
+  /** Normalized usage for the finalization model call only. */
+  usage?: import("../usage.js").NormalizedUsage;
+  /** True when the harness already persisted the assistant into the application transcript. */
+  assistantTranscriptOwned?: boolean;
+  /** Exact idempotency key for the harness-owned assistant transcript row. */
+  assistantTranscriptIdempotencyKey?: string;
+  /** Assistant stream generation index used to correlate final reply delivery. */
+  assistantMessageIndex?: number;
+  diagnosticTrace?: import("../../infra/diagnostic-trace-context.js").DiagnosticTraceContext;
+};
+type AgentHarnessIsolatedCompletionParams = {
+  /** Logical provider selected by the caller before harness dispatch. */
+  provider: string;
+  /** Logical model id selected by the caller before harness dispatch. */
+  modelId: string;
+  /** Exact prepared transport model; harnesses must not resolve another route. */
+  model: import("../../llm/types.js").Model;
+  /** Exact prepared credential; harnesses must not rotate or substitute it. */
+  auth: import("../model-auth-runtime-shared.js").ResolvedProviderAuth;
+  /** Non-reversible proof of the prepared credential owner when available. */
+  sourceAuthFingerprint?: string;
+  config: import("../../config/types.openclaw.js").OpenClawConfig;
+  agentId: string;
+  agentDir: string;
+  workspaceDir: string;
+  systemPrompt: string;
+  prompt: string;
+  timeoutMs: number;
+  abortSignal?: AbortSignal;
+  thinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
+  streamParams?: {
+    maxTokens?: number;
+    temperature?: number;
+  };
+};
+type AgentHarnessIsolatedCompletionResult = {
+  /** The single assistant completion. Core rejects tool-shaped or failed results. */
+  assistant: import("../../llm/types.js").AssistantMessage;
+};
 export type AgentHarnessAuthBindingFingerprintParams = {
   authProfileId: string;
   authProfileStore: import("../auth-profiles/types.js").AuthProfileStore;
@@ -128,14 +216,51 @@ export type AgentHarnessResetParams = {
   reason?: "new" | "reset" | "idle" | "daily" | "compaction" | "deleted" | "unknown";
 };
 
+export type AgentHarnessSessionForkFailureCode =
+  | "steer-message"
+  | "in-progress-turn"
+  | "drift-mismatch"
+  | "upstream-unavailable";
+
+export type AgentHarnessSessionForkParams = {
+  targetKey: string;
+  source: {
+    agentId: string;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+    entryId: string;
+  };
+  upstream: {
+    catalogId: string;
+    hostId: string;
+    kind: import("../../plugins/session-catalog.js").SessionUpstreamKind;
+    threadId: string;
+    ref: import("../../plugins/session-catalog.js").SessionUpstreamJsonValue;
+  };
+};
+
+export type AgentHarnessSessionForkResult =
+  | {
+      status: "created";
+      key: string;
+      editorText?: string;
+    }
+  | {
+      status: "failed";
+      code: AgentHarnessSessionForkFailureCode;
+      message: string;
+    };
+
 export type AgentHarnessResultClassification =
   | "ok"
   | NonNullable<AgentHarnessAttemptResult["agentHarnessResultClassification"]>;
 
 export type AgentHarnessDeliveryDefaults = {
+  /** Default visible-reply policy when config does not override the harness. */
+  visibleReplies?: "automatic" | "message_tool";
   /**
-   * @deprecated Prefer `messages.visibleReplies` / `messages.groupChat.visibleReplies`
-   * config. Kept for existing harness plugins.
+   * @deprecated Use visibleReplies. Kept for existing harness plugins.
    */
   sourceVisibleReplies?: "automatic" | "message_tool";
 };
@@ -144,6 +269,11 @@ type AgentHarnessRunCapability = {
   id: string;
   label: string;
   pluginId?: string;
+  /**
+   * Exhaustive provider ids eligible for automatic selection. Omitting this hint preserves
+   * dynamic probing; an empty list marks an explicit-only harness.
+   */
+  autoSelection?: { providerIds: readonly string[] };
   /**
    * Plugin ids this harness owner permits to execute its locked sessions.
    * Delegates receive work admission and execution only; session mutation stays owner-only.
@@ -160,6 +290,20 @@ type AgentHarnessRunCapability = {
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";
   runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult>;
+  /**
+   * Produces one final answer from a settled tool transcript without exposing
+   * capabilities that can repeat or extend the completed work.
+   */
+  finalizeSettledTurn?(
+    params: AgentHarnessSettledTurnFinalizationParams,
+  ): Promise<AgentHarnessSettledTurnFinalizationResult>;
+  /**
+   * Runs one fresh prompt-only completion with a literal zero-tool model surface.
+   * The harness must fail closed when it cannot enforce that native boundary.
+   */
+  runIsolatedCompletion?(
+    params: AgentHarnessIsolatedCompletionParams,
+  ): Promise<AgentHarnessIsolatedCompletionResult>;
 };
 
 type AgentHarnessSideQuestionCapability = {
@@ -182,6 +326,13 @@ type AgentHarnessSessionLifecycleCapability = {
   dispose?(): Promise<void> | void;
 };
 
+type AgentHarnessSessionForkCapability = {
+  sessionFork?: {
+    upstreamKinds: readonly import("../../plugins/session-catalog.js").SessionUpstreamKind[];
+    fork(params: AgentHarnessSessionForkParams): Promise<AgentHarnessSessionForkResult>;
+  };
+};
+
 type AgentHarnessRuntimeArtifactCapability = {
   /** Revalidate an artifact only at setup and persistent-operation boundaries. */
   runtimeArtifact?: {
@@ -196,12 +347,47 @@ type AgentHarnessAuthBindingCapability = {
   };
 };
 
+type AgentHarnessProviderUsageCapability = {
+  /**
+   * Contributes runtime-owned quota data without registering a text provider.
+   * Provider usage hooks remain authoritative when both surfaces exist.
+   */
+  fetchUsageSnapshot?: (
+    ctx: import("../../plugins/provider-runtime.types.js").ProviderFetchUsageSnapshotContext,
+  ) =>
+    | Promise<
+        import("../../infra/provider-usage.types.js").ProviderUsageSnapshot | null | undefined
+      >
+    | import("../../infra/provider-usage.types.js").ProviderUsageSnapshot
+    | null
+    | undefined;
+};
+
+type AgentHarnessMcpCatalogParams = {
+  config: OpenClawConfig;
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  workspaceDir: string;
+  /** OpenClaw-configured servers whose session policy this harness can enforce. */
+  mcpServerNames: readonly string[];
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
+};
+
+type AgentHarnessMcpCatalogCapability = {
+  /** Lists the MCP tools owned by this session's native runtime, if it is already bound. */
+  loadMcpToolCatalog?(params: AgentHarnessMcpCatalogParams): Promise<McpToolCatalog | undefined>;
+};
+
 export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessSideQuestionCapability &
   AgentHarnessClassificationCapability &
   AgentHarnessCompactionCapability &
   AgentHarnessRuntimeArtifactCapability &
   AgentHarnessAuthBindingCapability &
+  AgentHarnessProviderUsageCapability &
+  AgentHarnessMcpCatalogCapability &
+  AgentHarnessSessionForkCapability &
   AgentHarnessSessionLifecycleCapability;
 
 export type RegisteredAgentHarness = {
