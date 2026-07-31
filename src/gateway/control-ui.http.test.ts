@@ -225,7 +225,7 @@ describe("handleControlUiHttpRequest", () => {
     trustedProxies?: string[];
     remoteAddress?: string;
   }) {
-    const { res, end } = makeMockHttpResponse();
+    const { res, end, setHeader } = makeMockHttpResponse();
     const handled = await handleControlUiAvatarRequest(
       {
         url: params.url,
@@ -241,7 +241,7 @@ describe("handleControlUiHttpRequest", () => {
         config: params.config,
       },
     );
-    return { res, end, handled };
+    return { res, end, setHeader, handled };
   }
 
   async function runAssistantMediaRequest(params: {
@@ -2117,6 +2117,92 @@ describe("handleControlUiHttpRequest", () => {
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
       expect(responseBody(end)).toBe("avatar-bytes\n");
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { name: "PNG", filename: "avatar.png", contentType: "image/png" },
+    { name: "JPEG", filename: "avatar.jpg", contentType: "image/jpeg" },
+    { name: "GIF", filename: "avatar.gif", contentType: "image/gif" },
+    { name: "WebP", filename: "avatar.webp", contentType: "image/webp" },
+    { name: "SVG", filename: "avatar.svg", contentType: "image/svg+xml" },
+  ])(
+    "preserves the pinned $name avatar byte length and metadata on HEAD",
+    async ({ contentType, filename }) => {
+      const tmp = testTempDirs.make("openclaw-avatar-head-metadata-");
+      const body = Buffer.from(`avatar 東京 ${filename}\n`, "utf8");
+      const read = vi.spyOn(fsSync, "read");
+      const closeSync = vi.spyOn(fsSync, "closeSync");
+      try {
+        await fs.writeFile(path.join(tmp, filename), body);
+        const config = createAvatarConfig(tmp, filename);
+        const head = await runAvatarRequest({ url: "/avatar/main", method: "HEAD", config });
+
+        expect(head.handled).toBe(true);
+        expect(head.res.statusCode).toBe(200);
+        expect(head.setHeader).toHaveBeenCalledWith("Content-Length", String(body.byteLength));
+        expect(head.setHeader).toHaveBeenCalledWith("Content-Type", contentType);
+        expect(head.setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
+        expect(head.end).toHaveBeenCalledWith();
+        expect(read).not.toHaveBeenCalled();
+        expect(closeSync).toHaveBeenCalledOnce();
+
+        const get = await runAvatarRequest({ url: "/avatar/main", method: "GET", config });
+        expect(get.res.statusCode).toBe(200);
+        expect(get.end).toHaveBeenCalledWith(body);
+        expect(get.setHeader).toHaveBeenCalledWith("Content-Type", contentType);
+        expect(get.setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
+        expect(get.setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
+      } finally {
+        read.mockRestore();
+        closeSync.mockRestore();
+        await fs.rm(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["", "/openclaw"])(
+    "preserves authenticated avatar HEAD length under the %s Control UI base path",
+    async (basePath) => {
+      const tmp = testTempDirs.make("openclaw-avatar-head-base-");
+      const body = Buffer.from("authenticated avatar 東京", "utf8");
+      try {
+        await fs.writeFile(path.join(tmp, "main.png"), body);
+        const response = await runAvatarRequest({
+          url: `${basePath}/avatar/main`,
+          method: "HEAD",
+          config: createAvatarConfig(tmp, "main.png"),
+          ...(basePath ? { basePath } : {}),
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+          headers: { authorization: "Bearer test-token" },
+        });
+
+        expect(response.handled).toBe(true);
+        expect(response.res.statusCode).toBe(200);
+        expect(response.setHeader).toHaveBeenCalledWith("Content-Length", String(body.byteLength));
+        expect(response.end).toHaveBeenCalledWith();
+      } finally {
+        await fs.rm(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("does not expose avatar HEAD representation length before authentication", async () => {
+    const tmp = testTempDirs.make("openclaw-avatar-head-unauthorized-");
+    try {
+      await fs.writeFile(path.join(tmp, "main.png"), REAL_PNG);
+      const response = await runAvatarRequest({
+        url: "/avatar/main",
+        method: "HEAD",
+        config: createAvatarConfig(tmp, "main.png"),
+        auth: { mode: "token", token: "test-token", allowTailscale: false },
+      });
+
+      expect(response.handled).toBe(true);
+      expect(response.res.statusCode).toBe(401);
+      expect(response.setHeader).not.toHaveBeenCalledWith("Content-Length", expect.anything());
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }

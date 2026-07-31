@@ -831,6 +831,8 @@ export async function handleControlUiAvatarRequest(
     res.setHeader("Cache-Control", "no-cache");
     if (req.method === "HEAD") {
       res.statusCode = 200;
+      // The pinned descriptor exposes GET's exact byte count without reading the avatar.
+      res.setHeader("Content-Length", String(projection.openedFile.stat.size));
       res.end();
       return true;
     }
