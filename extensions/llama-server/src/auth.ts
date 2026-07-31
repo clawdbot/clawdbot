@@ -88,11 +88,14 @@ export async function resolveLlamaServerProviderHeaders(params: {
 export async function resolveLlamaServerRuntimeApiKey(params: {
   config?: OpenClawConfig;
   agentDir?: string;
+  profileId?: string;
 }): Promise<string | undefined> {
   const auth = await resolveApiKeyForProvider({
     provider: LLAMA_SERVER_PROVIDER_ID,
     cfg: params.config,
     agentDir: params.agentDir,
+    profileId: params.profileId,
+    lockedProfile: params.profileId !== undefined,
   });
   const apiKey = auth.apiKey?.trim();
   return apiKey && !isNonSecretApiKeyMarker(apiKey) ? apiKey : undefined;

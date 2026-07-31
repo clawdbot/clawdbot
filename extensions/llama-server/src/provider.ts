@@ -149,6 +149,7 @@ export async function prepareLlamaServerDynamicModels(
   const apiKey = await resolveLlamaServerRuntimeApiKey({
     config: ctx.config,
     agentDir: ctx.agentDir,
+    profileId: ctx.authProfileId,
   });
   const headers = await resolveLlamaServerProviderHeaders({
     config: ctx.config,

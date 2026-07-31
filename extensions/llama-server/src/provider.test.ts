@@ -172,6 +172,14 @@ describe("llama-server provider catalog", () => {
     await prepareLlamaServerDynamicModels(firstCtx);
     await prepareLlamaServerDynamicModels(secondCtx);
 
+    expect(runtimeApiKeyMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ profileId: "profile-one" }),
+    );
+    expect(runtimeApiKeyMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ profileId: "profile-two" }),
+    );
     expect(resolveLlamaServerDynamicModel(firstCtx)?.name).toBe("org/model:Q4");
     expect(resolveLlamaServerDynamicModel(secondCtx)?.name).toBe("second scope");
   });
