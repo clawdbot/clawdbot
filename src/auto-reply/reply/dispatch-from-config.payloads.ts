@@ -18,6 +18,14 @@ const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runt
 export const NO_VISIBLE_REPLY_FALLBACK_TEXT =
   "No reply was generated for this message. This is usually a temporary model failure - please try again.";
 
+/** Formats a more diagnostic fallback text with available context. */
+export function formatNoReplyFallbackText(provider: string | undefined): string {
+  if (provider) {
+    return `No reply was generated for this message. The provider "${provider}" did not produce a response. This is usually a temporary failure - please try again.`;
+  }
+  return NO_VISIBLE_REPLY_FALLBACK_TEXT;
+}
+
 export function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): string {
   const metadata = getReplyPayloadMetadata(payload);
   return JSON.stringify({

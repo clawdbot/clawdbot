@@ -6,7 +6,10 @@ import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subag
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { NO_VISIBLE_REPLY_FALLBACK_TEXT } from "./dispatch-from-config.payloads.js";
+import {
+  formatNoReplyFallbackText,
+  NO_VISIBLE_REPLY_FALLBACK_TEXT,
+} from "./dispatch-from-config.payloads.js";
 import {
   createDispatcher,
   diagnosticMocks,
@@ -494,7 +497,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         deliveredTexts.push(payload.text ?? "");
       }),
       beforeDeliver: async (payload) =>
-        payload.text === NO_VISIBLE_REPLY_FALLBACK_TEXT ? payload : null,
+        payload.text === formatNoReplyFallbackText("whatsapp") ? payload : null,
     });
     const replyResolver = vi.fn(
       async () => [{ text: "visible reply" }, { text: "NO_REPLY" }] satisfies ReplyPayload[],
@@ -510,7 +513,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     await dispatcher.waitForIdle();
 
     expect(deliveredTexts).not.toContain("visible reply");
-    expect(deliveredTexts).toContain(NO_VISIBLE_REPLY_FALLBACK_TEXT);
+    expect(deliveredTexts).toContain(formatNoReplyFallbackText("whatsapp"));
     expect(result.noVisibleReplyFallbackDelivered).toBe(true);
   });
 
@@ -542,7 +545,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
-      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+      text: formatNoReplyFallbackText("feishu"),
     });
     expect(result).toEqual({
       queuedFinal: true,
@@ -553,10 +556,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
   });
 
   it("keeps ambient group turns silent even when silence policy is disallow", async () => {
-    setNoAbort();
-    // The fallback exists for a user who asked and got nothing. An undirected
-    // group turn never draws a visible failure notice, regardless of silence
-    // policy (#114799: ambient HamVerBot group chatter drew fallback spam).
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => undefined);
     const ctx = buildTestCtx({
@@ -645,7 +644,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalledWith({
-      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+      text: formatNoReplyFallbackText("telegram"),
     });
     expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
     expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
@@ -683,7 +682,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalledWith({
-      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+      text: formatNoReplyFallbackText("telegram"),
     });
     expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
     expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
@@ -711,7 +710,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
-      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+      text: formatNoReplyFallbackText("telegram"),
     });
     expect(result.noVisibleReplyFallbackDelivered).toBe(true);
   });
@@ -927,7 +926,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const fallbackCall = mocks.routeReply.mock.calls.find(
       (call) =>
         (call[0] as { payload?: { text?: string } }).payload?.text ===
-        NO_VISIBLE_REPLY_FALLBACK_TEXT,
+        formatNoReplyFallbackText("slack"),
     );
     expect(fallbackCall).toBeDefined();
     expect(result.queuedFinal).toBe(true);
@@ -1048,7 +1047,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const fallbackCall = mocks.routeReply.mock.calls.find(
       (call) =>
         (call[0] as { payload?: { text?: string } }).payload?.text ===
-        NO_VISIBLE_REPLY_FALLBACK_TEXT,
+        formatNoReplyFallbackText("telegram"),
     );
     expect(fallbackCall).toBeUndefined();
     expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
@@ -1087,7 +1086,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     // The stub dispatcher exposes no settlement, so the ledger keeps the block's
     // admission as its visibility fact and no misleading fallback is sent.
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalledWith({
-      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+      text: formatNoReplyFallbackText("telegram"),
     });
     expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
   });
@@ -1158,7 +1157,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
-      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
+      text: formatNoReplyFallbackText("telegram"),
     });
     expect(result.queuedFinal).toBe(false);
     expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
@@ -1171,7 +1170,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     // admission-based gating used to end this turn silently (#114768 corner 1).
     mocks.routeReply.mockImplementation(async (paramsUnknown: unknown) => {
       const params = paramsUnknown as { payload?: { text?: string } };
-      return params.payload?.text === NO_VISIBLE_REPLY_FALLBACK_TEXT
+      return params.payload?.text === formatNoReplyFallbackText("slack")
         ? { ok: true, delivered: true, messageId: "fallback-1" }
         : { ok: true, delivered: false, suppressed: true };
     });
@@ -1205,7 +1204,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const fallbackCall = mocks.routeReply.mock.calls.find(
       (call) =>
         (call[0] as { payload?: { text?: string } }).payload?.text ===
-        NO_VISIBLE_REPLY_FALLBACK_TEXT,
+        formatNoReplyFallbackText("slack"),
     );
     expect(fallbackCall).toBeDefined();
     expect(result.noVisibleReplyFallbackDelivered).toBe(true);
@@ -1252,7 +1251,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     await dispatcher.waitForIdle();
 
     const deliveredTexts = deliver.mock.calls.map((call) => call[0].text);
-    expect(deliveredTexts).toContain(NO_VISIBLE_REPLY_FALLBACK_TEXT);
+    expect(deliveredTexts).toContain(formatNoReplyFallbackText("telegram"));
     expect(result.noVisibleReplyFallbackDelivered).toBe(true);
   });
 
@@ -1303,7 +1302,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const dispatcher = createReplyDispatcher({
       deliver,
       beforeDeliver: async (payload) =>
-        payload.text === NO_VISIBLE_REPLY_FALLBACK_TEXT ? payload : null,
+        payload.text === formatNoReplyFallbackText("telegram") ? payload : null,
     });
     const replyResolver = vi.fn(async () => ({ text: "cancelled answer" }));
     const ctx = buildTestCtx({
@@ -1332,7 +1331,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     await dispatcher.waitForIdle();
 
     const deliveredTexts = deliver.mock.calls.map((call) => call[0].text);
-    expect(deliveredTexts).toEqual([NO_VISIBLE_REPLY_FALLBACK_TEXT]);
+    expect(deliveredTexts).toEqual([formatNoReplyFallbackText("telegram")]);
     expect(result.noVisibleReplyFallbackDelivered).toBe(true);
   });
 
