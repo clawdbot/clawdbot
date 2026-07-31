@@ -15,6 +15,7 @@ import {
   type AgentExecutionAuthBinding,
 } from "../agents/execution-auth-binding.js";
 import { detectInferenceBackends } from "../commands/onboard-inference.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-records.js";
@@ -45,6 +46,7 @@ import {
   detectSetupInference,
   listSetupInferenceAuthOptions,
   listSetupInferenceManualProviders,
+  listSetupInferencePrepareOptions,
   resolvePersistentApplyInference,
   type VerifySetupInferenceResult,
   verifySetupInference as verifySetupInferenceImpl,
@@ -480,7 +482,7 @@ describe("detectSetupInference", () => {
     );
   });
 
-  it("discovers provider-owned local inference and reports unsafe CLIs without running them", async () => {
+  it("discovers provider-owned local inference without surfacing unsupported Google CLIs", async () => {
     const prepare = vi.fn();
     const detect = vi.fn(async () => ({
       modelRef: "local/qwen-tool",
@@ -519,25 +521,15 @@ describe("detectSetupInference", () => {
       ],
       probeLocalCommand: vi.fn(async (command) => ({
         command,
-        found: command === "agy" || command === "pi" || command === "opencode",
+        found: command === "pi" || command === "opencode",
       })),
       resolveManifestProviderAuthChoices: () => [
-        {
-          pluginId: "google",
-          providerId: "google-gemini-cli",
-          methodId: "oauth",
-          choiceId: "google-gemini-cli",
-          choiceLabel: "Gemini CLI OAuth",
-          groupId: "google",
-          groupLabel: "Google",
-          appGuidedAuth: "oauth",
-        },
         {
           pluginId: "google",
           providerId: "google",
           methodId: "api-key",
           choiceId: "gemini-api-key",
-          choiceLabel: "Google Gemini API key",
+          choiceLabel: "Google AI Studio API key",
           groupId: "google",
           groupLabel: "Google",
           appGuidedSecret: true,
@@ -572,13 +564,6 @@ describe("detectSetupInference", () => {
       },
     ]);
     expect(detection.unavailableCandidates).toEqual([
-      expect.objectContaining({
-        id: "gemini-cli",
-        brandId: "google-gemini-cli",
-        authOptionId: "google-gemini-cli",
-        manualProviderId: "gemini-api-key",
-      }),
-      expect.objectContaining({ id: "antigravity-cli" }),
       expect.objectContaining({ id: "pi-cli" }),
       expect.objectContaining({ id: "opencode-cli" }),
     ]);
@@ -791,6 +776,55 @@ describe("detectSetupInference", () => {
     ]);
   });
 
+  it("lists app-guided local model setup choices from provider metadata", () => {
+    const choices: ProviderAuthChoiceMetadata[] = [
+      {
+        pluginId: "lmstudio",
+        providerId: "lmstudio",
+        methodId: "custom",
+        choiceId: "lmstudio",
+        choiceLabel: "LM Studio",
+        choiceHint: "Local/self-hosted LM Studio server",
+        icon: "https://cdn.simpleicons.org/lmstudio",
+        website: "https://lmstudio.ai/download",
+        appGuidedDiscovery: true,
+      },
+      {
+        pluginId: "ollama",
+        providerId: "ollama",
+        methodId: "local",
+        choiceId: "ollama",
+        choiceLabel: "Ollama",
+        appGuidedDiscovery: true,
+      },
+      {
+        pluginId: "hidden",
+        providerId: "hidden",
+        methodId: "local",
+        choiceId: "hidden",
+        choiceLabel: "Hidden",
+        assistantVisibility: "manual-only",
+        appGuidedDiscovery: true,
+      },
+    ];
+
+    expect(listSetupInferencePrepareOptions(choices)).toEqual([
+      {
+        id: "lmstudio",
+        brandId: "lmstudio",
+        label: "LM Studio",
+        hint: "Local/self-hosted LM Studio server",
+        icon: "https://cdn.simpleicons.org/lmstudio",
+        website: "https://lmstudio.ai/download",
+      },
+      {
+        id: "ollama",
+        brandId: "ollama",
+        label: "Ollama",
+      },
+    ]);
+  });
+
   it("marks a configured default-agent model as complete setup", async () => {
     vi.mocked(detectInferenceBackends).mockResolvedValueOnce([
       {
@@ -924,7 +958,7 @@ describe("detectSetupInference", () => {
     ]);
   });
 
-  it("omits Gemini CLI because setup verification cannot hard-disable its tools", async () => {
+  it("omits Gemini CLI instead of presenting an unverifiable setup route", async () => {
     vi.mocked(detectInferenceBackends).mockResolvedValueOnce([
       {
         kind: "gemini-cli",
@@ -950,9 +984,7 @@ describe("detectSetupInference", () => {
     expect(detection.candidates).toEqual([
       expect.objectContaining({ kind: "claude-cli", recommended: false }),
     ]);
-    expect(detection.unavailableCandidates).toEqual([
-      expect.objectContaining({ id: "gemini-cli" }),
-    ]);
+    expect(detection.unavailableCandidates).toEqual([]);
   });
 
   it("reports installed Pi and OpenCode without offering them as setup inference routes", async () => {
@@ -986,6 +1018,7 @@ describe("detectSetupInference", () => {
     ]);
     expect(probeLocalCommand).toHaveBeenCalledWith("pi");
     expect(probeLocalCommand).toHaveBeenCalledWith("opencode");
+    expect(probeLocalCommand).not.toHaveBeenCalledWith("agy");
   });
 });
 
@@ -3669,16 +3702,19 @@ describe("activateSetupInference", () => {
 
   it.each([
     {
-      name: "uses a provider starter model instead of an unrelated existing default",
+      name: "requests a dynamic provider model instead of using a static starter",
       existingModel: "openai/gpt-5.2",
-      starterModel: "github-copilot/claude-sonnet-4.5",
+      starterModel: "github-copilot/static-should-not-win",
+      expectedSetupInputModel: undefined,
     },
     {
       name: "accepts an unchanged provider-owned dynamic model",
       existingModel: "github-copilot/claude-sonnet-4.5",
       starterModel: undefined,
+      expectedSetupInputModel: "github-copilot/claude-sonnet-4.5",
     },
-  ])("$name without starting interactive login", async ({ existingModel, starterModel }) => {
+  ])("$name without starting interactive login", async (testCase) => {
+    const { existingModel, starterModel, expectedSetupInputModel } = testCase;
     const stateDir = await makeTempDir();
     const agentDir = path.join(stateDir, "agent");
     const runInteractive = vi.fn();
@@ -3787,6 +3823,10 @@ describe("activateSetupInference", () => {
         expect.objectContaining({
           opts: expect.objectContaining({ githubCopilotToken: "github-token" }),
         }),
+      );
+      const setupInputConfig = runNonInteractive.mock.calls[0]?.[0].config;
+      expect(resolveAgentModelPrimaryValue(setupInputConfig?.agents?.defaults?.model)).toBe(
+        expectedSetupInputModel,
       );
       const activatedProfileId = runEmbeddedAgent.mock.calls[0]?.[0].authProfileId;
       if (!activatedProfileId) {

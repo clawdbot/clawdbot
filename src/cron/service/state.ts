@@ -3,7 +3,7 @@ import type { CronConfig } from "../../config/types.cron.js";
 import type {
   HeartbeatRunResult,
   HeartbeatWakeRequest,
-} from "../../infra/heartbeat-wake-contract.js";
+} from "../../infra/heartbeat-wake-contracts.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -222,6 +222,7 @@ export type CronServiceDeps = {
   sendCronFailureAlert?: (params: {
     job: CronJob;
     text: string;
+    runAtMs?: number;
     channel: CronMessageChannel;
     to?: string;
     mode?: "announce" | "webhook";

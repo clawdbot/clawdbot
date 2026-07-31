@@ -163,7 +163,7 @@ describe("ACP CLI process exit", () => {
             type: "event",
             event: "connect.challenge",
             seq: 1,
-            payload: { nonce: "acp-process-test" },
+            payload: { nonce: "acp-process-test", ts: Date.now() },
           }),
         );
         socket.on("message", (data) => {

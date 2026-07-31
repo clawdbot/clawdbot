@@ -29,9 +29,21 @@ const uiProofArtifactDir = path.join(
   "native-session-discovery",
 );
 
-async function expandCodingSection(page: Page) {
+async function expandCodingSection(page: Page, required = false) {
   const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
-  await toggle.waitFor({ state: "visible" });
+  if (required) {
+    await toggle.waitFor({ state: "visible" });
+  } else {
+    await page.waitForFunction(() =>
+      Boolean(
+        document.querySelector('[data-session-section="work"]') ??
+        document.querySelector('[data-session-section^="catalog:"]'),
+      ),
+    );
+    if ((await toggle.count()) === 0) {
+      return;
+    }
+  }
   if ((await toggle.getAttribute("aria-expanded")) === "false") {
     await toggle.click();
   }
@@ -198,7 +210,7 @@ suite("Codex native session catalog", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
       await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
-      await expandCodingSection(page);
+      await expandCodingSection(page, true);
       const sessionGroups = page.locator(".sidebar-recent-sessions");
       const workSection = sessionGroups.locator(':scope > [data-session-section="work"]');
       const liveRows = workSection.locator(":scope > .sidebar-recent-sessions__list");

@@ -82,12 +82,35 @@ export type MatrixQaFaultProxyHit = {
   ruleId: string;
 };
 
+export type MatrixQaFaultProxyRuleHandle = {
+  hits(): MatrixQaFaultProxyHit[];
+  remove(): void;
+};
+
 type MatrixQaFaultProxy = {
   baseUrl: string;
   hits(): MatrixQaFaultProxyHit[];
+  installRule(rule: MatrixQaFaultProxyRule): MatrixQaFaultProxyRuleHandle;
   setTargetBaseUrl(targetBaseUrl: string): void;
   stop(): Promise<void>;
 };
+
+type MatrixQaRegisteredFaultProxyRule = {
+  registrationId: number;
+  rule: MatrixQaFaultProxyRule;
+};
+
+type MatrixQaRegisteredFaultProxyHit = MatrixQaFaultProxyHit & {
+  registrationId: number;
+};
+
+function toMatrixQaFaultProxyHit(hit: MatrixQaRegisteredFaultProxyHit): MatrixQaFaultProxyHit {
+  return {
+    method: hit.method,
+    path: hit.path,
+    ruleId: hit.ruleId,
+  };
+}
 
 function normalizeHeaderValue(value: string | string[] | undefined) {
   if (Array.isArray(value)) {
@@ -330,7 +353,12 @@ export async function startMatrixQaFaultProxy(
   let targetBaseUrl = new URL(params.targetBaseUrl);
   const maxRequestBytes = params.maxRequestBytes ?? DEFAULT_FAULT_PROXY_REQUEST_MAX_BYTES;
   const maxResponseBytes = params.maxResponseBytes ?? DEFAULT_FAULT_PROXY_RESPONSE_MAX_BYTES;
-  const hits: MatrixQaFaultProxyHit[] = [];
+  let nextRuleRegistrationId = 0;
+  const registeredRules: MatrixQaRegisteredFaultProxyRule[] = params.rules.map((rule) => ({
+    registrationId: nextRuleRegistrationId++,
+    rule,
+  }));
+  const hits: MatrixQaRegisteredFaultProxyHit[] = [];
   const activeAbortControllers = new Set<AbortController>();
   const server = createServer((req, res) => {
     const abortController = new AbortController();
@@ -369,11 +397,13 @@ export async function startMatrixQaFaultProxy(
         observedRequest = request;
         const context = params.createExchangeContext?.(request);
         observedContext = context;
-        const rule = params.rules.find((candidate) => candidate.match(request));
-        if (rule) {
+        const registeredRule = registeredRules.find((candidate) => candidate.rule.match(request));
+        const rule = registeredRule?.rule;
+        if (rule && registeredRule) {
           hits.push({
             method: request.method,
             path: request.path,
+            registrationId: registeredRule.registrationId,
             ruleId: rule.id,
           });
           if (rule.response) {
@@ -461,7 +491,27 @@ export async function startMatrixQaFaultProxy(
 
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
-    hits: () => [...hits],
+    hits: () => hits.map(toMatrixQaFaultProxyHit),
+    installRule(rule) {
+      const registrationId = nextRuleRegistrationId++;
+      const registeredRule = { registrationId, rule };
+      registeredRules.push(registeredRule);
+      let removed = false;
+      return {
+        hits: () =>
+          hits.filter((hit) => hit.registrationId === registrationId).map(toMatrixQaFaultProxyHit),
+        remove() {
+          if (removed) {
+            return;
+          }
+          removed = true;
+          const index = registeredRules.indexOf(registeredRule);
+          if (index !== -1) {
+            registeredRules.splice(index, 1);
+          }
+        },
+      };
+    },
     setTargetBaseUrl(nextTargetBaseUrl) {
       targetBaseUrl = new URL(nextTargetBaseUrl);
     },

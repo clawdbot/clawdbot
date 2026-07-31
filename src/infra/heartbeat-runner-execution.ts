@@ -82,7 +82,7 @@ import type {
   HeartbeatScheduledTask,
   HeartbeatWakeIntent,
   HeartbeatWakeSource,
-} from "./heartbeat-wake-contract.js";
+} from "./heartbeat-wake-contracts.js";
 import {
   inferHeartbeatWakeSourceFromReason,
   isConfiguredHeartbeatAgent,

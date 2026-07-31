@@ -191,7 +191,7 @@ export async function emitSubagentEndedHookOnce(params: {
   outcome?: SubagentLifecycleEndedOutcome;
   error?: string;
   inFlightRunIds: Set<string>;
-  persist: () => void;
+  persist: (...runIds: string[]) => void;
 }) {
   const runId = params.entry.runId.trim();
   if (!runId) {
@@ -233,7 +233,7 @@ export async function emitSubagentEndedHookOnce(params: {
       );
     }
     params.entry.endedHookEmittedAt = Date.now();
-    params.persist();
+    params.persist(runId);
     return true;
   } catch (err) {
     log.warn(

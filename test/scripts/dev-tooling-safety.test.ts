@@ -632,22 +632,78 @@ describe("script-specific dev tooling hardening", () => {
   it("formats OpenAI realtime smoke help without launching live checks", () => {
     expect(realtimeSmokeTesting.parseRealtimeSmokeArgs(["--help"])).toEqual({
       help: true,
+      openAIAudioCycles: 1,
       openAIOnly: false,
     });
     expect(realtimeSmokeTesting.parseRealtimeSmokeArgs(["--openai-only"])).toEqual({
       help: false,
+      openAIAudioCycles: 1,
       openAIOnly: true,
+    });
+    expect(realtimeSmokeTesting.parseRealtimeSmokeArgs(["--openai-audio-cycles", "3"])).toEqual({
+      help: false,
+      openAIAudioCycles: 3,
+      openAIOnly: false,
     });
     expect(realtimeSmokeTesting.usage()).toContain(
       "Usage: node --import tsx scripts/dev/realtime-talk-live-smoke.ts",
     );
     expect(realtimeSmokeTesting.usage()).toContain("--openai-only");
+    expect(realtimeSmokeTesting.usage()).toContain("--openai-audio-cycles");
   });
 
   it("rejects unknown OpenAI realtime smoke args before runtime setup", () => {
     expect(() => realtimeSmokeTesting.parseRealtimeSmokeArgs(["--wat"])).toThrow(
       "Unknown argument: --wat",
     );
+    expect(() => realtimeSmokeTesting.parseRealtimeSmokeArgs(["--openai-audio-cycles"])).toThrow(
+      "--openai-audio-cycles requires a value",
+    );
+    expect(() =>
+      realtimeSmokeTesting.parseRealtimeSmokeArgs(["--openai-audio-cycles", "0"]),
+    ).toThrow("--openai-audio-cycles must be an integer >= 1");
+    expect(() =>
+      realtimeSmokeTesting.parseRealtimeSmokeArgs(["--openai-audio-cycles", "11"]),
+    ).toThrow("--openai-audio-cycles must be <= 10");
+  });
+
+  it("chunks PCM input without copying or dropping bytes", async () => {
+    const sent: Buffer[] = [];
+    const chunkCount = await realtimeSmokeTesting.sendPcmAudioInChunks(
+      {
+        sendAudio: (audio: Buffer) => sent.push(audio),
+      } as never,
+      Buffer.from([1, 2, 3, 4, 5]),
+      { chunkBytes: 2, delayMs: 0 },
+    );
+
+    expect(chunkCount).toBe(3);
+    expect(Buffer.concat(sent)).toEqual(Buffer.from([1, 2, 3, 4, 5]));
+    expect(sent.map((chunk) => chunk.byteLength)).toEqual([2, 2, 1]);
+    await expect(
+      realtimeSmokeTesting.sendPcmAudioInChunks({ sendAudio: vi.fn() } as never, Buffer.alloc(1), {
+        chunkBytes: 0,
+        delayMs: 0,
+      }),
+    ).rejects.toThrow("PCM audio chunk size must be a positive integer");
+  });
+
+  it("matches normalized live audio transcript markers", () => {
+    expect(realtimeSmokeTesting.transcriptIncludesMarker(["Glacier."], "glacier")).toBe(true);
+    expect(
+      realtimeSmokeTesting.transcriptIncludesMarker(
+        ["Please reply with the single-word GLACIER!"],
+        "single word glacier",
+      ),
+    ).toBe(true);
+    expect(realtimeSmokeTesting.transcriptIncludesMarker(["ocean"], "glacier")).toBe(false);
+  });
+
+  it("resolves the realtime relay smoke to an existing Control UI module", () => {
+    const modulePath = realtimeSmokeTesting.resolveGatewayRelayModulePath(process.cwd());
+
+    expect(modulePath.endsWith("/ui/src/pages/chat/realtime-talk-gateway-relay.ts")).toBe(true);
+    expect(existsSync(modulePath.slice("/@fs/".length))).toBe(true);
   });
 
   it("bounds OpenAI realtime smoke response body reads by content-length", async () => {

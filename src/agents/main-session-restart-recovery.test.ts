@@ -863,6 +863,71 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
   });
 
+  it("resumes when durable commentary is mirrored after the restart recovery mark", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const sessionKey = "agent:main:main";
+    await writeStore(sessionsDir, {
+      [sessionKey]: runningSessionEntry("main-session"),
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "finish the interrupted long-running turn" },
+    ]);
+
+    await expect(
+      markRestartAbortedMainSessions({
+        stateDir: tmpDir,
+        sessionKeys: [sessionKey],
+        reason: "gateway restart drain",
+      }),
+    ).resolves.toEqual({ marked: 1, skipped: 0 });
+
+    await writeTranscript(sessionsDir, "main-session", [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Checking the remaining background task." }],
+        stopReason: "stop",
+        openclawStreamFallback: {
+          replacementText: "Checking the remaining background task.",
+          source: "segment",
+          itemId: "progress-after-recovery-mark",
+        },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "The restart handoff is in progress." }],
+        stopReason: "stop",
+        openclawStreamFallback: {
+          replacementText: "The restart handoff is in progress.",
+          source: "segment",
+          itemId: "progress-after-recovery-mark-2",
+        },
+      },
+    ]);
+
+    await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(gatewayParams().sessionKey).toBe(sessionKey);
+    expect(readStore(path.join(sessionsDir, "sessions.json"))[sessionKey]).toMatchObject({
+      status: "running",
+      abortedLastRun: false,
+    });
+
+    const transcript = await loadTestTranscript(
+      sessionKey,
+      path.join(sessionsDir, "sessions.json"),
+    );
+    expect(
+      transcript
+        .map((event) => event.message)
+        .filter(
+          (message) =>
+            message?.role === "assistant" &&
+            (message as { openclawStreamFallback?: { source?: unknown } }).openclawStreamFallback
+              ?.source === "segment",
+        ),
+    ).toHaveLength(2);
+  });
+
   it.each([
     {
       label: "same-process lifecycle rotation",
@@ -4752,7 +4817,10 @@ describe("main-session-restart-recovery", () => {
     ]);
 
     await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
-    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+    expect(gatewayParams()).toMatchObject({
+      forceRestartSafeTools: true,
+      forceCodeModeTools: true,
+    });
   });
 
   it.each([
@@ -5178,7 +5246,55 @@ describe("main-session-restart-recovery", () => {
     ]);
 
     await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
-    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+    expect(gatewayParams()).toMatchObject({
+      forceRestartSafeTools: true,
+      forceCodeModeTools: true,
+    });
+  });
+
+  it("resumes through the current Code Mode abort persisted for an interrupted wait", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, mainSessionStore());
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      codeModeCheckpointMessage(),
+      codeModeWaitCallMessage(),
+      {
+        role: "toolResult",
+        toolName: "wait",
+        toolCallId: "call-wait-1",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "failed",
+              code: "aborted",
+              error: "code mode execution aborted",
+            }),
+          },
+        ],
+        details: {
+          status: "failed",
+          code: "aborted",
+          error: "code mode execution aborted",
+          replaySafe: true,
+        },
+        isError: true,
+      },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "aborted",
+        errorCode: "OPENCLAW_RESTART_ABORT",
+        errorMessage: "agent run aborted for restart",
+      },
+    ]);
+
+    await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
+    expect(gatewayParams()).toMatchObject({
+      forceRestartSafeTools: true,
+      forceCodeModeTools: true,
+    });
   });
 
   it("keeps an unmatched failed wait restricted when its checkpoint is replay-safe", async () => {
@@ -5203,7 +5319,10 @@ describe("main-session-restart-recovery", () => {
     ]);
 
     await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
-    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+    expect(gatewayParams()).toMatchObject({
+      forceRestartSafeTools: true,
+      forceCodeModeTools: true,
+    });
   });
 
   it.each([

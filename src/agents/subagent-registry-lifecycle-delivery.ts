@@ -386,7 +386,7 @@ export function createSubagentRegistryLifecycleDelivery(
       changed = true;
     }
     if (changed) {
-      params.persist();
+      params.persist(...candidates.map((entry) => entry.runId));
     }
     return changed;
   };

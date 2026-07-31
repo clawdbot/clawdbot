@@ -164,6 +164,42 @@ export function isRootHelpInvocation(argv: string[]): boolean {
   return isRootInvocationForFlags(argv, HELP_FLAGS);
 }
 
+/** Match fast-path command help only when no command option can own the help token as a value. */
+export function isSimpleCommandHelpInvocation(
+  argv: string[],
+  commandNames: ReadonlySet<string>,
+): boolean {
+  const args = argv.slice(2);
+  let commandSeen = false;
+  let helpSeen = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      return false;
+    }
+    const rootConsumed = commandSeen ? 0 : consumeRootOptionToken(args, index);
+    if (rootConsumed > 0) {
+      index += rootConsumed - 1;
+      continue;
+    }
+    if (HELP_FLAGS.has(arg)) {
+      if (!commandSeen) {
+        return false;
+      }
+      helpSeen = true;
+      continue;
+    }
+    if (arg.startsWith("-") || commandSeen) {
+      return false;
+    }
+    if (!commandNames.has(arg)) {
+      return false;
+    }
+    commandSeen = true;
+  }
+  return commandSeen && helpSeen;
+}
+
 type HelpNormalizationPositional = { value: string; index: number };
 
 type HelpNormalizationScanResult =

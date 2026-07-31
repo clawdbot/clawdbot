@@ -167,7 +167,7 @@ export function createSubagentRegistryLifecycleCompletion(
           entry.terminalOwner = "interrupted-recovery";
           mutated = true;
           try {
-            params.persistOrThrow();
+            params.persistOrThrow(completeParams.runId);
           } catch (error) {
             restoreEntrySnapshot(entrySnapshot);
             throw error;
@@ -483,7 +483,7 @@ export function createSubagentRegistryLifecycleCompletion(
         restoreEntrySnapshot(entry);
         entry = currentEntry;
         try {
-          params.persistOrThrow();
+          params.persistOrThrow(completeParams.runId);
         } catch (error) {
           restoreEntrySnapshot(liveBeforeCommit);
           throw error;
@@ -494,7 +494,7 @@ export function createSubagentRegistryLifecycleCompletion(
       } else {
         try {
           if (mutated) {
-            params.persistOrThrow();
+            params.persistOrThrow(completeParams.runId);
           }
         } catch (error) {
           restoreEntrySnapshot(entrySnapshot);
@@ -521,7 +521,7 @@ export function createSubagentRegistryLifecycleCompletion(
     const retireSupersededSession = async (currentEntry: SubagentRunRecord) => {
       if (completionReason !== SUBAGENT_ENDED_REASON_KILLED) {
         await params.retireSupersededRun(completeParams.runId, currentEntry);
-        params.persist();
+        params.persist(completeParams.runId);
       }
     };
     sessionSuperseded = sessionSuperseded || newerGenerationOwnsSession(entry);

@@ -363,7 +363,7 @@ ${JSON.stringify(details, null, 2)}
 
 function formatSessionStateChanges(details: {
   stateVersion: number;
-  stateChanges: ReturnType<typeof listSessionStateEventsSince>;
+  stateChanges: ReturnType<typeof compactSessionStateChanges>;
 }): string {
   return `Session state changes:
 \`\`\`json
@@ -1085,9 +1085,7 @@ export function createSessionStatusTool(opts?: {
             : undefined;
           const extraBlocks = [
             routeContextText,
-            rawStateChanges
-              ? formatSessionStateChanges({ stateVersion, stateChanges: rawStateChanges })
-              : undefined,
+            stateChanges ? formatSessionStateChanges({ stateVersion, stateChanges }) : undefined,
           ].filter((block): block is string => Boolean(block));
           const visibleStatusText =
             extraBlocks.length > 0

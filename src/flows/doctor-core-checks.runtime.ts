@@ -9,7 +9,6 @@ import {
   listAgentEntries,
   listAgentIds,
   resolveAgentDir,
-  resolveDefaultAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
@@ -607,7 +606,6 @@ export async function collectProviderCatalogProjectionFindings(
   const { runProviderStaticCatalog } = await import("../plugins/provider-discovery.js");
   const { resolvePluginProviders } = await import("../plugins/providers.runtime.js");
   const env = process.env;
-  const agentDir = resolveDefaultAgentDir(cfg);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   let providers: Awaited<ReturnType<typeof resolvePluginProviders>>;
   try {
@@ -666,13 +664,7 @@ export async function collectProviderCatalogProjectionFindings(
       }
       let result: Awaited<ReturnType<typeof runProviderStaticCatalog>>;
       try {
-        result = await runProviderStaticCatalog({
-          provider,
-          config: cfg,
-          agentDir,
-          workspaceDir,
-          env,
-        });
+        result = await runProviderStaticCatalog({ provider });
       } catch (error) {
         findings.push(
           providerCatalogProjectionFinding({

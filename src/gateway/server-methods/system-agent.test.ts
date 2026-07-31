@@ -526,6 +526,7 @@ describe("openclaw.chat", () => {
         unavailableCandidates: [],
         manualProviders: [],
         authOptions: [],
+        prepareOptions: [],
         recommendedInstalls: [],
         workspace: "/tmp/work",
         setupComplete: false,

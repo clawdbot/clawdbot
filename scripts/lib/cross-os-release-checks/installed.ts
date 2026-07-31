@@ -194,8 +194,10 @@ export function buildWindowsPathBootstrapScript(
   options: { includeCurrentProcessPath?: boolean } = {},
 ) {
   const includeCurrentProcessPath = options.includeCurrentProcessPath !== false;
+  // setup-node provisions the supported runtime in the current process PATH. Keep it ahead of
+  // stale runner image entries while still merging newly persisted user and machine paths.
   const pathCandidates = includeCurrentProcessPath
-    ? "@($userPath, $machinePath, $env:Path)"
+    ? "@($env:Path, $userPath, $machinePath)"
     : "@($userPath, $machinePath)";
   return `
 $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')

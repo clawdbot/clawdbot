@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import type { MemorySyncParams } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./manager-db.js";
 import {
@@ -34,6 +35,8 @@ describe("memory manager readonly recovery", () => {
   function createQueuedSyncHarness(syncing: Promise<void>) {
     const queuedArchiveFiles = new Set<string>();
     const queuedSessions = new Map<string, never>();
+    let queuedForce = false;
+    const queuedProgressCallbacks = new Set<NonNullable<MemorySyncParams["progress"]>>();
     let queuedSessionSync: Promise<void> | null = null;
     const sync = vi.fn(async () => {});
     return {
@@ -48,6 +51,11 @@ describe("memory manager readonly recovery", () => {
         getSyncing: () => syncing,
         getQueuedArchiveFiles: () => queuedArchiveFiles,
         getQueuedSessions: () => queuedSessions,
+        getQueuedForce: () => queuedForce,
+        setQueuedForce: (value: boolean) => {
+          queuedForce = value;
+        },
+        getQueuedProgressCallbacks: () => queuedProgressCallbacks,
         getQueuedSessionSync: () => queuedSessionSync,
         setQueuedSessionSync: (value: Promise<void> | null) => {
           queuedSessionSync = value;

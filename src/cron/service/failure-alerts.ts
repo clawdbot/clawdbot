@@ -137,6 +137,7 @@ function emitFailureAlert(
     job: CronJob;
     error?: string;
     errorReason?: FailoverReason;
+    runAtMs?: number;
     consecutiveErrors: number;
     channel: CronMessageChannel;
     to?: string;
@@ -153,7 +154,7 @@ function emitFailureAlert(
   const statusVerb = params.status === "skipped" ? "skipped" : "failed";
   const detailLabel = params.status === "skipped" ? "Skip reason" : "Last error";
   const text = [
-    `Cron job "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times`,
+    `Automation "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times`,
     ...(errorReason ? [`Cause: ${errorReason}`] : []),
     `${detailLabel}: ${truncatedError}`,
   ].join("\n");
@@ -163,6 +164,7 @@ function emitFailureAlert(
       .sendCronFailureAlert({
         job: params.job,
         text,
+        runAtMs: params.runAtMs,
         channel: params.channel,
         to: params.to,
         mode: params.mode,
@@ -196,6 +198,7 @@ export function maybeEmitFailureAlert(
     status: "error" | "skipped";
     error?: string;
     errorReason?: FailoverReason;
+    runAtMs?: number;
     consecutiveCount: number;
     delivery?: "emit" | "record-only";
     occurredAtMs?: number;
@@ -232,6 +235,7 @@ export function maybeEmitFailureAlert(
       job: params.job,
       error: params.error,
       errorReason: params.errorReason,
+      runAtMs: params.runAtMs,
       consecutiveErrors: params.consecutiveCount,
       channel: params.alertConfig.channel,
       to: params.alertConfig.to,

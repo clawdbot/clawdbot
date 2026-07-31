@@ -554,7 +554,7 @@ describe("plugin status reports", () => {
     expectPluginLoaderCall({ loadModules: true });
   });
 
-  it("preserves raw config activation context when compatibility notices build their own report", () => {
+  it("preserves raw config activation context for compatibility-derived reports", () => {
     expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig();
   });
 
@@ -572,10 +572,6 @@ describe("plugin status reports", () => {
       enabledConfig,
       loadModules: false,
     });
-  });
-
-  it("preserves raw config activation context for compatibility-derived reports", () => {
-    expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig();
   });
 
   it("normalizes bundled plugin versions to the core base release", () => {

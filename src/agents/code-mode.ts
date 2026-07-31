@@ -266,11 +266,12 @@ export function applyCodeModeCatalog(params: {
   toolHookContext?: HookContext;
   directToolNames?: Iterable<string>;
   codeModeSkills?: CodeModeToolContext["codeModeSkills"];
+  forceEnabled?: boolean;
 }) {
   const config = resolveCodeModeConfig(params.config, params.agentId);
   // Engagement (including "auto" per-model resolution) is decided by the run
   // gates before this is called; only a hard `false` may disable compaction.
-  if (config.enabled === false) {
+  if (config.enabled === false && params.forceEnabled !== true) {
     return applyToolCatalogCompaction({
       ...params,
       enabled: false,

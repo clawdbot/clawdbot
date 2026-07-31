@@ -1,11 +1,15 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeHeartbeatWakeReason } from "./heartbeat-reason.js";
 import type {
   HeartbeatScheduledTask,
   HeartbeatWakeIntent,
   HeartbeatWakeOverride,
   HeartbeatWakeSource,
-} from "./heartbeat-wake-contract.js";
+} from "./heartbeat-wake-contracts.js";
+import {
+  GLOBAL_HEARTBEAT_WAKE_TARGET_KEY,
+  normalizeHeartbeatWakeTarget,
+  resolveHeartbeatWakeTargetKey,
+} from "./heartbeat-wake-target.js";
 
 export type PendingWakeReason = {
   source: HeartbeatWakeSource;
@@ -13,6 +17,10 @@ export type PendingWakeReason = {
   reason: string;
   priority: number;
   requestedAt: number;
+  /** Stable enqueue order retained across coalescing, deferral, and lifecycle handoff. */
+  enqueueSequence: number;
+  /** First immediate-global request represented by this coalesced wake. */
+  immediateBarrierSequence?: number;
   /** Earliest dispatch instant requested by the wake's coalescing window. */
   readyAtMs?: number;
   agentId?: string;
@@ -75,14 +83,7 @@ export function normalizeWakeReason(reason?: string): string {
 }
 
 export function normalizeWakeTarget(value?: string): string | undefined {
-  const trimmed = normalizeOptionalString(value) ?? "";
-  return trimmed || undefined;
-}
-
-function getWakeTargetBaseKey(params: { agentId?: string; sessionKey?: string }) {
-  const agentId = normalizeWakeTarget(params.agentId);
-  const sessionKey = normalizeWakeTarget(params.sessionKey);
-  return `${agentId ?? ""}::${sessionKey ?? ""}`;
+  return normalizeHeartbeatWakeTarget(value);
 }
 
 export function getWakeCoalesceKey(params: {
@@ -91,7 +92,7 @@ export function getWakeCoalesceKey(params: {
   trustedContinuationRouting: boolean;
 }) {
   const trustDomain = params.trustedContinuationRouting ? "trusted-continuation" : "default";
-  return `${getWakeTargetBaseKey(params)}::${trustDomain}`;
+  return `${resolveHeartbeatWakeTargetKey(params)}::${trustDomain}`;
 }
 
 // The unscoped group is upstream's global flush barrier. Trust-domain separation
@@ -105,6 +106,9 @@ export const UNSCOPED_WAKE_TARGET_KEYS = [
 export function isUnscopedWakeTargetKey(targetKey: string): boolean {
   return UNSCOPED_WAKE_TARGET_KEYS.includes(targetKey);
 }
+
+/** Upstream's bare global key, retained so target-module helpers stay reusable. */
+export const GLOBAL_WAKE_TARGET_BASE_KEY = GLOBAL_HEARTBEAT_WAKE_TARGET_KEY;
 
 export function mergePendingWakeReasons(
   previous: PendingWakeReason,
@@ -139,12 +143,17 @@ export function mergePendingWakeReasons(
     (previous.guardRetry === true || next.guardRetry === true);
   const scheduledEveryMs = preferred.scheduledEveryMs ?? other.scheduledEveryMs;
   const scheduledAnchorMs = preferred.scheduledAnchorMs ?? other.scheduledAnchorMs;
+  const immediateBarrierSequences = [
+    previous.immediateBarrierSequence,
+    next.immediateBarrierSequence,
+  ].filter((value): value is number => value !== undefined);
   const readyAtMs = Math.min(
     previous.readyAtMs ?? previous.requestedAt,
     next.readyAtMs ?? next.requestedAt,
   );
   const merged: PendingWakeReason = {
     ...preferred,
+    enqueueSequence: Math.min(previous.enqueueSequence, next.enqueueSequence),
     readyAtMs,
     ...(!bypassGuardRetry && (previous.notBeforeMs !== undefined || next.notBeforeMs !== undefined)
       ? {
@@ -163,6 +172,11 @@ export function mergePendingWakeReasons(
     merged.guardRetry = true;
   } else {
     delete merged.guardRetry;
+  }
+  if (immediateBarrierSequences.length > 0) {
+    merged.immediateBarrierSequence = Math.min(...immediateBarrierSequences);
+  } else {
+    delete merged.immediateBarrierSequence;
   }
   return merged;
 }

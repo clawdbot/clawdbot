@@ -46,6 +46,10 @@ const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {
 const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
 const listRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn((): unknown[] => []));
 const disposeRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn(async () => {}));
+const getActiveMcpLoopbackRuntimeMock = vi.hoisted(() =>
+  vi.fn<() => { port: number } | undefined>(() => undefined),
+);
+const closeMcpLoopbackServerMock = vi.hoisted(() => vi.fn(async () => {}));
 const ensureTaskRegistryReadyMock = vi.hoisted(() => vi.fn());
 const startTaskRegistryMaintenanceMock = vi.hoisted(() => vi.fn());
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
@@ -276,6 +280,14 @@ vi.mock("../plugins/memory-state.js", () => ({
 vi.mock("../agents/harness/registry.js", () => ({
   listRegisteredAgentHarnesses: listRegisteredAgentHarnessesMock,
   disposeRegisteredAgentHarnesses: disposeRegisteredAgentHarnessesMock,
+}));
+
+vi.mock("../gateway/mcp-http.loopback-runtime.js", () => ({
+  getActiveMcpLoopbackRuntime: getActiveMcpLoopbackRuntimeMock,
+}));
+
+vi.mock("../gateway/mcp-http.js", () => ({
+  closeMcpLoopbackServer: closeMcpLoopbackServerMock,
 }));
 
 vi.mock("../tasks/task-registry.js", () => ({
@@ -524,6 +536,10 @@ describe("runCli exit behavior", () => {
     disposeRegisteredAgentHarnessesMock.mockImplementationOnce(async () => {
       order.push("harnesses");
     });
+    getActiveMcpLoopbackRuntimeMock.mockReturnValueOnce({ port: 1234 });
+    closeMcpLoopbackServerMock.mockImplementationOnce(async () => {
+      order.push("mcp-loopback");
+    });
     hasMemoryRuntimeMock.mockReturnValueOnce(true);
     closeActiveMemorySearchManagersMock.mockImplementationOnce(async () => {
       order.push("memory");
@@ -532,8 +548,18 @@ describe("runCli exit behavior", () => {
 
     await runCli(["node", "openclaw", "models", "status", "--probe"]);
 
-    expect(order).toEqual(["harnesses", "memory"]);
+    expect(order).toEqual(["harnesses", "mcp-loopback", "memory"]);
     expect(flushExitAfterOneShotOutputMock).not.toHaveBeenCalled();
+  });
+
+  it("does not fail the command when MCP loopback cleanup fails", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+    getActiveMcpLoopbackRuntimeMock.mockReturnValueOnce({ port: 1234 });
+    closeMcpLoopbackServerMock.mockRejectedValueOnce(new Error("listener cleanup failed"));
+
+    await expect(runCli(["node", "openclaw", "status"])).resolves.toBeUndefined();
+
+    expect(closeMcpLoopbackServerMock).toHaveBeenCalledTimes(1);
   });
 
   it("shows the standard spinner while loading the full CLI", async () => {

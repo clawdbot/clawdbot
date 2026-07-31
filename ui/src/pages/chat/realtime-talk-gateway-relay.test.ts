@@ -380,6 +380,116 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     expect(onInputLevel).toHaveBeenLastCalledWith(0);
   });
 
+  it("bounds stalled microphone appends and aborts every owner on stop", async () => {
+    const onStatus = vi.fn();
+    const client = createClient();
+    let activeAppends = 0;
+    let peakActiveAppends = 0;
+    const appendSignals: AbortSignal[] = [];
+    vi.mocked(client["request"]).mockImplementation((method, _params, options) => {
+      if (method !== "talk.session.appendAudio") {
+        return Promise.resolve({});
+      }
+      const signal = options?.signal;
+      if (!signal) {
+        return Promise.reject(new Error("missing append abort signal"));
+      }
+      appendSignals.push(signal);
+      activeAppends += 1;
+      peakActiveAppends = Math.max(peakActiveAppends, activeAppends);
+      return new Promise((_, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => {
+            activeAppends -= 1;
+            reject(new Error("append aborted"));
+          },
+          { once: true },
+        );
+      });
+    });
+    const transport = createTransport({ callbacks: { onStatus }, client });
+
+    await transport.start();
+    const samples = new Float32Array(4096);
+    for (let index = 0; index < 10_000; index += 1) {
+      pumpMicrophone(samples);
+    }
+
+    const appendCalls = requestCallsFor(client, "talk.session.appendAudio");
+    expect(appendCalls).toHaveLength(4);
+    expect(peakActiveAppends).toBe(4);
+    expect(activeAppends).toBe(4);
+    expect(new Set(appendSignals).size).toBe(1);
+    expect(
+      appendCalls.every(
+        (call) => call[2]?.signal === appendSignals[0] && call[2]?.timeoutMs === 8_000,
+      ),
+    ).toBe(true);
+
+    transport.stop();
+    transport.stop();
+    await Promise.resolve();
+
+    expect(activeAppends).toBe(0);
+    expect(appendSignals.every((signal) => signal.aborted)).toBe(true);
+    expect(requestCallsFor(client, "talk.session.close")).toHaveLength(1);
+    expect(onStatus).not.toHaveBeenCalled();
+  });
+
+  it("preserves accepted microphone frame order", async () => {
+    const client = createClient();
+    const transport = createTransport({ client });
+
+    await transport.start();
+    for (const timestamp of [10, 20, 30, 40]) {
+      audioCurrentTime = timestamp / 1_000;
+      pumpMicrophone(new Float32Array(4096));
+    }
+
+    expect(
+      requestCallsFor(client, "talk.session.appendAudio").map(
+        (call) => (call[1] as { timestamp: number }).timestamp,
+      ),
+    ).toEqual([10, 20, 30, 40]);
+    transport.stop();
+  });
+
+  it("ignores a stale append rejection after a replacement starts", async () => {
+    const oldStatus = vi.fn();
+    const oldClient = createClient();
+    let rejectOldAppend: (error: Error) => void = () => undefined;
+    vi.mocked(oldClient["request"]).mockImplementation((method) => {
+      if (method !== "talk.session.appendAudio") {
+        return Promise.resolve({});
+      }
+      return new Promise((_, reject) => {
+        rejectOldAppend = reject;
+      });
+    });
+    const oldTransport = createTransport({ callbacks: { onStatus: oldStatus }, client: oldClient });
+
+    await oldTransport.start();
+    pumpMicrophone(new Float32Array(4096));
+    oldTransport.stop();
+
+    const replacementStatus = vi.fn();
+    const replacementClient = createClient();
+    const replacement = createTransport({
+      callbacks: { onStatus: replacementStatus },
+      client: replacementClient,
+    });
+    await replacement.start();
+    pumpMicrophone(new Float32Array(4096));
+    rejectOldAppend(new Error("late stale append failure"));
+    await Promise.resolve();
+
+    expect(requestCallsFor(replacementClient, "talk.session.appendAudio")).toHaveLength(1);
+    expect(oldStatus).not.toHaveBeenCalled();
+    expect(replacementStatus).not.toHaveBeenCalled();
+    replacement.stop();
+  });
+
   it("stops microphone pumping when the relay rejects appended audio", async () => {
     const onStatus = vi.fn();
     const client = createClient();

@@ -9,6 +9,8 @@ const SIDEBAND_CONNECT_TIMEOUT_MS = 15_000;
 const SIDEBAND_CONNECT_ATTEMPTS = 5;
 const SIDEBAND_RETRY_BASE_MS = 200;
 const EARLY_FRAME_MAX = 32;
+const EARLY_FRAME_MAX_BYTES = 1024 * 1024;
+const SIDEBAND_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 
 export type OpenAIQuicksilverSocket = {
   readonly readyState: number;
@@ -47,6 +49,13 @@ type OpenAIQuicksilverConnectedSideband = {
   bufferedFrames: OpenAIQuicksilverBufferedFrame[];
   detachBuffer: () => OpenAIQuicksilverTerminalEvent | undefined;
 };
+
+function rawDataByteLength(data: RawData): number {
+  if (Array.isArray(data)) {
+    return data.reduce((total, chunk) => total + chunk.byteLength, 0);
+  }
+  return data.byteLength;
+}
 
 function waitForSocketOpen(params: {
   socket: OpenAIQuicksilverSocket;
@@ -165,12 +174,22 @@ export async function connectOpenAIQuicksilverSideband(params: {
     }
     const socket = params.createSocket(params.url, {
       headers: openAIQuicksilverAuthHeaders(params.auth, params.requestIds),
+      maxPayload: SIDEBAND_MAX_PAYLOAD_BYTES,
     });
     const bufferedFrames: OpenAIQuicksilverBufferedFrame[] = [];
+    let bufferedBytes = 0;
     const bufferFrame = (data: RawData, isBinary: boolean) => {
-      if (bufferedFrames.length < EARLY_FRAME_MAX) {
-        bufferedFrames.push({ data, isBinary });
+      const frameBytes = rawDataByteLength(data);
+      if (
+        bufferedFrames.length >= EARLY_FRAME_MAX ||
+        bufferedBytes + frameBytes > EARLY_FRAME_MAX_BYTES
+      ) {
+        socket.off("message", bufferFrame);
+        socket.close(1009, "sideband startup buffer exceeded");
+        return;
       }
+      bufferedBytes += frameBytes;
+      bufferedFrames.push({ data, isBinary });
     };
     socket.on("message", bufferFrame);
     try {

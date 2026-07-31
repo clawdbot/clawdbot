@@ -24,10 +24,11 @@ describe("cron tool creator cap", () => {
     capCronJobToolsAllowOnCreate(triggerJob, ["read", "cron"]);
     capCronJobToolsAllowOnCreate(plainJob, ["read", "cron"]);
 
+    // Legacy "cron" creator allowlists normalize to the canonical tool id.
     expect(triggerJob.payload).toEqual({
       kind: "systemEvent",
       text: "wake",
-      toolsAllow: ["read", "cron"],
+      toolsAllow: ["read", "automations"],
       toolsAllowIsDefault: true,
     });
     expect(plainJob.payload).toEqual({ kind: "systemEvent", text: "wake" });
@@ -103,7 +104,7 @@ describe("cron tool creator cap", () => {
       payload: {
         kind: "agentTurn",
         message: "updated",
-        toolsAllow: ["read", "cron"],
+        toolsAllow: ["read", "automations"],
         toolsAllowIsDefault: true,
       },
     });

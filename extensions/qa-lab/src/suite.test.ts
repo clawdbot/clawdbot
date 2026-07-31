@@ -165,6 +165,8 @@ describe("qa suite", () => {
       config: { expected: "value" },
       gateway: env.gateway,
       outputDir: "/tmp/qa-output",
+      scenarioId: "matrix-preparation-failure",
+      scenarioTitle: "matrix-preparation-failure",
       timeoutMs: 45_000,
       waitForConfigRestartSettle: expect.any(Function),
     });

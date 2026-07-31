@@ -330,22 +330,22 @@ function writeUpgradeAuthFailure(
   if (auth.rateLimited) {
     const retryAfterSeconds =
       auth.retryAfterMs && auth.retryAfterMs > 0 ? Math.ceil(auth.retryAfterMs / 1000) : undefined;
+    const body = JSON.stringify({
+      error: {
+        message: "Too many failed authentication attempts. Please try again later.",
+        type: "rate_limited",
+      },
+    });
     socket.write(
       [
         "HTTP/1.1 429 Too Many Requests",
-        retryAfterSeconds ? `Retry-After: ${retryAfterSeconds}` : undefined,
+        ...(retryAfterSeconds ? [`Retry-After: ${retryAfterSeconds}`] : []),
         "Content-Type: application/json; charset=utf-8",
+        `Content-Length: ${Buffer.byteLength(body, "utf8")}`,
         "Connection: close",
         "",
-        JSON.stringify({
-          error: {
-            message: "Too many failed authentication attempts. Please try again later.",
-            type: "rate_limited",
-          },
-        }),
-      ]
-        .filter(Boolean)
-        .join("\r\n"),
+        body,
+      ].join("\r\n"),
     );
     return;
   }
@@ -876,13 +876,14 @@ export function createGatewayHttpServer(opts: {
       if (configSnapshot.mcp?.apps?.enabled === true && isMcpAppStandalonePath(scopedRequestPath)) {
         requestStages.push({
           name: "mcp-app-standalone",
-          run: async () => {
-            const standalone = await getMcpAppStandaloneModule();
-            return await standalone.handleMcpAppStandaloneHttpRequest(req, res, {
-              sandboxPort: configSnapshot.mcp?.apps?.sandboxPort,
-              sandboxOrigin: configSnapshot.mcp?.apps?.sandboxOrigin,
-            });
-          },
+          run: async () =>
+            await runWithGatewayHttpWorkAdmission(res, async () => {
+              const standalone = await getMcpAppStandaloneModule();
+              return await standalone.handleMcpAppStandaloneHttpRequest(req, res, {
+                sandboxPort: configSnapshot.mcp?.apps?.sandboxPort,
+                sandboxOrigin: configSnapshot.mcp?.apps?.sandboxOrigin,
+              });
+            }),
         });
       }
       // Plugin routes run before the general Control UI SPA catch-all so

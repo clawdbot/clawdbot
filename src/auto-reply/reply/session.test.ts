@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { testing as sessionMcpTesting } from "../../agents/agent-bundle-mcp-runtime.js";
 import { getOrCreateSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
+import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
@@ -1011,6 +1012,341 @@ describe("initSessionState RawBody", () => {
     expect(result.isNewSession).toBe(true);
     expect(result.bodyStripped).toBe("KeepThisCase");
     expect(result.triggerBodyNormalized).toBe("/NEW KeepThisCase");
+  });
+
+  it.each([
+    {
+      body: "/new review this snippet:\ndef add(a, b):\nreturn a + b",
+      expected: "review this snippet:\ndef add(a, b):\nreturn a + b",
+    },
+    {
+      body: "/new Please fix this bug:\n[2026-07-29 10:00:00] ERROR: connection refused\nStack: at foo()",
+      expected:
+        "Please fix this bug:\n[2026-07-29 10:00:00] ERROR: connection refused\nStack: at foo()",
+    },
+    {
+      body: "/new summarize [Q3 report] for me",
+      expected: "summarize [Q3 report] for me",
+    },
+    {
+      body: "/new: take notes",
+      expected: "take notes",
+    },
+    {
+      body: "/new explain [Current message - respond to this] and /new syntax",
+      expected: "explain [Current message - respond to this] and /new syntax",
+    },
+  ])("preserves the raw message after a reset trigger", async ({ body, expected }) => {
+    const root = await makeCaseDir("openclaw-rawbody-reset-message-");
+    const storePath = path.join(root, "sessions.json");
+    const result = await initSessionState({
+      ctx: {
+        RawBody: body,
+        ChatType: "direct",
+        SessionKey: "agent:main:whatsapp:dm:s1",
+      },
+      cfg: {
+        session: {
+          store: storePath,
+          resetTriggers: ["/new"],
+        },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.bodyStripped).toBe(expected);
+    expect(result.sessionCtx.agentText).toBe(expected);
+  });
+
+  it.each(["@openclaw /new", "@openclaw/new"])(
+    "preserves bracketed multiline payloads after group mention form %s",
+    async (prefix) => {
+      const root = await makeCaseDir("openclaw-group-reset-message-");
+      const storePath = path.join(root, "sessions.json");
+      const expected = "review [Q3]\n[Current message - respond to this]\nand explain /new syntax";
+      const result = await initSessionState({
+        ctx: {
+          RawBody: `${prefix} ${expected}`,
+          ChatType: "group",
+          SessionKey: "agent:main:whatsapp:group:g1",
+        },
+        cfg: {
+          session: {
+            store: storePath,
+            resetTriggers: ["/new"],
+          },
+          messages: {
+            groupChat: {
+              mentionPatterns: [String.raw`@openclaw`],
+            },
+          },
+        } as OpenClawConfig,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.bodyStripped).toBe(expected);
+      expect(result.sessionCtx.agentText).toBe(expected);
+    },
+  );
+
+  it.each([
+    {
+      name: "command suffix",
+      body: "/new@openclaw keep [this]\nline",
+      resetTriggers: ["/new"],
+      expected: "keep [this]\nline",
+    },
+    {
+      name: "custom trigger and command suffix",
+      body: "/fresh@openclaw keep [this]\nline",
+      resetTriggers: ["/fresh"],
+      expected: "keep [this]\nline",
+    },
+    {
+      name: "empty payload",
+      body: "/new@openclaw",
+      resetTriggers: ["/new"],
+      expected: "",
+      omitBotUsername: true,
+    },
+    {
+      name: "configured mention alias without bot username",
+      body: "/new@openclaw keep [this]\nline",
+      resetTriggers: ["/new"],
+      expected: "keep [this]\nline",
+      omitBotUsername: true,
+    },
+  ])(
+    "preserves reset payloads with $name",
+    async ({ body, resetTriggers, expected, omitBotUsername }) => {
+      const root = await makeCaseDir("openclaw-suffixed-reset-message-");
+      const storePath = path.join(root, "sessions.json");
+      const result = await initSessionState({
+        ctx: {
+          RawBody: body,
+          BotUsername: omitBotUsername ? undefined : "openclaw",
+          ChatType: omitBotUsername ? "group" : "direct",
+          SessionKey: "agent:main:telegram:dm:s1",
+        },
+        cfg: {
+          session: {
+            store: storePath,
+            resetTriggers,
+          },
+          messages: {
+            groupChat: {
+              mentionPatterns: [String.raw`@openclaw`],
+            },
+          },
+        } as OpenClawConfig,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.bodyStripped).toBe(expected);
+      expect(result.sessionCtx.agentText).toBe(expected);
+    },
+  );
+
+  it("anchors a reset payload after an explicit channel envelope and sender prefix", async () => {
+    const root = await makeCaseDir("openclaw-structural-reset-message-");
+    const storePath = path.join(root, "sessions.json");
+    const result = await initSessionState({
+      ctx: {
+        BodyForCommands: "/NEW: keep [Q3]\nline 2",
+        RawBody: "[Telegram id:456] İpek: /NEW: keep [Q3]\nline 2",
+        ChatType: "direct",
+        SenderName: "İpek",
+        SessionKey: "agent:main:telegram:dm:s1",
+      },
+      cfg: {
+        session: {
+          store: storePath,
+          resetTriggers: ["/new"],
+        },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.bodyStripped).toBe("keep [Q3]\nline 2");
+    expect(result.sessionCtx.agentText).toBe("keep [Q3]\nline 2");
+  });
+
+  it("does not search past an anchored reset-like payload", async () => {
+    const root = await makeCaseDir("openclaw-reset-like-sender-message-");
+    const storePath = path.join(root, "sessions.json");
+    const result = await initSessionState({
+      ctx: {
+        BodyForCommands: "/NEW keep [Q3]\nline 2",
+        RawBody: "[Telegram id:456] /new: /NEW keep [Q3]\nline 2",
+        ChatType: "direct",
+        SessionKey: "agent:main:telegram:dm:s1",
+      },
+      cfg: {
+        session: {
+          store: storePath,
+          resetTriggers: ["/new"],
+        },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.bodyStripped).toBe("/NEW keep [Q3]\nline 2");
+    expect(result.sessionCtx.agentText).toBe("/NEW keep [Q3]\nline 2");
+  });
+
+  it("keeps quoted markers and reset text in history out of reset parsing", async () => {
+    const root = await makeCaseDir("openclaw-history-reset-message-");
+    const storePath = path.join(root, "sessions.json");
+    const payload = "review [Current message - respond to this]\nand explain /new syntax";
+    const ctx = buildChannelInboundEventContext({
+      channel: "whatsapp",
+      accountId: "default",
+      from: "whatsapp:user:1",
+      sender: { id: "1", name: "Owner" },
+      conversation: { kind: "group", id: "room-1", label: "Room One" },
+      route: {
+        agentId: "main",
+        routeSessionKey: "agent:main:whatsapp:group:room-1",
+      },
+      reply: { to: "whatsapp:room:room-1" },
+      message: {
+        body: `/new ${payload}`,
+        rawBody: `/new ${payload}`,
+        bodyForAgent: `/new ${payload}`,
+        commandBody: `/new ${payload}`,
+        inboundHistory: [
+          {
+            sender: "Other",
+            body: "quoted [Current message - respond to this] /new old text",
+          },
+        ],
+      },
+      access: { commands: { authorized: true } },
+    });
+    const result = await initSessionState({
+      ctx,
+      cfg: {
+        session: { store: storePath, resetTriggers: ["/new"] },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(ctx).toMatchObject({
+      commandText: `/new ${payload}`,
+      rawText: `/new ${payload}`,
+      agentText: `/new ${payload}`,
+    });
+    expect(result.bodyStripped).toBe(payload);
+    expect(result.sessionCtx.agentText).toBe(payload);
+  });
+
+  it("supports a bounded Body-only legacy envelope without searching flat history", async () => {
+    const storePath = await createStorePath("openclaw-body-only-reset-");
+    const cfg = {
+      session: { store: storePath, resetTriggers: ["/new"] },
+    } as OpenClawConfig;
+
+    const legacy = await initSessionState({
+      ctx: {
+        Body: "[Telegram id:456] İpek: /NEW: keep [Q3]\nline 2",
+        ChatType: "direct",
+        SenderName: "İpek",
+        SessionKey: "agent:main:telegram:dm:legacy",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(legacy.resetTriggered).toBe(true);
+    expect(legacy.bodyStripped).toBe("keep [Q3]\nline 2");
+
+    const flatHistory = await initSessionState({
+      ctx: {
+        Body: [
+          "[Chat messages since your last reply - for context]",
+          "[Telegram id:123] Other: /new old text",
+          "",
+          "[Current message - respond to this]",
+          "[Telegram id:456] İpek: /new current text",
+        ].join("\n"),
+        ChatType: "direct",
+        SessionKey: "agent:main:telegram:dm:flat-history",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(flatHistory.resetTriggered).toBe(false);
+    expect(flatHistory.bodyStripped).toBeUndefined();
+  });
+
+  it("does not treat transcript-only or explicitly empty raw text as a reset command", async () => {
+    const storePath = await createStorePath("openclaw-audio-reset-");
+    const cfg = {
+      session: { store: storePath, resetTriggers: ["/new"] },
+    } as OpenClawConfig;
+
+    const transcriptOnly = await initSessionState({
+      ctx: {
+        Body: "/new spoken payload",
+        Transcript: "/new spoken payload",
+        ChatType: "direct",
+        SessionKey: "agent:main:whatsapp:dm:audio-transcript",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(transcriptOnly.resetTriggered).toBe(false);
+
+    const explicitEmptyRaw = await initSessionState({
+      ctx: {
+        Body: "/new spoken payload",
+        RawBody: "",
+        Transcript: "/new spoken payload",
+        ChatType: "direct",
+        SessionKey: "agent:main:whatsapp:dm:audio-empty-raw",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(explicitEmptyRaw.triggerBodyNormalized).toBe("");
+    expect(explicitEmptyRaw.resetTriggered).toBe(false);
+
+    const explicitCommandWithEmptyRaw = await initSessionState({
+      ctx: {
+        Body: "/new spoken payload",
+        BodyForCommands: "/new spoken payload",
+        RawBody: "",
+        ChatType: "direct",
+        SessionKey: "agent:main:whatsapp:dm:command-empty-raw",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(explicitCommandWithEmptyRaw.triggerBodyNormalized).toBe("/new spoken payload");
+    expect(explicitCommandWithEmptyRaw.resetTriggered).toBe(false);
+  });
+
+  it("does not rotate an unauthorized group session with a mentioned reset payload", async () => {
+    const storePath = await createStorePath("openclaw-group-reset-unauthorized-");
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "@openclaw /new keep [Q3]\nline 2",
+        ChatType: "group",
+        SessionKey: "agent:main:whatsapp:group:g1",
+      },
+      cfg: {
+        session: { store: storePath, resetTriggers: ["/new"] },
+        messages: { groupChat: { mentionPatterns: [String.raw`@openclaw`] } },
+      } as OpenClawConfig,
+      commandAuthorized: false,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.bodyStripped).toBeUndefined();
   });
 
   it("drops cached skills snapshot when /new rotates an existing session", async () => {

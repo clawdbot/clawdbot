@@ -257,6 +257,20 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
       }),
     ),
   ),
+  /** Provider-owned app-guided local model setup methods. */
+  prepareOptions: Type.Optional(
+    Type.Array(
+      closedObject({
+        id: NonEmptyString,
+        /** Canonical provider identity for clients with bundled brand artwork. */
+        brandId: Type.Optional(NonEmptyString),
+        label: NonEmptyString,
+        hint: Type.Optional(Type.String()),
+        icon: Type.Optional(SetupInferenceHttpsUrl),
+        website: Type.Optional(SetupInferenceHttpsUrl),
+      }),
+    ),
+  ),
   recommendedInstalls: Type.Optional(
     Type.Array(
       closedObject({

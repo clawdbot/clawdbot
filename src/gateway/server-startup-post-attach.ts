@@ -535,6 +535,7 @@ async function prewarmConfiguredPrimaryModel(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
   log: { warn: (msg: string) => void };
+  startupTrace?: GatewayStartupTrace;
 }): Promise<void> {
   await publishConfiguredModelRuntimeSnapshots(params);
 }
@@ -543,6 +544,7 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
   log: { warn: (msg: string) => void };
+  startupTrace?: GatewayStartupTrace;
 }): Promise<void> {
   const { refreshPreparedModelRuntimeSnapshots } =
     await import("../agents/prepared-model-runtime.js");
@@ -550,6 +552,34 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
     gatewayLifecycle: true,
     catalogMode: "static",
     ...(params.workspaceDir ? { defaultWorkspaceDir: params.workspaceDir } : {}),
+    ...(params.startupTrace
+      ? {
+          onBuildStats: (stats) =>
+            params.startupTrace?.detail("sidecars.model-runtime-build", [
+              ["agentCount", stats.agentCount],
+              ["workspaceGroupCount", stats.workspaceGroupCount],
+              ["configuredFactsGroupCount", stats.configuredFactsGroupCount],
+              ["catalogSourceCount", stats.catalogSourceCount],
+              ["credentialGroupCount", stats.credentialGroupCount],
+              ["catalogGroupCount", stats.catalogGroupCount],
+              ["runtimeRegistryCount", stats.runtimeRegistryCount],
+              ["configuredRuntimeModelCount", stats.configuredRuntimeModelCount],
+              ["generatedCatalogPluginCount", stats.generatedCatalogPluginCount],
+              ["generatedCatalogReadCount", stats.generatedCatalogReadCount],
+              ["workspaceFactsMs", stats.workspaceFactsMs],
+              ["runtimePluginMs", stats.runtimePluginMs],
+              ["pluginMetadataMs", stats.pluginMetadataMs],
+              ["staticProviderCatalogMs", stats.staticProviderCatalogMs],
+              ["ambientCredentialsMs", stats.ambientCredentialsMs],
+              ["agentFactsMs", stats.agentFactsMs],
+              ["configuredProjectionMs", stats.configuredProjectionMs],
+              ["catalogSourceMs", stats.catalogSourceMs],
+              ["registryMs", stats.registryMs],
+              ["sourceConcurrencyLimitCount", stats.sourceConcurrencyLimit],
+              ["fullCatalogConcurrencyLimitCount", stats.fullCatalogConcurrencyLimit],
+            ]),
+        }
+      : {}),
   });
 }
 
@@ -558,6 +588,7 @@ async function publishStartupModelRuntime(
     cfg: OpenClawConfig;
     workspaceDir?: string;
     log: { warn: (msg: string) => void };
+    startupTrace?: GatewayStartupTrace;
   },
   prewarm: typeof prewarmConfiguredPrimaryModel = prewarmConfiguredPrimaryModel,
 ): Promise<void> {
@@ -635,6 +666,7 @@ export async function startGatewaySidecars(params: {
         cfg: params.cfg,
         workspaceDir: params.defaultWorkspaceDir,
         log: params.log,
+        startupTrace: params.startupTrace,
       },
       params.prewarmPrimaryModel,
     ),

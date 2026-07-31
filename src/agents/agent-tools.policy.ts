@@ -42,6 +42,7 @@ import {
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
 export { resolveProviderToolPolicy };
 
@@ -55,7 +56,7 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   "agents_list",
   // Status/scheduling - main agent coordinates
   "session_status",
-  "cron",
+  AUTOMATIONS_TOOL_NAME,
   // Direct session sends - subagents communicate through announce chain
   "sessions_send",
   "conversations_list",

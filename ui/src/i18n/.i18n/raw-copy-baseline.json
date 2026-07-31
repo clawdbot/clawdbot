@@ -450,6 +450,27 @@
       "text": "NIP-05"
     },
     {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-composer-skill-menu.ts",
+      "text": "Enter"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-composer-skill-menu.ts",
+      "text": "Esc"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-composer-skill-menu.ts",
+      "text": "Tab"
+    },
+    {
       "count": 2,
       "kind": "html-text",
       "name": "text",

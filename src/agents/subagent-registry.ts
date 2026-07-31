@@ -33,7 +33,11 @@ import {
 } from "./subagent-registry-helpers.js";
 import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
+import {
+  getSubagentRunsForChildSession,
+  getSubagentRunsForCollectorGroup,
+  subagentRuns,
+} from "./subagent-registry-memory.js";
 import { createSubagentRegistryPublicApi } from "./subagent-registry-public-api.js";
 import { createSubagentRegistryRestorer } from "./subagent-registry-restore.js";
 import {
@@ -79,16 +83,24 @@ let lastOrphanRecoveryScheduleAt = 0;
 const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
 
-function persistSubagentRuns() {
-  subagentRegistryDeps.persistSubagentRunsToDisk(subagentRuns);
+// Hot lifecycle callers name every changed or removed row. Zero ids is reserved
+// for explicit full-registry replacement at restore/reset boundaries.
+function persistSubagentRuns(...runIds: string[]) {
+  subagentRegistryDeps.persistSubagentRunsToDisk(
+    subagentRuns,
+    runIds.length > 0 ? runIds : undefined,
+  );
 }
 
-function persistSubagentRunsOrThrow() {
-  subagentRegistryDeps.persistSubagentRunsToDiskOrThrow(subagentRuns);
+function persistSubagentRunsOrThrow(...runIds: string[]) {
+  subagentRegistryDeps.persistSubagentRunsToDiskOrThrow(
+    subagentRuns,
+    runIds.length > 0 ? runIds : undefined,
+  );
 }
 
 function findSubagentTaskForRun(entry: SubagentRunRecord) {
-  return resolveSubagentTaskForRun(subagentRuns, entry);
+  return resolveSubagentTaskForRun(getSubagentRunsForChildSession(entry.childSessionKey), entry);
 }
 
 function hasContinuationWorkForSweepEntry(entry: SubagentRunRecord): boolean {
@@ -369,7 +381,7 @@ function resumeSubagentRun(runId: string) {
           resumedRuns,
         })
       ) {
-        persistSubagentRuns();
+        persistSubagentRuns(runId);
       }
       return;
     }
@@ -451,6 +463,8 @@ const subagentSweeper = createSubagentRegistrySweeper({
   runContextEngineSubagentEnded: contextCleanup.runContextEngineSubagentEnded,
   notifyContextEngineSubagentEnded: contextCleanup.notifyContextEngineSubagentEnded,
   retireSupersededRun: retireSupersededSubagentRun,
+  getRunsForChildSession: getSubagentRunsForChildSession,
+  getRunsForCollectorGroup: getSubagentRunsForCollectorGroup,
   warn: (message, meta) => log.warn(message, meta),
 });
 
@@ -523,7 +537,7 @@ configureSubagentRegistrySteerRuntime({
     entry.swarmLaunchIdempotencyKey = idempotencyKey;
     entry.swarmLaunchPending = true;
     try {
-      persistSubagentRunsOrThrow();
+      persistSubagentRunsOrThrow(entry.runId);
     } catch (error) {
       entry.swarmLaunchIdempotencyKey = previousIdempotencyKey;
       entry.swarmLaunchPending = previousPending;

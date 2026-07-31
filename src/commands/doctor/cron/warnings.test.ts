@@ -58,7 +58,7 @@ describe("collectCronDeliveryTargetAdvisory", () => {
       resolveAvailableChannelIds: availableChannels("slack", "telegram"),
     });
     expect(advisory).not.toBeNull();
-    expect(advisory).toContain("Cron delivery targets unavailable channels");
+    expect(advisory).toContain("Automation delivery targets unavailable channels");
     expect(advisory).toContain("1 job announces");
     expect(advisory).toContain("Channels: missing-channel=1");
     expect(advisory).toContain("Examples: report -> missing-channel");

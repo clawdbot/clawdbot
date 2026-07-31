@@ -410,6 +410,7 @@ async function loadRestartSentinelStartupTask(params: {
 
     if (resolvedTo && channel) {
       const queuedNotice = await enqueueRestartSentinelNotice({
+        cfg,
         channel,
         to: resolvedTo,
         accountId: origin?.accountId,

@@ -1,6 +1,7 @@
 // Implements TUI slash command handlers and backend action dispatch.
 import { randomUUID } from "node:crypto";
 import type { Component, OverlayHandle, SelectItem, TUI } from "@earendil-works/pi-tui";
+import type { Result } from "@openclaw/normalization-core/result";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { modelKey } from "../agents/model-ref-shared.js";
 import { shouldForwardModelCommandToServer } from "../auto-reply/commands-registry.shared.js";
@@ -74,7 +75,7 @@ type CommandHandlerContext = {
   refreshSessionInfo: () => Promise<void>;
   loadHistory: () => Promise<unknown>;
   setSession: (key: string) => Promise<void>;
-  refreshAgents: () => Promise<void>;
+  refreshAgents: () => Promise<Result<void, string>>;
   abortActive: (params?: { preferActive?: boolean }) => Promise<void>;
   setActivityStatus: (text: string) => void;
   formatSessionKey: (key: string) => string;
@@ -289,7 +290,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const openAgentSelector = async () => {
-    await refreshAgents();
+    const refreshResult = await refreshAgents();
+    if (!refreshResult.ok) {
+      tui.requestRender();
+      return;
+    }
     const selectableAgents = state.agents.filter((agent) => agent.kind !== "system");
     if (selectableAgents.length === 0) {
       chatLog.addSystem("no agents found");
@@ -920,6 +925,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       return;
     }
     const runId = randomUUID();
+    const sendSelection = captureSessionSelection();
+    const sendSessionId = state.currentSessionId;
+    const sendSessionGeneration = state.sessionGeneration ?? 0;
+    const isCurrentSendViewport = () =>
+      isCurrentSessionSelection(sendSelection) &&
+      (state.sessionGeneration ?? 0) === sendSessionGeneration &&
+      (sendSessionId === null || state.currentSessionId === sendSessionId);
     const sendScope = readTuiSessionProjectionScope(state);
     try {
       if (!isBtw) {
@@ -945,9 +957,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
       tui.requestRender();
       const sendResult = await client.sendChat({
-        sessionKey: state.currentSessionKey,
-        ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
-        sessionId: state.currentSessionId,
+        sessionKey: sendSelection.sessionKey,
+        ...(sendSelection.sessionKey === "global" ? { agentId: sendSelection.agentId } : {}),
+        sessionId: sendSessionId,
         message: text,
         thinking: opts.thinking,
         deliver: deliverDefault,
@@ -958,6 +970,23 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       const terminalAckFailure = isTerminalChatSendAckFailure(sendResult.status);
       const terminalAckSuccess = isTerminalChatSendAckSuccess(sendResult.status);
       const terminalAck = terminalAckFailure || terminalAckSuccess;
+      if (!isCurrentSendViewport()) {
+        if (isBtw) {
+          forgetLocalBtwRunId?.(runId);
+          if (acceptedRunId !== runId) {
+            forgetLocalBtwRunId?.(acceptedRunId);
+          }
+        } else {
+          forgetLocalRunId?.(runId);
+          if (acceptedRunId !== runId) {
+            forgetLocalRunId?.(acceptedRunId);
+          }
+          clearPendingSubmit(state, runId);
+          clearPendingSubmit(state, acceptedRunId);
+          consumeCompletedRunForPendingSend?.(acceptedRunId);
+        }
+        return;
+      }
       if (isBtw && terminalAck) {
         forgetLocalBtwRunId?.(runId);
         if (acceptedRunId !== runId) {
@@ -1049,12 +1078,15 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     } catch (err) {
       if (isBtw) {
         forgetLocalBtwRunId?.(runId);
-      }
-      if (!isBtw && state.activeChatRunId && state.activeChatRunId === runId) {
-        forgetLocalRunId?.(state.activeChatRunId);
-      }
-      if (!isBtw) {
+      } else {
         forgetLocalRunId?.(runId);
+      }
+      if (!isCurrentSendViewport()) {
+        clearPendingSubmit(state, runId);
+        return;
+      }
+      if (!isBtw && state.activeChatRunId === runId) {
+        forgetLocalRunId?.(state.activeChatRunId);
       }
       if (!isBtw) {
         // Only clear the failed send's ownership. A queued run may have

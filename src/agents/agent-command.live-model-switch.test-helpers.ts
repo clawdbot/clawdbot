@@ -159,7 +159,7 @@ export function buildTestAllowedModelSet({
   return {
     allowedKeys,
     allowedCatalog: allowedCatalog.filter((entry) =>
-      allowedKeys.has(`${entry.provider}/${entry.id}`),
+      isTestModelKeyAllowed(allowedKeys, `${entry.provider}/${entry.id}`),
     ),
     allowAny: false,
   };

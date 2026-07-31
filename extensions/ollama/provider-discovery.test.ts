@@ -328,7 +328,7 @@ describe("Ollama provider", () => {
     const fetchMock = vi.fn(async (input: unknown) => {
       const url = fetchInputUrl(input);
       if (url.endsWith("/api/tags")) {
-        return tagsResponse(["qwen3:32b"]);
+        return tagsResponse(["deepseek-r1:14b"]);
       }
       if (url.endsWith("/api/show")) {
         return jsonResponse({}, 500);
@@ -340,8 +340,10 @@ describe("Ollama provider", () => {
     const provider = await runOllamaCatalog({
       env: { OLLAMA_API_KEY: "test-key", VITEST: "", NODE_ENV: "development" },
     });
-    const model = provider?.models?.find((entry) => entry.id === "qwen3:32b");
+    const model = provider?.models?.find((entry) => entry.id === "deepseek-r1:14b");
     expect(model?.contextWindow).toBe(128000);
+    expect(model?.compat?.supportsTools).toBe(false);
+    expect(model?.reasoning).toBe(true);
     expectDiscoveryCallCounts(fetchMock, { tags: 1, show: 1 });
   });
 

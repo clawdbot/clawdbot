@@ -1185,6 +1185,7 @@ export async function runAgentAttempt(params: {
     swarmCollector: params.opts.swarmCollector,
     swarmOutputSchema: params.opts.swarmOutputSchema,
     forceRestartSafeTools: params.opts.forceRestartSafeTools,
+    forceCodeModeTools: params.opts.forceCodeModeTools,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowGatewaySubagentBinding: params.opts.allowGatewaySubagentBinding,

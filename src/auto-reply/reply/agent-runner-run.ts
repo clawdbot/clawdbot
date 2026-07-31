@@ -58,6 +58,7 @@ import { enqueueFollowupRun, type FollowupRun, scheduleFollowupDrain } from "./q
 import { createReplyMediaContext } from "./reply-media-paths.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { type ReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import { bindReplyOperationTyping, refreshReplyOperationTyping } from "./reply-run-typing.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import {
@@ -338,6 +339,13 @@ export async function runReplyAgent(
       if (followupRun.currentInboundAudio === true) {
         activeReplyOperation?.markAcceptedSteeredInboundAudio();
       }
+      if (activeReplyOperation) {
+        // Steering joins the existing task; its dispatch-local controller is
+        // disposable, while the task-owned controller must keep its lifetime.
+        await refreshReplyOperationTyping(activeReplyOperation, {
+          startIfIdle: typingSignals.shouldStartImmediately,
+        });
+      }
       await touchActiveSessionEntry();
       typing.cleanup();
       return undefined;
@@ -564,6 +572,7 @@ export async function runReplyAgent(
       }
     }
   }
+  bindReplyOperationTyping(replyOperation, typing);
   let runFollowupTurn = queuedRunFollowupTurn;
   let shouldDrainQueuedFollowupsAfterClear = false;
   const returnWithQueuedFollowupDrain = <T>(value: T): T => {

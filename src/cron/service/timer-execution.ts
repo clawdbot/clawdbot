@@ -1,4 +1,4 @@
-import type { HeartbeatRunResult } from "../../infra/heartbeat-wake-contract.js";
+import type { HeartbeatRunResult } from "../../infra/heartbeat-wake-contracts.js";
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   isRetryableHeartbeatBusySkipReason,

@@ -123,6 +123,7 @@ export type MockOpenAiRequestSnapshot = {
   imageInputCount: number;
   plannedToolCallId?: string;
   plannedToolName?: string;
+  plannedWireToolName?: string;
   plannedToolArgs?: Record<string, unknown>;
   toolOutputCallId?: string;
   toolOutputStructuredError?: true;
@@ -280,6 +281,7 @@ export const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa ch
 
 export type MockScenarioState = {
   anthropicThinkingErrorScenarioKeys: Set<string>;
+  subagentFanoutCompletedWorkers: Set<"alpha" | "beta">;
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;
   toolLoopReadAttempts: number;

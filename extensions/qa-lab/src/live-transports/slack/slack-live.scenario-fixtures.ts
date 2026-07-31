@@ -73,7 +73,7 @@ export function renderSlackTableAccessibleText(summaryText: string) {
 }
 
 type SlackProgressCommentaryExpectation = {
-  commentary: "absent" | "draft" | "standalone";
+  commentary: "headline" | "lane" | "standalone";
   toolProgress: "absent" | "draft" | "standalone";
 };
 
@@ -109,20 +109,32 @@ export function buildSlackProgressCommentaryRun(
         message.text.includes(commentaryMarker),
       );
       const commentaryTimestamps = new Set(commentaryMessages.map((message) => message.ts));
-      if (expectation.commentary === "absent" && commentaryTimestamps.size !== 0) {
-        throw new Error("expected commentary to stay out of Slack progress messages");
-      }
-      if (expectation.commentary !== "absent" && commentaryTimestamps.size !== 1) {
+      const [commentaryTs] = commentaryTimestamps;
+      if (commentaryTimestamps.size !== 1 || commentaryTs === undefined) {
         throw new Error(
           `expected exactly one Slack message identity containing commentary; got ${commentaryTimestamps.size}`,
         );
       }
-      const commentaryTs = [...commentaryTimestamps][0];
-      if (expectation.commentary === "draft" && commentaryTs !== finalMessage.ts) {
-        throw new Error("expected commentary on the progress draft finalized as the answer");
+      if (commentaryTs === finalMessage.ts) {
+        throw new Error("expected Slack progress commentary to stay separate from the fresh final");
       }
-      if (expectation.commentary === "standalone" && commentaryTs === finalMessage.ts) {
-        throw new Error("expected commentary only in the standalone verbose message");
+      const commentaryLaneTimestamps = new Set(
+        commentaryMessages
+          .filter((message) => message.text.includes(`💬 ${commentaryMarker}`))
+          .map((message) => message.ts),
+      );
+      if (
+        expectation.commentary === "lane" &&
+        (commentaryLaneTimestamps.size !== 1 || !commentaryLaneTimestamps.has(commentaryTs))
+      ) {
+        throw new Error("expected commentary in the Slack progress commentary lane");
+      }
+      if (expectation.commentary !== "lane" && commentaryLaneTimestamps.size !== 0) {
+        throw new Error(
+          expectation.commentary === "headline"
+            ? "expected the preamble as the Slack progress status headline"
+            : "expected commentary only in the standalone verbose message",
+        );
       }
       const toolTimestamps = new Set(
         progressMessages
@@ -130,8 +142,11 @@ export function buildSlackProgressCommentaryRun(
           .map((message) => message.ts),
       );
       if (expectation.toolProgress === "draft") {
-        if (toolTimestamps.size !== 1 || !toolTimestamps.has(finalMessage.ts)) {
-          throw new Error("expected tool progress on the progress draft finalized as the answer");
+        if (toolTimestamps.size !== 1 || toolTimestamps.has(finalMessage.ts)) {
+          throw new Error("expected tool progress on the draft separate from the fresh final");
+        }
+        if (expectation.commentary !== "standalone" && !toolTimestamps.has(commentaryTs)) {
+          throw new Error("expected commentary and tool progress on one Slack draft identity");
         }
       } else if (expectation.toolProgress === "standalone") {
         if (toolTimestamps.size === 0 || toolTimestamps.has(finalMessage.ts)) {
@@ -151,11 +166,11 @@ export function buildSlackProgressCommentaryRun(
         );
       }
       const commentaryDetails =
-        expectation.commentary === "draft"
-          ? "commentary on progress/final identity"
+        expectation.commentary === "lane"
+          ? "commentary in the progress lane"
           : expectation.commentary === "standalone"
             ? "one standalone commentary identity"
-            : "commentary absent from Slack progress";
+            : "preamble in the progress status headline";
       return `verified ${commentaryDetails}; tool progress ${expectation.toolProgress}; final identity unique`;
     },
   };

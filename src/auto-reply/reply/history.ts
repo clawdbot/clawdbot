@@ -1,8 +1,8 @@
 /** Pending chat-history windows and prompt context builders for auto-reply turns. */
 import type { HistoryEntry, HistoryMediaEntry } from "./history.types.js";
-import { CURRENT_MESSAGE_MARKER } from "./mentions.js";
 
 export const HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]";
+export const CURRENT_MESSAGE_MARKER = "[Current message - respond to this]";
 export const DEFAULT_GROUP_HISTORY_LIMIT = 50;
 
 /** Maximum number of group history keys to retain (LRU eviction when exceeded). */

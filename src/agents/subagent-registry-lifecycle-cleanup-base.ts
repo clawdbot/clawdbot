@@ -53,7 +53,7 @@ export function createSubagentRegistryLifecycleCleanupBase(
             return;
           }
           entry.cleanupHandled = false;
-          params.persist();
+          params.persist(runId);
         }
         params.resumedRuns.delete(runId);
         params.resumeSubagentRun(runId);
@@ -104,7 +104,7 @@ export function createSubagentRegistryLifecycleCleanupBase(
         }
         current.cleanupHandled = false;
         params.resumedRuns.delete(args.runId);
-        params.persist();
+        params.persist(args.runId);
       }
     }).catch((err: unknown) => {
       defaultRuntime.log(
@@ -155,7 +155,7 @@ export function createSubagentRegistryLifecycleCleanupBase(
     logAnnounceGiveUp(args.entry, args.reason);
     markRequesterSettleWakePending(args.entry);
     try {
-      params.persistOrThrow();
+      params.persistOrThrow(args.runId);
     } catch (error) {
       const mutableEntry = args.entry as unknown as Record<string, unknown>;
       for (const key of Object.keys(mutableEntry)) {
@@ -179,7 +179,7 @@ export function createSubagentRegistryLifecycleCleanupBase(
     }
     entry.cleanupHandled = true;
     cleanupGenerations.set(entry, (cleanupGenerations.get(entry) ?? 0) + 1);
-    params.persist();
+    params.persist(runId);
     return true;
   };
 
@@ -209,7 +209,7 @@ export function createSubagentRegistryLifecycleCleanupBase(
     // Cleanup can yield to attachment, mirror, or announce work. A successor
     // registered while it was suspended owns every session-scoped side effect.
     await params.retireSupersededRun(runId, entry);
-    params.persist();
+    params.persist(runId);
     return true;
   };
 

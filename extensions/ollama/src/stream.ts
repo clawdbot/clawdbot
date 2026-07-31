@@ -33,6 +33,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard, isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { estimateStringChars } from "./cjk-char-estimate.js";
 import { OLLAMA_CLOUD_BASE_URL, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { shouldWrapOllamaCompatMoonshotThinking } from "./model-behavior.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
@@ -45,7 +46,7 @@ import {
   createOllamaVisibleContentSanitizer,
   sanitizeOllamaFinalVisibleContent,
 } from "./sanitizers/visible-content.js";
-
+import { checkNdjsonRecordCap } from "./stream-ndjson-cap.js";
 const log = createSubsystemLogger("ollama-stream");
 
 export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
@@ -561,17 +562,24 @@ function buildUsageWithNoCost(params: {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  cacheTelemetry?: Usage["cacheTelemetry"];
   totalTokens?: number;
 }): Usage {
   const input = params.input ?? 0;
   const output = params.output ?? 0;
   const cacheRead = params.cacheRead ?? 0;
   const cacheWrite = params.cacheWrite ?? 0;
+  const cacheTelemetry =
+    params.cacheTelemetry ??
+    (params.cacheRead !== undefined && params.cacheWrite !== undefined
+      ? { state: "available" as const }
+      : { state: "unavailable" as const });
   return {
     input,
     output,
     cacheRead,
     cacheWrite,
+    cacheTelemetry,
     totalTokens: params.totalTokens ?? input + output,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
@@ -676,7 +684,7 @@ interface OllamaChatResponse {
 function safeJsonLength(value: unknown): number {
   try {
     const serialized = JSON.stringify(value);
-    return typeof serialized === "string" ? serialized.length : 0;
+    return typeof serialized === "string" ? estimateStringChars(serialized) : 0;
   } catch {
     return 0;
   }
@@ -707,10 +715,10 @@ function estimateOllamaPromptTokens(params: {
 }): number {
   let chars = 0;
   for (const message of params.messages) {
-    chars += message.content.length;
+    chars += estimateStringChars(message.content);
     chars += safeJsonLength(message.images);
     chars += safeJsonLength(message.tool_calls);
-    chars += message.tool_name?.length ?? 0;
+    chars += message.tool_name ? estimateStringChars(message.tool_name) : 0;
   }
   chars += safeJsonLength(params.tools);
   return estimateTokensFromChars(chars);
@@ -722,9 +730,9 @@ function estimateOllamaCompletionTokens(
 ): number {
   const chars =
     extraOutputChars +
-    response.message.content.length +
-    (response.message.thinking?.length ?? 0) +
-    (response.message.reasoning?.length ?? 0) +
+    estimateStringChars(response.message.content) +
+    (response.message.thinking ? estimateStringChars(response.message.thinking) : 0) +
+    (response.message.reasoning ? estimateStringChars(response.message.reasoning) : 0) +
     safeJsonLength(response.message.tool_calls);
   return estimateTokensFromChars(chars);
 }
@@ -1082,13 +1090,14 @@ export async function* parseNdjsonStream(
 ): AsyncGenerator<OllamaChatResponse> {
   const decoder = new TextDecoder();
   let buffer = "";
-
+  let pendingRecordBytes = 0;
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) {
         break;
       }
+      pendingRecordBytes = checkNdjsonRecordCap(value, pendingRecordBytes);
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
@@ -1177,6 +1186,9 @@ function createRawOllamaStreamFn(
         if (typeof options?.maxTokens === "number") {
           ollamaOptions.num_predict = options.maxTokens;
         }
+        if (options?.stop && options.stop.length > 0) {
+          ollamaOptions.stop = options.stop;
+        }
         normalizeOllamaGreedySamplingOptions(ollamaOptions);
 
         // Structured-output grammars constrain the same token stream as tool
@@ -1202,7 +1214,8 @@ function createRawOllamaStreamFn(
           options: ollamaOptions,
           requestParams,
         });
-        options?.onPayload?.(body, model);
+        const replacement = await options?.onPayload?.(body, model);
+        const requestBody = replacement === undefined ? body : replacement;
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
           ...defaultHeaders,
@@ -1220,7 +1233,7 @@ function createRawOllamaStreamFn(
           init: {
             method: "POST",
             headers,
-            body: JSON.stringify(body),
+            body: JSON.stringify(requestBody),
           },
           policy: ssrfPolicy,
           ...(options?.signal ? { signal: options.signal } : {}),
@@ -1466,7 +1479,10 @@ function createRawOllamaStreamFn(
 
           const usageFallback = {
             input: estimateOllamaPromptTokens({ messages: ollamaMessages, tools: ollamaTools }),
-            output: estimateOllamaCompletionTokens(finalResponse, suppressedThinking.length),
+            output: estimateOllamaCompletionTokens(
+              finalResponse,
+              estimateStringChars(suppressedThinking),
+            ),
           };
           const assistantMessage = buildAssistantMessage(finalResponse, modelInfo, usageFallback, {
             ...toolCallNameOptions,

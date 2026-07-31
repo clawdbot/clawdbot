@@ -727,7 +727,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     sectionOrder: [],
   };
   let inFlight: Promise<void> | null = null;
-  let queuedRefresh: SessionRefreshOptions | null = null;
+  let queuedExplicitRefresh: SessionRefreshOptions | null = null;
+  let eventRefreshQueued = false;
   let eventRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let eventRefreshDeadline: number | null = null;
   let canonicalListRevision = 0;
@@ -975,19 +976,6 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
   };
 
-  const drainRefreshQueue = async (options: SessionRefreshOptions) => {
-    const epoch = connectionEpoch;
-    let next: SessionRefreshOptions | null = options;
-    while (next) {
-      await load(next);
-      if (disposed || connectionEpoch !== epoch) {
-        return;
-      }
-      next = queuedRefresh;
-      queuedRefresh = null;
-    }
-  };
-
   const clearEventRefreshTimer = () => {
     if (eventRefreshTimer !== null) {
       globalThis.clearTimeout(eventRefreshTimer);
@@ -996,24 +984,42 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     eventRefreshDeadline = null;
   };
 
-  const refresh = (options: SessionRefreshOptions = {}) => {
-    if (gateway.snapshot.phase !== "connected" || !gateway.snapshot.client || disposed) {
-      return Promise.resolve();
-    }
-    if (inFlight) {
-      // An explicit queued refresh subsumes any older event invalidation.
-      clearEventRefreshTimer();
-      queuedRefresh = options;
-      return inFlight;
-    }
-    const hasListOverrides = Object.entries(options).some(
-      ([key, value]) => key !== "force" && key !== "backgroundHydrate" && value !== undefined,
-    );
-    if (state.result && !options.force && !hasListOverrides) {
-      return Promise.resolve();
-    }
-    // An explicit refresh that will issue a request must run now.
+  const absorbPendingEventRefresh = () => {
     clearEventRefreshTimer();
+    eventRefreshQueued = false;
+  };
+
+  const takeNextQueuedRefresh = (): SessionRefreshOptions | null => {
+    const explicitRefresh = queuedExplicitRefresh;
+    queuedExplicitRefresh = null;
+    if (explicitRefresh) {
+      // A replacement that has not started yet observes every earlier event.
+      // Appends still need a canonical replacement after their requested page.
+      if (explicitRefresh.append !== true) {
+        absorbPendingEventRefresh();
+      }
+      return explicitRefresh;
+    }
+    if (!eventRefreshQueued) {
+      return null;
+    }
+    eventRefreshQueued = false;
+    return { ...lastListOptions, force: true };
+  };
+
+  const drainRefreshQueue = async (options: SessionRefreshOptions) => {
+    const epoch = connectionEpoch;
+    let next: SessionRefreshOptions | null = options;
+    while (next) {
+      await load(next);
+      if (disposed || connectionEpoch !== epoch) {
+        return;
+      }
+      next = takeNextQueuedRefresh();
+    }
+  };
+
+  const startRefresh = (options: SessionRefreshOptions) => {
     const request = drainRefreshQueue(options).finally(() => {
       if (inFlight === request) {
         inFlight = null;
@@ -1023,12 +1029,45 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return request;
   };
 
+  const refresh = (options: SessionRefreshOptions = {}) => {
+    if (gateway.snapshot.phase !== "connected" || !gateway.snapshot.client || disposed) {
+      return Promise.resolve();
+    }
+    if (inFlight) {
+      // Keep event invalidation pending until the queued request actually
+      // starts: a later explicit call can still replace this request.
+      queuedExplicitRefresh = options;
+      return inFlight;
+    }
+    const hasListOverrides = Object.entries(options).some(
+      ([key, value]) => key !== "force" && key !== "backgroundHydrate" && value !== undefined,
+    );
+    if (state.result && !options.force && !hasListOverrides) {
+      return Promise.resolve();
+    }
+    if (options.append !== true) {
+      absorbPendingEventRefresh();
+    }
+    return startRefresh(options);
+  };
+
+  const refreshFromEvent = () => {
+    if (gateway.snapshot.phase !== "connected" || !gateway.snapshot.client || disposed) {
+      return Promise.resolve();
+    }
+    if (inFlight) {
+      eventRefreshQueued = true;
+      return inFlight;
+    }
+    return startRefresh({ ...lastListOptions, force: true });
+  };
+
   const flushEventRefresh = () => {
     if (eventRefreshTimer === null) {
       return;
     }
     clearEventRefreshTimer();
-    void refresh({ ...lastListOptions, force: true });
+    void refreshFromEvent();
   };
 
   const scheduleEventRefresh = () => {
@@ -1044,7 +1083,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     eventRefreshTimer = globalThis.setTimeout(() => {
       eventRefreshTimer = null;
       eventRefreshDeadline = null;
-      void refresh({ ...lastListOptions, force: true });
+      void refreshFromEvent();
     }, delay);
   };
 
@@ -1818,7 +1857,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       invalidateGroupsLoad();
       swarmActivity.clear();
       inFlight = null;
-      queuedRefresh = null;
+      queuedExplicitRefresh = null;
+      eventRefreshQueued = false;
       rollbackPendingModelPatches();
       preparedWorkSessionKeys.clear();
       pullRequestSummaries.clear();
@@ -2010,7 +2050,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       invalidateGroupsLoad();
       connectionConnected = false;
       inFlight = null;
-      queuedRefresh = null;
+      queuedExplicitRefresh = null;
+      eventRefreshQueued = false;
       subscribedClient = null;
       pendingModelPatches.clear();
       preparedWorkSessionKeys.clear();

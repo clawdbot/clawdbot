@@ -26,7 +26,7 @@ import {
   resolveHeartbeatSession,
   resolveIsolatedHeartbeatSessionKey,
 } from "./heartbeat-runner-session.js";
-import type { HeartbeatScheduledTask, HeartbeatWakeSource } from "./heartbeat-wake-contract.js";
+import type { HeartbeatScheduledTask, HeartbeatWakeSource } from "./heartbeat-wake-contracts.js";
 import {
   resolveHeartbeatWakePayloadFlags,
   type HeartbeatWakePayloadFlags,
