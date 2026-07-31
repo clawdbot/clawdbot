@@ -569,7 +569,9 @@ describe("createGatewayPluginRequestHandler", () => {
         ).rejects.toMatchObject({ name: "TypeError" });
       } finally {
         server.closeAllConnections();
-        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
       }
     },
   );
