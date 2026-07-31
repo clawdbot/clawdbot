@@ -9,7 +9,7 @@ import {
   type ReplyPayload,
 } from "../reply-payload.js";
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
-import { executeDispatch } from "./dispatch-from-config.execute.js";
+import type { executeDispatch } from "./dispatch-from-config.execute.js";
 import {
   createFinalDispatchPayloadDedupeKey,
   formatSuppressedReplyPayloadForLog,

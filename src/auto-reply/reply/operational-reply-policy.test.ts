@@ -286,6 +286,40 @@ describe("operational reply policy", () => {
     expect(duplicateAfterSuccess).toMatchObject({ intentionalSilence: true });
   });
 
+  it("keeps local once dedupe when durable lease ownership changes during delivery", async () => {
+    const { sessionKey, storePath } = await createSessionStoreFixture();
+    const cfg = onceConfig(storePath);
+    const first = await applyOncePolicy({
+      cfg,
+      sessionKey,
+      storePath,
+      text: "slow backend notice",
+    });
+    const entry = await readSessionStoreEntry(storePath, sessionKey);
+    const reservation = entry.operationalReplyPendingOnceKeys?.[0];
+    if (!reservation) {
+      throw new Error("expected pending once reservation");
+    }
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      {
+        ...entry,
+        operationalReplyPendingOnceKeys: [{ ...reservation, owner: "other-process" }],
+      },
+    );
+
+    await markOperationalReplyPolicyDelivered(first, true);
+
+    await expect(
+      applyOncePolicy({
+        cfg,
+        sessionKey,
+        storePath,
+        text: "slow backend notice",
+      }),
+    ).resolves.toMatchObject({ intentionalSilence: true, shouldDeliver: false });
+  });
+
   it("scopes sessionless once notices to their source conversation", async () => {
     const payload = markReplyPayloadForSourceSuppressionDelivery({
       text: "shared provider error",

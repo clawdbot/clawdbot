@@ -480,6 +480,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     ) {
       return false;
     }
+    if (!hasOutboundReplyContent(visiblePayload, { trimText: true })) {
+      return false;
+    }
     // Redirect policy writes to another session. Do not evaluate it after the
     // ACP run has already been canceled.
     if (isOperationalReply && params.abortSignal?.aborted) {
@@ -509,11 +512,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       if (params.suppressUserDelivery && !allowOperationalSuppressionBypass) {
         return false;
       }
-      if (hasOutboundReplyContent(visiblePayload, { trimText: true })) {
-        await startReplyLifecycleOnce();
-      } else {
-        return false;
-      }
+      await startReplyLifecycleOnce();
 
       const ttsPayload = await maybeApplyAcpTts({
         payload: visiblePayload,

@@ -2,7 +2,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { markCommandReplyForDelivery } from "../reply-payload.js";
+import {
+  markCommandReplyForDelivery,
+  markOperationalReplyPayloadForSourceSuppressionDelivery,
+} from "../reply-payload.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
@@ -1163,5 +1166,32 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
         payload: expect.objectContaining({ text: "compacted" }),
       }),
     );
+  });
+
+  it("drops empty operational payloads before redirect policy side effects", async () => {
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: {
+        ...createAcpTestConfig(),
+        messages: {
+          operationalReplies: { policy: "redirect" },
+        },
+      },
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      shouldRouteToOriginating: true,
+      originatingChannel: "visiblechat",
+      originatingTo: "channel:thread-1",
+    });
+    const emptyNotice = markOperationalReplyPayloadForSourceSuppressionDelivery({
+      text: "   ",
+    });
+
+    await expect(coordinator.deliver("final", emptyNotice, { skipTts: true })).resolves.toBe(false);
+    expect(deliveryMocks.routeReply).not.toHaveBeenCalled();
   });
 });

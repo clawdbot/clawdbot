@@ -448,7 +448,9 @@ async function finalizeOperationalReplyOnceReservation(
     if (finalized) {
       markOperationalReplyOnceKeyDeliveredInMemory(reservation.key);
     } else {
-      releaseOperationalReplyOnceKeyInMemory(reservation.key);
+      // Delivery succeeded even if another process expired or replaced the
+      // durable lease before finalization. Preserve local dedupe.
+      markOperationalReplyOnceKeyDeliveredInMemory(reservation.key);
     }
   } catch (error) {
     // Delivery already succeeded. Keep process-local dedupe even when the
