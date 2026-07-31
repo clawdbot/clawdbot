@@ -8,8 +8,6 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { formatErrorMessage } from "./errors.js";
-import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -21,6 +19,7 @@ import {
   writeRestartSentinelRowSync,
   type RestartSentinelEnvelope,
 } from "./restart-sentinel-store.js";
+import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import type { LegacyRestartSentinelDetection } from "./state-migrations.restart-sentinel.types.js";
 import {
   legacyMigrationSourceOrClaimMayExist,
@@ -35,8 +34,6 @@ const LEGACY_RESTART_SENTINEL_FILENAME = "restart-sentinel.json";
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 const MAX_LEGACY_RESTART_SENTINEL_BYTES = 4 * 1024 * 1024;
 const MIGRATION_KIND = "legacy-restart-sentinel-json";
-const MIGRATION_LOCK_TIMEOUT_MS = 250;
-const MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 type RestartSentinelMigrationDatabase = Pick<
@@ -430,66 +427,25 @@ export async function migrateLegacyRestartSentinel(params: {
   if (!detected?.hasLegacy) {
     return { changes: [], warnings: [] };
   }
-  const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
-  let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
-  try {
-    lock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: MIGRATION_LOCK_POLL_INTERVAL_MS,
-      role: "sqlite-maintenance",
-      timeoutMs: MIGRATION_LOCK_TIMEOUT_MS,
-    });
-  } catch (error) {
-    const detail =
-      error instanceof GatewayLockError
-        ? "the Gateway or another SQLite maintenance command owns this state directory"
-        : String(error);
-    return {
-      changes: [],
-      warnings: [
-        `Failed migrating the legacy restart sentinel: ${detail}. Stop the Gateway, then run \`openclaw doctor --fix\` again.`,
-      ],
-    };
-  }
-  if (!lock) {
-    return {
-      changes: [],
-      warnings: [
-        "Failed migrating the legacy restart sentinel: exclusive state ownership unavailable.",
-      ],
-    };
-  }
-
-  let result: MigrationMessages = { changes: [], warnings: [] };
-  let releaseError: unknown;
-  try {
-    try {
+  return await withLegacyMigrationStateLock({
+    stateDir: params.stateDir,
+    env: params.env,
+    label: "the legacy restart sentinel",
+    releaseLabel: "Restart sentinel",
+    errorLabel: "Failed reading the legacy restart sentinel",
+    retryGuidance: "Stop the Gateway, then run `openclaw doctor --fix` again.",
+    run: async (env) => {
       const stateRoot = await root(params.stateDir, {
         hardlinks: "reject",
         maxBytes: MAX_LEGACY_RESTART_SENTINEL_BYTES,
         symlinks: "reject",
       });
-      result = await migrateWithExclusiveStateOwnership({
+      return await migrateWithExclusiveStateOwnership({
         ...params,
         detected,
         env,
         stateRoot,
       });
-    } catch (error) {
-      result.warnings.push(`Failed reading the legacy restart sentinel: ${String(error)}`);
-    }
-  } finally {
-    try {
-      await lock.release();
-    } catch (error) {
-      releaseError = error;
-    }
-  }
-  if (releaseError) {
-    result.warnings.push(
-      `Restart sentinel migration lock release failed: ${formatErrorMessage(releaseError)}`,
-    );
-  }
-  return result;
+    },
+  });
 }

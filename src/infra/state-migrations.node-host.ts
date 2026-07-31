@@ -11,13 +11,12 @@ import {
 } from "../node-host/config.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { formatErrorMessage } from "./errors.js";
-import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
   legacyMigrationSourceContentMatches as contentSnapshotsMatch,
   legacyMigrationSourceOrClaimMayExist,
@@ -29,8 +28,6 @@ import {
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_NODE_HOST_MAX_BYTES = 64 * 1024;
-const MIGRATION_LOCK_TIMEOUT_MS = 250;
-const MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 const CONFIG_KEYS = new Set(["version", "nodeId", "token", "displayName", "gateway"]);
 const GATEWAY_KEYS = new Set(["host", "port", "tls", "tlsFingerprint", "contextPath"]);
 
@@ -487,63 +484,24 @@ export async function migrateLegacyNodeHostConfig(params: {
   if (!params.detected.hasLegacy) {
     return { changes: [], warnings: [] };
   }
-  const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
-  let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
-  try {
-    lock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: MIGRATION_LOCK_POLL_INTERVAL_MS,
-      role: "sqlite-maintenance",
-      timeoutMs: MIGRATION_LOCK_TIMEOUT_MS,
-    });
-  } catch (error) {
-    const detail =
-      error instanceof GatewayLockError
-        ? "the Gateway or another SQLite maintenance command owns this state directory"
-        : String(error);
-    return {
-      changes: [],
-      warnings: [
-        `Failed migrating legacy node-host state: ${detail}. Stop the Gateway and node host, then run \`openclaw doctor --fix\` again.`,
-      ],
-    };
-  }
-  if (!lock) {
-    return {
-      changes: [],
-      warnings: ["Failed migrating legacy node-host state: exclusive state ownership unavailable."],
-    };
-  }
-
-  let result: MigrationMessages = { changes: [], warnings: [] };
-  let releaseError: unknown;
-  try {
-    try {
+  return await withLegacyMigrationStateLock({
+    stateDir: params.stateDir,
+    env: params.env,
+    label: "legacy node-host state",
+    releaseLabel: "Node-host",
+    errorLabel: "Failed reading legacy node-host state",
+    retryGuidance: "Stop the Gateway and node host, then run `openclaw doctor --fix` again.",
+    run: async (env) => {
       const stateRoot = await root(params.stateDir, {
         hardlinks: "reject",
         maxBytes: LEGACY_NODE_HOST_MAX_BYTES,
         symlinks: "reject",
       });
-      result = await migrateWithExclusiveStateOwnership({
+      return await migrateWithExclusiveStateOwnership({
         ...params,
         env,
         stateRoot,
       });
-    } catch (error) {
-      result.warnings.push(`Failed reading legacy node-host state: ${String(error)}`);
-    }
-  } finally {
-    try {
-      await lock.release();
-    } catch (error) {
-      releaseError = error;
-    }
-  }
-  if (releaseError) {
-    result.warnings.push(
-      `Node-host migration lock release failed: ${formatErrorMessage(releaseError)}`,
-    );
-  }
-  return result;
+    },
+  });
 }
