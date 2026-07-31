@@ -87,16 +87,16 @@ const OPENAI_GPT_56_SOL_COST = {
   cacheWrite: 6.25,
 } as const;
 const OPENAI_GPT_56_TERRA_COST = {
-  input: 2,
-  output: 12,
-  cacheRead: 0.2,
-  cacheWrite: 2.5,
+  input: 2.5,
+  output: 15,
+  cacheRead: 0.25,
+  cacheWrite: 3.125,
 } as const;
 const OPENAI_GPT_56_LUNA_COST = {
-  input: 0.2,
-  output: 1.2,
-  cacheRead: 0.02,
-  cacheWrite: 0.25,
+  input: 1,
+  output: 6,
+  cacheRead: 0.1,
+  cacheWrite: 1.25,
 } as const;
 const OPENAI_GPT_55_COST = { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 } as const;
 const OPENAI_GPT_55_PRO_COST = { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 } as const;

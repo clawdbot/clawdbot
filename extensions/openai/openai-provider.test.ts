@@ -1154,12 +1154,12 @@ describe("buildOpenAIProvider", () => {
     },
     {
       id: "gpt-5.6-terra",
-      cost: { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 2.5 },
+      cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 },
       thinkingLevelMap: { off: "none", xhigh: "xhigh", max: "max" },
     },
     {
       id: "gpt-5.6-luna",
-      cost: { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 },
+      cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
       thinkingLevelMap: { off: "none", xhigh: "xhigh", max: "max" },
     },
   ])("resolves $id locally with direct API metadata", ({ id, cost, thinkingLevelMap }) => {
