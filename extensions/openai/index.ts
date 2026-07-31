@@ -20,6 +20,18 @@ import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
 import { buildOpenAIVideoGenerationProvider } from "./video-generation-provider.js";
 
+// The GPT-Live browser broker is process-wide shared state. Reuse one broker
+// across repeated full OpenAI plugin registrations so reservation and offer
+// state stay together; only disable tears it down and allows the next full
+// registration to create a fresh one (#116525).
+type QuicksilverSession = ReturnType<typeof createOpenAIQuicksilverBrowserSessionBroker>;
+let sharedQuicksilverSession: QuicksilverSession | undefined;
+
+/** Test-only: drop the shared broker so repeated-registration tests start clean. */
+export function __resetSharedQuicksilverSessionForTests(): void {
+  sharedQuicksilverSession = undefined;
+}
+
 export default definePluginEntry({
   id: "openai",
   name: "OpenAI Provider",
@@ -27,10 +39,11 @@ export default definePluginEntry({
   register(api) {
     const quicksilverSession =
       api.registrationMode === "full"
-        ? createOpenAIQuicksilverBrowserSessionBroker({
+        ? (sharedQuicksilverSession ??
+          (sharedQuicksilverSession = createOpenAIQuicksilverBrowserSessionBroker({
             getConfig: () => api.runtime.config.current() as OpenClawConfig,
             logger: api.logger,
-          })
+          })))
         : undefined;
     if (quicksilverSession) {
       api.registerHttpRoute({
@@ -49,7 +62,9 @@ export default definePluginEntry({
           // restart), and cleanup() permanently stops the broker for the whole
           // process, so session cleanup must not trigger it (#116525).
           if (ctx.reason === "disable") {
-            return quicksilverSession.cleanup();
+            const session = sharedQuicksilverSession;
+            sharedQuicksilverSession = undefined;
+            return session?.cleanup();
           }
           return undefined;
         },

@@ -13,7 +13,7 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
-import plugin from "./index.js";
+import plugin, { __resetSharedQuicksilverSessionForTests } from "./index.js";
 
 const OPENAI_FRIENDLY_PROMPT_OVERLAY = GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY;
 const OPENAI_GPT5_BEHAVIOR_CONTRACT = GPT5_BEHAVIOR_CONTRACT;
@@ -168,6 +168,7 @@ function expectNoRequestUrl(mocked: unknown, url: string): void {
 describe("openai plugin", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetSharedQuicksilverSessionForTests();
   });
 
   afterEach(() => {
@@ -238,6 +239,30 @@ describe("openai plugin", () => {
     // Plugin disable tears the broker down.
     cleanup({ reason: "disable" });
     expect(quicksilverBrokerMocks.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses one GPT-Live broker across repeated full registrations", () => {
+    quicksilverBrokerMocks.create.mockClear();
+    const register = () =>
+      plugin.register(
+        createTestPluginApi({
+          id: "openai",
+          name: "OpenAI Provider",
+          source: "test",
+          config: {},
+          runtime: { config: { current: vi.fn(() => ({})) } } as never,
+          registerRuntimeLifecycle: vi.fn(),
+        }),
+      );
+
+    // First full registration creates the shared broker.
+    register();
+    expect(quicksilverBrokerMocks.create).toHaveBeenCalledTimes(1);
+
+    // A second full registration reuses it instead of splitting a new broker
+    // (which would leave reservation and offer-handler state out of sync).
+    register();
+    expect(quicksilverBrokerMocks.create).toHaveBeenCalledTimes(1);
   });
 
   it("generates PNG buffers from the OpenAI Images API", async () => {
