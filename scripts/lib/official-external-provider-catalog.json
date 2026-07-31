@@ -1589,6 +1589,138 @@
       }
     },
     {
+      "name": "@openclaw/xiaomi-provider",
+      "description": "OpenClaw Xiaomi provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "xiaomi",
+          "label": "Xiaomi"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "xiaomi-native",
+            "hosts": [
+              "api.xiaomimimo.com",
+              "token-plan-ams.xiaomimimo.com",
+              "token-plan-cn.xiaomimimo.com",
+              "token-plan-sgp.xiaomimimo.com"
+            ]
+          }
+        ],
+        "providers": [
+          {
+            "id": "xiaomi",
+            "name": "Xiaomi",
+            "docs": "/providers/xiaomi",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "XIAOMI_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "xiaomi-api-key",
+                "choiceLabel": "Xiaomi API key (Pay-as-you-go)",
+                "choiceHint": "Endpoint: api.xiaomimimo.com/v1",
+                "groupId": "xiaomi",
+                "groupLabel": "Xiaomi",
+                "groupHint": "Pay-as-you-go / Token Plan",
+                "optionKey": "xiaomiApiKey",
+                "cliFlag": "--xiaomi-api-key",
+                "cliOption": "--xiaomi-api-key <key>",
+                "cliDescription": "Xiaomi MiMo pay-as-you-go API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          },
+          {
+            "id": "xiaomi-token-plan",
+            "name": "Xiaomi Token Plan",
+            "docs": "/providers/xiaomi",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "XIAOMI_TOKEN_PLAN_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "token-plan-ams",
+                "choiceId": "xiaomi-token-plan-ams",
+                "choiceLabel": "Xiaomi Token Plan (Europe)",
+                "choiceHint": "Endpoint preset: token-plan-ams.xiaomimimo.com/v1",
+                "groupId": "xiaomi",
+                "groupLabel": "Xiaomi",
+                "groupHint": "Pay-as-you-go / Token Plan",
+                "optionKey": "xiaomiTokenPlanApiKey",
+                "cliFlag": "--xiaomi-token-plan-api-key",
+                "cliOption": "--xiaomi-token-plan-api-key <key>",
+                "cliDescription": "Xiaomi MiMo Token Plan API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              },
+              {
+                "method": "token-plan-cn",
+                "choiceId": "xiaomi-token-plan-cn",
+                "choiceLabel": "Xiaomi Token Plan (China)",
+                "choiceHint": "Endpoint preset: token-plan-cn.xiaomimimo.com/v1",
+                "groupId": "xiaomi",
+                "groupLabel": "Xiaomi",
+                "groupHint": "Pay-as-you-go / Token Plan",
+                "optionKey": "xiaomiTokenPlanApiKey",
+                "cliFlag": "--xiaomi-token-plan-api-key",
+                "cliOption": "--xiaomi-token-plan-api-key <key>",
+                "cliDescription": "Xiaomi MiMo Token Plan API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              },
+              {
+                "method": "token-plan-sgp",
+                "choiceId": "xiaomi-token-plan-sgp",
+                "choiceLabel": "Xiaomi Token Plan (Singapore)",
+                "choiceHint": "Endpoint preset: token-plan-sgp.xiaomimimo.com/v1",
+                "groupId": "xiaomi",
+                "groupLabel": "Xiaomi",
+                "groupHint": "Pay-as-you-go / Token Plan",
+                "optionKey": "xiaomiTokenPlanApiKey",
+                "cliFlag": "--xiaomi-token-plan-api-key",
+                "cliOption": "--xiaomi-token-plan-api-key <key>",
+                "cliDescription": "Xiaomi MiMo Token Plan API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "speechProviders": [
+            "xiaomi"
+          ],
+          "usageProviders": [
+            "xiaomi",
+            "xiaomi-token-plan"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/xiaomi-provider",
+          "npmSpec": "@openclaw/xiaomi-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/zai-provider",
       "description": "OpenClaw Z.AI provider plugin",
       "source": "official",

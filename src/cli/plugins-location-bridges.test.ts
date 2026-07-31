@@ -171,6 +171,7 @@ describe("listPersistedBundledPluginLocationBridges", () => {
     ["volcengine", "@openclaw/volcengine-provider", true],
     ["voyage", "@openclaw/voyage-provider", true],
     ["vydra", "@openclaw/vydra-provider", true],
+    ["xiaomi", "@openclaw/xiaomi-provider", true],
     ["zoom-meetings", "@openclaw/zoom-meetings", true],
   ] as const)(
     "externalizes the shipped bundled %s plugin using official install metadata",
