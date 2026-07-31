@@ -1192,11 +1192,16 @@ describe("startGatewayPostAttachRuntime", () => {
   it("uses current config when agent runtime plugin prewarm runs", async () => {
     const startupConfig = { marker: "startup" } as never;
     const currentConfig = { marker: "current" } as never;
+    let releaseGatewayReady!: () => void;
+    const gatewayReady = new Promise<void>((resolve) => {
+      releaseGatewayReady = resolve;
+    });
 
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams({
         gatewayPluginConfigAtStart: startupConfig,
       }),
+      waitForPostReadyWork: () => gatewayReady,
       providerAuthPrewarm: { enabled: false },
       agentRuntimePluginPrewarm: {
         enabled: true,
@@ -1205,6 +1210,12 @@ describe("startGatewayPostAttachRuntime", () => {
       },
     });
 
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(hoisted.ensureRuntimePluginsLoaded).not.toHaveBeenCalled();
+
+    releaseGatewayReady();
     await waitForGatewayTestState(() => {
       expect(hoisted.ensureRuntimePluginsLoaded).toHaveBeenCalledWith({
         config: currentConfig,

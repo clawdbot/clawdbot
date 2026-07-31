@@ -115,6 +115,53 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     sidecar.stop();
   });
 
+  it("waits for gateway readiness before warming handler data", async () => {
+    vi.useFakeTimers();
+    let releaseGatewayReady!: () => void;
+    const gatewayReady = new Promise<void>((resolve) => {
+      releaseGatewayReady = resolve;
+    });
+    const load = vi.fn(async () => {});
+
+    const sidecar = scheduleGatewayHandlerPrewarm({
+      cfgAtStart: {} as never,
+      log: { warn: vi.fn() },
+      items: [{ name: "sessions", load }],
+      waitForPostReadyWork: () => gatewayReady,
+    });
+
+    await vi.advanceTimersToNextTimerAsync();
+    expect(load).not.toHaveBeenCalled();
+
+    releaseGatewayReady();
+    await vi.runAllTimersAsync();
+    expect(load).toHaveBeenCalledOnce();
+    sidecar.stop();
+  });
+
+  it("stays stopped when readiness arrives after shutdown", async () => {
+    vi.useFakeTimers();
+    let releaseGatewayReady!: () => void;
+    const gatewayReady = new Promise<void>((resolve) => {
+      releaseGatewayReady = resolve;
+    });
+    const load = vi.fn(async () => {});
+
+    const sidecar = scheduleGatewayHandlerPrewarm({
+      cfgAtStart: {} as never,
+      log: { warn: vi.fn() },
+      items: [{ name: "sessions", load }],
+      waitForPostReadyWork: () => gatewayReady,
+    });
+
+    await vi.advanceTimersToNextTimerAsync();
+    sidecar.stop();
+    releaseGatewayReady();
+    await vi.runAllTimersAsync();
+
+    expect(load).not.toHaveBeenCalled();
+  });
+
   it("logs failures and continues without changing later request behavior", async () => {
     vi.useFakeTimers();
     const warn = vi.fn();

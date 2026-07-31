@@ -77,12 +77,14 @@ export function scheduleGatewayHandlerPrewarm(params: {
   startupTrace?: StartupTrace;
   log: { warn: (msg: string) => void };
   items?: readonly GatewayHandlerPrewarmItem[];
+  waitForPostReadyWork?: () => Promise<void>;
 }): GatewayHandlerPrewarmHandle {
   // Frequent updater restarts make cold dashboard data the remaining slow tier.
   // Keep cheap session reads first, process-stable plugin data second, and provider catalogs last.
   const items = params.items ?? dashboardDataPrewarmItems(params.cfgAtStart);
   let stopped = false;
   let nextIndex = 0;
+  let currentItemName = "unknown";
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const scheduleNext = () => {
@@ -91,23 +93,27 @@ export function scheduleGatewayHandlerPrewarm(params: {
     }
     timer = setTimeout(() => {
       timer = undefined;
-      if (stopped) {
-        return;
-      }
-      const item = items[nextIndex++];
-      if (!item) {
-        return;
-      }
-      const load = () => item.load();
-      void runWithGatewayIndependentRootWorkAdmission(() =>
-        params.startupTrace
-          ? params.startupTrace.measure(`post-ready.gateway-data.${item.name}`, load)
-          : load(),
-      )
+      void (async () => {
+        await params.waitForPostReadyWork?.();
+        if (stopped) {
+          return;
+        }
+        const item = items[nextIndex++];
+        if (!item) {
+          return;
+        }
+        currentItemName = item.name;
+        const load = () => item.load();
+        await runWithGatewayIndependentRootWorkAdmission(() =>
+          params.startupTrace
+            ? params.startupTrace.measure(`post-ready.gateway-data.${item.name}`, load)
+            : load(),
+        );
+      })()
         .catch((err: unknown) => {
           // Prewarm only improves latency; readiness and request-time loaders remain authoritative.
           params.log.warn(
-            `post-ready gateway data prewarm failed for ${item.name}: ${String(err)}`,
+            `post-ready gateway data prewarm failed for ${currentItemName}: ${String(err)}`,
           );
         })
         .finally(scheduleNext);
