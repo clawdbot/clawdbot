@@ -138,6 +138,18 @@ export type SubagentCompletionDeliveryState = {
     | "waiting_for_requester_turn";
 };
 
+export type SpawnFailureCleanupState = {
+  status: "pending" | "exhausted" | "deleted" | "terminal_registered";
+  reason: string;
+  recordedAt: number;
+  attempts: number;
+  maxAttempts: number;
+  nextAttemptAt?: number;
+  lastAttemptAt?: number;
+  lastError?: string | null;
+  sessionDeletion: "indeterminate";
+};
+
 /** Durable outbox state for the top-level requester settle wake. */
 export type RequesterSettleWakeState = {
   status: "pending" | "dispatching";
@@ -213,6 +225,8 @@ export type SubagentRunRecord = {
   terminalOwner?: "interrupted-recovery";
   /** Present only while a current-version killed run awaits bounded reconciliation. */
   killReconciliation?: SubagentKillReconciliationState;
+  /** Fail-closed holder for a child whose failed spawn could not prove session deletion. */
+  spawnFailureCleanup?: SpawnFailureCleanupState;
   /** Durable requester-stop policy until silent completion cleanup finishes. */
   suppressCompletionDelivery?: boolean;
   expectsCompletionMessage?: boolean;

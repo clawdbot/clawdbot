@@ -12,6 +12,11 @@ import {
 import { listAgentIds } from "./agent-scope-config.js";
 import { resolveSpawnAdmission, resolveSpawnMode } from "./spawn-plan.js";
 import { listSwarmRunsForGroup } from "./subagent-registry.js";
+import {
+  countPendingSubagentSpawnAdmissionSlots,
+  reserveSubagentSpawnAdmissionSlot,
+  type SubagentSpawnAdmissionSlot,
+} from "./subagent-spawn-admission.js";
 import { resolveSubagentContextMode } from "./subagent-spawn-context.js";
 import type {
   SpawnSubagentContext,
@@ -55,6 +60,7 @@ type ResolvedSubagentSpawnRequest = {
   admission: {
     resolve: () => ReturnType<typeof resolveSpawnAdmission>;
     initial: ReturnType<typeof resolveSpawnAdmission> & { ok: true };
+    slot?: SubagentSpawnAdmissionSlot;
     childDepth: number;
     maxSpawnDepth: number;
   };
@@ -210,14 +216,12 @@ export function resolveSubagentSpawnRequest(
   const preallocatedRunId = normalizeOptionalString(ctx.preallocatedRunId);
   const pluginOwnerId = normalizeOptionalString(ctx.pluginOwnerId);
   const reservedSubagentClaimToken = normalizeOptionalString(ctx.reservedSubagentClaimToken);
-  const reservedSubagentAdditionalActiveChildren = ctx.reservedSubagentAdditionalActiveChildren;
   const hasReservedSpawnField = Boolean(
     authorizedTargetAgentId ||
     preallocatedChildSessionKey ||
     preallocatedRunId ||
     pluginOwnerId ||
-    reservedSubagentClaimToken ||
-    reservedSubagentAdditionalActiveChildren !== undefined,
+    reservedSubagentClaimToken,
   );
   if (
     hasReservedSpawnField &&
@@ -230,16 +234,6 @@ export function resolveSubagentSpawnRequest(
     return rejectSubagentSpawnRequest(
       "error",
       "reserved subagent spawn requires target, child, run, plugin owner, and Gateway claim identities",
-    );
-  }
-  if (
-    reservedSubagentAdditionalActiveChildren !== undefined &&
-    (!Number.isSafeInteger(reservedSubagentAdditionalActiveChildren) ||
-      reservedSubagentAdditionalActiveChildren < 0)
-  ) {
-    return rejectSubagentSpawnRequest(
-      "error",
-      "reserved subagent additional active children must be a non-negative safe integer",
     );
   }
   if (authorizedTargetAgentId) {
@@ -285,6 +279,7 @@ export function resolveSubagentSpawnRequest(
   const swarmSchedulerGroupKey = swarmGroupId
     ? JSON.stringify([requesterInternalKey, swarmGroupId])
     : undefined;
+  let admissionSlot: SubagentSpawnAdmissionSlot | undefined;
   const resolveAdmission = () => {
     const collectorRuns = params.collect
       ? swarmGroupId
@@ -307,9 +302,12 @@ export function resolveSubagentSpawnRequest(
       requestedAgentId: effectiveRequestedAgentId,
       configuredAgentIds,
       authorizedTargetAgentId,
-      ...(reservedSubagentAdditionalActiveChildren !== undefined
-        ? { additionalActiveChildren: reservedSubagentAdditionalActiveChildren }
-        : {}),
+      additionalActiveChildren:
+        params.collect === true
+          ? 0
+          : countPendingSubagentSpawnAdmissionSlots(requesterInternalKey, {
+              exclude: admissionSlot,
+            }),
     });
   };
   const admission = resolveAdmission();
@@ -340,6 +338,13 @@ export function resolveSubagentSpawnRequest(
           .digest("hex")
           .slice(0, 32)}`
       : crypto.randomUUID());
+  if (params.collect !== true) {
+    admissionSlot = reserveSubagentSpawnAdmissionSlot({
+      requesterSessionKey: requesterInternalKey,
+      runId: childIdem,
+      ...(preallocatedChildSessionKey ? { childSessionKey: preallocatedChildSessionKey } : {}),
+    });
+  }
   let reservationPending = false;
   if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
     const groupRuns = listSwarmRunsForGroup(swarmGroupId, requesterInternalKey);
@@ -389,6 +394,7 @@ export function resolveSubagentSpawnRequest(
       admission: {
         resolve: resolveAdmission,
         initial: admission,
+        ...(admissionSlot ? { slot: admissionSlot } : {}),
         childDepth,
         maxSpawnDepth,
       },

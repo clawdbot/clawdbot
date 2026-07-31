@@ -150,7 +150,10 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resolveAgentWorkspaceDir?: (cfg: Record<string, unknown>, agentId: string) => string;
   resolveSubagentSpawnModelSelection?: () => string | undefined;
   getSubagentDepthFromSessionStore?: (sessionKey: string, opts?: unknown) => number;
-  countActiveRunsForSession?: (sessionKey: string) => number;
+  countActiveRunsForSession?: (sessionKey: string, options?: unknown) => number;
+  hasSubagentRunIdentity?: (runId: string) => boolean;
+  getLatestSubagentRunByChildSessionKey?: (childSessionKey: string) => unknown;
+  quarantineFailedSubagentSpawnMock?: MockFn;
   listSwarmRunsForGroup?: (groupId: string) => unknown[];
   resolveSandboxRuntimeStatus?: (params: {
     cfg?: Record<string, unknown>;
@@ -390,7 +393,11 @@ export async function loadSubagentSpawnModuleForTest(params: {
   vi.doMock("./subagent-registry.js", () => ({
     completeCollectorLaunchCleanup: params.completeCollectorLaunchCleanupMock ?? vi.fn(),
     countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
+    getLatestSubagentRunByChildSessionKey:
+      params.getLatestSubagentRunByChildSessionKey ?? (() => null),
+    hasSubagentRunIdentity: params.hasSubagentRunIdentity ?? (() => false),
     listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
+    quarantineFailedSubagentSpawn: params.quarantineFailedSubagentSpawnMock ?? vi.fn(),
     registerSubagentRun:
       params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined),
     resetSubagentRegistryForTests,

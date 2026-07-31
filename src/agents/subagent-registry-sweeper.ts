@@ -148,6 +148,123 @@ export function createSubagentRegistrySweeper(params: {
     return typeof entry.endedAt === "number" && isDeliverySuspended(entry);
   }
 
+  function markSpawnFailureCleanupDeleted(
+    runId: string,
+    entry: SubagentRunRecord,
+    now: number,
+  ): void {
+    if (entry.spawnFailureCleanup) {
+      entry.spawnFailureCleanup.status = "deleted";
+      entry.spawnFailureCleanup.lastAttemptAt = now;
+      entry.spawnFailureCleanup.nextAttemptAt = undefined;
+      entry.spawnFailureCleanup.lastError = null;
+    }
+    entry.endedAt = now;
+    entry.outcome = {
+      status: "error",
+      error: "subagent spawn failed before startup and cleanup deleted the provisional session",
+    };
+    entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
+    entry.cleanupHandled = true;
+    entry.cleanupCompletedAt = now;
+    entry.deleteCleanupDispatchedAt ??= now;
+    entry.execution = {
+      ...(entry.execution ?? { status: "interrupted" as const }),
+      status: "terminal",
+      endedAt: now,
+      outcome: entry.outcome,
+    };
+    resumedRuns.delete(runId);
+    params.clearPendingLifecycleError(runId);
+    params.clearPendingLifecycleTimeout(runId);
+    emitSessionLifecycleEvent({
+      sessionKey: entry.childSessionKey,
+      reason: "delete",
+      parentSessionKey: entry.controllerSessionKey ?? entry.requesterSessionKey,
+    });
+  }
+
+  async function reconcileSpawnFailureCleanup(
+    runId: string,
+    entry: SubagentRunRecord,
+    now: number,
+    storeCache: SubagentSessionStoreCache,
+  ): Promise<boolean> {
+    const cleanup = entry.spawnFailureCleanup;
+    if (!cleanup || typeof entry.cleanupCompletedAt === "number") {
+      return false;
+    }
+    let sessionEntry;
+    try {
+      sessionEntry = loadSubagentSessionEntry({
+        childSessionKey: entry.childSessionKey,
+        storeCache,
+      });
+    } catch (error) {
+      params.warn("failed to inspect quarantined failed-spawn child session", {
+        runId,
+        childSessionKey: entry.childSessionKey,
+        error,
+      });
+      sessionEntry = undefined;
+    }
+    const completion = resolveCompletionFromSessionEntry(sessionEntry, now, {
+      notBeforeMs: entry.createdAt,
+    });
+    if (completion) {
+      cleanup.status = "terminal_registered";
+      cleanup.lastAttemptAt = now;
+      cleanup.nextAttemptAt = undefined;
+      await params.completeSubagentRunWithRecovery(
+        {
+          runId,
+          startedAt: completion.startedAt,
+          endedAt: completion.endedAt,
+          outcome: completion.outcome,
+          reason: completion.reason,
+          sendFarewell: false,
+          accountId: entry.requesterOrigin?.accountId,
+          triggerCleanup: true,
+          suppressSessionEffects: true,
+        },
+        "sweeper-spawn-failure-cleanup-session-completion",
+      );
+      return true;
+    }
+    if (!sessionEntry && cleanup.attempts >= cleanup.maxAttempts) {
+      markSpawnFailureCleanupDeleted(runId, entry, now);
+      return true;
+    }
+    if (cleanup.status === "exhausted" || cleanup.status === "deleted") {
+      return false;
+    }
+    if (typeof cleanup.nextAttemptAt === "number" && cleanup.nextAttemptAt > now) {
+      return false;
+    }
+    cleanup.attempts += 1;
+    cleanup.lastAttemptAt = now;
+    try {
+      await deleteSession(entry.childSessionKey);
+      markSpawnFailureCleanupDeleted(runId, entry, now);
+      return true;
+    } catch (error) {
+      cleanup.lastError = error instanceof Error ? error.message : String(error);
+      if (cleanup.attempts >= cleanup.maxAttempts) {
+        cleanup.status = "exhausted";
+        cleanup.nextAttemptAt = undefined;
+        params.warn("failed-spawn cleanup exhausted; retaining active quarantine", {
+          runId,
+          childSessionKey: entry.childSessionKey,
+          attempts: cleanup.attempts,
+          error,
+        });
+      } else {
+        cleanup.nextAttemptAt = now + (isFastTestRuntimeEnv() ? 1 : 1_000);
+      }
+      return true;
+    }
+  }
+
   function resolveSuspendedDeliveryExpiryMs(entry: SubagentRunRecord): number {
     const requester = entry.requesterSessionKey;
     return requester.includes(":cron:")
@@ -257,6 +374,12 @@ export function createSubagentRegistrySweeper(params: {
         });
       }
       for (const [runId, entry] of runs.entries()) {
+        if (entry.spawnFailureCleanup && typeof entry.cleanupCompletedAt !== "number") {
+          if (await reconcileSpawnFailureCleanup(runId, entry, now, storeCache)) {
+            mutated = true;
+          }
+          continue;
+        }
         if (entry.requesterSettleWake) {
           params.resumeRequesterSettleWake(runId, entry);
           continue;

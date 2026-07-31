@@ -283,6 +283,19 @@ describe("subagent registry seam flow", () => {
   let mod: RegistryHarness;
   const findRequesterRun = (runId: string) =>
     mod.listSubagentRunsForRequester("agent:main:main").find((entry) => entry.runId === runId);
+  const quarantineFailedSpawn = (overrides: Partial<SubagentRunRecord> = {}) =>
+    mod.quarantineFailedSubagentSpawn({
+      runId: overrides.runId ?? "failed-spawn-run",
+      childSessionKey: overrides.childSessionKey ?? "agent:worker:subagent:failed-spawn-child",
+      controllerSessionKey: overrides.controllerSessionKey ?? "agent:main:main",
+      requesterSessionKey: overrides.requesterSessionKey ?? "agent:main:main",
+      requesterDisplayKey: overrides.requesterDisplayKey ?? "main",
+      requesterAgentId: overrides.requesterAgentId ?? "main",
+      task: overrides.task ?? "failed spawn",
+      cleanup: overrides.cleanup ?? "delete",
+      agentId: "worker",
+      reason: "ambiguous dispatch failure",
+    });
   const getLifecycleHandler = () => {
     const handler = mocks.onAgentEvent.mock.calls.at(-1)?.[0] as unknown as
       | ((event: {
@@ -407,6 +420,63 @@ describe("subagent registry seam flow", () => {
     expect(mocks.getSubagentRunsSnapshotForChildSession).toHaveBeenCalledWith(
       expect.any(Map),
       childSessionKey,
+    );
+  });
+
+  it("keeps exhausted failed-spawn cleanup quarantined and counted active", async () => {
+    const childSessionKey = "agent:worker:subagent:failed-spawn-exhausted-child";
+    const runId = "failed-spawn-exhausted-run";
+    mocks.loadSessionStore.mockReturnValue(createSessionStore({}, childSessionKey));
+    mockGatewayMethods(mocks.callGateway, {
+      "sessions.delete": new Error("delete failed"),
+    });
+
+    expect(quarantineFailedSpawn({ runId, childSessionKey })).toBe("recorded");
+    expect(mod.countActiveRunsForSession("agent:main:main", { collect: false })).toBe(1);
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await mod.testing.sweepOnceForTests();
+      vi.advanceTimersByTime(1);
+    }
+
+    const entry = expectDefined(mod.getSubagentRunByRunId(runId), "quarantined run");
+    expect(entry.spawnFailureCleanup).toMatchObject({
+      status: "exhausted",
+      attempts: 3,
+      sessionDeletion: "indeterminate",
+    });
+    expect(entry.endedAt).toBeUndefined();
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+    expect(mod.countActiveRunsForSession("agent:main:main", { collect: false })).toBe(1);
+    expect(mocks.callGateway).toHaveBeenCalledTimes(3);
+  });
+
+  it("releases failed-spawn quarantine only after deletion proof", async () => {
+    const childSessionKey = "agent:worker:subagent:failed-spawn-deleted-child";
+    const runId = "failed-spawn-deleted-run";
+    mocks.loadSessionStore.mockReturnValue(createSessionStore({}, childSessionKey));
+    mockGatewayMethods(mocks.callGateway, {
+      "sessions.delete": { ok: true },
+    });
+
+    expect(quarantineFailedSpawn({ runId, childSessionKey })).toBe("recorded");
+    await mod.testing.sweepOnceForTests();
+
+    const entry = expectDefined(mod.getSubagentRunByRunId(runId), "deleted quarantine run");
+    expect(entry.spawnFailureCleanup).toMatchObject({
+      status: "deleted",
+      attempts: 1,
+      sessionDeletion: "indeterminate",
+    });
+    expect(entry.endedAt).toBeTypeOf("number");
+    expect(entry.cleanupCompletedAt).toBe(entry.endedAt);
+    expect(mod.countActiveRunsForSession("agent:main:main", { collect: false })).toBe(0);
+    expect(mocks.emitSessionLifecycleEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: childSessionKey,
+        reason: "delete",
+        parentSessionKey: "agent:main:main",
+      }),
     );
   });
 
