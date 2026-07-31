@@ -61,6 +61,15 @@ export async function collectMcpPaginatedItems<TInput, TOutput = TInput>(
   const timeoutError = new Error(`${params.label} timed out after ${timeoutMs}ms`);
   const deadlineTimer = setTimeout(() => deadlineController.abort(timeoutError), timeoutMs);
   deadlineTimer.unref?.();
+  const assertActive = () => {
+    if (signal.aborted) {
+      throw abortError(signal, params.label);
+    }
+    if (Date.now() >= deadlineAtMs) {
+      deadlineController.abort(timeoutError);
+      throw timeoutError;
+    }
+  };
 
   let onAbort: (() => void) | undefined;
   const aborted = new Promise<never>((_resolve, reject) => {
@@ -75,7 +84,7 @@ export async function collectMcpPaginatedItems<TInput, TOutput = TInput>(
 
   try {
     for (let pageNumber = 0; pageNumber < maxPages; pageNumber += 1) {
-      signal.throwIfAborted();
+      assertActive();
       const remainingTimeoutMs = clampPositiveTimerTimeoutMs(deadlineAtMs - Date.now());
       if (remainingTimeoutMs === undefined) {
         throw timeoutError;
@@ -84,6 +93,7 @@ export async function collectMcpPaginatedItems<TInput, TOutput = TInput>(
         params.loadPage({ cursor, timeoutMs: remainingTimeoutMs, signal }),
         aborted,
       ]);
+      assertActive();
       const measured = boundedJsonUtf8Bytes(
         page.serializedValue ?? { items: page.items, nextCursor: page.nextCursor },
         maxBytes - collectedBytes,
@@ -104,7 +114,10 @@ export async function collectMcpPaginatedItems<TInput, TOutput = TInput>(
         items.push(mapped);
       }
 
+      // Synchronous page projection can consume the deadline or abort its caller.
+      // Never accept either a terminal page or its continuation after ownership ends.
       const nextCursor = page.nextCursor;
+      assertActive();
       if (nextCursor === undefined) {
         return items;
       }

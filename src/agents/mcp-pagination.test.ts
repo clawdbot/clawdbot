@@ -112,6 +112,54 @@ describe("collectMcpPaginatedItems", () => {
     expect(requestTimeouts).toEqual([50, 20]);
   });
 
+  it("rejects a final page when synchronous processing crosses the deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    let mappedItems = 0;
+    const listing = collectMcpPaginatedItems({
+      label: "MCP resource listing",
+      itemLabel: "resources",
+      ...limits,
+      timeoutMs: 50,
+      loadPage: async () => ({ items: ["resource"] }),
+      mapItem: (item) => {
+        mappedItems += 1;
+        vi.setSystemTime(1_050);
+        return item;
+      },
+    });
+
+    await expect(listing).rejects.toThrow("timed out after 50ms");
+    expect(mappedItems).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("rejects when a page loader synchronously aborts its caller before resolving", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    let mappedItems = 0;
+    const listing = collectMcpPaginatedItems({
+      label: "MCP prompt listing",
+      itemLabel: "prompts",
+      ...limits,
+      signal: controller.signal,
+      loadPage: async () => {
+        controller.abort("runtime disposed");
+        return { items: ["must-not-return"] };
+      },
+      mapItem: (item) => {
+        mappedItems += 1;
+        return item;
+      },
+    });
+
+    const failure = await listing.catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).toMatchObject({ message: "MCP prompt listing aborted" });
+    expect(mappedItems).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("aborts an in-flight page through the caller signal", async () => {
     const controller = new AbortController();
     const listing = collectMcpPaginatedItems({
