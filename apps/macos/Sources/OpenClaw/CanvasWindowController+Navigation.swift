@@ -73,6 +73,7 @@ extension CanvasWindowController {
     func webView(_ webView: WKWebView, didCommit _: WKNavigation?) {
         if let url = webView.url {
             self.updateA2UITrustForMainFrameNavigation(to: url)
+            self.updateFilePollingForCommittedNavigation(to: url)
         }
     }
 

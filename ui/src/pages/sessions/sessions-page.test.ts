@@ -25,6 +25,7 @@ type TestSessionsPage = HTMLElement & {
   result: SessionsListResult | null;
   error: string | null;
   loading: boolean;
+  statusFilter: "active" | "archived" | "all";
   selectedKeys: Set<string>;
   sessionMenu: { key: string; x: number; y: number } | null;
   sessionMenuTrigger: HTMLElement | null;
@@ -40,6 +41,7 @@ type TestSessionsPage = HTMLElement & {
   loadCheckpoint: (sessionKey: string) => Promise<void>;
   deleteSelected: () => Promise<void>;
   deleteSessionFromMenu: (row: GatewaySessionRow) => Promise<void>;
+  deleteAllArchived: () => Promise<void>;
   stopCloudWorker: (row: GatewaySessionRow) => Promise<void>;
   rememberCustomGroup: (name: string) => Promise<void>;
   openSessionMenu: (
@@ -47,7 +49,8 @@ type TestSessionsPage = HTMLElement & {
     position: { x: number; y: number },
     trigger: HTMLElement | null,
   ) => void;
-  patchSession: (key: string, patch: { archived?: boolean }) => Promise<void>;
+  patchSession: (key: string, patch: { archived?: boolean; pinned?: boolean }) => Promise<unknown>;
+  archiveSessionWithUndo: (row: GatewaySessionRow) => Promise<void>;
   forkSession: (key: string) => Promise<void>;
   branchCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
   restoreCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
@@ -62,6 +65,7 @@ type MutableGateway = {
 
 type TestSessionMenu = HTMLElement & {
   forkDisabled: boolean;
+  workboard: { captured: boolean; busy: boolean } | null;
   readonly updateComplete: Promise<boolean>;
 };
 
@@ -78,8 +82,9 @@ function deferred<T>() {
 function createGateway(client: GatewayBrowserClient): MutableGateway {
   let snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -177,6 +182,7 @@ async function createPage(context: ApplicationContext): Promise<TestSessionsPage
 async function createRenderedPage(
   context: ApplicationContext,
   result: SessionsListResult,
+  statusFilter: "active" | "archived" | "all" = "active",
 ): Promise<TestSessionsPage> {
   const page = document.createElement("openclaw-sessions-page") as TestSessionsPage;
   page.context = context;
@@ -186,7 +192,7 @@ async function createRenderedPage(
     result,
     error: null,
     expandedSessionKey: null,
-    showArchived: false,
+    statusFilter,
   };
   document.body.append(page);
   await page.updateComplete;
@@ -199,6 +205,200 @@ afterEach(() => {
 });
 
 describe("sessions page lifecycle", () => {
+  it("switches between Active and Archived with the route parameter", async () => {
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const context = createContext(gateway, createSessions());
+    const page = await createRenderedPage(context, {
+      ts: Date.now(),
+      path: "",
+      count: 0,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [],
+    });
+
+    const docsLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
+    expect(docsLink?.textContent?.trim()).toBe("Learn more");
+    expect(docsLink?.href).toBe("https://docs.openclaw.ai/concepts/session");
+
+    const archived = [
+      ...page.querySelectorAll<HTMLElement & { checked: boolean }>(
+        ".sessions-view-segment wa-radio",
+      ),
+    ].find((radio) => radio.textContent?.trim() === "Archived");
+    const group = archived?.closest<HTMLElement & { value: string }>("wa-radio-group");
+    if (group) {
+      group.value = "archived";
+      group.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    await page.updateComplete;
+
+    expect(page.statusFilter).toBe("archived");
+    expect(context.navigate).toHaveBeenCalledWith("sessions", { search: "?status=archived" });
+    expect(
+      [...page.querySelectorAll<HTMLElement & { checked: boolean }>("wa-radio")].find(
+        (radio) => radio.textContent?.trim() === "Archived",
+      )?.checked,
+    ).toBe(true);
+  });
+
+  it("re-enumerates all archived sessions before bulk deletion", async () => {
+    // The rendered result holds one archived row; enumeration must find both.
+    const archivedKeys = ["agent:main:old-1", "agent:main:old-2"];
+    const sessions = createSessions({
+      list: vi.fn(async () => ({
+        count: 2,
+        sessions: archivedKeys.map((key) => ({ key, archived: true })),
+      })) as unknown as SessionCapability["list"],
+      deleteMany: vi.fn(async () => ({
+        deleted: archivedKeys,
+        errors: [],
+        preservedWorktrees: [],
+      })),
+    });
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const page = await createRenderedPage(
+      createContext(gateway, sessions),
+      {
+        count: 2,
+        sessions: [
+          { key: archivedKeys[0], archived: true },
+          { key: "agent:main:active", archived: false },
+        ],
+      } as SessionsListResult,
+      "archived",
+    );
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    page.querySelector<HTMLButtonElement>(".settings-section__actions .danger")?.click();
+    await vi.waitFor(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
+
+    expect(sessions.list).toHaveBeenCalledWith(
+      expect.objectContaining({ archivedFilter: "archived", limit: 1000 }),
+    );
+    expect(confirm).toHaveBeenCalledWith("Delete 2 archived threads and their transcripts?");
+    expect(sessions.deleteMany).toHaveBeenCalledWith([
+      {
+        key: archivedKeys[0],
+        agentId: undefined,
+        deleteTranscript: true,
+        archivedOnly: true,
+      },
+      {
+        key: archivedKeys[1],
+        agentId: undefined,
+        deleteTranscript: true,
+        archivedOnly: true,
+      },
+    ]);
+  });
+
+  it("aborts delete-all when an enumeration page fails", async () => {
+    const sessions = createSessions({
+      list: vi.fn(async () => null) as unknown as SessionCapability["list"],
+      deleteMany: vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] })),
+    });
+    sessions.state.error = "list failed";
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const page = await createRenderedPage(
+      createContext(gateway, sessions),
+      {
+        count: 1,
+        sessions: [{ key: "agent:main:old-1", archived: true }],
+      } as SessionsListResult,
+      "archived",
+    );
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    page.querySelector<HTMLButtonElement>(".settings-section__actions .danger")?.click();
+    await vi.waitFor(() => expect(sessions.list).toHaveBeenCalledOnce());
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(sessions.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it("paginates the archived enumeration until the listing is exhausted", async () => {
+    const pageOne = ["agent:main:old-1", "agent:main:old-2"];
+    const pageTwo = ["agent:main:old-3"];
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce({
+        count: 3,
+        sessions: pageOne.map((key) => ({ key, archived: true })),
+        hasMore: true,
+        nextOffset: 2,
+      })
+      .mockResolvedValueOnce({
+        count: 3,
+        sessions: pageTwo.map((key) => ({ key, archived: true })),
+        hasMore: false,
+        nextOffset: null,
+      });
+    const sessions = createSessions({
+      list: list as unknown as SessionCapability["list"],
+      deleteMany: vi.fn(async () => ({
+        deleted: [...pageOne, ...pageTwo],
+        errors: [],
+        preservedWorktrees: [],
+      })),
+    });
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const page = await createRenderedPage(
+      createContext(gateway, sessions),
+      {
+        count: 1,
+        sessions: [{ key: pageOne[0], archived: true }],
+      } as SessionsListResult,
+      "archived",
+    );
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    page.querySelector<HTMLButtonElement>(".settings-section__actions .danger")?.click();
+    await vi.waitFor(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
+
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(list).toHaveBeenNthCalledWith(2, expect.objectContaining({ offset: 2 }));
+    expect(confirm).toHaveBeenCalledWith("Delete 3 archived threads and their transcripts?");
+    expect(sessions.deleteMany).toHaveBeenCalledWith(
+      [...pageOne, ...pageTwo].map((key) => ({
+        key,
+        agentId: undefined,
+        deleteTranscript: true,
+        archivedOnly: true,
+      })),
+    );
+  });
+
+  it("offers undo after archiving from the Sessions page", async () => {
+    const key = "agent:main:pinned";
+    const patch = vi.fn(async () => ({
+      ok: true as const,
+      path: "",
+      key,
+      entry: { sessionId: key },
+    }));
+    const sessions = createSessions({ patch });
+    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    mutableGateway.emit({ sessionKey: key });
+    const page = await createPage(createContext(mutableGateway.gateway, sessions));
+    const toast = document.createElement("openclaw-toast-host");
+    document.body.append(toast);
+    await toast.updateComplete;
+
+    await page.archiveSessionWithUndo({ key, pinned: true } as GatewaySessionRow);
+    await toast.updateComplete;
+    toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
+    await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+    expect(mutableGateway.setSessionKey).not.toHaveBeenCalled();
+
+    expect(patch).toHaveBeenNthCalledWith(1, key, { archived: true }, { agentId: undefined });
+    expect(patch).toHaveBeenNthCalledWith(
+      2,
+      key,
+      { archived: false, pinned: true },
+      { agentId: undefined },
+    );
+  });
+
   it("submits one trimmed bounded transcript search and adopts its status", async () => {
     const response = deferred<SessionsSearchResult>();
     const request = vi.fn(() => response.promise);
@@ -419,12 +619,87 @@ describe("sessions page lifecycle", () => {
     expect(menu.querySelector<HTMLButtonElement>('[data-shortcut="f"]')?.disabled).toBe(true);
   });
 
+  it.each([
+    {
+      name: "offers capture when only an archived Workboard card matches",
+      metadata: { archivedAt: 10 },
+      captured: false,
+    },
+    {
+      name: "recognizes an active Workboard card",
+      metadata: undefined,
+      captured: true,
+    },
+  ])("$name", async ({ metadata, captured }) => {
+    const row = { key: "agent:main:captured", kind: "direct" } as GatewaySessionRow;
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const context = createContext(gateway, createSessions());
+    context.runtimeConfig.state.configSnapshot = {
+      config: { plugins: { entries: { workboard: { enabled: true } } } },
+    };
+    context.workboard.state.cards = [
+      {
+        id: "captured-card",
+        title: "Captured session",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 2,
+        sessionKey: row.key,
+        metadata,
+      },
+    ];
+    const result = { count: 1, sessions: [row] } as SessionsListResult;
+    const page = await createRenderedPage(context, result);
+
+    page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
+    await page.updateComplete;
+
+    const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu");
+    if (!menu) {
+      throw new Error("Expected sessions page menu");
+    }
+    await menu.updateComplete;
+
+    expect(menu.workboard).toEqual({ captured, busy: false });
+    expect(menu.querySelector('[value="workboard"]')?.textContent).toContain(
+      captured ? "Open Workboard card" : "Add to Workboard",
+    );
+  });
+
+  it("disables the Workboard action for every concurrently captured session", async () => {
+    const row = { key: "agent:main:second-capture", kind: "direct" } as GatewaySessionRow;
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const context = createContext(gateway, createSessions());
+    context.runtimeConfig.state.configSnapshot = {
+      config: { plugins: { entries: { workboard: { enabled: true } } } },
+    };
+    context.workboard.state.capturingSessionKeys.add("agent:main:first-capture");
+    context.workboard.state.capturingSessionKeys.add(row.key);
+    const result = { count: 1, sessions: [row] } as SessionsListResult;
+    const page = await createRenderedPage(context, result);
+
+    page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
+    await page.updateComplete;
+
+    const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu");
+    if (!menu) {
+      throw new Error("Expected sessions page menu");
+    }
+    await menu.updateComplete;
+
+    expect(menu.workboard).toEqual({ captured: false, busy: true });
+    expect(menu.querySelector('[value="workboard"]')?.hasAttribute("disabled")).toBe(true);
+  });
+
   it("rejects preloaded data after a same-client reconnect and loads the current epoch", async () => {
     const client = {} as GatewayBrowserClient;
     const mutableGateway = createGateway(client);
     const preloadedSnapshot = mutableGateway.gateway.snapshot;
-    mutableGateway.emit({ connected: false, client });
-    mutableGateway.emit({ connected: true, client });
+    mutableGateway.emit({ phase: "reconnecting", client });
+    mutableGateway.emit({ phase: "connected", client });
     const freshResult = { count: 1, sessions: [{ key: "fresh" }] } as SessionsListResult;
     const sessions = createSessions({ list: vi.fn(async () => freshResult) });
     const context = createContext(mutableGateway.gateway, sessions);
@@ -437,7 +712,7 @@ describe("sessions page lifecycle", () => {
       result: { count: 1, sessions: [{ key: "stale" }] } as SessionsListResult,
       error: null,
       expandedSessionKey: null,
-      showArchived: false,
+      statusFilter: "active",
     };
 
     document.body.append(page);
@@ -506,7 +781,7 @@ describe("sessions page lifecycle", () => {
     page.checkpointBusyKey = "busy";
     page.sessionMutationPending = true;
 
-    mutableGateway.emit({ connected: false, client });
+    mutableGateway.emit({ phase: "reconnecting", client });
 
     expect(page.checkpointLoadingKey).toBeNull();
     expect(page.checkpointBusyKey).toBeNull();
@@ -528,7 +803,7 @@ describe("sessions page lifecycle", () => {
       trigger,
     );
 
-    mutableGateway.emit({ connected: false, client });
+    mutableGateway.emit({ phase: "reconnecting", client });
 
     expect(page.sessionMenu).toBeNull();
     expect(page.sessionMenuTrigger).toBeNull();
@@ -674,7 +949,7 @@ describe("sessions page lifecycle", () => {
       expect(request).toHaveBeenCalledWith("workboard.cards.create", expect.any(Object)),
     );
 
-    mutableGateway.emit({ connected: false, client });
+    mutableGateway.emit({ phase: "reconnecting", client });
     deleted.resolve({ deleted: ["main"], errors: ["stale delete error"], preservedWorktrees: [] });
     patched.resolve({ ok: true });
     forked.resolve("forked");

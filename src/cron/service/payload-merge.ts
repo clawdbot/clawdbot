@@ -101,6 +101,29 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
     applyToolsAllowPatch(next, patch, existing);
     return next;
   }
+  if (patch.kind === "script") {
+    if (existing.kind !== "script") {
+      return buildPayloadFromPatch(patch);
+    }
+    const next: Extract<CronPayload, { kind: "script" }> = { ...existing };
+    if (typeof patch.script === "string") {
+      next.script = patch.script;
+    }
+    if (typeof patch.timeoutSeconds === "number") {
+      next.timeoutSeconds = patch.timeoutSeconds;
+    }
+    if (typeof patch.toolBudget === "number") {
+      next.toolBudget = patch.toolBudget;
+    }
+    applyToolsAllowPatch(next, patch, existing);
+    return next;
+  }
+
+  if (patch.kind === "heartbeat") {
+    // Unreachable through the service (system-owned boundary rejects it
+    // first); keep the merge total for the type union.
+    return { kind: "heartbeat" };
+  }
 
   if (existing.kind !== "agentTurn") {
     return buildPayloadFromPatch(patch);
@@ -167,6 +190,24 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     };
     applyToolsAllowPatch(next, patch);
     return next;
+  }
+
+  if (patch.kind === "script") {
+    if (typeof patch.script !== "string" || patch.script.trim().length === 0) {
+      throw new Error('cron.update payload.kind="script" requires script');
+    }
+    const next: Extract<CronPayload, { kind: "script" }> = {
+      kind: "script",
+      script: patch.script,
+      timeoutSeconds: patch.timeoutSeconds,
+      toolBudget: patch.toolBudget,
+    };
+    applyToolsAllowPatch(next, patch);
+    return next;
+  }
+
+  if (patch.kind === "heartbeat") {
+    return { kind: "heartbeat" };
   }
 
   if (typeof patch.message !== "string" || patch.message.length === 0) {

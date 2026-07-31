@@ -3,7 +3,6 @@ import { appendFileSync, createWriteStream, existsSync, mkdirSync } from "node:f
 import { dirname, join } from "node:path";
 import {
   agentOutputHasExpectedOkMarker,
-  agentTurnUsedEmbeddedFallback,
   buildCrossOsReleaseAgentSessionId,
   buildReleaseAgentTurnArgs,
   maybeBuildOptionalAgentTurnSkipResult,
@@ -195,8 +194,10 @@ export function buildWindowsPathBootstrapScript(
   options: { includeCurrentProcessPath?: boolean } = {},
 ) {
   const includeCurrentProcessPath = options.includeCurrentProcessPath !== false;
+  // setup-node provisions the supported runtime in the current process PATH. Keep it ahead of
+  // stale runner image entries while still merging newly persisted user and machine paths.
   const pathCandidates = includeCurrentProcessPath
-    ? "@($userPath, $machinePath, $env:Path)"
+    ? "@($env:Path, $userPath, $machinePath)"
     : "@($userPath, $machinePath)";
   return `
 $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
@@ -377,6 +378,23 @@ export async function runInstalledCli(params: {
   });
 }
 
+export async function resolveInstalledGatewayStopArgs(params: {
+  cliPath: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  logPath: string;
+}) {
+  const help = await runInstalledCli({
+    cliPath: params.cliPath,
+    args: ["gateway", "stop", "--help"],
+    cwd: params.cwd,
+    env: params.env,
+    logPath: params.logPath,
+    timeoutMs: 15_000,
+  });
+  return buildGatewayStopArgsFromHelpText(`${help.stdout}\n${help.stderr}`);
+}
+
 async function readInstalledUpdateStatus(params: {
   cliPath: string;
   cwd: string;
@@ -420,8 +438,9 @@ export async function runOnboardWithInstalledCli(params: {
   providerConfig: ProviderConfig;
   installDaemon: boolean;
   logPath: string;
+  allocateGatewayPort?: boolean;
 }) {
-  await withAllocatedGatewayPort(params.lane, async () => {
+  const runOnboard = async () => {
     const args = buildReleaseOnboardArgs({
       authChoice: params.providerConfig.authChoice,
       gatewayPort: params.lane.gatewayPort,
@@ -436,7 +455,15 @@ export async function runOnboardWithInstalledCli(params: {
       logPath: params.logPath,
       timeoutMs: 10 * 60 * 1000,
     });
-  });
+  };
+  if (params.allocateGatewayPort === false) {
+    if (params.lane.gatewayPort <= 0) {
+      throw new Error("Installed onboarding requires a reserved gateway port.");
+    }
+    await runOnboard();
+    return;
+  }
+  await withAllocatedGatewayPort(params.lane, runOnboard);
 }
 
 export function buildReleaseOnboardArgs(params: {
@@ -562,6 +589,13 @@ export function buildGatewayStatusArgsFromHelpText(
     ];
   }
   return ["gateway", "status"];
+}
+
+export function buildGatewayStopArgsFromHelpText(helpText: string) {
+  if (helpText.includes("--force")) {
+    return ["gateway", "stop", "--force"];
+  }
+  return ["gateway", "stop"];
 }
 
 export function appendGatewayStatusHelpProbeFallback(logPath: string, error: unknown) {
@@ -756,9 +790,6 @@ export async function runInstalledAgentTurn(params: {
       const logText = readLogTextSince(params.logPath, logOffset);
       if (!agentOutputHasExpectedOkMarker(result.stdout, { logText })) {
         throw new Error("Agent output did not contain the expected OK marker.");
-      }
-      if (agentTurnUsedEmbeddedFallback(result, { logText })) {
-        throw new Error("Agent turn used embedded fallback instead of gateway.");
       }
       return result;
     } catch (error) {

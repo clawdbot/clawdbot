@@ -10,6 +10,8 @@ import {
   getSignalToolResultTestMocks,
   installSignalToolResultTestHooks,
   setSignalToolResultTestConfig,
+  toSignalToolResultTestError,
+  waitForSignalToolResultIngressIdle,
 } from "./monitor.tool-result.test-harness.js";
 
 installSignalToolResultTestHooks();
@@ -31,7 +33,7 @@ const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
 type MonitorSignalProviderOptions = NonNullable<Parameters<typeof monitorSignalProvider>[0]>;
 
 function waitForSignalDelivery(assertion: () => void) {
-  return vi.waitFor(assertion, { interval: 1 });
+  return vi.waitFor(assertion, { interval: 1, timeout: 5_000 });
 }
 
 async function runMonitorWithMocks(opts: MonitorSignalProviderOptions) {
@@ -48,6 +50,7 @@ async function receiveSignalPayloads(params: {
   opts?: Partial<MonitorSignalProviderOptions>;
 }) {
   const abortController = new AbortController();
+  let ingressIdleError: Error | undefined;
   streamMock.mockImplementation(async ({ onEvent }) => {
     for (const payload of params.payloads) {
       await onEvent({
@@ -55,11 +58,13 @@ async function receiveSignalPayloads(params: {
         data: JSON.stringify(payload),
       });
     }
-    // Durable receive returns after append; let the drain start before simulating shutdown.
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    abortController.abort();
+    try {
+      await waitForSignalToolResultIngressIdle();
+    } catch (error) {
+      ingressIdleError = toSignalToolResultTestError(error, "Signal ingress did not become idle");
+    } finally {
+      abortController.abort();
+    }
   });
 
   await runMonitorWithMocks({
@@ -68,6 +73,9 @@ async function receiveSignalPayloads(params: {
     abortSignal: abortController.signal,
     ...params.opts,
   });
+  if (ingressIdleError) {
+    throw ingressIdleError;
+  }
 }
 
 function hasQueuedReactionEventFor(sender: string) {
@@ -517,61 +525,67 @@ describe("monitorSignalProvider tool results", () => {
   });
 
   it("keeps durable conversation events separate in batched reply mode", async () => {
-    vi.useFakeTimers();
-    try {
-      setSignalToolResultTestConfig({
-        ...createSignalToolResultConfig({
-          autoStart: false,
-          replyToMode: "batched",
-        }),
-        messages: { inbound: { debounceMs: 10 } },
-      });
-      replyMock.mockResolvedValue({ text: "reply" });
-      const abortController = new AbortController();
-      streamMock.mockImplementation(async ({ onEvent }) => {
-        for (const [timestamp, message] of [
-          [1700000000001, "first message"],
-          [1700000000002, "second message"],
-        ] as const) {
-          await onEvent({
-            event: "receive",
-            data: JSON.stringify({
-              envelope: {
-                sourceNumber: "+15550001111",
-                sourceName: "Ada",
-                timestamp,
-                dataMessage: { message },
-              },
-            }),
-          });
-        }
-        try {
-          await vi.advanceTimersByTimeAsync(2_000);
-          expect(replyMock).toHaveBeenCalledTimes(2);
-        } finally {
-          abortController.abort();
-        }
-      });
-
-      await runMonitorWithMocks({
+    setSignalToolResultTestConfig({
+      ...createSignalToolResultConfig({
         autoStart: false,
-        baseUrl: SIGNAL_BASE_URL,
-        abortSignal: abortController.signal,
-      });
-
-      expect(sendMock).toHaveBeenCalledTimes(2);
-      for (const call of sendMock.mock.calls) {
-        expect(call[2]).not.toHaveProperty("replyToId");
-        expect(call[2]).not.toHaveProperty("replyToAuthor");
-        expect(call[2]).not.toHaveProperty("replyToBody");
+        replyToMode: "batched",
+      }),
+      messages: { inbound: { debounceMs: 10 } },
+    });
+    replyMock.mockResolvedValue({ text: "reply" });
+    const abortController = new AbortController();
+    let ingressIdleError: Error | undefined;
+    streamMock.mockImplementation(async ({ onEvent }) => {
+      for (const [timestamp, message] of [
+        [1700000000001, "first message"],
+        [1700000000002, "second message"],
+      ] as const) {
+        await onEvent({
+          event: "receive",
+          data: JSON.stringify({
+            envelope: {
+              sourceNumber: "+15550001111",
+              sourceName: "Ada",
+              timestamp,
+              dataMessage: { message },
+            },
+          }),
+        });
       }
-    } finally {
-      vi.useRealTimers();
+      try {
+        await waitForSignalDelivery(() => {
+          expect(replyMock).toHaveBeenCalledTimes(2);
+        });
+        await waitForSignalToolResultIngressIdle();
+      } catch (error) {
+        ingressIdleError = toSignalToolResultTestError(
+          error,
+          "Batched Signal ingress did not become idle",
+        );
+      } finally {
+        abortController.abort();
+      }
+    });
+
+    await runMonitorWithMocks({
+      autoStart: false,
+      baseUrl: SIGNAL_BASE_URL,
+      abortSignal: abortController.signal,
+    });
+    if (ingressIdleError) {
+      throw ingressIdleError;
+    }
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    for (const call of sendMock.mock.calls) {
+      expect(call[2]).not.toHaveProperty("replyToId");
+      expect(call[2]).not.toHaveProperty("replyToAuthor");
+      expect(call[2]).not.toHaveProperty("replyToBody");
     }
   });
 
   it("passes inbound Signal quote metadata to media replies", async () => {
-    replyMock.mockResolvedValue({ text: "caption", mediaUrl: "file:///tmp/reply.png" });
+    replyMock.mockResolvedValue({ text: "caption", mediaUrl: "https://example.com/reply.png" });
 
     await receiveSignalPayloads({
       payloads: [
@@ -592,7 +606,7 @@ describe("monitorSignalProvider tool results", () => {
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
     expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
-      mediaUrl: "file:///tmp/reply.png",
+      mediaUrl: "https://example.com/reply.png",
       replyToId: "1700000000001",
       replyToAuthor: "+15550001111",
       replyToBody: "quote me",

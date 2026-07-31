@@ -12,6 +12,7 @@ const scriptEntries = productionConfig.workspaces["."].entry.filter((entry) =>
 );
 
 const repositoryToolEntries = [
+  ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/actions/register-bind-mount-cleanup/main.cjs!",
   ".github/actions/register-bind-mount-cleanup/post.cjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
@@ -44,24 +45,8 @@ const config = {
       "enumMembers",
       "namespaceMembers",
     ],
-    "scripts/e2e/secret-provider-integrations.mjs": [
-      "exports",
-      "nsExports",
-      "types",
-      "nsTypes",
-      "enumMembers",
-      "namespaceMembers",
-    ],
     // Oxlint consumes this required default export through a JSON config path.
     "scripts/oxlint-boundary-guards.mjs": ["exports"],
-    "scripts/repro/code-mode-namespace-live.ts": [
-      "exports",
-      "nsExports",
-      "types",
-      "nsTypes",
-      "enumMembers",
-      "namespaceMembers",
-    ],
     "src/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
     "test/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
   },

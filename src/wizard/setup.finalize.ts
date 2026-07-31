@@ -20,6 +20,7 @@ import { formatHealthCheckFailure } from "../commands/health-format.js";
 import { healthCommand } from "../commands/health.js";
 import {
   detectBrowserOpenSupport,
+  buildOnboardingControlUiUrl,
   formatControlUiSshHint,
   openUrl,
   probeGatewayReachable,
@@ -184,9 +185,7 @@ function getLocalizedGatewayDaemonRuntimeOptions() {
   }));
 }
 
-const loadOnboardSearchModule = createLazyRuntimeModule(
-  () => import("../commands/onboard-search.js"),
-);
+const loadSearchSetupModule = createLazyRuntimeModule(() => import("../flows/search-setup.js"));
 
 /**
  * Ensure the gateway service matches the onboarding decision: prompt/decide
@@ -580,10 +579,12 @@ export async function finalizeSetupWizard(
       basePath: controlUiBasePath,
       tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
-    const authedUrl =
-      settings.authMode === "token" && settings.gatewayToken && !suppressGatewayTokenOutput
-        ? `${displayLinks.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
-        : displayLinks.httpUrl;
+    const authedUrl = buildOnboardingControlUiUrl({
+      httpUrl: displayLinks.httpUrl,
+      authMode: settings.authMode,
+      token: settings.gatewayToken,
+      suppressTokenOutput: suppressGatewayTokenOutput,
+    });
     if (opts.skipHealth || !gatewayProbe.ok) {
       gatewayProbe = await probeGatewayReachable({
         url: probeLinks.wsUrl,
@@ -612,12 +613,15 @@ export async function finalizeSetupWizard(
     // route facts must not turn the onboarding greeting into a guaranteed failure.
     const [
       { resolveDefaultModelAuthStatus, resolveDefaultModelCatalogFacts },
-      { loadModelCatalogSnapshot },
+      { loadPreparedModelCatalogSnapshot },
     ] = await Promise.all([
       import("../commands/auth-choice.js"),
-      import("../agents/model-catalog.js"),
+      import("../agents/prepared-model-catalog.js"),
     ]);
-    const modelCatalog = await loadModelCatalogSnapshot({ config: nextConfig, readOnly: true });
+    const modelCatalog = await loadPreparedModelCatalogSnapshot({
+      config: nextConfig,
+      readOnly: true,
+    });
     const modelCatalogFacts = resolveDefaultModelCatalogFacts(nextConfig, modelCatalog.entries, {
       routeVariants: modelCatalog.routeVariants,
     });
@@ -728,7 +732,7 @@ export async function finalizeSetupWizard(
     const webSearchEnabled = nextConfig.tools?.web?.search?.enabled;
     const configuredSearchProviders = listConfiguredWebSearchProviders({ config: nextConfig });
     if (webSearchProvider) {
-      const { resolveExistingKey, hasExistingKey, hasKeyInEnv } = await loadOnboardSearchModule();
+      const { resolveExistingKey, hasExistingKey, hasKeyInEnv } = await loadSearchSetupModule();
       const entry = configuredSearchProviders.find((e) => e.id === webSearchProvider);
       const label = entry?.label ?? webSearchProvider;
       const storedKey = entry ? resolveExistingKey(nextConfig, webSearchProvider) : undefined;
@@ -827,7 +831,7 @@ export async function finalizeSetupWizard(
     } else {
       // Legacy configs may have a working key (e.g. apiKey or BRAVE_API_KEY) without
       // an explicit provider. Runtime auto-detects these, so avoid saying "skipped".
-      const { hasExistingKey, hasKeyInEnv } = await loadOnboardSearchModule();
+      const { hasExistingKey, hasKeyInEnv } = await loadSearchSetupModule();
       const legacyDetected = configuredSearchProviders.find(
         (e) => hasExistingKey(nextConfig, e.id) || hasKeyInEnv(e),
       );

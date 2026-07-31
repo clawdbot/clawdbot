@@ -102,7 +102,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       runtime: runtime as never,
     });
 
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(1_000);
     await monitorPromise;
 
     expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(2);
@@ -147,7 +147,7 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
       runtime: runtime as never,
     }).catch((error: unknown) => error);
 
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(2_000);
     const monitorError = await monitorErrorPromise;
 
     expect(monitorError).toBeInstanceOf(Error);

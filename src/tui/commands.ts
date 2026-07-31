@@ -7,13 +7,18 @@ import {
   listChatCommandsForConfig,
   resolveTextCommand,
 } from "../auto-reply/commands-registry.js";
-import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thinking.js";
+import {
+  formatThinkingLevels,
+  listThinkingLevelLabels,
+  type ReasoningLevel,
+  type VerboseLevel,
+} from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.js";
 
-const VERBOSE_LEVELS = ["on", "off"];
+const VERBOSE_LEVELS = ["on", "off", "full"] satisfies VerboseLevel[];
 const TRACE_LEVELS = ["on", "off"];
 const FAST_LEVELS = ["status", "auto", "on", "off"];
-const REASONING_LEVELS = ["on", "off"];
+const REASONING_LEVELS = ["on", "off", "stream"] satisfies ReasoningLevel[];
 const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
 const ACTIVATION_LEVELS = ["mention", "always"];
 const USAGE_FOOTER_LEVELS = ["off", "tokens", "full", "reset", "inherit", "clear", "default"];
@@ -53,6 +58,12 @@ function createLevelCompletion(
         value,
         label: value,
       }));
+}
+
+/** Keep TUI help and no-argument usage aligned with actual directive completions. */
+export function formatTuiLevelCommandUsage(command: "verbose" | "reasoning"): string {
+  const levels = command === "verbose" ? VERBOSE_LEVELS : REASONING_LEVELS;
+  return `/${command} <${levels.join("|")}>`;
 }
 
 function normalizeSlashCommandName(value: string): string {
@@ -139,7 +150,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     },
     {
       name: "verbose",
-      description: "Set verbose on/off",
+      description: `Set verbose ${VERBOSE_LEVELS.join("/")}`,
       getArgumentCompletions: verboseCompletions,
     },
     {
@@ -149,7 +160,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     },
     {
       name: "reasoning",
-      description: "Set reasoning on/off",
+      description: `Set reasoning ${REASONING_LEVELS.join("/")}`,
       getArgumentCompletions: reasoningCompletions,
     },
     {
@@ -206,6 +217,28 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
   return commands;
 }
 
+export function shouldSubmitExactArgumentCompletion(
+  input: string,
+  commands: SlashCommand[],
+): boolean {
+  const match = /^\/([^\s]+)\s+(.+)$/u.exec(input);
+  if (!match) {
+    return false;
+  }
+  const [, commandName, argumentText] = match;
+  if (argumentText === undefined) {
+    return false;
+  }
+  const command = commands.find((candidate) => candidate.name === commandName);
+  if (!command?.getArgumentCompletions) {
+    return false;
+  }
+  const completions = command.getArgumentCompletions(argumentText);
+  return (
+    Array.isArray(completions) && completions.length === 1 && completions[0]?.value === argumentText
+  );
+}
+
 export function helpText(options: SlashCommandOptions = {}): string {
   const thinkLevels = formatThinkingLevels(
     options.provider,
@@ -227,9 +260,9 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/model <provider/model> (or /models)",
     `/think <${thinkLevels}>`,
     "/fast <status|auto|on|off>",
-    "/verbose <on|off>",
+    formatTuiLevelCommandUsage("verbose"),
     "/trace <on|off>",
-    "/reasoning <on|off>",
+    formatTuiLevelCommandUsage("reasoning"),
     "/usage <off|tokens|full|reset|inherit|clear|default>",
     "/elevated <on|off|ask|full>",
     "/elev <on|off|ask|full>",
@@ -238,5 +271,9 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/abort",
     "/settings",
     "/exit",
+    "",
+    "Keyboard shortcuts:",
+    "Enter: send message",
+    "Shift+Enter or Ctrl+J: insert a newline",
   ].join("\n");
 }

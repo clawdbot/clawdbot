@@ -8,7 +8,16 @@ type SecretRefResolutionCode =
   | "SECRET_REF_PROVIDER_ERROR"
   | "SECRET_REF_PROVIDER_CONTRACT";
 
-type SecretProviderResolutionCode = "SECRET_PROVIDER_INVALID" | "SECRET_PROVIDER_UNAVAILABLE";
+type SecretProviderResolutionCode =
+  | "SECRET_PROVIDER_INVALID"
+  | "SECRET_PROVIDER_NOT_CONFIGURED"
+  | "SECRET_PROVIDER_UNAVAILABLE";
+
+export type SecretResolutionFailureReason =
+  | "secret provider failed"
+  | "secret provider policy denied resolution"
+  | "secret provider response violated its contract"
+  | "secret reference was not found";
 
 /** Error for failures that affect an entire configured secret provider. */
 class SecretProviderResolutionError extends Error {
@@ -73,7 +82,9 @@ export function isSecretResolutionError(
 }
 
 /** Redacted reason suitable for warnings and status output. */
-export function describeSecretResolutionError(value: unknown): string | undefined {
+export function describeSecretResolutionError(
+  value: unknown,
+): SecretResolutionFailureReason | undefined {
   if (value instanceof SecretProviderResolutionError) {
     return value.code === "SECRET_PROVIDER_UNAVAILABLE" ? "secret provider failed" : undefined;
   }

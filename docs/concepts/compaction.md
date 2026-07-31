@@ -26,6 +26,8 @@ New configs default `agents.defaults.compaction.mode` to `"safeguard"` (stricter
 
 Auto-compaction is on by default. It runs when the session nears the context limit, or when the model returns a context-overflow error (in which case OpenClaw compacts and retries).
 
+Set `agents.defaults.compaction.enabled: false` to disable the embedded runtime's proactive threshold compaction. OpenClaw's preflight and overflow-recovery compaction paths remain available, as does manual `/compact`.
+
 You will see:
 
 - `embedded run auto-compaction start` / `complete` in normal Gateway logs.
@@ -58,7 +60,7 @@ Type `/compact` in any chat to force a compaction. Add instructions to guide the
 /compact Focus on the API design decisions
 ```
 
-When `agents.defaults.compaction.keepRecentTokens` is set (default: 20,000), manual compaction honors that cut-point and keeps the recent tail in rebuilt context. Without an explicit keep budget, manual compaction behaves as a hard checkpoint and continues from the new summary alone.
+Manual compaction uses `agents.defaults.compaction.keepRecentTokens` (default: 20,000) as its cut-point budget and keeps that recent tail in rebuilt context.
 
 ## Configuration
 
@@ -100,7 +102,7 @@ When unset, compaction starts with the active session model. If summarization fa
 
 ### Identifier preservation
 
-Compaction summarization preserves opaque identifiers by default (`identifierPolicy: "strict"`). Override with `identifierPolicy: "off"` to disable, or `identifierPolicy: "custom"` plus `identifierInstructions` for custom guidance.
+Compaction summarization preserves opaque identifiers by default (`identifierPolicy: "strict"`). Override with `identifierPolicy: "off"` to disable. Custom guidance belongs in a compaction provider's `summarize()` implementation.
 
 ### Active transcript byte guard
 
@@ -108,8 +110,11 @@ When `agents.defaults.compaction.maxActiveTranscriptBytes` is set, OpenClaw
 triggers normal local compaction before a run if transcript history reaches
 that size. This is useful for long-running sessions where provider-side context
 management may keep model context healthy while persisted transcript history
-keeps growing. It does not split raw bytes; it asks the normal compaction
-pipeline to create a semantic summary.
+keeps growing. Set a positive byte count or size string such as `"20mb"` to opt
+in; `0` or an unset value disables the guard. It does not split raw bytes; it
+asks the normal compaction pipeline to create a semantic summary. For Codex
+app-server sessions, the same threshold caps native rollout transcripts and
+oversized native threads restart fresh.
 
 <Warning>
 The byte guard applies to the active SQLite transcript history. Legacy JSONL
@@ -118,10 +123,7 @@ checkpoint artifacts are not the active compaction target.
 
 ### Successor transcripts
 
-When `agents.defaults.compaction.truncateAfterCompaction` is enabled, OpenClaw does not rewrite the existing transcript in place. It creates a new active successor transcript from the compaction summary, preserved state, and unsummarized tail, then records checkpoint metadata that points branch/restore flows at that compacted successor.
-Successor transcripts also drop exact duplicate long user turns that arrive
-inside a short retry window, so channel retry storms are not carried into the
-next active transcript after compaction.
+A context engine may return an explicit compacted successor session identity. OpenClaw adopts that successor and records checkpoint metadata against it. The built-in SQLite compactor keeps the current session identity and does not create a second runtime transcript.
 
 OpenClaw no longer writes separate `.checkpoint.*.jsonl` copies for new
 compactions. Existing legacy checkpoint files can still be used while referenced

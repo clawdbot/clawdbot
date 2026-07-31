@@ -34,7 +34,12 @@ export interface InboundGroupInfo {
 
 export interface InboundContext {
   event: QueuedMessage;
-  route: { sessionKey: string; accountId: string; agentId?: string };
+  route: {
+    sessionKey: string;
+    accountId: string;
+    agentId?: string;
+    dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  };
   isGroupChat: boolean;
   peerId: string;
   qualifiedTarget: string;

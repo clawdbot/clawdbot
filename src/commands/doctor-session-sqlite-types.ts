@@ -7,6 +7,18 @@ export type DoctorSessionSqliteIssue = {
   sessionKey?: string;
 };
 
+const SESSION_SQLITE_WARNING_ISSUE_CODES = new Set([
+  "entry_invalid",
+  "transcript_archive_failed",
+  "transcript_malformed",
+  "transcript_missing",
+  "unreferenced_jsonl_archive_failed",
+]);
+
+export function isSessionSqliteMigrationWarning(issue: DoctorSessionSqliteIssue): boolean {
+  return SESSION_SQLITE_WARNING_ISSUE_CODES.has(issue.code);
+}
+
 export type DoctorSessionSqliteRestoreConflict = {
   archivePath: string;
   reason: string;

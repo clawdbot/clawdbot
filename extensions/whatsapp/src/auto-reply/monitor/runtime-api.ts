@@ -2,11 +2,7 @@
 export { resolveIdentityNamePrefix } from "openclaw/plugin-sdk/agent-runtime";
 export { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 export { resolveInboundSessionEnvelopeContext } from "openclaw/plugin-sdk/channel-inbound";
-export { toLocationContext } from "openclaw/plugin-sdk/channel-inbound";
-export {
-  createChannelMessageReplyPipeline,
-  resolveChannelMessageSourceReplyDeliveryMode,
-} from "openclaw/plugin-sdk/channel-outbound";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export {
   isControlCommandMessage,
   shouldComputeCommandAuthorized,
@@ -20,7 +16,6 @@ export {
 } from "openclaw/plugin-sdk/reply-history";
 export { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 export {
-  dispatchReplyWithBufferedBlockDispatcher,
   resolveChunkMode,
   resolveTextChunkLimit,
   type getReplyFromConfig,

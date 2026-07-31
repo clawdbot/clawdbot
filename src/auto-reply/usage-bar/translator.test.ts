@@ -21,6 +21,10 @@ function render(pieces: unknown[], contract: Record<string, unknown>): string {
   return renderUsageBar(tpl(pieces), { surface: "discord", ...contract });
 }
 
+function fixedHalf(digits: number): string {
+  return `0.5${"0".repeat(digits - 1)}`;
+}
+
 describe("usage-bar verbs", () => {
   it("num — compact counts", () => {
     expect(render([{ text: "{usage.input_tokens|num}" }], { usage: { input_tokens: 3000 } })).toBe(
@@ -35,6 +39,14 @@ describe("usage-bar verbs", () => {
     expect(render([{ text: "{cost|fixed}" }], { cost: 1.5 })).toBe("1.50");
     expect(render([{ text: "{cost|fixed:0}" }], { cost: 2.7 })).toBe("3");
     expect(render([{ text: "{cost|fixed:4}" }], { cost: "nope" })).toBe("");
+  });
+
+  it("fixed — preserves supported precision and rejects invalid arguments", () => {
+    expect(render([{ text: "{cost|fixed:21}" }], { cost: 0.5 })).toBe(fixedHalf(21));
+    expect(render([{ text: "{cost|fixed:100}" }], { cost: 0.5 })).toBe(fixedHalf(100));
+    for (const digits of ["", "-1", "2.5", "101", "1e2", "2junk", "9007199254740992"]) {
+      expect(render([{ text: `{cost|fixed:${digits}}` }], { cost: 0.5 })).toBe("");
+    }
   });
 
   it("dur — seconds to reset", () => {
@@ -59,6 +71,21 @@ describe("usage-bar verbs", () => {
     expect(render([{ text: "{x|meter:1:moon}" }], { x: 50 })).toBe("🌗");
     expect(render([{ text: "{x|meter:1:moon}" }], { x: 100 })).toBe("🌕");
   });
+
+  it("meter — preserves default and supported explicit widths", () => {
+    expect(render([{ text: "{x|meter::braille}" }], { x: 75 })).toBe("⣿⣿⣿⣧⠐");
+    expect(render([{ text: "{x|meter:   :braille}" }], { x: 75 })).toBe("⣿⣿⣿⣧⠐");
+    expect(render([{ text: "{x|meter:+5:braille}" }], { x: 75 })).toBe("⣿⣿⣿⣧⠐");
+    expect(render([{ text: "{x|meter: 5 :braille}" }], { x: 75 })).toBe("⣿⣿⣿⣧⠐");
+    expect(render([{ text: "{x|meter:100:braille}" }], { x: 50 })).toHaveLength(100);
+  });
+
+  it.each(["0", "-1", "2.5", "101", "1e2", "2junk", "abc", "9007199254740992"])(
+    "meter — rejects invalid width %s",
+    (width) => {
+      expect(render([{ text: `{x|meter:${width}:braille}` }], { x: 75 })).toBe("");
+    },
+  );
 
   it("alias — listed shortens, unlisted echoes through", () => {
     expect(render([{ text: "{m|alias:models}" }], { m: "claude-opus-4-6" })).toBe("opus46");

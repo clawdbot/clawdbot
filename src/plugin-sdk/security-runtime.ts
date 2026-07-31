@@ -14,7 +14,10 @@ export function fileExists(filePath: string): boolean {
   }
 }
 
-export { buildUntrustedChannelMetadata } from "../security/channel-metadata.js";
+export {
+  buildChannelMetadata,
+  buildUntrustedChannelMetadata,
+} from "../security/channel-metadata.js";
 export {
   evaluateSupplementalContextVisibility,
   filterSupplementalContextItems,

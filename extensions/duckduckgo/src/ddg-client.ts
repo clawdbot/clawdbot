@@ -53,7 +53,9 @@ function decodeHtmlEntities(text: string): string {
 }
 
 function stripHtml(html: string): string {
-  return html
+  // DuckDuckGo match highlights can occur inside words, so remove them without adding whitespace.
+  const withoutMatchHighlights = html.replace(/<\/?b\b[^>]*>/gi, "");
+  return withoutMatchHighlights
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();

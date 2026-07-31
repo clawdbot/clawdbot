@@ -24,6 +24,7 @@ export function resolveDefaultModel(params: { cfg: OpenClawConfig; agentId?: str
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider,
+    agentId: params.agentId,
     allowPluginNormalization: false,
   });
   return { defaultProvider, defaultModel, aliasIndex };

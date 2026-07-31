@@ -64,6 +64,7 @@ function buildConfigWithoutAgentRuntimePolicy(): OpenClawConfig {
         },
         {
           id: "main",
+          default: true,
         },
       ],
       // No `defaults.agentRuntime` either.

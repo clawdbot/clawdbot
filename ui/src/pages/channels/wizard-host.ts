@@ -2,6 +2,7 @@
 // per-step multiselect state, dirty-config guarding, and completion effects
 // (config resync + WhatsApp QR handoff) so the page element stays thin.
 import type { ApplicationContext } from "../../app/context.ts";
+import { t } from "../../i18n/index.ts";
 import { ChannelWizardController, type ChannelWizardState } from "./wizard-controller.ts";
 
 type WizardHostDeps = {
@@ -30,6 +31,7 @@ export class ChannelWizardHost {
           .getContext()
           ?.channels.state.channelsSnapshot?.channelMeta?.some((entry) => entry.id === value) ??
         false,
+      () => t("channels.setup.sessionExpired"),
     );
   }
 

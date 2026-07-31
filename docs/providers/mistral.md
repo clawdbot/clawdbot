@@ -61,14 +61,12 @@ The bundled `mistral` plugin registers four contracts: chat completions, media u
 | Model ref                        | Input       | Context | Max output | Notes                                                 |
 | -------------------------------- | ----------- | ------- | ---------- | ----------------------------------------------------- |
 | `mistral/mistral-large-latest`   | text, image | 262,144 | 16,384     | Default model                                         |
-| `mistral/mistral-medium-2508`    | text, image | 262,144 | 8,192      | Mistral Medium 3.1                                    |
 | `mistral/mistral-medium-3-5`     | text, image | 262,144 | 8,192      | Mistral Medium 3.5; adjustable reasoning              |
 | `mistral/mistral-small-latest`   | text, image | 262,144 | 16,384     | Mistral Small 4 latest; adjustable `reasoning_effort` |
 | `mistral/mistral-small-2603`     | text, image | 262,144 | 16,384     | Mistral Small 4 pinned; adjustable `reasoning_effort` |
-| `mistral/pixtral-large-latest`   | text, image | 128,000 | 32,768     | Pixtral                                               |
-| `mistral/codestral-latest`       | text        | 256,000 | 4,096      | Coding                                                |
-| `mistral/devstral-medium-latest` | text        | 262,144 | 32,768     | Devstral 2                                            |
-| `mistral/magistral-small`        | text        | 128,000 | 40,000     | Reasoning-enabled                                     |
+| `mistral/codestral-latest`       | text        | 128,000 | 4,096      | Coding                                                |
+| `mistral/mistral-medium-2508`    | text, image | 128,000 | 8,192      | Deprecated; hidden; use Mistral Medium 3.5            |
+| `mistral/devstral-medium-latest` | text        | 262,144 | 32,768     | Deprecated; hidden; use Mistral Medium 3.5            |
 
 Browse the bundled catalog row before changing config:
 
@@ -149,7 +147,7 @@ OpenClaw defaults Mistral realtime STT to `pcm_mulaw` at 8 kHz so Voice Call can
 
 <AccordionGroup>
   <Accordion title="Adjustable reasoning">
-    `mistral/mistral-small-latest`, `mistral/mistral-small-2603`, and `mistral/mistral-medium-3-5` support [adjustable reasoning](https://docs.mistral.ai/studio-api/conversations/reasoning/adjustable) on the Chat Completions API via `reasoning_effort` (`none` minimizes extra thinking in the output; `high` surfaces full thinking traces before the final answer).
+    `mistral/mistral-small-latest`, `mistral/mistral-small-2603`, and `mistral/mistral-medium-3-5` support [adjustable reasoning](https://docs.mistral.ai/studio-api/conversations/reasoning) on the Chat Completions API via `reasoning_effort` (`none` minimizes extra thinking in the output; `high` surfaces full thinking traces before the final answer).
 
     OpenClaw maps the session **thinking** level to Mistral's API:
 
@@ -180,7 +178,7 @@ OpenClaw defaults Mistral realtime STT to `pcm_mulaw` at 8 kHz so Voice Call can
     ```
 
     <Note>
-    Other bundled Mistral catalog models do not use this parameter. Keep using `magistral-*` models when you want Mistral's native reasoning-first behavior.
+    Other bundled Mistral catalog models do not use this parameter. Mistral's native Magistral models are deprecated; use adjustable reasoning on Mistral Small 4 or Mistral Medium 3.5 for current API models.
     </Note>
 
   </Accordion>
@@ -190,10 +188,8 @@ OpenClaw defaults Mistral realtime STT to `pcm_mulaw` at 8 kHz so Voice Call can
 
     ```json5
     {
-      agents: {
-        defaults: {
-          memorySearch: { provider: "mistral" },
-        },
+      memory: {
+        search: { provider: "mistral" },
       },
     }
     ```

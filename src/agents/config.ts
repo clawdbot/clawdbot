@@ -132,8 +132,3 @@ export function getAgentDir(): string {
 export function getBinDir(): string {
   return join(getAgentDir(), "bin");
 }
-
-/** Get path to sessions directory */
-export function getSessionsDir(): string {
-  return join(getAgentDir(), "sessions");
-}

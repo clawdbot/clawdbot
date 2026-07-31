@@ -6,7 +6,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveRepoToolBinPath } from "./lib/local-heavy-check-runtime.mjs";
 import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
+import { outputTail } from "./lib/output-tail.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
@@ -23,18 +25,6 @@ function outputText(value) {
     return value.toString("utf8");
   }
   return "";
-}
-
-function outputTail(value) {
-  const text = outputText(value).trim();
-  if (!text) {
-    return "";
-  }
-  const bytes = Buffer.from(text, "utf8");
-  if (bytes.byteLength <= FAILURE_OUTPUT_TAIL_BYTES) {
-    return text;
-  }
-  return bytes.subarray(bytes.byteLength - FAILURE_OUTPUT_TAIL_BYTES).toString("utf8");
 }
 
 function commandFailureMessage(label, result, invocation) {
@@ -56,11 +46,11 @@ function commandFailureMessage(label, result, invocation) {
   if (result.signal) {
     details.push(`signal: ${result.signal}`);
   }
-  const stderrTail = outputTail(result.stderr);
+  const stderrTail = outputTail(result.stderr, FAILURE_OUTPUT_TAIL_BYTES);
   if (stderrTail) {
     details.push(`stderr tail:\n${stderrTail}`);
   }
-  const stdoutTail = outputTail(result.stdout);
+  const stdoutTail = outputTail(result.stdout, FAILURE_OUTPUT_TAIL_BYTES);
   if (stdoutTail) {
     details.push(`stdout tail:\n${stdoutTail}`);
   }
@@ -124,7 +114,7 @@ export function resolveOxfmtInvocation(args, params = {}) {
   const platform = params.platform ?? process.platform;
   const existsSync = params.existsSync ?? fs.existsSync;
   const shimName = platform === "win32" ? "oxfmt.cmd" : "oxfmt";
-  const shimPath = path.join(repoRoot, "node_modules", ".bin", shimName);
+  const shimPath = resolveRepoToolBinPath(shimName, { cwd: repoRoot, fileExists: existsSync });
 
   if (existsSync(shimPath)) {
     if (platform === "win32") {

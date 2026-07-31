@@ -3,6 +3,8 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   AgentParamsSchema,
+  ConversationListParamsSchema,
+  ConversationListResultSchema,
   ConversationSendParamsSchema,
   ConversationSendResultSchema,
   ConversationTurnCancelParamsSchema,
@@ -59,6 +61,8 @@ const musicCompletionEvent: AgentInternalEvent = {
       path: "/tmp/openclaw/generated-release-anthem.mp3",
       mimeType: "audio/mpeg",
       name: "generated-release-anthem.mp3",
+      sizeBytes: 1_024,
+      durationMs: 30_000,
     },
   ],
   mediaUrls: ["/tmp/openclaw/generated-release-anthem.mp3"],
@@ -150,6 +154,33 @@ describe("MessageActionParamsSchema", () => {
 });
 
 describe("Conversation schemas", () => {
+  it("accepts Gateway-owned address discovery without session internals", () => {
+    expect(
+      Value.Check(ConversationListParamsSchema, {
+        agentId: "main",
+        channel: "reef",
+        query: "@molty",
+        limit: 50,
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(ConversationListResultSchema, {
+        conversations: [
+          {
+            conversationRef: "conv_0123456789abcdef0123456789abcdef",
+            channel: "reef",
+            accountId: "default",
+            kind: "direct",
+            target: "reef:molty",
+            label: "@molty's agent",
+            firstSeenAt: 100,
+            lastSeenAt: 100,
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
   it("accepts a Gateway-owned durable send and result", () => {
     expect(
       Value.Check(ConversationSendParamsSchema, {

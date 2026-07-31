@@ -131,6 +131,48 @@ describe("diagnostics-prometheus service", () => {
     expect(metrics.render()).toBe("");
   });
 
+  it("separates request and turn model-call metrics by observation unit", () => {
+    const metrics = createMetricsHarness();
+
+    metrics.record(
+      {
+        ...baseEvent(),
+        type: "model.call.completed",
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        api: "openai-responses",
+        transport: "http",
+        durationMs: 250,
+      },
+      trusted,
+    );
+    metrics.record(
+      {
+        ...baseEvent(),
+        type: "model.call.completed",
+        runId: "run-1",
+        callId: "call-2",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        api: "claude-code",
+        transport: "stdio-live",
+        observationUnit: "turn",
+        durationMs: 2500,
+      },
+      trusted,
+    );
+
+    const rendered = metrics.render();
+    expect(rendered).toContain(
+      'openclaw_model_call_total{api="openai-responses",error_category="none",model="gpt-5.4",observation_unit="request",outcome="completed",provider="openai",transport="http"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_model_call_duration_seconds_sum{api="claude-code",error_category="none",model="claude-opus-4-7",observation_unit="turn",outcome="completed",provider="anthropic",transport="stdio-live"} 2.5',
+    );
+  });
+
   it("drops untrusted plugin-emitted diagnostic events that spoof gateway stability signals", () => {
     const metrics = createMetricsHarness();
 

@@ -65,11 +65,11 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
     });
   });
 
-  it("falls back to aggregate usage when final-call usage is empty", async () => {
+  it("does not use aggregate usage when final-call usage is empty", async () => {
     const cronSession = makeCronSession();
     resolveCronSessionMock.mockReturnValue(cronSession);
     mockRunCronFallbackPassthrough();
-    deriveSessionTotalTokensMock.mockReturnValueOnce(undefined).mockReturnValueOnce(77000);
+    deriveSessionTotalTokensMock.mockReturnValueOnce(undefined);
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "done" }],
       meta: {
@@ -93,9 +93,9 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
     const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
     expect(result.status).toBe("ok");
-    expect(cronSession.sessionEntry.totalTokens).toBe(77000);
-    expect(cronSession.sessionEntry.totalTokensFresh).toBe(true);
-    expect(deriveSessionTotalTokensMock).toHaveBeenNthCalledWith(1, {
+    expect(cronSession.sessionEntry.totalTokens).toBeUndefined();
+    expect(cronSession.sessionEntry.totalTokensFresh).toBe(false);
+    expect(deriveSessionTotalTokensMock).toHaveBeenCalledWith({
       usage: {
         input: 0,
         output: 0,
@@ -105,23 +105,14 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
       contextTokens: 128000,
       promptTokens: undefined,
     });
-    expect(deriveSessionTotalTokensMock).toHaveBeenNthCalledWith(2, {
-      usage: {
-        input: 75000,
-        output: 2000,
-        cacheRead: 5000,
-        cacheWrite: 0,
-      },
-      contextTokens: 128000,
-      promptTokens: undefined,
-    });
+    expect(deriveSessionTotalTokensMock).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to aggregate usage when final-call usage is output-only", async () => {
+  it("does not use aggregate usage when final-call usage is output-only", async () => {
     const cronSession = makeCronSession();
     resolveCronSessionMock.mockReturnValue(cronSession);
     mockRunCronFallbackPassthrough();
-    deriveSessionTotalTokensMock.mockReturnValueOnce(undefined).mockReturnValueOnce(77000);
+    deriveSessionTotalTokensMock.mockReturnValueOnce(undefined);
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "done" }],
       meta: {
@@ -135,18 +126,14 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
     const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
     expect(result.status).toBe("ok");
-    expect(cronSession.sessionEntry.totalTokens).toBe(77000);
-    expect(cronSession.sessionEntry.totalTokensFresh).toBe(true);
-    expect(deriveSessionTotalTokensMock).toHaveBeenNthCalledWith(1, {
+    expect(cronSession.sessionEntry.totalTokens).toBeUndefined();
+    expect(cronSession.sessionEntry.totalTokensFresh).toBe(false);
+    expect(deriveSessionTotalTokensMock).toHaveBeenCalledWith({
       usage: { output: 125 },
       contextTokens: 128000,
       promptTokens: undefined,
     });
-    expect(deriveSessionTotalTokensMock).toHaveBeenNthCalledWith(2, {
-      usage: { input: 75000, output: 2000 },
-      contextTokens: 128000,
-      promptTokens: undefined,
-    });
+    expect(deriveSessionTotalTokensMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not fall back to aggregate billing when final-call context is unavailable", async () => {

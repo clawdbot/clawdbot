@@ -23,6 +23,8 @@ export const PluginControlUiDescriptorSchema = closedObject({
     Type.Literal("tool"),
     Type.Literal("run"),
     Type.Literal("settings"),
+    Type.Literal("tab"),
+    Type.Literal("widget"),
   ]),
   label: NonEmptyString,
   description: Type.Optional(Type.String()),
@@ -107,6 +109,7 @@ export const PluginCatalogEntrySchema = closedObject({
     Type.Literal("error"),
   ]),
   featured: Type.Optional(Type.Boolean()),
+  featuredAt: Type.Optional(Type.Integer({ minimum: 0 })),
   order: Type.Optional(Type.Number()),
   /** True when the gateway can resolve a manifest or catalog icon for this plugin identity. */
   hasIcon: Type.Optional(Type.Boolean()),

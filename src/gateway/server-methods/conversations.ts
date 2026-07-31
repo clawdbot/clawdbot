@@ -2,10 +2,11 @@ import { createHash } from "node:crypto";
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
+  validateConversationListParams,
   validateConversationSendParams,
   validateConversationTurnCancelParams,
   validateConversationTurnParams,
+  type ConversationListParams,
   type ConversationSendParams,
   type ConversationTurnCancelParams,
   type ConversationTurnParams,
@@ -15,6 +16,7 @@ import {
   ConversationInputError,
   ConversationOperationConflictError,
 } from "../conversation-errors.js";
+import { runGatewayConversationList } from "../conversation-list.js";
 import { runGatewayConversationSend } from "../conversation-send.js";
 import { runGatewayConversationTurn } from "../conversation-turn.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
@@ -32,9 +34,11 @@ import type {
   GatewayRequestHandlers,
   RespondFn,
 } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 type ConversationHandlerDeps = {
   cancelConversationTurn: typeof cancelPendingConversationTurn;
+  runConversationList: typeof runGatewayConversationList;
   runConversationSend: typeof runGatewayConversationSend;
   runConversationTurn: typeof runGatewayConversationTurn;
 };
@@ -184,24 +188,52 @@ async function runConversationOperation<T extends { channel: string }>(params: {
   }
 }
 
+const defaultConversationHandlerDeps: ConversationHandlerDeps = {
+  cancelConversationTurn: cancelPendingConversationTurn,
+  runConversationList: runGatewayConversationList,
+  runConversationSend: runGatewayConversationSend,
+  runConversationTurn: runGatewayConversationTurn,
+};
+
 export function createConversationHandlers(
-  deps: ConversationHandlerDeps = {
-    cancelConversationTurn: cancelPendingConversationTurn,
-    runConversationSend: runGatewayConversationSend,
-    runConversationTurn: runGatewayConversationTurn,
-  },
+  overrides: Partial<ConversationHandlerDeps> = {},
 ): GatewayRequestHandlers {
+  const deps = { ...defaultConversationHandlerDeps, ...overrides };
   return {
-    "conversations.send": async ({ params, respond, context, client }) => {
-      if (!validateConversationSendParams(params)) {
+    "conversations.list": async ({ params, respond, context }) => {
+      if (
+        !assertValidParams(params, validateConversationListParams, "conversations.list", respond)
+      ) {
+        return;
+      }
+      const request = params as ConversationListParams;
+      try {
+        respond(
+          true,
+          await deps.runConversationList({
+            config: resolveGatewayPluginConfig({ config: context.getRuntimeConfig() }),
+            agentId: request.agentId,
+            ...(request.channel ? { channel: request.channel } : {}),
+            ...(request.query ? { query: request.query } : {}),
+            limit: request.limit ?? 50,
+          }),
+          undefined,
+        );
+      } catch (cause) {
         respond(
           false,
           undefined,
           errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid conversations.send params: ${formatValidationErrors(validateConversationSendParams.errors)}`,
+            ErrorCodes.UNAVAILABLE,
+            cause instanceof Error ? cause.message : String(cause),
           ),
         );
+      }
+    },
+    "conversations.send": async ({ params, respond, context, client }) => {
+      if (
+        !assertValidParams(params, validateConversationSendParams, "conversations.send", respond)
+      ) {
         return;
       }
       const request = params as ConversationSendParams;
@@ -247,15 +279,14 @@ export function createConversationHandlers(
       });
     },
     "conversations.turn.cancel": ({ params, respond }) => {
-      if (!validateConversationTurnCancelParams(params)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid conversations.turn.cancel params: ${formatValidationErrors(validateConversationTurnCancelParams.errors)}`,
-          ),
-        );
+      if (
+        !assertValidParams(
+          params,
+          validateConversationTurnCancelParams,
+          "conversations.turn.cancel",
+          respond,
+        )
+      ) {
         return;
       }
       const request = params as ConversationTurnCancelParams;
@@ -271,15 +302,9 @@ export function createConversationHandlers(
       );
     },
     "conversations.turn": async ({ params, respond, context, client }) => {
-      if (!validateConversationTurnParams(params)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid conversations.turn params: ${formatValidationErrors(validateConversationTurnParams.errors)}`,
-          ),
-        );
+      if (
+        !assertValidParams(params, validateConversationTurnParams, "conversations.turn", respond)
+      ) {
         return;
       }
       const request = params as ConversationTurnParams;

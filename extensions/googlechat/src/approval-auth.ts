@@ -20,7 +20,7 @@ const googleChatApproval = createChannelApprovalAuth({
   channelLabel: "Google Chat",
   resolveInputs: ({ cfg, accountId }) => {
     const account = resolveGoogleChatAccount({ cfg, accountId }).config;
-    return { allowFrom: account.dm?.allowFrom, defaultTo: account.defaultTo };
+    return { allowFrom: account.allowFrom, defaultTo: account.defaultTo };
   },
   normalizeApprover: normalizeGoogleChatApproverId,
 });

@@ -82,8 +82,31 @@ export const ChatMessageGetResultSchema = closedObject({
 /** Typed result shape for callers that branch on message availability. */
 export type ChatMessageGetResult = Static<typeof ChatMessageGetResultSchema>;
 
-/** Attachment envelope shared by chat.send and session creation's initial turn. */
-export const ChatAttachmentsSchema = Type.Array(Type.Unknown());
+/** Permissive attachment envelope shared by chat and session entrypoints. */
+export const ChatAttachmentSchema = Type.Object(
+  {
+    type: Type.Optional(Type.String()),
+    mimeType: Type.Optional(Type.String()),
+    fileName: Type.Optional(Type.String()),
+    // Runtime normalization also accepts ArrayBuffer views from native/browser callers.
+    content: Type.Optional(Type.Unknown()),
+    sizeBytes: Type.Optional(Type.Number()),
+    durationMs: Type.Optional(Type.Number()),
+    width: Type.Optional(Type.Number()),
+    height: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: true },
+);
+
+/** Attachment list shared by chat.send and session creation's initial turn. */
+export const ChatAttachmentsSchema = Type.Array(ChatAttachmentSchema);
+
+/** Opaque, out-of-band plugin bindings carried separately from model input. */
+const RunToolBindingsSchema = Type.Record(
+  Type.String({ minLength: 1, maxLength: 128 }),
+  Type.Unknown(),
+  { maxProperties: 16 },
+);
 
 /** User-to-agent send request; idempotency key lets clients safely retry transport failures. */
 export const ChatSendParamsSchema = closedObject({
@@ -102,11 +125,18 @@ export const ChatSendParamsSchema = closedObject({
   originatingTo: Type.Optional(Type.String()),
   originatingAccountId: Type.Optional(Type.String()),
   originatingThreadId: Type.Optional(Type.String()),
+  // Transcript id of the message this send replies to; the Gateway hydrates
+  // channel-agnostic reply context metadata from session history.
+  replyToId: Type.Optional(NonEmptyString),
   attachments: Type.Optional(ChatAttachmentsSchema),
+  toolBindings: Type.Optional(RunToolBindingsSchema),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   systemInputProvenance: Type.Optional(InputProvenanceSchema),
   systemProvenanceReceipt: Type.Optional(Type.String()),
   suppressCommandInterpretation: Type.Optional(Type.Boolean()),
+  // Client's believed active-branch leaf entry id. A mismatch with the
+  // session's current active leaf rejects the send so stale views cannot post elsewhere.
+  expectedLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   expectedSessionRoutingContract: Type.Optional(NonEmptyString),
   idempotencyKey: NonEmptyString,
 });
@@ -144,6 +174,21 @@ const ChatEventErrorKindSchema = Type.Union([
   Type.Literal("context_length"),
   Type.Literal("unknown"),
 ]);
+
+/** Coarse startup stages shown while a run has not produced visible activity yet. */
+export const ChatRunStartupPhaseSchema = Type.Union([
+  Type.Literal("preparing_workspace"),
+  Type.Literal("provisioning_environment"),
+  Type.Literal("preparing_context"),
+  Type.Literal("starting_model"),
+]);
+
+/** Non-terminal run status emitted before assistant or tool activity becomes visible. */
+export const ChatStatusEventSchema = closedObject({
+  ...ChatEventBaseSchema,
+  state: Type.Literal("status"),
+  phase: ChatRunStartupPhaseSchema,
+});
 
 /** Incremental assistant output event; `replace` marks full-content refresh deltas. */
 export const ChatDeltaEventSchema = closedObject({
@@ -187,6 +232,7 @@ export const ChatErrorEventSchema = closedObject({
 
 /** Public chat stream event union consumed by gateway protocol validators. */
 export const ChatEventSchema = Type.Union([
+  ChatStatusEventSchema,
   ChatDeltaEventSchema,
   ChatFinalEventSchema,
   ChatAbortedEventSchema,
@@ -201,4 +247,6 @@ export type LogsTailParams = Static<typeof LogsTailParamsSchema>;
 export type LogsTailResult = Static<typeof LogsTailResultSchema>;
 export type ChatAbortParams = Static<typeof ChatAbortParamsSchema>;
 export type ChatInjectParams = Static<typeof ChatInjectParamsSchema>;
+export type ChatRunStartupPhase = Static<typeof ChatRunStartupPhaseSchema>;
+export type ChatStatusEvent = Static<typeof ChatStatusEventSchema>;
 export type ChatEvent = Static<typeof ChatEventSchema>;

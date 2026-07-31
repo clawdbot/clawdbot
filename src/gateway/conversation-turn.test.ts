@@ -3,6 +3,7 @@ import {
   ConversationDeliveryInputError,
   type ConversationDeliveryRecord,
 } from "../config/sessions/conversation-delivery-store.js";
+import type { ConversationRecord } from "../config/sessions/conversation-registry.js";
 import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
 import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
 import {
@@ -122,13 +123,22 @@ function createDeps() {
       update(operationId, { status: "unknown" }),
     ),
     registerPendingConversationTurn: vi.fn(registerPendingConversationTurn),
-    resolveConversation: vi.fn((): typeof conversation | undefined => conversation),
+    resolveConversation: vi.fn((): ConversationRecord | undefined => conversation),
     resolveOutboundChannelPlugin: vi.fn(
       () =>
         ({
           outbound: { prepareConversationTurnMessageId: () => "reef-outbound-1" },
         }) as never,
     ),
+    resolveOutboundSessionRoute: vi.fn(async () => ({
+      sessionKey: conversation.sessionKey,
+      baseSessionKey: conversation.sessionKey,
+      peer: { kind: "direct" as const, id: "molty" },
+      chatType: "direct" as const,
+      from: "reef:molty",
+      to: conversation.target,
+    })),
+    bindOutboundSessionEntry: vi.fn(async () => undefined),
     runMessageAction: vi.fn(async () => sentResult()) as never,
     operations,
     update,
@@ -151,6 +161,44 @@ function persistIntent(input: Record<string, unknown>): void {
 }
 
 describe("runGatewayConversationTurn", () => {
+  it("creates a context binding only when a discovered address starts a turn", async () => {
+    const deps = createDeps();
+    const {
+      sessionId: _sessionId,
+      sessionKey: _sessionKey,
+      role: _role,
+      ...unbound
+    } = conversation;
+    deps.resolveConversation.mockReturnValueOnce(unbound).mockReturnValue(conversation);
+    deps.runMessageAction = vi.fn(async (input: Record<string, unknown>) => {
+      persistIntent(input);
+      return sentResult();
+    }) as never;
+
+    await expect(
+      runGatewayConversationTurn(
+        {
+          config: {},
+          agentId: "main",
+          senderIsOwner: true,
+          turnId: "turn-directory-peer",
+          conversationRef: conversation.conversationRef,
+          message: "hello molty",
+          timeoutMs: 1,
+        },
+        deps,
+      ),
+    ).resolves.toMatchObject({ status: "timeout" });
+
+    expect(deps.resolveOutboundSessionRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "reef", target: "reef:molty" }),
+    );
+    expect(deps.bindOutboundSessionEntry).toHaveBeenCalledOnce();
+    expect(deps.registerPendingConversationTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: conversation.sessionId }),
+    );
+  });
+
   it("registers correlation before durable delivery and consumes a fast reply inline", async () => {
     const deps = createDeps();
     let capture: Promise<void> | undefined;
@@ -468,6 +516,13 @@ describe("runGatewayConversationTurn", () => {
 
   it("rejects unsupported channels before registering or sending", async () => {
     const deps = createDeps();
+    const {
+      sessionId: _sessionId,
+      sessionKey: _sessionKey,
+      role: _role,
+      ...unbound
+    } = conversation;
+    deps.resolveConversation.mockReturnValue(unbound);
     deps.resolveOutboundChannelPlugin.mockReturnValueOnce({ outbound: {} } as never);
 
     await expect(
@@ -484,6 +539,9 @@ describe("runGatewayConversationTurn", () => {
         deps,
       ),
     ).rejects.toBeInstanceOf(ConversationInputError);
+    expect(deps.resolveOutboundSessionRoute).not.toHaveBeenCalled();
+    expect(deps.bindOutboundSessionEntry).not.toHaveBeenCalled();
+    expect(deps.beginOperation).not.toHaveBeenCalled();
     expect(deps.registerPendingConversationTurn).not.toHaveBeenCalled();
     expect(deps.runMessageAction).not.toHaveBeenCalled();
   });

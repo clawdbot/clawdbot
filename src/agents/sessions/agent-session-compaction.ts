@@ -1,5 +1,4 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
-import { streamSimple } from "../../llm/stream.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import {
   calculateContextTokens,
@@ -7,11 +6,14 @@ import {
   estimateContextTokens,
   prepareCompaction,
   shouldCompact,
+  type CompactionPreparation,
   type CompactionResult,
 } from "../runtime/index.js";
 import { AgentSessionInspection } from "./agent-session-inspection.js";
 import { unwrapCoreResult } from "./agent-session-utils.js";
 import { formatNoModelSelectedMessage } from "./auth-guidance.js";
+import { preflightManualSessionCompaction } from "./manual-compaction-preflight.js";
+import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { getLatestCompactionEntry, type CompactionEntry } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
 
@@ -107,7 +109,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       }
     | undefined
   > {
-    if (this.agent.streamFn !== streamSimple) {
+    if (
+      this.agent.streamFn !==
+      getModelRegistryRuntime(this.sessionModelRegistry).llmRuntime.streamSimple
+    ) {
       return this.getCompactionRequestAuth(model);
     }
 
@@ -141,16 +146,17 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     }
 
     const pathEntries = this.sessionManager.getBranch();
-    const preparation = unwrapCoreResult(prepareCompaction(pathEntries, options.settings));
-    if (!preparation) {
-      if (isManual) {
-        const lastEntry = pathEntries[pathEntries.length - 1];
-        throw new Error(
-          lastEntry?.type === "compaction"
-            ? "Already compacted"
-            : "Nothing to compact (session too small)",
-        );
+    let preparation: CompactionPreparation | undefined;
+    if (isManual) {
+      const manualPreflight = preflightManualSessionCompaction(pathEntries, options.settings);
+      if (!manualPreflight.compactable) {
+        throw new Error(manualPreflight.reason);
       }
+      preparation = manualPreflight.preparation;
+    } else {
+      preparation = unwrapCoreResult(prepareCompaction(pathEntries, options.settings));
+    }
+    if (!preparation) {
       return { status: "skipped" };
     }
 
@@ -163,6 +169,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         branchEntries: pathEntries,
         customInstructions: options.customInstructions,
         signal: options.signal,
+        // Extension-owned compaction must use the same prepared model execution
+        // context as the core path below or provider wrappers and reasoning drift.
+        thinkingLevel: this.thinkingLevel,
+        streamFn: this.agent.streamFn,
       });
 
       if (extensionResult?.cancel) {
@@ -265,8 +275,16 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       return false;
     }
 
-    // Case 1: Overflow - LLM returned context overflow error
-    if (sameModel && isContextOverflow(assistantMessage, contextWindow)) {
+    // Case 1: Overflow - an unsuccessful response needs compact-and-retry recovery.
+    // Successful high-usage responses fall through to threshold maintenance below.
+    if (
+      sameModel &&
+      (assistantMessage.stopReason === "error" || assistantMessage.stopReason === "length") &&
+      isContextOverflow(assistantMessage, contextWindow)
+    ) {
+      if (this.contextOverflowRecoveryOwner === "caller") {
+        return false;
+      }
       if (this.overflowRecoveryAttempted) {
         this.emit({
           type: "compaction_end",
@@ -281,8 +299,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       }
 
       this.overflowRecoveryAttempted = true;
-      // Remove the error message from agent state (it IS saved to session for history,
-      // but we don't want it in context for the retry)
+      // Keep the failed response in history, but exclude it from the retry context.
       const messages = this.agent.state.messages;
       if (messages.at(-1)?.role === "assistant") {
         this.agent.state.messages = messages.slice(0, -1);
@@ -376,7 +393,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       if (willRetry) {
         const messages = this.agent.state.messages;
         const lastMsg = messages[messages.length - 1];
-        if (lastMsg?.role === "assistant" && lastMsg.stopReason === "error") {
+        if (
+          lastMsg?.role === "assistant" &&
+          (lastMsg.stopReason === "error" || lastMsg.stopReason === "length")
+        ) {
           this.agent.state.messages = messages.slice(0, -1);
         }
         return true;

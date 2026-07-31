@@ -6,7 +6,7 @@ import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionEntry }>(
   selected: T | undefined,
@@ -24,6 +24,9 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
       selected.entry.lifecycleRevision === expected.expectedLifecycleRevision) &&
     (expectedState === undefined ||
       (selected.entry.abortedLastRun === expectedState.abortedLastRun &&
+        selected.entry.mainRestartRecovery?.cycleId === expectedState.mainRestartRecoveryCycleId &&
+        selected.entry.mainRestartRecovery?.revision ===
+          expectedState.mainRestartRecoveryRevision &&
         selected.entry.restartRecoveryBeforeAgentReplyState ===
           expectedState.restartRecoveryBeforeAgentReplyState &&
         selected.entry.restartRecoveryDeliveryReceiptState ===
@@ -50,8 +53,7 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
           selected.entry.restartRecoveryTerminalRunIds,
           expectedState.restartRecoveryTerminalRunIds,
         ) &&
-        selected.entry.status === expectedState.status &&
-        selected.entry.updatedAt === expectedState.updatedAt)),
+        selected.entry.status === expectedState.status)),
   );
 }
 
@@ -78,9 +80,6 @@ export function buildExpectedTranscriptTurnSessionPatch(params: {
   return {
     ...(acceptedMessage ? params.sessionLifecyclePatch : undefined),
     ...(acceptedMessage && restartRecoveryTerminalRunIds ? { restartRecoveryTerminalRunIds } : {}),
-    ...(params.currentEntry.sessionFile === params.sessionFile
-      ? {}
-      : { sessionFile: params.sessionFile }),
     ...(touchUpdatedAt > 0
       ? {
           updatedAt: Math.max(

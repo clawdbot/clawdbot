@@ -2,7 +2,6 @@
 // active-run cleanup, hooks, thread bindings, and browser/MCP cleanup.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, test, vi } from "vitest";
@@ -23,6 +22,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -118,22 +118,25 @@ function expectThreadBindingsUnbound(targetSessionKey: string) {
   });
 }
 
-test("sessions.delete removes clean session worktrees and keeps dirty ones", async () => {
-  const root = await fs.mkdtemp(
-    path.join(await fs.realpath(os.tmpdir()), "openclaw-delete-worktree-"),
-  );
+test("sessions.delete snapshots and removes session worktrees", async () => {
+  const openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-delete-worktree-",
+  });
+  const root = openClawState.root;
   const workspace = await initializeRemoteBackedGitWorkspace(root);
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
   let dirtyWorktreeId: string | undefined;
   try {
     const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
+    await fs.writeFile(path.join(workspace, "local-base.txt"), "inherited local commit\n");
+    await execFileAsync("git", ["-C", workspace, "add", "local-base.txt"]);
+    await execFileAsync("git", ["-C", workspace, "commit", "-m", "local base"]);
     const clean = await directSessionReq<{
       key: string;
-      worktree: { id: string; path: string };
+      worktree: { id: string; path: string; branch: string };
     }>("sessions.create", { agentId: "main", worktree: true }, { client: adminClient });
     expect(clean.ok).toBe(true);
     const cleanKey = clean.payload?.key;
@@ -148,10 +151,26 @@ test("sessions.delete removes clean session worktrees and keeps dirty ones", asy
       removedAt: expect.any(Number),
       snapshotRef: expect.stringMatching(/^refs\/openclaw\/snapshots\//),
     });
+    const registered = await execFileAsync("git", [
+      "-C",
+      workspace,
+      "worktree",
+      "list",
+      "--porcelain",
+    ]);
+    expect(registered.stdout).not.toContain(cleanWorktree!.path);
+    const branch = await execFileAsync("git", [
+      "-C",
+      workspace,
+      "branch",
+      "--list",
+      cleanWorktree!.branch,
+    ]);
+    expect(branch.stdout.trim()).toBe("");
 
     const dirty = await directSessionReq<{
       key: string;
-      worktree: { id: string; path: string };
+      worktree: { id: string; path: string; branch: string };
     }>("sessions.create", { agentId: "main", worktree: true }, { client: adminClient });
     expect(dirty.ok).toBe(true);
     const dirtyKey = dirty.payload?.key;
@@ -161,8 +180,12 @@ test("sessions.delete removes clean session worktrees and keeps dirty ones", asy
 
     await expectSessionDeleteSucceeds({ key: dirtyKey! });
 
-    await expect(fs.access(dirtyWorktree!.path)).resolves.toBeUndefined();
-    expect(getRegistryWorktree(process.env, dirtyWorktree!.id)?.removedAt).toBeUndefined();
+    await expect(fs.access(dirtyWorktree!.path)).rejects.toThrow();
+    expect(getRegistryWorktree(process.env, dirtyWorktree!.id)).toMatchObject({
+      removedAt: expect.any(Number),
+      snapshotRef: expect.stringMatching(/^refs\/openclaw\/snapshots\//),
+    });
+    dirtyWorktreeId = undefined;
   } finally {
     if (
       dirtyWorktreeId &&
@@ -171,13 +194,8 @@ test("sessions.delete removes clean session worktrees and keeps dirty ones", asy
       await managedWorktrees.remove({ id: dirtyWorktreeId, reason: "test-cleanup", force: true });
     }
     closeOpenClawStateDatabaseForTest();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
     testState.agentConfig = undefined;
-    await fs.rm(root, { recursive: true, force: true });
+    await openClawState.cleanup();
   }
 });
 
@@ -937,7 +955,7 @@ test("sessions.delete sessions.changed event always carries the resolved owner",
     "sessions.changed",
     expect.objectContaining({ sessionKey: "agent:main:side", agentId: "main", reason: "delete" }),
     new Set(["conn-1"]),
-    { dropIfSlow: true },
+    { agentId: "main", dropIfSlow: true },
   );
 });
 

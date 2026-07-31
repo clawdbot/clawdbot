@@ -16,38 +16,77 @@ import {
   formatEnvelopeForText,
   providerHasGenericConfig,
   providerSummaryText,
+  requireProviderModelOverride,
   resolveLocalCapabilityRuntimeConfig,
-  resolveModelRefOverride,
 } from "./shared.js";
+
+async function closeEmbeddingProviderWithRetry(provider: {
+  close?: () => Promise<void> | void;
+}): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await provider.close?.();
+      return;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
+}
 
 async function runMemoryEmbeddingCreate(params: {
   texts: string[];
   provider?: string;
   model?: string;
 }) {
+  const modelRef = requireProviderModelOverride(params.model);
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer embedding create",
     targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
   });
-  const modelRef = resolveModelRefOverride(params.model);
-  const requestedProvider = normalizeOptionalString(params.provider) || modelRef.provider || "auto";
+  const requestedProvider =
+    normalizeOptionalString(params.provider) || modelRef?.provider || "auto";
   const result = await createEmbeddingProvider({
     config: cfg,
     agentDir: resolveAgentDir(cfg, resolveDefaultAgentId(cfg)),
     provider: requestedProvider,
     fallback: "none",
-    model: modelRef.model ?? "",
+    model: modelRef?.model ?? "",
   });
   if (!result.provider) {
     throw new Error(result.providerUnavailableReason ?? "No embedding provider available.");
   }
-  const embeddings = await result.provider.embedBatch(params.texts);
+  const provider = result.provider;
+  let embeddings: number[][] = [];
+  let operationError: unknown;
+  let operationFailed = false;
+  try {
+    embeddings = await provider.embedBatch(params.texts);
+  } catch (err) {
+    operationError = err;
+    operationFailed = true;
+  }
+  let closeError: unknown;
+  let closeFailed = false;
+  try {
+    await closeEmbeddingProviderWithRetry(provider);
+  } catch (err) {
+    closeError = err;
+    closeFailed = true;
+  }
+  if (operationFailed) {
+    throw operationError;
+  }
+  if (closeFailed) {
+    throw closeError;
+  }
   return {
     ok: true,
     capability: "embedding.create",
     transport: "local" as const,
-    provider: result.provider.id,
-    model: result.provider.model,
+    provider: provider.id,
+    model: provider.model,
     attempts: result.fallbackFrom
       ? [{ provider: result.fallbackFrom, outcome: "failed", error: result.fallbackReason }]
       : [],

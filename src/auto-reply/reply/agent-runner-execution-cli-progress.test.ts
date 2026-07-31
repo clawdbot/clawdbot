@@ -3,7 +3,7 @@ import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   setupAgentRunnerExecutionTestState,
-  getRunAgentTurnWithFallback,
+  getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
   createMinimalRunAgentTurnParams,
@@ -15,7 +15,7 @@ import type {
 
 const state = setupAgentRunnerExecutionTestState();
 
-describe("runAgentTurnWithFallback: CLI progress bridging", () => {
+describe("executeAgentTurn: CLI progress bridging", () => {
   it("bridges CLI assistant agent events into onPartialReply for live preview (#76869)", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
@@ -47,12 +47,12 @@ describe("runAgentTurnWithFallback: CLI progress bridging", () => {
     const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>(
       async (_payload) => undefined,
     );
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "claude-opus-4-6";
 
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "hi",
       followupRun,
       sessionCtx: {
@@ -125,12 +125,12 @@ describe("runAgentTurnWithFallback: CLI progress bridging", () => {
         }
       },
     );
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "claude-opus-4-6";
 
-    const runPromise = runAgentTurnWithFallback({
+    const runPromise = executeAgentTurn({
       commandBody: "hi",
       followupRun,
       sessionCtx: {
@@ -204,12 +204,12 @@ describe("runAgentTurnWithFallback: CLI progress bridging", () => {
     );
 
     const onToolStart = vi.fn<NonNullable<GetReplyOptions["onToolStart"]>>(async () => undefined);
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "claude-opus-4-6";
 
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "hi",
       followupRun,
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
@@ -279,11 +279,11 @@ describe("runAgentTurnWithFallback: CLI progress bridging", () => {
     const typingSignals = createMockTypingSignaler();
     vi.mocked(typingSignals.signalTextDelta).mockReturnValue(typingPending);
     const callbackOrder: string[] = [];
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "claude-opus-4-6";
-    const runPromise = runAgentTurnWithFallback({
+    const runPromise = executeAgentTurn({
       commandBody: "hi",
       followupRun,
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
@@ -371,11 +371,11 @@ describe("runAgentTurnWithFallback: CLI progress bridging", () => {
     const typingSignals = createMockTypingSignaler();
     vi.mocked(typingSignals.signalToolStart).mockReturnValue(typingPending);
     const callbackOrder: string[] = [];
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "claude-opus-4-6";
-    const runPromise = runAgentTurnWithFallback({
+    const runPromise = executeAgentTurn({
       commandBody: "hi",
       followupRun,
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
@@ -441,12 +441,12 @@ describe("runAgentTurnWithFallback: CLI progress bridging", () => {
     );
 
     const onItemEvent = vi.fn<NonNullable<GetReplyOptions["onItemEvent"]>>(async () => undefined);
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "claude-opus-4-6";
 
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "hi",
       followupRun,
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
@@ -498,12 +498,12 @@ describe("runAgentTurnWithFallback: CLI progress bridging", () => {
     );
 
     const onItemEvent = vi.fn<NonNullable<GetReplyOptions["onItemEvent"]>>();
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "claude-opus-4-6";
 
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "hi",
       followupRun,
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
@@ -557,13 +557,13 @@ describe("runAgentTurnWithFallback: CLI progress bridging", () => {
     });
 
     const onToolStart = vi.fn<NonNullable<GetReplyOptions["onToolStart"]>>(async () => undefined);
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "claude-opus-4-6";
     followupRun.run.silentExpected = true;
 
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "hi",
       followupRun,
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
@@ -617,13 +617,13 @@ describe("runAgentTurnWithFallback: CLI progress bridging", () => {
     const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>(
       async (_payload) => undefined,
     );
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "claude-opus-4-6";
     followupRun.run.silentExpected = true;
 
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "hi",
       followupRun,
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
@@ -682,12 +682,12 @@ describe("runAgentTurnWithFallback: CLI progress bridging", () => {
     const onReasoningStream = vi.fn<NonNullable<GetReplyOptions["onReasoningStream"]>>(
       async (_payload) => undefined,
     );
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "claude-opus-4-7";
 
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "hi",
       followupRun,
       sessionCtx: {
@@ -752,13 +752,13 @@ describe("runAgentTurnWithFallback: CLI progress bridging", () => {
     const onReasoningStream = vi.fn<NonNullable<GetReplyOptions["onReasoningStream"]>>(
       async (_payload) => undefined,
     );
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "claude-opus-4-7";
     followupRun.run.silentExpected = true;
 
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "hi",
       followupRun,
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
@@ -807,12 +807,12 @@ describe("runAgentTurnWithFallback: CLI progress bridging", () => {
     const onReasoningStream = vi.fn<NonNullable<GetReplyOptions["onReasoningStream"]>>(
       async (_payload) => undefined,
     );
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.5";
 
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "hi",
       followupRun,
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
@@ -865,12 +865,12 @@ describe("runAgentTurnWithFallback: CLI progress bridging", () => {
     const onReasoningStream = vi.fn<NonNullable<GetReplyOptions["onReasoningStream"]>>(
       async (_payload) => undefined,
     );
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "anthropic";
     followupRun.run.model = "claude-sonnet-4-7";
 
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "hi",
       followupRun,
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
@@ -909,9 +909,9 @@ describe("runAgentTurnWithFallback: CLI progress bridging", () => {
     const onReasoningStream = vi.fn<NonNullable<GetReplyOptions["onReasoningStream"]>>(
       async (_payload) => undefined,
     );
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
 
-    await runAgentTurnWithFallback(
+    await executeAgentTurn(
       createMinimalRunAgentTurnParams({
         opts: { onReasoningStream },
       }),

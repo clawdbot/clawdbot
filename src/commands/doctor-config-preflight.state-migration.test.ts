@@ -1,5 +1,9 @@
 // Doctor config preflight tests cover state migration preflight behavior before config repair.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  listActiveDegradedPlugins,
+  setActiveDegradedPlugins,
+} from "../plugins/runtime-degraded-state.js";
 import { ExitError } from "../runtime.js";
 
 type StateMigrationResult = {
@@ -11,8 +15,17 @@ type StateMigrationResult = {
 };
 
 type StartupConvergenceWarning = {
+  pluginId?: string;
+  reason: string;
   message: string;
   guidance: string[];
+};
+
+type StartupSmokeFailure = {
+  pluginId: string;
+  installPath?: string;
+  reason: "missing-install-path" | "missing-main-entry" | "unreadable-package-json";
+  detail: string;
 };
 
 type StartupConvergenceResult = {
@@ -20,7 +33,7 @@ type StartupConvergenceResult = {
   notices?: StartupConvergenceWarning[];
   warnings: StartupConvergenceWarning[];
   errored: boolean;
-  smokeFailures: unknown[];
+  smokeFailures: StartupSmokeFailure[];
   installRecords: Record<string, unknown>;
 };
 
@@ -36,7 +49,7 @@ const autoMigrateLegacyStateDir = vi.hoisted(() =>
 );
 const autoMigrateLegacyState = vi.hoisted(() =>
   vi.fn(
-    async (): Promise<StateMigrationResult> => ({
+    async (_params?: unknown): Promise<StateMigrationResult> => ({
       migrated: true,
       skipped: false,
       changes: ["imported"],
@@ -63,6 +76,9 @@ const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
       warnings: [],
     }),
   ),
+);
+const migrateLegacyMediaPersistence = vi.hoisted(() =>
+  vi.fn(() => ({ changes: [], warnings: [] })),
 );
 const repairLegacyCronStoreWithoutPrompt = vi.hoisted(() =>
   vi.fn(
@@ -99,6 +115,9 @@ const runPostCorePluginConvergence = vi.hoisted(() =>
       installRecords: {},
     }),
   ),
+);
+const runActivePluginPayloadSmokeCheck = vi.hoisted(() =>
+  vi.fn(async () => ({ checked: [] as string[], failures: [] as StartupSmokeFailure[] })),
 );
 const planStartupPluginConvergence = vi.hoisted(() =>
   vi.fn(async () => ({ required: true, installRecords: {} })),
@@ -140,6 +159,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
   autoMigrateLegacyStateDir,
   autoMigrateLegacyPluginDoctorState,
   autoMigrateLegacyTaskStateSidecars,
+  migrateLegacyMediaPersistence,
 }));
 
 vi.mock("./doctor/cron/legacy-repair.js", () => ({
@@ -151,6 +171,10 @@ vi.mock("../infra/startup-migration-checkpoint.js", () => ({
   acquireStartupMigrationLease,
   needsStartupMigrationCheckpoint,
   recordSuccessfulStartupMigrations,
+}));
+
+vi.mock("../cli/update-cli/active-plugin-payload-validation.js", () => ({
+  runActivePluginPayloadSmokeCheck,
 }));
 
 vi.mock("../cli/update-cli/post-core-plugin-convergence.js", () => ({
@@ -173,11 +197,13 @@ vi.mock("../config/io.js", () => ({
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
-const { runDoctorConfigPreflight } = await import("./doctor-config-preflight.js");
+const { mapStartupPluginQuarantineRefresh, runDoctorConfigPreflight } =
+  await import("./doctor-config-preflight.js");
 
 describe("runDoctorConfigPreflight state migration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setActiveDegradedPlugins([]);
     needsStartupMigrationCheckpoint.mockReturnValue(false);
     runPostCorePluginConvergence.mockResolvedValue(makeStartupConvergenceResult());
     planStartupPluginConvergence.mockResolvedValue({ required: true, installRecords: {} });
@@ -374,6 +400,7 @@ describe("runDoctorConfigPreflight state migration", () => {
       cfg: { gateway: { mode: "local", port: 19091 } },
       env: process.env,
       recoverCorruptTargetStore: undefined,
+      doctorOnlyStateMigrations: undefined,
     });
     expect(note).toHaveBeenCalledWith("- cron-imported", "Doctor changes");
     expect(note).toHaveBeenCalledWith("- imported", "Doctor changes");
@@ -451,21 +478,165 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
-  it("does not acquire the startup migration lease when the checkpoint is current", async () => {
+  it("checkpoints after a dreaming conflict is archived without a migration warning", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    autoMigrateLegacyPluginDoctorState.mockResolvedValueOnce({
+      migrated: true,
+      skipped: false,
+      changes: [
+        "Resolved Memory Core session ingestion legacy conflict by keeping canonical SQLite plugin state",
+        "Archived Memory Core session ingestion conflicting legacy source",
+      ],
+      warnings: [],
+    });
+
+    await runDoctorConfigPreflight({
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      requireStartupMigrationCheckpoint: true,
+      skipPristineCoreStateMigrations: true,
+    });
+
+    expect(autoMigrateLegacyPluginDoctorState).toHaveBeenCalledOnce();
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Resolved Memory Core session ingestion legacy conflict by keeping canonical SQLite plugin state",
+      ),
+      "Doctor changes",
+    );
+    expect(note).not.toHaveBeenCalledWith(
+      expect.stringContaining("SQLite rows conflict with the legacy source"),
+      "Doctor warnings",
+    );
+    expect(recordSuccessfulStartupMigrations).toHaveBeenCalledOnce();
+    expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
+  });
+
+  it("maps active payload failures into refreshed plugin quarantine", () => {
+    const result = mapStartupPluginQuarantineRefresh({
+      cfg: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      failures: [
+        {
+          pluginId: "discord",
+          installPath: "/plugins/discord",
+          reason: "missing-main-entry",
+          detail: "index.js",
+        },
+      ],
+    });
+
+    expect(result.blockingDiagnostic).toBeNull();
+    expect(result.quarantinedPlugins).toMatchObject([
+      {
+        pluginId: "discord",
+        state: "configured-unavailable",
+        diagnostic: { reason: "missing-main-entry" },
+      },
+    ]);
+  });
+
+  it("maps active ownerless payload failures into blocking diagnostics", () => {
+    const result = mapStartupPluginQuarantineRefresh({
+      cfg: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      failures: [
+        {
+          pluginId: "discord",
+          reason: "missing-install-path",
+          detail: "Install path is missing from the plugin install record.",
+        },
+      ],
+    });
+
+    expect(result.quarantinedPlugins).toEqual([]);
+    expect(result.blockingDiagnostic?.messages).toEqual([
+      expect.stringContaining("Install path is missing from the plugin install record."),
+    ]);
+  });
+
+  it("clears stale plugin quarantine through the current-checkpoint preflight", async () => {
+    setActiveDegradedPlugins([
+      {
+        pluginId: "stale-plugin",
+        state: "configured-unavailable",
+        diagnostic: {
+          kind: "plugin-verification",
+          reason: "missing-main-entry",
+          detail: "index.js",
+          installPath: "/plugins/stale-plugin",
+        },
+      },
+    ]);
+    planStartupPluginConvergence.mockResolvedValueOnce({ required: false, installRecords: {} });
+
     await runDoctorConfigPreflight({
       migrateLegacyConfig: false,
       invalidConfigNote: false,
       requireStartupMigrationCheckpoint: true,
     });
 
-    expect(acquireStartupMigrationLease).not.toHaveBeenCalled();
+    expect(listActiveDegradedPlugins()).toEqual([]);
+    expect(runActivePluginPayloadSmokeCheck).not.toHaveBeenCalled();
     expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
-    expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
-    expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
-    expect(autoMigrateLegacyState).not.toHaveBeenCalled();
-    expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
-    expect(runPostCorePluginConvergence).not.toHaveBeenCalled();
-    expect(readConfigFileSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("keeps ownerless install-record failures blocking", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      config: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      sourceConfig: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      parsed: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      legacyIssues: [],
+      warnings: [],
+      issues: [],
+    });
+    runPostCorePluginConvergence.mockResolvedValueOnce(
+      makeStartupConvergenceResult({
+        errored: true,
+        warnings: [
+          {
+            pluginId: "discord",
+            reason: "missing-install-path: install path missing",
+            message: 'Plugin "discord" has no install path.',
+            guidance: ["Run `openclaw update repair` to retry plugin repair."],
+          },
+        ],
+        smokeFailures: [
+          {
+            pluginId: "discord",
+            reason: "missing-install-path",
+            detail: "install path missing",
+          },
+        ],
+      }),
+    );
+
+    await expect(
+      runDoctorConfigPreflight({
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        requireStartupMigrationCheckpoint: true,
+      }),
+    ).rejects.toThrow('Plugin "discord" has no install path.');
+
+    expect(listActiveDegradedPlugins()).toEqual([]);
+    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
   });
 
   it("checkpoints startup migrations without loading plugin convergence when the plan is empty", async () => {
@@ -563,7 +734,9 @@ describe("runDoctorConfigPreflight state migration", () => {
         invalidConfigNote: false,
         requireStartupMigrationCheckpoint: true,
       }),
-    ).rejects.toThrow("refusing to report the gateway ready");
+    ).rejects.toThrow(
+      "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.",
+    );
 
     expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
@@ -575,6 +748,7 @@ describe("runDoctorConfigPreflight state migration", () => {
       makeStartupConvergenceResult({
         warnings: [
           {
+            reason: "Configured plugin discord is not installed.",
             message: "Configured plugin discord is not installed.",
             guidance: ["Run `openclaw update repair` to retry plugin repair."],
           },
@@ -598,13 +772,34 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
-  it("blocks gateway readiness when plugin convergence reports an error", async () => {
+  it("quarantines a plugin payload verification failure and checkpoints readiness", async () => {
     needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      config: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      sourceConfig: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      parsed: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      legacyIssues: [],
+      warnings: [],
+      issues: [],
+    });
     runPostCorePluginConvergence.mockResolvedValueOnce(
       makeStartupConvergenceResult({
         errored: true,
         warnings: [
           {
+            pluginId: "discord",
+            reason: "missing-main-entry: index.js",
             message: 'Plugin "discord" failed post-core payload smoke check (missing): index.js',
             guidance: [
               "Run `openclaw update repair` to retry plugin repair.",
@@ -612,18 +807,43 @@ describe("runDoctorConfigPreflight state migration", () => {
             ],
           },
         ],
+        smokeFailures: [
+          {
+            pluginId: "discord",
+            installPath: "/plugins/discord",
+            reason: "missing-main-entry",
+            detail: "index.js",
+          },
+        ],
       }),
     );
 
-    await expect(
-      runDoctorConfigPreflight({
-        migrateLegacyConfig: false,
-        invalidConfigNote: false,
-        requireStartupMigrationCheckpoint: true,
-      }),
-    ).rejects.toThrow("failed post-core payload smoke check");
+    await runDoctorConfigPreflight({
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      requireStartupMigrationCheckpoint: true,
+    });
 
-    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
+    expect(listActiveDegradedPlugins()).toEqual([
+      {
+        pluginId: "discord",
+        state: "configured-unavailable",
+        diagnostic: {
+          kind: "plugin-verification",
+          reason: "missing-main-entry",
+          detail: "index.js",
+          installPath: "/plugins/discord",
+        },
+      },
+    ]);
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        '- Plugin "discord" failed post-core payload smoke check (missing): index.js',
+      ),
+      "Doctor warnings",
+    );
+    expect(note.mock.calls.filter(([, title]) => title === "Doctor warnings")).toHaveLength(1);
+    expect(recordSuccessfulStartupMigrations).toHaveBeenCalledOnce();
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
@@ -663,22 +883,38 @@ describe("runDoctorConfigPreflight state migration", () => {
       cfg: { gateway: { mode: "local", port: 19091 } },
       env: process.env,
       recoverCorruptTargetStore: true,
+      doctorOnlyStateMigrations: undefined,
     });
+  });
+
+  it("passes explicit Doctor-only migration authority only when requested", async () => {
+    await runDoctorConfigPreflight({
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(autoMigrateLegacyState).toHaveBeenCalledWith(
+      expect.objectContaining({ doctorOnlyStateMigrations: true }),
+    );
   });
 
   it("runs plugin state migrations with resolved legacy config before config repair removes retired paths", async () => {
     const parsedConfig = { $include: "memory-search.json" };
     const resolvedConfig = {
-      agents: {
-        defaults: {
-          memorySearch: {
-            store: {
-              path: "/custom/memory-{agentId}.sqlite",
-              vector: { enabled: false },
-            },
+      cron: { webhook: "https://example.invalid/cron-finished" },
+      memory: {
+        search: {
+          store: {
+            path: "/custom/memory-{agentId}.sqlite",
+            vector: { enabled: false },
           },
         },
-        list: [{ id: "main" }],
+      },
+
+      agents: {
+        defaults: {},
+        entries: { main: {} },
       },
     };
     readConfigFileSnapshot.mockResolvedValueOnce({
@@ -689,9 +925,9 @@ describe("runDoctorConfigPreflight state migration", () => {
       parsed: parsedConfig,
       legacyIssues: [
         {
-          path: "agents.defaults.memorySearch.store.path",
+          path: "memory.search.store.path",
           message:
-            "agents.defaults.memorySearch.store.path is legacy; memory indexes now live in each agent database.",
+            "memory.search.store.path is legacy; memory indexes now live in each agent database.",
         },
       ],
       warnings: [],
@@ -705,50 +941,56 @@ describe("runDoctorConfigPreflight state migration", () => {
 
     expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
       cfg: expect.objectContaining({
-        agents: expect.objectContaining({
-          defaults: expect.objectContaining({
-            memorySearch: {
-              store: {
-                vector: { enabled: false },
-              },
+        cron: expect.objectContaining({ webhook: "https://example.invalid/cron-finished" }),
+        memory: expect.objectContaining({
+          search: expect.objectContaining({
+            store: {
+              vector: { enabled: false },
             },
           }),
-          list: [{ id: "main" }],
+        }),
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({}),
+          entries: { main: { default: true } },
         }),
       }),
       migrateCodexModelRefs: false,
     });
     expect(autoMigrateLegacyState).toHaveBeenCalledWith({
       cfg: expect.objectContaining({
-        agents: expect.objectContaining({
-          defaults: expect.objectContaining({
-            memorySearch: {
-              store: {
-                vector: { enabled: false },
-              },
+        memory: expect.objectContaining({
+          search: expect.objectContaining({
+            store: {
+              vector: { enabled: false },
             },
           }),
-          list: [{ id: "main" }],
+        }),
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({}),
+          entries: { main: { default: true } },
         }),
       }),
       pluginDoctorConfig: resolvedConfig,
       env: process.env,
       recoverCorruptTargetStore: undefined,
+      doctorOnlyStateMigrations: undefined,
     });
   });
 
   it("keeps plugin state migrations for partially valid legacy config repairs", async () => {
     const resolvedConfig = {
       gateway: { mode: "local", port: "not-a-port" },
-      agents: {
-        defaults: {
-          memorySearch: {
-            store: {
-              path: "/custom/memory-{agentId}.sqlite",
-              vector: { enabled: false },
-            },
+      memory: {
+        search: {
+          store: {
+            path: "/custom/memory-{agentId}.sqlite",
+            vector: { enabled: false },
           },
         },
+      },
+
+      agents: {
+        defaults: {},
         list: [{ id: "main" }],
       },
     };
@@ -760,9 +1002,9 @@ describe("runDoctorConfigPreflight state migration", () => {
       parsed: resolvedConfig,
       legacyIssues: [
         {
-          path: "agents.defaults.memorySearch.store.path",
+          path: "memory.search.store.path",
           message:
-            "agents.defaults.memorySearch.store.path is legacy; memory indexes now live in each agent database.",
+            "memory.search.store.path is legacy; memory indexes now live in each agent database.",
         },
       ],
       warnings: [],
@@ -785,7 +1027,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(note).toHaveBeenCalledWith("- task-imported", "Doctor changes");
   });
 
-  it("limits invalid-config preflight to config-independent state migration", async () => {
+  it("runs config-independent state migration for invalid config", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       exists: true,
       valid: false,
@@ -802,9 +1044,23 @@ describe("runDoctorConfigPreflight state migration", () => {
       invalidConfigNote: false,
     });
 
-    expect(autoMigrateLegacyState).not.toHaveBeenCalled();
-    expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
-    expect(autoMigrateLegacyTaskStateSidecars).toHaveBeenCalledWith({ env: process.env });
-    expect(note).toHaveBeenCalledWith("- task-imported", "Doctor changes");
+    expect(autoMigrateLegacyState).toHaveBeenCalledOnce();
+    const migrationParams = autoMigrateLegacyState.mock.calls[0]?.[0] as
+      | {
+          cfg?: unknown;
+          pluginDoctorConfig?: unknown;
+          env?: NodeJS.ProcessEnv;
+        }
+      | undefined;
+    expect(migrationParams?.cfg).not.toHaveProperty("cron.store");
+    expect(migrationParams?.pluginDoctorConfig).toEqual({
+      cron: { store: "/tmp/legacy-cron.json" },
+    });
+    expect(migrationParams?.env).toBe(process.env);
+    expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
+      cfg: migrationParams?.cfg,
+      migrateCodexModelRefs: false,
+    });
+    expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
   });
 });

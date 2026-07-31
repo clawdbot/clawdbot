@@ -13,16 +13,7 @@ type ContextPruningConfig = {
   mode?: ContextPruningMode;
   /** TTL to consider cache expired (duration string, default unit: minutes). */
   ttl?: string;
-  keepLastAssistants?: number;
-  softTrimRatio?: number;
-  hardClearRatio?: number;
-  minPrunableToolChars?: number;
   tools?: ContextPruningToolMatch;
-  softTrim?: {
-    maxChars?: number;
-    headChars?: number;
-    tailChars?: number;
-  };
   hardClear?: {
     enabled?: boolean;
     placeholder?: string;
@@ -89,31 +80,8 @@ export function computeEffectiveSettings(raw: unknown): EffectiveContextPruningS
     }
   }
 
-  if (typeof cfg.keepLastAssistants === "number" && Number.isFinite(cfg.keepLastAssistants)) {
-    s.keepLastAssistants = Math.max(0, Math.floor(cfg.keepLastAssistants));
-  }
-  if (typeof cfg.softTrimRatio === "number" && Number.isFinite(cfg.softTrimRatio)) {
-    s.softTrimRatio = Math.min(1, Math.max(0, cfg.softTrimRatio));
-  }
-  if (typeof cfg.hardClearRatio === "number" && Number.isFinite(cfg.hardClearRatio)) {
-    s.hardClearRatio = Math.min(1, Math.max(0, cfg.hardClearRatio));
-  }
-  if (typeof cfg.minPrunableToolChars === "number" && Number.isFinite(cfg.minPrunableToolChars)) {
-    s.minPrunableToolChars = Math.max(0, Math.floor(cfg.minPrunableToolChars));
-  }
   if (cfg.tools) {
     s.tools = cfg.tools;
-  }
-  if (cfg.softTrim) {
-    if (typeof cfg.softTrim.maxChars === "number" && Number.isFinite(cfg.softTrim.maxChars)) {
-      s.softTrim.maxChars = Math.max(0, Math.floor(cfg.softTrim.maxChars));
-    }
-    if (typeof cfg.softTrim.headChars === "number" && Number.isFinite(cfg.softTrim.headChars)) {
-      s.softTrim.headChars = Math.max(0, Math.floor(cfg.softTrim.headChars));
-    }
-    if (typeof cfg.softTrim.tailChars === "number" && Number.isFinite(cfg.softTrim.tailChars)) {
-      s.softTrim.tailChars = Math.max(0, Math.floor(cfg.softTrim.tailChars));
-    }
   }
   if (cfg.hardClear) {
     if (typeof cfg.hardClear.enabled === "boolean") {

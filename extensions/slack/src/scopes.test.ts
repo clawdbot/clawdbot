@@ -1,21 +1,21 @@
 // Slack tests cover scopes plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const createSlackWebClientMock = vi.hoisted(() => vi.fn());
+const createSlackReadClientMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./client.js", () => ({
-  createSlackWebClient: createSlackWebClientMock,
+  createSlackReadClient: createSlackReadClientMock,
 }));
 
 const { fetchSlackScopes } = await import("./scopes.js");
 
 function mockSlackClient(apiCall: ReturnType<typeof vi.fn>) {
-  createSlackWebClientMock.mockReturnValue({ apiCall });
+  createSlackReadClientMock.mockReturnValue({ apiCall });
 }
 
 describe("fetchSlackScopes", () => {
   beforeEach(() => {
-    createSlackWebClientMock.mockReset();
+    createSlackReadClientMock.mockReset();
   });
 
   it("uses auth.test response metadata scopes for modern bot tokens", async () => {
@@ -31,7 +31,7 @@ describe("fetchSlackScopes", () => {
       scopes: ["chat:write", "im:history"],
       source: "auth.test",
     });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("xoxb-token", { timeout: 1234 });
+    expect(createSlackReadClientMock).toHaveBeenCalledWith("xoxb-token", { timeout: 1234 });
     expect(apiCall).toHaveBeenCalledTimes(1);
     expect(apiCall).toHaveBeenCalledWith("auth.test");
   });

@@ -3,22 +3,28 @@ import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
 } from "../../gateway/session-store-key.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { getRuntimeConfig } from "../io.js";
+import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentMainSessionKey } from "./main-session.js";
 import { resolveStorePath } from "./paths.js";
 import { clearPluginOwnedSessionState } from "./plugin-host-cleanup.js";
 import {
+  listSqliteSessionChildEntriesReadOnly as listSessionChildEntriesReadOnly,
   listSqliteSessionEntries,
-  loadExactSqliteSessionEntry,
-  loadSqliteSessionEntry,
-  patchSqliteSessionEntry,
-  patchSqliteSessionEntryTarget,
-  readSqliteSessionUpdatedAt,
-  replaceSqliteSessionEntry,
-  replaceSqliteSessionEntrySync,
-  upsertSqliteSessionEntry,
+  listSqliteSessionEntriesReadOnly as listSessionEntriesReadOnly,
+  listSqliteSessionEntryKeysReadOnly as listSessionEntryKeysReadOnly,
+  loadExactSqliteSessionEntry as loadExactSessionEntry,
+  loadExactSqliteSessionEntryReadOnly as loadExactSessionEntryReadOnly,
+  loadSqliteSessionEntry as loadSessionEntry,
+  loadSqliteSessionEntryReadOnly as loadSessionEntryReadOnly,
+  patchSqliteSessionEntry as patchSessionEntry,
+  patchSqliteSessionEntryTarget as patchSessionEntryTarget,
+  readSqliteSessionUpdatedAt as readSessionUpdatedAt,
+  replaceSqliteSessionEntry as replaceSessionEntry,
+  replaceSqliteSessionEntrySync as replaceSessionEntrySync,
+  resolveSqliteSessionEntry,
+  upsertSqliteSessionEntry as upsertSessionEntry,
 } from "./session-accessor.sqlite.js";
 import type {
   SessionAccessScope,
@@ -32,18 +38,34 @@ import type {
   ResolvedSessionEntryUpdateResult,
   SessionEntrySummary,
   SessionEntryReadView,
-  ExactSessionEntry,
   SessionEntryPatchOptions,
   SessionEntryPatchContext,
   SessionEntryPatchResult,
-  SessionEntryTargetPatchScope,
 } from "./session-accessor.types.js";
-import { normalizeStoreSessionKey } from "./store-entry.js";
-import { resolveSessionStoreEntry } from "./store.js";
+import { resolveSessionStorePathForScope } from "./session-store-path.js";
+import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 import { resolveAllAgentSessionStoreTargetsSync, type SessionStoreTarget } from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
 export { clearPluginOwnedSessionState };
+
+// SQLite is the only runtime session store. Re-export its canonical entry
+// operations directly instead of maintaining a second pass-through layer.
+export {
+  listSessionChildEntriesReadOnly,
+  listSessionEntriesReadOnly,
+  listSessionEntryKeysReadOnly,
+  loadExactSessionEntry,
+  loadExactSessionEntryReadOnly,
+  loadSessionEntry,
+  loadSessionEntryReadOnly,
+  patchSessionEntry,
+  patchSessionEntryTarget,
+  readSessionUpdatedAt,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+  upsertSessionEntry,
+};
 
 /** Keeps legacy store-key alias resolution behind the entry owner boundary. */
 export function resolveSessionEntryFromStore(params: {
@@ -53,15 +75,16 @@ export function resolveSessionEntryFromStore(params: {
   return resolveSessionStoreEntry(params);
 }
 
+/** Resolves a session directly through canonical SQLite row and alias ownership. */
+export function resolveSessionEntrySelection(
+  scope: SessionAccessScope,
+  options: { readOnly?: boolean } = {},
+): ReturnType<typeof resolveSessionStoreEntry> {
+  return resolveSqliteSessionEntry(scope, options);
+}
+
 export function resolveAccessStorePath(scope: SessionAccessScope): string {
-  if (scope.storePath) {
-    return scope.storePath;
-  }
-  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
-  return resolveStorePath(getRuntimeConfig().session?.store, {
-    agentId,
-    env: scope.env,
-  });
+  return resolveSessionStorePathForScope(scope);
 }
 
 function isStorePathTemplate(store?: string): boolean {
@@ -118,7 +141,7 @@ function buildLogicalSessionEntryCandidateKeys(params: {
 }
 
 function findFreshestSessionEntryMatch(
-  entries: SessionEntrySummary[],
+  scope: Omit<SessionAccessScope, "sessionKey">,
   candidateKeys: readonly string[],
 ): SessionEntrySummary | undefined {
   let freshest: SessionEntrySummary | undefined;
@@ -127,7 +150,7 @@ function findFreshestSessionEntryMatch(
     if (!trimmed) {
       continue;
     }
-    const match = entries.find((entry) => entry.sessionKey === trimmed);
+    const match = loadExactSessionEntry({ ...scope, sessionKey: trimmed });
     if (match && (!freshest || (match.entry.updatedAt ?? 0) >= (freshest.entry.updatedAt ?? 0))) {
       freshest = match;
     }
@@ -156,26 +179,34 @@ export function resolveSessionEntryAccessTarget(
 export function resolveSessionEntryCandidateTarget(
   scope: SessionEntryCandidateAccessScope,
 ): ResolvedSessionEntryCandidateTarget | null {
-  const storePath = resolveStorePath(scope.cfg.session?.store, {
-    agentId: scope.agentId,
-    env: scope.env,
-  });
-  const store = Object.fromEntries(
-    listSessionEntries({ agentId: scope.agentId, storePath }).map(({ sessionKey, entry }) => [
-      sessionKey,
-      entry,
-    ]),
-  );
-  for (const candidateKey of uniqueStrings(scope.candidateKeys.map((key) => key.trim()))) {
+  const candidateKeys = uniqueStrings(scope.candidateKeys.map((key) => key.trim()));
+  const incognitoKey = candidateKeys.find(isIncognitoSessionKey);
+  const incognitoAgentId = incognitoKey ? resolveAgentIdFromSessionKey(incognitoKey) : undefined;
+  const storePath = incognitoAgentId
+    ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: incognitoAgentId, env: scope.env })
+    : resolveStorePath(scope.cfg.session?.store, {
+        agentId: scope.agentId,
+        env: scope.env,
+      });
+  const resolvedAgentId = incognitoAgentId ?? scope.agentId;
+  for (const candidateKey of candidateKeys) {
     if (!candidateKey) {
       continue;
     }
-    const resolved = resolveSessionEntryFromStore({ store, sessionKey: candidateKey });
+    const resolved = resolveSessionEntrySelection(
+      {
+        agentId: resolvedAgentId,
+        ...(scope.env ? { env: scope.env } : {}),
+        sessionKey: candidateKey,
+        storePath,
+      },
+      { readOnly: !incognitoAgentId },
+    );
     if (!resolved.existing) {
       continue;
     }
     return {
-      agentId: scope.agentId,
+      agentId: resolvedAgentId,
       candidateKey,
       entry: structuredClone(resolved.existing),
       persisted: true,
@@ -187,7 +218,7 @@ export function resolveSessionEntryCandidateTarget(
     return null;
   }
   return {
-    agentId: scope.agentId,
+    agentId: resolvedAgentId,
     candidateKey: fallbackKey,
     entry: structuredClone(scope.fallback.entry),
     persisted: false,
@@ -207,6 +238,25 @@ function resolveSessionEntryStoreTarget(
     cfg: scope.cfg,
     requestedKey,
   });
+  if (isIncognitoSessionKey(canonicalKey)) {
+    const incognitoAgentId = resolveAgentIdFromSessionKey(canonicalKey);
+    const storePath = resolveIncognitoOpenClawAgentSqlitePath({
+      agentId: incognitoAgentId,
+      env: scope.env,
+    });
+    const selectedMatch = findFreshestSessionEntryMatch(
+      { agentId: incognitoAgentId, ...(scope.env ? { env: scope.env } : {}), storePath },
+      scanTargets,
+    );
+    return {
+      agentId: incognitoAgentId,
+      canonicalKey,
+      entry: selectedMatch?.entry,
+      requestedKey,
+      storeKey: selectedMatch?.sessionKey ?? canonicalKey,
+      storePath,
+    };
+  }
   const candidates = resolveLogicalSessionStoreCandidates({
     agentId,
     cfg: scope.cfg,
@@ -218,7 +268,7 @@ function resolveSessionEntryStoreTarget(
   };
   let selectedStorePath = fallback.storePath;
   let selectedMatch = findFreshestSessionEntryMatch(
-    listSessionEntries({ agentId, storePath: fallback.storePath }),
+    { agentId, ...(scope.env ? { env: scope.env } : {}), storePath: fallback.storePath },
     scanTargets,
   );
   for (let index = 1; index < candidates.length; index += 1) {
@@ -227,7 +277,7 @@ function resolveSessionEntryStoreTarget(
       continue;
     }
     const match = findFreshestSessionEntryMatch(
-      listSessionEntries({ agentId, storePath: candidate.storePath }),
+      { agentId, ...(scope.env ? { env: scope.env } : {}), storePath: candidate.storePath },
       scanTargets,
     );
     if (
@@ -291,20 +341,6 @@ export async function updateResolvedSessionEntry<T>(
   };
 }
 
-/** Returns the entry for a canonical or alias session key, if one exists. */
-export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
-  return loadSqliteSessionEntry(scope);
-}
-
-/**
- * Returns only the row persisted under the exact key provided.
- * Use this for authorization-sensitive routing where alias canonicalization
- * could cross an account or agent boundary.
- */
-export function loadExactSessionEntry(scope: SessionAccessScope): ExactSessionEntry | undefined {
-  return loadExactSqliteSessionEntry(scope);
-}
-
 /** Lists entries from the resolved store, preserving the persisted key for each row. */
 export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
   if (scope.clone === false) {
@@ -316,76 +352,17 @@ export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEn
 /**
  * Borrowed keyed view over one resolved store for synchronous read-only hot paths.
  * Unlike loadSessionEntry, `get` is a raw exact persisted-key probe with no alias
- * or canonical-key resolution and no row scans, so large stores stay cheap until
- * `entries` is called. Rows are borrowed, not cloned: callers must not mutate them
- * and must drop the view before any await.
+ * or canonical-key resolution. The first probe materializes one validated store
+ * snapshot; later probes and `entries` reuse its parsed rows. Rows are borrowed,
+ * not cloned: callers must not mutate them and must drop the view before any await.
  */
 export function openSessionEntryReadView(
   scope: Omit<SessionEntryListScope, "clone" | "readConsistency"> = {},
 ): SessionEntryReadView {
-  // Exact-key probes read single SQLite rows; entries() materializes the full
-  // list only when raw probes cannot settle the caller's lookup.
   return {
-    get: (sessionKey) => loadExactSqliteSessionEntry({ ...scope, sessionKey })?.entry,
-    entries: () => listSqliteSessionEntries(scope),
+    get: (sessionKey) => loadExactSessionEntry({ ...scope, clone: false, sessionKey })?.entry,
+    entries: () => listSqliteSessionEntries({ ...scope, clone: false }),
   };
-}
-
-/** Reads the last activity timestamp for one session entry, or undefined when absent. */
-export function readSessionUpdatedAt(scope: SessionAccessScope): number | undefined {
-  return readSqliteSessionUpdatedAt(scope);
-}
-
-/** Creates or updates one entry from a partial patch and returns the persisted entry. */
-export async function upsertSessionEntry(
-  scope: SessionAccessScope,
-  patch: Partial<SessionEntry>,
-): Promise<SessionEntry | null> {
-  return await upsertSqliteSessionEntry(scope, patch);
-}
-
-/** Replaces one entry with the supplied value and returns the persisted entry. */
-export async function replaceSessionEntry(
-  scope: SessionAccessScope,
-  entry: SessionEntry,
-): Promise<SessionEntry | null> {
-  return await replaceSqliteSessionEntry(scope, entry);
-}
-
-/** Replaces one entry synchronously for sync session runtimes. */
-export function replaceSessionEntrySync(scope: SessionAccessScope, entry: SessionEntry): void {
-  replaceSqliteSessionEntrySync(scope, entry);
-}
-
-/**
- * Applies an atomic patch to one entry.
- * The updater sees the current entry plus whether it was synthesized from a
- * fallback; returning null skips persistence.
- */
-export async function patchSessionEntry(
-  scope: SessionAccessScope,
-  update: (
-    entry: SessionEntry,
-    context: SessionEntryPatchContext,
-  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
-  options: SessionEntryPatchOptions = {},
-): Promise<SessionEntry | null> {
-  return await patchSqliteSessionEntry(scope, update, options);
-}
-
-/**
- * Applies an atomic patch to the freshest entry selected from a canonical key
- * plus its known aliases, then persists the result under the canonical key.
- */
-export async function patchSessionEntryTarget(
-  scope: SessionEntryTargetPatchScope,
-  update: (
-    entry: SessionEntry,
-    context: SessionEntryPatchContext,
-  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
-  options: SessionEntryPatchOptions = {},
-): Promise<SessionEntry | null> {
-  return await patchSqliteSessionEntryTarget(scope, update, options);
 }
 
 /**
@@ -400,7 +377,7 @@ export async function patchSessionEntryWithKey(
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
   options: SessionEntryPatchOptions = {},
 ): Promise<SessionEntryPatchResult | null> {
-  const entry = await patchSqliteSessionEntry(scope, update, options);
+  const entry = await patchSessionEntry(scope, update, options);
   return entry ? { sessionKey: normalizeStoreSessionKey(scope.sessionKey), entry } : null;
 }
 

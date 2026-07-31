@@ -284,14 +284,10 @@ describe("mattermost websocket monitor", () => {
       await once(server, "close");
     }
 
-    expect(onPosted).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "post-1", message: "normal Mattermost post" }),
-      expect.any(Object),
-    );
-    expect(onPosted).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "post-large", props: largeProps }),
-      expect.any(Object),
-    );
+    // onPosted now receives the raw envelope; the post rides inside it as a
+    // nested JSON string, so its fields appear escaped.
+    expect(onPosted).toHaveBeenCalledWith(expect.stringContaining('\\"id\\":\\"post-1\\"'));
+    expect(onPosted).toHaveBeenCalledWith(expect.stringContaining('\\"id\\":\\"post-large\\"'));
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("Max payload size exceeded"),
     );
@@ -345,6 +341,52 @@ describe("mattermost websocket monitor", () => {
       event: "reaction_added",
       data: { reaction },
     });
+  });
+
+  it("hands posted envelopes to ingress raw and keeps post_edited out", async () => {
+    const socket = new FakeWebSocket();
+    const onPosted = vi.fn(async () => {});
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime: testRuntime(),
+      nextSeq: () => 1,
+      onPosted,
+      webSocketFactory: () => socket,
+    });
+    const posted = {
+      event: "posted",
+      data: {
+        post: JSON.stringify({
+          id: "post-raw",
+          channel_id: "channel-raw",
+          unexpected_transport_field: true,
+        }),
+      },
+    };
+
+    const connected = connectOnce();
+    socket.emitOpen();
+    socket.emitMessage(
+      Buffer.from(
+        JSON.stringify({
+          ...posted,
+          event: "post_edited",
+        }),
+      ),
+    );
+    await new Promise<void>((resolve) => {
+      queueMicrotask(resolve);
+    });
+    expect(onPosted).not.toHaveBeenCalled();
+    socket.emitMessage(Buffer.from(JSON.stringify(posted)));
+    await vi.waitFor(() => {
+      expect(onPosted).toHaveBeenCalledTimes(1);
+    });
+    socket.emitClose(1000);
+    await connected;
+
+    expect(onPosted).toHaveBeenCalledWith(JSON.stringify(posted));
   });
 
   it("terminates when bot update_at changes (disable/enable cycle)", async () => {

@@ -46,6 +46,10 @@ describe("worker placement projection", () => {
         workspaceBaseManifestRef: "manifest-1",
         remoteWorkspaceDir: "/workspace",
         workerBundleHash: BUNDLE_HASH,
+        workspaceResultConflict: {
+          paths: ["src/local.ts"],
+          stagedResultRef: "refs/openclaw/worker-results/claim-1",
+        },
       },
       {
         ...RECORD_BASE,
@@ -85,6 +89,10 @@ describe("worker placement projection", () => {
         workspaceBaseManifestRef: "manifest-1",
         remoteWorkspaceDir: "/workspace",
         workerBundleHash: BUNDLE_HASH,
+        workspaceResultConflict: {
+          paths: ["src/local.ts"],
+          stagedResultRef: "refs/openclaw/worker-results/claim-1",
+        },
       },
       {
         state: "failed",

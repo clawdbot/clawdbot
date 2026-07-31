@@ -24,17 +24,59 @@ function legacyTwoKindCreateSql(): string {
     .replace(/'exec',\s*'plugin',\s*'system-agent'/, "'exec', 'plugin'");
 }
 
-function seedRow(db: DatabaseSync, kind: string): void {
-  db.exec(`
+function withoutResolutionRefColumn(sql: string): string {
+  const resolutionRefStart = sql.indexOf("\n  resolution_ref ");
+  const followingColumnStart = sql.indexOf("\n  kind ", resolutionRefStart);
+  if (resolutionRefStart < 0 || followingColumnStart < 0) {
+    throw new Error("resolution_ref column not found");
+  }
+  return sql.slice(0, resolutionRefStart) + sql.slice(followingColumnStart);
+}
+
+function createAlterAppendedLegacyTable(db: DatabaseSync, strict: boolean): void {
+  const createSql = withoutResolutionRefColumn(
+    strict ? legacyTwoKindCreateSql().replace(/\);$/u, ") STRICT;") : legacyTwoKindCreateSql(),
+  );
+  db.exec(createSql);
+  db.exec("ALTER TABLE operator_approvals ADD COLUMN resolution_ref TEXT;");
+}
+
+const RESOLUTION_REF = "ref0000000000000000000000000000000000000000";
+
+function seedRow(
+  db: DatabaseSync,
+  kind: string,
+  resolutionRef: string | null = RESOLUTION_REF,
+  approvalId = "a1",
+): void {
+  db.prepare(`
     INSERT INTO operator_approvals (
       approval_id, resolution_ref, kind, status, presentation_json,
       reviewer_device_ids_json, audience_session_keys_json, runtime_epoch,
       created_at_ms, expires_at_ms, updated_at_ms
     ) VALUES (
-      'a1', 'ref0000000000000000000000000000000000000000', '${kind}',
-      'pending', '{}', '[]', '[]', 1, 1, 1, 1
+      ?, ?, ?, 'pending', '{}', '[]', '[]', 1, 1, 1, 1
     );
-  `);
+  `).run(approvalId, resolutionRef, kind);
+}
+
+function expectAlterAppendedLegacyRepair(strict: boolean): void {
+  const db = new DatabaseSync(":memory:");
+  createAlterAppendedLegacyTable(db, strict);
+  seedRow(db, "exec");
+
+  expect(repairOperatorApprovalSchema(db)).toEqual([
+    "Migrated shared state operator approvals → OpenClaw system changes",
+  ]);
+
+  expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).not.toThrow();
+  expect(
+    db.prepare("SELECT approval_id, kind, resolution_ref FROM operator_approvals").all(),
+  ).toEqual([{ approval_id: "a1", kind: "exec", resolution_ref: RESOLUTION_REF }]);
+  expect(
+    db.prepare("SELECT strict FROM pragma_table_list WHERE name = 'operator_approvals'").get(),
+  ).toEqual({ strict: 1 });
+  db.close();
 }
 
 describe("repairOperatorApprovalKinds", () => {
@@ -51,11 +93,48 @@ describe("repairOperatorApprovalKinds", () => {
     ]);
 
     expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).not.toThrow();
-    const rows = db.prepare("SELECT approval_id, kind FROM operator_approvals").all();
-    expect(rows).toEqual([{ approval_id: "a1", kind: "exec" }]);
+    const rows = db
+      .prepare("SELECT approval_id, kind, resolution_ref FROM operator_approvals")
+      .all();
+    expect(rows).toEqual([{ approval_id: "a1", kind: "exec", resolution_ref: RESOLUTION_REF }]);
     expect(
       db.prepare("SELECT strict FROM pragma_table_list WHERE name = 'operator_approvals'").get(),
     ).toEqual({ strict: 1 });
+    db.close();
+  });
+
+  it("migrates the ALTER-appended non-STRICT legacy shape", () => {
+    expectAlterAppendedLegacyRepair(false);
+  });
+
+  it("migrates the ALTER-appended STRICT legacy shape", () => {
+    expectAlterAppendedLegacyRepair(true);
+  });
+
+  it("drops pre-ref rows that violate the canonical resolution_ref shape", () => {
+    const db = new DatabaseSync(":memory:");
+    createAlterAppendedLegacyTable(db, false);
+    seedRow(db, "exec");
+    seedRow(db, "exec", null, "a2-null-ref");
+    seedRow(db, "plugin", "short", "a3-bad-ref");
+    // Non-STRICT legacy tables can hold a BLOB in the TEXT column; it must be
+    // filtered out or the STRICT destination insert aborts the whole repair.
+    db.prepare(`
+      INSERT INTO operator_approvals (
+        approval_id, resolution_ref, kind, status, presentation_json,
+        reviewer_device_ids_json, audience_session_keys_json, runtime_epoch,
+        created_at_ms, expires_at_ms, updated_at_ms
+      ) VALUES ('a4-blob-ref', ?, 'exec', 'pending', '{}', '[]', '[]', 1, 1, 1, 1);
+    `).run(Buffer.from("ref0000000000000000000000000000000000000000"));
+
+    expect(repairOperatorApprovalSchema(db)).toEqual([
+      "Migrated shared state operator approvals → OpenClaw system changes",
+    ]);
+
+    expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).not.toThrow();
+    expect(db.prepare("SELECT approval_id, resolution_ref FROM operator_approvals").all()).toEqual([
+      { approval_id: "a1", resolution_ref: RESOLUTION_REF },
+    ]);
     db.close();
   });
 
@@ -66,7 +145,7 @@ describe("repairOperatorApprovalKinds", () => {
     db.close();
   });
 
-  it("refuses to replace a look-alike table with the same columns but different constraints", () => {
+  it("refuses to replace an arbitrarily different table", () => {
     const db = new DatabaseSync(":memory:");
     // Same column names, but a different (non-canonical) kind constraint — the
     // fail-closed guard must not copy its rows under today's schema.

@@ -1,6 +1,6 @@
 # Meta provider
 
-Bundled OpenClaw provider plugin for the **Meta API** — an OpenAI-compatible
+Official OpenClaw provider plugin for the **Meta API** — an OpenAI-compatible
 **Responses API** endpoint (`POST /v1/responses`).
 
 - **Base URL:** `https://api.meta.ai/v1`
@@ -14,6 +14,13 @@ Bundled OpenClaw provider plugin for the **Meta API** — an OpenAI-compatible
   - Stateless encrypted reasoning replay (`store: false`)
 
 ## Usage
+
+Install the plugin and restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/meta-provider
+openclaw gateway restart
+```
 
 Set the API key and select the model:
 

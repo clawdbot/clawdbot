@@ -21,6 +21,7 @@ import {
 } from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
+import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import {
   getChannelPlugin,
@@ -32,6 +33,7 @@ import {
   channelSupportsMessageCapabilityForChannel,
   type ChannelMessageActionDiscoveryInput,
   listCrossChannelSchemaSupportedMessageActions,
+  type PreparedMessageToolCatalog,
   resolveChannelMessageToolSchemaProperties,
 } from "../../channels/plugins/message-action-discovery.js";
 import { CHANNEL_MESSAGE_ACTION_NAMES } from "../../channels/plugins/message-action-names.js";
@@ -49,6 +51,11 @@ import {
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { sha256Base64UrlPrefix } from "../../infra/crypto-digest.js";
+import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import {
+  resolveMessageBroadcastAccountPlan,
+  validateExplicitMessageAccountSelection,
+} from "../../infra/outbound/message-account-selection.js";
 import {
   parseInteractiveParam,
   parseJsonMessageParam,
@@ -66,7 +73,9 @@ import {
 } from "../../infra/outbound/outbound-policy.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { normalizeAccountId, parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -574,8 +583,8 @@ const presentationCommandOrCallbackActionSchema = Type.Union([
   presentationCallbackActionSchema,
 ]);
 
-// Approval actions carry server-issued IDs and are runtime-authored only. The
-// message tool exposes the remaining button actions that models may safely author.
+// Approval and question actions carry server-issued IDs and are runtime-authored
+// only. The message tool exposes the remaining actions models may safely author.
 const presentationButtonActionSchema = Type.Union([
   presentationCommandActionSchema,
   presentationCallbackActionSchema,
@@ -1032,10 +1041,12 @@ const MessageToolSchema = buildMessageToolSchemaFromActions(
 type MessageToolOptions = {
   agentAccountId?: string;
   agentSessionKey?: string;
+  runSessionKey?: string;
   runId?: string;
   sessionId?: string;
   agentId?: string;
   config?: OpenClawConfig;
+  preparedMessageToolCatalog?: PreparedMessageToolCatalog;
   getRuntimeConfig?: () => OpenClawConfig;
   getScopedChannelsCommandSecretTargets?: typeof getScopedChannelsCommandSecretTargets;
   resolveCommandSecretRefsViaGateway?: typeof resolveCommandSecretRefsViaGateway;
@@ -1062,6 +1073,33 @@ type MessageToolOptions = {
   conversationReadOrigin?: ConversationReadInvocationOrigin;
 };
 
+// A live channel turn grants delegated use of that provider account, not a
+// model-selected sibling account. Keep cross-provider and source-less routing intact.
+function enforceTrustedTurnExplicitAccount(params: {
+  explicitAccountId?: string;
+  selectedChannels: Array<string | undefined>;
+  trustedCurrentChannel?: string;
+  trustedRequesterAccountId?: string;
+  hasTrustedTurnContext: boolean;
+}): void {
+  if (!params.explicitAccountId || !params.hasTrustedTurnContext) {
+    return;
+  }
+  const trustedCurrentChannel = normalizeMessageChannel(params.trustedCurrentChannel);
+  if (!trustedCurrentChannel) {
+    throw new Error("Trusted current account is missing its channel identity.");
+  }
+  const includesTrustedCurrentChannel = params.selectedChannels.some(
+    (channel) => normalizeMessageChannel(channel) === trustedCurrentChannel,
+  );
+  if (!includesTrustedCurrentChannel) {
+    return;
+  }
+  if (normalizeOptionalAccountId(params.trustedRequesterAccountId) !== params.explicitAccountId) {
+    throw new Error("Explicit account does not match the trusted current account.");
+  }
+}
+
 type MessageToolDiscoveryParams = {
   cfg: OpenClawConfig;
   currentChannelProvider?: string;
@@ -1074,11 +1112,13 @@ type MessageToolDiscoveryParams = {
   agentId?: string;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
+  preparedMessageToolCatalog?: PreparedMessageToolCatalog;
 };
 
 type MessageActionDiscoveryInput = Omit<ChannelMessageActionDiscoveryInput, "cfg" | "channel"> & {
   cfg: OpenClawConfig;
   channel?: string;
+  preparedMessageToolCatalog?: PreparedMessageToolCatalog;
 };
 
 type InferredSessionDelivery = {
@@ -1179,6 +1219,7 @@ function buildMessageActionDiscoveryInput(
     agentId: params.agentId,
     requesterSenderId: params.requesterSenderId,
     senderIsOwner: params.senderIsOwner,
+    preparedMessageToolCatalog: params.preparedMessageToolCatalog,
   };
 }
 
@@ -1191,7 +1232,8 @@ function resolveMessageToolSchemaActions(params: MessageToolDiscoveryParams): st
     const allActions = new Set<string>(["send", ...scopedActions]);
     // Include actions from other configured channels so isolated/cron agents
     // can invoke cross-channel actions without validation errors.
-    for (const plugin of listChannelPlugins()) {
+    const channels = params.preparedMessageToolCatalog?.channels ?? listChannelPlugins();
+    for (const plugin of channels) {
       if (plugin.id === currentChannel) {
         continue;
       }
@@ -1236,7 +1278,11 @@ function resolveIncludeCapability(
       capability,
     );
   }
-  return channelSupportsMessageCapability(params.cfg, capability);
+  return channelSupportsMessageCapability(
+    params.cfg,
+    capability,
+    params.preparedMessageToolCatalog,
+  );
 }
 
 function resolveIncludePresentation(params: MessageToolDiscoveryParams): boolean {
@@ -1252,11 +1298,15 @@ function resolveIncludeBestEffort(params: MessageToolDiscoveryParams): boolean {
   if (!currentChannel) {
     return false;
   }
-  const adapter =
-    listChannelPlugins().find((plugin) => plugin.id === currentChannel)?.message ??
-    getLoadedChannelPlugin(currentChannel as Parameters<typeof getLoadedChannelPlugin>[0])
-      ?.message ??
-    getChannelPlugin(currentChannel as Parameters<typeof getChannelPlugin>[0])?.message;
+  const prepared = params.preparedMessageToolCatalog?.getChannel(currentChannel);
+  if (prepared) {
+    return prepared.reconcilesUnknownSend;
+  }
+  const adapter = params.preparedMessageToolCatalog
+    ? getBundledChannelPlugin(currentChannel)?.message
+    : (getLoadedChannelPlugin(currentChannel as Parameters<typeof getLoadedChannelPlugin>[0])
+        ?.message ??
+      getChannelPlugin(currentChannel as Parameters<typeof getChannelPlugin>[0])?.message);
   return (
     adapter?.durableFinal?.capabilities?.reconcileUnknownSend === true &&
     typeof adapter.durableFinal.reconcileUnknownSend === "function"
@@ -1309,6 +1359,7 @@ function buildMessageToolDescription(options?: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
+  preparedMessageToolCatalog?: PreparedMessageToolCatalog;
 }): string {
   const baseDescription = "Send/manage channel messages.";
   const resolvedOptions = options ?? {};
@@ -1325,6 +1376,7 @@ function buildMessageToolDescription(options?: {
         agentId: resolvedOptions.agentId,
         requesterSenderId: resolvedOptions.requesterSenderId,
         senderIsOwner: resolvedOptions.senderIsOwner,
+        preparedMessageToolCatalog: resolvedOptions.preparedMessageToolCatalog,
       }
     : undefined;
 
@@ -1344,7 +1396,7 @@ function buildMessageToolDescription(options?: {
   }
 
   return appendMessageToolVisibleReplyHint(
-    `${baseDescription} Supports actions: send, delete, react, poll, pin, threads, and more.`,
+    `${baseDescription} Action families (availability depends on the channel): sending/editing/unsend, reactions, polls, pins, threads, file upload/download, moderation (timeout/kick/ban), roles, channel + category management, profile/presence.`,
     resolvedOptions.sourceReplyDeliveryMode,
     resolvedOptions.requireExplicitTarget,
   );
@@ -1357,6 +1409,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const resolveSecretRefsForTool =
     options?.resolveCommandSecretRefsViaGateway ?? resolveCommandSecretRefsViaGateway;
   const runMessageActionForTool = options?.runMessageAction ?? runMessageAction;
+  const preparedMessageToolCatalog =
+    options?.preparedMessageToolCatalog ?? getPreparedMessageToolCatalog();
   let generatedIdempotencyCounter = 0;
   // Poll-vote echo record lives in the session-scoped map (recentPollVoteBySession)
   // so it survives the run boundary between the vote and the follow-up text; a
@@ -1401,6 +1455,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         agentId: resolvedAgentId,
         requesterSenderId: options.requesterSenderId,
         senderIsOwner: options.senderIsOwner,
+        preparedMessageToolCatalog,
       })
     : MessageToolSchema;
   const description = buildMessageToolDescription({
@@ -1417,6 +1472,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
     requesterSenderId: options?.requesterSenderId,
     senderIsOwner: options?.senderIsOwner,
+    preparedMessageToolCatalog,
   });
 
   return {
@@ -1533,17 +1589,71 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
 
       const gatewayOpts = readGatewayCallOptions(params);
       const rawConfig = options?.config ?? loadConfigForTool();
+      const requestedAccountId = readStringParam(params, "accountId");
+      validateExplicitMessageAccountSelection({
+        cfg: rawConfig,
+        accountId: requestedAccountId,
+        checkResolvedAccount: false,
+      });
+      const requestedBroadcastChannel = normalizeOptionalLowercaseString(params.channel);
+      if (
+        action === "broadcast" &&
+        requestedBroadcastChannel &&
+        requestedBroadcastChannel !== "all"
+      ) {
+        // Authorize and execute the same canonical provider. Otherwise an unavailable
+        // hint can fall back to the current provider only after account authorization.
+        const selection = await resolveMessageChannelSelection({
+          cfg: rawConfig,
+          channel: requestedBroadcastChannel,
+          fallbackChannel: effectiveCurrentChannel.currentChannelProvider,
+        });
+        params.channel = selection.channel;
+      }
       const scope = resolveMessageSecretScope({
         channel: params.channel,
         target: params.target,
         targets: params.targets,
         fallbackChannel: effectiveCurrentChannel.currentChannelProvider,
-        accountId: params.accountId,
+        accountId: requestedAccountId,
         fallbackAccountId: agentAccountId,
       });
+      // Broadcast execution only narrows on an explicit non-all channel. Target
+      // prefixes cannot authorize fewer providers than the runner will execute.
+      const unscopedExplicitBroadcast =
+        action === "broadcast" &&
+        (!requestedBroadcastChannel || requestedBroadcastChannel === "all") &&
+        requestedAccountId !== undefined;
+      const explicitAccountId = validateExplicitMessageAccountSelection({
+        cfg: rawConfig,
+        channel: unscopedExplicitBroadcast ? undefined : scope.channel,
+        accountId: requestedAccountId,
+        checkResolvedAccount: false,
+      });
+      const broadcastAccountPlan =
+        unscopedExplicitBroadcast && explicitAccountId
+          ? resolveMessageBroadcastAccountPlan({
+              cfg: rawConfig,
+              accountId: explicitAccountId,
+            })
+          : undefined;
+      enforceTrustedTurnExplicitAccount({
+        explicitAccountId,
+        selectedChannels: broadcastAccountPlan
+          ? broadcastAccountPlan.candidateChannels
+          : [scope.channel],
+        trustedCurrentChannel: trustedTurnContext?.toolContext?.currentChannelProvider,
+        trustedRequesterAccountId: trustedTurnContext?.requesterAccountId,
+        hasTrustedTurnContext: trustedTurnContext !== undefined,
+      });
+      if (explicitAccountId) {
+        scope.accountId = explicitAccountId;
+        params.accountId = explicitAccountId;
+      }
       const scopedTargets = getScopedSecretTargetsForTool({
         config: rawConfig,
-        channel: scope.channel,
+        channel: broadcastAccountPlan ? undefined : scope.channel,
+        ...(broadcastAccountPlan ? { channels: broadcastAccountPlan.secretChannels } : {}),
         accountId: scope.accountId,
       });
       const cfg = (
@@ -1556,10 +1666,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         })
       ).resolvedConfig;
 
-      const accountId = readStringParam(params, "accountId") ?? agentAccountId;
-      if (accountId) {
-        params.accountId = accountId;
-      }
+      const accountId = explicitAccountId ?? agentAccountId;
       const pollVoteEchoRoute = resolvePollVoteEchoRoute({
         action,
         args: params,
@@ -1701,9 +1808,11 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           },
           senderIsOwner: options?.senderIsOwner,
           conversationReadOrigin: options?.conversationReadOrigin,
+          broadcastAccountPlan,
           gateway,
           toolContext,
           sessionKey: options?.agentSessionKey,
+          sourceReplySessionKey: options?.runSessionKey,
           sessionId: options?.sessionId,
           agentId: resolvedAgentId,
           sandboxRoot: options?.sandboxRoot,

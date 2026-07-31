@@ -16,6 +16,15 @@ const RULES: Rule[] = [
       /\.channel\.(?:reply\.(?:createReplyDispatcherWithTyping|resolveHumanDelayConfig|dispatchReplyFromConfig|finalizeInboundContext|formatInboundEnvelope)|session\.(?:resolveStorePath|recordInboundSession)|inbound\.(?:runPreparedReply|dispatchReply)|media\.fetchRemoteMedia)\b/u,
   },
   {
+    label: "caller-owned prepared channel dispatch",
+    pattern: /\b(?:runDispatch|onPreDispatchFailure)\b/u,
+  },
+  {
+    label: "caller-owned reply dispatcher lifecycle",
+    pattern:
+      /\b(?:createReplyDispatcherWithTyping|dispatchInboundMessage(?:WithBufferedDispatcher|WithDispatcher)?|dispatchReplyFromConfigWithSettledDispatcher|settleReplyDispatcher)\s*\(/u,
+  },
+  {
     label: "deprecated channel ingress resolver aliases",
     pattern:
       /\b(?:resolved|result|directResolved|groupResolved)\.(?:legacyAccess|senderReasonCode|commandAuthorized|shouldBlockControlCommand)\b/u,

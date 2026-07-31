@@ -1,5 +1,6 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.wear.shared.WearConnectionFailure
 import ai.openclaw.wear.shared.WearDecodeResult
 import ai.openclaw.wear.shared.WearEventType
 import ai.openclaw.wear.shared.WearMessage
@@ -22,6 +23,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -57,7 +59,7 @@ class WearProxyBridgeTest {
         WearProxyBridge(
           scope = backgroundScope,
           sender = WearMessageSender { nodeId, path, data -> sent += SentWearMessage(nodeId, path, data) },
-          handleRequest = { request ->
+          handleRequest = { _, request ->
             WearMessage.Response(
               requestId = request.requestId,
               ok = true,
@@ -86,7 +88,7 @@ class WearProxyBridgeTest {
         WearProxyBridge(
           scope = backgroundScope,
           sender = WearMessageSender { nodeId, path, data -> sent += SentWearMessage(nodeId, path, data) },
-          handleRequest = { error("must not run") },
+          handleRequest = { _, _ -> error("must not run") },
         )
 
       bridge.handleMessage("watch-1", "not-json".encodeToByteArray())
@@ -111,7 +113,7 @@ class WearProxyBridgeTest {
               }
               sent += SentWearMessage(nodeId, path, data)
             },
-          handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
+          handleRequest = { _, request -> WearMessage.Response(requestId = request.requestId, ok = true) },
         )
 
       assertTrue(bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1"))))
@@ -140,7 +142,7 @@ class WearProxyBridgeTest {
             },
           peerResolver = WearPeerResolver { setOf("watch-1") },
           monotonicMillis = { 1_000L },
-          handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
+          handleRequest = { _, request -> WearMessage.Response(requestId = request.requestId, ok = true) },
         )
 
       bridge.publishConnection(connected = true, status = "Connected")
@@ -168,7 +170,7 @@ class WearProxyBridgeTest {
               setOf("watch-1")
             },
           monotonicMillis = { 1_000L },
-          handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
+          handleRequest = { _, request -> WearMessage.Response(requestId = request.requestId, ok = true) },
         )
 
       bridge.publishConnection(connected = true, status = "first")
@@ -176,6 +178,29 @@ class WearProxyBridgeTest {
       bridge.awaitIdleForTests()
 
       assertEquals(listOf(WearProtocol.EVENT_PATH, WearProtocol.EVENT_PATH), sent.map { it.path })
+    }
+
+  @Test
+  fun resyncInvalidatesTheWatchSnapshot() =
+    withActorScope { actorScope ->
+      val sent = mutableListOf<SentWearMessage>()
+      val bridge =
+        WearProxyBridge(
+          scope = actorScope,
+          sender = WearMessageSender { nodeId, path, data -> sent += SentWearMessage(nodeId, path, data) },
+          peerResolver = WearPeerResolver { setOf("watch-1") },
+          monotonicMillis = { 1_000L },
+          handleRequest = { _, request -> WearMessage.Response(requestId = request.requestId, ok = true) },
+        )
+
+      bridge.publishResync()
+      bridge.awaitIdleForTests()
+
+      val event = (WearProtocolCodec.decode(sent.single().data) as WearDecodeResult.Success).message as WearMessage.Event
+      assertEquals(WearProtocol.EVENT_PATH, sent.single().path)
+      assertEquals(WearEventType.Resync, event.event)
+      assertEquals(1L, event.sequence)
+      assertEquals(null, event.payload)
     }
 
   @Test
@@ -188,7 +213,7 @@ class WearProxyBridgeTest {
         WearProxyBridge(
           scope = backgroundScope,
           sender = WearMessageSender { nodeId, path, data -> sent += SentWearMessage(nodeId, path, data) },
-          handleRequest = { request ->
+          handleRequest = { _, request ->
             requestStarted.complete(Unit)
             finishRequest.await()
             WearMessage.Response(requestId = request.requestId, ok = true)
@@ -270,6 +295,65 @@ class WearProxyBridgeTest {
     assertEquals("true", continued.getValue("streamTextComplete").jsonPrimitive.content)
     assertEquals("tail", unknownPrefix.getValue("streamText").jsonPrimitive.content)
     assertEquals("false", unknownPrefix.getValue("streamTextComplete").jsonPrimitive.content)
+  }
+
+  @Test
+  fun foreignFinalPreservesTheActiveWatchStream() {
+    assertForeignTerminalPreservesActiveStream("final")
+  }
+
+  @Test
+  fun foreignAbortPreservesTheActiveWatchStream() {
+    assertForeignTerminalPreservesActiveStream("aborted")
+  }
+
+  @Test
+  fun foreignErrorPreservesTheActiveWatchStream() {
+    assertForeignTerminalPreservesActiveStream("error")
+  }
+
+  @Test
+  fun foreignFinalPreservesAnAnonymousWatchStream() {
+    assertForeignTerminalPreservesAnonymousStream("final")
+  }
+
+  @Test
+  fun foreignAbortPreservesAnAnonymousWatchStream() {
+    assertForeignTerminalPreservesAnonymousStream("aborted")
+  }
+
+  @Test
+  fun foreignErrorPreservesAnAnonymousWatchStream() {
+    assertForeignTerminalPreservesAnonymousStream("error")
+  }
+
+  @Test
+  fun identifiedTerminalClearsItsOwnStreamWithoutErasingAnotherRun() {
+    val projector = WearChatStreamProjector()
+    projectStreamEvent(projector, state = "delta", runId = "older-run", text = "Old", message = "Old")
+    projectStreamEvent(projector, state = "delta", runId = "active-run", text = "Hel", message = "Hel")
+
+    projectStreamEvent(projector, state = "final", runId = "older-run")
+
+    val active = projectStreamEvent(projector, state = "delta", runId = "active-run", text = "lo")
+    val retired = projectStreamEvent(projector, state = "delta", runId = "older-run", text = "new")
+    assertEquals("Hello", active.getValue("streamText").jsonPrimitive.content)
+    assertEquals("true", active.getValue("streamTextComplete").jsonPrimitive.content)
+    assertEquals("new", retired.getValue("streamText").jsonPrimitive.content)
+    assertEquals("false", retired.getValue("streamTextComplete").jsonPrimitive.content)
+  }
+
+  @Test
+  fun unidentifiedTerminalClearsEveryStreamInItsSession() {
+    val projector = WearChatStreamProjector()
+    projectStreamEvent(projector, state = "delta", runId = "older-run", text = "old", message = "old")
+    projectStreamEvent(projector, state = "delta", runId = "active-run", text = "stale", message = "stale")
+
+    projectStreamEvent(projector, state = "final")
+
+    val next = projectStreamEvent(projector, state = "delta", runId = "active-run", text = "fresh")
+    assertEquals("fresh", next.getValue("streamText").jsonPrimitive.content)
+    assertEquals("false", next.getValue("streamTextComplete").jsonPrimitive.content)
   }
 
   @Test
@@ -394,7 +478,7 @@ class WearProxyBridgeTest {
           sender = WearMessageSender { nodeId, path, data -> sent += SentWearMessage(nodeId, path, data) },
           peerResolver = WearPeerResolver { setOf("watch-1") },
           monotonicMillis = { 1_000L },
-          handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
+          handleRequest = { _, request -> WearMessage.Response(requestId = request.requestId, ok = true) },
         )
 
       bridge.publishChat(
@@ -423,7 +507,7 @@ class WearProxyBridgeTest {
               emptySet()
             },
           monotonicMillis = { 1_000L },
-          handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
+          handleRequest = { _, request -> WearMessage.Response(requestId = request.requestId, ok = true) },
         )
 
       repeat(20) { index ->
@@ -455,7 +539,7 @@ class WearProxyBridgeTest {
               if (resolutions == 1) emptySet() else setOf("watch-1")
             },
           monotonicMillis = { 1_000L },
-          handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
+          handleRequest = { _, request -> WearMessage.Response(requestId = request.requestId, ok = true) },
         )
 
       bridge.publishChat(
@@ -494,7 +578,7 @@ class WearProxyBridgeTest {
               setOf("watch-1", "watch-2")
             },
           monotonicMillis = { 1_000L },
-          handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
+          handleRequest = { _, request -> WearMessage.Response(requestId = request.requestId, ok = true) },
         )
       bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1")))
       sent.clear()
@@ -533,7 +617,7 @@ class WearProxyBridgeTest {
               setOf("watch-current")
             },
           monotonicMillis = { 1_000L },
-          handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
+          handleRequest = { _, request -> WearMessage.Response(requestId = request.requestId, ok = true) },
         )
       bridge.handleMessage("watch-stale", WearProtocolCodec.encode(request("req-1")))
       attempts.clear()
@@ -577,7 +661,7 @@ class WearProxyBridgeTest {
               setOf("watch-1", "watch-2")
             },
           monotonicMillis = { 1_000L },
-          handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
+          handleRequest = { _, request -> WearMessage.Response(requestId = request.requestId, ok = true) },
         )
       bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1")))
       bridge.handleMessage("watch-2", WearProtocolCodec.encode(request("req-2")))
@@ -601,7 +685,7 @@ class WearProxyBridgeTest {
           scope = actorScope,
           sender = WearMessageSender { nodeId, path, data -> sent += SentWearMessage(nodeId, path, data) },
           monotonicMillis = { 1_000L },
-          handleRequest = { request ->
+          handleRequest = { _, request ->
             requestStarted.complete(Unit)
             finishRequest.await()
             WearMessage.Response(requestId = request.requestId, ok = true)
@@ -663,7 +747,7 @@ class WearProxyBridgeTest {
         WearProxyBridge(
           scope = backgroundScope,
           sender = WearMessageSender { nodeId, path, data -> sent += SentWearMessage(nodeId, path, data) },
-          handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
+          handleRequest = { _, request -> WearMessage.Response(requestId = request.requestId, ok = true) },
         )
       repeat(9) { index -> bridge.handleMessage("watch-$index", WearProtocolCodec.encode(request("req-$index"))) }
       sent.clear()
@@ -698,6 +782,58 @@ class WearProxyBridgeTest {
       assertEquals("hello", payload.getValue("deltaText").jsonPrimitive.content)
       assertEquals("hello", payload.getValue("streamText").jsonPrimitive.content)
     }
+
+  @Test
+  fun connectionEventsCarrySemanticFailureReasons() =
+    runTest {
+      val sent = mutableListOf<SentWearMessage>()
+      val bridge =
+        WearProxyBridge(
+          scope = backgroundScope,
+          sender =
+            WearMessageSender { nodeId, path, data ->
+              sent += SentWearMessage(nodeId, path, data)
+            },
+          peerResolver = WearPeerResolver { setOf("watch-1") },
+          handleRequest = { _, request ->
+            WearMessage.Response(requestId = request.requestId, ok = true)
+          },
+        )
+      bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1")))
+      sent.clear()
+
+      bridge.publishConnection(
+        connected = false,
+        status = "Update required",
+        failure = WearConnectionFailure.Incompatible,
+      )
+      bridge.awaitIdleForTests()
+
+      val event =
+        sent
+          .single { it.path == WearProtocol.EVENT_PATH }
+          .let { (WearProtocolCodec.decode(it.data) as WearDecodeResult.Success).message }
+          as WearMessage.Event
+      val payload = checkNotNull(event.payload).jsonObject
+      assertEquals(false, payload.getValue("connected").jsonPrimitive.boolean)
+      assertEquals("incompatible", payload.getValue("failure").jsonPrimitive.content)
+    }
+
+  @Test
+  fun connectionFailurePreservesProtocolMismatchAndLegacyUpdateSignals() {
+    assertEquals(
+      WearConnectionFailure.Incompatible,
+      wearConnectionFailure(problemCode = "PROTOCOL_MISMATCH", status = "Connection failed"),
+    )
+    assertEquals(
+      WearConnectionFailure.Incompatible,
+      wearConnectionFailure(problemCode = null, status = "Update required"),
+    )
+    assertEquals(
+      WearConnectionFailure.GatewayOffline,
+      wearConnectionFailure(problemCode = null, status = "Offline"),
+    )
+  }
 
   @Test
   fun canceledGoogleTaskResumesAsSendFailure() =
@@ -743,7 +879,7 @@ class WearProxyBridgeTest {
               sent += SentWearMessage(nodeId, path, data)
             },
           monotonicMillis = { 1_000L },
-          handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
+          handleRequest = { _, request -> WearMessage.Response(requestId = request.requestId, ok = true) },
         )
       bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1")))
 
@@ -764,6 +900,55 @@ class WearProxyBridgeTest {
       // The stale send is retried after discovery, then the later offline event also delivers.
       assertEquals(2, sent.count { it.path == WearProtocol.EVENT_PATH })
     }
+
+  private fun assertForeignTerminalPreservesActiveStream(state: String) {
+    val projector = WearChatStreamProjector()
+    projectStreamEvent(projector, state = "delta", runId = "active-run", text = "Hel", message = "Hel")
+
+    projectStreamEvent(projector, state = state, runId = "older-run")
+
+    val continued = projectStreamEvent(projector, state = "delta", runId = "active-run", text = "lo")
+    assertEquals("Hello", continued.getValue("streamText").jsonPrimitive.content)
+    assertEquals("true", continued.getValue("streamTextComplete").jsonPrimitive.content)
+  }
+
+  private fun assertForeignTerminalPreservesAnonymousStream(state: String) {
+    val projector = WearChatStreamProjector()
+    projectStreamEvent(projector, state = "delta", text = "Hel", message = "Hel")
+
+    projectStreamEvent(projector, state = state, runId = "older-run")
+
+    val continued = projectStreamEvent(projector, state = "delta", text = "lo")
+    assertEquals("Hello", continued.getValue("streamText").jsonPrimitive.content)
+    assertEquals("true", continued.getValue("streamTextComplete").jsonPrimitive.content)
+  }
+
+  private fun projectStreamEvent(
+    projector: WearChatStreamProjector,
+    state: String,
+    runId: String? = null,
+    text: String? = null,
+    message: String? = null,
+  ): JsonObject =
+    checkNotNull(
+      projector.project(
+        buildJsonObject {
+          put("sessionKey", "main")
+          runId?.let { put("runId", it) }
+          put("state", state)
+          text?.let { put("deltaText", it) }
+          message?.let { fullText ->
+            put(
+              "message",
+              buildJsonObject {
+                put("role", "assistant")
+                put("content", fullText)
+              },
+            )
+          }
+        },
+      ),
+    )
 
   private fun request(requestId: String): WearMessage.Request = WearMessage.Request(requestId = requestId, method = WearRpcMethod.ProxyStatus)
 }

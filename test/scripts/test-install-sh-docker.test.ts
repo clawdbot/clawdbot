@@ -71,6 +71,54 @@ function extractInstallE2eInstallerFunction(): string {
   return script.slice(start, end);
 }
 
+function extractDockerTimezoneValidator(): string {
+  const script = readFileSync(DOCKER_SETUP_PATH, "utf8");
+  const match = script.match(
+    /(is_valid_timezone_in_image\(\) \{[\s\S]*?\n\})\n\nvalidate_mount_path_value/u,
+  );
+  if (!match) {
+    throw new Error("Docker timezone validator was not found");
+  }
+  return expectDefined(match[1], "Docker timezone validator capture");
+}
+
+function runDockerTimezoneValidator(timezone: string) {
+  const root = tempDirs.make("openclaw-docker-timezone-");
+  const binDir = join(root, "bin");
+  const dockerPath = join(binDir, "docker");
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(
+    dockerPath,
+    [
+      "#!/bin/bash",
+      "set -euo pipefail",
+      'while [[ "$#" -gt 0 && "$1" != "-e" ]]; do shift; done',
+      'exec "$HOST_NODE" "$@"',
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+
+  return spawnSync(
+    "bash",
+    [
+      "--noprofile",
+      "--norc",
+      "-c",
+      `${extractDockerTimezoneValidator()}\nIMAGE_NAME=openclaw:test\nis_valid_timezone_in_image "$TIMEZONE"`,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        HOME: root,
+        HOST_NODE: process.execPath,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        TIMEZONE: timezone,
+      },
+    },
+  );
+}
+
 function runInstallE2eInstallerFixture(params: {
   curlExitCode?: number;
   installTag: string;
@@ -904,6 +952,25 @@ printf 'status=%s\\n' "$status"
     expect(script).not.toContain('docker pull "$IMAGE_NAME"');
   });
 
+  it("validates Docker timezones against the selected image runtime", () => {
+    for (const timezone of ["Asia/Shanghai", "UTC", "US/Pacific"]) {
+      const result = runDockerTimezoneValidator(timezone);
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+    }
+
+    for (const timezone of ["zone.tab", "iso3166.tab", "Factory", "localtime"]) {
+      const result = runDockerTimezoneValidator(timezone);
+      expect(result.status).toBe(1);
+    }
+
+    const script = readFileSync(DOCKER_SETUP_PATH, "utf8");
+    expect(script).not.toContain("/usr/share/zoneinfo");
+    expect(script).toContain(
+      'fail "OPENCLAW_TZ must be supported by $IMAGE_NAME (e.g. Asia/Shanghai)."',
+    );
+  });
+
   it("bounds Podman setup image pulls", () => {
     const script = readFileSync(PODMAN_SETUP_PATH, "utf8");
 
@@ -1140,6 +1207,19 @@ printf 'status=%s\\n' "$status"
     expect(runner).toContain('--version "$FRESHNESS_VERSION"');
     expect(runner).toMatch(
       /HOME="\$policy_home" \\\n\s*NPM_CONFIG_USERCONFIG="\$\{policy_home\}\/\.npmrc" \\\n\s*OPENCLAW_NO_ONBOARD=1 \\\n\s*OPENCLAW_NO_PROMPT=1 \\\n\s*run_installer_pipeline/u,
+    );
+  });
+
+  it("bounds both non-root installer pipelines and propagates curl failures", () => {
+    const wrapper = readFileSync(SCRIPT_PATH, "utf8");
+    const nonrootRunner = readFileSync(NONROOT_RUNNER_PATH, "utf8");
+
+    expect(wrapper).toContain('-e OPENCLAW_INSTALL_CLI_URL="$CLI_INSTALL_URL"');
+    expect(wrapper).toContain(
+      `'set -o pipefail; curl -fsSL --connect-timeout 30 --max-time 300 -- "$OPENCLAW_INSTALL_CLI_URL" | bash -s -- --set-npm-prefix --no-onboard'`,
+    );
+    expect(nonrootRunner).toContain(
+      'curl -fsSL --connect-timeout 30 --max-time 300 -- "$INSTALL_URL" | bash',
     );
   });
 

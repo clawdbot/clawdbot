@@ -423,9 +423,7 @@ export function createExecApprovalChannelRuntime<
         gatewayClient = client;
         try {
           const readiness = await startGatewayClientWhenEventLoopReady(client, {
-            clientOptions: {
-              preauthHandshakeTimeoutMs: adapter.cfg.gateway?.handshakeTimeoutMs,
-            },
+            clientOptions: {},
           });
           if (!readiness.ready) {
             throw new Error(

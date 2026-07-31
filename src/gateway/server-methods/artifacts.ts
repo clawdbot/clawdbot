@@ -22,6 +22,11 @@ import {
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
+import {
+  parseManagedOutgoingArtifactId,
+  resolveManagedOutgoingMediaArtifactDownload,
+  resolveManagedOutgoingMediaUrlDownload,
+} from "../managed-image-attachments.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
   resolveSessionStoreAgentId,
@@ -29,7 +34,7 @@ import {
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
 import { visitSessionMessagesAsync } from "../session-transcript-readers.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadSessionEntryReadOnly } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -139,6 +144,9 @@ function normalizeArtifactType(value: string): string {
   }
   if (normalized === "audio" || normalized === "input_audio") {
     return "audio";
+  }
+  if (normalized === "video" || normalized === "input_video") {
+    return "video";
   }
   if (normalized === "file" || normalized === "input_file") {
     return "file";
@@ -362,9 +370,11 @@ function isArtifactBlock(block: Record<string, unknown>): boolean {
   if (
     type === "image" ||
     type === "audio" ||
+    type === "video" ||
     type === "file" ||
     type === "input_image" ||
     type === "input_audio" ||
+    type === "input_video" ||
     type === "input_file" ||
     type === "image_url"
   ) {
@@ -411,13 +421,17 @@ function collectArtifactsFromMessage(params: {
       asNonEmptyString(block.filename) ??
       asNonEmptyString(block.alt) ??
       `${type} ${params.artifacts.length + 1}`;
-    const id = artifactId({
-      sessionKey: params.sessionKey,
-      messageSeq,
-      contentIndex,
-      title,
-      type,
-    });
+    const declaredArtifactId = asNonEmptyString(block.artifactId);
+    const id =
+      declaredArtifactId && parseManagedOutgoingArtifactId(declaredArtifactId)
+        ? declaredArtifactId
+        : artifactId({
+            sessionKey: params.sessionKey,
+            messageSeq,
+            contentIndex,
+            title,
+            type,
+          });
     const includeData = params.downloadArtifactId
       ? params.downloadArtifactId === id
       : params.includeDownloadData !== false;
@@ -512,8 +526,8 @@ async function loadArtifacts(
   const scopedGlobalAgentId =
     cfg?.session?.scope === "global" && sessionKey === "global" ? resolved.agentId : undefined;
   const { storePath, entry } = scopedGlobalAgentId
-    ? loadSessionEntry(sessionKey, { agentId: scopedGlobalAgentId })
-    : loadSessionEntry(sessionKey);
+    ? loadSessionEntryReadOnly(sessionKey, { agentId: scopedGlobalAgentId })
+    : loadSessionEntryReadOnly(sessionKey);
   const sessionId = entry?.sessionId;
   if (!sessionId || !storePath) {
     return { sessionKey, artifacts: [] };
@@ -639,6 +653,37 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!requireQueryable(params, respond)) {
       return;
     }
+    if (
+      params.sessionKey &&
+      !params.runId &&
+      !params.taskId &&
+      parseManagedOutgoingArtifactId(params.artifactId)
+    ) {
+      const resolved = resolveQuerySession(params, context.getRuntimeConfig?.());
+      const managed = resolved
+        ? await resolveManagedOutgoingMediaArtifactDownload({
+            sessionKey: resolved.sessionKey,
+            artifactId: params.artifactId,
+          })
+        : null;
+      if (managed) {
+        respond(true, {
+          artifact: {
+            id: managed.artifactId,
+            type: managed.type,
+            title: managed.title,
+            ...(managed.mimeType ? { mimeType: managed.mimeType } : {}),
+            ...(managed.sizeBytes !== undefined ? { sizeBytes: managed.sizeBytes } : {}),
+            sessionKey: managed.sessionKey,
+            source: "session-transcript",
+            download: { mode: "url" as const },
+          },
+          url: managed.url,
+          expiresAt: managed.expiresAt,
+        });
+        return;
+      }
+    }
     const { artifact } = await findArtifact(params, context.getRuntimeConfig?.(), {
       downloadArtifactId: params.artifactId,
     });
@@ -662,12 +707,24 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const managedUrl =
+      artifact.download.mode === "url" && artifact.url && artifact.sessionKey
+        ? await resolveManagedOutgoingMediaUrlDownload({
+            sessionKey: artifact.sessionKey,
+            url: artifact.url,
+          })
+        : null;
     respond(true, {
       artifact: toSummary(artifact),
       ...(artifact.download.mode === "bytes"
         ? { encoding: "base64" as const, data: artifact.data }
         : {}),
-      ...(artifact.download.mode === "url" ? { url: artifact.url } : {}),
+      ...(artifact.download.mode === "url"
+        ? {
+            url: managedUrl?.url ?? artifact.url,
+            ...(managedUrl ? { expiresAt: managedUrl.expiresAt } : {}),
+          }
+        : {}),
     });
   },
 };

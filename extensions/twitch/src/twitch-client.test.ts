@@ -677,11 +677,11 @@ describe("TwitchClientManager", () => {
       expect(capturedMessage?.displayName).toBe("TestUser");
       expect(capturedMessage?.userId).toBe("12345");
       expect(capturedMessage?.message).toBe("Hello bot!");
-      expect(capturedMessage?.channel).toBe("testchannel");
+      expect(capturedMessage?.channel).toBe("#testchannel");
       expect(capturedMessage?.chatType).toBe("group");
     });
 
-    it("should normalize channel names without # prefix", async () => {
+    it("should preserve channel names without a # prefix", async () => {
       await manager.getClient(testAccount);
 
       const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");

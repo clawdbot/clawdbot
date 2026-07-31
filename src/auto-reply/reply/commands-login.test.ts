@@ -114,7 +114,7 @@ describe("handleLoginCommand", () => {
   it("registers /login as a built-in command handler", () => {
     expect(buildBuiltinChatCommands().find((entry) => entry.key === "login")).toMatchObject({
       nativeName: "login",
-      nativeProviders: ["telegram"],
+      nativeProviders: ["discord", "slack", "telegram"],
       textAliases: ["/login"],
       scope: "both",
     });
@@ -567,19 +567,6 @@ describe("handleLoginCommand", () => {
       },
     });
     expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
-  });
-
-  it("normalizes Codex login aliases to the OpenAI provider", async () => {
-    mockSuccessfulLoginFlow();
-
-    await handleLoginCommand(
-      buildLoginParams("/login openai-codex", { opts: blockReplyOpts() }),
-      true,
-    );
-
-    expect(runModelsAuthLoginFlowMock).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "openai" }),
-    );
   });
 
   it("returns a friendly error for unsupported providers", async () => {

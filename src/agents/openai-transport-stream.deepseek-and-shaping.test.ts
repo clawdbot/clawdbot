@@ -1,12 +1,10 @@
 import { createServer } from "node:http";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transports";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import {
-  buildOpenAICompletionsParams,
-  createOpenAICompletionsTransportStreamFn,
-} from "./openai-transport-stream.js";
+import { buildOpenAICompletionsParams } from "./openai-transport-stream.js";
 import {
   buildOpenAIResponsesParams,
   type CapturedStreamEvent,
@@ -93,7 +91,11 @@ describe("openai transport stream", () => {
     );
 
     expect(output.content).toEqual([
-      { type: "text", text: "before  after" },
+      {
+        type: "text",
+        text: "before  after",
+        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+      },
       {
         type: "toolCall",
         id: "call_native_1",
@@ -132,7 +134,11 @@ describe("openai transport stream", () => {
     );
 
     expect(output.content).toEqual([
-      { type: "text", text: "I'll check" },
+      {
+        type: "text",
+        text: "I'll check",
+        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+      },
       {
         type: "toolCall",
         id: "call_native_1",
@@ -180,7 +186,11 @@ describe("openai transport stream", () => {
         arguments: { path: "/tmp/native.md" },
         partialArgs: '{"path":"/tmp/native.md"}',
       },
-      { type: "text", text: " visible" },
+      {
+        type: "text",
+        text: " visible",
+        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+      },
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
   });
@@ -216,7 +226,11 @@ describe("openai transport stream", () => {
     );
 
     expect(output.content).toEqual([
-      { type: "text", text: "before " },
+      {
+        type: "text",
+        text: "before ",
+        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+      },
       {
         type: "toolCall",
         id: "call_native_1",
@@ -224,7 +238,11 @@ describe("openai transport stream", () => {
         arguments: { path: "/tmp/native.md" },
         partialArgs: '{"path":"/tmp/native.md"}',
       },
-      { type: "text", text: " after" },
+      {
+        type: "text",
+        text: " after",
+        textSignature: '{"v":1,"id":"commentary-1","phase":"commentary"}',
+      },
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
   });
@@ -621,15 +639,163 @@ describe("openai transport stream", () => {
 
     {
       const params = buildOpenAICompletionsParams(model, context, {
+        responseFormat: { type: "text" },
+      });
+      expect(params.response_format).toEqual({ type: "text" });
+    }
+
+    {
+      const params = buildOpenAICompletionsParams(model, context, {
         responseFormat: { type: "json_schema", json_schema: {} },
       });
       expect(params.response_format).toEqual({ type: "json_schema", json_schema: {} });
     }
 
     {
+      const schema = {
+        type: "object",
+        properties: { reply: { type: "string" } },
+        required: ["reply"],
+        additionalProperties: false,
+      };
+      const params = buildOpenAICompletionsParams(model, context, { responseFormat: schema });
+      expect(params.response_format).toEqual({
+        type: "json_schema",
+        json_schema: { name: "openclaw_response", schema },
+      });
+    }
+
+    {
       const params = buildOpenAICompletionsParams(model, context, {});
       expect(params).not.toHaveProperty("response_format");
     }
+  });
+
+  it("does not infer JSON Schema response formats for legacy first-party OpenAI models", () => {
+    const responseFormat = {
+      type: "object",
+      properties: { reply: { type: "string" } },
+      required: ["reply"],
+      additionalProperties: false,
+    };
+    const build = (id: string) =>
+      buildOpenAICompletionsParams(
+        makeCompletionsModel({
+          id,
+          name: id,
+          provider: "openai",
+          baseUrl: "https://api.openai.com/v1",
+          reasoning: false,
+        }),
+        { messages: [{ role: "user", content: "hi", timestamp: 1 }], tools: [] } as never,
+        { responseFormat },
+      );
+
+    expect(build("gpt-4-turbo")).not.toHaveProperty("response_format");
+    expect(build("gpt-4o-audio-preview")).not.toHaveProperty("response_format");
+    expect(build("gpt-4o-2024-05-13")).not.toHaveProperty("response_format");
+    expect(build("o1-mini")).not.toHaveProperty("response_format");
+    for (const id of [
+      "gpt-4o",
+      "gpt-4o-2024-08-06",
+      "gpt-4o-mini",
+      "gpt-4o-mini-2024-07-18",
+      "gpt-4.1",
+      "o1",
+      "o1-2024-12-17",
+      "o3",
+      "o4-mini",
+    ]) {
+      expect(build(id).response_format).toMatchObject({ type: "json_schema" });
+    }
+  });
+
+  it("omits JSON Schema response_format for compatible backends without support", () => {
+    const model = makeCompletionsModel({
+      id: "custom-model",
+      name: "Custom model",
+      provider: "custom-provider",
+      baseUrl: "https://models.example/v1",
+      reasoning: false,
+      compat: { supportsJsonSchemaResponseFormat: false },
+    });
+    const schema = {
+      type: "object",
+      properties: { reply: { type: "string" } },
+      required: ["reply"],
+      additionalProperties: false,
+    };
+
+    const params = buildOpenAICompletionsParams(
+      model,
+      { messages: [{ role: "user", content: "hi", timestamp: 1 }], tools: [] } as never,
+      { responseFormat: schema },
+    );
+
+    expect(params).not.toHaveProperty("response_format");
+
+    const configuredFormat = {
+      type: "json_schema",
+      json_schema: { name: "configured", schema },
+    };
+    const configuredParams = buildOpenAICompletionsParams(
+      model,
+      { messages: [{ role: "user", content: "hi", timestamp: 1 }], tools: [] } as never,
+      { responseFormat: configuredFormat },
+    );
+    expect(configuredParams.response_format).toBe(configuredFormat);
+  });
+
+  it("maps JSON Schema response_format for Ollama OpenAI-compatible routes", () => {
+    const model = makeCompletionsModel({
+      id: "gemma4:e4b",
+      name: "Gemma 4 E4B",
+      provider: "ollama",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      reasoning: false,
+      compat: { supportsJsonSchemaResponseFormat: true },
+    });
+    const schema = {
+      type: "object",
+      properties: { reply: { type: "string" } },
+      required: ["reply"],
+      additionalProperties: false,
+    };
+
+    const params = buildOpenAICompletionsParams(
+      model,
+      { messages: [{ role: "user", content: "hi", timestamp: 1 }], tools: [] } as never,
+      { responseFormat: schema },
+    );
+
+    expect(params.response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "openclaw_response", schema },
+    });
+
+    const toolParams = buildOpenAICompletionsParams(
+      model,
+      {
+        messages: [{ role: "user", content: "weather", timestamp: 1 }],
+        tools: [
+          {
+            name: "weather",
+            description: "Get weather",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      { responseFormat: schema },
+    );
+    expect(toolParams.tools).toHaveLength(1);
+    expect(toolParams).not.toHaveProperty("response_format");
+
+    const hostedCloudParams = buildOpenAICompletionsParams(
+      { ...model, id: "gemma4", baseUrl: "https://ollama.com/v1" },
+      { messages: [{ role: "user", content: "hi", timestamp: 1 }], tools: [] } as never,
+      { responseFormat: schema },
+    );
+    expect(hostedCloudParams).not.toHaveProperty("response_format");
   });
 
   it("does not build OpenRouter reasoning params for Hunter Alpha when reasoning is disabled", () => {
@@ -1044,7 +1210,7 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.5",
         name: "GPT-5.5",
-        api: "openclaw-openai-responses-transport" as Api,
+        api: "openclaw-openai-chatgpt-responses-transport" as Api,
         provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api/codex",
         reasoning: true,
