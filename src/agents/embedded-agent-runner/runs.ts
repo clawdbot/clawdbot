@@ -902,10 +902,24 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
     );
     return { aborted: true, drained, forceCleared: false };
   }
+  const replyOnlyForceCleared =
+    capturedHandle === undefined &&
+    capturedReplyOperation !== undefined &&
+    params.forceClear === true &&
+    isReplyOperationActive(capturedReplyOperation) &&
+    forceClearReplyOperation(
+      capturedReplyOperation,
+      new Error(`Embedded run force-cleared by ${params.reason ?? "abort"}`),
+    );
   const aborted =
     (capturedHandle !== undefined &&
       ACTIVE_EMBEDDED_RUNS.get(params.sessionId) === capturedHandle &&
       abortEmbeddedAgentRun(params.sessionId)) ||
+    (capturedHandle === undefined &&
+      !replyOnlyForceCleared &&
+      capturedReplyOperation !== undefined &&
+      isReplyOperationActive(capturedReplyOperation) &&
+      capturedReplyOperation.abortForRestart()) ||
     expiredReplyRun;
   const drained = aborted
     ? await waitForEmbeddedAgentRunHandleEnd(capturedHandle, capturedReplyOperation, settleMs)
@@ -915,7 +929,8 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
       ? tryLoadForceClearSessionSnapshot(params.sessionKey)
       : undefined;
   const forceCleared =
-    params.forceClear === true && (!aborted || !drained)
+    replyOnlyForceCleared ||
+    (params.forceClear === true && (!aborted || !drained)
       ? forceClearEmbeddedAgentRun(
           params.sessionId,
           capturedHandle,
@@ -923,7 +938,7 @@ export async function abortAndDrainEmbeddedAgentRun(params: {
           params.sessionKey,
           params.reason,
         )
-      : false;
+      : false);
   if (forceCleared && params.sessionKey && persistenceSnapshot) {
     await persistForceClearedEmbeddedRunTerminalState({
       ...persistenceSnapshot,

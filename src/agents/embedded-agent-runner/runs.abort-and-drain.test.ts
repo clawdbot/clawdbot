@@ -140,6 +140,28 @@ describe("abortAndDrainEmbeddedAgentRun", () => {
     expect(isReplyRunActiveForSessionId(sessionId)).toBe(false);
   });
 
+  it("aborts a reply-only run without force-clear as a restart", async () => {
+    const sessionId = "session-reply-only-abort";
+    const sessionKey = "agent:reply-only-abort";
+    const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
+    operation.setPhase("running");
+
+    await expect(
+      abortAndDrainEmbeddedAgentRun({
+        sessionId,
+        sessionKey,
+        settleMs: 0,
+        reason: "test_timeout",
+      }),
+    ).resolves.toEqual({
+      aborted: true,
+      drained: false,
+      forceCleared: false,
+    });
+
+    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
+  });
+
   it("does not force-clear a replacement reply operation", async () => {
     vi.useFakeTimers();
     const sessionId = "session-replacement-reply-operation";
