@@ -1,17 +1,16 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   measureEmbeddedAgentPreparation,
   measureEmbeddedAgentPreparationSync,
 } from "./preparation-timing.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function createTimelineEnv() {
-  const dir = await mkdtemp(join(tmpdir(), "openclaw-agent-preparation-"));
-  tempDirs.push(dir);
+  const dir = tempDirs.make("openclaw-agent-preparation-");
   return {
     env: {
       OPENCLAW_DIAGNOSTICS: "timeline",
@@ -27,10 +26,6 @@ async function readTimeline(path: string) {
     .split("\n")
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
-});
 
 describe("embedded agent preparation timing", () => {
   it("emits the canonical span name with stage attribution", async () => {
