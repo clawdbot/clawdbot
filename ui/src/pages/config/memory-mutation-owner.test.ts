@@ -216,7 +216,10 @@ describe("Memory plugin mutation ownership", () => {
       catalog: [createMemoryTestAddon("active-memory", true)],
       setEnabled,
     });
-    const owner = element as unknown as { addonBusy: Set<string> };
+    const owner = element as unknown as {
+      addonBusy: Set<string>;
+      catalog: { kind: string };
+    };
     document.body.append(element);
     try {
       await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
@@ -226,7 +229,14 @@ describe("Memory plugin mutation ownership", () => {
       setPhase("disconnected");
       expect(owner.addonBusy.has("active-memory")).toBe(false);
       setPhase("connected");
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+      await waitForFast(() =>
+        expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(2),
+      );
+      await waitForFast(async () => {
+        await element.updateComplete;
+        expect(owner.catalog.kind).toBe("ready");
+        expect(addonSwitch(element, "Active memory")).not.toBeNull();
+      });
       toggleAddon(element, "Active memory", false);
       await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
 
@@ -263,7 +273,7 @@ describe("Memory plugin mutation ownership", () => {
       ],
       setEnabled,
     });
-    const owner = element as unknown as { engineBusy: boolean };
+    const owner = element as unknown as { engineBusy: boolean; catalog: { kind: string } };
     document.body.append(element);
     try {
       await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
@@ -273,7 +283,14 @@ describe("Memory plugin mutation ownership", () => {
       setPhase("disconnected");
       expect(owner.engineBusy).toBe(false);
       setPhase("connected");
-      await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
+      await waitForFast(() =>
+        expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(2),
+      );
+      await waitForFast(async () => {
+        await element.updateComplete;
+        expect(owner.catalog.kind).toBe("ready");
+        expect(activeEngine(element)).toBe("memory-core");
+      });
       selectEngine(element, "other");
       await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
 
