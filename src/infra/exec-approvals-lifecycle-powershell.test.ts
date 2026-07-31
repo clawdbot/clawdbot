@@ -124,6 +124,27 @@ describe("OpenClaw PowerShell lifecycle edges", () => {
     ).toBe(true);
   });
 
+  it("keeps OpenClaw selected by a compound positive filter", () => {
+    const command =
+      "Get-Process | Where-Object { $_.ProcessName -Like 'notepad' -or $true } | Stop-Process";
+    expect(
+      requiresApproval(command, [
+        "Get-Process",
+        "|",
+        "Where-Object",
+        "{",
+        "$_.ProcessName",
+        "-Like",
+        "notepad",
+        "-or",
+        "$true",
+        "}",
+        "|",
+        "Stop-Process",
+      ]),
+    ).toBe(true);
+  });
+
   it("inspects mutations nested in pipeline script blocks", () => {
     const command = "Get-Process OpenClaw | ForEach-Object { Stop-Process -InputObject $_ }";
     expect(

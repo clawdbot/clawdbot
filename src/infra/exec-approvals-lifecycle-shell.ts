@@ -28,6 +28,26 @@ function unwrapCmdIfArgv(argv: readonly string[]): string[] {
   return stripBraceTokens(argv.slice(index));
 }
 
+function cmdLoopVariableOccupiesExecutable(argv: readonly string[], variable: string): boolean {
+  let candidate = stripBraceTokens(argv);
+  for (let depth = 0; candidate.length > 0 && depth < 8; depth += 1) {
+    const executable = (candidate[0] ?? "").trim().toLowerCase().replace(/^@/u, "");
+    if (executable.includes(variable)) {
+      return true;
+    }
+    if (executable === "call") {
+      candidate = stripBraceTokens(candidate.slice(1));
+      continue;
+    }
+    if (executable === "cmd" && ["/c", "/k"].includes((candidate[1] ?? "").toLowerCase())) {
+      candidate = stripBraceTokens(candidate.slice(2));
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
+
 /** Return true when a shell control construct hides a dynamic executable. */
 export function lifecycleControlArgvRequiresApproval(
   argv: readonly string[],
@@ -43,7 +63,9 @@ export function lifecycleControlArgvRequiresApproval(
   }
   const variable = argv.slice(1, inIndex).find((token) => /^%%?[A-Za-z]$/u.test(token.trim()));
   const commandArgv = stripBraceTokens(argv.slice(doIndex + 1));
-  return Boolean(variable && commandArgv[0]?.toLowerCase().includes(variable.trim().toLowerCase()));
+  return Boolean(
+    variable && cmdLoopVariableOccupiesExecutable(commandArgv, variable.trim().toLowerCase()),
+  );
 }
 
 /** Return true when PowerShell calculates an invocation target for a lifecycle-shaped command. */

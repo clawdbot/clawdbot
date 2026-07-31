@@ -371,6 +371,10 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
       ["cmd", "/c", "for %X in (openclaw) do %X gateway restart"],
     ],
     [
+      `cmd /c "for %X in (openclaw) do call %X gateway restart"`,
+      ["cmd", "/c", "for %X in (openclaw) do call %X gateway restart"],
+    ],
+    [
       `powershell -Command '& ("open" + "claw") gateway restart'`,
       ["powershell", "-Command", `& ("open" + "claw") gateway restart`],
     ],
@@ -455,6 +459,15 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
     expect(requiresApproval("pkill -0 -x openclaw", ["pkill", "-0", "-x", "openclaw"])).toBe(false);
     expect(requiresApproval("pkill -0 -TERM openclaw", ["pkill", "-0", "-TERM", "openclaw"])).toBe(
       true,
+    );
+  });
+
+  it("does not honor killall help operands after the option terminator", () => {
+    expect(
+      requiresApproval("killall -- openclaw --help", ["killall", "--", "openclaw", "--help"]),
+    ).toBe(true);
+    expect(requiresApproval("killall --help openclaw", ["killall", "--help", "openclaw"])).toBe(
+      false,
     );
   });
 

@@ -58,8 +58,19 @@ function normalizedToken(value: string | undefined): string {
   return (value ?? "").trim().toLowerCase().replaceAll("`", "").replaceAll("^", "");
 }
 
-export function lifecycleHasHelpOrVersion(argv: readonly string[]): boolean {
-  return argv.some((token) => HELP_OR_VERSION_FLAGS.has(token.trim()));
+export function lifecycleHasHelpOrVersion(
+  argv: readonly string[],
+  extraFlags?: ReadonlySet<string>,
+): boolean {
+  for (const token of argv) {
+    if (token === "--") {
+      return false;
+    }
+    if (HELP_OR_VERSION_FLAGS.has(token.trim()) || extraFlags?.has(normalizedToken(token))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function lifecycleHasEffectiveHelpOrVersion(

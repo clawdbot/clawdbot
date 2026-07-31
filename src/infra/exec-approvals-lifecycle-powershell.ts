@@ -220,6 +220,12 @@ function powerShellIdentityFilterKeepsOpenClaw(
   argv: readonly string[],
   allowUnresolved: boolean,
 ): boolean {
+  const hasCompoundPredicate = argv.some((token) =>
+    ["&&", "-and", "-or", "-xor", "||"].includes(token.toLowerCase()),
+  );
+  if (hasCompoundPredicate) {
+    return true;
+  }
   const negativeIndex = argv.findIndex((token) =>
     ["-ne", "-notcontains", "-notin", "-notlike", "-notmatch"].includes(token.trim().toLowerCase()),
   );
@@ -227,9 +233,6 @@ function powerShellIdentityFilterKeepsOpenClaw(
     return isPowerShellOpenClawFilter(argv, allowUnresolved);
   }
   const operands = argv.slice(negativeIndex + 1);
-  if (operands.some((token) => ["&&", "-and", "-or", "-xor", "||"].includes(token.toLowerCase()))) {
-    return true;
-  }
   if (operands.some((token) => /[$@][A-Za-z_][A-Za-z0-9_]*/u.test(token))) {
     return true;
   }

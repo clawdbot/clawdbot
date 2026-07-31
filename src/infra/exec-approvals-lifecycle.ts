@@ -218,11 +218,7 @@ function classifyProcessMutation(
 ): boolean {
   const executable = normalizeExecutableToken(argv[0] ?? "");
   if (["killall", "pkill"].includes(executable)) {
-    if (
-      hasHelpOrVersion(argv) ||
-      argvUsesSignalZero(argv) ||
-      argv.some((token) => ["-l", "--list"].includes(normalizedToken(token)))
-    ) {
+    if (hasHelpOrVersion(argv, new Set(["-l", "--list"])) || argvUsesSignalZero(argv)) {
       return false;
     }
     return argv.slice(1).some(matchesOpenClawProcessPattern);
@@ -237,11 +233,7 @@ function classifyProcessMutation(
     if (shellContext === "powershell") {
       return argv.slice(1).some(matchesOpenClawProcessPattern);
     }
-    if (
-      hasHelpOrVersion(argv) ||
-      argvUsesSignalZero(argv) ||
-      argv.some((token) => normalizedToken(token) === "-l")
-    ) {
+    if (hasHelpOrVersion(argv, new Set(["-l"])) || argvUsesSignalZero(argv)) {
       return false;
     }
     const normalizedRaw = raw
