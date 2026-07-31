@@ -6,7 +6,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { copyStaticExtensionAssetsToRuntimeOverlay } from "../../scripts/lib/static-extension-assets.mjs";
+import {
+  copyStaticExtensionAssets,
+  copyStaticExtensionAssetsToRuntimeOverlay,
+} from "../../scripts/lib/static-extension-assets.mjs";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -62,7 +65,7 @@ describe("stageBundledPluginRuntime", () => {
     });
   });
 
-  it("resolves plugin SDK imports from copied static assets in the runtime overlay", async () => {
+  it("resolves plugin SDK imports from copied static assets in both runtime roots", async () => {
     await withTempDir(async (repoRoot) => {
       const pluginDir = path.join(repoRoot, "extensions", "onepassword");
       const staticAsset = path.join(pluginDir, "onepassword-op-path.js");
@@ -107,34 +110,23 @@ describe("stageBundledPluginRuntime", () => {
       );
 
       stageBundledPluginRuntime({ repoRoot });
+      copyStaticExtensionAssets({ rootDir: repoRoot });
       copyStaticExtensionAssetsToRuntimeOverlay({ rootDir: repoRoot });
 
-      const emittedAsset = path.join(
-        repoRoot,
-        "dist-runtime",
-        "extensions",
-        "onepassword",
-        "onepassword-op-path.js",
-      );
-      const { stdout } = await execFileAsync(process.execPath, [
-        "--no-opt",
-        "--input-type=module",
-        "--eval",
-        `import { marker } from ${JSON.stringify(pathToFileURL(emittedAsset).href)}; process.stdout.write(marker);`,
-      ]);
-      expect(stdout).toBe("runtime-sdk");
-      expect(
-        fs.existsSync(
-          path.join(
-            repoRoot,
-            "dist-runtime",
-            "extensions",
-            "node_modules",
-            "openclaw",
-            "package.json",
-          ),
-        ),
-      ).toBe(true);
+      for (const runtimeRoot of ["dist", "dist-runtime"]) {
+        const extensionsRoot = path.join(repoRoot, runtimeRoot, "extensions");
+        const emittedAsset = path.join(extensionsRoot, "onepassword", "onepassword-op-path.js");
+        const { stdout } = await execFileAsync(process.execPath, [
+          "--no-opt",
+          "--input-type=module",
+          "--eval",
+          `import { marker } from ${JSON.stringify(pathToFileURL(emittedAsset).href)}; process.stdout.write(marker);`,
+        ]);
+        expect(stdout).toBe("runtime-sdk");
+        expect(
+          fs.existsSync(path.join(extensionsRoot, "node_modules", "openclaw", "package.json")),
+        ).toBe(true);
+      }
     });
   });
 });

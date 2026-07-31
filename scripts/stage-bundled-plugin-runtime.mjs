@@ -178,11 +178,7 @@ function ensureOpenClawExtensionAlias(params) {
     repoRoot: params.repoRoot,
     pluginSdkDir,
   });
-  // Static extension assets run from dist-runtime/extensions/<plugin>, so their
-  // package imports resolve through dist-runtime/extensions/node_modules. Keep
-  // this alias in the runtime overlay rather than the source dist tree, which
-  // is not in Node's lookup path for those emitted assets.
-  const aliasDir = path.join(params.runtimeExtensionsRoot, "node_modules", "openclaw");
+  const aliasDir = path.join(params.extensionsRoot, "node_modules", "openclaw");
   const pluginSdkAliasPath = path.join(aliasDir, "plugin-sdk");
   fs.mkdirSync(aliasDir, { recursive: true });
   writeJsonFile(path.join(aliasDir, "package.json"), {
@@ -336,7 +332,9 @@ export function stageBundledPluginRuntime(params = {}) {
 
   removePathIfExists(runtimeRoot);
   fs.mkdirSync(runtimeExtensionsRoot, { recursive: true });
-  ensureOpenClawExtensionAlias({ repoRoot, runtimeExtensionsRoot });
+  // Built bundled plugins and copied static assets resolve from separate extension roots.
+  ensureOpenClawExtensionAlias({ repoRoot, extensionsRoot: distExtensionsRoot });
+  ensureOpenClawExtensionAlias({ repoRoot, extensionsRoot: runtimeExtensionsRoot });
 
   for (const dirent of fs.readdirSync(distExtensionsRoot, { withFileTypes: true })) {
     if (!dirent.isDirectory() || dirent.name === "node_modules") {
