@@ -146,7 +146,7 @@ const createManagedStream = createOpenAICompletionsTransportStreamFn();
 function createManagedFixtureStream(): AssistantMessageEventStreamLike {
   const stream = createManagedStream(model, context, {
     apiKey: "fixture-token",
-    reasoningEffort: "medium",
+    reasoning: "medium",
   });
   if (stream instanceof Promise) {
     throw new Error("OpenAI Chat Completions transport must return its stream synchronously");
