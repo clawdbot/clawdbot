@@ -63,6 +63,7 @@ class ClawsPage extends OpenClawLightDomElement {
   @state() private mutationAvailable = false;
   @state() private loading = false;
   @state() private operationBusy = false;
+  @state() private applyBusy = false;
   @state() private error: string | null = null;
   @state() private status: ClawsStatusResult | null = null;
   @state() private doctor: ClawsDoctorResult | null = null;
@@ -97,6 +98,7 @@ class ClawsPage extends OpenClawLightDomElement {
   override disconnectedCallback() {
     this.generation += 1;
     this.operationGeneration += 1;
+    this.applyBusy = false;
     this.gatewaySource = undefined;
     this.client = null;
     this.subscriptions.clear();
@@ -128,6 +130,7 @@ class ClawsPage extends OpenClawLightDomElement {
       this.operationGeneration += 1;
       this.loading = false;
       this.operationBusy = false;
+      this.applyBusy = false;
       if (clientChanged) {
         this.resetState();
       }
@@ -145,6 +148,7 @@ class ClawsPage extends OpenClawLightDomElement {
     this.status = null;
     this.doctor = null;
     this.error = null;
+    this.applyBusy = false;
     this.selectedAgentId = null;
     this.selectedAgentExplicit = false;
     this.entries = [];
@@ -390,21 +394,26 @@ class ClawsPage extends OpenClawLightDomElement {
       return;
     }
     await this.runOperation(async (scope) => {
-      const payload = await scope.client.request<ClawLifecycleApplyResult>(
-        request.method,
-        request.request,
-      );
-      if (!this.operationCurrent(scope)) {
-        return;
+      this.applyBusy = true;
+      try {
+        const payload = await scope.client.request<ClawLifecycleApplyResult>(
+          request.method,
+          request.request,
+        );
+        if (!this.operationCurrent(scope)) {
+          return;
+        }
+        if (!validateClawLifecycleApplyResult(payload)) {
+          throw new Error(t("clawsPage.errors.invalidOutcome"));
+        }
+        this.completion = payload;
+        this.selectedAgentId = payload.operation === "remove" ? null : payload.agentId;
+        this.selectedAgentExplicit = false;
+        this.cancelPlan();
+        await this.refresh({ preserveOperation: true });
+      } finally {
+        this.applyBusy = false;
       }
-      if (!validateClawLifecycleApplyResult(payload)) {
-        throw new Error(t("clawsPage.errors.invalidOutcome"));
-      }
-      this.completion = payload;
-      this.selectedAgentId = payload.operation === "remove" ? null : payload.agentId;
-      this.selectedAgentExplicit = false;
-      this.cancelPlan();
-      await this.refresh({ preserveOperation: true });
     });
   }
 
@@ -468,7 +477,7 @@ class ClawsPage extends OpenClawLightDomElement {
                 lifecycleAvailable: this.lifecycleAvailable,
                 mutationAvailable: this.mutationAvailable,
                 busy: this.loading || this.operationBusy,
-                applying: this.operationBusy,
+                applying: this.applyBusy,
                 error: this.error,
                 query: this.query,
                 entries: this.entries,
