@@ -479,6 +479,200 @@ describe("subagent registry seam flow", () => {
     ).toHaveLength(2);
   });
 
+  it("keeps collector archive groups scoped to their requester", async () => {
+    const now = Date.now();
+    for (const [requesterSessionKey, archiveAtMs] of [
+      ["agent:main:requester-one", now - 1],
+      ["agent:main:requester-two", now + 1_000],
+    ] as const) {
+      mod.addSubagentRunForTests({
+        runId: `run-${requesterSessionKey}`,
+        childSessionKey: `${requesterSessionKey}:subagent:collector`,
+        requesterSessionKey,
+        task: "retain requester-scoped collector groups",
+        cleanup: "delete",
+        createdAt: now - 10_000,
+        endedAt: now - 5_000,
+        cleanupCompletedAt: now - 4_000,
+        archiveAtMs,
+        collect: true,
+        groupId: "swarm:shared-group-id",
+        collectorCompletion: { status: "done" },
+      });
+    }
+
+    await mod.testing.sweepOnceForTests();
+
+    expect(mod.getSubagentRunByRunId("run-agent:main:requester-one")).toBeUndefined();
+    expect(mod.getSubagentRunByRunId("run-agent:main:requester-two")).toBeDefined();
+  });
+
+  it("keeps completed collectors while any group member is incomplete", async () => {
+    const now = Date.now();
+    mod.addSubagentRunForTests({
+      runId: "run-collector-complete",
+      childSessionKey: "agent:main:subagent:collector-complete",
+      task: "completed collector",
+      createdAt: now - 10_000,
+      endedAt: now - 5_000,
+      archiveAtMs: now - 1,
+      collect: true,
+      groupId: "swarm:incomplete-member",
+      collectorCompletion: { status: "done" },
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-collector-incomplete",
+      childSessionKey: "agent:main:subagent:collector-incomplete",
+      task: "incomplete collector",
+      createdAt: now - 9_000,
+      endedAt: now - 4_000,
+      archiveAtMs: now + 1_000,
+      collect: true,
+      groupId: "swarm:incomplete-member",
+    });
+
+    await mod.testing.sweepOnceForTests();
+
+    expect(mod.getSubagentRunByRunId("run-collector-complete")).toBeDefined();
+    expect(mod.getSubagentRunByRunId("run-collector-incomplete")).toBeDefined();
+  });
+
+  it("refreshes collector membership after awaited sweep work", async () => {
+    const now = Date.now();
+    let releaseFirstDelete: (() => void) | undefined;
+    let shouldBlockDelete = true;
+    mocks.callGateway.mockImplementation((request: { method?: string }) => {
+      if (request.method !== "sessions.delete" || !shouldBlockDelete) {
+        return Promise.resolve({});
+      }
+      shouldBlockDelete = false;
+      return new Promise<Record<string, unknown>>((resolve) => {
+        releaseFirstDelete = () => resolve({});
+      });
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-archive-blocker",
+      childSessionKey: "agent:main:subagent:archive-blocker",
+      task: "hold the sweep before collector archival",
+      cleanup: "delete",
+      createdAt: now - 10_000,
+      endedAt: now - 5_000,
+      cleanupCompletedAt: now - 4_000,
+      archiveAtMs: now - 1,
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-collector-before-await",
+      childSessionKey: "agent:main:subagent:collector-before-await",
+      task: "completed collector present at sweep start",
+      createdAt: now - 10_000,
+      endedAt: now - 5_000,
+      archiveAtMs: now - 1,
+      collect: true,
+      groupId: "swarm:late-member",
+      collectorCompletion: { status: "done" },
+    });
+
+    const sweep = mod.testing.runSweeperTickForTests();
+    await waitForFast(() => expect(releaseFirstDelete).toBeTypeOf("function"));
+    mod.addSubagentRunForTests({
+      runId: "run-collector-after-await",
+      childSessionKey: "agent:main:subagent:collector-after-await",
+      task: "incomplete collector registered during sweep",
+      createdAt: now,
+      collect: true,
+      groupId: "swarm:late-member",
+    });
+    releaseFirstDelete?.();
+    await sweep;
+
+    expect(mod.getSubagentRunByRunId("run-collector-before-await")).toBeDefined();
+    expect(mod.getSubagentRunByRunId("run-collector-after-await")).toBeDefined();
+  });
+
+  it("revalidates collector membership after collector cleanup awaits", async () => {
+    const now = Date.now();
+    let releaseCollectorDelete: (() => void) | undefined;
+    mocks.callGateway.mockImplementation((request: { method?: string }) => {
+      if (request.method !== "sessions.delete" || releaseCollectorDelete) {
+        return Promise.resolve({});
+      }
+      return new Promise<Record<string, unknown>>((resolve) => {
+        releaseCollectorDelete = () => resolve({});
+      });
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-collector-cleanup-snapshot",
+      childSessionKey: "agent:main:subagent:collector-cleanup-snapshot",
+      task: "completed collector present before cleanup",
+      createdAt: now - 10_000,
+      endedAt: now - 5_000,
+      archiveAtMs: now - 1,
+      collect: true,
+      groupId: "swarm:cleanup-race",
+      collectorCompletion: { status: "done" },
+    });
+
+    const sweep = mod.testing.runSweeperTickForTests();
+    await waitForFast(() => expect(releaseCollectorDelete).toBeTypeOf("function"));
+    mod.addSubagentRunForTests({
+      runId: "run-collector-added-during-cleanup",
+      childSessionKey: "agent:main:subagent:collector-added-during-cleanup",
+      task: "incomplete collector registered during cleanup",
+      createdAt: now,
+      collect: true,
+      groupId: "swarm:cleanup-race",
+    });
+    releaseCollectorDelete?.();
+    await sweep;
+
+    expect(mod.getSubagentRunByRunId("run-collector-cleanup-snapshot")).toBeDefined();
+    expect(mod.getSubagentRunByRunId("run-collector-added-during-cleanup")).toBeDefined();
+  });
+
+  it("keeps a collector replaced during collector cleanup awaits", async () => {
+    const now = Date.now();
+    let releaseCollectorDelete: (() => void) | undefined;
+    mocks.callGateway.mockImplementation((request: { method?: string }) => {
+      if (request.method !== "sessions.delete" || releaseCollectorDelete) {
+        return Promise.resolve({});
+      }
+      return new Promise<Record<string, unknown>>((resolve) => {
+        releaseCollectorDelete = () => resolve({});
+      });
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-collector-replaced-during-cleanup",
+      childSessionKey: "agent:main:subagent:collector-before-replacement",
+      task: "collector before replacement",
+      createdAt: now - 10_000,
+      endedAt: now - 5_000,
+      archiveAtMs: now - 1,
+      collect: true,
+      groupId: "swarm:replacement-race",
+      collectorCompletion: { status: "done" },
+    });
+
+    const sweep = mod.testing.runSweeperTickForTests();
+    await waitForFast(() => expect(releaseCollectorDelete).toBeTypeOf("function"));
+    mod.addSubagentRunForTests({
+      runId: "run-collector-replaced-during-cleanup",
+      childSessionKey: "agent:main:subagent:collector-after-replacement",
+      task: "collector after replacement",
+      createdAt: now,
+      endedAt: now,
+      archiveAtMs: now - 1,
+      collect: true,
+      groupId: "swarm:replacement-race",
+      collectorCompletion: { status: "done" },
+    });
+    releaseCollectorDelete?.();
+    await sweep;
+
+    expect(
+      mod.getSubagentRunByRunId("run-collector-replaced-during-cleanup")?.childSessionKey,
+    ).toBe("agent:main:subagent:collector-after-replacement");
+  });
+
   it("keeps collector groups while any member owes failed-launch cleanup", async () => {
     const now = Date.now();
     mod.addSubagentRunForTests({
