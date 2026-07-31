@@ -12,6 +12,7 @@ use crate::{
 pub enum SidecarHandshakeState {
     Starting,
     AwaitingAcceptance,
+    AcceptancePending,
     Authenticated,
     Failed,
 }
@@ -53,6 +54,8 @@ pub struct SidecarHandshake {
     local_offer: SidecarProtocolOffer,
     state: SidecarHandshakeState,
     negotiated: Option<NegotiatedSidecarProtocol>,
+    pending_negotiated: Option<NegotiatedSidecarProtocol>,
+    channel_instance_id: Option<u64>,
 }
 
 impl SidecarHandshake {
@@ -68,6 +71,8 @@ impl SidecarHandshake {
             local_offer,
             state: SidecarHandshakeState::Starting,
             negotiated: None,
+            pending_negotiated: None,
+            channel_instance_id: None,
         })
     }
 
@@ -91,6 +96,9 @@ impl SidecarHandshake {
         &mut self,
         channel: &mut AuthenticatedSidecarChannel,
     ) -> Result<Vec<u8>, SidecarHandshakeError> {
+        if let Err(error) = self.bind_channel(channel) {
+            return self.fail(channel, error);
+        }
         if channel.role() != self.local_offer.peer.role {
             return self.fail(channel, SidecarHandshakeError::ChannelRoleMismatch);
         }
@@ -124,6 +132,9 @@ impl SidecarHandshake {
         channel: &mut AuthenticatedSidecarChannel,
         frame: &[u8],
     ) -> Result<Option<Vec<u8>>, SidecarHandshakeError> {
+        if let Err(error) = self.bind_channel(channel) {
+            return self.fail(channel, error);
+        }
         if channel.role() != self.local_offer.peer.role {
             return self.fail(channel, SidecarHandshakeError::ChannelRoleMismatch);
         }
@@ -132,8 +143,52 @@ impl SidecarHandshake {
             channel.retire();
             self.state = SidecarHandshakeState::Failed;
             self.negotiated = None;
+            self.pending_negotiated = None;
         }
         result
+    }
+
+    /// Commit the runtime's negotiated channel state after its acceptance
+    /// frame has been written successfully using the bootstrap ceiling.
+    ///
+    /// The runtime remains in [`SidecarHandshakeState::AcceptancePending`]
+    /// until this method succeeds, so active traffic cannot race ahead of the
+    /// final bootstrap frame. On transport failure, retire the channel before
+    /// calling this method; completion then fails terminally.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for the wrong channel, role, state, a retired channel,
+    /// or an invalid negotiated selection. Every error retires this channel
+    /// and handshake.
+    pub fn complete_acceptance(
+        &mut self,
+        channel: &mut AuthenticatedSidecarChannel,
+    ) -> Result<(), SidecarHandshakeError> {
+        if let Err(error) = self.bind_channel(channel) {
+            return self.fail(channel, error);
+        }
+        if channel.role() != SidecarPeerRole::Runtime {
+            return self.fail(channel, SidecarHandshakeError::ChannelRoleMismatch);
+        }
+        if channel.is_retired() {
+            return self.fail(
+                channel,
+                SidecarHandshakeError::Frame(SidecarFrameError::ChannelRetired),
+            );
+        }
+        if self.state != SidecarHandshakeState::AcceptancePending {
+            return self.fail(channel, SidecarHandshakeError::UnexpectedMessage);
+        }
+        let Some(negotiated) = self.pending_negotiated.take() else {
+            return self.fail(channel, SidecarHandshakeError::UnexpectedMessage);
+        };
+        if let Err(error) = channel.apply_negotiated_protocol(&negotiated) {
+            return self.fail(channel, SidecarHandshakeError::Negotiation(error));
+        }
+        self.negotiated = Some(negotiated);
+        self.state = SidecarHandshakeState::Authenticated;
+        Ok(())
     }
 
     fn receive_active(
@@ -183,11 +238,8 @@ impl SidecarHandshake {
                 selection,
             })
             .map_err(SidecarHandshakeError::Frame)?;
-        channel
-            .apply_negotiated_protocol(&negotiated)
-            .map_err(SidecarHandshakeError::Negotiation)?;
-        self.negotiated = Some(negotiated);
-        self.state = SidecarHandshakeState::Authenticated;
+        self.pending_negotiated = Some(negotiated);
+        self.state = SidecarHandshakeState::AcceptancePending;
         Ok(acceptance)
     }
 
@@ -222,7 +274,23 @@ impl SidecarHandshake {
         channel.retire();
         self.state = SidecarHandshakeState::Failed;
         self.negotiated = None;
+        self.pending_negotiated = None;
         Err(error)
+    }
+
+    fn bind_channel(
+        &mut self,
+        channel: &AuthenticatedSidecarChannel,
+    ) -> Result<(), SidecarHandshakeError> {
+        let instance_id = channel.instance_id();
+        match self.channel_instance_id {
+            None => {
+                self.channel_instance_id = Some(instance_id);
+                Ok(())
+            }
+            Some(bound) if bound == instance_id => Ok(()),
+            Some(_) => Err(SidecarHandshakeError::ChannelInstanceMismatch),
+        }
     }
 }
 
@@ -276,6 +344,8 @@ pub enum SidecarHandshakeError {
     WrongPeerRole,
     #[error("sidecar handshake role does not match the authenticated channel role")]
     ChannelRoleMismatch,
+    #[error("sidecar handshake cannot move between authenticated channel instances")]
+    ChannelInstanceMismatch,
 }
 
 #[cfg(test)]
@@ -338,6 +408,10 @@ mod tests {
             .receive(&mut runtime_channel, &offer_frame)
             .unwrap()
             .unwrap();
+        assert_eq!(runtime_channel.max_frame_bytes(), 4096);
+        assert_eq!(runtime.state(), SidecarHandshakeState::AcceptancePending);
+        assert!(runtime.negotiated().is_none());
+        runtime.complete_acceptance(&mut runtime_channel).unwrap();
         assert_eq!(runtime_channel.max_frame_bytes(), 2048);
         assert_eq!(runtime.state(), SidecarHandshakeState::Authenticated);
 
@@ -424,6 +498,7 @@ mod tests {
             accept_frame,
             BASE64.decode(fixture.accept_frame_base64).unwrap()
         );
+        runtime.complete_acceptance(&mut runtime_channel).unwrap();
         assert!(supervisor
             .receive(&mut supervisor_channel, &accept_frame)
             .unwrap()
@@ -470,6 +545,82 @@ mod tests {
         ));
         assert_eq!(supervisor.state(), SidecarHandshakeState::Failed);
         assert!(supervisor_channel.is_retired());
+    }
+
+    #[test]
+    fn runtime_commits_selection_only_after_acceptance_delivery() {
+        let mut supervisor =
+            SidecarHandshake::new(offer(SidecarPeerRole::Supervisor, 4096, 0)).unwrap();
+        let mut runtime = SidecarHandshake::new(offer(SidecarPeerRole::Runtime, 128, 0)).unwrap();
+        let mut supervisor_channel = channel(SidecarPeerRole::Supervisor, 4096);
+        let mut runtime_channel = channel(SidecarPeerRole::Runtime, 4096);
+
+        let offer_frame = supervisor.start(&mut supervisor_channel).unwrap();
+        let acceptance = runtime
+            .receive(&mut runtime_channel, &offer_frame)
+            .unwrap()
+            .unwrap();
+        assert!(acceptance.len() > 128);
+        assert_eq!(runtime.state(), SidecarHandshakeState::AcceptancePending);
+        assert_eq!(runtime_channel.max_frame_bytes(), 4096);
+        assert!(runtime.negotiated().is_none());
+
+        runtime.complete_acceptance(&mut runtime_channel).unwrap();
+        assert_eq!(runtime.state(), SidecarHandshakeState::Authenticated);
+        assert_eq!(runtime_channel.max_frame_bytes(), 128);
+    }
+
+    #[test]
+    fn failed_acceptance_delivery_is_terminal() {
+        let mut supervisor =
+            SidecarHandshake::new(offer(SidecarPeerRole::Supervisor, 4096, 0)).unwrap();
+        let mut runtime = SidecarHandshake::new(offer(SidecarPeerRole::Runtime, 2048, 0)).unwrap();
+        let mut supervisor_channel = channel(SidecarPeerRole::Supervisor, 4096);
+        let mut runtime_channel = channel(SidecarPeerRole::Runtime, 4096);
+
+        let offer_frame = supervisor.start(&mut supervisor_channel).unwrap();
+        runtime
+            .receive(&mut runtime_channel, &offer_frame)
+            .unwrap()
+            .unwrap();
+        runtime_channel.retire();
+        assert!(matches!(
+            runtime.complete_acceptance(&mut runtime_channel),
+            Err(SidecarHandshakeError::Frame(
+                SidecarFrameError::ChannelRetired
+            ))
+        ));
+        assert_eq!(runtime.state(), SidecarHandshakeState::Failed);
+        assert!(runtime.negotiated().is_none());
+    }
+
+    #[test]
+    fn handshake_cannot_move_to_another_channel_instance() {
+        let mut supervisor =
+            SidecarHandshake::new(offer(SidecarPeerRole::Supervisor, 4096, 0b0011)).unwrap();
+        let mut original_channel = channel(SidecarPeerRole::Supervisor, 4096);
+        let _offer_frame = supervisor.start(&mut original_channel).unwrap();
+
+        let runtime_offer = offer(SidecarPeerRole::Runtime, 2048, 0b0011);
+        let selection = SidecarProtocolSelection::from(
+            &negotiate_sidecar_protocol(&supervisor.local_offer, &runtime_offer).unwrap(),
+        );
+        let mut other_runtime_channel = channel(SidecarPeerRole::Runtime, 4096);
+        let acceptance = other_runtime_channel
+            .seal(&SidecarHandshakeMessage::Accept {
+                offer: runtime_offer,
+                selection,
+            })
+            .unwrap();
+        let mut other_supervisor_channel = channel(SidecarPeerRole::Supervisor, 4096);
+
+        assert!(matches!(
+            supervisor.receive(&mut other_supervisor_channel, &acceptance),
+            Err(SidecarHandshakeError::ChannelInstanceMismatch)
+        ));
+        assert_eq!(supervisor.state(), SidecarHandshakeState::Failed);
+        assert!(other_supervisor_channel.is_retired());
+        assert!(!original_channel.is_retired());
     }
 
     #[test]

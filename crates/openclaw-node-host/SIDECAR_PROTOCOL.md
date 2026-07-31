@@ -93,11 +93,15 @@ The supervisor initiates with an authenticated `offer`. The runtime
 independently negotiates against its local offer and replies with one
 authenticated `accept` containing its offer and the selected parameters. The
 supervisor independently recomputes the selection; a mismatch is terminal.
-Both peers lower the already-sequenced channel only after the acceptance is
-encoded or verified, so the larger bootstrap ceiling cannot persist and
-sequence state is never reset.
+The runtime remains in `AcceptancePending` and retains the bootstrap ceiling
+until the acceptance is written successfully. It then commits the selection;
+the supervisor commits only after receiving and verifying that frame. This
+prevents active traffic from racing ahead of the acceptance and ensures an
+acceptance larger than the negotiated ceiling can still be delivered. Both
+peers preserve the existing directional sequence state.
 
-The `SidecarHandshake` state machine accepts only this two-frame ordering.
+The `SidecarHandshake` state machine is bound to one exact authenticated
+channel instance and accepts only this two-frame ordering.
 Wrong roles, incompatible versions, malformed/authentication failures, forged
 selection, repeated/out-of-order messages, and unencodable bootstrap messages
 retire the handshake and channel. Negotiation must complete before accepting
