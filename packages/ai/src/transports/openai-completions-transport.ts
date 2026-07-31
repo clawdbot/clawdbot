@@ -5,7 +5,6 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import OpenAI from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { getEnvApiKey } from "../env-api-keys.js";
-import { applyProviderReportedUsageCost, calculateCost } from "../model-utils.js";
 import { convertMessages } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
@@ -75,6 +74,7 @@ import {
   GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP,
   createModelStreamCooperativeScheduler,
   log,
+  parseOpenAICompletionsUsage,
   resolvePromptCacheKey,
   sortTransportToolsByName,
   throwIfModelStreamAborted,
@@ -657,7 +657,7 @@ async function processOpenAICompletionsStream(
     output.responseId ||= chunk.id;
     let hasReasoningUsageActivity = false;
     if (chunk.usage) {
-      output.usage = parseTransportChunkUsage(chunk.usage, model);
+      output.usage = parseOpenAICompletionsUsage(chunk.usage, model);
       hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(chunk.usage);
     }
     const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
@@ -668,7 +668,7 @@ async function processOpenAICompletionsStream(
     }
     const choiceUsage = (choice as unknown as { usage?: ChatCompletionChunk["usage"] }).usage;
     if (!chunk.usage && choiceUsage) {
-      output.usage = parseTransportChunkUsage(choiceUsage, model);
+      output.usage = parseOpenAICompletionsUsage(choiceUsage, model);
       hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(choiceUsage);
     }
     if (choice.finish_reason) {
@@ -1941,37 +1941,6 @@ export function buildOpenAICompletionsParams(
   return params;
 }
 
-function parseTransportChunkUsage(
-  rawUsage: NonNullable<ChatCompletionChunk["usage"]> & {
-    cost?: unknown;
-    prompt_tokens_details?: { cache_write_tokens?: number | null };
-  },
-  model: Model,
-): MutableAssistantOutput["usage"] {
-  // OpenRouter reports cache writes separately inside prompt totals. Keep read/write
-  // buckets out of input so normalized prompt buckets stay disjoint.
-  const cacheWriteTokens = rawUsage.prompt_tokens_details?.cache_write_tokens || 0;
-  const cachedTokens = rawUsage.prompt_tokens_details?.cached_tokens || 0;
-  const promptTokens = rawUsage.prompt_tokens || 0;
-  const input = Math.max(0, promptTokens - cachedTokens - cacheWriteTokens);
-  const outputTokens = rawUsage.completion_tokens || 0;
-  const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
-  const usage: MutableAssistantOutput["usage"] = {
-    input,
-    output: outputTokens,
-    cacheRead: cachedTokens,
-    cacheWrite: cacheWriteTokens,
-    ...(typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
-      ? { reasoningTokens }
-      : {}),
-    totalTokens: input + outputTokens + cachedTokens + cacheWriteTokens,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-  calculateCost(model as never, usage as never);
-  applyProviderReportedUsageCost(usage, rawUsage.cost);
-  return usage;
-}
-
 function hasOpenAICompletionsReasoningUsageActivity(
   rawUsage: NonNullable<ChatCompletionChunk["usage"]>,
 ) {
@@ -1986,7 +1955,7 @@ const completionsTesting = {
   createSseDoneDetector,
   createOpenAICompletionsClient,
   buildOpenAICompletionsClientConfig,
-  parseTransportChunkUsage,
+  parseTransportChunkUsage: parseOpenAICompletionsUsage,
   processOpenAICompletionsStream,
   shouldEmitOpenAICompletionsReasoningForModel,
 };

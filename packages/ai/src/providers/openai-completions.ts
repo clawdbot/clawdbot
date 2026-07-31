@@ -10,11 +10,7 @@ import type {
 } from "openai/resources/chat/completions.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
-import {
-  applyProviderReportedUsageCost,
-  calculateCost,
-  clampThinkingLevel,
-} from "../model-utils.js";
+import { clampThinkingLevel } from "../model-utils.js";
 import { convertMessages } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import {
@@ -22,6 +18,7 @@ import {
   type ResolvedOpenAICompletionsCompat,
 } from "../transports/openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-compat.js";
+import { parseOpenAICompletionsUsage } from "../transports/openai-transport-shared.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
   AssistantMessage,
@@ -405,7 +402,9 @@ export const streamOpenAICompletions: StreamFunction<
           output.responseModel ||= chunk.model;
         }
         if (chunk.usage) {
-          output.usage = parseChunkUsage(chunk.usage, model);
+          output.usage = parseOpenAICompletionsUsage(chunk.usage, model, {
+            includeReasoningTokens: false,
+          });
         }
 
         const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
@@ -416,10 +415,12 @@ export const streamOpenAICompletions: StreamFunction<
         // Fallback: some providers (e.g., Moonshot) return usage
         // in choice.usage instead of the standard chunk.usage
         const choiceUsage = (
-          choice as typeof choice & { usage?: Parameters<typeof parseChunkUsage>[0] }
+          choice as typeof choice & { usage?: Parameters<typeof parseOpenAICompletionsUsage>[0] }
         ).usage;
         if (!chunk.usage && choiceUsage) {
-          output.usage = parseChunkUsage(choiceUsage, model);
+          output.usage = parseOpenAICompletionsUsage(choiceUsage, model, {
+            includeReasoningTokens: false,
+          });
         }
 
         if (choice.finish_reason) {
@@ -1083,45 +1084,6 @@ function convertTools(
       },
     })),
   };
-}
-
-function parseChunkUsage(
-  rawUsage: {
-    prompt_tokens?: number;
-    completion_tokens?: number;
-    prompt_cache_hit_tokens?: number;
-    prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
-    cost?: unknown;
-  },
-  model: Model<"openai-completions">,
-): AssistantMessage["usage"] {
-  const promptTokens = rawUsage.prompt_tokens || 0;
-  const cacheReadTokens =
-    rawUsage.prompt_tokens_details?.cached_tokens ?? rawUsage.prompt_cache_hit_tokens ?? 0;
-  const cacheWriteTokens = rawUsage.prompt_tokens_details?.cache_write_tokens || 0;
-
-  // Follow documented OpenAI/OpenRouter semantics: cached_tokens is cache-read
-  // tokens (hits). OpenAI does not document or emit cache_write_tokens, but
-  // OpenRouter-compatible providers can include it as a separate write count.
-  // OpenRouter's own provider/tests affirm the separate mapping:
-  // https://github.com/OpenRouterTeam/ai-sdk-provider/pull/409
-  // Do not subtract writes from cached_tokens, otherwise spec-compliant
-  // providers are under-reported. DS4 mirrors this contract too:
-  // https://github.com/antirez/ds4/pull/29
-  const input = Math.max(0, promptTokens - cacheReadTokens - cacheWriteTokens);
-  // OpenAI completion_tokens already includes reasoning_tokens.
-  const outputTokens = rawUsage.completion_tokens || 0;
-  const usage: AssistantMessage["usage"] = {
-    input,
-    output: outputTokens,
-    cacheRead: cacheReadTokens,
-    cacheWrite: cacheWriteTokens,
-    totalTokens: input + outputTokens + cacheReadTokens + cacheWriteTokens,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-  calculateCost(model, usage);
-  applyProviderReportedUsageCost(usage, rawUsage.cost);
-  return usage;
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
