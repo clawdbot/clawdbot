@@ -21,7 +21,7 @@ afterAll(async () => {
 });
 
 function sessionEntry(sessionId: string, updatedAt: number): SessionEntry {
-  return { sessionId, updatedAt };
+  return { sessionId, updatedAt, delivery: { kind: "none" } };
 }
 
 async function createStore(entries: Record<string, SessionEntry>): Promise<string> {
@@ -141,6 +141,47 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     expect(
       loadSessionEntry({ sessionKey: "agent:main:cron:done-job:run:recent-run", storePath }),
     ).toEqual(sessionEntry("recent-run", now));
+  });
+
+  it("applies pruning to stale cron-run descendant rows", async () => {
+    const now = Date.now();
+    const staleParentKey = "agent:main:cron:done-job:run:old-run";
+    const staleChildKey = "agent:main:cron:done-job:run:old-run:subagent:worker";
+    const runningParentKey = "agent:main:cron:running-job:run:old-run";
+    const runningChildKey = "agent:main:cron:running-job:run:old-run:thread:reply";
+    const ordinaryKey = "agent:main:subagent:ordinary-worker";
+    const storePath = await createStore({
+      [staleParentKey]: sessionEntry("done-run", now - 8 * DAY_MS),
+      [staleChildKey]: sessionEntry("done-run-child", now - 8 * DAY_MS),
+      [runningParentKey]: sessionEntry("running-run", now - 8 * DAY_MS),
+      [runningChildKey]: sessionEntry("running-run-child", now - 8 * DAY_MS),
+      [ordinaryKey]: sessionEntry("ordinary-worker", now - 8 * DAY_MS),
+    });
+
+    const result = await runSessionRegistryMaintenanceForStore({
+      apply: true,
+      retentionMs: 7 * DAY_MS,
+      runningCronJobIds: new Set(["running-job"]),
+      storePath,
+    });
+
+    expect(result).toEqual({
+      beforeCount: 5,
+      afterCount: 3,
+      preservedRunning: 2,
+      pruned: 2,
+    });
+    expect(loadSessionEntry({ sessionKey: staleParentKey, storePath })).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: staleChildKey, storePath })).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: runningParentKey, storePath })).toEqual(
+      sessionEntry("running-run", now - 8 * DAY_MS),
+    );
+    expect(loadSessionEntry({ sessionKey: runningChildKey, storePath })).toEqual(
+      sessionEntry("running-run-child", now - 8 * DAY_MS),
+    );
+    expect(loadSessionEntry({ sessionKey: ordinaryKey, storePath })).toEqual(
+      sessionEntry("ordinary-worker", now - 8 * DAY_MS),
+    );
   });
 
   it("skips generic session maintenance while applying task registry pruning", async () => {

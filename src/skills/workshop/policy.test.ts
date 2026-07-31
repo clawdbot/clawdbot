@@ -15,6 +15,13 @@ import { proposeCreateSkill } from "./service.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
+const pendingApprovalConfig = {
+  skills: {
+    workshop: {
+      approvalPolicy: "pending" as const,
+    },
+  },
+};
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({
@@ -48,6 +55,7 @@ describe("resolveSkillWorkshopToolApproval", () => {
       toolName: "skill_workshop",
       toolParams: { action: "apply", proposal_id: proposal.record.id },
       workspaceDir,
+      config: pendingApprovalConfig,
     });
 
     expect(result?.requireApproval).toMatchObject({
@@ -70,6 +78,7 @@ describe("resolveSkillWorkshopToolApproval", () => {
       toolName: "skill_workshop",
       toolParams: { action: "reject", name: "weather-helper" },
       workspaceDir,
+      config: pendingApprovalConfig,
     });
     expect(resolvedByName?.requireApproval?.description).toContain(
       `Proposal ID: ${proposal.record.id}`,
@@ -105,6 +114,7 @@ describe("resolveSkillWorkshopToolApproval", () => {
       toolName: "skill_workshop",
       toolParams: { action: "apply", proposal_id: proposal.record.id },
       workspaceDir,
+      config: pendingApprovalConfig,
     });
     const approvalDescription = result?.requireApproval?.description ?? "";
 
@@ -137,6 +147,7 @@ describe("resolveSkillWorkshopToolApproval", () => {
       toolName: "skill_workshop",
       toolParams: { action: "apply", proposal_id: proposal.record.id },
       workspaceDir,
+      config: pendingApprovalConfig,
     });
     const lines = result?.requireApproval?.description.split("\n") ?? [];
 
@@ -158,6 +169,7 @@ describe("resolveSkillWorkshopToolApproval", () => {
       toolName: "skill_workshop",
       toolParams: { action: "apply", proposal_id: "missing-20260705-0000000000" },
       workspaceDir,
+      config: pendingApprovalConfig,
     });
 
     expect(result?.requireApproval?.description).toBe(
@@ -168,10 +180,20 @@ describe("resolveSkillWorkshopToolApproval", () => {
     const withoutWorkspace = await resolveSkillWorkshopToolApproval({
       toolName: "skill_workshop",
       toolParams: { action: "apply", proposal_id: "any-proposal" },
+      config: pendingApprovalConfig,
     });
     expect(withoutWorkspace?.requireApproval?.description).toBe(
       "Apply a pending workspace skill proposal into live workspace skills.",
     );
+  });
+
+  it("allows lifecycle actions without approval by default", async () => {
+    await expect(
+      resolveSkillWorkshopToolApproval({
+        toolName: "skill_workshop",
+        toolParams: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("uses runtime config when lifecycle hook config is absent", async () => {
@@ -191,7 +213,7 @@ describe("resolveSkillWorkshopToolApproval", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("keeps approval pending when runtime config loading throws", async () => {
+  it("keeps the default auto policy when runtime config loading throws", async () => {
     const sharedAgentDir = testState.agentDir("shared");
     await testState.writeConfig({
       agents: {
@@ -205,12 +227,12 @@ describe("resolveSkillWorkshopToolApproval", () => {
 
     try {
       expect(() => getRuntimeConfig()).toThrow(/duplicate agentDir/i);
-      const result = await resolveSkillWorkshopToolApproval({
-        toolName: "skill_workshop",
-        toolParams: { action: "quarantine", proposal_id: "weather-20260530-a1b2c3d4e5" },
-      });
-
-      expect(result?.requireApproval?.title).toBe("Quarantine workspace skill proposal");
+      await expect(
+        resolveSkillWorkshopToolApproval({
+          toolName: "skill_workshop",
+          toolParams: { action: "quarantine", proposal_id: "weather-20260530-a1b2c3d4e5" },
+        }),
+      ).resolves.toBeUndefined();
     } finally {
       consoleError.mockRestore();
     }

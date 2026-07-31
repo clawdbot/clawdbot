@@ -549,6 +549,41 @@ describe("runtime.llm.complete", () => {
     ).rejects.toThrow('model override "openai/gpt-5.5" is not allowlisted');
   });
 
+  it("requires model overrides to satisfy host and plugin allowlists", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => ({
+        ...cfg,
+        plugins: {
+          entries: {
+            "restricted-plugin": {
+              llm: {
+                allowModelOverride: true,
+                allowedModels: ["openai/gpt-5.4"],
+              },
+            },
+          },
+        },
+      }),
+      authority: {
+        allowComplete: true,
+        allowModelOverride: true,
+        allowedModels: ["openai/gpt-5.5"],
+      },
+    });
+
+    await expect(
+      withPluginRuntimePluginIdScope("restricted-plugin", () =>
+        llm.complete({
+          model: "openai/gpt-5.5",
+          messages: [{ role: "user", content: "Ping" }],
+        }),
+      ),
+    ).rejects.toThrow(
+      'model override "openai/gpt-5.5" is not allowlisted for plugin "restricted-plugin"',
+    );
+    expect(hoisted.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+  });
+
   it("uses runtime-scoped config and the host preparation/dispatch path", async () => {
     const logger = createLogger();
     const llm = createRuntimeLlm({
@@ -567,6 +602,7 @@ describe("runtime.llm.complete", () => {
       ],
       temperature: 0.2,
       maxTokens: 64,
+      reasoning: "ultra",
       purpose: "test-purpose",
     });
 
@@ -590,6 +626,7 @@ describe("runtime.llm.complete", () => {
     expectFields(requireRecord(completionArg.options, "completion options"), {
       maxTokens: 64,
       temperature: 0.2,
+      reasoning: "ultra",
     });
     expectFields(requireRecord(result, "completion result"), {
       text: "done",
@@ -613,6 +650,25 @@ describe("runtime.llm.complete", () => {
       },
     );
     expectFields(requireRecord(logPayload.usage, "log usage"), { costUsd: 0.0042 });
+  });
+
+  it("preserves the completion options shape when reasoning is omitted", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: { allowComplete: true },
+    });
+
+    await llm.complete({
+      messages: [{ role: "user", content: "Ping" }],
+    });
+
+    const completionArg = expectSingleCallFirstArg(
+      hoisted.completeWithPreparedSimpleCompletionModel,
+      { cfg },
+    );
+    expect(requireRecord(completionArg.options, "completion options")).not.toHaveProperty(
+      "reasoning",
+    );
   });
 
   it("uses scoped plugin identity and ignores caller-shaped spoofing input", async () => {
@@ -740,11 +796,168 @@ describe("runtime.llm.complete", () => {
     await expect(
       withPluginRuntimePluginIdScope("trusted-plugin", () =>
         llm.complete({
-          model: "openai/gpt-5.5",
+          model: "openai/gpt-5.6",
           messages: [{ role: "user", content: "Ping" }],
         }),
       ),
-    ).rejects.toThrow('model override "openai/gpt-5.5" is not allowlisted');
+    ).rejects.toThrow('model override "openai/gpt-5.6" is not allowlisted');
+  });
+
+  it("preserves direct model-profile overrides under model authority", async () => {
+    hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValueOnce({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      profileId: "openai:work",
+      agentDir: "/tmp/main",
+    });
+    const llm = createRuntimeLlm({
+      getConfig: () => ({
+        ...cfg,
+        plugins: {
+          entries: {
+            "trusted-plugin": {
+              llm: {
+                allowModelOverride: true,
+                allowedModels: ["openai/gpt-5.4"],
+              },
+            },
+          },
+        },
+      }),
+      authority: { allowComplete: true },
+    });
+
+    await expect(
+      withPluginRuntimePluginIdScope("trusted-plugin", () =>
+        llm.complete({
+          model: "openai/gpt-5.4@openai:work",
+          messages: [{ role: "user", content: "Ping" }],
+        }),
+      ),
+    ).resolves.toMatchObject({ text: "done" });
+    expectSingleCallFirstArg(hoisted.prepareSimpleCompletionModelForAgent, {
+      agentId: "main",
+      modelRef: "openai/gpt-5.4@openai:work",
+    });
+  });
+
+  it("keeps the shipped model allowlist scoped to explicit overrides", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => ({
+        ...cfg,
+        plugins: {
+          entries: {
+            "restricted-plugin": {
+              llm: { allowedModels: ["anthropic/claude-haiku-4-5"] },
+            },
+          },
+        },
+      }),
+      authority: { allowComplete: true },
+    });
+
+    await expect(
+      withPluginRuntimePluginIdScope("restricted-plugin", () =>
+        llm.complete({ messages: [{ role: "user", content: "Ping" }] }),
+      ),
+    ).resolves.toMatchObject({ text: "done" });
+  });
+
+  it("applies a completion model allowlist to the host-resolved default", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => ({
+        ...cfg,
+        plugins: {
+          entries: {
+            "restricted-plugin": {
+              llm: { allowedCompletionModels: ["anthropic/claude-haiku-4-5"] },
+            },
+          },
+        },
+      }),
+      authority: { allowComplete: true },
+    });
+
+    await expect(
+      withPluginRuntimePluginIdScope("restricted-plugin", () =>
+        llm.complete({ messages: [{ role: "user", content: "Ping" }] }),
+      ),
+    ).rejects.toThrow('model "openai/gpt-5.5" is not allowlisted for completions');
+    expect(hoisted.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+  });
+
+  it("applies the completion model allowlist to explicit overrides too", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => ({
+        ...cfg,
+        plugins: {
+          entries: {
+            "restricted-plugin": {
+              llm: {
+                allowModelOverride: true,
+                allowedModels: ["*"],
+                allowedCompletionModels: ["openai/gpt-5.4"],
+              },
+            },
+          },
+        },
+      }),
+      authority: { allowComplete: true },
+    });
+
+    await expect(
+      withPluginRuntimePluginIdScope("restricted-plugin", () =>
+        llm.complete({
+          model: "openai/gpt-5.6",
+          messages: [{ role: "user", content: "Ping" }],
+        }),
+      ),
+    ).rejects.toThrow('model "openai/gpt-5.6" is not allowlisted for completions');
+    expect(hoisted.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+  });
+
+  it.each([[[]], [["not-a-canonical-model-ref"]]])(
+    "fails closed for an unusable completion allowlist %j",
+    async (allowedCompletionModels) => {
+      const llm = createRuntimeLlm({
+        getConfig: () => ({
+          ...cfg,
+          plugins: {
+            entries: {
+              "restricted-plugin": { llm: { allowedCompletionModels } },
+            },
+          },
+        }),
+        authority: { allowComplete: true },
+      });
+
+      await expect(
+        withPluginRuntimePluginIdScope("restricted-plugin", () =>
+          llm.complete({ messages: [{ role: "user", content: "Ping" }] }),
+        ),
+      ).rejects.toThrow("completion model allowlist has no valid models");
+      expect(hoisted.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    },
+  );
+
+  it("accepts an explicit wildcard completion allowlist", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => ({
+        ...cfg,
+        plugins: {
+          entries: {
+            "restricted-plugin": { llm: { allowedCompletionModels: ["*"] } },
+          },
+        },
+      }),
+      authority: { allowComplete: true },
+    });
+
+    await expect(
+      withPluginRuntimePluginIdScope("restricted-plugin", () =>
+        llm.complete({ messages: [{ role: "user", content: "Ping" }] }),
+      ),
+    ).resolves.toMatchObject({ text: "done" });
   });
 
   it("denies completions when runtime authority disables the capability", async () => {

@@ -10,7 +10,7 @@ import {
 describe('spawnSubagentDirect mode="session" diagnostics (#67400)', () => {
   const callGatewayMock = vi.fn();
   let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
-  let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
+  let resetSubagentRegistryForTests: typeof import("./subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 
   beforeEach(async () => {
     callGatewayMock.mockReset();
@@ -68,7 +68,7 @@ describe('spawnSubagentDirect mode="session" diagnostics (#67400)', () => {
 describe('spawnSubagentDirect mode="session" with thread binding-capable channels (#67400)', () => {
   const callGatewayMock = vi.fn();
   let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
-  let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
+  let resetSubagentRegistryForTests: typeof import("./subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 
   beforeEach(async () => {
     callGatewayMock.mockReset();

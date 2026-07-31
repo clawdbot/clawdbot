@@ -16,6 +16,10 @@ import {
   resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
+import {
+  pluginInstallPathMatchesRoot,
+  type PluginVerificationFailureReason,
+} from "../../plugins/runtime-degraded-state.js";
 import { isDefaultAgentRuntimeId, OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { isCliRuntimeAliasForProvider } from "../model-runtime-aliases.js";
@@ -128,6 +132,82 @@ export function resolveAgentHarnessOwnerPluginIds(params: {
       (pluginId) => pluginId !== "codex" && safeProviderOwnerPluginIds.includes(pluginId),
     ),
   ]);
+}
+
+export type AgentHarnessRuntimeAvailability =
+  | {
+      status: "available";
+      ownerPluginIds: string[];
+    }
+  | {
+      status: "unavailable";
+      ownerPluginIds: string[];
+      reason: "owner-plugin-not-activatable" | "owner-plugin-unverified" | "owner-plugin-degraded";
+      detail: string;
+    };
+
+export type AgentHarnessRuntimePayloadFailure = {
+  pluginId: string;
+  installPath?: string;
+  reason: PluginVerificationFailureReason;
+};
+
+/**
+ * Resolves whether manifest-owned harness code is loadable without importing it.
+ * Callers must pass the result of a payload check performed for this invocation.
+ */
+export function resolveAgentHarnessRuntimeAvailability(params: {
+  runtime: string;
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir: string;
+  payloadFailures: readonly AgentHarnessRuntimePayloadFailure[];
+  payloadCheckedPluginIds: readonly string[];
+  selectedPluginRootDirs: ReadonlyMap<string, string>;
+}): AgentHarnessRuntimeAvailability {
+  const runtime = params.runtime.trim();
+  const ownerPluginIds = resolveAgentHarnessOwnerPluginIds({
+    ...params,
+    runtime,
+  });
+  if (ownerPluginIds.length === 0) {
+    return {
+      status: "unavailable",
+      ownerPluginIds,
+      reason: "owner-plugin-not-activatable",
+      detail: `No enabled plugin owns agent harness "${runtime}".`,
+    };
+  }
+  const checkedPluginIds = new Set(params.payloadCheckedPluginIds);
+  const unverifiedOwner = ownerPluginIds.find(
+    (pluginId) => !params.selectedPluginRootDirs.has(pluginId) || !checkedPluginIds.has(pluginId),
+  );
+  if (unverifiedOwner) {
+    return {
+      status: "unavailable",
+      ownerPluginIds,
+      reason: "owner-plugin-unverified",
+      detail: `Agent harness "${runtime}" owner plugin "${unverifiedOwner}" payload was not verified.`,
+    };
+  }
+  const failedOwner = params.payloadFailures.find((failure) => {
+    if (!ownerPluginIds.includes(failure.pluginId)) {
+      return false;
+    }
+    const selectedRootDir = params.selectedPluginRootDirs.get(failure.pluginId);
+    return selectedRootDir
+      ? pluginInstallPathMatchesRoot(failure.installPath, selectedRootDir)
+      : false;
+  });
+  if (failedOwner) {
+    return {
+      status: "unavailable",
+      ownerPluginIds,
+      reason: "owner-plugin-degraded",
+      detail: `Agent harness "${runtime}" owner plugin "${failedOwner.pluginId}" is unavailable (${failedOwner.reason}).`,
+    };
+  }
+  return { status: "available", ownerPluginIds };
 }
 
 function withRuntimePluginIdsAllowed(params: {

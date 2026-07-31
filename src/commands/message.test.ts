@@ -1,12 +1,27 @@
 // Message command tests cover CLI message sending, environment handling, and runtime dependency wiring.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv } from "../test-utils/env.js";
 
+type ResetPluginRuntimeStateForTest =
+  typeof import("../plugins/runtime.js").resetPluginRuntimeStateForTest;
+type SetActivePluginRegistry = typeof import("../plugins/runtime.js").setActivePluginRegistry;
+type CreateTestRegistry = typeof import("../test-utils/channel-plugins.js").createTestRegistry;
+
+let resetPluginRuntimeStateForTest: ResetPluginRuntimeStateForTest;
+let setActivePluginRegistry: SetActivePluginRegistry;
+let createTestRegistry: CreateTestRegistry;
+
 type RunMessageActionParams = {
   cfg?: unknown;
   action: string;
+  broadcastAccountPlan?: {
+    accountId: string;
+    candidateChannels: string[];
+    secretChannels: string[];
+  };
   params: Record<string, unknown>;
   agentId?: string;
   senderIsOwner?: boolean;
@@ -100,6 +115,9 @@ let messageCommand: typeof import("./message.js").messageCommand;
 let envSnapshot: ReturnType<typeof captureEnv>;
 
 beforeAll(async () => {
+  ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } =
+    await import("../plugins/runtime.js"));
+  ({ createTestRegistry } = await import("../test-utils/channel-plugins.js"));
   ({ messageCommand } = await import("./message.js"));
 });
 
@@ -112,6 +130,8 @@ const runtime: RuntimeEnv = {
 };
 
 beforeEach(() => {
+  resetPluginRuntimeStateForTest();
+  setActivePluginRegistry(createTestRegistry([]));
   envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN", "DISCORD_BOT_TOKEN"]);
   process.env.TELEGRAM_BOT_TOKEN = "";
   process.env.DISCORD_BOT_TOKEN = "";
@@ -128,7 +148,50 @@ beforeEach(() => {
 
 afterEach(() => {
   envSnapshot.restore();
+  resetPluginRuntimeStateForTest();
 });
+
+function createAccountPlugin(id: "slack" | "telegram", accountIds: string[]): ChannelPlugin {
+  return {
+    id,
+    meta: {
+      id,
+      label: id,
+      selectionLabel: id,
+      docsPath: `/channels/${id}`,
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct", "group"], media: true },
+    config: {
+      listAccountIds: () => accountIds,
+      inspectAccount: () => ({ enabled: true }),
+      resolveAccount: () => {
+        throw new Error("raw account credentials must not resolve during planning");
+      },
+    },
+  };
+}
+
+function createLegacySingleAccountPlugin(params: {
+  id: "buzz";
+  resolveAccount: ChannelPlugin["config"]["resolveAccount"];
+}): ChannelPlugin {
+  return {
+    id: params.id,
+    meta: {
+      id: params.id,
+      label: params.id,
+      selectionLabel: params.id,
+      docsPath: `/channels/${params.id}`,
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["group"] },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: params.resolveAccount,
+    },
+  };
+}
 
 const makeDeps = (overrides: Partial<CliDeps> = {}): CliDeps => ({
   sendMessageWhatsApp: vi.fn(),
@@ -189,6 +252,130 @@ async function runMessageCommand(opts: Record<string, unknown> = {}) {
 }
 
 describe("messageCommand", () => {
+  it("rejects a malformed explicit account before resolving secrets", async () => {
+    await expect(runMessageCommand({ accountId: "!!!" })).rejects.toThrow("Invalid account ID");
+
+    expect(resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+    expect(runMessageActionMock).not.toHaveBeenCalled();
+  });
+
+  it("scopes unqualified broadcast secrets to channels accepting the explicit account", async () => {
+    const slackPlugin = createAccountPlugin("slack", ["shared"]);
+    const telegramPlugin = createAccountPlugin("telegram", ["default"]);
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "slack", source: "test", plugin: slackPlugin },
+        { pluginId: "telegram", source: "test", plugin: telegramPlugin },
+      ]),
+    );
+    testConfig = {
+      channels: {
+        slack: { accounts: { shared: { botToken: { $secret: "vault://slack/shared" } } } },
+        telegram: {
+          accounts: { default: { botToken: { $secret: "vault://telegram/default" } } },
+        },
+      },
+    };
+
+    await runMessageCommand({
+      action: "broadcast",
+      channel: "all",
+      target: undefined,
+      targets: ["slack:channel:ops", "telegram:123"],
+      accountId: "shared",
+    });
+
+    expect(getScopedChannelsCommandSecretTargets).toHaveBeenCalledWith({
+      config: testConfig,
+      channel: undefined,
+      channels: ["slack"],
+      accountId: "shared",
+    });
+    expect(readOnlyMessageActionCall().broadcastAccountPlan).toEqual({
+      accountId: "shared",
+      candidateChannels: ["slack", "telegram"],
+      secretChannels: ["slack"],
+    });
+  });
+
+  it("keeps unresolved SecretRefs for a legacy single-account broadcast plugin", async () => {
+    const resolveAccount = vi.fn(() => ({
+      accountId: "default",
+      enabled: true,
+      configured: false,
+    }));
+    const buzzPlugin = createLegacySingleAccountPlugin({ id: "buzz", resolveAccount });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "buzz", source: "test", plugin: buzzPlugin }]),
+    );
+    testConfig = {
+      channels: {
+        buzz: {
+          relayUrl: "wss://buzz.example.test",
+          privateKey: { source: "file", provider: "vault", id: "/buzz/private-key" },
+        },
+      },
+    };
+
+    await runMessageCommand({
+      action: "broadcast",
+      channel: "all",
+      target: undefined,
+      targets: ["00000000-0000-4000-8000-000000000001"],
+      accountId: "default",
+    });
+
+    expect(resolveAccount).toHaveBeenCalledOnce();
+    expect(getScopedChannelsCommandSecretTargets).toHaveBeenCalledWith({
+      config: testConfig,
+      channel: undefined,
+      channels: ["buzz"],
+      accountId: "default",
+    });
+    expect(readOnlyMessageActionCall().broadcastAccountPlan).toEqual({
+      accountId: "default",
+      candidateChannels: ["buzz"],
+      secretChannels: ["buzz"],
+    });
+  });
+
+  it("excludes unknown legacy-plugin accounts before account or secret resolution", async () => {
+    const resolveAccount = vi.fn(() => ({ accountId: "default", enabled: true }));
+    const buzzPlugin = createLegacySingleAccountPlugin({ id: "buzz", resolveAccount });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "buzz", source: "test", plugin: buzzPlugin }]),
+    );
+    testConfig = {
+      channels: {
+        buzz: {
+          relayUrl: "wss://buzz.example.test",
+          privateKey: { source: "file", provider: "vault", id: "/buzz/private-key" },
+        },
+      },
+    };
+
+    await runMessageCommand({
+      action: "broadcast",
+      channel: "all",
+      target: undefined,
+      targets: ["00000000-0000-4000-8000-000000000001"],
+      accountId: "ops",
+    });
+
+    expect(resolveAccount).not.toHaveBeenCalled();
+    expect(getScopedChannelsCommandSecretTargets).toHaveBeenCalledWith({
+      config: testConfig,
+      channel: undefined,
+      channels: [],
+      accountId: "ops",
+    });
+    expect(readOnlyMessageActionCall().broadcastAccountPlan).toEqual({
+      accountId: "ops",
+      candidateChannels: ["buzz"],
+      secretChannels: [],
+    });
+  });
+
   it("threads resolved SecretRef config into message actions", async () => {
     const rawConfig = createTelegramSecretRawConfig();
     const resolvedConfig = createTelegramResolvedTokenConfig("12345:resolved-token");

@@ -4,6 +4,7 @@
  * Chooses storage and command target session keys for channel-native command events.
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { ChannelMessagingAdapter } from "./plugins/types.core.js";
 
 /**
  * Inputs for resolving where a native channel command should attach session state.
@@ -14,7 +15,7 @@ export type ResolveNativeCommandSessionTargetsParams = {
   userId: string;
   targetSessionKey: string;
   boundSessionKey?: string;
-  lowercaseSessionKey?: boolean;
+  sessionKeyCase?: NonNullable<ChannelMessagingAdapter["targetIdComparison"]>;
 };
 
 /**
@@ -28,9 +29,10 @@ export function resolveNativeCommandSessionTargets(
   return {
     // Some providers normalize user ids case-insensitively; keep this opt-in so existing
     // case-sensitive bindings are preserved for channels that need them.
-    sessionKey: params.lowercaseSessionKey
-      ? normalizeLowercaseStringOrEmpty(rawSessionKey)
-      : rawSessionKey,
+    sessionKey:
+      params.sessionKeyCase === "lowercase"
+        ? normalizeLowercaseStringOrEmpty(rawSessionKey)
+        : rawSessionKey,
     commandTargetSessionKey: params.boundSessionKey ?? params.targetSessionKey,
   };
 }

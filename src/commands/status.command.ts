@@ -58,7 +58,7 @@ function loadStatusNodeModeModule() {
 }
 
 /** Extracts device-pairing recovery context from structured gateway errors or legacy message text. */
-export function resolvePairingRecoveryContext(params: {
+function resolvePairingRecoveryContext(params: {
   error?: string | null;
   closeReason?: string | null;
   details?: unknown;
@@ -89,6 +89,12 @@ export function resolvePairingRecoveryContext(params: {
     requestId: normalizePairingConnectRequestId(pairing.requestId) ?? null,
     reason: pairing.reason ?? null,
     remediationHint: null,
+  };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.statusCommandTestApi")] = {
+    resolvePairingRecoveryContext,
   };
 }
 
@@ -135,8 +141,8 @@ export async function statusCommand(
     await runStatusJsonCommand({
       opts,
       runtime,
-      includeSecurityAudit: opts.all === true,
-      includePluginCompatibility: true,
+      includeSecurityAudit: opts.all === true || opts.deep === true,
+      includePluginCompatibility: opts.all === true,
       suppressHealthErrors: true,
       scanStatusJsonFast: async (scanOpts, runtimeForScan) =>
         await loadStatusScanFastJsonModule().then(({ scanStatusJsonFast }) =>
@@ -219,6 +225,11 @@ export async function statusCommand(
         async () => await resolveStatusGatewayHealth(input),
       ),
   });
+
+  // Structured probe failures belong to nonthrowing JSON; text status keeps failures loud.
+  if (health && "error" in health) {
+    throw new Error(health.error);
+  }
 
   const rich = true;
   const {

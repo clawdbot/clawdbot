@@ -6,6 +6,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { SsrFBlockedError, isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { WebSocket } from "ws";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { readHttpHeaders, requireNumber, requireObject, requireString } from "./json-rpc.js";
@@ -204,8 +205,9 @@ function readStreamingSandboxHttpResponse(params: {
       }
       reject(new Error(message));
     };
-    params.child.stdout.on("data", (chunk: Buffer) => {
-      stdoutBuffer += chunk.toString("utf8");
+    params.child.stdout.setEncoding("utf8");
+    params.child.stdout.on("data", (chunk: string) => {
+      stdoutBuffer += chunk;
       let newline = stdoutBuffer.indexOf("\n");
       while (newline >= 0) {
         const line = stdoutBuffer.slice(0, newline).trim();
@@ -246,8 +248,9 @@ function readStreamingSandboxHttpResponse(params: {
         );
       }
     });
-    params.child.stderr.on("data", (chunk: Buffer) => {
-      stderr = `${stderr}${chunk.toString("utf8")}`.slice(-4096);
+    params.child.stderr.setEncoding("utf8");
+    params.child.stderr.on("data", (chunk: string) => {
+      stderr = sliceUtf16Safe(`${stderr}${chunk}`, -4096);
     });
     params.child.once("error", (error) => {
       // ChildProcess error can precede close while the helper is still alive.

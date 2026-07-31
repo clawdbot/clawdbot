@@ -21,6 +21,7 @@ import {
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
+import { resetRecentQueuedMessageIdDedupe } from "./queue/enqueue.test-support.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
@@ -261,7 +262,7 @@ describe("followup queue drain restart after idle window", () => {
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
     const firstProcessed = createDeferred<void>();
 
-    enqueueB.resetRecentQueuedMessageIdDedupe();
+    resetRecentQueuedMessageIdDedupe();
 
     try {
       const runFollowup = async (run: FollowupRun) => {
@@ -299,7 +300,7 @@ describe("followup queue drain restart after idle window", () => {
     } finally {
       clearSessionQueues([key]);
       drainA.clearFollowupDrainCallback(key);
-      enqueueB.resetRecentQueuedMessageIdDedupe();
+      resetRecentQueuedMessageIdDedupe();
     }
   });
 

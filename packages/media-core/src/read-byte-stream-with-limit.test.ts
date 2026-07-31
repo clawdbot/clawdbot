@@ -15,6 +15,8 @@ describe("readByteStreamWithLimit", () => {
   it("throws and destroys node streams after overflow", async () => {
     const stream = Readable.from([Buffer.alloc(4), Buffer.alloc(4)]);
     const destroySpy = vi.spyOn(stream, "destroy");
+    const errorSpy = vi.fn();
+    stream.on("error", errorSpy);
 
     await expect(
       readByteStreamWithLimit(stream, {
@@ -22,6 +24,7 @@ describe("readByteStreamWithLimit", () => {
         onOverflow: ({ size, maxBytes }) => new Error(`too large ${size}/${maxBytes}`),
       }),
     ).rejects.toThrow("too large 8/7");
-    expect(destroySpy).toHaveBeenCalled();
+    expect(destroySpy).toHaveBeenCalledWith();
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,7 @@
 // Defines the detached task runtime contract and spawn options.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
+  JsonValue,
   TaskDeliveryState,
   TaskDeliveryStatus,
   TaskNotifyPolicy,
@@ -34,6 +35,7 @@ export type DetachedTaskCreateParams = {
   preferMetadata?: boolean;
   notifyPolicy?: TaskNotifyPolicy;
   deliveryStatus?: TaskDeliveryStatus;
+  detail?: JsonValue;
 };
 
 export type DetachedRunningTaskCreateParams = DetachedTaskCreateParams & {
@@ -61,43 +63,34 @@ type DetachedTaskProgressParams = {
   eventSummary?: string | null;
 };
 
-type DetachedTaskCompleteParams = {
+type DetachedTaskFinalizeCommonParams = {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
+  childSessionKey?: string | null;
   endedAt: number;
   lastEventAt?: number;
   progressSummary?: string | null;
   terminalSummary?: string | null;
-  terminalOutcome?: TaskTerminalOutcome | null;
+  preserveTerminalSummary?: boolean;
+  detail?: JsonValue;
   suppressDelivery?: boolean;
 };
 
-type DetachedTaskFailParams = {
-  runId: string;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
+export type DetachedTaskCompleteParams = DetachedTaskFinalizeCommonParams & {
+  terminalOutcome?: TaskTerminalOutcome | null;
+};
+
+export type DetachedTaskFailParams = DetachedTaskFinalizeCommonParams & {
   status?: Extract<TaskStatus, "failed" | "timed_out" | "cancelled">;
-  endedAt: number;
-  lastEventAt?: number;
   error?: string;
-  progressSummary?: string | null;
-  terminalSummary?: string | null;
-  suppressDelivery?: boolean;
 };
 
-export type DetachedTaskFinalizeParams = {
-  runId: string;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
+export type DetachedTaskFinalizeParams = DetachedTaskFinalizeCommonParams & {
   status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
-  endedAt: number;
-  lastEventAt?: number;
   error?: string;
-  progressSummary?: string | null;
-  terminalSummary?: string | null;
+  clearError?: boolean;
   terminalOutcome?: TaskTerminalOutcome | null;
-  suppressDelivery?: boolean;
 };
 
 export type DetachedTaskTerminalState = Omit<

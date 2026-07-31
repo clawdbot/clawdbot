@@ -1,7 +1,17 @@
 // Anthropic OAuth tests cover token exchange and refresh behavior.
 import { get } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { anthropicOAuthProvider, refreshAnthropicToken, testing } from "./anthropic.js";
+import { anthropicOAuthProvider } from "./anthropic.js";
+
+const ANTHROPIC_REDIRECT_URI = "http://localhost:53692/callback";
+
+async function refreshThroughAnthropicProvider(refreshToken: string) {
+  return await anthropicOAuthProvider.refreshToken({
+    access: "expired-access-token",
+    refresh: refreshToken,
+    expires: 0,
+  });
+}
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -58,12 +68,12 @@ describe("Anthropic OAuth token responses", () => {
       ),
     );
 
-    await expect(refreshAnthropicToken("old-refresh-token")).rejects.toThrow(
+    await expect(refreshThroughAnthropicProvider("old-refresh-token")).rejects.toThrow(
       "Anthropic token refresh returned invalid JSON.",
     );
 
     try {
-      await refreshAnthropicToken("old-refresh-token");
+      await refreshThroughAnthropicProvider("old-refresh-token");
       throw new Error("Expected refresh to fail");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -87,7 +97,7 @@ describe("Anthropic OAuth token responses", () => {
       ),
     );
 
-    await expect(refreshAnthropicToken("old-refresh-token")).rejects.toThrow(
+    await expect(refreshThroughAnthropicProvider("old-refresh-token")).rejects.toThrow(
       "Anthropic token refresh returned invalid token fields.",
     );
   });
@@ -108,7 +118,7 @@ describe("Anthropic OAuth token responses", () => {
       vi.fn(async () => new Response(oversizedStream, { status: 200 })),
     );
 
-    await expect(refreshAnthropicToken("old-refresh-token")).rejects.toThrow("too large");
+    await expect(refreshThroughAnthropicProvider("old-refresh-token")).rejects.toThrow("too large");
 
     expect(pullCount).toBeLessThanOrEqual(2);
     expect(cancel).toHaveBeenCalledOnce();
@@ -116,28 +126,15 @@ describe("Anthropic OAuth token responses", () => {
 });
 
 describe("Anthropic OAuth callback host", () => {
-  it("rejects non-loopback callback bind hosts", () => {
-    expect(() => testing.resolveCallbackHost({ OPENCLAW_OAUTH_CALLBACK_HOST: "0.0.0.0" })).toThrow(
-      "Anthropic OAuth callback host must be localhost, 127.0.0.1, or ::1",
-    );
-  });
-
-  it("defaults the bind host to IPv4 loopback", () => {
-    expect(testing.resolveCallbackHost({})).toBe("127.0.0.1");
-  });
-
-  it.each(["localhost", "127.0.0.1", "::1"])("accepts loopback bind host %s", (host) => {
-    expect(testing.resolveCallbackHost({ OPENCLAW_OAUTH_CALLBACK_HOST: host })).toBe(host);
-    expect(testing.redirectUri).toBe("http://localhost:53692/callback");
-  });
-
-  it("defers callback-host validation until login resolves the bind host", () => {
+  it("rejects non-loopback callback bind hosts", async () => {
     vi.stubEnv("OPENCLAW_OAUTH_CALLBACK_HOST", "0.0.0.0");
-    expect(() => testing.resolveCallbackHost()).toThrow(
-      "Anthropic OAuth callback host must be localhost, 127.0.0.1, or ::1",
-    );
-    vi.unstubAllEnvs();
-    expect(() => testing.resolveCallbackHost()).not.toThrow();
+
+    await expect(
+      anthropicOAuthProvider.login({
+        onAuth: vi.fn(),
+        onPrompt: vi.fn(async () => "unused-code"),
+      }),
+    ).rejects.toThrow("Anthropic OAuth callback host must be localhost, 127.0.0.1, or ::1");
   });
 
   it("binds IPv4 loopback while keeping Anthropic's registered localhost redirect", async () => {
@@ -147,7 +144,7 @@ describe("Anthropic OAuth callback host", () => {
         throw new Error("token exchange did not send a JSON string body");
       }
       const body = JSON.parse(init.body) as { redirect_uri?: string };
-      expect(body.redirect_uri).toBe(testing.redirectUri);
+      expect(body.redirect_uri).toBe(ANTHROPIC_REDIRECT_URI);
       return new Response(
         JSON.stringify({
           access_token: "access-token",
@@ -162,7 +159,7 @@ describe("Anthropic OAuth callback host", () => {
     const credentials = await anthropicOAuthProvider.login({
       onAuth: ({ url }) => {
         const authorizationUrl = new URL(url);
-        expect(authorizationUrl.searchParams.get("redirect_uri")).toBe(testing.redirectUri);
+        expect(authorizationUrl.searchParams.get("redirect_uri")).toBe(ANTHROPIC_REDIRECT_URI);
         const state = authorizationUrl.searchParams.get("state");
         if (!state) {
           throw new Error("authorization URL did not include OAuth state");

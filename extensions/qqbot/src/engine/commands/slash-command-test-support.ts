@@ -7,7 +7,7 @@ type RuntimeConfigApi = ReturnType<NonNullable<CommandsPort["approveRuntimeGette
 type ReplaceConfigFile = RuntimeConfigApi["replaceConfigFile"];
 type ReplaceConfigFileResult = Awaited<ReturnType<ReplaceConfigFile>>;
 
-export type WrittenQQBotConfig = {
+type WrittenQQBotConfig = {
   streaming?: unknown;
   accounts?: { default?: { streaming?: unknown } };
 };

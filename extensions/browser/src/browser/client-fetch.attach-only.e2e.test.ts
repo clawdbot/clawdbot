@@ -75,6 +75,8 @@ describe("browser client fetch attachOnly diagnostics", () => {
       const message = thrown instanceof Error ? thrown.message : String(thrown);
       expect(message).toContain("browser profile is external to OpenClaw");
       expect(message).toContain("Restarting the OpenClaw gateway will not launch it");
+      expect(message).toContain("Retry the browser tool once");
+      expect(message).toContain("If the same error persists");
       expect(message).not.toContain("Restart the OpenClaw gateway");
       expect(message).not.toContain("Do NOT retry the browser tool");
     } finally {

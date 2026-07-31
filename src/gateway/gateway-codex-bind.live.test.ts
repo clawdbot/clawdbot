@@ -5,20 +5,25 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
+import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
-import type { ChannelOutboundContext } from "../channels/plugins/types.public.js";
+import type { ChannelOutboundContext } from "../channels/plugins/types.adapters.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { findBundledPluginMetadataById } from "../plugins/bundled-plugin-metadata.js";
 import { pluginCommands } from "../plugins/command-registry-state.js";
+import { getCurrentPluginConversationBinding } from "../plugins/conversation-binding.js";
+import { seedPluginConversationBindingApprovalForTest } from "../plugins/conversation-binding.test-fixtures.js";
 import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
 import {
   pinActivePluginChannelRegistry,
   releasePinnedPluginChannelRegistry,
   resetPluginRuntimeStateForTest,
 } from "../plugins/runtime.js";
+import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
@@ -179,7 +184,7 @@ async function waitForAgentRunOk(
   runId: string,
   context: string,
 ): Promise<void> {
-  let result: { status?: string };
+  let result: { status?: string; error?: unknown };
   try {
     result = await client.request(
       "agent.wait",
@@ -191,7 +196,7 @@ async function waitForAgentRunOk(
     throw new Error(`${context}: agent.wait error for ${runId}: ${message}`, { cause: error });
   }
   if (result?.status !== "ok") {
-    throw new Error(`${context}: agent.wait failed for ${runId}: status=${String(result?.status)}`);
+    throw new Error(`${context}: agent.wait failed for ${runId}: ${JSON.stringify(result)}`);
   }
 }
 
@@ -307,36 +312,6 @@ function resolveBoundSessionKey(params: {
   return binding.targetSessionKey;
 }
 
-async function writePluginBindingApproval(params: {
-  homeDir: string;
-  pluginRoot: string;
-  channel: string;
-  accountId: string;
-}): Promise<void> {
-  const openclawDir = path.join(params.homeDir, ".openclaw");
-  await fs.mkdir(openclawDir, { recursive: true });
-  await fs.writeFile(
-    path.join(openclawDir, "plugin-binding-approvals.json"),
-    `${JSON.stringify(
-      {
-        version: 1,
-        approvals: [
-          {
-            pluginRoot: params.pluginRoot,
-            pluginId: "codex",
-            pluginName: "Codex",
-            channel: params.channel,
-            accountId: params.accountId,
-            approvedAt: Date.now(),
-          },
-        ],
-      },
-      null,
-      2,
-    )}\n`,
-  );
-}
-
 async function writeGatewayConfig(params: {
   configPath: string;
   model: string;
@@ -346,6 +321,8 @@ async function writeGatewayConfig(params: {
   workspace: string;
 }): Promise<void> {
   const modelProvider = params.modelProvider?.trim() || "codex";
+  const usesApiKeyAuth =
+    modelProvider === "openai" && process.env.OPENCLAW_LIVE_CODEX_HARNESS_AUTH === "api-key";
   const cfg: OpenClawConfig = {
     gateway: {
       mode: "local",
@@ -379,6 +356,26 @@ async function writeGatewayConfig(params: {
         sandbox: { mode: "off" },
       },
     },
+    ...(usesApiKeyAuth
+      ? {
+          auth: {
+            profiles: { "openai:default": { provider: "openai", mode: "api_key" } },
+            order: { openai: ["openai:default"] },
+          },
+          secrets: { providers: { default: { source: "env" } } },
+          models: {
+            mode: "merge",
+            providers: {
+              openai: {
+                api: "openai-responses",
+                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+                baseUrl: "https://api.openai.com/v1",
+                models: [],
+              },
+            },
+          },
+        }
+      : {}),
   };
   await fs.writeFile(params.configPath, `${JSON.stringify(cfg, null, 2)}\n`);
 }
@@ -452,6 +449,31 @@ describeLive("gateway live (native Codex conversation binding)", () => {
       setTestEnvValue("OPENCLAW_SKIP_CRON", "1");
       setTestEnvValue("OPENCLAW_SKIP_GMAIL_WATCHER", "1");
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      if (process.env.OPENCLAW_LIVE_CODEX_HARNESS_AUTH === "api-key") {
+        const apiKey = process.env.OPENAI_API_KEY?.trim();
+        if (!apiKey) {
+          throw new Error("API-key bind mode requires OPENAI_API_KEY.");
+        }
+        // This isolated test database is removed in finally. Persisting the prepared key here
+        // avoids coupling the binding proof to the outer gateway's secret-snapshot lifecycle.
+        saveAuthProfileStore(
+          {
+            version: 1,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                key: apiKey,
+              },
+            },
+            order: { openai: ["openai:default"] },
+          },
+          resolveDefaultAgentDir({}),
+        );
+      }
+      // The live process imports against its original home before this test switches to
+      // an isolated state dir. Force gateway startup to materialize that exact store.
+      clearSecretsRuntimeSnapshot();
       let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
       let client: Awaited<ReturnType<typeof connectTestGatewayClient>> | undefined;
       let pinnedChannelRegistry:
@@ -476,9 +498,10 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         pinActivePluginChannelRegistry(channelRegistry);
         pinnedChannelRegistry = channelRegistry;
 
-        await writePluginBindingApproval({
-          homeDir: tempHome,
+        seedPluginConversationBindingApprovalForTest({
           pluginRoot: resolveCodexPluginRoot(),
+          pluginId: "codex",
+          pluginName: "Codex",
           channel: "slack",
           accountId,
         });
@@ -498,17 +521,44 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         });
         const bindReply = await waitForOutboundText({
           replies: outboundReplies,
-          contains: "Bound this conversation to Codex thread",
+          contains: "Bound this conversation to",
           timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
         });
-        expect(bindReply.matchedText).toContain("Bound this conversation to Codex thread");
+        expect(bindReply.matchedText).toContain("The next message will initialize it.");
         const boundSessionKey = resolveBoundSessionKey({
           channel: "slack",
           accountId,
           conversationId,
         });
         logCodexBindStep(`binding resolved to ${boundSessionKey}`);
-        let commandReplyCount = bindReply.outboundTexts.length;
+
+        const initialNonce = randomBytes(4).toString("hex").toUpperCase();
+        const expectedReply = `CODEX-BIND-${initialNonce}`;
+        await sendChatAndWait({
+          client: activeClient,
+          sessionKey,
+          idempotencyKey: `idem-codex-bound-text-${randomUUID()}`,
+          context: "bound text turn",
+          message: `Reply with exactly this token and nothing else: ${expectedReply}`,
+          originatingChannel: "slack",
+          originatingTo: conversationId,
+          originatingAccountId: accountId,
+          deliver: true,
+        });
+        const textReply = await waitForOutboundText({
+          replies: outboundReplies,
+          contains: expectedReply,
+          timeoutMs: CODEX_BIND_REQUEST_TIMEOUT_MS,
+        });
+        expect(textReply.matchedText).toContain(expectedReply);
+
+        const currentConversationBinding = await getCurrentPluginConversationBinding({
+          pluginRoot: resolveCodexPluginRoot(),
+          conversation: { channel: "slack", accountId, conversationId },
+        });
+        expect(currentConversationBinding).not.toBeNull();
+
+        let commandReplyCount = textReply.outboundTexts.length;
 
         const sendCodexCommand = async (message: string, contains: string, timeoutMs = 60_000) => {
           await sendChatAndWait({
@@ -538,6 +588,12 @@ describeLive("gateway live (native Codex conversation binding)", () => {
           CODEX_BIND_REQUEST_TIMEOUT_MS,
         );
         await sendCodexCommand("/codex models", "Codex models:", CODEX_BIND_REQUEST_TIMEOUT_MS);
+        const initializedBinding = await sendCodexCommand(
+          "/codex binding",
+          "Codex conversation binding:",
+          CODEX_BIND_REQUEST_TIMEOUT_MS,
+        );
+        expect(initializedBinding.matchedText).not.toContain("- Thread: unknown");
         await sendCodexCommand("/codex fast on", "Codex fast mode enabled.");
         await sendCodexCommand("/codex fast status", "Codex fast mode: on.");
         await sendCodexCommand("/codex permissions default", "Codex permissions set to default.");

@@ -1,7 +1,12 @@
 // Browser origin tests document same-origin, private-network, loopback, forwarded
 // host, and explicit allowlist decisions for gateway browser surfaces.
+import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
-import { checkBrowserOrigin } from "./origin-check.js";
+import {
+  checkBrowserOrigin,
+  normalizeChromeExtensionOrigin,
+  resolveAcceptedBrowserOrigin,
+} from "./origin-check.js";
 
 describe("checkBrowserOrigin", () => {
   it.each([
@@ -172,5 +177,37 @@ describe("checkBrowserOrigin", () => {
       ok: false,
       reason: "origin missing or invalid",
     });
+  });
+
+  it("recognizes only canonical Chrome extension origins", () => {
+    expect(
+      normalizeChromeExtensionOrigin("chrome-extension://abcdefghijklmnopabcdefghijklmnop"),
+    ).toBe("chrome-extension://abcdefghijklmnopabcdefghijklmnop");
+    expect(normalizeChromeExtensionOrigin("chrome-extension://abc")).toBeUndefined();
+    expect(
+      normalizeChromeExtensionOrigin("https://abcdefghijklmnopabcdefghijklmnop"),
+    ).toBeUndefined();
+  });
+});
+
+describe("resolveAcceptedBrowserOrigin", () => {
+  it("applies the configured Host-header fallback through the canonical request resolver", () => {
+    const origin = "https://gateway.example.com:18789";
+    const req = {
+      headers: { host: "gateway.example.com:18789", origin },
+      socket: { remoteAddress: "203.0.113.10" },
+    } as IncomingMessage;
+
+    expect(
+      resolveAcceptedBrowserOrigin({
+        req,
+        cfg: {
+          gateway: {
+            controlUi: { dangerouslyAllowHostHeaderOriginFallback: true },
+          },
+        },
+      }),
+    ).toBe(origin);
+    expect(resolveAcceptedBrowserOrigin({ req, cfg: {} })).toBeUndefined();
   });
 });

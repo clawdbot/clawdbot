@@ -57,10 +57,12 @@ async function runGitOk(repoDir: string, args: string[]) {
 }
 
 async function writeCapturePolicyScript(root: string) {
+  await fs.chmod(root, 0o700);
   const scriptPath = path.join(root, "capture-policy.cjs");
   await fs.writeFile(
     scriptPath,
     [
+      `#!${process.execPath}`,
       "const fs = require('node:fs');",
       "let input = '';",
       "process.stdin.on('data', (chunk) => { input += chunk; });",
@@ -82,11 +84,9 @@ function capturePolicyConfig(params: { scriptPath: string; capturePath: string }
         enabled: true,
         exec: {
           source: "exec" as const,
-          command: process.execPath,
-          args: [params.scriptPath],
+          command: params.scriptPath,
           env: { CAPTURE_PATH: params.capturePath },
-          allowInsecurePath: true,
-          allowSymlinkCommand: true,
+          trustedDirs: [path.dirname(params.scriptPath)],
         },
       },
     },

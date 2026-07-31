@@ -47,6 +47,7 @@ export async function maybeInstallDaemon(params: {
         ],
       }),
       params.runtime,
+      1,
     );
     if (action === "restart") {
       await withProgress(
@@ -93,6 +94,7 @@ export async function maybeInstallDaemon(params: {
             initialValue: DEFAULT_GATEWAY_DAEMON_RUNTIME,
           }),
           params.runtime,
+          1,
         ) as GatewayDaemonRuntime;
       }
     }
@@ -156,7 +158,7 @@ export async function maybeInstallDaemon(params: {
     await ensureSystemdUserLingerInteractive({
       runtime: params.runtime,
       prompter: {
-        confirm: async (p) => guardCancel(await confirm(p), params.runtime),
+        confirm: async (p) => guardCancel(await confirm(p), params.runtime, 1),
         note,
       },
       reason:

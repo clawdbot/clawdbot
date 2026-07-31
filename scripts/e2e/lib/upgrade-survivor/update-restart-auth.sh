@@ -13,13 +13,22 @@ daemon_log="${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-/tmp/openclaw
 printf '%s\n' "$*" >>"$log_file"
 
 filtered=()
+system_scope=1
+property=""
 for ((i = 1; i <= $#; i++)); do
   arg="${!i}"
   case "$arg" in
-    --user | --quiet | --no-page | --now)
+    --user)
+      system_scope=0
+      ;;
+    --quiet | --no-page | --now | --value)
       ;;
     --property)
       i=$((i + 1))
+      property="${!i}"
+      ;;
+    --property=*)
+      property="${arg#--property=}"
       ;;
     *)
       filtered+=("$arg")
@@ -122,6 +131,21 @@ case "$command" in
     exit 3
     ;;
   show)
+    if [ "$system_scope" = "1" ]; then
+      case "$property" in
+        LoadState)
+          printf 'not-found\n'
+          ;;
+        UnitPath)
+          printf '/etc/systemd/system /usr/lib/systemd/system\n'
+          ;;
+        *)
+          echo "systemctl shim unsupported system-scope show: $*" >&2
+          exit 1
+          ;;
+      esac
+      exit 0
+    fi
     if is_running; then
       printf 'ActiveState=active\nSubState=running\nMainPID=%s\nExecMainStatus=0\nExecMainCode=0\n' "$(cat "$pid_file")"
     else
@@ -242,12 +266,18 @@ prepare_update_restart_probe_current_install() {
   local port="$1"
   local log_file="$2"
   local command_timeout="${OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT:-900s}"
+  local doctor_log="${log_file}.doctor"
   local start_epoch
   local ready_epoch
 
   echo "Preparing candidate-auth gateway for automatic update restart."
   install_update_restart_systemctl_shim
   seed_update_restart_probe_device_auth
+  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw doctor --fix --non-interactive >"$doctor_log" 2>&1; then
+    echo "candidate device identity migration failed" >&2
+    cat "$doctor_log" >&2 || true
+    return 1
+  fi
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway --port "$port" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
   gateway_pid="$!"

@@ -1,6 +1,9 @@
 // Allow-from helpers parse and match plugin channel allowlist entries.
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
-import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "../../packages/normalization-core/src/string-normalization.js";
 import { isAllowedParsedChatSender as isAllowedParsedChatSenderShared } from "../channels/plugins/chat-target-prefixes.js";
 
 export type {
@@ -55,6 +58,48 @@ export function formatNormalizedAllowFromEntries(params: {
   return normalizeStringEntries(params.allowFrom)
     .map((entry) => params.normalizeEntry(entry))
     .filter((entry): entry is string => Boolean(entry));
+}
+
+type ParsedAllowFromEntry = { value: string } | { error: string };
+
+/** Parse, validate, and deduplicate setup allow-from entries with wildcard support. */
+export function parseAllowFromEntries(
+  raw: string,
+  parseEntry: (entry: string) => ParsedAllowFromEntry,
+): { entries: string[]; error?: string } {
+  const entries: string[] = [];
+  for (const entry of normalizeStringEntries(raw.split(/[\n,;]+/g))) {
+    if (entry === "*") {
+      entries.push(entry);
+      continue;
+    }
+    const parsed = parseEntry(entry);
+    if ("error" in parsed) {
+      return { entries: [], error: parsed.error };
+    }
+    entries.push(parsed.value);
+  }
+  return { entries: uniqueStrings(normalizeStringEntries(entries)) };
+}
+
+/** Resolve basic setup allow-from entries when a channel token is available. */
+export async function resolveBasicAllowFromEntries(params: {
+  token?: string | null;
+  entries: string[];
+  resolveEntries: (params: {
+    token: string;
+    entries: string[];
+  }) => Promise<Array<{ input: string; resolved: boolean; id?: string | null }>>;
+}): Promise<Array<{ input: string; resolved: boolean; id: string | null }>> {
+  const token = params.token?.trim();
+  if (!token) {
+    return params.entries.map((input) => ({ input, resolved: false, id: null }));
+  }
+  return (await params.resolveEntries({ token, entries: params.entries })).map((entry) => ({
+    input: entry.input,
+    resolved: entry.resolved,
+    id: entry.id ?? null,
+  }));
 }
 
 /** Check whether a sender id matches a simple normalized allowlist with wildcard support. */

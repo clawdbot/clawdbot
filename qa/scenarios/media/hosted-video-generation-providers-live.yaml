@@ -2,9 +2,8 @@ title: Hosted video generation providers live
 
 scenario:
   id: hosted-video-generation-providers-live
-  surface: long-tail-hosted-providers
-  category: long-tail-hosted-providers.hosted-media-providers
-  runtimeParityTier: live-only
+  surface: hosted-providers
+  category: hosted-providers.hosted-media-providers
   coverage:
     primary:
       - hosted-providers.video-generation-providers

@@ -21,7 +21,7 @@ type LocalAudioCandidate = {
   entry?: MediaUnderstandingModelConfig;
 };
 
-export type LocalAudioSelection = {
+type LocalAudioSelection = {
   candidates: LocalAudioCandidate[];
   entries: MediaUnderstandingModelConfig[];
   selected?: LocalAudioCandidate;
@@ -91,13 +91,17 @@ export function recordLocalAudioBackendObservation(params: {
   if (commandId(params.command) !== "whisper-cli") {
     return undefined;
   }
-  const backend = /using\s+(?:MTL\d+|Metal)\s+backend/i.test(params.output)
-    ? "metal"
-    : /using\s+CUDA\d*\s+backend/i.test(params.output)
-      ? "cuda"
-      : /using\s+CPU\s+backend|no GPU found/i.test(params.output)
-        ? "cpu"
-        : undefined;
+  const acceleratorInitializationFailed =
+    /failed to initialize\s+(?:MTL\d+|Metal|CUDA\d*)\s+backend/i.test(params.output);
+  const backend = acceleratorInitializationFailed
+    ? "cpu"
+    : /using\s+(?:MTL\d+|Metal)\s+backend/i.test(params.output)
+      ? "metal"
+      : /using\s+CUDA\d*\s+backend/i.test(params.output)
+        ? "cuda"
+        : /using\s+CPU\s+backend|no GPU found/i.test(params.output)
+          ? "cpu"
+          : undefined;
   if (backend) {
     observedBackendCache.set(observationKey(params), backend);
   }
@@ -295,7 +299,7 @@ export async function inspectLocalAudioSelection(
     (await Promise.all(sherpaFiles.map(fileExists))).every(Boolean);
   const parakeetReady = Boolean(parakeetCommand) && platform === "darwin" && arch === "arm64";
   const parakeetArgs = [
-    "{{MediaPath}}",
+    "{{AttachmentPath}}",
     "--output-format",
     "txt",
     "--output-dir",
@@ -310,14 +314,14 @@ export async function inspectLocalAudioSelection(
     "-of",
     "{{OutputBase}}",
     "-nt",
-    "{{MediaPath}}",
+    "{{AttachmentPath}}",
   ];
   const sherpaArgs = [
     `--tokens=${sherpaFiles[0]}`,
     `--encoder=${sherpaFiles[1]}`,
     `--decoder=${sherpaFiles[2]}`,
     `--joiner=${sherpaFiles[3]}`,
-    "{{MediaPath}}",
+    "{{AttachmentPath}}",
   ];
   const pythonArgs = [
     "--model",
@@ -328,7 +332,7 @@ export async function inspectLocalAudioSelection(
     "{{OutputDir}}",
     "--verbose",
     "False",
-    "{{MediaPath}}",
+    "{{AttachmentPath}}",
   ];
 
   const candidates: LocalAudioCandidate[] = [

@@ -1,7 +1,9 @@
 // Discord tests cover native command.status direct plugin behavior.
 import { ChannelType } from "discord-api-types/v10";
+import type { dispatchChannelInboundTurn } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { nativeCommandRuntime } from "./native-command.runtime.js";
 import { createMockCommandInteraction as createInteraction } from "./native-command.test-helpers.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
@@ -31,17 +33,39 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia: (...args: unknown[]) => runtimeModuleMocks.loadWebMedia(...args),
 }));
 
+const dispatchChannelInboundTurnForTest: typeof dispatchChannelInboundTurn = async (plan) => {
+  const dispatchResult = await runtimeModuleMocks.dispatchReplyWithDispatcher({
+    ctx: plan.ctxPayload,
+    cfg: plan.cfg,
+    dispatcherOptions: {
+      ...plan.dispatcherOptions,
+      deliver: "deliver" in plan.delivery ? plan.delivery.deliver : undefined,
+      onError: plan.delivery.onError,
+    },
+    replyOptions: plan.replyOptions,
+  });
+  return {
+    admission: { kind: "dispatch" },
+    dispatched: true,
+    ctxPayload: plan.ctxPayload,
+    routeSessionKey: plan.route.sessionKey,
+    dispatchResult,
+  };
+};
+
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
-let discordNativeCommandTesting: typeof import("./native-command.js").testing;
 
 function createConfig(params?: { requireMention?: boolean }): OpenClawConfig {
   return {
     commands: {
-      useAccessGroups: false,
+      allowFrom: { discord: ["user:owner"] },
     },
     channels: {
       discord: {
-        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+        dm: { enabled: true },
+        dmPolicy: "open",
+        groupPolicy: "open",
+        allowFrom: ["*"],
         guilds: {
           guild1: {
             requireMention: true,
@@ -75,7 +99,7 @@ async function createStatusCommand(cfg: OpenClawConfig) {
 }
 
 function setDefaultRouteState() {
-  discordNativeCommandTesting.setResolveDiscordNativeInteractionRouteState(async (params) => ({
+  nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = async (params) => ({
     route: {
       agentId: "main",
       channel: "discord",
@@ -98,7 +122,7 @@ function setDefaultRouteState() {
     configuredRoute: null,
     configuredBinding: null,
     bindingReadiness: null,
-  }));
+  });
 }
 
 type MockWithCalls = { mock: { calls: unknown[][] } };
@@ -137,8 +161,7 @@ function firstStatusCall(): {
 
 describe("discord native /status", () => {
   beforeAll(async () => {
-    ({ createDiscordNativeCommand, testing: discordNativeCommandTesting } =
-      await import("./native-command.js"));
+    ({ createDiscordNativeCommand } = await import("./native-command.js"));
   });
 
   beforeEach(() => {
@@ -158,12 +181,9 @@ describe("discord native /status", () => {
       buffer: Buffer.from("image"),
       fileName: "status.png",
     });
-    discordNativeCommandTesting.setDispatchReplyWithDispatcher(
-      runtimeModuleMocks.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithDispatcher,
-    );
-    discordNativeCommandTesting.setMatchPluginCommand(
-      (() => null) as typeof import("openclaw/plugin-sdk/plugin-runtime").matchPluginCommand,
-    );
+    nativeCommandRuntime.dispatchChannelInboundTurn = dispatchChannelInboundTurnForTest;
+    nativeCommandRuntime.matchPluginCommand = (() =>
+      null) as typeof import("openclaw/plugin-sdk/plugin-runtime").matchPluginCommand;
     setDefaultRouteState();
   });
 
@@ -186,7 +206,7 @@ describe("discord native /status", () => {
 
   it("prioritizes direct status replies over matching plugin commands", async () => {
     const executePluginCommand = vi.fn(async () => ({ text: "plugin status" }));
-    discordNativeCommandTesting.setMatchPluginCommand((() => ({
+    nativeCommandRuntime.matchPluginCommand = (() => ({
       command: {
         name: "status",
         description: "Plugin status",
@@ -195,10 +215,9 @@ describe("discord native /status", () => {
         handler: async () => ({ text: "plugin status" }),
       },
       args: undefined,
-    })) as typeof import("openclaw/plugin-sdk/plugin-runtime").matchPluginCommand);
-    discordNativeCommandTesting.setExecutePluginCommand(
-      executePluginCommand as typeof import("openclaw/plugin-sdk/plugin-runtime").executePluginCommand,
-    );
+    })) as typeof import("openclaw/plugin-sdk/plugin-runtime").matchPluginCommand;
+    nativeCommandRuntime.executePluginCommand =
+      executePluginCommand as typeof import("openclaw/plugin-sdk/plugin-runtime").executePluginCommand;
     const cfg = createConfig();
     const command = await createStatusCommand(cfg);
     const interaction = createInteraction();

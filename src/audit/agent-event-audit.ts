@@ -244,13 +244,8 @@ function projectAgentEvent(event: AgentEventPayload): AgentAuditProjection | und
   return undefined;
 }
 
-/** Return a metadata-only audit input for supported run lifecycle events. */
-export function projectAgentEventToAudit(event: AgentEventPayload): AuditEventInput | undefined {
-  return projectAgentEvent(event)?.input;
-}
-
 /** Project the complete trusted tool-execution lifecycle without private diagnostic content. */
-export function projectToolExecutionEventToAudit(
+function projectToolExecutionEventToAudit(
   event: TrustedToolExecutionEvent,
 ): ToolActionAuditEventInput | undefined {
   // Schema quarantine describes tool availability before invocation. Without
@@ -480,9 +475,4 @@ export function createAgentEventAuditRecorder(options?: {
       await writer.stop();
     },
   };
-}
-
-export function resetAgentEventAuditForTest(): void {
-  runProvenance.clear();
-  persistenceFailureWarned = false;
 }

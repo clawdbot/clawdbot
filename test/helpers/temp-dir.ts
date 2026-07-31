@@ -5,16 +5,16 @@ import path from "node:path";
 
 // Synchronous temporary directory helpers for tests.
 
-export type TempDirCollection = string[] | Set<string>;
-export type RegisterTempDirCleanup = (cleanup: () => void) => unknown;
+type TempDirCollection = string[] | Set<string>;
+type RegisterTempDirCleanup = (cleanup: () => void) => unknown;
 
-export interface TestTempDirTracker {
+interface TestTempDirTracker {
   readonly dirs: ReadonlySet<string>;
   make(prefix: string, root?: string): string;
   cleanup(): void;
 }
 
-export interface AutoCleanupTempDirTracker {
+interface AutoCleanupTempDirTracker {
   readonly dirs: ReadonlySet<string>;
   make(prefix: string, root?: string): string;
 }

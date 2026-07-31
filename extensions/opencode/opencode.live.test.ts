@@ -5,7 +5,7 @@ import {
   type Model,
   type Tool,
 } from "openclaw/plugin-sdk/llm";
-import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { buildStaticOpencodeZenProviderConfig } from "./provider-catalog.js";

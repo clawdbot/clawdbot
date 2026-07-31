@@ -6,7 +6,10 @@ import {
 } from "./batch-utils.js";
 import { hashText } from "./hash.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
-import { readResponseJsonWithLimit, readResponseTextSnippet } from "./response-snippet.js";
+import {
+  readMemoryHostResponseTextSnippet,
+  readResponseJsonWithLimit,
+} from "./response-snippet.js";
 
 // Uploads provider batch JSONL payloads through the shared remote HTTP guard.
 
@@ -40,7 +43,7 @@ export async function uploadBatchJsonlFile(params: {
     },
     onResponse: async (fileRes) => {
       if (!fileRes.ok) {
-        const text = await readResponseTextSnippet(fileRes, { signal: params.signal });
+        const text = await readMemoryHostResponseTextSnippet(fileRes, { signal: params.signal });
         throw new Error(`${params.errorPrefix}: ${fileRes.status} ${text}`);
       }
       return (await readResponseJsonWithLimit(fileRes, {

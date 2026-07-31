@@ -16,6 +16,7 @@ const removedAsyncTransactionNames = new Set([
 ]);
 const synchronousTransactionCallbackIndexes = new Map([
   ["runOpenClawAgentWriteTransaction", 0],
+  ["runOpenClawStateWriteTransaction", 0],
   ["runSqliteImmediateTransactionSync", 1],
 ]);
 

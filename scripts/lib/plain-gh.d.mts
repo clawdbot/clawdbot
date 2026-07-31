@@ -2,10 +2,6 @@ import type {
   ExecFileSyncOptions,
   ExecFileSyncOptionsWithBufferEncoding,
   ExecFileSyncOptionsWithStringEncoding,
-  SpawnSyncOptions,
-  SpawnSyncOptionsWithBufferEncoding,
-  SpawnSyncOptionsWithStringEncoding,
-  SpawnSyncReturns,
 } from "node:child_process";
 
 export function plainGhEnv(env?: NodeJS.ProcessEnv): {
@@ -19,21 +15,21 @@ export function execPlainGh(
 export function execPlainGh(
   args: readonly string[],
   options?: ExecFileSyncOptionsWithBufferEncoding,
-): NonSharedBuffer;
+): Uint8Array<ArrayBuffer>;
 export function execPlainGh(
   args: readonly string[],
   options?: ExecFileSyncOptions,
-): string | NonSharedBuffer;
-export function spawnPlainGh(
-  args: readonly string[],
-  options: SpawnSyncOptionsWithStringEncoding,
-): SpawnSyncReturns<string>;
-export function spawnPlainGh(
-  args: readonly string[],
-  options?: SpawnSyncOptionsWithBufferEncoding,
-): SpawnSyncReturns<NonSharedBuffer>;
-export function spawnPlainGh(
-  args: readonly string[],
-  options?: SpawnSyncOptions,
-): SpawnSyncReturns<string | NonSharedBuffer>;
+): string | Uint8Array<ArrayBuffer>;
+export function execGhApiRead(
+  endpoint: string,
+  options: ExecFileSyncOptionsWithStringEncoding,
+): string;
+export function execGhApiRead(
+  endpoint: string,
+  options?: ExecFileSyncOptionsWithBufferEncoding,
+): Uint8Array<ArrayBuffer>;
+export function execGhApiRead(
+  endpoint: string,
+  options?: ExecFileSyncOptions,
+): string | Uint8Array<ArrayBuffer>;
 export const PLAIN_GH_SYSTEM_CANDIDATES: string[];

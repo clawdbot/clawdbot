@@ -2,12 +2,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
-import { resetDiscordChannelInfoCacheForTest } from "./message-channel-info.js";
+import { clearDiscordChannelInfoCacheForTest } from "./message-channel-info.test-support.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
 
 describe("resolveDiscordThreadParentInfo", () => {
   beforeEach(() => {
-    resetDiscordChannelInfoCacheForTest();
+    clearDiscordChannelInfoCacheForTest();
   });
 
   it("falls back to fetched thread parentId when parentId is missing in payload", async () => {

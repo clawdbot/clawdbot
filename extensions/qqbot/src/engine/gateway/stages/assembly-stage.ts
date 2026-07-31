@@ -15,6 +15,11 @@
  * sees directly.
  */
 
+import {
+  formatInboundEnvelope,
+  resolveEnvelopeFormatOptions,
+  type EnvelopeFormatOptions,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   buildMergedMessageContext,
@@ -103,13 +108,13 @@ export function buildAgentBody(input: BuildAgentBodyInput): string {
     return base;
   }
 
-  const envelopeOpts = deps.runtime.channel.reply.resolveEnvelopeFormatOptions(deps.cfg);
+  const envelopeOpts = resolveEnvelopeFormatOptions(deps.cfg);
   return deps.adapters.history.buildPendingHistoryContext({
     historyMap: deps.groupHistories,
     historyKey: event.groupOpenid,
     limit: groupInfo.historyLimit,
     currentMessage: base,
-    formatEntry: (entry) => formatHistoryEntry(entry as HistoryEntry, deps, envelopeOpts),
+    formatEntry: (entry) => formatHistoryEntry(entry as HistoryEntry, envelopeOpts),
   });
 }
 
@@ -139,19 +144,15 @@ function formatSenderLabelFrom(name: string | undefined, id: string): string {
   return name.includes(id) ? name : `${name} (${id})`;
 }
 
-function formatHistoryEntry(
-  entry: HistoryEntry,
-  deps: InboundPipelineDeps,
-  envelopeOpts: unknown,
-): string {
+function formatHistoryEntry(entry: HistoryEntry, envelopeOpts: unknown): string {
   const attachmentDesc = formatAttachmentTags(entry.attachments);
   const bodyWithAttachments = attachmentDesc ? `${entry.body} ${attachmentDesc}` : entry.body;
-  return deps.runtime.channel.reply.formatInboundEnvelope({
+  return formatInboundEnvelope({
     channel: "qqbot",
     from: entry.sender,
     timestamp: entry.timestamp,
     body: bodyWithAttachments,
     chatType: "group",
-    envelope: envelopeOpts,
+    envelope: envelopeOpts as EnvelopeFormatOptions,
   });
 }

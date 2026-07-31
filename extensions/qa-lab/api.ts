@@ -57,11 +57,7 @@ export {
   QA_BASE_RUNTIME_PLUGIN_IDS,
   type QaThinkingLevel,
 } from "./src/qa-gateway-config.js";
-export {
-  renderQaMarkdownReport,
-  type QaReportCheck,
-  type QaReportScenario,
-} from "openclaw/plugin-sdk/qa-runtime";
+export { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./src/report.js";
 export {
   type QaScenarioDefinition,
   type QaScenarioResult,

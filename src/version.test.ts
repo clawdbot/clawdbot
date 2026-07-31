@@ -33,7 +33,7 @@ async function withVersionFixtureDir<T>(run: (root: string) => Promise<T>): Prom
   return await run(await versionFixtureRoot.make("case"));
 }
 
-async function ensureModuleFixture(root: string, relativePath = "dist/plugin-sdk/index.js") {
+async function ensureModuleFixture(root: string, relativePath = "dist/plugin-sdk/core.js") {
   await fs.mkdir(path.dirname(path.join(root, relativePath)), { recursive: true });
   return moduleUrlFrom(root, relativePath);
 }

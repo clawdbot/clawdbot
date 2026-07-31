@@ -3,6 +3,41 @@ import OpenClawKit
 import Testing
 
 struct GatewayErrorsTests {
+    @Test func `response error reads structured missing scope`() throws {
+        let error = GatewayResponseError(
+            method: "question.list",
+            code: "FORBIDDEN",
+            message: "permission denied",
+            details: [
+                "code": AnyCodable("MISSING_SCOPE"),
+                "missingScope": AnyCodable("operator.questions"),
+                "requiredScopes": AnyCodable(["operator.read", "operator.questions"]),
+            ])
+
+        let details = try #require(error.missingScopeDetails)
+        #expect(details.missingScope == "operator.questions")
+        #expect(details.requiredScopes == ["operator.read", "operator.questions"])
+        #expect(error.missingScope == "operator.questions")
+    }
+
+    @Test func `response error keeps legacy missing scope compatibility`() {
+        let legacy = GatewayResponseError(
+            method: "question.list",
+            code: "INVALID_REQUEST",
+            message: "missing scope: operator.questions",
+            details: nil)
+        let unrelated = GatewayResponseError(
+            method: "question.list",
+            code: "UNAVAILABLE",
+            message: "missing scope: operator.questions",
+            details: nil)
+
+        #expect(legacy.missingScope == "operator.questions")
+        #expect(unrelated.missingScope == nil)
+        #expect(legacy.isAuthorizationFailure)
+        #expect(!unrelated.isAuthorizationFailure)
+    }
+
     @Test func `bootstrap token invalid is non recoverable`() {
         let error = GatewayConnectAuthError(
             message: "setup code expired",
@@ -56,10 +91,10 @@ struct GatewayErrorsTests {
 
         let problem = try #require(GatewayConnectionProblemMapper.map(error: error))
 
-        #expect(problem.titlePresentation == .localized("Pairing approval required"))
-        #expect(problem.messagePresentation == .localized(
-            "Approve this device on the gateway, then reconnect."))
-        #expect(problem.actionLabelPresentation == .localized("Approve on gateway"))
+        #expect(problem.titlePresentation.localizationKey == "This device is not approved yet")
+        #expect(problem.messagePresentation
+            .localizationKey == "The gateway received the connection request, but this device must be approved first.")
+        #expect(problem.actionLabelPresentation?.localizationKey == "Approve on gateway")
     }
 
     @Test func `gateway supplied copy remains verbatim`() throws {
@@ -265,6 +300,52 @@ struct GatewayErrorsTests {
         #expect(problem?.pauseReconnect == true)
     }
 
+    @Test func `TLS pin storage failure stays retryable`() {
+        let error = GatewayTLSValidationError(
+            failure: GatewayTLSValidationFailure(
+                kind: .pinStorageUnavailable,
+                host: "gateway.example.com",
+                storeKey: "gateway.example.com:443",
+                expectedFingerprint: nil,
+                observedFingerprint: "observed",
+                systemTrustOk: true),
+            context: "connect to gateway")
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .tlsCertificateUnavailable)
+        #expect(problem?.retryable == true)
+        #expect(problem?.pauseReconnect == false)
+        #expect(problem?.actionLabel == "Retry")
+        #expect(problem?.titlePresentation == .localized("Gateway certificate unavailable"))
+        #expect(problem?.messagePresentation == .localizedFormat(
+            "OpenClaw could not securely save the TLS certificate pin for %@.",
+            ["gateway.example.com"]))
+    }
+
+    @Test func `TLS authority mismatch pauses reconnect`() {
+        let error = GatewayTLSValidationError(
+            failure: GatewayTLSValidationFailure(
+                kind: .authorityMismatch,
+                host: "redirect.example.com",
+                storeKey: "gateway.example.com:443",
+                expectedFingerprint: "expected",
+                observedFingerprint: nil,
+                systemTrustOk: false,
+                port: 443),
+            context: "connect to gateway")
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .tlsCertificateUntrusted)
+        #expect(problem?.retryable == false)
+        #expect(problem?.pauseReconnect == true)
+        #expect(problem?.actionLabel == "Check certificate")
+        #expect(problem?.titlePresentation == .localized("Gateway certificate is not trusted"))
+        #expect(problem?.messagePresentation == .localized(
+            "The TLS challenge came from a different host or port than the requested Gateway."))
+    }
+
     @Test func `untrusted TLS mismatch cannot be recovered in app`() {
         let error = GatewayTLSValidationError(
             failure: GatewayTLSValidationFailure(
@@ -280,5 +361,12 @@ struct GatewayErrorsTests {
 
         #expect(problem?.kind == .tlsPinMismatch)
         #expect(problem?.canTrustRotatedCertificate == false)
+    }
+}
+
+extension GatewayConnectionProblem.PresentationText {
+    fileprivate var localizationKey: String? {
+        guard case let .localized(key) = self else { return nil }
+        return key
     }
 }

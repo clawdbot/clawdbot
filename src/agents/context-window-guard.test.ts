@@ -229,6 +229,23 @@ describe("context-window-guard", () => {
     expect(guard.shouldBlock).toBe(false);
   });
 
+  it("uses the selected agent cap instead of the default", () => {
+    const info = resolveContextWindowInfo({
+      cfg: { agents: { defaults: { contextTokens: 20_000 } } },
+      provider: "anthropic",
+      modelId: "whatever",
+      modelContextWindow: 200_000,
+      agentContextTokens: 40_000,
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({
+      source: "agentContextTokens",
+      tokens: 40_000,
+      referenceTokens: 200_000,
+    });
+  });
+
   it("does not override when cap exceeds base window", () => {
     const cfg = {
       agents: { defaults: { contextTokens: 128_000 } },

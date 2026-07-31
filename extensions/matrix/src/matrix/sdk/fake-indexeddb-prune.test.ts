@@ -1,10 +1,7 @@
 // Matrix tests cover fake-indexeddb transaction pruning for crypto stores.
 import "fake-indexeddb/auto";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  installFakeIndexedDbTransactionPruner,
-  pruneFinishedFakeIndexedDbTransactions,
-} from "./fake-indexeddb-prune.js";
+import { installFakeIndexedDbTransactionPruner } from "./fake-indexeddb-prune.js";
 
 function openDatabase(name: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -112,15 +109,5 @@ describe("Matrix fake-indexeddb transaction pruning", () => {
       rawTransactions(db).filter((transaction) => transaction["_state"] === "finished").length,
     ).toBeGreaterThan(0);
     db.close();
-  });
-
-  it("keeps active transactions when pruning the raw transaction queue", () => {
-    const rawDatabase = {
-      name: "openclaw-matrix-direct-prune-test::matrix-sdk-crypto",
-      transactions: [{ _state: "finished" }, { _state: "active" }, { _state: "inactive" }],
-    };
-
-    expect(pruneFinishedFakeIndexedDbTransactions(rawDatabase)).toBe(1);
-    expect(rawDatabase.transactions).toEqual([{ _state: "active" }, { _state: "inactive" }]);
   });
 });

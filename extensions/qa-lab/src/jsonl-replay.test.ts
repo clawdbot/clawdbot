@@ -7,9 +7,12 @@ import {
   createMockJsonlReplayCellRunner,
   renderJsonlReplayMarkdownReport,
   runJsonlReplay,
-  type JsonlReplayCellRunner,
 } from "./jsonl-replay.js";
 import type { RuntimeId, RuntimeParityCell, RuntimeParityToolCall } from "./runtime-parity.js";
+
+type JsonlReplayCellRunner = NonNullable<
+  NonNullable<Parameters<typeof runJsonlReplay>[1]>["runCell"]
+>;
 
 const tempRoots: string[] = [];
 
@@ -118,7 +121,7 @@ describe("jsonl replay", () => {
     const runCell: JsonlReplayCellRunner = async ({ runtime, turn }) => {
       if (turn.turn === 2) {
         return {
-          scenarioStatus: "pass",
+          status: "pass",
           cell: makeCell(runtime, {
             toolCalls: [makeToolCall(runtime === "openclaw" ? {} : { argsHash: "args-codex" })],
           }),
@@ -126,14 +129,14 @@ describe("jsonl replay", () => {
       }
       if (turn.turn === 3) {
         return {
-          scenarioStatus: "pass",
+          status: "pass",
           cell: makeCell(runtime, {
             finalText: runtime === "openclaw" ? "openclaw wording" : "codex wording",
           }),
         };
       }
       return {
-        scenarioStatus: "pass",
+        status: "pass",
         cell: makeCell(runtime),
       };
     };

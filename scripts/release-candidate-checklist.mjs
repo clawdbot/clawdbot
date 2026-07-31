@@ -6,13 +6,15 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
@@ -52,8 +54,10 @@ const WINDOWS_NODE_REQUIRED_ASSETS = [
   "OpenClawCompanion-Setup-arm64.exe",
 ];
 const SHA256_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/u;
-const RELEASE_CANDIDATE_STATE_VERSION = 1;
+const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
+const RELEASE_CANDIDATE_STATE_VERSION = 2;
 const RELEASE_CANDIDATE_STATE_FILE = "release-candidate-state.json";
+const TRUSTED_TOOLING_SHA_ENV = "OPENCLAW_RELEASE_CANDIDATE_TRUSTED_TOOLING_SHA";
 const RELEASE_CANDIDATE_STATE_KEYS = [
   "repo",
   "tag",
@@ -66,6 +70,7 @@ const RELEASE_CANDIDATE_STATE_KEYS = [
   "npmDistTag",
   "pluginPublishScope",
   "plugins",
+  "parallelsRegistryPackageArtifacts",
   "windowsNodeTag",
   "skipParallels",
   "skipTelegram",
@@ -89,6 +94,8 @@ Options:
   --skip-dispatch                     Require both run ids; do not dispatch workflows.
   --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
   --skip-parallels                   Do not run local Parallels fresh/update candidate smoke.
+  --parallels-registry-package-artifact <dir>
+                                      Add a verified plugin npm preflight artifact directory. Repeatable.
   --skip-telegram                    Do not run NPM Telegram E2E against the prepared tarball.
   --telegram-provider-mode <mode>     mock-openai|live-frontier. Default: ${DEFAULT_TELEGRAM_PROVIDER_MODE}
   --provider <provider>               Full validation provider. Default: ${DEFAULT_PROVIDER}
@@ -130,6 +137,8 @@ export function parseArgs(argv) {
     npmDistTag: DEFAULT_NPM_DIST_TAG,
     pluginPublishScope: DEFAULT_PLUGIN_SCOPE,
     plugins: "",
+    parallelsRegistryPackageArtifactDirs: [],
+    parallelsRegistryPackageArtifacts: [],
     skipDispatch: false,
     skipLocalGeneratedCheck: false,
     skipParallels: false,
@@ -182,6 +191,9 @@ export function parseArgs(argv) {
         break;
       case "--skip-parallels":
         setOnce(arg, "skipParallels", true);
+        break;
+      case "--parallels-registry-package-artifact":
+        options.parallelsRegistryPackageArtifactDirs.push(requireValue(args, ++index, arg));
         break;
       case "--skip-telegram":
         setOnce(arg, "skipTelegram", true);
@@ -272,6 +284,7 @@ export function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
     encoding: "utf8",
+    env: options.env ? { ...process.env, ...options.env } : process.env,
     maxBuffer: COMMAND_CAPTURE_MAX_BUFFER_BYTES,
     stdio: options.capture ? ["ignore", "pipe", "pipe"] : "inherit",
   });
@@ -294,6 +307,67 @@ function readJson(path, label) {
   }
 }
 
+export function validateParallelsRegistryPackageArtifact(artifactDir, params) {
+  const resolvedDir = resolvePath(artifactDir);
+  const manifestPath = join(resolvedDir, "plugin-publication-manifest.json");
+  const manifest = readJson(manifestPath, "plugin npm preflight manifest");
+  const artifactName = manifest.artifact?.name;
+  const tarballName = manifest.artifact?.tarball;
+  const tarballSha256 = manifest.artifact?.sha256;
+  const packageName = manifest.package?.name;
+  const packageVersion = manifest.package?.version;
+  if (
+    manifest.schema !== "openclaw.plugin-publication-artifact/v1" ||
+    manifest.schemaVersion !== 1 ||
+    manifest.targetSha !== params.targetSha ||
+    !artifactName ||
+    !packageName ||
+    packageVersion !== params.targetVersion ||
+    !tarballName ||
+    tarballName !== basename(tarballName) ||
+    !SHA256_HEX_PATTERN.test(tarballSha256)
+  ) {
+    throw new Error(`plugin npm preflight artifact identity is invalid: ${resolvedDir}`);
+  }
+  const tarballPath = join(resolvedDir, tarballName);
+  const compareFileNames = (left, right) => left.localeCompare(right);
+  const files = readdirSync(resolvedDir).toSorted(compareFileNames);
+  const expectedFiles = [basename(manifestPath), tarballName].toSorted(compareFileNames);
+  if (!isDeepStrictEqual(files, expectedFiles) || !existsSync(tarballPath)) {
+    throw new Error(`plugin npm preflight artifact inventory is invalid: ${resolvedDir}`);
+  }
+  const actualSha256 = sha256(tarballPath);
+  if (actualSha256 !== tarballSha256) {
+    throw new Error(
+      `plugin npm preflight tarball digest mismatch for ${packageName}: expected ${tarballSha256}, got ${actualSha256}`,
+    );
+  }
+  let packedPackage;
+  try {
+    packedPackage = JSON.parse(
+      run("tar", ["-xOf", tarballPath, "package/package.json"], { capture: true }),
+    );
+  } catch (error) {
+    throw new Error(`plugin npm preflight tarball package metadata is invalid: ${tarballPath}`, {
+      cause: error,
+    });
+  }
+  if (packedPackage.name !== packageName || packedPackage.version !== packageVersion) {
+    throw new Error(
+      `plugin npm preflight tarball identity mismatch: manifest=${packageName}@${packageVersion} packed=${packedPackage.name ?? "<missing>"}@${packedPackage.version ?? "<missing>"}`,
+    );
+  }
+  return {
+    artifactDir: resolvedDir,
+    artifactName,
+    manifestPath,
+    packageName,
+    packageVersion,
+    tarballPath,
+    tarballSha256,
+  };
+}
+
 export function buildReleaseCandidateState(options, { targetSha, toolingSha }) {
   return {
     version: RELEASE_CANDIDATE_STATE_VERSION,
@@ -309,6 +383,7 @@ export function buildReleaseCandidateState(options, { targetSha, toolingSha }) {
     npmDistTag: options.npmDistTag,
     pluginPublishScope: options.pluginPublishScope,
     plugins: options.plugins,
+    parallelsRegistryPackageArtifacts: options.parallelsRegistryPackageArtifacts,
     windowsNodeTag: options.windowsNodeTag,
     skipParallels: options.skipParallels,
     skipTelegram: options.skipTelegram,
@@ -391,6 +466,16 @@ export async function githubApi(path, options = {}) {
   const timeoutMs = options.timeoutMs ?? githubApiTimeoutMs();
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_GITHUB_API_RESPONSE_BODY_MAX_BYTES;
   const controller = new AbortController();
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const request = (requestToken) =>
+    fetchImpl(`https://api.github.com/${path}`, {
+      signal: controller.signal,
+      headers: {
+        Accept: "application/vnd.github+json",
+        ...(requestToken ? { Authorization: `Bearer ${requestToken}` } : {}),
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
   let timeout;
   const timeoutPromise = new Promise((_, reject) => {
     timeout = setTimeout(() => {
@@ -400,21 +485,24 @@ export async function githubApi(path, options = {}) {
     timeout.unref?.();
   });
   try {
-    const response = await Promise.race([
-      (options.fetchImpl ?? fetch)(`https://api.github.com/${path}`, {
-        signal: controller.signal,
-        headers: {
-          Accept: "application/vnd.github+json",
-          Authorization: `Bearer ${token}`,
-          "X-GitHub-Api-Version": "2022-11-28",
-        },
-      }),
-      timeoutPromise,
-    ]);
-    const text = await readBoundedResponseText(response, `GitHub API ${path}`, maxBodyBytes, {
+    let response = await Promise.race([request(token), timeoutPromise]);
+    let text = await readBoundedResponseText(response, `GitHub API ${path}`, maxBodyBytes, {
       signal: controller.signal,
       timeoutPromise,
     });
+    const primaryRateLimitExhausted =
+      (response.status === 403 || response.status === 429) &&
+      (/API rate limit exceeded/iu.test(text) ||
+        response.headers.get("x-ratelimit-remaining") === "0");
+    if (primaryRateLimitExhausted) {
+      // Public release evidence remains readable without auth when one maintainer
+      // token is exhausted. Mutating gh commands keep their authenticated path.
+      response = await Promise.race([request(""), timeoutPromise]);
+      text = await readBoundedResponseText(response, `GitHub API ${path}`, maxBodyBytes, {
+        signal: controller.signal,
+        timeoutPromise,
+      });
+    }
     if (!response.ok) {
       throw new Error(`GitHub API ${path} failed with ${response.status}: ${text}`);
     }
@@ -507,7 +595,7 @@ function runFromTrustedTooling(argv, { targetRoot, workflowRef }) {
       [join(toolingRoot, "scripts/release-candidate-checklist.mjs"), ...argv],
       {
         cwd: targetRoot,
-        env: process.env,
+        env: { ...process.env, [TRUSTED_TOOLING_SHA_ENV]: trustedToolingSha },
         stdio: "inherit",
       },
     );
@@ -530,6 +618,21 @@ function runFromTrustedTooling(argv, { targetRoot, workflowRef }) {
       }
     }
     rmSync(tempRoot, { force: true, recursive: true });
+  }
+}
+
+export function isDirectReleaseCandidateExecution(
+  directPath,
+  modulePath,
+  resolveRealPath = realpathSync,
+) {
+  if (!directPath) {
+    return false;
+  }
+  try {
+    return resolveRealPath(directPath) === resolveRealPath(modulePath);
+  } catch {
+    return false;
   }
 }
 
@@ -585,6 +688,49 @@ function gitIsAncestor(ancestor, target) {
       result.stderr?.trim() || result.signal || result.status
     }`,
   );
+}
+
+export function validateTrustedToolingPin({
+  toolingSha,
+  pinnedToolingSha,
+  latestTrustedToolingSha,
+  isAncestor = gitIsAncestor,
+}) {
+  if (!/^[a-f0-9]{40}$/u.test(pinnedToolingSha)) {
+    throw new Error("release candidate trusted tooling pin is missing or invalid");
+  }
+  if (toolingSha !== pinnedToolingSha) {
+    throw new Error(
+      `release candidate tooling HEAD ${toolingSha} does not match pinned tooling ${pinnedToolingSha}`,
+    );
+  }
+  if (
+    pinnedToolingSha !== latestTrustedToolingSha &&
+    !isAncestor(pinnedToolingSha, latestTrustedToolingSha)
+  ) {
+    throw new Error(
+      `pinned release candidate tooling ${pinnedToolingSha} is not reachable from trusted workflow tip ${latestTrustedToolingSha}`,
+    );
+  }
+  return pinnedToolingSha;
+}
+
+export function validateNpmPreflightRunSource({
+  workflowRun,
+  workflowRef,
+  isTrustedWorkflowAncestor = gitIsAncestor,
+}) {
+  const trustedRef = `refs/remotes/origin/${workflowRef}`;
+  if (!isTrustedWorkflowAncestor(workflowRun.headSha, trustedRef)) {
+    throw new Error(
+      `npm preflight workflow SHA ${workflowRun.headSha} is not reachable from trusted ${workflowRef}`,
+    );
+  }
+  return {
+    status: "passed",
+    headSha: workflowRun.headSha,
+    workflowRef,
+  };
 }
 
 function candidateContributionRecordPullRequests(
@@ -804,8 +950,11 @@ export function validateCandidateChangelogProvenance({
 async function runArtifacts(repo, runId) {
   const data = await githubApi(`repos/${repo}/actions/runs/${runId}/artifacts?per_page=100`);
   return (data.artifacts ?? []).map((artifact) => ({
-    name: artifact.name,
+    digest: artifact.digest,
     expired: artifact.expired,
+    id: artifact.id,
+    name: artifact.name,
+    workflowRunId: artifact.workflow_run?.id,
   }));
 }
 
@@ -831,8 +980,14 @@ export function resolveArtifactName(artifacts, preferredName, prefix) {
   );
 }
 
-async function resolveRunArtifactName(repo, runId, preferredName, prefix) {
-  return resolveArtifactName(await runArtifacts(repo, runId), preferredName, prefix);
+async function resolveRunArtifact(repo, runId, preferredName, prefix) {
+  const artifacts = await runArtifacts(repo, runId);
+  const name = resolveArtifactName(artifacts, preferredName, prefix);
+  const artifact = artifacts.find((candidate) => candidate.name === name);
+  if (!artifact) {
+    throw new Error(`resolved artifact ${name} disappeared from run ${runId}`);
+  }
+  return artifact;
 }
 
 function runAndEcho(command, args) {
@@ -1002,9 +1157,9 @@ function downloadArtifact(repo, runId, name, dir) {
 }
 
 async function downloadResolvedArtifact(repo, runId, preferredName, prefix, dir) {
-  const name = await resolveRunArtifactName(repo, runId, preferredName, prefix);
-  downloadArtifact(repo, runId, name, dir);
-  return name;
+  const artifact = await resolveRunArtifact(repo, runId, preferredName, prefix);
+  downloadArtifact(repo, runId, artifact.name, dir);
+  return artifact;
 }
 
 function sha256(path) {
@@ -1117,10 +1272,9 @@ export function validatePreflightManifest(manifest, params) {
   if (!manifest.tarballName || !manifest.tarballSha256) {
     throw new Error("npm preflight manifest missing tarball metadata");
   }
-  if (!Array.isArray(manifest.dependencyTarballs)) {
-    throw new Error("npm preflight manifest missing dependency tarball metadata");
-  }
-  for (const dependency of manifest.dependencyTarballs) {
+  const corePackageTarballs = preflightCorePackageTarballs(manifest);
+  const dependencyTarballs = preflightDependencyTarballs(manifest);
+  for (const dependency of [...corePackageTarballs, ...dependencyTarballs]) {
     if (
       !dependency?.packageName ||
       !dependency.packageVersion ||
@@ -1131,6 +1285,45 @@ export function validatePreflightManifest(manifest, params) {
       throw new Error("npm preflight manifest contains invalid dependency tarball metadata");
     }
   }
+  const corePackageDescriptors = new Set(corePackageTarballs.map(preflightTarballDescriptorKey));
+  for (const dependency of dependencyTarballs) {
+    if (!corePackageDescriptors.has(preflightTarballDescriptorKey(dependency))) {
+      throw new Error(
+        `npm preflight dependency tarball metadata does not match the core package manifest: ${dependency.packageName}`,
+      );
+    }
+  }
+}
+
+function preflightTarballDescriptorKey(tarball) {
+  return JSON.stringify([
+    tarball.packageName,
+    tarball.packageVersion,
+    tarball.tarballName,
+    tarball.tarballSha256,
+  ]);
+}
+
+export function preflightCorePackageTarballs(manifest) {
+  const hasCorePackageTarballs = Object.hasOwn(manifest, "corePackageTarballs");
+  const tarballs = hasCorePackageTarballs
+    ? manifest.corePackageTarballs
+    : manifest.dependencyTarballs;
+  if (!Array.isArray(tarballs)) {
+    throw new Error("npm preflight manifest missing dependency tarball metadata");
+  }
+  return tarballs;
+}
+
+export function preflightDependencyTarballs(manifest) {
+  const hasDependencyTarballs = Object.hasOwn(manifest, "dependencyTarballs");
+  const tarballs = hasDependencyTarballs
+    ? manifest.dependencyTarballs
+    : manifest.corePackageTarballs;
+  if (!Array.isArray(tarballs)) {
+    throw new Error("npm preflight manifest missing dependency tarball metadata");
+  }
+  return tarballs;
 }
 
 export function validateFullManifest(manifest, params) {
@@ -1158,18 +1351,30 @@ export function validateFullManifest(manifest, params) {
       `full validation must record runReleaseSoak=true for ${params.releaseProfile} release candidates`,
     );
   }
-  if (manifest.controls?.performanceBlocking !== true) {
+  if (params.releaseProfile !== "beta" && manifest.controls?.performanceBlocking !== true) {
     throw new Error("full validation manifest must record blocking product performance evidence");
   }
 }
 
-export function candidateParallelsArgs(tarballPath, dependencyTarballPaths = []) {
+export function candidateParallelsArgs(
+  tarballPath,
+  dependencyTarballPaths = [],
+  toolingRoot = TOOLING_ROOT,
+  registryPackageTarballPaths = [],
+  macosSnapshotHint = "",
+) {
   return [
-    "test:parallels:npm-update",
-    "--",
+    "exec",
+    "tsx",
+    join(toolingRoot, "scripts/e2e/parallels/npm-update-smoke.ts"),
     "--target-tarball",
     tarballPath,
     ...dependencyTarballPaths.flatMap((dependency) => ["--dependency-tarball", dependency]),
+    ...registryPackageTarballPaths.flatMap((registryPackage) => [
+      "--registry-package-tarball",
+      registryPackage,
+    ]),
+    ...(macosSnapshotHint ? ["--macos-snapshot-hint", macosSnapshotHint] : []),
     "--json",
   ];
 }
@@ -1178,43 +1383,107 @@ export function candidateParallelsShellCommand(
   tarballPath,
   timeoutBin,
   dependencyTarballPaths = [],
+  registryPackageTarballPaths = [],
+  macosSnapshotHint = "",
 ) {
+  // Login shells can replace the candidate's supported Node with ambient host Node.
+  // Keep the invoking Node first so pnpm and npm use the validated runtime.
+  const nodeBinDir = dirname(process.execPath);
   return [
     'set -a; source "$HOME/.profile" >/dev/null 2>&1 || true; set +a;',
+    `export PATH=${shellQuote(nodeBinDir)}:"$PATH";`,
     "exec",
     shellQuote(timeoutBin),
     "--foreground",
     "150m",
     "pnpm",
-    ...candidateParallelsArgs(tarballPath, dependencyTarballPaths).map(shellQuote),
+    ...candidateParallelsArgs(
+      tarballPath,
+      dependencyTarballPaths,
+      TOOLING_ROOT,
+      registryPackageTarballPaths,
+      macosSnapshotHint,
+    ).map(shellQuote),
   ].join(" ");
 }
 
-async function runParallelsIfNeeded(options, tarballPath, dependencyTarballPaths) {
+async function runParallelsIfNeeded(
+  options,
+  tarballPath,
+  dependencyTarballPaths,
+  registryPackageTarballPaths,
+) {
   if (options.skipParallels) {
     return { status: "skipped", reason: "operator skipped --skip-parallels" };
   }
+  // This function runs inside trusted tooling, not the frozen target checkout.
+  // Prepare its isolated dependencies here before importing the Parallels harness.
+  run("pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"], {
+    cwd: TOOLING_ROOT,
+  });
   const timeoutBin = run("bash", ["-lc", "command -v gtimeout || command -v timeout"], {
     capture: true,
   }).trim();
-  const command = candidateParallelsShellCommand(tarballPath, timeoutBin, dependencyTarballPaths);
-  run("bash", ["-lc", command]);
+  const command = candidateParallelsShellCommand(
+    tarballPath,
+    timeoutBin,
+    dependencyTarballPaths,
+    registryPackageTarballPaths,
+    process.env.OPENCLAW_PARALLELS_MACOS_SNAPSHOT_HINT?.trim() ?? "",
+  );
+  run("bash", ["-lc", command], {
+    env: {
+      OPENCLAW_PARALLELS_ARTIFACT_ROOT: join(process.cwd(), ".artifacts", "parallels"),
+    },
+  });
   return {
     status: "passed",
     command,
   };
 }
 
-async function runTelegramIfNeeded(options, artifactName) {
+export function buildTelegramArtifactInputs({ artifact, manifest, runAttempt, runId, sourceSha }) {
+  const artifactDigest = artifact.digest?.match(/^sha256:([0-9a-f]{64})$/u)?.[1];
+  if (!Number.isInteger(artifact.id) || artifact.id < 1 || !artifactDigest) {
+    throw new Error(`npm preflight artifact ${artifact.name} is missing immutable identity`);
+  }
+  if (String(artifact.workflowRunId) !== String(runId)) {
+    throw new Error(
+      `npm preflight artifact ${artifact.name} belongs to run ${artifact.workflowRunId}, not ${runId}`,
+    );
+  }
+  if (!Number.isInteger(runAttempt) || runAttempt < 1) {
+    throw new Error(`npm preflight run ${runId} has invalid attempt`);
+  }
+  return {
+    package_artifact_digest: artifactDigest,
+    package_artifact_id: artifact.id,
+    package_artifact_name: artifact.name,
+    package_artifact_run_attempt: runAttempt,
+    package_artifact_run_id: runId,
+    package_file_name: manifest.tarballName,
+    package_sha256: manifest.tarballSha256,
+    package_source_sha: sourceSha,
+    package_version: manifest.packageVersion,
+  };
+}
+
+async function runTelegramIfNeeded(options, artifact, manifest, runAttempt, sourceSha) {
   if (options.skipTelegram) {
     return { status: "skipped" };
   }
   const workflowFile = "npm-telegram-beta-e2e.yml";
+  const artifactInputs = buildTelegramArtifactInputs({
+    artifact,
+    manifest,
+    runAttempt,
+    runId: options.npmPreflightRunId,
+    sourceSha,
+  });
   const runId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
     package_spec: `openclaw@${options.tag.replace(/^v/u, "")}`,
     package_label: options.tag,
-    package_artifact_name: artifactName,
-    package_artifact_run_id: options.npmPreflightRunId,
+    ...artifactInputs,
     harness_ref: options.workflowRef,
     provider_mode: options.telegramProviderMode,
   });
@@ -1226,7 +1495,7 @@ async function runTelegramIfNeeded(options, artifactName) {
     status: "passed",
     runId,
     url: runLocal.url,
-    artifactName,
+    artifactName: artifact.name,
     providerMode: options.telegramProviderMode,
   };
 }
@@ -1245,7 +1514,14 @@ async function main() {
   options.outputDir ||= join(".artifacts", "release-candidate", options.tag);
   const targetSha = gitRevParse(`${options.tag}^{}`, targetRoot);
   const toolingSha = gitRevParse("HEAD", TOOLING_ROOT);
-  const trustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT);
+  const latestTrustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT);
+  // The outer process pins a clean main commit before creating this tooling checkout.
+  // A newer main tip must not invalidate that immutable, still-trusted ancestor mid-run.
+  const trustedToolingSha = validateTrustedToolingPin({
+    toolingSha,
+    pinnedToolingSha: process.env[TRUSTED_TOOLING_SHA_ENV] ?? latestTrustedToolingSha,
+    latestTrustedToolingSha,
+  });
   validateCandidateCheckout({
     targetSha,
     targetHeadSha: gitRevParse("HEAD", targetRoot),
@@ -1255,6 +1531,19 @@ async function main() {
     toolingTrackedStatus: gitTrackedStatus(TOOLING_ROOT),
     workflowRef: options.workflowRef,
   });
+  options.parallelsRegistryPackageArtifacts = options.parallelsRegistryPackageArtifactDirs.map(
+    (artifactDir) =>
+      validateParallelsRegistryPackageArtifact(artifactDir, {
+        targetSha,
+        targetVersion: options.tag.replace(/^v/u, ""),
+      }),
+  );
+  const registryPackageNames = new Set(
+    options.parallelsRegistryPackageArtifacts.map((artifact) => artifact.packageName),
+  );
+  if (registryPackageNames.size !== options.parallelsRegistryPackageArtifacts.length) {
+    throw new Error("Parallels registry package artifacts must have unique package names");
+  }
   const statePath = join(options.outputDir, RELEASE_CANDIDATE_STATE_FILE);
   const expectedState = buildReleaseCandidateState(options, { targetSha, toolingSha });
   let candidateState = reconcileReleaseCandidateState(
@@ -1332,19 +1621,21 @@ async function main() {
     workflowName: "OpenClaw NPM Release",
     workflowRef: options.workflowRef,
   });
-  if (npmRun.headSha !== targetSha) {
-    throw new Error(`run SHA mismatch: tag=${targetSha} npm=${npmRun.headSha}`);
-  }
+  const npmPreflightSource = validateNpmPreflightRunSource({
+    workflowRun: npmRun,
+    workflowRef: options.workflowRef,
+  });
 
   const npmDir = join(options.outputDir, "npm-preflight");
   const fullDir = join(options.outputDir, "full-release-validation");
-  const npmArtifactName = await downloadResolvedArtifact(
+  const npmArtifact = await downloadResolvedArtifact(
     options.repo,
     options.npmPreflightRunId,
     `openclaw-npm-preflight-${options.tag}`,
     "openclaw-npm-preflight-",
     npmDir,
   );
+  const npmArtifactName = npmArtifact.name;
   if (!Number.isInteger(fullRun.runAttempt) || fullRun.runAttempt < 1) {
     throw new Error(`Full Release Validation run ${options.fullReleaseRunId} has invalid attempt.`);
   }
@@ -1392,22 +1683,54 @@ async function main() {
       `prepared tarball digest mismatch: expected ${npmManifest.tarballSha256}, got ${actualTarballSha}`,
     );
   }
-  const dependencyTarballPaths = npmManifest.dependencyTarballs.map((dependency) => {
-    const dependencyPath = join(npmDir, dependency.tarballName);
-    if (!existsSync(dependencyPath)) {
-      throw new Error(`prepared dependency tarball missing: ${dependencyPath}`);
-    }
-    const actualDependencySha = sha256(dependencyPath);
-    if (actualDependencySha !== dependency.tarballSha256) {
+  const corePackageTarballPaths = new Map(
+    preflightCorePackageTarballs(npmManifest).map((dependency) => {
+      const dependencyPath = join(npmDir, dependency.tarballName);
+      if (!existsSync(dependencyPath)) {
+        throw new Error(`prepared dependency tarball missing: ${dependencyPath}`);
+      }
+      const actualDependencySha = sha256(dependencyPath);
+      if (actualDependencySha !== dependency.tarballSha256) {
+        throw new Error(
+          `prepared dependency tarball digest mismatch for ${dependency.packageName}: expected ${dependency.tarballSha256}, got ${actualDependencySha}`,
+        );
+      }
+      return [preflightTarballDescriptorKey(dependency), dependencyPath];
+    }),
+  );
+  const dependencyTarballPaths = preflightDependencyTarballs(npmManifest).map((dependency) => {
+    const dependencyPath = corePackageTarballPaths.get(preflightTarballDescriptorKey(dependency));
+    if (!dependencyPath) {
       throw new Error(
-        `prepared dependency tarball digest mismatch for ${dependency.packageName}: expected ${dependency.tarballSha256}, got ${actualDependencySha}`,
+        `prepared dependency tarball is missing from the core package manifest: ${dependency.tarballName}`,
       );
     }
     return dependencyPath;
   });
 
-  const parallels = await runParallelsIfNeeded(options, tarballPath, dependencyTarballPaths);
-  const npmTelegram = await runTelegramIfNeeded(options, npmArtifactName);
+  const revalidatedRegistryArtifacts = options.parallelsRegistryPackageArtifactDirs.map(
+    (artifactDir) =>
+      validateParallelsRegistryPackageArtifact(artifactDir, {
+        targetSha,
+        targetVersion: options.tag.replace(/^v/u, ""),
+      }),
+  );
+  if (!isDeepStrictEqual(revalidatedRegistryArtifacts, options.parallelsRegistryPackageArtifacts)) {
+    throw new Error("Parallels registry package artifacts changed during candidate validation");
+  }
+  const parallels = await runParallelsIfNeeded(
+    options,
+    tarballPath,
+    dependencyTarballPaths,
+    revalidatedRegistryArtifacts.map((artifact) => artifact.tarballPath),
+  );
+  const npmTelegram = await runTelegramIfNeeded(
+    options,
+    npmArtifact,
+    npmManifest,
+    npmRun.runAttempt,
+    targetSha,
+  );
   options.npmTelegramRunId = npmTelegram.runId ?? "";
   const pluginNpmPlan = await collectPluginPlanWithRetry(
     "scripts/plugin-npm-release-plan.ts",
@@ -1435,6 +1758,7 @@ async function main() {
     fullReleaseValidationUrl: fullRun.url,
     fullReleaseValidationControls: fullManifest.controls,
     npmPreflightUrl: npmRun.url,
+    npmPreflightSource,
     artifacts: {
       npmPreflight: npmArtifactName,
       fullReleaseValidation: fullArtifactName,
@@ -1448,6 +1772,7 @@ async function main() {
       path: tarballPath,
     },
     parallels,
+    parallelsRegistryPackageArtifacts: revalidatedRegistryArtifacts,
     npmTelegram,
     pluginNpmPlan,
     pluginClawHubPlan,
@@ -1512,7 +1837,7 @@ async function main() {
   console.log(publishCommand);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isDirectReleaseCandidateExecution(process.argv[1], fileURLToPath(import.meta.url))) {
   await main().catch(
     /** @param {unknown} error */ (error) => {
       console.error(error instanceof Error ? error.message : String(error));

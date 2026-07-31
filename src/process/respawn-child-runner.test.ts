@@ -50,10 +50,41 @@ describe("runRespawnChildWithSignalBridge", () => {
     });
   });
 
+  it.each([
+    { signal: "SIGINT" as const, laterSignal: "SIGTERM" as const, exitCode: 130 },
+    { signal: "SIGTERM" as const, laterSignal: "SIGINT" as const, exitCode: 143 },
+  ])("exits $exitCode when the child exits by forwarded $signal", (testCase) => {
+    const { child } = createChild(2345);
+    const exit = vi.fn();
+    let onSignal: ((signal: NodeJS.Signals) => void) | undefined;
+
+    runRespawnChildWithSignalBridge({
+      command: "/usr/bin/node",
+      args: ["/repo/openclaw/dist/entry.js"],
+      env: {},
+      runtime: {
+        spawn: vi.fn(() => child) as unknown as typeof spawn,
+        attachChildProcessBridge: vi.fn((_child, options) => {
+          onSignal = options?.onSignal;
+          return { detach: vi.fn() };
+        }),
+        exit: exit as unknown as (code?: number) => never,
+      },
+      onError: vi.fn(),
+    });
+
+    onSignal?.(testCase.signal);
+    onSignal?.(testCase.laterSignal);
+    child.emit("exit", null, testCase.signal);
+
+    expect(exit).toHaveBeenCalledWith(testCase.exitCode);
+  });
+
   it("signals detached respawn process groups after forwarded signal grace", () => {
     vi.useFakeTimers();
     const { child, kill } = createChild(2468);
     const spawnChild = vi.fn(() => child);
+    const exit = vi.fn();
     let onSignal: ((signal: NodeJS.Signals) => void) | undefined;
 
     try {
@@ -69,7 +100,7 @@ describe("runRespawnChildWithSignalBridge", () => {
             onSignal = options?.onSignal;
             return { detach: vi.fn() };
           }),
-          exit: vi.fn() as unknown as (code?: number) => never,
+          exit: exit as unknown as (code?: number) => never,
         },
         onError: vi.fn(),
       });
@@ -98,6 +129,7 @@ describe("runRespawnChildWithSignalBridge", () => {
       }
 
       child.emit("exit", null, "SIGKILL");
+      expect(exit).toHaveBeenCalledWith(1);
     } finally {
       vi.useRealTimers();
     }

@@ -1,7 +1,8 @@
 // Telegram plugin module implements bot core behavior.
 import {
+  buildChannelGroupsScopeTree,
   resolveChannelGroupPolicy,
-  resolveChannelGroupRequireMention,
+  resolveScopeRequireMention,
 } from "openclaw/plugin-sdk/channel-policy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -10,6 +11,7 @@ import {
   resolveThreadBindingSpawnPolicy,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage, formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeGroupActivation } from "openclaw/plugin-sdk/group-activation";
 import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
@@ -32,6 +34,7 @@ import {
 } from "./bot-message.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
+  ensureTelegramMessageProcessingResult,
   getTelegramSpooledReplayDeferredParticipant,
   isTelegramSpooledReplayUpdate,
   runWithTelegramUpdateProcessingFrame,
@@ -44,6 +47,7 @@ import { apiThrottler, Bot, sequentialize, type ApiClientOptions } from "./bot.r
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import { setTelegramCallbackQueryAnswerPromise } from "./callback-query-answer-state.js";
+import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
 import {
   asTelegramClientFetch,
   createTelegramClientFetch,
@@ -63,11 +67,6 @@ import { createTelegramSendChatActionHandler } from "./sendchataction-401-backof
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
-export type { TelegramBotOptions } from "./bot.types.js";
-
-export { getTelegramSequentialKey };
-export { resolveTelegramScopedGroupConfig };
-
 type TelegramBotRuntime = {
   Bot: typeof Bot;
   sequentialize: typeof sequentialize;
@@ -80,18 +79,10 @@ const DEFAULT_TELEGRAM_BOT_RUNTIME: TelegramBotRuntime = {
   sequentialize,
   apiThrottler,
 };
-const TELEGRAM_TYPING_COALESCE_MS = 4_000;
-
-let telegramBotRuntimeForTest: TelegramBotRuntime | undefined;
-
-export function setTelegramBotRuntimeForTest(runtime?: TelegramBotRuntime): void {
-  telegramBotRuntimeForTest = runtime;
-}
-
 export function createTelegramBotCore(
   opts: TelegramBotOptions & { telegramDeps: TelegramBotDeps },
 ): TelegramBotInstance {
-  const botRuntime = telegramBotRuntimeForTest ?? DEFAULT_TELEGRAM_BOT_RUNTIME;
+  const botRuntime = DEFAULT_TELEGRAM_BOT_RUNTIME;
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
   const telegramDeps = opts.telegramDeps;
   const cfg = opts.config ?? telegramDeps.getRuntimeConfig();
@@ -130,16 +121,15 @@ export function createTelegramBotCore(
     });
   const finalFetch = createTelegramClientFetch({
     fetchImpl: asTelegramClientFetch(telegramTransport.fetch),
-    timeoutSeconds: telegramCfg?.timeoutSeconds,
     shutdownSignal: opts.fetchAbortSignal,
     transport: telegramTransport,
   });
 
   const timeoutSeconds = resolveTelegramClientTimeoutSeconds({
-    value: telegramCfg?.timeoutSeconds,
+    value: undefined,
     minimum: resolveTelegramClientTimeoutMinimumSeconds([
       opts.minimumClientTimeoutSeconds,
-      resolveTelegramOutboundClientTimeoutFloorSeconds(telegramCfg?.timeoutSeconds),
+      resolveTelegramOutboundClientTimeoutFloorSeconds(undefined),
     ]),
   });
   const apiRoot = normalizeOptionalString(telegramCfg.apiRoot);
@@ -197,6 +187,10 @@ export function createTelegramBotCore(
     try {
       const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
         await next();
+        if (!getTelegramSpooledReplayDeferredParticipant()) {
+          // Accepted synchronous updates need one terminal fact at their middleware owner.
+          ensureTelegramMessageProcessingResult({ kind: "completed" });
+        }
       });
       const deferredWork = getTelegramSpooledReplayDeferredParticipant();
       if (deferredWork) {
@@ -321,11 +315,15 @@ export function createTelegramBotCore(
       if (!getSessionEntry) {
         return undefined;
       }
-      const entry = getSessionEntry({ storePath, sessionKey });
-      if (entry?.groupActivation === "always") {
+      const storedActivation = getSessionEntry({ storePath, sessionKey })?.groupActivation;
+      const activation =
+        storedActivation === "mention" || storedActivation === "always"
+          ? normalizeGroupActivation(storedActivation)
+          : undefined;
+      if (activation === "always") {
         return false;
       }
-      if (entry?.groupActivation === "mention") {
+      if (activation === "mention") {
         return true;
       }
     } catch (err) {
@@ -334,11 +332,9 @@ export function createTelegramBotCore(
     return undefined;
   };
   const resolveGroupRequireMention = (chatId: string | number, turnCfg: OpenClawConfig) =>
-    resolveChannelGroupRequireMention({
-      cfg: turnCfg,
-      channel: "telegram",
-      accountId: account.accountId,
-      groupId: String(chatId),
+    resolveScopeRequireMention({
+      tree: buildChannelGroupsScopeTree(turnCfg, "telegram", account.accountId),
+      path: [String(chatId)],
       requireMentionOverride: opts.requireMention,
       overrideOrder: "after-config",
     });
@@ -362,7 +358,7 @@ export function createTelegramBotCore(
     sendChatActionFn: (chatId, action, threadParams) =>
       bot.api.sendChatAction(chatId, action, threadParams),
     logger: (message) => logVerbose(`telegram: ${message}`),
-    minIntervalMs: TELEGRAM_TYPING_COALESCE_MS,
+    minIntervalMs: TELEGRAM_CHAT_ACTION_INTERVAL_MS,
   });
 
   const processMessage = createTelegramMessageProcessor({

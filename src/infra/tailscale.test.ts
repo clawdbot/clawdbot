@@ -5,12 +5,11 @@ import * as tailscale from "./tailscale.js";
 
 const {
   getTailnetHostname,
-  getTestTailscaleBinaryOverride,
+  getTailnetHostnameAfterServe,
   readTailscaleWhoisIdentity,
   enableTailscaleServe,
   disableTailscaleServe,
   hasTailscaleFunnelRouteForPort,
-  tailscaleFunnelStatusCoversPort,
 } = tailscale;
 const tailscaleBin = "tailscale";
 
@@ -77,6 +76,67 @@ describe("tailscale helpers", () => {
     expect(host).toBe("noisy.tailnet.ts.net");
   });
 
+  it.each([
+    [new Error("Failed to connect to local Tailscale daemon; not running?")],
+    [new Error("failed to connect to local Tailscale service; is Tailscale running?")],
+    [Object.assign(new Error("Command timed out"), { timedOut: true, signal: "SIGTERM" })],
+  ])("retries post-Serve status after a transient failure", async (failure) => {
+    vi.useFakeTimers();
+    const exec = vi
+      .fn()
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          Self: { DNSName: "retry.tailnet.ts.net.", TailscaleIPs: ["100.7.7.7"] },
+        }),
+      });
+
+    const hostPromise = getTailnetHostnameAfterServe(exec);
+    await vi.runAllTimersAsync();
+    const host = await hostPromise;
+
+    expect(host).toBe("retry.tailnet.ts.net");
+    expect(exec).toHaveBeenCalledTimes(2);
+    expectExecCall(exec, 1, tailscaleBin, ["status", "--json"], {
+      timeoutMs: 5000,
+      maxBuffer: 400_000,
+      logOutput: false,
+    });
+    expectExecCall(exec, 2, tailscaleBin, ["status", "--json"], {
+      timeoutMs: 5000,
+      maxBuffer: 400_000,
+      logOutput: false,
+    });
+  });
+
+  it.each([
+    ["missing binary", new Error("spawn tailscale ENOENT")],
+    ["permission failure", new Error("permission denied")],
+  ])("does not retry post-Serve status after a permanent %s", async (_name, failure) => {
+    const exec = vi.fn().mockRejectedValue(failure);
+
+    await expect(getTailnetHostnameAfterServe(exec)).rejects.toThrow(failure.message);
+
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry malformed post-Serve status JSON", async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: "{not json}" });
+
+    await expect(getTailnetHostnameAfterServe(exec)).rejects.toThrow(SyntaxError);
+
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps ordinary hostname lookup single-attempt", async () => {
+    const failure = new Error("Failed to connect to local Tailscale daemon; not running?");
+    const exec = vi.fn().mockRejectedValue(failure);
+
+    await expect(getTailnetHostname(exec, tailscaleBin)).rejects.toThrow(failure.message);
+
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
   it("parses noisy JSON output from tailscale whois", async () => {
     const exec = vi.fn().mockResolvedValue({
       stdout:
@@ -138,22 +198,6 @@ describe("tailscale helpers", () => {
     });
 
     expect(exec).toHaveBeenCalledTimes(2);
-  });
-
-  it("allows the test binary override in explicit test environments", () => {
-    process.env.OPENCLAW_TEST_TAILSCALE_BINARY = "/tmp/test-tailscale";
-    process.env.NODE_ENV = "test";
-    delete process.env.VITEST;
-
-    expect(getTestTailscaleBinaryOverride()).toBe("/tmp/test-tailscale");
-  });
-
-  it("ignores the test binary override outside test environments", () => {
-    process.env.OPENCLAW_TEST_TAILSCALE_BINARY = "/tmp/attacker-tailscale";
-    process.env.NODE_ENV = "production";
-    delete process.env.VITEST;
-
-    expect(getTestTailscaleBinaryOverride()).toBeNull();
   });
 
   it("enableTailscaleServe attempts normal first, then sudo", async () => {
@@ -263,100 +307,47 @@ describe("tailscale helpers", () => {
     await expect(hasTailscaleFunnelRouteForPort(18789, exec)).resolves.toBe(true);
   });
 
+  it.each([
+    { proxy: "http://127.0.0.1:18789", expected: true },
+    { proxy: "http://127.0.0.1:18789/", expected: true },
+    { proxy: "http://127.0.0.1:18789/api", expected: true },
+    { proxy: "http://localhost:18789", expected: true },
+    { proxy: "http://[::1]:18789", expected: true },
+    { proxy: "https+insecure://localhost:18789", expected: true },
+    { proxy: "https+insecure://127.0.0.1:18789/api", expected: true },
+    { proxy: "18789", expected: true },
+    { proxy: "http://127.0.0.1:9000", expected: false },
+    { proxy: "http://10.0.0.5:18789", expected: false },
+    { proxy: "https+insecure://10.0.0.5:18789", expected: false },
+  ])("validates Funnel loopback proxy $proxy", async ({ proxy, expected }) => {
+    const host = "device.tailnet.ts.net:443";
+    const exec = vi.fn().mockResolvedValue({
+      stdout: JSON.stringify({
+        AllowFunnel: { [host]: true },
+        Web: { [host]: { Handlers: { "/": { Proxy: proxy } } } },
+      }),
+    });
+
+    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).resolves.toBe(expected);
+  });
+
+  it("ignores Funnel handlers whose host is not allowed", async () => {
+    const host = "device.tailnet.ts.net:443";
+    const exec = vi.fn().mockResolvedValue({
+      stdout: JSON.stringify({
+        AllowFunnel: { [host]: false },
+        Web: { [host]: { Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } } } },
+      }),
+    });
+
+    await expect(hasTailscaleFunnelRouteForPort(18789, exec)).resolves.toBe(false);
+  });
+
   it("hasTailscaleFunnelRouteForPort preserves malformed status parse failures", async () => {
     const exec = vi.fn().mockResolvedValue({
       stdout: "warning: stale state\n{not json}\n",
     });
 
     await expect(hasTailscaleFunnelRouteForPort(18789, exec)).rejects.toThrow(SyntaxError);
-  });
-});
-
-describe("tailscaleFunnelStatusCoversPort", () => {
-  function buildFunnelStatus(handlers: Record<string, { Proxy?: unknown }>) {
-    const host = "device.tailnet.ts.net:443";
-    return {
-      AllowFunnel: { [host]: true },
-      Web: {
-        [host]: { Handlers: handlers },
-      },
-    } as Record<string, unknown>;
-  }
-
-  it("matches a Funnel route whose Proxy is a full http URL", () => {
-    const status = buildFunnelStatus({ "/": { Proxy: "http://127.0.0.1:18789" } });
-    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(true);
-  });
-
-  it("matches a Proxy URL with a trailing slash", () => {
-    const status = buildFunnelStatus({ "/": { Proxy: "http://127.0.0.1:18789/" } });
-    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(true);
-  });
-
-  it("matches a Proxy URL with a longer path", () => {
-    const status = buildFunnelStatus({ "/api": { Proxy: "http://127.0.0.1:18789/api" } });
-    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(true);
-  });
-
-  it("matches the localhost loopback alias", () => {
-    const status = buildFunnelStatus({ "/": { Proxy: "http://localhost:18789" } });
-    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(true);
-  });
-
-  it("matches an IPv6 loopback Proxy", () => {
-    const status = buildFunnelStatus({ "/": { Proxy: "http://[::1]:18789" } });
-    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(true);
-  });
-
-  it("matches the documented https+insecure target scheme", () => {
-    const status = buildFunnelStatus({
-      "/": { Proxy: "https+insecure://localhost:18789" },
-    });
-    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(true);
-  });
-
-  it("matches https+insecure with a trailing path", () => {
-    const status = buildFunnelStatus({
-      "/api": { Proxy: "https+insecure://127.0.0.1:18789/api" },
-    });
-    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(true);
-  });
-
-  it("does not match https+insecure on a non-loopback host", () => {
-    const status = buildFunnelStatus({
-      "/": { Proxy: "https+insecure://10.0.0.5:18789" },
-    });
-    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(false);
-  });
-
-  it("matches a bare port form", () => {
-    const status = buildFunnelStatus({ "/": { Proxy: "18789" } });
-    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(true);
-  });
-
-  it("does not match a Proxy on a different port", () => {
-    const status = buildFunnelStatus({ "/": { Proxy: "http://127.0.0.1:9000" } });
-    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(false);
-  });
-
-  it("does not match a non-loopback host on the right port", () => {
-    const status = buildFunnelStatus({ "/": { Proxy: "http://10.0.0.5:18789" } });
-    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(false);
-  });
-
-  it("ignores Web entries whose host is not in AllowFunnel", () => {
-    const status = {
-      AllowFunnel: { "device.tailnet.ts.net:443": false },
-      Web: {
-        "device.tailnet.ts.net:443": {
-          Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } },
-        },
-      },
-    } as Record<string, unknown>;
-    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(false);
-  });
-
-  it("returns false on an empty status payload", () => {
-    expect(tailscaleFunnelStatusCoversPort({}, 18789)).toBe(false);
   });
 });

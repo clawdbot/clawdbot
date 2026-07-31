@@ -13,7 +13,6 @@ import {
   deleteSessionEntry,
   listSessionEntries,
   loadTranscriptEventsSync,
-  parseSqliteSessionFileMarker,
   resolveSessionStoreBackupPaths,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -123,10 +122,6 @@ function resolveFeishuAgentSessionsDir(agentId: string): string {
   return path.join(resolveStateDir(), "agents", normalizeAgentId(agentId), "sessions");
 }
 
-function isSqliteTranscriptMarker(value: string): boolean {
-  return parseSqliteSessionFileMarker(value) !== undefined;
-}
-
 function safeReadDir(dir: string): fs.Dirent[] {
   try {
     return fs.readdirSync(dir, { withFileTypes: true });
@@ -171,7 +166,7 @@ function formatFinding(finding: FeishuDoctorFinding): string {
   return exhaustive;
 }
 
-export function isFeishuSessionStoreKey(key: string): boolean {
+function isFeishuSessionStoreKey(key: string): boolean {
   const normalized = key.trim().toLowerCase();
   return /^agent:[^:]+:feishu(?::|$)/.test(normalized) || /^feishu(?::|$)/.test(normalized);
 }
@@ -346,24 +341,6 @@ function resolveSessionTranscriptCandidates(params: {
     return true;
   };
 
-  if (
-    typeof params.entry.sessionId === "string" &&
-    /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(params.entry.sessionId)
-  ) {
-    let addedExplicitCandidate = false;
-    if (typeof params.entry.sessionFile === "string" && params.entry.sessionFile.trim()) {
-      const explicitSessionFile = params.entry.sessionFile.trim();
-      if (isSqliteTranscriptMarker(explicitSessionFile)) {
-        return [];
-      }
-      addedExplicitCandidate = addSafeCandidate(explicitSessionFile);
-    }
-    if (!addedExplicitCandidate) {
-      candidates.add(path.join(sessionsDir, `${params.entry.sessionId}.jsonl`));
-    }
-    return [...candidates].toSorted();
-  }
-
   if (typeof params.entry.sessionFile === "string" && params.entry.sessionFile.trim()) {
     addSafeCandidate(params.entry.sessionFile.trim());
   }
@@ -518,44 +495,33 @@ function inspectSessionTranscript(params: {
   return inspectTranscriptEntries({ ...params, entries, malformedLines });
 }
 
-function inspectSqliteSessionTranscript(params: {
+function inspectCanonicalSessionTranscript(params: {
   agentId: string;
+  sessionId: string;
   sessionKey: string;
   storePath: string;
-  entry: FeishuSessionEntry;
 }): FeishuDoctorFinding | null {
-  if (typeof params.entry.sessionFile !== "string") {
-    return null;
-  }
-  const marker = parseSqliteSessionFileMarker(params.entry.sessionFile);
-  if (!marker) {
-    return null;
-  }
-  const sessionId =
-    typeof params.entry.sessionId === "string" && params.entry.sessionId.trim()
-      ? params.entry.sessionId.trim()
-      : marker.sessionId;
   let entries: unknown[];
   try {
     entries = loadTranscriptEventsSync({
-      agentId: marker.agentId,
-      sessionId,
+      agentId: params.agentId,
+      sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      storePath: marker.storePath,
+      storePath: params.storePath,
     });
   } catch {
     return {
       kind: "invalid-session-transcript",
       sessionKey: params.sessionKey,
       storePath: params.storePath,
-      path: params.entry.sessionFile,
+      path: params.storePath,
       reason: "unreadable",
     };
   }
   return inspectTranscriptEntries({
     sessionKey: params.sessionKey,
     storePath: params.storePath,
-    transcriptPath: params.entry.sessionFile,
+    transcriptPath: params.storePath,
     allowMissingSessionHeader: true,
     entries,
   });
@@ -567,9 +533,15 @@ function collectFeishuSessionFindings(params: {
   storePath: string;
   entry: FeishuSessionEntry;
 }): FeishuDoctorFinding[] {
-  const sqliteFinding = inspectSqliteSessionTranscript(params);
-  if (sqliteFinding) {
-    return [sqliteFinding];
+  const sessionId = typeof params.entry.sessionId === "string" ? params.entry.sessionId.trim() : "";
+  if (sessionId) {
+    const finding = inspectCanonicalSessionTranscript({
+      agentId: params.agentId,
+      sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
+    return finding ? [finding] : [];
   }
   const transcriptCandidates = resolveSessionTranscriptCandidates(params);
   const existing = transcriptCandidates.filter(existsFile);
@@ -935,7 +907,7 @@ function hasConfiguredFeishuChannel(cfg: OpenClawConfig): boolean {
   return Boolean(cfg.channels?.feishu);
 }
 
-export async function runFeishuDoctorSequence(params: {
+async function runFeishuDoctorSequence(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   shouldRepair: boolean;
@@ -973,3 +945,4 @@ export const feishuDoctor: ChannelDoctorAdapter = {
   runConfigSequence: async ({ cfg, env, shouldRepair }) =>
     await runFeishuDoctorSequence({ cfg, env, shouldRepair }),
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

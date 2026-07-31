@@ -4,10 +4,11 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const WORKSPACE_DIRS_ENV = "OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS";
 const REAL_NPM_ENV = "OPENCLAW_OCM_REAL_NPM_BIN";
+const INTERNAL_NPM_BIN_ENV = "OCM_INTERNAL_NPM_BIN";
 const ALLOW_UNRELEASED_CHANGELOG_ENV = "OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG";
 const RUNTIME_BUILD_PROFILE_ENV = "OPENCLAW_OCM_RUNTIME_BUILD_PROFILE";
 const supportedRuntimeBuildProfiles = new Set(["sourcePerformance"]);
@@ -74,6 +75,7 @@ export function resolveNpmEnvironment(args, env = process.env) {
   }
   return {
     ...env,
+    [INTERNAL_NPM_BIN_ENV]: fileURLToPath(import.meta.url),
     [ALLOW_UNRELEASED_CHANGELOG_ENV]: "1",
   };
 }

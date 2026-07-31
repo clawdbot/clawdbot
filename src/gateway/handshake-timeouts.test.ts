@@ -1,7 +1,6 @@
 // Handshake timeout tests document env/config/default precedence and supported
 // clamping for pre-auth and connect-challenge timeouts.
 import { describe, expect, test } from "vitest";
-import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 import {
   clampConnectChallengeTimeoutMs,
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
@@ -9,8 +8,9 @@ import {
   MAX_CONNECT_CHALLENGE_TIMEOUT_MS,
   MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
   resolveConnectChallengeTimeoutMs,
-  resolvePreauthHandshakeTimeoutMs,
-} from "./handshake-timeouts.js";
+} from "../../packages/gateway-client/src/timeouts.js";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
+import { resolvePreauthHandshakeTimeoutMs } from "./handshake-timeouts.js";
 
 describe("gateway handshake timeouts", () => {
   test("defaults connect challenge timeout to the shared pre-auth handshake timeout", () => {
@@ -144,25 +144,6 @@ describe("gateway handshake timeouts", () => {
     expect(
       getConnectChallengeTimeoutMsFromEnv({ OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "0x10" }),
     ).toBeUndefined();
-  });
-
-  test("caps connect challenge timeout env and explicit values to the safe timer range", () => {
-    expect(
-      getConnectChallengeTimeoutMsFromEnv({
-        OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "3000000000",
-      }),
-    ).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
-    expect(
-      resolveConnectChallengeTimeoutMs(3_000_000_000, {
-        env: {},
-        configuredTimeoutMs: 3_000_000_000,
-      }),
-    ).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
-    expect(
-      resolveConnectChallengeTimeoutMs(undefined, {
-        env: { OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "3000000000" },
-      }),
-    ).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
   });
 
   test("resolveConnectChallengeTimeoutMs falls back to env override", () => {

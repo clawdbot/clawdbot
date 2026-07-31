@@ -24,10 +24,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { sendMessage } from "../infra/outbound/message.js";
-import {
-  buildExecApprovalFollowupPrompt,
-  sendExecApprovalFollowup,
-} from "./bash-tools.exec-approval-followup.js";
+import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const tempStoreDirs: string[] = [];
@@ -119,29 +116,43 @@ function expectDirectSend(expected: Record<string, unknown>) {
 }
 
 describe("exec approval followup", () => {
-  it("uses an explicit denial prompt when the command did not run", () => {
-    const prompt = buildExecApprovalFollowupPrompt(
-      "Exec denied (gateway id=req-1, user-denied): uname -a",
-    );
+  it("uses an explicit denial prompt when the command did not run", async () => {
+    await sendExecApprovalFollowup({
+      approvalId: "req-1",
+      sessionKey: "agent:main:main",
+      resultText: "Exec denied (gateway id=req-1, user-denied): uname -a",
+    });
 
+    const prompt = expectGatewayAgentFollowup({ sessionKey: "agent:main:main" }).message;
+    expect(prompt).toBeTypeOf("string");
     expect(prompt).toContain("did not run");
     expect(prompt).toContain("Do not mention, summarize, or reuse output");
     expect(prompt).not.toContain("already approved has completed");
   });
 
-  it("uses the denied followup branch for nested-parentheses denial metadata", () => {
-    const prompt = buildExecApprovalFollowupPrompt(
-      "Exec denied (gateway id=req-1, approval-timeout (allowlist-miss)): uname -a",
-    );
+  it("uses the denied followup branch for nested-parentheses denial metadata", async () => {
+    await sendExecApprovalFollowup({
+      approvalId: "req-1",
+      sessionKey: "agent:main:main",
+      resultText: "Exec denied (gateway id=req-1, approval-timeout (allowlist-miss)): uname -a",
+    });
 
+    const prompt = expectGatewayAgentFollowup({ sessionKey: "agent:main:main" }).message;
+    expect(prompt).toBeTypeOf("string");
     expect(prompt).toContain("did not run");
     expect(prompt).toContain("Do not mention, summarize, or reuse output");
     expect(prompt).not.toContain("already approved has completed");
   });
 
-  it("tells the agent to continue the task before replying when the command succeeds", () => {
-    const prompt = buildExecApprovalFollowupPrompt("Exec finished (gateway id=req-1, code 0)\nok");
+  it("tells the agent to continue the task before replying when the command succeeds", async () => {
+    await sendExecApprovalFollowup({
+      approvalId: "req-1",
+      sessionKey: "agent:main:main",
+      resultText: "Exec finished (gateway id=req-1, code 0)\nok",
+    });
 
+    const prompt = expectGatewayAgentFollowup({ sessionKey: "agent:main:main" }).message;
+    expect(prompt).toBeTypeOf("string");
     expect(prompt).toContain("continue from this result before replying to the user");
     expect(prompt).toContain("Continue the task if needed, then reply to the user");
   });

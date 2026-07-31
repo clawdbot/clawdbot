@@ -117,6 +117,7 @@ describe("local audio selection", () => {
       "sherpa-onnx-offline",
       "whisper-cli",
     ]);
+    expect(selection.entries.flatMap((entry) => entry.args ?? [])).toContain("{{AttachmentPath}}");
 
     recordLocalAudioBackendObservation({
       command: "/custom/bin/whisper-cli",
@@ -167,6 +168,39 @@ describe("local audio selection", () => {
       capableBackend: "metal",
       observedBackend: "metal",
     });
+
+    for (const failedBackend of ["Metal", "MTL0", "CUDA0"]) {
+      expect(
+        recordLocalAudioBackendObservation({
+          command: "whisper-cli",
+          args: ["-m", modelPath, "-otxt", "-of", "{{OutputBase}}", "-nt", "{{MediaPath}}"],
+          output: [
+            `whisper_backend_init_gpu: using ${failedBackend} backend`,
+            `whisper_backend_init_gpu: failed to initialize ${failedBackend} backend`,
+          ].join("\n"),
+        }),
+      ).toBe("cpu");
+      const failedAccelerationSelection = await inspectLocalAudioSelection({
+        env: {
+          WHISPER_CPP_MODEL: modelPath,
+          SHERPA_ONNX_MODEL_DIR: sherpaDir,
+        },
+        platform: "darwin",
+        arch: "arm64",
+        resolveBinary: async (name) =>
+          name === "whisper-cli"
+            ? "/opt/homebrew/bin/whisper-cli"
+            : name === "sherpa-onnx-offline"
+              ? "/usr/local/bin/sherpa-onnx-offline"
+              : null,
+        resolveRealpath: async () => "/opt/homebrew/Cellar/whisper-cpp/1.9.1/bin/whisper-cli",
+        inspectLinkedLibraries: async () => null,
+      });
+      expect(failedAccelerationSelection.selected).toMatchObject({ id: "sherpa-onnx-offline" });
+      expect(
+        failedAccelerationSelection.candidates.find((candidate) => candidate.id === "whisper-cli"),
+      ).toMatchObject({ observedBackend: "cpu" });
+    }
   });
 
   it("reports Parakeet as MLX-capable without treating capability as observation", async () => {

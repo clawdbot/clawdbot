@@ -6,12 +6,11 @@ scenario:
   category: pre-release
   coverage:
     primary:
-      - plugins.kitchen-sink
+      - plugins.tool-plugin-kitchen-sink
     secondary:
-      - plugins.lifecycle
+      - plugins.activation-lifecycle
       - plugins.plugin-tools
-      - models.live-openai
-      - gateway.performance
+      - agent-runtime.hosted-provider-turns
   risk: high
   objective: Verify the external Kitchen Sink plugin can be installed into a qa-lab gateway, expose its major runtime surfaces, and coexist with a live OpenAI provider turn.
   successCriteria:
@@ -119,6 +118,7 @@ flow:
             - - plugins
               - install
               - expr: config.pluginSpec
+              - --force
             - timeoutMs: 180000
         - call: runQaCli
           args:

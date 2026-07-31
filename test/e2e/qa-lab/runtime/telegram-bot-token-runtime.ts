@@ -1,14 +1,18 @@
-// Telegram bot-token runtime evidence starts the real monitor through getMe.
+// Telegram startup evidence launches the real Gateway product path through getMe.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { monitorTelegramProvider } from "../../../../extensions/telegram/runtime-api.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
+import {
+  createOpenClawTestInstance,
+  type OpenClawTestInstance,
+} from "../../../helpers/openclaw-test-instance.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const STARTUP_TIMEOUT_MS = 30_000;
+const LIVE_ACCOUNT_ID = "qa-live";
+const PRODUCT_STARTUP_LOG = `[${LIVE_ACCOUNT_ID}] starting provider (@`;
+const POLLING_STARTUP_LOGS = ["isolated polling ingress started", "polling cycle started"] as const;
 const TOKEN_ENV_KEYS = [
   "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN",
   "TELEGRAM_E2E_SUT_BOT_TOKEN",
@@ -20,18 +24,62 @@ type TelegramRuntimeOptions = {
   startupTimeoutMs: number;
 };
 
-async function waitForMonitorShutdown(monitorPromise: Promise<void>, timeoutMs: number) {
-  let timeout: NodeJS.Timeout | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(new Error("Telegram runtime shutdown timed out")), timeoutMs);
+type TelegramProductStartupInstance = Pick<
+  OpenClawTestInstance,
+  "child" | "cleanup" | "logs" | "startGateway"
+>;
+
+type TelegramRuntimeDependencies = {
+  createInstance: (
+    options: Parameters<typeof createOpenClawTestInstance>[0],
+  ) => Promise<TelegramProductStartupInstance>;
+};
+
+const defaultDependencies: TelegramRuntimeDependencies = {
+  createInstance: createOpenClawTestInstance,
+};
+
+const wait = (durationMs: number) =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, durationMs);
   });
-  try {
-    await Promise.race([monitorPromise.catch(() => undefined), timeoutPromise]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
+
+function sanitizeRuntimeLogs(logs: string, token: string) {
+  if (!token) {
+    return logs;
   }
+  return logs
+    .replaceAll(token, "[REDACTED_TELEGRAM_TOKEN]")
+    .replaceAll(encodeURIComponent(token), "[REDACTED_TELEGRAM_TOKEN]");
+}
+
+async function waitForProductStartup(instance: TelegramProductStartupInstance, timeoutMs: number) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const logs = instance.logs();
+    const productStartupIndex = logs.indexOf(PRODUCT_STARTUP_LOG);
+    const pollingStartupIndex = Math.min(
+      ...POLLING_STARTUP_LOGS.map((marker) => {
+        const index = logs.indexOf(marker);
+        return index < 0 ? Number.POSITIVE_INFINITY : index;
+      }),
+    );
+    if (
+      productStartupIndex >= 0 &&
+      Number.isFinite(pollingStartupIndex) &&
+      pollingStartupIndex > productStartupIndex
+    ) {
+      return;
+    }
+    if (
+      instance.child &&
+      (instance.child.exitCode !== null || instance.child.signalCode !== null)
+    ) {
+      throw new Error("Telegram Gateway stopped before product startup completed");
+    }
+    await wait(50);
+  }
+  throw new Error("Telegram product startup getMe timed out before polling began");
 }
 
 function parseOptions(argv: string[], repoRoot = process.cwd()): TelegramRuntimeOptions {
@@ -71,65 +119,38 @@ function resolveLeasedToken(env: NodeJS.ProcessEnv = process.env) {
 function createWriter(options: TelegramRuntimeOptions) {
   return createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
-    logFileName: "telegram-bot-token.log",
+    logFileName: "telegram-startup-getme-live.log",
     primaryModel: "telegram/bot-api",
     providerMode: "live-frontier",
     repoRoot: options.repoRoot,
     target: {
-      id: "telegram-bot-token",
-      title: "Telegram bot token runtime startup",
+      id: "telegram-startup-getme-live",
+      title: "Telegram product-startup getMe live",
       sourcePath: "test/e2e/qa-lab/runtime/telegram-bot-token-runtime.ts",
-      primaryCoverageIds: ["telegram.startup-getme"],
       docsRefs: ["docs/channels/telegram.md"],
       codeRefs: [
         "test/e2e/qa-lab/runtime/telegram-bot-token-runtime.ts",
+        "extensions/telegram/src/channel.ts",
+        "extensions/telegram/src/probe.ts",
         "extensions/telegram/src/monitor.ts",
-        "extensions/telegram/src/polling-session.ts",
       ],
     },
   });
 }
 
-async function waitForStartup(params: {
-  abortController: AbortController;
-  monitorPromise: Promise<void>;
-  startupPromise: Promise<void>;
-  timeoutMs: number;
-}) {
-  let timeout: NodeJS.Timeout | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(
-      () => reject(new Error("Telegram runtime startup timed out")),
-      params.timeoutMs,
-    );
-  });
-  try {
-    await Promise.race([
-      params.startupPromise,
-      params.monitorPromise.then(() => {
-        throw new Error("Telegram runtime stopped before polling startup");
-      }),
-      timeoutPromise,
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-    params.abortController.abort();
-    await waitForMonitorShutdown(params.monitorPromise, params.timeoutMs);
-  }
-}
-
 export async function runTelegramBotTokenRuntime(
   options: TelegramRuntimeOptions,
   env: NodeJS.ProcessEnv = process.env,
+  dependencies: TelegramRuntimeDependencies = defaultDependencies,
 ) {
   await fs.mkdir(options.artifactBase, { recursive: true });
   const writer = createWriter(options);
   const startedAt = Date.now();
   const credential = resolveLeasedToken(env);
   if (!credential) {
-    writer.appendLog(`telegram-bot-token: blocked; none of ${TOKEN_ENV_KEYS.join(", ")} is set\n`);
+    writer.appendLog(
+      `telegram-startup-getme: blocked; none of ${TOKEN_ENV_KEYS.join(", ")} is set\n`,
+    );
     return await writer.write({
       details: "Telegram runtime proof requires a leased bot token",
       durationMs: Math.max(1, Date.now() - startedAt),
@@ -137,81 +158,80 @@ export async function runTelegramBotTokenRuntime(
     });
   }
 
-  writer.appendLog(`telegram-bot-token: using leased credential from ${credential.key}\n`);
-  const abortController = new AbortController();
-  let markStarted: (() => void) | undefined;
-  const startupPromise = new Promise<void>((resolve) => {
-    markStarted = resolve;
-  });
-  const runtime: RuntimeEnv = {
-    log: (...args) => {
-      const line = args.map(String).join(" ");
-      writer.appendLog(`${line}\n`);
-      if (
-        line.includes("isolated polling ingress started") ||
-        line.includes("polling cycle started")
-      ) {
-        markStarted?.();
-      }
-    },
-    error: (...args) => writer.appendLog(`${args.map(String).join(" ")}\n`),
-    exit: (code) => {
-      throw new Error(`Telegram runtime requested exit ${code}`);
-    },
-  };
-  const config: OpenClawConfig = {
-    channels: { telegram: { enabled: true } },
-  };
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = path.join(options.artifactBase, "state");
+  writer.appendLog(`telegram-startup-getme: using leased credential from ${credential.key}\n`);
+  let instance: TelegramProductStartupInstance | undefined;
   try {
-    const monitorPromise = monitorTelegramProvider({
-      abortSignal: abortController.signal,
-      config,
-      isolatedIngress: { enabled: true },
-      runtime,
-      token: credential.token,
+    instance = await dependencies.createInstance({
+      name: "qa-telegram-startup-getme",
+      config: {
+        channels: {
+          telegram: {
+            enabled: true,
+            defaultAccount: LIVE_ACCOUNT_ID,
+            dmPolicy: "disabled",
+            groupPolicy: "disabled",
+            commands: { native: false, nativeSkills: false },
+            accounts: {
+              [LIVE_ACCOUNT_ID]: {
+                enabled: true,
+                botToken: credential.token,
+              },
+            },
+          },
+        },
+      },
+      env: {
+        OPENCLAW_SKIP_CHANNELS: undefined,
+        OPENCLAW_SKIP_PROVIDERS: undefined,
+        TELEGRAM_BOT_TOKEN: "qa-invalid-precedence-decoy",
+      },
+      startTimeoutMs: options.startupTimeoutMs,
     });
-    await waitForStartup({
-      abortController,
-      monitorPromise,
-      startupPromise,
-      timeoutMs: options.startupTimeoutMs,
-    });
-    writer.appendLog("telegram-bot-token: runtime started after Telegram getMe\n");
+    await instance.startGateway();
+    await waitForProductStartup(instance, options.startupTimeoutMs);
+    writer.appendLog(sanitizeRuntimeLogs(instance.logs(), credential.token));
+    writer.appendLog(
+      "telegram-startup-getme: product startAccount resolved getMe bot identity before polling\n",
+    );
+    await instance.cleanup();
+    instance = undefined;
     return await writer.write({
-      details: `Telegram runtime startup completed with ${credential.key}`,
+      details: `Telegram product-startup getMe completed with ${credential.key}`,
       durationMs: Math.max(1, Date.now() - startedAt),
       status: "pass",
     });
   } catch (error) {
-    const details = formatErrorMessage(error);
-    writer.appendLog(`telegram-bot-token: ${details}\n`);
+    const details = sanitizeRuntimeLogs(formatErrorMessage(error), credential.token);
+    if (instance) {
+      writer.appendLog(sanitizeRuntimeLogs(instance.logs(), credential.token));
+    }
+    writer.appendLog(`telegram-startup-getme: ${details}\n`);
     return await writer.write({
       details,
       durationMs: Math.max(1, Date.now() - startedAt),
       status: "fail",
     });
   } finally {
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
+    await instance?.cleanup().catch(() => undefined);
   }
 }
 
-export const testing = { parseOptions, resolveLeasedToken, waitForMonitorShutdown };
+export const testing = {
+  parseOptions,
+  resolveLeasedToken,
+  sanitizeRuntimeLogs,
+  waitForProductStartup,
+};
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   runTelegramBotTokenRuntime(parseOptions(process.argv.slice(2)))
     .then((evidence) => {
       const status = evidence.entries[0]?.result.status;
-      process.stdout.write(`telegram-bot-token: ${status}\n`);
+      process.stdout.write(`telegram-startup-getme: ${status}\n`);
       process.exitCode = status === "fail" ? 1 : 0;
     })
     .catch((error: unknown) => {
-      process.stderr.write(`telegram-bot-token: ${formatErrorMessage(error)}\n`);
+      process.stderr.write(`telegram-startup-getme: ${formatErrorMessage(error)}\n`);
       process.exitCode = 1;
     });
 }

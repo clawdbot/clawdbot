@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 // Test Skip Inventory reports skipped, conditional, todo, and focused tests.
 
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { collectFilesSync, isCodeFile, toPosixPath } from "./check-file-utils.js";
+import { isCodeFile, isTestRelatedFile, listRepoFilesSync } from "./check-file-utils.js";
 
 type SkipInventoryKind = "alias" | "call";
 type SkipInventoryReason =
@@ -42,16 +41,6 @@ export type TestSkipInventoryReport = {
   };
 };
 
-const DEFAULT_SCAN_ROOTS = ["src", "test", "extensions", "packages", "ui", "scripts"];
-const DEFAULT_SKIPPED_DIR_NAMES = new Set([
-  ".artifacts",
-  ".generated",
-  "coverage",
-  "dist",
-  "fixtures",
-  "node_modules",
-  "vendor",
-]);
 const EMPTY_REASON_COUNTS: Record<SkipInventoryReason, number> = {
   "conditional-skip": 0,
   "explicit-skip": 0,
@@ -65,49 +54,10 @@ const SKIP_METHODS = new Set(["only", "runIf", "skip", "skipIf", "todo"]);
 const TEST_TARGETS = new Set(["describe", "it", "test"]);
 const TRANSPARENT_CHAIN_METHODS = new Set(["concurrent", "each", "sequential"]);
 
-function isTestRelatedFile(relativePath: string): boolean {
-  return (
-    /(?:^|[/.])(?:test|spec)\.[cm]?[jt]sx?$/u.test(relativePath) ||
-    /\.(?:e2e|live)\.test\.[cm]?[jt]sx?$/u.test(relativePath) ||
-    /\.(?:test-helpers|test-utils|test-harness|test-support)\.[cm]?[jt]sx?$/u.test(relativePath) ||
-    /-(?:test-helpers|test-utils|test-harness|test-support)\.[cm]?[jt]sx?$/u.test(relativePath) ||
-    /(?:^|\/)(?:test|tests|test-helpers|test-utils|test-harness|test-support)\//u.test(
-      relativePath,
-    ) ||
-    relativePath.startsWith("scripts/e2e/") ||
-    /^scripts\/.*-(?:client|e2e|harness|probe|smoke)\.[cm]?[jt]s$/u.test(relativePath)
-  );
-}
-
-function listGitFiles(repoRoot: string): string[] | null {
-  try {
-    const stdout = execFileSync("git", ["-C", repoRoot, "ls-files", "--", ...DEFAULT_SCAN_ROOTS], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return stdout.split(/\r?\n/u).filter(Boolean);
-  } catch {
-    return null;
-  }
-}
-
 function listCandidateFiles(repoRoot: string): string[] {
-  const gitFiles = listGitFiles(repoRoot);
-  const relativeFiles =
-    gitFiles ??
-    DEFAULT_SCAN_ROOTS.flatMap((root) => {
-      const absoluteRoot = path.join(repoRoot, root);
-      if (!fs.existsSync(absoluteRoot)) {
-        return [];
-      }
-      return collectFilesSync(absoluteRoot, {
-        includeFile: isCodeFile,
-        skipDirNames: DEFAULT_SKIPPED_DIR_NAMES,
-      }).map((filePath) => toPosixPath(path.relative(repoRoot, filePath)));
-    });
-  return relativeFiles
-    .filter((file) => isCodeFile(file) && isTestRelatedFile(file))
-    .toSorted((left, right) => left.localeCompare(right));
+  return listRepoFilesSync(repoRoot, {
+    includeFile: (file) => isCodeFile(file) && isTestRelatedFile(file),
+  });
 }
 
 function expressionText(sourceFile: ts.SourceFile, node: ts.Node): string {

@@ -2,13 +2,11 @@
  * Test helper for constructing a channel account startup context.
  */
 import { vi } from "vitest";
-import { createRuntimeEnv } from "../testing.js";
-import type {
-  ChannelAccountSnapshot,
-  ChannelGatewayContext,
-  OpenClawConfig,
-  RuntimeEnv,
-} from "../testing.js";
+import type { ChannelGatewayContext } from "../../channels/plugins/types.adapters.js";
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import { createRuntimeEnv } from "../../test-utils/plugin-runtime-env.js";
 
 /** Creates a minimal ChannelGatewayContext with mutable status for startAccount tests. */
 export function createStartAccountContext<TAccount extends { accountId: string }>(params: {

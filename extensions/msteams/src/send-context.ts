@@ -52,7 +52,7 @@ export type MSTeamsProactiveContext = {
   mediaMaxBytes?: number;
 };
 
-export function resolveMSTeamsProactiveReplyStyle(params: {
+function resolveMSTeamsProactiveReplyStyle(params: {
   cfg?: MSTeamsConfig;
   conversationId: string;
   ref: StoredConversationReference;

@@ -217,8 +217,8 @@ const qqbotExecApprovalProfile = createChannelExecApprovalProfile({
 });
 
 export const isQQBotExecApprovalClientEnabled = qqbotExecApprovalProfile.isClientEnabled;
-export const isQQBotExecApprovalApprover = qqbotExecApprovalProfile.isApprover;
-export const isQQBotExecApprovalAuthorizedSender = qqbotExecApprovalProfile.isAuthorizedSender;
+const isQQBotExecApprovalApprover = qqbotExecApprovalProfile.isApprover;
+const isQQBotExecApprovalAuthorizedSender = qqbotExecApprovalProfile.isAuthorizedSender;
 export const shouldHandleQQBotExecApprovalRequest = qqbotExecApprovalProfile.shouldHandleRequest;
 
 export function authorizeQQBotApprovalAction(params: {

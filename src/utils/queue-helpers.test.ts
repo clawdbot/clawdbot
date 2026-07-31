@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   applyQueueDropPolicy,
   applyQueueRuntimeSettings,
-  clearQueueSummaryState,
   countPendingQueueItems,
   drainCollectQueueStep,
   drainNextQueueItem,
@@ -83,17 +82,6 @@ describe("queue summary helpers", () => {
       droppedCount: 2,
       summaryLines: ["first", "second"],
     });
-  });
-
-  it("clearQueueSummaryState resets summary counters", () => {
-    const state = {
-      dropPolicy: "summarize" as const,
-      droppedCount: 5,
-      summaryLines: ["a", "b"],
-    };
-    clearQueueSummaryState(state);
-    expect(state.droppedCount).toBe(0);
-    expect(state.summaryLines).toStrictEqual([]);
   });
 
   it("keeps dropped-item previews free of lone surrogates", () => {

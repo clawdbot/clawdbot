@@ -8,6 +8,17 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../../infra/diagnostic-events.js";
+import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
+import {
+  captureNodeWakeLifecycle,
+  releaseNodeWakeLifecycle,
+  runNodeWakeAttempt,
+  runNodeWakeNudgeAttempt,
+} from "../node-wake-state.js";
+import {
+  getNodeWakeStateSnapshot,
+  resetNodeWakeStateForTest,
+} from "../node-wake-state.test-support.js";
 import { deviceHandlers } from "./devices.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -88,6 +99,9 @@ function createOptions(
         info: vi.fn(),
         warn: vi.fn(),
       },
+      nodeRegistry: {
+        updateSurface: vi.fn(),
+      },
     },
     ...overrides,
   } as unknown as GatewayRequestHandlerOptions;
@@ -145,10 +159,58 @@ function captureSecurityEvents(): {
   return { events, stop };
 }
 
+async function seedNodeWakeState(nodeId: string): Promise<void> {
+  await runNodeWakeAttempt({
+    nodeId,
+    force: true,
+    throttleMs: 60_000,
+    attempt: async (markAttempted) => {
+      markAttempted();
+      return { available: true, throttled: false, path: "sent", durationMs: 1 };
+    },
+  });
+  await runNodeWakeNudgeAttempt({
+    nodeId,
+    throttleMs: 60_000,
+    throttled: () => ({ sent: false, throttled: true, reason: "throttled", durationMs: 0 }),
+    attempt: async () => ({ sent: true, throttled: false, reason: "sent", durationMs: 1 }),
+  });
+}
+
 describe("deviceHandlers", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
+    resetNodeWakeStateForTest();
     vi.clearAllMocks();
+  });
+
+  it("clears and invalidates node runtime state after removing a full device pairing", async () => {
+    const nodeId = "disconnected-node-device";
+    removePairedDeviceMock.mockResolvedValue({ deviceId: nodeId });
+    await seedNodeWakeState(nodeId);
+    enqueueNodePendingWork({ nodeId, type: "location.request" });
+    const wakeLifecycle = captureNodeWakeLifecycle(nodeId);
+    const opts = createOptions("device.pair.remove", { deviceId: nodeId });
+
+    await expectDefined(
+      deviceHandlers["device.pair.remove"],
+      'deviceHandlers["device.pair.remove"] test invariant',
+    )(opts);
+
+    expect(getNodeWakeStateSnapshot(nodeId)).toBeUndefined();
+    expect(wakeLifecycle.aborted).toBe(true);
+    expect(drainNodePendingWork(nodeId).items.map((item) => item.id)).toEqual(["baseline-status"]);
+    const nodeRegistry = opts.context.nodeRegistry as unknown as {
+      updateSurface: ReturnType<typeof vi.fn>;
+    };
+    expect(nodeRegistry.updateSurface).toHaveBeenCalledWith(nodeId, {
+      caps: [],
+      commands: [],
+      permissions: undefined,
+    });
+    expect(opts.context.invalidateClientsForDevice).toHaveBeenCalledWith(nodeId, {
+      reason: "device-pair-removed",
+    });
   });
 
   it("disconnects active clients after removing a paired device", async () => {
@@ -475,6 +537,70 @@ describe("deviceHandlers", () => {
       },
       undefined,
     );
+  });
+
+  it("invalidates an in-flight node wake when the node token rotates", async () => {
+    rotateDeviceTokenMock.mockResolvedValue({
+      ok: true,
+      entry: {
+        token: "new-node-token",
+        role: "node",
+        scopes: [],
+        createdAtMs: 456,
+        rotatedAtMs: 789,
+      },
+    });
+    const lifecycle = captureNodeWakeLifecycle("device-1");
+    const opts = createOptions(
+      "device.token.rotate",
+      { deviceId: "device-1", role: "node" },
+      { client: createClient(["operator.admin"], "admin-device", { isDeviceTokenAuth: true }) },
+    );
+
+    await expectDefined(
+      deviceHandlers["device.token.rotate"],
+      'deviceHandlers["device.token.rotate"] test invariant',
+    )(opts);
+
+    expect(lifecycle.aborted).toBe(true);
+  });
+
+  it("invalidates an in-flight node wake when the node token is revoked", async () => {
+    revokeDeviceTokenMock.mockResolvedValue({
+      ok: true,
+      entry: { role: "node", revokedAtMs: 789 },
+    });
+    const lifecycle = captureNodeWakeLifecycle("device-1");
+    const opts = createOptions(
+      "device.token.revoke",
+      { deviceId: "device-1", role: "node" },
+      { client: createClient(["operator.admin"], "admin-device", { isDeviceTokenAuth: true }) },
+    );
+
+    await expectDefined(
+      deviceHandlers["device.token.revoke"],
+      'deviceHandlers["device.token.revoke"] test invariant',
+    )(opts);
+
+    expect(lifecycle.aborted).toBe(true);
+  });
+
+  it("keeps node wake ownership across unrelated operator token rotation", async () => {
+    mockRotateOperatorTokenSuccess();
+    const lifecycle = captureNodeWakeLifecycle("device-1");
+    const opts = createOptions("device.token.rotate", {
+      deviceId: "device-1",
+      role: "operator",
+      scopes: ["operator.pairing"],
+    });
+
+    await expectDefined(
+      deviceHandlers["device.token.rotate"],
+      'deviceHandlers["device.token.rotate"] test invariant',
+    )(opts);
+
+    expect(lifecycle.aborted).toBe(false);
+    releaseNodeWakeLifecycle("device-1", lifecycle);
   });
 
   it("invalidates affected clients synchronously before responding to device.token.rotate", async () => {
@@ -1054,6 +1180,44 @@ describe("deviceHandlers", () => {
     expect(serialized).not.toContain("pk-2");
   });
 
+  it("retires the previous node generation before returning reapproval success", async () => {
+    approveDevicePairingMock.mockResolvedValue({
+      status: "approved",
+      requestId: "req-node-repair",
+      nodePairingGenerationChanged: true,
+      device: {
+        deviceId: "node-repaired",
+        publicKey: "replacement-key",
+        role: "node",
+        roles: ["node"],
+        approvedAtMs: 200,
+        createdAtMs: 100,
+      },
+    });
+    const lifecycle = captureNodeWakeLifecycle("node-repaired");
+    const opts = createOptions("device.pair.approve", { requestId: "req-node-repair" });
+    const respond = vi.mocked(opts.respond);
+    const invalidate = vi.mocked(opts.context.invalidateClientsForDevice!);
+    const disconnect = vi.mocked(opts.context.disconnectClientsForDevice!);
+    respond.mockImplementation(() => {
+      expect(lifecycle.aborted).toBe(true);
+      expect(invalidate).toHaveBeenCalledWith("node-repaired", {
+        role: "node",
+        reason: "device-pairing-reapproved",
+      });
+      expect(disconnect).not.toHaveBeenCalled();
+    });
+
+    await expectDefined(
+      deviceHandlers["device.pair.approve"],
+      'deviceHandlers["device.pair.approve"] test invariant',
+    )(opts);
+    await Promise.resolve();
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(disconnect).toHaveBeenCalledWith("node-repaired", { role: "node" });
+  });
+
   it("allows approving the caller device from a non-admin device session", async () => {
     getPendingDevicePairingMock.mockResolvedValue({
       requestId: "req-1",
@@ -1464,3 +1628,4 @@ describe("deviceHandlers", () => {
     expect(call[2]?.message).toContain("invalid device.pair.rename params");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

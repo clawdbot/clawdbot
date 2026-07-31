@@ -1,7 +1,7 @@
 // Covers prompt-facing sandbox metadata and full-access availability rules.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as execApprovals from "../infra/exec-approvals.js";
-import { buildEmbeddedSandboxInfo } from "./embedded-agent-runner.js";
+import { buildEmbeddedSandboxInfo } from "./embedded-agent-runner/sandbox-info.js";
 import {
   resolveEmbeddedFullAccessState,
   resolveEmbeddedSandboxInfoExecPolicy,

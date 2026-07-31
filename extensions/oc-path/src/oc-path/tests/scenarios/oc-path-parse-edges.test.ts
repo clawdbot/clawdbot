@@ -1,13 +1,6 @@
 // OC Path tests cover oc path parse edges plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  OcPathError,
-  formatOcPath,
-  getPathLayout,
-  isPattern,
-  isValidOcPath,
-  parseOcPath,
-} from "../../oc-path.js";
+import { OcPathError, formatOcPath, hasWildcard, parseOcPath } from "../../oc-path.js";
 
 function expectErr(fn: () => unknown, code: string): void {
   try {
@@ -106,20 +99,6 @@ describe("oc-path-parse-edges", () => {
     }
   });
 
-  it("isValidOcPath true positives", () => {
-    expect(isValidOcPath("oc://X.md")).toBe(true);
-    expect(isValidOcPath("oc://X.md/sec/item/field")).toBe(true);
-  });
-
-  it("isValidOcPath true negatives", () => {
-    expect(isValidOcPath("")).toBe(false);
-    expect(isValidOcPath("X.md")).toBe(false);
-    expect(isValidOcPath("oc://")).toBe(false);
-    expect(isValidOcPath("oc://x//y")).toBe(false);
-    expect(isValidOcPath(null)).toBe(false);
-    expect(isValidOcPath({})).toBe(false);
-  });
-
   it("file segment with special chars (file with dots/slashes)", () => {
     const p = parseOcPath("oc://config/plugins.entries.foo.token");
     expect(p.file).toBe("config");
@@ -195,19 +174,10 @@ describe("oc-path-parse-edges", () => {
     }
   });
 
-  it("isPattern is quote-aware (literal `*` inside quoted segment)", () => {
+  it("wildcard detection is quote-aware (literal `*` inside quoted segment)", () => {
     const concrete = parseOcPath('oc://config.jsonc/"items.*.glob"');
-    expect(isPattern(concrete)).toBe(false);
+    expect(hasWildcard(concrete)).toBe(false);
     const wildcard = parseOcPath("oc://config.jsonc/items/*");
-    expect(isPattern(wildcard)).toBe(true);
-  });
-
-  it("getPathLayout is quote-aware", () => {
-    const path = parseOcPath('oc://config.jsonc/"github.com"/repos');
-    const layout = getPathLayout(path);
-    expect(layout.sectionLen).toBe(1);
-    expect(layout.subs[0]).toBe('"github.com"');
-    expect(layout.itemLen).toBe(1);
-    expect(layout.subs[1]).toBe("repos");
+    expect(hasWildcard(wildcard)).toBe(true);
   });
 });

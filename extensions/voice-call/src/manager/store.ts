@@ -324,11 +324,6 @@ export function persistCallRecord(storePath: string, call: CallRecord): void {
   }
 }
 
-/** Test hook for older async persistence call sites. */
-export async function flushPendingCallRecordWritesForTest(): Promise<void> {
-  await Promise.resolve();
-}
-
 /** Restore nonterminal active calls and provider/event indexes from persisted records. */
 export function loadActiveCallsFromStore(storePath: string): {
   activeCalls: Map<CallId, CallRecord>;

@@ -22,7 +22,7 @@ import {
   type NodePairingCleanupClaim,
   type RequestNodePairingResult,
 } from "../../../infra/node-pairing.js";
-import { rawDataToString } from "../../../infra/ws.js";
+import { rawDataByteLength, rawDataToString } from "../../../infra/ws.js";
 import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
 import {
   getGatewaySuspendAdmissionPhase,
@@ -186,7 +186,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       return;
     }
 
-    const preauthPayloadBytes = !getClient() ? getRawDataByteLength(data) : undefined;
+    const preauthPayloadBytes = !getClient() ? rawDataByteLength(data) : undefined;
     if (preauthPayloadBytes !== undefined && preauthPayloadBytes > MAX_PREAUTH_PAYLOAD_BYTES) {
       logRejectedLargePayload({
         surface: "gateway.ws.preauth",
@@ -403,7 +403,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
   };
 
   const rejectConnectForClosedAdmission = async (data: RawData): Promise<boolean> => {
-    if (isClosed() || getRawDataByteLength(data) > MAX_PREAUTH_PAYLOAD_BYTES) {
+    if (isClosed() || rawDataByteLength(data) > MAX_PREAUTH_PAYLOAD_BYTES) {
       return false;
     }
     let parsed: unknown;
@@ -477,19 +477,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       handleIncomingMessage(data),
     );
   });
-}
-
-function getRawDataByteLength(data: unknown): number {
-  if (Buffer.isBuffer(data)) {
-    return data.byteLength;
-  }
-  if (Array.isArray(data)) {
-    return data.reduce((total, chunk) => total + chunk.byteLength, 0);
-  }
-  if (data instanceof ArrayBuffer) {
-    return data.byteLength;
-  }
-  return Buffer.byteLength(String(data));
 }
 
 export const testing = {

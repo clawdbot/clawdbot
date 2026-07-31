@@ -16,7 +16,7 @@ Adds agent-callable tools. Adds web search provider support.
 
 ## Surface
 
-contracts: tools, webSearchProviders; skills
+contracts: `tools`, `webSearchProviders`; skills
 
 ## Related docs
 

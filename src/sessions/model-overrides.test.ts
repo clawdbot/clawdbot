@@ -102,9 +102,12 @@ describe("applyModelOverrideToSessionEntry", () => {
         model: "claude-sonnet-4-6",
         contextTokenBudget: 200_000,
       }),
-      fallbackNoticeSelectedModel: "anthropic/claude-sonnet-4-6",
-      fallbackNoticeActiveModel: "anthropic/claude-sonnet-4-6",
-      fallbackNoticeReason: "provider temporary failure",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "anthropic/claude-sonnet-4-6",
+        activeModel: "anthropic/claude-sonnet-4-6",
+        reason: "provider temporary failure",
+      },
     };
 
     const result = applyOpenAiSelection(entry);
@@ -113,10 +116,9 @@ describe("applyModelOverrideToSessionEntry", () => {
     expectRuntimeModelFieldsCleared(entry, before);
     expect(entry.contextTokens).toBeUndefined();
     expect(entry.contextBudgetStatus).toBeUndefined();
-    expect(entry.fallbackNoticeSelectedModel).toBeUndefined();
-    expect(entry.fallbackNoticeActiveModel).toBeUndefined();
-    expect(entry.fallbackNoticeReason).toBeUndefined();
+    expect(entry.fallbackNotice).toBeUndefined();
     expect(entry.modelOverrideSource).toBe("user");
+    expect(entry.modelOverrideRouteResolution).toBe("resolved");
   });
 
   it("clears stale runtime model fields even when override selection is unchanged", () => {
@@ -187,6 +189,7 @@ describe("applyModelOverrideToSessionEntry", () => {
       updatedAt: before,
       providerOverride: "local",
       modelOverride: "sunapi386/llama-3-lexi-uncensored:8b",
+      modelOverrideRouteResolution: "resolved",
       contextTokens: 4_096,
       contextBudgetStatus: contextBudgetStatus({
         updatedAt: before,
@@ -209,6 +212,7 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.providerOverride).toBeUndefined();
     expect(entry.modelOverride).toBeUndefined();
     expect(entry.modelOverrideSource).toBeUndefined();
+    expect(entry.modelOverrideRouteResolution).toBeUndefined();
     expect(entry.contextTokens).toBeUndefined();
     expect(entry.contextBudgetStatus).toBeUndefined();
     expect((entry.updatedAt ?? 0) > before).toBe(true);
@@ -266,6 +270,7 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.providerOverride).toBe("anthropic");
     expect(entry.modelOverride).toBe("claude-sonnet-4-6");
     expect(entry.modelOverrideSource).toBe("auto");
+    expect(entry.modelOverrideRouteResolution).toBe("resolved");
   });
 
   it("sets liveModelSwitchPending only when explicitly requested", () => {

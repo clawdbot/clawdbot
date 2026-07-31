@@ -43,7 +43,7 @@ OpenClaw supports Brave Search API as a `web_search` provider.
 }
 ```
 
-Provider-specific Brave search settings live under `plugins.entries.brave.config.webSearch.*`; this is the canonical config path. A shared top-level `tools.web.search.apiKey` and a scoped `tools.web.search.brave.*` still load through a compatibility merge, but new config should use the plugin-scoped path above.
+Provider-specific Brave search settings live under `plugins.entries.brave.config.webSearch.*`; this is the canonical config path.
 
 `webSearch.mode` controls the Brave transport:
 

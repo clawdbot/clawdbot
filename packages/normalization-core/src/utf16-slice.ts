@@ -12,6 +12,20 @@ function isLowSurrogate(codeUnit: number): boolean {
   return codeUnit >= 0xdc00 && codeUnit <= 0xdfff;
 }
 
+/** Moves a chunk boundary away from the middle of a UTF-16 surrogate pair. */
+export function avoidTrailingHighSurrogateBreak(text: string, start: number, end: number): number {
+  if (
+    end <= start ||
+    end >= text.length ||
+    !isHighSurrogate(text.charCodeAt(end - 1)) ||
+    !isLowSurrogate(text.charCodeAt(end))
+  ) {
+    return end;
+  }
+  const adjusted = end - 1;
+  return adjusted > start ? adjusted : end + 1;
+}
+
 /** Slices a UTF-16 string without returning dangling surrogate halves at either edge. */
 export function sliceUtf16Safe(input: string, start: number, end?: number): string {
   const len = input.length;

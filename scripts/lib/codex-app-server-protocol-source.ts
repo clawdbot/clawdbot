@@ -20,7 +20,7 @@ export const selectedCodexAppServerJsonSchemas = [
   "v2/TurnStartResponse.json",
 ] as const;
 
-export type GeneratedCodexAppServerProtocolSource = {
+type GeneratedCodexAppServerProtocolSource = {
   root: string;
   codexRepo: string;
   typescriptRoot: string;

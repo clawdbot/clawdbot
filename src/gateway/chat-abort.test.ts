@@ -16,6 +16,7 @@ import {
   resolveInFlightRunSnapshot,
   updateChatRunProvider,
 } from "./chat-abort.js";
+import { createChatRunState, type ChatRunPlanSnapshot } from "./server-chat-state.js";
 
 type ChatAbortPayload = {
   runId: string;
@@ -36,13 +37,6 @@ type CreatedChatAbortOps = ChatAbortOps & {
   broadcast: ReturnType<typeof vi.fn>;
   nodeSendToSession: ReturnType<typeof vi.fn>;
   removeChatRun: ReturnType<typeof vi.fn>;
-  clearedState: {
-    chatDeltaSentAt: Map<string, number>;
-    chatDeltaLastBroadcastLen: Map<string, number>;
-    chatDeltaLastBroadcastText: Map<string, string>;
-    agentDeltaSentAt: Map<string, number>;
-    bufferedAgentEvents: Map<string, unknown>;
-  };
 };
 
 afterEach(() => {
@@ -69,51 +63,34 @@ function createOps(params: {
   const broadcast = vi.fn();
   const nodeSendToSession = vi.fn();
   const removeChatRun = vi.fn();
-  const chatRunBuffers = new Map(buffer !== undefined ? [[runId, buffer]] : []);
-  const chatDeltaSentAt = new Map([[runId, Date.now()]]);
-  const chatDeltaLastBroadcastLen = new Map([[runId, buffer?.length ?? 0]]);
-  const chatDeltaLastBroadcastText = new Map(buffer !== undefined ? [[runId, buffer]] : []);
-  const agentDeltaSentAt = new Map([[`${runId}:assistant`, Date.now()]]);
-  const bufferedAgentEvents = new Map<string, unknown>([
-    [
-      `${runId}:assistant`,
-      {
-        payload: {
-          runId,
-          seq: 1,
-          stream: "assistant",
-          ts: Date.now(),
-          data: { text: "buffer", delta: "buffer" },
+  const chatRunState = createChatRunState();
+  Object.assign(chatRunState.getOrCreate(runId), {
+    ...(buffer !== undefined ? { buffer, deltaLastBroadcastText: buffer } : {}),
+    deltaSentAt: Date.now(),
+    deltaLastBroadcastLen: buffer?.length ?? 0,
+    agentText: {
+      assistant: {
+        lastSentAt: Date.now(),
+        bufferedEvent: {
+          payload: {
+            runId,
+            seq: 1,
+            stream: "assistant",
+            ts: Date.now(),
+            data: { text: "buffer", delta: "buffer" },
+          },
         },
       },
-    ],
-  ]);
+    },
+  });
 
   return {
     chatAbortControllers: new Map([[runId, entry]]),
-    chatRunBuffers,
-    chatAbortedRuns: new Map(),
-    clearChatRunState: (id: string) => {
-      chatRunBuffers.delete(id);
-      chatDeltaSentAt.delete(id);
-      chatDeltaLastBroadcastLen.delete(id);
-      chatDeltaLastBroadcastText.delete(id);
-      for (const key of [id, `${id}:assistant`, `${id}:thinking`]) {
-        agentDeltaSentAt.delete(key);
-        bufferedAgentEvents.delete(key);
-      }
-    },
+    chatRunState,
     removeChatRun,
     agentRunSeq: new Map(),
     broadcast,
     nodeSendToSession,
-    clearedState: {
-      chatDeltaSentAt,
-      chatDeltaLastBroadcastLen,
-      chatDeltaLastBroadcastText,
-      agentDeltaSentAt,
-      bufferedAgentEvents,
-    },
   };
 }
 
@@ -308,6 +285,23 @@ describe("registerChatAbortController", () => {
 });
 
 describe("abortChatRunById", () => {
+  it("notifies the run-bound approval owner only after an active run abort wins", () => {
+    const { runId, sessionKey, ops } = createAbortRunFixture({});
+    const onRunAborted = vi.fn();
+    ops.onRunAborted = onRunAborted;
+
+    expect(abortChatRunById(ops, { runId: "other-run", sessionKey })).toEqual({
+      aborted: false,
+    });
+    expect(onRunAborted).not.toHaveBeenCalled();
+
+    expect(abortChatRunById(ops, { runId, sessionKey, stopReason: "user" })).toEqual({
+      aborted: true,
+    });
+    expect(onRunAborted).toHaveBeenCalledOnce();
+    expect(onRunAborted).toHaveBeenCalledWith(runId);
+  });
+
   it("retains terminal persistence ownership observed during abort", () => {
     const { runId, sessionKey, entry, ops } = createAbortRunFixture({});
     let terminalEvents = 0;
@@ -354,12 +348,11 @@ describe("abortChatRunById", () => {
     const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "user" });
 
     expectRunAborted({ result, entry, ops, runId });
-    expect(ops.chatRunBuffers.has(runId)).toBe(false);
-    expect(ops.clearedState.chatDeltaSentAt.has(runId)).toBe(false);
-    expect(ops.clearedState.chatDeltaLastBroadcastLen.has(runId)).toBe(false);
-    expect(ops.clearedState.chatDeltaLastBroadcastText.has(runId)).toBe(false);
-    expect(ops.clearedState.agentDeltaSentAt.has(`${runId}:assistant`)).toBe(false);
-    expect(ops.clearedState.bufferedAgentEvents.has(`${runId}:assistant`)).toBe(false);
+    expect(ops.chatRunState.runs.get(runId)?.buffer).toBeUndefined();
+    expect(ops.chatRunState.runs.get(runId)?.deltaSentAt).toBeUndefined();
+    expect(ops.chatRunState.runs.get(runId)?.deltaLastBroadcastLen).toBeUndefined();
+    expect(ops.chatRunState.runs.get(runId)?.deltaLastBroadcastText).toBeUndefined();
+    expect(ops.chatRunState.runs.get(runId)?.agentText).toBeUndefined();
     expect(ops.removeChatRun).toHaveBeenCalledWith(runId, runId, sessionKey);
     expect(ops.agentRunSeq.has(runId)).toBe(false);
     expect(ops.agentRunSeq.has("client-run-1")).toBe(false);
@@ -426,8 +419,8 @@ describe("abortChatRunById", () => {
     expect(result).toEqual({ aborted: false });
     expect(entry.controller.signal.aborted).toBe(false);
     expect(ops.chatAbortControllers.get(runId)).toBe(entry);
-    expect(ops.chatRunBuffers.get(runId)).toBe("completed reply");
-    expect(ops.chatAbortedRuns.has(runId)).toBe(false);
+    expect(ops.chatRunState.runs.get(runId)?.buffer).toBe("completed reply");
+    expect(ops.chatRunState.runs.get(runId)?.abortMarker).toBeUndefined();
     expect(ops.removeChatRun).not.toHaveBeenCalled();
     expect(ops.broadcast).not.toHaveBeenCalled();
     expect(ops.nodeSendToSession).not.toHaveBeenCalled();
@@ -511,7 +504,7 @@ describe("abortChatRunById", () => {
 
     // Simulate synchronous cleanup triggered by AbortController listeners.
     entry.controller.signal.addEventListener("abort", () => {
-      ops.chatRunBuffers.delete(runId);
+      delete ops.chatRunState.runs.get(runId)?.buffer;
     });
 
     const result = abortChatRunById(ops, { runId, sessionKey });
@@ -548,6 +541,7 @@ describe("abortChatRunsForProvider", () => {
       authProviderId: "openrouter",
     });
     const result = abortChatRunsForProvider(ops, {
+      cfg: {},
       providerId: "openrouter",
       stopReason: "auth-revoked",
     });
@@ -562,7 +556,28 @@ describe("abortChatRunsForProvider", () => {
         state: "aborted",
         stopReason: "auth-revoked",
       }),
+      { sessionKeys: [sessionKey] },
     );
+  });
+
+  it("derives missing entry agent ids from canonical session keys", () => {
+    const writerEntry = createActiveEntry("agent:writer:main");
+    writerEntry.providerId = "openrouter";
+    const mainEntry = createActiveEntry("agent:main:main");
+    mainEntry.providerId = "openrouter";
+    const ops = createOps({ runId: "run-writer", entry: writerEntry });
+    ops.chatAbortControllers.set("run-main", mainEntry);
+
+    const result = abortChatRunsForProvider(ops, {
+      cfg: { agents: { list: [{ id: "main", default: true }, { id: "writer" }] } },
+      providerId: "openrouter",
+      agentId: "writer",
+      stopReason: "auth-revoked",
+    });
+
+    expect(result.runIds).toEqual(["run-writer"]);
+    expect(writerEntry.controller.signal.aborted).toBe(true);
+    expect(mainEntry.controller.signal.aborted).toBe(false);
   });
 });
 
@@ -602,19 +617,28 @@ describe("resolveInFlightRunSnapshot", () => {
   const snap = (p: {
     chatAbortControllers: Map<string, ChatAbortControllerEntry>;
     chatRunBuffers: Map<string, string>;
+    chatRunPlanSnapshots?: Map<string, ChatRunPlanSnapshot>;
     sessionKey: string;
     canonicalSessionKey?: string;
     agentId?: string;
     defaultAgentId?: string;
-  }) =>
-    resolveInFlightRunSnapshot({
+  }) => {
+    const chatRunState = createChatRunState();
+    for (const [runId, buffer] of p.chatRunBuffers ?? []) {
+      chatRunState.getOrCreate(runId).buffer = buffer;
+    }
+    for (const [runId, plan] of p.chatRunPlanSnapshots ?? []) {
+      chatRunState.getOrCreate(runId).planSnapshot = plan;
+    }
+    return resolveInFlightRunSnapshot({
       chatAbortControllers: p.chatAbortControllers,
-      chatRunBuffers: p.chatRunBuffers,
+      chatRunState,
       requestedSessionKey: p.sessionKey,
       canonicalSessionKey: p.canonicalSessionKey ?? p.sessionKey,
       agentId: p.agentId,
       defaultAgentId: p.defaultAgentId,
     });
+  };
 
   it("returns the live assistant text of a matching active run", () => {
     const result = snap({
@@ -623,6 +647,32 @@ describe("resolveInFlightRunSnapshot", () => {
       sessionKey: "agent:main:tui-x",
     });
     expect(result).toEqual({ runId: "run-1", text: "partial answer so far" });
+  });
+
+  it("returns the active run plan snapshot with buffered text", () => {
+    const plan = {
+      explanation: "Current work",
+      steps: [{ step: "Implement replay", status: "in_progress" as const }],
+    };
+    expect(
+      snap({
+        chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:s")]]),
+        chatRunBuffers: new Map([["run-1", "partial"]]),
+        chatRunPlanSnapshots: new Map([["run-1", plan]]),
+        sessionKey: "agent:main:s",
+      }),
+    ).toEqual({ runId: "run-1", text: "partial", plan });
+  });
+
+  it("returns an explicit empty plan snapshot for dismissal", () => {
+    expect(
+      snap({
+        chatAbortControllers: new Map([["run-1", inFlightEntry("agent:main:s")]]),
+        chatRunBuffers: new Map(),
+        chatRunPlanSnapshots: new Map([["run-1", { steps: [] }]]),
+        sessionKey: "agent:main:s",
+      }),
+    ).toEqual({ runId: "run-1", text: "", plan: { steps: [] } });
   });
 
   it("is a no-op when chatAbortControllers is not a Map (unpopulated context)", () => {
@@ -807,23 +857,63 @@ describe("resolveInFlightRunSnapshot", () => {
     ).toEqual({ runId: "run-b", text: "b" });
   });
 
-  it("keeps in-flight text when it fits the chat history budget", () => {
+  it("keeps in-flight text and plan when they fit the chat history budget", () => {
+    const plan = {
+      steps: [{ step: "Keep this", status: "pending" as const }],
+    };
     expect(
       boundInFlightRunSnapshotForChatHistory({
-        snapshot: { runId: "run-1", text: "partial" },
+        snapshot: { runId: "run-1", text: "partial", plan },
         messages: [],
         maxBytes: 1_000,
       }),
-    ).toEqual({ runId: "run-1", text: "partial" });
+    ).toEqual({ runId: "run-1", text: "partial", plan });
   });
 
   it("drops oversized in-flight text but keeps the run id for adoption", () => {
+    const plan = {
+      steps: [{ step: "Keep this", status: "pending" as const }],
+    };
     expect(
       boundInFlightRunSnapshotForChatHistory({
-        snapshot: { runId: "run-1", text: "x".repeat(1_000) },
+        snapshot: { runId: "run-1", text: "x".repeat(1_000), plan },
         messages: [],
-        maxBytes: 100,
+        maxBytes: 200,
       }),
-    ).toEqual({ runId: "run-1", text: "" });
+    ).toEqual({ runId: "run-1", text: "", plan });
+  });
+
+  it("drops an oversized plan after dropping text", () => {
+    expect(
+      boundInFlightRunSnapshotForChatHistory({
+        snapshot: {
+          runId: "run-1",
+          text: "",
+          plan: {
+            steps: [{ step: "x".repeat(500), status: "pending" }],
+          },
+        },
+        messages: [{ role: "user", content: "near budget" }],
+        maxBytes: 160,
+      }),
+    ).toEqual({ runId: "run-1", text: "", plan: { steps: [] } });
+  });
+
+  it("keeps small buffered text and clears an oversized plan explicitly", () => {
+    // Absence means legacy-gateway unknown to clients; a budget drop must send
+    // an explicit empty plan so retained stale checklists cannot survive.
+    expect(
+      boundInFlightRunSnapshotForChatHistory({
+        snapshot: {
+          runId: "run-1",
+          text: "short answer",
+          plan: {
+            steps: [{ step: "x".repeat(500), status: "pending" }],
+          },
+        },
+        messages: [],
+        maxBytes: 200,
+      }),
+    ).toEqual({ runId: "run-1", text: "short answer", plan: { steps: [] } });
   });
 });

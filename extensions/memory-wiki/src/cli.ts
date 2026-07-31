@@ -484,7 +484,7 @@ function addWikiApplyMutationOptions<T extends Command>(command: T): T {
     .option("--status <status>", "Page status");
 }
 
-export async function runWikiStatus(params: {
+async function runWikiStatus(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   agentId?: string;
@@ -509,7 +509,7 @@ export async function runWikiStatus(params: {
   return status;
 }
 
-export async function runWikiDoctor(params: {
+async function runWikiDoctor(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   agentId?: string;
@@ -608,7 +608,7 @@ async function runWikiIngest(params: {
   });
 }
 
-export async function runWikiOkfImport(params: {
+async function runWikiOkfImport(params: {
   config: ResolvedMemoryWikiConfig;
   bundlePath: string;
   json?: boolean;
@@ -777,7 +777,7 @@ async function runWikiApplyMetadata(params: {
   return result;
 }
 
-export async function runWikiBridgeImport(params: {
+async function runWikiBridgeImport(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
   agentId?: string;
@@ -915,13 +915,17 @@ function formatChatGptImportSummary(result: ChatGptImportResult): string {
 }
 
 function formatChatGptRollbackSummary(result: ChatGptRollbackResult): string {
+  const preservedNote =
+    result.preservedPaths.length > 0
+      ? ` Preserved ${result.preservedPaths.length} page${result.preservedPaths.length === 1 ? "" : "s"} edited after import: ${result.preservedPaths.map((entry) => entry.recoveryPath).join(", ")}.`
+      : "";
   if (result.alreadyRolledBack) {
-    return `ChatGPT import run ${result.runId} was already rolled back.`;
+    return `ChatGPT import run ${result.runId} was already rolled back.${preservedNote}`;
   }
-  return `Rolled back ChatGPT import run ${result.runId} (${result.removedCount} removed, ${result.restoredCount} restored). Refreshed ${result.indexUpdatedFiles.length} index file${result.indexUpdatedFiles.length === 1 ? "" : "s"}.`;
+  return `Rolled back ChatGPT import run ${result.runId} (${result.removedCount} removed, ${result.restoredCount} restored).${preservedNote} Refreshed ${result.indexUpdatedFiles.length} index file${result.indexUpdatedFiles.length === 1 ? "" : "s"}.`;
 }
 
-export async function runWikiChatGptImport(params: {
+async function runWikiChatGptImport(params: {
   config: ResolvedMemoryWikiConfig;
   exportPath: string;
   dryRun?: boolean;
@@ -941,7 +945,7 @@ export async function runWikiChatGptImport(params: {
   });
 }
 
-export async function runWikiChatGptRollback(params: {
+async function runWikiChatGptRollback(params: {
   config: ResolvedMemoryWikiConfig;
   runId: string;
   json?: boolean;
@@ -1265,3 +1269,4 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
       await runWikiObsidianDailyCli({ config, json: opts.json });
     });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

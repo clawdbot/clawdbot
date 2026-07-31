@@ -5,11 +5,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildQaConfidenceReport,
-  buildQaConfidenceSelfTestSummary,
   renderQaConfidenceMarkdownReport,
   writeQaConfidenceSelfTestArtifacts,
-  type QaConfidenceManifest,
 } from "./confidence-report.js";
+
+type QaConfidenceManifest = Parameters<typeof buildQaConfidenceReport>[0]["manifest"];
 
 describe("qa confidence report", () => {
   let tempRoot: string;
@@ -130,6 +130,32 @@ describe("qa confidence report", () => {
     expect(report.counts).toMatchObject({ total: 1, passed: 1, unknown: 0 });
     expect(report.failures).toEqual([]);
     expect(report.lanes[1]).toMatchObject({ id: "optional-missing", status: "missing" });
+  });
+
+  it("escapes backslashes before Markdown table delimiters", async () => {
+    const report = await buildQaConfidenceReport({
+      manifest: {
+        version: 1,
+        profile: "codex-100",
+        lanes: [
+          {
+            id: "missing",
+            title: "Missing",
+            kind: "qa-suite-summary",
+            artifact: "missing/qa-suite-summary.json",
+            required: true,
+            missingVerdict: "environment-blocked",
+            missingReason: String.raw`path\|fallback unavailable`,
+          },
+        ],
+      },
+      artifactRoot: tempRoot,
+      generatedAt: "2026-05-13T00:00:00.000Z",
+    });
+
+    expect(renderQaConfidenceMarkdownReport(report)).toContain(
+      String.raw`path\\\|fallback unavailable`,
+    );
   });
 
   it("fails strict global pass when any lane is blocked, missing, unknown, or classified failed", async () => {
@@ -544,8 +570,9 @@ describe("qa confidence report", () => {
             scenarioId: "plugin-hook-health-sentinel",
             drift: "none",
             cells: {
-              pi: { sentinelFindings: [] },
+              openclaw: { status: "pass", sentinelFindings: [] },
               codex: {
+                status: "pass",
                 sentinelFindings: [
                   {
                     kind: "plugin-hook-failure",
@@ -949,7 +976,10 @@ describe("qa confidence report", () => {
   });
 
   it("emits confidence self-test canaries for every drift class we need to catch", async () => {
-    const summary = await buildQaConfidenceSelfTestSummary("2026-05-12T00:00:00.000Z");
+    const { summary } = await writeQaConfidenceSelfTestArtifacts({
+      outputDir: tempRoot,
+      generatedAt: "2026-05-12T00:00:00.000Z",
+    });
 
     expect(summary.pass).toBe(true);
     expect(summary.canaries.map((canary) => canary.id)).toEqual([

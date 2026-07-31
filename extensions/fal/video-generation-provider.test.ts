@@ -4,10 +4,8 @@ import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  setFalVideoFetchGuardForTesting,
-  buildFalVideoGenerationProvider,
-} from "./video-generation-provider.js";
+import { setFalVideoFetchGuardForTesting } from "./test-support.js";
+import { buildFalVideoGenerationProvider } from "./video-generation-provider.js";
 
 function createMockRequestConfig() {
   return {} as ReturnType<typeof providerHttp.resolveProviderHttpRequestConfig>["requestConfig"];

@@ -205,7 +205,6 @@ describe("generateToolCallTitles", () => {
       agentId: AGENT_ID,
       modelRef: "openai/gpt-test",
       preferredProfile: undefined,
-      useAsyncModelResolution: true,
       allowMissingApiKeyModes: ["aws-sdk"],
     });
   });

@@ -8,14 +8,7 @@ import {
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import {
-  DEFAULT_WIKI_RENDER_MODE,
-  DEFAULT_WIKI_SEARCH_BACKEND,
-  DEFAULT_WIKI_SEARCH_CORPUS,
-  DEFAULT_WIKI_VAULT_MODE,
-  DEFAULT_WIKI_VAULT_SCOPE,
   memoryWikiConfigSchema,
-  resolveDefaultMemoryWikiVaultPath,
-  resolveDefaultMemoryWikiVaultRoot,
   resolveMemoryWikiAgentConfig,
   resolveMemoryWikiConfig,
 } from "./config.js";
@@ -37,12 +30,12 @@ describe("resolveMemoryWikiConfig", () => {
   it("returns isolated defaults", () => {
     const config = resolveMemoryWikiConfig(undefined, { homedir: "/Users/tester" });
 
-    expect(config.vaultMode).toBe(DEFAULT_WIKI_VAULT_MODE);
-    expect(config.vault.scope).toBe(DEFAULT_WIKI_VAULT_SCOPE);
-    expect(config.vault.renderMode).toBe(DEFAULT_WIKI_RENDER_MODE);
-    expect(config.vault.path).toBe(resolveDefaultMemoryWikiVaultPath("/Users/tester"));
-    expect(config.search.backend).toBe(DEFAULT_WIKI_SEARCH_BACKEND);
-    expect(config.search.corpus).toBe(DEFAULT_WIKI_SEARCH_CORPUS);
+    expect(config.vaultMode).toBe("isolated");
+    expect(config.vault.scope).toBe("global");
+    expect(config.vault.renderMode).toBe("native");
+    expect(config.vault.path).toBe(path.join("/Users/tester", ".openclaw", "wiki", "main"));
+    expect(config.search.backend).toBe("shared");
+    expect(config.search.corpus).toBe("wiki");
     expect(config.context.includeCompiledDigestPrompt).toBe(false);
   });
 
@@ -123,10 +116,9 @@ describe("resolveMemoryWikiConfig", () => {
       appConfig: { agents: { list: [{ id: "support", default: true }] } },
     });
 
-    expect(base.vault.path).toBe(resolveDefaultMemoryWikiVaultRoot("/Users/tester"));
-    expect(resolved.vault.path).toBe(
-      path.join(resolveDefaultMemoryWikiVaultRoot("/Users/tester"), "support"),
-    );
+    const expectedRoot = path.join("/Users/tester", ".openclaw", "wiki");
+    expect(base.vault.path).toBe(expectedRoot);
+    expect(resolved.vault.path).toBe(path.join(expectedRoot, "support"));
   });
 
   it("fails closed when a multi-agent scoped vault has no agent context", () => {

@@ -2,6 +2,7 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { isSecretValueRegisteredForRedaction } from "../../../logging/secret-redaction-registry.js";
+import { SecretSurfaceUnavailableError } from "../../../secrets/runtime-degraded-state.js";
 import {
   looksLikeSecretSentinel,
   mintSecretSentinel,
@@ -297,6 +298,37 @@ describe("createEmbeddedRunAuthController", () => {
     expect(harness.runtimeAuthState?.sourceApiKey).toBe("source-api-key");
     expect(harness.runtimeAuthState?.authMode).toBe("api-key");
     expect(harness.runtimeAuthState?.profileId).toBe("default");
+  });
+
+  it("does not rotate profiles after an explicit SecretRef owner becomes unavailable", async () => {
+    const unavailable = new SecretSurfaceUnavailableError({
+      ownerKind: "account",
+      ownerId: "openai:cold",
+      state: "unavailable",
+      paths: ["auth-profiles.openai:cold.key"],
+      refKeys: ["env:default:MISSING_OPENAI_KEY"],
+      reason: "secret reference was not found",
+    });
+    mocks.getApiKeyForModel.mockImplementation(async ({ profileId }) => {
+      if (profileId === "default") {
+        throw unavailable;
+      }
+      return {
+        apiKey: "unused",
+        mode: "api-key" as const,
+        profileId,
+        source: `profile:${String(profileId)}`,
+      };
+    });
+    const controller = createMutableEmbeddedRunAuthController({
+      harness: createMutableAuthControllerHarness(),
+      setRuntimeApiKey: vi.fn(),
+      profileCandidates: ["default", "backup"],
+    });
+
+    await expect(controller.initializeAuthProfile()).rejects.toBe(unavailable);
+    expect(mocks.getApiKeyForModel).toHaveBeenCalledOnce();
+    expect(mocks.prepareProviderRuntimeAuth).not.toHaveBeenCalled();
   });
 
   it("clears prior runtime-auth transport overrides when rotating profiles", async () => {

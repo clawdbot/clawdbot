@@ -81,6 +81,7 @@ describe("buildRealtimeVoiceInstructions", () => {
       }),
       coreConfig,
       agentRuntime: createAgentRuntime(workspaceDir),
+      agentId: "voice",
     });
 
     expect(instructions).toContain("OpenClaw agent voice context:");
@@ -114,6 +115,7 @@ describe("buildRealtimeVoiceInstructions", () => {
       config,
       coreConfig: { agents: { list: [{ id: agentId }] } } as OpenClawConfig,
       agentRuntime: createAgentRuntime("/unused"),
+      agentId,
     });
 
     expect(instructions).toBe(`Base voice instructions.\n\n${expectedContext}\n[truncated]`);

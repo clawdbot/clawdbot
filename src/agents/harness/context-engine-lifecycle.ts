@@ -14,6 +14,8 @@ import type {
   ContextEngineRuntimeSettings,
   ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
+import { runWithPreparedMemoryPromptSection } from "../../plugins/memory-state.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
 import {
   buildAfterTurnRuntimeContext,
@@ -23,7 +25,7 @@ import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.j
 import type { AgentMessage } from "../runtime/index.js";
 import type { SessionWriteLockAcquireTimeoutConfig } from "../session-write-lock.js";
 
-export type HarnessContextEngine = ContextEngine;
+type HarnessContextEngine = ContextEngine;
 
 type HarnessRuntimeSettingsParams = {
   runtimeSettings?: ContextEngineRuntimeSettings;
@@ -143,6 +145,7 @@ export async function assembleHarnessContextEngine(params: {
   tokenBudget?: number;
   availableTools?: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  sandboxed?: boolean;
   modelId: string;
   prompt?: string;
   runtimeSettings?: ContextEngineRuntimeSettings;
@@ -159,20 +162,35 @@ export async function assembleHarnessContextEngine(params: {
   if (!params.contextEngine) {
     return undefined;
   }
+  const contextEngine = params.contextEngine;
   const messages = stripRuntimeContextCustomMessages(params.messages);
   const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
-  const result = await params.contextEngine.assemble({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    messages,
-    tokenBudget: params.tokenBudget,
-    ...(params.availableTools ? { availableTools: params.availableTools } : {}),
-    ...(params.citationsMode ? { citationsMode: params.citationsMode } : {}),
-    model: params.modelId,
-    runtimeSettings,
-    ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
-  });
-  return ensureAssembleResultShape(result, params.contextEngine.info.id);
+  const assemble = () =>
+    contextEngine.assemble({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      messages,
+      tokenBudget: params.tokenBudget,
+      ...(params.availableTools ? { availableTools: params.availableTools } : {}),
+      ...(params.citationsMode ? { citationsMode: params.citationsMode } : {}),
+      model: params.modelId,
+      runtimeSettings,
+      ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
+    });
+  const result =
+    contextEngine.info.id === "legacy"
+      ? await assemble()
+      : await runWithPreparedMemoryPromptSection(
+          {
+            availableTools: new Set(params.availableTools),
+            citationsMode: params.citationsMode,
+            agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+            agentSessionKey: params.sessionKey,
+            sandboxed: params.sandboxed,
+          },
+          assemble,
+        );
+  return ensureAssembleResultShape(result, contextEngine.info.id);
 }
 
 /**

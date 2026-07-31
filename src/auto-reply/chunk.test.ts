@@ -6,6 +6,7 @@ import * as fences from "../../packages/markdown-core/src/fences.js";
 import { hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 import {
   chunkByNewline,
+  chunkByParagraph,
   chunkMarkdownText,
   chunkMarkdownTextWithMode,
   chunkText,
@@ -214,6 +215,14 @@ describe("chunkText", () => {
       },
     },
     {
+      name: "trims trailing whitespace from the final outbound reply chunk",
+      text: "alpha beta   ",
+      limit: 8,
+      assert: (chunks: string[]) => {
+        expect(chunks).toEqual(["alpha", "beta"]);
+      },
+    },
+    {
       name: "falls back to a hard break when no whitespace is present",
       text: "Supercalifragilisticexpialidocious",
       limit: 10,
@@ -228,6 +237,37 @@ describe("chunkText", () => {
   runChunkCases(chunkText, [
     expectDefined(parentheticalCases[0], "parentheticalCases[0] test invariant"),
   ]);
+});
+
+describe("chunkByParagraph Unicode line/paragraph separators", () => {
+  it.each([
+    {
+      name: "treats lone U+2029 as a standalone paragraph boundary",
+      text: "paragraph one\u2029paragraph two starts here",
+      normalized: "paragraph one\n\nparagraph two starts here",
+      limit: 39,
+      expected: ["paragraph one", "paragraph two starts here"],
+    },
+    {
+      name: "treats lone U+2028 as a line break within one paragraph",
+      text: "paragraph one line\u2028still same paragraph",
+      normalized: "paragraph one line\nstill same paragraph",
+      limit: 50,
+      expected: ["paragraph one line\nstill same paragraph"],
+    },
+    {
+      name: "treats consecutive U+2028 and U+2029 as a paragraph boundary",
+      text: "paragraph one line\u2028\u2029paragraph two starts here",
+      normalized: "paragraph one line\n\nparagraph two starts here",
+      limit: 40,
+      expected: ["paragraph one line", "paragraph two starts here"],
+    },
+  ] as const)("$name", ({ text, normalized, limit, expected }) => {
+    const chunks = chunkByParagraph(text, limit);
+
+    expect(chunks).toEqual(expected);
+    expect(chunks).toEqual(chunkByParagraph(normalized, limit));
+  });
 });
 
 describe("resolveTextChunkLimit", () => {
@@ -628,8 +668,6 @@ describe("chunkMarkdownTextWithMode", () => {
 });
 
 describe("resolveChunkMode", () => {
-  // All bundled channels are nested-only now; the flat chunkMode row below
-  // covers the deprecated SDK-plugin fallback that streaming.ts still reads.
   const providerCfg = {
     channels: { signal: { streaming: { chunkMode: "newline" as const } } },
   };
@@ -670,33 +708,6 @@ describe("resolveChunkMode", () => {
       },
       provider: "imessage",
       accountId: "personal",
-      expected: "newline",
-    },
-    {
-      cfg: { channels: { webchat: { chunkMode: "newline" as const } } },
-      provider: "webchat",
-      accountId: undefined,
-      expected: "length",
-    },
-    // Deprecated SDK fallback: nested config wins over a stale flat key, and
-    // a flat-only entry still resolves until the SDK deprecation window ends.
-    {
-      cfg: {
-        channels: {
-          mattermost: {
-            chunkMode: "length" as const,
-            streaming: { chunkMode: "newline" as const },
-          },
-        },
-      },
-      provider: "mattermost",
-      accountId: undefined,
-      expected: "newline",
-    },
-    {
-      cfg: { channels: { "sdk-plugin": { chunkMode: "newline" as const } } },
-      provider: "sdk-plugin",
-      accountId: undefined,
       expected: "newline",
     },
   ] as const)(

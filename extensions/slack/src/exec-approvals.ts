@@ -51,7 +51,7 @@ export function getSlackExecApprovalApprovers(params: {
   });
 }
 
-export function isSlackExecApprovalTargetRecipient(params: {
+function isSlackExecApprovalTargetRecipient(params: {
   cfg: OpenClawConfig;
   senderId?: string | null;
   accountId?: string | null;
@@ -80,9 +80,7 @@ const slackExecApprovalProfile = createChannelExecApprovalProfile({
 });
 
 export const isSlackExecApprovalClientEnabled = slackExecApprovalProfile.isClientEnabled;
-export const isSlackExecApprovalApprover = slackExecApprovalProfile.isApprover;
 export const isSlackExecApprovalAuthorizedSender = slackExecApprovalProfile.isAuthorizedSender;
 export const resolveSlackExecApprovalTarget = slackExecApprovalProfile.resolveTarget;
-export const shouldHandleSlackExecApprovalRequest = slackExecApprovalProfile.shouldHandleRequest;
 export const shouldSuppressLocalSlackExecApprovalPrompt =
   slackExecApprovalProfile.shouldSuppressLocalPrompt;

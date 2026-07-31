@@ -101,6 +101,25 @@ describe("sendDiscordComponentMessage", () => {
     resetClassicMocks();
   });
 
+  it("passes allowed mentions through component sends", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText, id: "chan-1" });
+    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+
+    await sendDiscordComponentMessage(
+      "channel:chan-1",
+      { blocks: [{ type: "actions", buttons: [{ label: "Open" }] }] },
+      {
+        cfg: DISCORD_TEST_CFG,
+        rest,
+        token: "t",
+        allowedMentions: { parse: [] },
+      },
+    );
+
+    expect(readRecordArg(postMock, 0, 1).body).toMatchObject({ allowed_mentions: { parse: [] } });
+  });
+
   it("keeps direct-channel DM session keys on component entries", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({

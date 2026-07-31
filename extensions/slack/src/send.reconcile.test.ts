@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { reconcileSlackUnknownSend, sendMessageSlack } from "./send.js";
 
 const slackClientMocks = vi.hoisted(() => ({
-  createSlackWebClient: vi.fn(),
+  createSlackReadClient: vi.fn(),
   getSlackWriteClient: vi.fn(),
 }));
 
@@ -16,7 +16,7 @@ vi.mock("./client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./client.js")>();
   return {
     ...actual,
-    createSlackWebClient: slackClientMocks.createSlackWebClient,
+    createSlackReadClient: slackClientMocks.createSlackReadClient,
     getSlackWriteClient: slackClientMocks.getSlackWriteClient,
   };
 });
@@ -105,7 +105,7 @@ async function postWithDeliveryMetadata(params: {
 
 describe("reconcileSlackUnknownSend", () => {
   beforeEach(() => {
-    slackClientMocks.createSlackWebClient.mockReset();
+    slackClientMocks.createSlackReadClient.mockReset();
     slackClientMocks.getSlackWriteClient.mockReset();
   });
 
@@ -301,6 +301,27 @@ describe("reconcileSlackUnknownSend", () => {
     expect(order).toEqual(["open", "dispatch", "post"]);
   });
 
+  it("uses the user-identity user token to open a durable DM target", async () => {
+    const client = createSlackReconcileTestClient();
+    slackClientMocks.getSlackWriteClient.mockReturnValue(client);
+    const userIdentityCfg = {
+      channels: {
+        slack: {
+          postAs: "user",
+          userToken: "test-user-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    await sendMessageSlack("user:U123", "final answer", {
+      cfg: userIdentityCfg,
+      deliveryQueueId: "test-queue-id",
+    });
+
+    expect(slackClientMocks.getSlackWriteClient).toHaveBeenCalledWith("test-user-token");
+    expect(client.conversations.open).toHaveBeenCalledWith({ users: "U123" });
+  });
+
   it("preserves existing assistant metadata while adding the durable id", async () => {
     const client = createSlackReconcileTestClient();
     const metadata = await postWithDeliveryMetadata({
@@ -324,7 +345,7 @@ describe("reconcileSlackUnknownSend", () => {
       messages: [{ ts: "1782584647.000002", metadata }],
     });
     const writeClient = createSlackReconcileTestClient();
-    slackClientMocks.createSlackWebClient.mockReturnValue(readClient);
+    slackClientMocks.createSlackReadClient.mockReturnValue(readClient);
     slackClientMocks.getSlackWriteClient.mockReturnValue(writeClient);
     const tokenCfg = {
       channels: {
@@ -338,7 +359,7 @@ describe("reconcileSlackUnknownSend", () => {
     await expect(
       reconcileSlackUnknownSend(createUnknownSendContext({ cfg: tokenCfg })),
     ).resolves.toEqual(expect.objectContaining({ status: "sent" }));
-    expect(slackClientMocks.createSlackWebClient).toHaveBeenCalledWith("xoxp-read");
+    expect(slackClientMocks.createSlackReadClient).toHaveBeenCalledWith("xoxp-read");
     expect(slackClientMocks.getSlackWriteClient).toHaveBeenCalledWith("xoxb-write");
     expect(readClient.conversations.history).toHaveBeenCalledOnce();
     expect(writeClient.conversations.history).not.toHaveBeenCalled();
@@ -353,7 +374,7 @@ describe("reconcileSlackUnknownSend", () => {
     writeClient.conversations.history.mockResolvedValueOnce({
       messages: [{ ts: "1782584647.000002", metadata }],
     });
-    slackClientMocks.createSlackWebClient.mockReturnValue(readClient);
+    slackClientMocks.createSlackReadClient.mockReturnValue(readClient);
     slackClientMocks.getSlackWriteClient.mockReturnValue(writeClient);
     const tokenCfg = {
       channels: {
@@ -381,7 +402,7 @@ describe("reconcileSlackUnknownSend", () => {
     writeClient.conversations.history.mockResolvedValueOnce({
       messages: [{ ts: "1782584647.000002", metadata }],
     });
-    slackClientMocks.createSlackWebClient.mockReturnValue(readClient);
+    slackClientMocks.createSlackReadClient.mockReturnValue(readClient);
     slackClientMocks.getSlackWriteClient.mockReturnValue(writeClient);
     const tokenCfg = {
       channels: {

@@ -2,18 +2,24 @@
 // the canonical agent prompt facade.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  buildConfiguredAgentSystemPrompt,
-  resolveAgentSystemPromptConfig,
-} from "./system-prompt-config.js";
+import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
 
-vi.mock("../tts/tts.js", () => ({
+vi.mock("../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
 }));
 
-describe("resolveAgentSystemPromptConfig", () => {
+function buildPrompt(config: OpenClawConfig, agentId = "main"): string {
+  return buildConfiguredAgentSystemPrompt({
+    config,
+    agentId,
+    workspaceDir: "/tmp/openclaw",
+    toolNames: ["sessions_spawn", "subagents"],
+  });
+}
+
+describe("buildConfiguredAgentSystemPrompt", () => {
   it("defaults sub-agent delegation mode to suggest", () => {
-    expect(resolveAgentSystemPromptConfig({ config: {} }).subagentDelegationMode).toBe("suggest");
+    expect(buildPrompt({})).not.toContain("Mode: prefer");
   });
 
   it("inherits default sub-agent delegation mode", () => {
@@ -27,9 +33,7 @@ describe("resolveAgentSystemPromptConfig", () => {
       },
     } satisfies OpenClawConfig;
 
-    expect(resolveAgentSystemPromptConfig({ config, agentId: "main" }).subagentDelegationMode).toBe(
-      "prefer",
-    );
+    expect(buildPrompt(config)).toContain("Mode: prefer");
   });
 
   it("lets per-agent sub-agent delegation mode override defaults", () => {
@@ -51,13 +55,9 @@ describe("resolveAgentSystemPromptConfig", () => {
       },
     } satisfies OpenClawConfig;
 
-    expect(
-      resolveAgentSystemPromptConfig({ config, agentId: "coordinator" }).subagentDelegationMode,
-    ).toBe("prefer");
+    expect(buildPrompt(config, "coordinator")).toContain("Mode: prefer");
   });
-});
 
-describe("buildConfiguredAgentSystemPrompt", () => {
   it("applies config-backed prompt parameters through the canonical facade", () => {
     const prompt = buildConfiguredAgentSystemPrompt({
       config: {

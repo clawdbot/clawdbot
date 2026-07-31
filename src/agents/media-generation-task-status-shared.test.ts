@@ -6,8 +6,8 @@ import {
   findDuplicateGuardMediaGenerationTaskForSession,
   listActiveMediaGenerationTasksForSession,
   MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS,
-  resetRecentMediaGenerationDuplicateGuardsForTests,
 } from "./media-generation-task-status-shared.js";
+import { resetRecentMediaGenerationDuplicateGuardsForTests } from "./media-generation-task-status-shared.test-support.js";
 
 const taskRuntimeInternalMocks = vi.hoisted(() => ({
   listFreshTasksForOwnerKey: vi.fn(),

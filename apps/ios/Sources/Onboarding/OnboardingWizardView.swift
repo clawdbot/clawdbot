@@ -82,22 +82,19 @@ struct OnboardingWizardView: View {
     }
 
     private var connectPhase: OnboardingConnectPhase {
-        if self.connectingGateway != nil {
-            return .connecting(detail: self.statusLine.isEmpty ? "Connecting…" : self.statusLine)
-        }
-        if let message = self.localConnectionFailure {
-            return .failedStatus(message: message, allowsRetry: false)
-        }
-        if let problem = self.currentProblem {
-            return .failed(problem)
-        }
-        if self.issue != .none {
-            let message = self.connectMessage
-                ?? (self.statusLine.isEmpty ? nil : self.statusLine)
-                ?? self.issueFallbackMessage
-            return .failedStatus(message: message, allowsRetry: true)
-        }
-        return .ready
+        let connectingDetail = self.connectingGateway == nil
+            ? nil
+            : (self.statusLine.isEmpty ? "Connecting…" : self.statusLine)
+        let retryableFailure = self.issue == .none
+            ? nil
+            : self.connectMessage
+            ?? (self.statusLine.isEmpty ? nil : self.statusLine)
+            ?? self.issueFallbackMessage
+        return OnboardingConnectPhase.resolve(
+            problem: self.currentProblem,
+            connectingDetail: connectingDetail,
+            localFailure: self.localConnectionFailure,
+            retryableFailure: retryableFailure)
     }
 
     private var issueFallbackMessage: String {
@@ -845,6 +842,8 @@ extension OnboardingWizardView {
             }
         }
         .font(OpenClawType.subheadSemiBold)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .disabled(!self.canConnectManual || self.connectingGateway != nil)
     }
 
@@ -989,11 +988,17 @@ extension OnboardingWizardView {
         let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
         self.gatewayCredentialFieldStableID = setupAuth.targetStableID
         if setupAuth.hasBootstrapToken {
-            await GatewayOnboardingReset.prepareForBootstrapPairing(
+            guard await GatewayOnboardingReset.prepareForBootstrapPairing(
                 appModel: self.appModel,
                 instanceId: GatewaySettingsStore.currentInstanceID(),
                 gatewayStableID: setupAuth.targetStableID,
                 disconnectGateway: disconnectExistingGatewayForBootstrap)
+            else {
+                let message = "Could not safely replace the gateway's offline data. Try again."
+                self.connectMessage = message
+                self.statusLine = message
+                return
+            }
         }
         self.gatewayToken = setupAuth.token
         self.gatewayPassword = setupAuth.password

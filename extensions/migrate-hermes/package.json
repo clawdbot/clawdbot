@@ -5,6 +5,7 @@
   "description": "Hermes to OpenClaw migration provider",
   "type": "module",
   "dependencies": {
+    "dotenv": "17.4.2",
     "yaml": "2.9.0"
   },
   "devDependencies": {

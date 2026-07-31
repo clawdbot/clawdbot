@@ -7,6 +7,7 @@ import {
   appendMatchMetadata,
   asString,
   isRecord,
+  readAccountStatusSnapshot,
   resolveEnabledConfiguredAccountId,
 } from "openclaw/plugin-sdk/status-helpers";
 
@@ -16,17 +17,6 @@ type DiscordIntentSummary = {
 
 type DiscordApplicationSummary = {
   intents?: DiscordIntentSummary;
-};
-
-type DiscordAccountStatus = {
-  accountId?: unknown;
-  enabled?: unknown;
-  configured?: unknown;
-  running?: unknown;
-  connected?: unknown;
-  healthState?: unknown;
-  application?: unknown;
-  audit?: unknown;
 };
 
 type DiscordPermissionsAuditSummary = {
@@ -40,22 +30,6 @@ type DiscordPermissionsAuditSummary = {
     matchSource?: string;
   }>;
 };
-
-function readDiscordAccountStatus(value: ChannelAccountSnapshot): DiscordAccountStatus | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  return {
-    accountId: value.accountId,
-    enabled: value.enabled,
-    configured: value.configured,
-    running: value.running,
-    connected: value.connected,
-    healthState: value.healthState,
-    application: value.application,
-    audit: value.audit,
-  };
-}
 
 function readDiscordApplicationSummary(value: unknown): DiscordApplicationSummary {
   if (!isRecord(value)) {
@@ -122,7 +96,7 @@ export function collectDiscordStatusIssues(
 ): ChannelStatusIssue[] {
   const issues: ChannelStatusIssue[] = [];
   for (const entry of accounts) {
-    const account = readDiscordAccountStatus(entry);
+    const account = readAccountStatusSnapshot(entry, ["healthState", "application", "audit"]);
     if (!account) {
       continue;
     }

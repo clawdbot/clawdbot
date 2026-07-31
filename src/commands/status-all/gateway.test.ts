@@ -52,6 +52,42 @@ describe("summarizeLogTail", () => {
     expect(lines).toEqual(["[openai] token refresh 401 invalid_grant · re-auth required"]);
   });
 
+  it("summarizes single-line OAuth JSON diagnostics", () => {
+    const sentinel = "[gateway] synthetic sentinel after OAuth JSON";
+    const lines = summarizeLogTail([
+      `[openai] Token refresh failed: 401 ${JSON.stringify({
+        error: {
+          code: "invalid_grant",
+          message: "Session invalidated due to signing in again",
+        },
+      })}`,
+      sentinel,
+    ]);
+
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("token refresh 401 invalid_grant");
+    expect(lines[0]).toContain("re-auth required");
+    expect(lines[1]).toBe(sentinel);
+  });
+
+  it("keeps later logs after single-line OAuth JSON string braces", () => {
+    const sentinel = "[gateway] synthetic sentinel after OAuth JSON";
+    const lines = summarizeLogTail([
+      `[openai] Token refresh failed: 401 ${JSON.stringify({
+        error: {
+          code: "invalid_grant",
+          message: "Session invalidated { due to signing in again",
+        },
+      })}`,
+      sentinel,
+    ]);
+
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("token refresh 401 invalid_grant");
+    expect(lines[0]).toContain("re-auth required");
+    expect(lines[1]).toBe(sentinel);
+  });
+
   it("consumes an incomplete OAuth JSON block through the end of the tail", () => {
     const lines = summarizeLogTail([
       "[openai] Token refresh failed: 401 {",

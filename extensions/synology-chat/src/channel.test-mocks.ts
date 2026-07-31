@@ -14,7 +14,7 @@ export const registerPluginHttpRouteMock: Mock<(params: RegisteredRoute) => () =
 );
 
 export const dispatchReplyWithBufferedBlockDispatcher: Mock<
-  () => Promise<{ counts: Record<string, number> }>
+  (_params: unknown) => Promise<{ counts: Record<string, number> }>
 > = vi.fn().mockResolvedValue({ counts: {} });
 export const finalizeInboundContextMock: Mock<
   (ctx: Record<string, unknown>) => Record<string, unknown>
@@ -78,6 +78,33 @@ export function setSynologyRuntimeConfigForTest(cfg: unknown): void {
   mockRuntimeConfig = cfg;
 }
 
+export const channelInboundRunMock = vi.fn(async (params) => {
+  const input = await params.adapter.ingest(params.raw);
+  if (!input) {
+    return { admission: { kind: "drop", reason: "ingest-null" }, dispatched: false };
+  }
+  const resolved = await params.adapter.resolveTurn(input, {
+    kind: "message",
+    canStartAgentTurn: true,
+  });
+  const dispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
+    ctx: resolved.ctxPayload,
+    cfg: mockRuntimeConfig,
+    dispatcherOptions: {
+      ...resolved.dispatcherOptions,
+      deliver: resolved.delivery.deliver,
+      onError: resolved.delivery.onError,
+    },
+  });
+  return {
+    admission: { kind: "dispatch" },
+    dispatched: true,
+    dispatchResult,
+    ctxPayload: resolved.ctxPayload,
+    routeSessionKey: resolved.route.sessionKey,
+  };
+});
+
 async function readRequestBodyWithLimitForTest(req: IncomingMessage): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -127,6 +154,32 @@ vi.mock("./client.js", () => ({
   resolveLegacyWebhookNameToChatUserId: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("./webhook-ingress.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./webhook-ingress.js")>("./webhook-ingress.js");
+  return {
+    ...actual,
+    createSynologyIngressMonitor: vi.fn(
+      (options: Parameters<typeof actual.createSynologyIngressMonitor>[0]) => ({
+        start: vi.fn(),
+        stop: vi.fn(async () => undefined),
+        waitForIdle: vi.fn(async () => undefined),
+        receive: vi.fn(async (rawEvent: import("./webhook-ingress.js").SynologyWebhookRawEvent) => {
+          const lifecycle: import("./webhook-ingress.js").SynologyIngressLifecycle = {
+            admission: "exclusive",
+            abortSignal: options.abortSignal ?? new AbortController().signal,
+            onAdopted: vi.fn(async () => undefined),
+            onDeferred: vi.fn(),
+            onAbandoned: vi.fn(async () => undefined),
+          };
+          await options.dispatch(rawEvent, lifecycle);
+          return { kind: "durable" as const };
+        }),
+      }),
+    ),
+  };
+});
+
 vi.mock("./runtime.js", () => ({
   getSynologyRuntime: vi.fn(() => ({
     config: { current: vi.fn(() => mockRuntimeConfig) },
@@ -143,32 +196,7 @@ vi.mock("./runtime.js", () => ({
         recordInboundSession: vi.fn(async () => undefined),
       },
       inbound: {
-        run: vi.fn(async (params) => {
-          const input = await params.adapter.ingest(params.raw);
-          if (!input) {
-            return { admission: { kind: "drop", reason: "ingest-null" }, dispatched: false };
-          }
-          const resolved = await params.adapter.resolveTurn(input, {
-            kind: "message",
-            canStartAgentTurn: true,
-          });
-          const dispatchResult = await resolved.dispatchReplyWithBufferedBlockDispatcher({
-            ctx: resolved.ctxPayload,
-            cfg: mockRuntimeConfig,
-            dispatcherOptions: {
-              ...resolved.dispatcherOptions,
-              deliver: resolved.delivery.deliver,
-              onError: resolved.delivery.onError,
-            },
-          });
-          return {
-            admission: { kind: "dispatch" },
-            dispatched: true,
-            dispatchResult,
-            ctxPayload: resolved.ctxPayload,
-            routeSessionKey: resolved.routeSessionKey,
-          };
-        }),
+        run: channelInboundRunMock,
         buildContext: buildChannelInboundEventContextMock,
       },
     },

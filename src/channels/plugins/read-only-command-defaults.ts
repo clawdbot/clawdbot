@@ -16,7 +16,7 @@ const SAFE_MANIFEST_CHANNEL_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 /**
  * Native command/skill auto-enable defaults exposed by channel manifests.
  */
-export type ChannelCommandDefaults = Pick<
+type ChannelCommandDefaults = Pick<
   NonNullable<ChannelPlugin["commands"]>,
   "nativeCommandsAutoEnabled" | "nativeSkillsAutoEnabled"
 >;

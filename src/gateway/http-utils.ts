@@ -11,7 +11,8 @@ import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
-import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
 import {
   buildAgentMainSessionKey,
   isAcpSessionKey,
@@ -36,15 +37,13 @@ export {
   checkGatewayHttpRequestAuth,
   getBearerToken,
   getHeader,
-  isGatewayBearerHttpRequest,
   resolveHttpBrowserOriginPolicy,
-  resolveHttpSenderIsOwner,
   resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
   resolveSharedSecretHttpOperatorScopes,
   resolveTrustedHttpOperatorScopes,
+  setControlUiPluginAuthCookieForRequest,
   type AuthorizedGatewayHttpRequest,
-  type GatewayHttpRequestAuthCheckResult,
 } from "./http-auth-utils.js";
 
 export const OPENCLAW_MODEL_ID = "openclaw";
@@ -58,7 +57,7 @@ class UnknownGatewayAgentError extends Error {
   }
 }
 
-export class GatewaySessionKeyOverrideError extends Error {
+class GatewaySessionKeyOverrideError extends Error {
   constructor() {
     super("`x-openclaw-session-key` cannot use reserved internal session namespaces.");
     this.name = "GatewaySessionKeyOverrideError";
@@ -140,12 +139,14 @@ export async function resolveOpenAiCompatModelOverride(params: {
   const cfg = getRuntimeConfig();
   const defaultModelRef = resolveDefaultModelForAgent({ cfg, agentId: params.agentId });
   const defaultProvider = defaultModelRef.provider;
-  const manifestMetadataSnapshot = loadManifestMetadataSnapshot({
+  const workspaceDir = getActivePluginRegistryWorkspaceDirFromState();
+  const manifestMetadataSnapshot = getCurrentPluginMetadataSnapshot({
     config: cfg,
     env: process.env,
+    ...(workspaceDir ? { workspaceDir } : {}),
   });
   const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot.plugins,
+    manifestPlugins: manifestMetadataSnapshot?.plugins,
   };
   const parsed = parseModelRef(raw, defaultProvider, {
     allowManifestNormalization: true,

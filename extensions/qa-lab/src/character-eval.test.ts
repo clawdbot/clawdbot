@@ -3,13 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  runQaCharacterEval,
-  type QaCharacterEvalJudgment,
-  type QaCharacterEvalParams,
-} from "./character-eval.js";
+import { runQaCharacterEval } from "./character-eval.js";
 import type { QaSuiteResult } from "./suite.js";
 
+type QaCharacterEvalParams = Parameters<typeof runQaCharacterEval>[0];
+type QaCharacterEvalJudgment = Awaited<
+  ReturnType<typeof runQaCharacterEval>
+>["judgments"][number]["rankings"][number];
 type CharacterRunSuiteParams = Parameters<NonNullable<QaCharacterEvalParams["runSuite"]>>[0];
 type CharacterRunJudgeParams = Parameters<NonNullable<QaCharacterEvalParams["runJudge"]>>[0];
 type TestJudgeRanking = Pick<QaCharacterEvalJudgment, "model" | "rank" | "score" | "summary"> &
@@ -521,6 +521,38 @@ describe("runQaCharacterEval", () => {
 
     expect(result.runs[0]?.status).toBe("fail");
     expect(result.runs[0]?.error).toBeUndefined();
+  });
+
+  it.each([
+    { description: "user-only conversation", transcript: "USER Alice: hello?" },
+    { description: "report-only fallback", transcript: "# Character scenario report" },
+  ])("rejects a passing suite with a $description", async ({ transcript }) => {
+    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
+      makeSuiteResult({
+        outputDir: params.outputDir,
+        model: params.primaryModel,
+        transcript,
+      }),
+    );
+    const runJudge = makeRunJudge([
+      { model: "openai/gpt-5.6-luna", rank: 1, score: 0.5, summary: "no reply" },
+    ]);
+
+    const result = await runQaCharacterEval({
+      repoRoot: tempRoot,
+      outputDir: path.join(tempRoot, "character"),
+      models: ["openai/gpt-5.6-luna"],
+      judgeModels: ["openai/gpt-5.6-luna"],
+      runSuite,
+      runJudge,
+    });
+
+    expectFirstRunFailure(result, {
+      model: "openai/gpt-5.6-luna",
+      error: "candidate transcript did not contain an assistant reply",
+    });
+    expect(result.runs[0]?.stats.assistantTurns).toBe(0);
+    expect(result.runs[0]?.transcript).toBe(transcript);
   });
 
   it("marks raw tool failure transcripts as failed output", async () => {

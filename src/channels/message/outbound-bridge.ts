@@ -25,7 +25,7 @@ const defaultManualReceiveAdapter = {
 } as const satisfies ChannelMessageReceiveAdapterShape;
 
 /** Send result accepted from legacy outbound bridge methods before receipt normalization. */
-export type ChannelMessageOutboundBridgeResult = MessageReceiptSourceResult & {
+type ChannelMessageOutboundBridgeResult = MessageReceiptSourceResult & {
   receipt?: MessageReceipt;
   messageId?: string;
 };
@@ -35,7 +35,7 @@ type ChannelMessageOutboundBridgeContext<TContext> = Omit<TContext, "onDeliveryR
 };
 
 /** Legacy outbound adapter shape bridged into the channel message adapter contract. */
-export type ChannelMessageOutboundBridgeAdapter<TConfig = unknown> = {
+type ChannelMessageOutboundBridgeAdapter<TConfig = unknown> = {
   deliveryCapabilities?: {
     durableFinal?: DurableFinalDeliveryRequirementMap;
   };
@@ -54,7 +54,7 @@ export type ChannelMessageOutboundBridgeAdapter<TConfig = unknown> = {
 };
 
 /** Options for building a message adapter from legacy outbound send functions. */
-export type CreateChannelMessageAdapterFromOutboundParams<TConfig = unknown> = {
+type CreateChannelMessageAdapterFromOutboundParams<TConfig = unknown> = {
   id?: string;
   outbound: ChannelMessageOutboundBridgeAdapter<TConfig>;
   capabilities?: DurableFinalDeliveryRequirementMap;

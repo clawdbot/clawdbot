@@ -28,10 +28,10 @@ import {
 } from "./target-normalization.js";
 
 /** Directory-backed destination kind used by outbound target resolution. */
-export type TargetResolveKind = ChannelDirectoryEntryKind | "channel";
+type TargetResolveKind = ChannelDirectoryEntryKind | "channel";
 
 /** Strategy for resolving multiple matching directory entries. */
-export type ResolveAmbiguousMode = "error" | "best" | "first";
+type ResolveAmbiguousMode = "error" | "best" | "first";
 
 /** Canonical outbound target produced by plugin, directory, or normalized fallback resolution. */
 export type ResolvedMessagingTarget = {
@@ -43,7 +43,7 @@ export type ResolvedMessagingTarget = {
 };
 
 /** Result of resolving a user-supplied outbound target. */
-export type ResolveMessagingTargetResult =
+type ResolveMessagingTargetResult =
   | { ok: true; target: ResolvedMessagingTarget }
   | { ok: false; error: Error; candidates?: ChannelDirectoryEntry[] };
 
@@ -408,7 +408,7 @@ function pickAmbiguousMatch(
 }
 
 /** Resolves a user target through id-like, directory, plugin, and normalized fallback paths. */
-export async function resolveMessagingTarget(params: {
+async function resolveMessagingTarget(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
   input: string;

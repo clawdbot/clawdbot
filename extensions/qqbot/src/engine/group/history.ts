@@ -1,22 +1,4 @@
-/**
- * Group history cache — buffer non-@ messages and inject them as context
- * the next time the bot is @-ed in the same group.
- *
- * Lifecycle (per group):
- *   1. `recordPendingHistoryEntry` — called for every non-@ message that
- *      should be remembered (the gate returns `skip_no_mention` /
- *      `drop_other_mention`).
- *   2. `buildPendingHistoryContext` — called when the bot IS @-ed; wraps
- *      the cached entries in context tags and prepends them to the
- *      current user message.
- *   3. `clearPendingHistory` — called after the reply has been attempted
- *      (success, timeout, or error) so the next @ starts fresh.
- *
- * The cache itself is a simple `Map<groupOpenid, HistoryEntry[]>` with an
- * LRU eviction policy both on the number of keys and on the per-key
- * length. No I/O, no external dependencies — the module is pure and
- * portable between the built-in and standalone plugin builds.
- */
+/** Group-message content and attachment formatting helpers. */
 
 import type { RefAttachmentSummary } from "../ref/types.js";
 import { formatAttachmentTags } from "../utils/attachment-tags.js";
@@ -28,27 +10,9 @@ export { formatAttachmentTags } from "../utils/attachment-tags.js";
 
 // ───────────────────────────── Constants ─────────────────────────────
 
-/**
- * Tags wrapping history injected on the bot's current turn.
- *
- * Kept in English so downstream LLMs (which are multilingual but follow
- * instructions more reliably in English) parse the block structure
- * unambiguously, regardless of the user/bot conversation language.
- */
-const HISTORY_CTX_START = "[Chat messages since your last reply — CONTEXT ONLY]";
-const HISTORY_CTX_END = "[CURRENT MESSAGE — reply to this]";
-
 /** Tags wrapping merged sub-messages from the queue. */
 const MERGED_CTX_START = "[Merged earlier messages — CONTEXT ONLY]";
 const MERGED_CTX_END = "[CURRENT MESSAGE — reply using the context above]";
-
-/**
- * Upper bound on the number of concurrent group histories the cache will
- * retain. Prevents the Map from growing without bound in long-running
- * multi-group deployments. LRU-evict the least-recently-touched key once
- * this limit is exceeded.
- */
-const MAX_HISTORY_KEYS = 1000;
 
 // ───────────────────────────── Types ─────────────────────────────
 
@@ -94,7 +58,7 @@ interface FormatMessageContentParams {
 // ───────────────────────────── Content formatting ─────────────────────────────
 
 /** Map a raw QQ content-type string onto the normalized attachment type. */
-export function inferAttachmentType(contentType?: string): AttachmentSummary["type"] {
+function inferAttachmentType(contentType?: string): AttachmentSummary["type"] {
   const ct = (contentType ?? "").toLowerCase();
   if (ct.startsWith("image/")) {
     return "image";
@@ -171,116 +135,7 @@ export function formatMessageContent(params: FormatMessageContentParams): string
 // from the top of this file so existing `from "group/history.js"` imports
 // continue to work.
 
-// ───────────────────────────── Internal LRU helpers ─────────────────────────────
-
-/**
- * LRU-evict the least-recently-inserted keys so the map never exceeds
- * `maxKeys`. Since `Map` iteration order is insertion order, removing
- * from the front gives us an LRU by insertion point.
- */
-function evictOldHistoryKeys<T>(
-  historyMap: Map<string, T[]>,
-  maxKeys: number = MAX_HISTORY_KEYS,
-): void {
-  if (historyMap.size <= maxKeys) {
-    return;
-  }
-  const keysToDelete = historyMap.size - maxKeys;
-  const iterator = historyMap.keys();
-  for (let i = 0; i < keysToDelete; i++) {
-    const key = iterator.next().value;
-    if (key !== undefined) {
-      historyMap.delete(key);
-    }
-  }
-}
-
-/**
- * Append one entry to a group's history. When the group's buffer exceeds
- * `limit`, the oldest entry is shifted off the front. The group's key is
- * re-inserted into the map so its LRU position is refreshed.
- */
-function appendHistoryEntry(params: {
-  historyMap: Map<string, HistoryEntry[]>;
-  historyKey: string;
-  entry: HistoryEntry;
-  limit: number;
-}): HistoryEntry[] {
-  const { historyMap, historyKey, entry, limit } = params;
-  if (limit <= 0) {
-    return [];
-  }
-
-  const history = historyMap.get(historyKey) ?? [];
-  history.push(entry);
-  while (history.length > limit) {
-    history.shift();
-  }
-  // Refresh insertion order so this key becomes the most recent.
-  if (historyMap.has(historyKey)) {
-    historyMap.delete(historyKey);
-  }
-  historyMap.set(historyKey, history);
-  evictOldHistoryKeys(historyMap);
-  return history;
-}
-
 // ───────────────────────────── Public API ─────────────────────────────
-
-/**
- * Record a non-@ message so it can be replayed on the next @-activation.
- *
- * No-op when `limit <= 0` (history disabled) or when `entry` is missing.
- * Returns the updated history list for the group.
- */
-export function recordPendingHistoryEntry(params: {
-  historyMap: Map<string, HistoryEntry[]>;
-  historyKey: string;
-  entry?: HistoryEntry | null;
-  limit: number;
-}): HistoryEntry[] {
-  if (!params.entry || params.limit <= 0) {
-    return [];
-  }
-  return appendHistoryEntry({
-    historyMap: params.historyMap,
-    historyKey: params.historyKey,
-    entry: params.entry,
-    limit: params.limit,
-  });
-}
-
-/**
- * Build the full user-message string when the bot is @-ed, prefixing the
- * buffered non-@ chatter for context.
- *
- * Returns `currentMessage` unchanged when no history exists, when the
- * limit is zero, or when the buffer is empty.
- */
-export function buildPendingHistoryContext(params: {
-  historyMap: Map<string, HistoryEntry[]>;
-  historyKey: string;
-  limit: number;
-  currentMessage: string;
-  formatEntry: (entry: HistoryEntry) => string;
-  lineBreak?: string;
-}): string {
-  if (params.limit <= 0) {
-    return params.currentMessage;
-  }
-
-  const entries = params.historyMap.get(params.historyKey) ?? [];
-  if (entries.length === 0) {
-    return params.currentMessage;
-  }
-
-  const lineBreak = params.lineBreak ?? "\n";
-  const historyText = entries.map(params.formatEntry).join(lineBreak);
-
-  return [HISTORY_CTX_START, historyText, "", HISTORY_CTX_END, params.currentMessage].join(
-    lineBreak,
-  );
-}
 
 /**
  * Wrap a batch of merged messages with begin/end tags and append the
@@ -302,20 +157,4 @@ export function buildMergedMessageContext(params: {
   return [MERGED_CTX_START, precedingParts.join(lineBreak), MERGED_CTX_END, currentMessage].join(
     lineBreak,
   );
-}
-
-/**
- * Clear a group's pending history after a reply has been attempted.
- *
- * No-op when the feature is disabled (`limit <= 0`).
- */
-export function clearPendingHistory(params: {
-  historyMap: Map<string, HistoryEntry[]>;
-  historyKey: string;
-  limit: number;
-}): void {
-  if (params.limit <= 0) {
-    return;
-  }
-  params.historyMap.set(params.historyKey, []);
 }

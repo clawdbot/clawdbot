@@ -2,6 +2,15 @@ import CoreLocation
 import Foundation
 import OpenClawKit
 
+struct LocationAuthorizationSnapshot: Equatable, Sendable {
+    var authorizationStatus: CLAuthorizationStatus
+    var accuracyAuthorization: CLAccuracyAuthorization
+
+    static let undetermined = LocationAuthorizationSnapshot(
+        authorizationStatus: .notDetermined,
+        accuracyAuthorization: .fullAccuracy)
+}
+
 struct LocationPermissionSummary: Equatable {
     var desiredMode: OpenClawLocationMode
     var locationServicesEnabled: Bool

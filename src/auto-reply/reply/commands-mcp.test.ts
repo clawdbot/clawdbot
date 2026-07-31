@@ -4,10 +4,14 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { withTempHome } from "../../config/home-env.test-harness.js";
 import { REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
 import { createCommandWorkspaceHarness } from "./commands-filesystem.test-support.js";
-import { createMcpCommandHandler, handleMcpCommand } from "./commands-mcp.js";
+import { handleMcpCommand } from "./commands-mcp.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
 const mcpServers = vi.hoisted(() => new Map<string, Record<string, unknown>>());
+const privateRouteMocks = vi.hoisted(() => ({
+  deliverPrivateCommandReply: vi.fn(),
+  resolvePrivateCommandRouteTargets: vi.fn(),
+}));
 
 vi.mock("../../config/mcp-config.js", () => ({
   listConfiguredMcpServers: vi.fn(async () => ({
@@ -37,6 +41,17 @@ vi.mock("../../config/mcp-config.js", () => ({
   }),
 }));
 
+vi.mock("./commands-private-route.js", async () => {
+  const actual = await vi.importActual<typeof import("./commands-private-route.js")>(
+    "./commands-private-route.js",
+  );
+  return {
+    ...actual,
+    deliverPrivateCommandReply: privateRouteMocks.deliverPrivateCommandReply,
+    resolvePrivateCommandRouteTargets: privateRouteMocks.resolvePrivateCommandRouteTargets,
+  };
+});
+
 const workspaceHarness = createCommandWorkspaceHarness("openclaw-command-mcp-");
 
 function expectMcpResult<T>(result: T | null): T {
@@ -58,6 +73,8 @@ function buildCfg(): OpenClawConfig {
 describe("handleCommands /mcp", () => {
   afterEach(async () => {
     mcpServers.clear();
+    privateRouteMocks.deliverPrivateCommandReply.mockReset();
+    privateRouteMocks.resolvePrivateCommandRouteTargets.mockReset();
     await workspaceHarness.cleanupWorkspaces();
   });
 
@@ -168,13 +185,15 @@ describe("handleCommands /mcp", () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
       const workspaceDir = await workspaceHarness.createWorkspace();
       const privateReplies: string[] = [];
-      const groupHandler = createMcpCommandHandler({
-        resolvePrivateMcpTargets: async () => [{ channel: "telegram", to: "owner-1" }],
-        deliverPrivateMcpReply: async ({ reply }) => {
+      privateRouteMocks.resolvePrivateCommandRouteTargets.mockResolvedValue([
+        { channel: "telegram", to: "owner-1" },
+      ]);
+      privateRouteMocks.deliverPrivateCommandReply.mockImplementation(
+        async ({ reply }: { reply: { text?: string } }) => {
           privateReplies.push(reply.text ?? "");
           return true;
         },
-      });
+      );
       const headerSecret = "Bearer sk-test-secret-value";
       const envSecret = "stdio-process-token-value";
       const separateArgSecret = "plain-separate-arg-secret";
@@ -229,7 +248,7 @@ describe("handleCommands /mcp", () => {
       );
       namedParams.command.senderIsOwner = true;
       namedParams.isGroup = true;
-      const namedResult = expectMcpResult(await groupHandler(namedParams, true));
+      const namedResult = expectMcpResult(await handleMcpCommand(namedParams, true));
       const namedGroupText = namedResult.reply?.text ?? "";
       expect(namedGroupText).toContain("sent the details to the owner privately");
       expect(namedGroupText).not.toContain("billing-server");
@@ -264,7 +283,7 @@ describe("handleCommands /mcp", () => {
       });
       allParams.command.senderIsOwner = true;
       allParams.isGroup = true;
-      const allResult = expectMcpResult(await groupHandler(allParams, true));
+      const allResult = expectMcpResult(await handleMcpCommand(allParams, true));
       const allGroupText = allResult.reply?.text ?? "";
       expect(allGroupText).toContain("sent the details to the owner privately");
       expect(allGroupText).not.toContain("billing-server");
@@ -306,14 +325,17 @@ describe("handleCommands /mcp", () => {
         command: "uvx",
         args: ["billing-mcp", "--api-key", secret],
       });
-      const handler = createMcpCommandHandler(route);
+      privateRouteMocks.resolvePrivateCommandRouteTargets.mockImplementation(
+        route.resolvePrivateMcpTargets,
+      );
+      privateRouteMocks.deliverPrivateCommandReply.mockImplementation(route.deliverPrivateMcpReply);
       const params = buildCommandTestParams("/mcp show billing-server", buildCfg(), undefined, {
         workspaceDir,
       });
       params.command.senderIsOwner = true;
       params.isGroup = true;
 
-      const result = expectMcpResult(await handler(params, true));
+      const result = expectMcpResult(await handleMcpCommand(params, true));
       const groupText = result.reply?.text ?? "";
       expect(groupText).toContain("Run /mcp show from an owner DM");
       expect(groupText).not.toContain("billing-server");
@@ -330,24 +352,24 @@ describe("handleCommands /mcp", () => {
         command: "uvx",
         args: ["billing-mcp", "--api-key", "private-route-secret"],
       });
-      const handler = createMcpCommandHandler({
-        resolvePrivateMcpTargets: async () => [
-          { channel: "telegram", to: "stale-owner-route" },
-          { channel: "signal", to: "working-owner-route" },
-        ],
-        deliverPrivateMcpReply: async ({ targets }) => {
+      privateRouteMocks.resolvePrivateCommandRouteTargets.mockResolvedValue([
+        { channel: "telegram", to: "stale-owner-route" },
+        { channel: "signal", to: "working-owner-route" },
+      ]);
+      privateRouteMocks.deliverPrivateCommandReply.mockImplementation(
+        async ({ targets }: { targets: Array<{ to: string }> }) => {
           const target = targets[0]?.to ?? "";
           attemptedTargets.push(target);
           return target === "working-owner-route";
         },
-      });
+      );
       const params = buildCommandTestParams("/mcp show billing-server", buildCfg(), undefined, {
         workspaceDir,
       });
       params.command.senderIsOwner = true;
       params.isGroup = true;
 
-      const result = expectMcpResult(await handler(params, true));
+      const result = expectMcpResult(await handleMcpCommand(params, true));
       const groupText = result.reply?.text ?? "";
       expect(attemptedTargets).toEqual(["stale-owner-route", "working-owner-route"]);
       expect(groupText).toContain("sent the details to the owner privately");

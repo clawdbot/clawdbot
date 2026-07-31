@@ -4,9 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import { getCanonicalSqliteNamedIndexContracts } from "../infra/sqlite-schema-contract.js";
+import {
+  clearOpenClawAgentDatabaseOpenFailure,
+  migrateOpenClawAgentDatabaseForMaintenance,
+} from "../state/openclaw-agent-db.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.generated.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import {
   createSessionSqliteMigrationFailureIssue,
@@ -27,6 +33,10 @@ type SessionSqliteRecoverTargetValidator = (
   target: SessionStoreTarget,
 ) => Promise<DoctorSessionSqliteTargetReport>;
 
+const CANONICAL_AGENT_INDEX_NAMES = getCanonicalSqliteNamedIndexContracts(
+  OPENCLAW_AGENT_SCHEMA_SQL,
+).map((index) => index.name);
+
 /** Restores the latest failed migration run and validates only selected manifest targets. */
 export async function recoverDoctorSessionSqliteTargets(params: {
   env: NodeJS.ProcessEnv;
@@ -37,7 +47,7 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   const trustedTargets = resolveRecoverTargets(params.targets);
   const failedRun = findLatestFailedSessionSqliteMigrationManifest(params.env, trustedTargets);
   if (!failedRun) {
-    const recoveredCorruptTargets = recoverCorruptSqliteTargets(params.targets);
+    const recoveredCorruptTargets = recoverCorruptSqliteTargets(params.targets, params.env);
     if (recoveredCorruptTargets.length > 0) {
       return summarizeRecoverReport(recoveredCorruptTargets);
     }
@@ -89,6 +99,7 @@ export async function recoverDoctorSessionSqliteTargets(params: {
 
 function recoverCorruptSqliteTargets(
   targets: readonly SessionStoreTarget[],
+  env: NodeJS.ProcessEnv,
 ): DoctorSessionSqliteTargetReport[] {
   return targets.flatMap((target) => {
     const sqlitePath = resolveTargetSqlitePath(target);
@@ -117,8 +128,48 @@ function recoverCorruptSqliteTargets(
     if (!isSqliteCorruptionError(inspection.error)) {
       return [createRecoverInspectionFailureTargetReport(target, sqlitePath, inspection.error)];
     }
+    if (!isCanonicalAgentIndexCorruptionError(inspection.error)) {
+      return [recoverCorruptSqliteTarget(target, sqlitePath, inspection.error)];
+    }
+    const repair = repairCanonicalIndexesForRecovery(target, sqlitePath, env);
+    if (repair.ok) {
+      return [createEmptyRecoverTargetReport(target, sqlitePath)];
+    }
+    if (repair.preserveOriginal) {
+      return [createRecoverInspectionFailureTargetReport(target, sqlitePath, repair.error)];
+    }
     return [recoverCorruptSqliteTarget(target, sqlitePath, inspection.error)];
   });
+}
+
+function repairCanonicalIndexesForRecovery(
+  target: SessionStoreTarget,
+  sqlitePath: string,
+  env: NodeJS.ProcessEnv,
+): { ok: true } | { error: unknown; ok: false; preserveOriginal: boolean } {
+  try {
+    migrateOpenClawAgentDatabaseForMaintenance({
+      agentId: target.agentId,
+      pathname: sqlitePath,
+    });
+  } catch (error) {
+    return { error, ok: false, preserveOriginal: false };
+  }
+  const sourcePaths = inspectSqliteRecoveryFiles(sqlitePath).existing;
+  const inspection = inspectSqliteForRecovery(sqlitePath, sourcePaths);
+  if (!inspection.ok) {
+    return { error: inspection.error, ok: false, preserveOriginal: false };
+  }
+  if (!clearOpenClawAgentDatabaseOpenFailure(sqlitePath, { env })) {
+    return {
+      error: new Error(
+        `Repaired canonical SQLite indexes, but could not clear the quarantine for ${sqlitePath}.`,
+      ),
+      ok: false,
+      preserveOriginal: true,
+    };
+  }
+  return { ok: true };
 }
 
 function inspectSqliteForRecovery(
@@ -129,7 +180,6 @@ function inspectSqliteForRecovery(
   let database: DatabaseSync | undefined;
   let inspectionError: unknown;
   try {
-    const sqlite = requireNodeSqlite();
     inspectionDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-recovery-"));
     const inspectionPath = path.join(inspectionDir, path.basename(sqlitePath));
     for (const sourcePath of sourcePaths) {
@@ -140,7 +190,7 @@ function inspectSqliteForRecovery(
     }
     // Writable inspection of the disposable copy lets SQLite roll back a hot
     // journal without changing the original forensic file set.
-    database = new sqlite.DatabaseSync(inspectionPath);
+    database = openNodeSqliteDatabase(inspectionPath);
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     database.exec("PRAGMA trusted_schema = OFF;");
     assertSqliteIntegrity(database, inspectionPath);
@@ -311,6 +361,13 @@ function isSqliteCorruptionError(error: unknown): boolean {
     message.includes("sqlite integrity_check failed") ||
     message.includes("sqlite foreign_key_check failed")
   );
+}
+
+function isCanonicalAgentIndexCorruptionError(error: unknown): boolean {
+  if (!(error instanceof Error) || error.name !== "SqliteIntegrityError") {
+    return false;
+  }
+  return CANONICAL_AGENT_INDEX_NAMES.some((indexName) => error.message.includes(indexName));
 }
 
 function resolveRecoverTargets(

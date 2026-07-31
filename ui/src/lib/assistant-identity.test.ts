@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover assistant identity behavior.
 import { describe, expect, it } from "vitest";
 import { AVATAR_MAX_BYTES, AVATAR_MAX_DATA_URL_CHARS } from "../../../src/shared/avatar-limits.js";

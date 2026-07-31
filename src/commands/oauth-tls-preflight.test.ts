@@ -54,6 +54,28 @@ describe("runOpenAIOAuthTlsPreflight", () => {
     }
     expect(result.kind).toBe("tls-cert");
     expect(result.code).toBe("UNABLE_TO_GET_ISSUER_CERT_LOCALLY");
+    expect(result.message).toBe("unable to get local issuer certificate");
+  });
+
+  it("classifies a deeply wrapped hostname mismatch", async () => {
+    const tlsFetchImpl = vi.fn(async () => {
+      throw new TypeError("fetch failed", {
+        cause: {
+          cause: {
+            code: "ERR_TLS_CERT_ALTNAME_INVALID",
+            message: "Hostname/IP does not match certificate's altnames",
+          },
+        },
+      });
+    }) as unknown as typeof fetch;
+    await expect(
+      runOpenAIOAuthTlsPreflight({ fetchImpl: tlsFetchImpl, timeoutMs: 20 }),
+    ).resolves.toEqual({
+      ok: false,
+      kind: "tls-cert",
+      code: "ERR_TLS_CERT_ALTNAME_INVALID",
+      message: "Hostname/IP does not match certificate's altnames",
+    });
   });
 
   it("keeps generic TLS transport failures in network classification", async () => {

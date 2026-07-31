@@ -66,6 +66,28 @@ describe("scripts/ci-live-command-retry.sh", () => {
     );
   });
 
+  it.each([
+    ["provider HTTP 500", "xAI image edit failed (HTTP 500): Please try again later"],
+    ["live test timeout", "Error: Test timed out in 45000ms."],
+    ["live terminal timeout", "Error: terminal timeout after 300000ms"],
+  ])("retries a transient %s", (_label, message) => {
+    const { commandPath, counterPath } = writeCommand("openclaw-ci-live-transient-", [
+      'attempts="$(cat "$OPENCLAW_RETRY_TEST_COUNTER" 2>/dev/null || printf 0)"',
+      'attempts="$((attempts + 1))"',
+      'printf "%s" "$attempts" > "$OPENCLAW_RETRY_TEST_COUNTER"',
+      'if [[ "$attempts" -eq 1 ]]; then',
+      `  echo ${JSON.stringify(message)} >&2`,
+      "  exit 42",
+      "fi",
+    ]);
+
+    const result = runRetryHelper(commandPath, counterPath);
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(counterPath, "utf8")).toBe("2");
+    expect(result.stderr).toContain("retrying (1/2)");
+  });
+
   it("does not retry a MiniMax authentication failure", () => {
     const { commandPath, counterPath } = writeCommand("openclaw-ci-live-auth-failure-", [
       'attempts="$(cat "$OPENCLAW_RETRY_TEST_COUNTER" 2>/dev/null || printf 0)"',

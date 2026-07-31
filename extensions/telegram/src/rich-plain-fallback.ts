@@ -1,17 +1,25 @@
 // Telegram rich/plain fallback policy is shared by durable sends, final replies,
 // and draft previews. A second copy reintroduces silent drift in parse failures.
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  telegramHtmlToPlainTextFallback,
-  type TelegramRichHtmlDegradationReason,
-} from "./format.js";
+import type { TelegramRichBlocksDegradationReason } from "./rich-block-model.js";
 
-const RICH_ENTITY_INVALID_RE =
-  /RICH_MESSAGE_(?:EMAIL|URL|MENTION|HASHTAG|CASHTAG|BOT_COMMAND|PHONE|BANK_CARD)_INVALID/i;
+// Any RICH_MESSAGE_*_INVALID rejection (entities, media, depth) degrades to
+// plain text; media content validity (e.g. AUDIO_INVALID for a non-decodable
+// file, live-verified) is only knowable server-side.
+const RICH_ENTITY_INVALID_RE = /RICH_MESSAGE_[A-Z_]+_INVALID/i;
 const RICH_CONTENT_REQUIRED_RE = /RICH_MESSAGE_CONTENT_REQUIRED/i;
-const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
+// Structural-limit rejections, live-verified against Bot API 10.2 (2026-07-15):
+// >500 top-level blocks, >16 depth, oversized text, >50 media, >20 table cols.
+const RICH_STRUCTURE_INVALID_RE =
+  /RICH_MESSAGE_(?:BLOCKS_TOO_MANY|DEPTH_INVALID|TEXT_TOO_LONG|MEDIA_TOO_MANY|TABLE_COLS_TOO_MANY)/i;
+const PARSE_ERR_RE =
+  /can't parse entities|parse entities|find end of the entity|can't parse InputRichBlock/i;
 
-type TelegramPlainFallbackTrigger = "rich-entity-invalid" | "html-parse" | "rich-content-required";
+type TelegramPlainFallbackTrigger =
+  | "rich-entity-invalid"
+  | "rich-structure-invalid"
+  | "html-parse"
+  | "rich-content-required";
 
 type TelegramPlainFallbackPlan = {
   plainText: string;
@@ -33,13 +41,16 @@ function getTelegramPlainFallbackTrigger(err: unknown): TelegramPlainFallbackTri
   if (RICH_CONTENT_REQUIRED_RE.test(formatErrorMessage(err))) {
     return "rich-content-required";
   }
+  if (RICH_STRUCTURE_INVALID_RE.test(formatErrorMessage(err))) {
+    return "rich-structure-invalid";
+  }
   if (isTelegramHtmlParseError(err)) {
     return "html-parse";
   }
   return undefined;
 }
 
-function surrogateSafeChunkEnd(text: string, end: number, start: number): number {
+export function surrogateSafeChunkEnd(text: string, end: number, start: number): number {
   const high = text.charCodeAt(end - 1);
   const low = text.charCodeAt(end);
   const splitsPair = end > 0 && high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff;
@@ -65,11 +76,7 @@ export function splitTelegramPlainTextChunks(text: string, limit: number): strin
   return chunks;
 }
 
-export function splitTelegramPlainTextFallback(
-  text: string,
-  chunkCount: number,
-  limit: number,
-): string[] {
+function splitTelegramPlainTextFallback(text: string, chunkCount: number, limit: number): string[] {
   if (!text) {
     return [];
   }
@@ -95,7 +102,7 @@ export function splitTelegramPlainTextFallback(
 }
 
 export function buildTelegramPlainFallbackPlan(params: {
-  html: string;
+  plainText: string;
   err: unknown;
   context: string;
   warn: (message: string) => void;
@@ -106,7 +113,7 @@ export function buildTelegramPlainFallbackPlan(params: {
   if (!trigger) {
     return undefined;
   }
-  const plainText = telegramHtmlToPlainTextFallback(params.html);
+  const plainText = params.plainText;
   const limit = params.limit ?? 4000;
   const chunks =
     params.chunkCount === undefined
@@ -123,9 +130,9 @@ export function buildTelegramPlainFallbackPlan(params: {
   };
 }
 
-export function warnTelegramRichHtmlDegradations(params: {
+export function warnTelegramRichBlocksDegradations(params: {
   context: string;
-  reasons: readonly TelegramRichHtmlDegradationReason[];
+  reasons: readonly TelegramRichBlocksDegradationReason[];
   warn: (message: string) => void;
 }): void {
   for (const reason of new Set(params.reasons)) {

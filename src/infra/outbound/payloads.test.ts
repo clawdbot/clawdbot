@@ -2,12 +2,12 @@
 // interactive blocks, mirror text, and suppressed relay status payloads.
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it } from "vitest";
+import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import {
   createOutboundPayloadPlan,
   formatOutboundPayloadLog,
-  normalizeOutboundPayloads,
   normalizeOutboundPayloadsForJson,
   normalizeReplyPayloadsForDelivery,
   projectOutboundPayloadPlanForDelivery,
@@ -52,6 +52,43 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         audioAsVoice: true,
       },
     ]);
+  });
+
+  it("strips leading echoed inbound metadata before parsing reply directives", () => {
+    const text = [
+      markInboundContextLabel("Location:"),
+      "```json",
+      '{"latitude":51.5072,"longitude":-0.1276}',
+      "```",
+      "",
+      markInboundContextLabel("Plugin context:"),
+      "```json",
+      '{"source":"example","payload":{"mode":"test"}}',
+      "```",
+      "",
+      "[[reply_to: 123]] Visible reply",
+    ].join("\n");
+
+    expect(normalizeReplyPayloadsForDelivery([{ text }])).toMatchObject([
+      {
+        text: "Visible reply",
+        replyToId: "123",
+        replyToTag: true,
+      },
+    ]);
+  });
+
+  it("preserves marked metadata examples after visible reply text", () => {
+    const text = [
+      "Here is the metadata format:",
+      "",
+      markInboundContextLabel("Location:"),
+      "```json",
+      '{"latitude":51.5072,"longitude":-0.1276}',
+      "```",
+    ].join("\n");
+
+    expect(normalizeReplyPayloadsForDelivery([{ text }])).toMatchObject([{ text }]);
   });
 
   it("strips unsupported citation control markers from reply payload text", () => {
@@ -507,64 +544,6 @@ describe("normalizeOutboundPayloadsForJson", () => {
   });
 });
 
-describe("normalizeOutboundPayloads", () => {
-  it("keeps channelData-only payloads", () => {
-    const channelData = { line: { flexMessage: { altText: "Card", contents: {} } } };
-    expect(normalizeOutboundPayloads([{ channelData }])).toEqual([
-      { text: "", mediaUrls: [], channelData },
-    ]);
-  });
-
-  it("keeps location-only payloads", () => {
-    const location = { latitude: 48.858844, longitude: 2.294351 };
-    expect(normalizeOutboundPayloads([{ location }])).toEqual([
-      { text: "", mediaUrls: [], location },
-    ]);
-  });
-
-  it("suppresses reasoning payloads during runtime normalization", () => {
-    expect(
-      normalizeOutboundPayloads([
-        { text: "Reasoning:\n_step_", isReasoning: true },
-        { text: "final answer" },
-      ]),
-    ).toEqual([{ text: "final answer", mediaUrls: [] }]);
-  });
-
-  it("formats BTW replies prominently for external delivery", () => {
-    expect(
-      normalizeOutboundPayloads([
-        {
-          text: "323",
-          btw: { question: "what is 17 * 19?" },
-        },
-      ]),
-    ).toEqual([{ text: "BTW\nQuestion: what is 17 * 19?\n\n323", mediaUrls: [] }]);
-  });
-
-  it("keeps delivery and mirror projections aligned", () => {
-    const payloads: ReplyPayload[] = [
-      { text: "Hello" },
-      { text: "MEDIA:https://x.test/a.png\nMEDIA:https://x.test/b.png" },
-      { text: '{"action":"NO_REPLY"}' },
-      { text: "NO_REPLY", mediaUrl: "https://x.test/c.png" },
-    ];
-
-    const deliveryProjection = normalizeOutboundPayloads(payloads);
-    const mirrorProjection = resolveMirrorProjection(payloads);
-
-    expect(mirrorProjection.text).toBe(
-      deliveryProjection
-        .map((payload) => payload.text)
-        .filter((text) => Boolean(text))
-        .join("\n"),
-    );
-    expect(mirrorProjection.mediaUrls).toEqual(
-      deliveryProjection.flatMap((payload) => payload.mediaUrls),
-    );
-  });
-});
-
 describe("OutboundPayloadPlan projections", () => {
   const matrix: ReplyPayload[] = [
     { text: "hello" },
@@ -583,9 +562,15 @@ describe("OutboundPayloadPlan projections", () => {
     );
   });
 
-  it("matches normalizeOutboundPayloads", () => {
+  it("projects transport payloads without no-reply or reasoning entries", () => {
     const plan = createOutboundPayloadPlan(matrix);
-    expect(projectOutboundPayloadPlanForOutbound(plan)).toEqual(normalizeOutboundPayloads(matrix));
+    expect(projectOutboundPayloadPlanForOutbound(plan)).toEqual([
+      { text: "hello", mediaUrls: [] },
+      { text: "", mediaUrls: ["https://x.test/1.png"] },
+      { text: "world", mediaUrls: ["https://x.test/2.png"] },
+      { text: '{"action":"NO_REPLY","note":"keep"}', mediaUrls: [] },
+      { text: "", mediaUrls: [], channelData: { mode: "flex" } },
+    ]);
   });
 
   it("matches normalizeOutboundPayloadsForJson", () => {
@@ -743,6 +728,51 @@ describe("OutboundPayloadPlan projections", () => {
         audioAsVoice: false,
       },
     ]);
+  });
+
+  it.each([
+    {
+      name: "a MEDIA directive",
+      attachment: "MEDIA:https://example.com/config.png",
+      extractMarkdownImages: false,
+    },
+    {
+      name: "an extracted Markdown image",
+      attachment: "![chart](https://example.com/config.png)",
+      extractMarkdownImages: true,
+    },
+  ])("preserves formatted reply text when extracting $name", (testCase) => {
+    const visibleText = [
+      "Here is the config.",
+      "",
+      "```yaml",
+      "server:",
+      "  host: 0.0.0.0",
+      "  ports:",
+      "    - 80",
+      "```",
+      "",
+      "The service is ready.",
+    ].join("\n");
+    const [planned] = createOutboundPayloadPlan(
+      [{ text: `${visibleText}\n\n${testCase.attachment}` }],
+      { extractMarkdownImages: testCase.extractMarkdownImages },
+    );
+
+    expect(planned?.payload.text).toBe(visibleText);
+    expect(planned?.payload.mediaUrls).toEqual(["https://example.com/config.png"]);
+  });
+
+  it("preserves canonical code fences when reply directives and media share a payload", () => {
+    const code = ["```python", "value = 'a  b'", "``` not a close", "other = 'c  d'", "```"].join(
+      "\n",
+    );
+    const [planned] = createOutboundPayloadPlan([
+      { text: `[[reply_to_current]]\n${code}\nMEDIA:https://example.com/config.png` },
+    ]);
+
+    expect(planned?.payload.text).toBe(code);
+    expect(planned?.payload.mediaUrls).toEqual(["https://example.com/config.png"]);
   });
 });
 

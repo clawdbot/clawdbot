@@ -8,14 +8,14 @@ import { formatErrorMessage } from "../../infra/errors.js";
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
 
 /** Metadata persisted on gateway-injected assistant messages that mark a stopped run. */
-export type GatewayInjectedAbortMeta = {
+type GatewayInjectedAbortMeta = {
   aborted: true;
   origin: "rpc" | "stop-command";
   runId: string;
 };
 
 /** Result shape returned after appending an assistant row to a session transcript. */
-export type GatewayInjectedTranscriptAppendResult = {
+type GatewayInjectedTranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
   message?: Record<string, unknown>;

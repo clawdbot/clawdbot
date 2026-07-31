@@ -16,6 +16,7 @@ const requiredDoctorCompatCodes = [
   "doctor-plugin-install-config-ledger",
   "doctor-bundled-plugin-load-paths",
   "doctor-bundled-provider-discovery-allowlist",
+  "doctor-cli-backends-plugin-registration",
   "doctor-codex-supervisor-plugin-config",
   "doctor-message-queue-steering-modes",
   "doctor-web-search-plugin-config",

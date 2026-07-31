@@ -8,7 +8,7 @@ import { scheduleGatewaySigusr1Restart, type ScheduledRestart } from "./restart.
 
 // Safe restart coordination checks active local work before scheduling SIGUSR1
 // restarts, while still allowing explicit deferral bypasses for operators.
-export type SafeGatewayRestartCounts = {
+type SafeGatewayRestartCounts = {
   queueSize: number;
   pendingReplies: number;
   embeddedRuns: number;
@@ -18,7 +18,7 @@ export type SafeGatewayRestartCounts = {
   activeTasks: number;
   totalActive: number;
 };
-export type SafeGatewayRestartBlocker = Omit<GatewayActiveWorkBlocker, "kind"> & {
+type SafeGatewayRestartBlocker = Omit<GatewayActiveWorkBlocker, "kind"> & {
   kind:
     | "queue"
     | "reply"
@@ -41,7 +41,7 @@ type SafeRestartInspectors = Pick<
   | "getTaskBlockers"
 >;
 
-export type SafeGatewayRestartPreflight = {
+type SafeGatewayRestartPreflight = {
   safe: boolean;
   counts: SafeGatewayRestartCounts;
   blockers: SafeGatewayRestartBlocker[];

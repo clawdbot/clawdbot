@@ -84,26 +84,8 @@ export function getRequiredSharedGatewaySessionGeneration(
   return state.required === null ? state.current : state.required;
 }
 
-/** Update current generation and clear stale required-generation markers. */
-export function setCurrentSharedGatewaySessionGeneration(
-  state: SharedGatewaySessionGenerationState,
-  nextGeneration: string | undefined,
-): void {
-  const previousGeneration = state.current;
-  state.current = nextGeneration;
-  if (state.required === nextGeneration) {
-    state.required = null;
-    advanceStateRevision(state);
-    return;
-  }
-  if (state.required !== null && previousGeneration !== nextGeneration) {
-    state.required = null;
-  }
-  advanceStateRevision(state);
-}
-
 /** Claim current generation while preserving required until its transaction commits. */
-export function claimSharedGatewaySessionGeneration(
+function claimSharedGatewaySessionGeneration(
   state: SharedGatewaySessionGenerationState,
   generation: string | undefined,
 ): SharedGatewaySessionGenerationOwnership {
@@ -133,7 +115,7 @@ export function isSharedGatewaySessionGenerationOwnershipCurrent(
 }
 
 /** Replace both generation fields as one ownership-changing mutation. */
-export function replaceSharedGatewaySessionGenerationState(
+function replaceSharedGatewaySessionGenerationState(
   state: SharedGatewaySessionGenerationState,
   next: Pick<SharedGatewaySessionGenerationState, "current" | "required">,
 ): void {

@@ -1,18 +1,17 @@
 // Zalouser tests cover group policy plugin behavior.
+import {
+  resolveScopeRequireMention,
+  resolveScopeToolsPolicy,
+} from "openclaw/plugin-sdk/channel-policy";
 import { describe, expect, it } from "vitest";
 import {
   buildZalouserGroupCandidates,
   findZalouserGroupEntry,
   isZalouserGroupEntryAllowed,
-  normalizeZalouserGroupSlug,
+  resolveZalouserGroupScope,
 } from "./group-policy.js";
 
 describe("zalouser group policy helpers", () => {
-  it("normalizes group slug names", () => {
-    expect(normalizeZalouserGroupSlug(" Team Alpha ")).toBe("team-alpha");
-    expect(normalizeZalouserGroupSlug("#Roadmap Updates")).toBe("roadmap-updates");
-  });
-
   it("builds ordered candidates with optional aliases", () => {
     expect(
       buildZalouserGroupCandidates({
@@ -24,7 +23,7 @@ describe("zalouser group policy helpers", () => {
     ).toEqual(["123", "group:123", "chan-1", "Team Alpha", "team-alpha", "*"]);
   });
 
-  it("builds id-only candidates when name matching is disabled", () => {
+  it("gates name candidates behind dangerouslyAllowNameMatching", () => {
     expect(
       buildZalouserGroupCandidates({
         groupId: "123",
@@ -58,5 +57,38 @@ describe("zalouser group policy helpers", () => {
     expect(isZalouserGroupEntryAllowed({ allow: false } as never)).toBe(false);
     expect(isZalouserGroupEntryAllowed({ enabled: false })).toBe(false);
     expect(isZalouserGroupEntryAllowed(undefined)).toBe(false);
+  });
+
+  it("keeps wildcard fields hidden by a matched whole entry", () => {
+    const scope = resolveZalouserGroupScope(
+      {
+        "123": {},
+        "*": { requireMention: false, tools: { deny: ["exec"] } },
+      },
+      ["123"],
+    );
+
+    expect(resolveScopeRequireMention(scope)).toBe(true);
+    expect(resolveScopeToolsPolicy(scope)).toBeUndefined();
+  });
+
+  it("selects name candidates only when dangerous name matching is enabled", () => {
+    const groups = {
+      "team-alpha": { requireMention: false },
+      "*": { requireMention: true },
+    };
+    const buildScope = (allowNameMatching: boolean) =>
+      resolveZalouserGroupScope(
+        groups,
+        buildZalouserGroupCandidates({
+          groupId: "123",
+          groupName: "Team Alpha",
+          includeWildcard: false,
+          allowNameMatching,
+        }),
+      );
+
+    expect(resolveScopeRequireMention(buildScope(false))).toBe(true);
+    expect(resolveScopeRequireMention(buildScope(true))).toBe(false);
   });
 });

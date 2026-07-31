@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover theme behavior.
 import { describe, expect, it, vi } from "vitest";
 import { parseThemeSelection, resolveTheme } from "./theme.ts";

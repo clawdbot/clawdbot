@@ -78,7 +78,7 @@ export function getBootEchoContextForSession(sessionKey: string | undefined): st
  * never trigger to avoid suppressing legitimate short BOOT.md-directed
  * sends like a literal "good morning".
  */
-export function containsSubstantialBootEcho(
+function containsSubstantialBootEcho(
   outboundText: string,
   bootPrompt: string,
   minLen: number = MIN_ECHO_CHARS,
@@ -111,9 +111,4 @@ export function stripBootEchoFromOutboundText(
     return outboundText;
   }
   return containsSubstantialBootEcho(outboundText, bootPrompt) ? "" : outboundText;
-}
-
-export function resetBootEchoContextForTests(): void {
-  bootContextBySessionKey.clear();
-  bootChunksByNormalizedPrompt.clear();
 }

@@ -24,7 +24,11 @@ cat > "$PLUGIN_DIR/package.json" <<'JSON'
   "version": "1.0.0",
   "openclaw": {
     "extensions": ["./index.cjs"],
-    "setupEntry": "./setup-entry.cjs"
+    "setupEntry": "./setup-entry.cjs",
+    "channel": {
+      "id": "e2e-corrupt-chat",
+      "configuredState": { "env": { "anyOf": ["E2E_CORRUPT_CHAT_TOKEN"] } }
+    }
   }
 }
 JSON
@@ -51,10 +55,7 @@ cat > "$PLUGIN_DIR/openclaw.plugin.json" <<'JSON'
       }
     }
   },
-  "channels": ["e2e-corrupt-chat"],
-  "channelEnvVars": {
-    "e2e-corrupt-chat": ["E2E_CORRUPT_CHAT_TOKEN"]
-  }
+  "channels": ["e2e-corrupt-chat"]
 }
 JSON
 

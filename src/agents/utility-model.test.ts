@@ -3,11 +3,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import {
-  readUtilityModelSetting,
-  resolveProviderDefaultUtilityModelRef,
-  resolveUtilityModelRefForAgent,
-} from "./utility-model.js";
+import { readUtilityModelSetting, resolveUtilityModelRefForAgent } from "./utility-model.js";
 
 function snapshotWithDefaults(defaults: Record<string, string>): PluginMetadataSnapshot {
   const plugins = Object.entries(defaults).map(([provider, defaultUtilityModel], index) => ({
@@ -60,30 +56,6 @@ describe("readUtilityModelSetting", () => {
   });
 });
 
-describe("resolveProviderDefaultUtilityModelRef", () => {
-  it("reads the provider-declared default from the metadata snapshot", () => {
-    const metadataSnapshot = snapshotWithDefaults({
-      openai: "gpt-5.6-luna",
-      anthropic: "claude-haiku-4-5",
-    });
-
-    expect(
-      resolveProviderDefaultUtilityModelRef({
-        cfg: {} as OpenClawConfig,
-        provider: "Anthropic",
-        metadataSnapshot,
-      }),
-    ).toBe("anthropic/claude-haiku-4-5");
-    expect(
-      resolveProviderDefaultUtilityModelRef({
-        cfg: {} as OpenClawConfig,
-        provider: "ollama",
-        metadataSnapshot,
-      }),
-    ).toBeUndefined();
-  });
-});
-
 describe("resolveUtilityModelRefForAgent", () => {
   const metadataSnapshot = snapshotWithDefaults({
     openai: "gpt-5.6-luna",
@@ -128,15 +100,20 @@ describe("resolveUtilityModelRefForAgent", () => {
     );
   });
 
-  it("prefers a caller-resolved primary provider over re-derivation", () => {
+  it("prefers caller-resolved session provider and profile context", () => {
+    const cfg = {
+      agents: { defaults: { model: "anthropic/claude-fable-5@personal" } },
+    } as OpenClawConfig;
+
     expect(
       resolveUtilityModelRefForAgent({
-        cfg: {} as OpenClawConfig,
+        cfg,
         agentId: "main",
-        primaryProvider: "openai",
+        primaryProvider: "OpenAI",
+        primaryModelRef: "openai/gpt-5.5@work",
         metadataSnapshot,
       }),
-    ).toBe("openai/gpt-5.6-luna");
+    ).toBe("openai/gpt-5.6-luna@work");
   });
 
   it("returns undefined for providers without a declared default", () => {

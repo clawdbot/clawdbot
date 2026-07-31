@@ -1,5 +1,7 @@
-// Fireworks provider module implements model/runtime integration.
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+import {
+  buildManifestModelProviderConfig,
+  readManifestProviderDefaultModelRef,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -10,9 +12,13 @@ const FIREWORKS_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
   providerId: "fireworks",
   catalog: manifest.modelCatalog.providers.fireworks,
 });
+export const FIREWORKS_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(
+  manifest,
+  "fireworks",
+)!;
 
 export const FIREWORKS_BASE_URL = FIREWORKS_MANIFEST_PROVIDER.baseUrl;
-export const FIREWORKS_DEFAULT_MODEL_ID = "accounts/fireworks/routers/kimi-k2p5-turbo";
+export const FIREWORKS_DEFAULT_MODEL_ID = FIREWORKS_DEFAULT_MODEL_REF.slice("fireworks/".length);
 
 function requireFireworksManifestModel(id: string): ModelDefinitionConfig {
   const model = FIREWORKS_MANIFEST_PROVIDER.models.find((entry) => entry.id === id);

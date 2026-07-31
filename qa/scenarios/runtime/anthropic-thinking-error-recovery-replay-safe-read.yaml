@@ -7,8 +7,11 @@ scenario:
     primary:
       - anthropic.signed-redacted-thinking-replay
     secondary:
-      - runtime.retry-policy
+      - agent-runtime.failure-recovery-retry-policy
   gatewayConfigPatch:
+    tools:
+      codeMode:
+        enabled: false
     agents:
       defaults:
         models:
@@ -48,49 +51,88 @@ flow:
             - ref: env
             - 60000
         - call: reset
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - set: requestCursorBefore
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - set: sessionKey
           value:
             expr: "`agent:qa:anthropic-thinking-error:${randomUUID().slice(0, 8)}`"
+        - set: scenarioPrompt
+          value:
+            expr: "`${config.prompt} QA scenario run: ${sessionKey}`"
         - set: modelAck
           value:
             expr: "await env.gateway.call('sessions.patch', { key: sessionKey, model: config.anthropicModelRef }, { timeoutMs: liveTurnTimeoutMs(env, 45000) })"
-        - call: runAgentPrompt
-          args:
-            - ref: env
-            - sessionKey:
-                ref: sessionKey
-              message:
-                expr: config.prompt
-              timeoutMs:
-                expr: liveTurnTimeoutMs(env, 45000)
-        - call: waitForOutboundMessage
-          saveAs: outbound
-          args:
-            - ref: state
-            - lambda:
-                params: [candidate]
-                expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes(config.expectedReply)"
-            - expr: liveTurnTimeoutMs(env, 30000)
         - assert:
-            expr: "outbound.text.includes(config.expectedReply)"
+            expr: "modelAck?.ok === true && modelAck.resolved?.modelProvider === 'anthropic' && modelAck.resolved?.model === 'claude-opus-4-8'"
             message:
-              expr: "`missing Anthropic thinking-error recovery marker: ${outbound.text}`"
-        - if:
-            expr: "Boolean(env.mock)"
-            then:
-              - set: scenarioRequests
+              expr: "`Anthropic thinking-error recovery session resolved to ${String(modelAck?.resolved?.modelProvider ?? 'unknown')}/${String(modelAck?.resolved?.model ?? 'unknown')}`"
+        - set: effectiveToolIds
+          value:
+            expr: "Array.from(await readEffectiveTools(env, sessionKey)).sort()"
+        - assert:
+            expr: "effectiveToolIds.includes('read')"
+            message:
+              expr: "`Anthropic thinking-error recovery requires the replay-safe read tool; effective tools: ${JSON.stringify(effectiveToolIds)}`"
+        - try:
+            actions:
+              - call: runAgentPrompt
+                args:
+                  - ref: env
+                  - sessionKey:
+                      ref: sessionKey
+                    message:
+                      expr: scenarioPrompt
+                    provider: anthropic
+                    model: claude-opus-4-8
+                    timeoutMs:
+                      expr: liveTurnTimeoutMs(env, 45000)
+              - if:
+                  expr: "Boolean(env.mock)"
+                  then:
+                    - set: scenarioRequests
+                      value:
+                        expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)"
+                    - assert:
+                        expr: "scenarioRequests.some((request) => String(request.allInputText ?? '').includes(config.promptSnippet) && request.providerVariant === 'anthropic' && request.plannedToolName === 'read')"
+                        message: expected replay-safe read request on the Anthropic mock route
+                    - assert:
+                        expr: "scenarioRequests.filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet) && request.providerVariant === 'anthropic').length >= 3"
+                        message: expected initial read, terminal-error attempt, and same-prompt retry
+                    - assert:
+                        expr: "!scenarioRequests.some((request) => String(request.allInputText ?? '').includes(config.visibleAnswerRetryNeedle))"
+                        message: expected same-prompt retry, not visible-answer continuation retry
+              - call: waitForOutboundMessage
+                saveAs: outbound
+                args:
+                  - ref: state
+                  - lambda:
+                      params: [candidate]
+                      expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes(config.expectedReply)"
+                  - expr: liveTurnTimeoutMs(env, 30000)
+                  - sinceIndex:
+                      ref: outboundStartIndex
+              - assert:
+                  expr: "outbound.text.includes(config.expectedReply)"
+                  message:
+                    expr: "`missing Anthropic thinking-error recovery marker: ${outbound.text}`"
+            catchAs: anthropicRecoveryError
+            catch:
+              - set: anthropicRecoveryDebugRequests
                 value:
-                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))"
-              - assert:
-                  expr: "scenarioRequests.some((request) => String(request.allInputText ?? '').includes(config.promptSnippet) && request.providerVariant === 'anthropic' && request.plannedToolName === 'read')"
-                  message: expected replay-safe read request on the Anthropic mock route
-              - assert:
-                  expr: "scenarioRequests.filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet) && request.providerVariant === 'anthropic').length >= 3"
-                  message: expected initial read, terminal-error attempt, and same-prompt retry
-              - assert:
-                  expr: "!scenarioRequests.some((request) => String(request.allInputText ?? '').includes(config.visibleAnswerRetryNeedle))"
-                  message: expected same-prompt retry, not visible-answer continuation retry
+                  expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`).catch(() => [])).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)).map((request) => ({ providerVariant: request.providerVariant ?? null, model: request.model ?? null, declaredToolNames: Array.isArray(request.body?.tools) ? request.body.tools.flatMap((tool) => { const name = tool?.name ?? tool?.function?.name; return typeof name === 'string' ? [name] : []; }).sort() : [], plannedToolName: request.plannedToolName ?? null, plannedToolCallId: request.plannedToolCallId ?? null, toolOutputCallId: request.toolOutputCallId ?? null, hasToolOutput: Boolean(request.toolOutput), toolOutputStructuredError: request.toolOutputStructuredError === true, toolOutputHasEnoent: /\bENOENT\b/i.test(String(request.toolOutput ?? '')), toolOutputHasPermissionError: /\b(?:EACCES|EPERM)\b/i.test(String(request.toolOutput ?? '')), toolOutputHasWorkspaceBoundaryError: /outside (?:the )?(?:allowed )?workspace|path traversal/i.test(String(request.toolOutput ?? '')), toolOutputHasSandboxError: /\bsandbox\b/i.test(String(request.toolOutput ?? '')), toolOutputHasMissingToolError: /tool.{0,32}not found/i.test(String(request.toolOutput ?? '')), hasVisibleAnswerContinuation: String(request.allInputText ?? '').includes(config.visibleAnswerRetryNeedle) })) : []"
+              - set: anthropicRecoveryKickoffExists
+                value:
+                  expr: "await fs.stat(path.join(env.gateway.workspaceDir, 'QA_KICKOFF_TASK.md')).then((entry) => entry.isFile()).catch(() => false)"
+              - set: anthropicRecoveryTranscript
+                value:
+                  expr: "await readSessionTranscriptSummary(env, sessionKey, { allowEmpty: true }).then((summary) => ({ lastAssistantStopReason: summary.lastAssistantStopReason ?? null, lastAssistantContentTypes: summary.lastAssistantContentTypes ?? [], readCalls: summary.assistantToolCallCounts.read ?? 0, completedReads: summary.completedToolCallCounts.read ?? 0, successfulReads: summary.successfulToolCallCounts.read ?? 0, hasExpectedFinalMarker: String(summary.finalText ?? '').includes(config.expectedReply) })).catch(() => null)"
+              - set: anthropicRecoveryOutbound
+                value:
+                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex).map((message) => ({ conversationId: message.conversation.id, hasExpectedMarker: message.text.includes(config.expectedReply), isFailure: message.text.trim().startsWith('⚠️') }))"
+              - throw:
+                  expr: "`Anthropic signed-thinking recovery failed: ${JSON.stringify({ errorKind: anthropicRecoveryError instanceof Error ? anthropicRecoveryError.name : typeof anthropicRecoveryError, timedOut: /timed out/i.test(formatErrorMessage(anthropicRecoveryError)), modelProvider: modelAck?.resolved?.modelProvider ?? null, model: modelAck?.resolved?.model ?? null, effectiveToolIds, workspaceKickoffExists: anthropicRecoveryKickoffExists, requests: anthropicRecoveryDebugRequests, transcript: anthropicRecoveryTranscript, outbound: anthropicRecoveryOutbound })}`"
       detailsExpr: "env.mock ? `${outbound.text}\\nrequests=${String(scenarioRequests?.length ?? 0)}` : outbound.text"

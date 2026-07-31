@@ -16,6 +16,8 @@ export type PluginStateKeyedStore<T> = {
     updateValue: (current: T | undefined) => T | undefined,
     opts?: { ttlMs?: number },
   ) => Promise<boolean>;
+  /** Atomically deletes an existing entry when its current value matches. */
+  deleteIf?: (key: string, predicate: (current: T) => boolean) => Promise<boolean>;
   lookup(key: string): Promise<T | undefined>;
   consume(key: string): Promise<T | undefined>;
   delete(key: string): Promise<boolean>;
@@ -32,6 +34,8 @@ export type PluginStateSyncKeyedStore<T> = {
     updateValue: (current: T | undefined) => T | undefined,
     opts?: { ttlMs?: number },
   ) => boolean;
+  /** Atomically deletes an existing entry when its current value matches. */
+  deleteIf?: (key: string, predicate: (current: T) => boolean) => boolean;
   lookup(key: string): T | undefined;
   consume(key: string): T | undefined;
   delete(key: string): boolean;

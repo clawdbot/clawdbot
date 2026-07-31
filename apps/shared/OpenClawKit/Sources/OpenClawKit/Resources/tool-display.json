@@ -44,6 +44,36 @@
         "screenIndex"
       ]
     },
+    "mobile_ui": {
+      "emoji": "📱",
+      "title": "Mobile UI",
+      "detailKeys": [
+        "action",
+        "mobileAction",
+        "snapshotId",
+        "node",
+        "nodeId"
+      ]
+    },
+    "screen": {
+      "emoji": "🖥️",
+      "title": "Screen",
+      "detailKeys": [
+        "action",
+        "sessionKey",
+        "dock"
+      ]
+    },
+    "terminal": {
+      "emoji": "⌨️",
+      "title": "Terminal",
+      "detailKeys": [
+        "action",
+        "sessionId",
+        "command",
+        "cwd"
+      ]
+    },
     "process": {
       "emoji": "🧰",
       "title": "Process",
@@ -255,6 +285,16 @@
         }
       }
     },
+    "dashboard": {
+      "emoji": "📋",
+      "title": "Dashboard",
+      "detailKeys": [
+        "action",
+        "tabId",
+        "name",
+        "title"
+      ]
+    },
     "nodes": {
       "emoji": "📱",
       "title": "Nodes",
@@ -421,6 +461,13 @@
         "plan.0.step"
       ]
     },
+    "ask_user": {
+      "emoji": "❓",
+      "title": "Ask User",
+      "detailKeys": [
+        "questions.0.question"
+      ]
+    },
     "spawn_task": {
       "emoji": "✨",
       "title": "Suggest Task",
@@ -447,9 +494,9 @@
         "proposal_id"
       ]
     },
-    "crestodian": {
+    "openclaw": {
       "emoji": "🦀",
-      "title": "Crestodian",
+      "title": "OpenClaw",
       "detailKeys": [
         "action",
         "path",
@@ -459,15 +506,10 @@
     "gateway": {
       "emoji": "🔌",
       "title": "Gateway",
-      "actions": {
-        "restart": {
-          "label": "restart",
-          "detailKeys": [
-            "reason",
-            "delayMs"
-          ]
-        }
-      }
+      "detailKeys": [
+        "action",
+        "path"
+      ]
     },
     "exec": {
       "emoji": "🛠️",
@@ -494,6 +536,45 @@
         "model"
       ]
     },
+    "sessions": {
+      "emoji": "🗂️",
+      "title": "Session Settings",
+      "actions": {
+        "patch": {
+          "label": "update",
+          "detailKeys": [
+            "sessionKey",
+            "label",
+            "pinned",
+            "archived",
+            "model",
+            "thinkingLevel"
+          ]
+        },
+        "group_list": {
+          "label": "groups"
+        },
+        "group_set": {
+          "label": "set groups",
+          "detailKeys": [
+            "names"
+          ]
+        },
+        "group_rename": {
+          "label": "rename group",
+          "detailKeys": [
+            "name",
+            "to"
+          ]
+        },
+        "group_delete": {
+          "label": "delete group",
+          "detailKeys": [
+            "name"
+          ]
+        }
+      }
+    },
     "sessions_list": {
       "emoji": "🗂️",
       "title": "Sessions",
@@ -507,6 +588,29 @@
         "includeDerivedTitles",
         "includeLastMessage",
         "messageLimit"
+      ]
+    },
+    "conversations_list": {
+      "emoji": "💬",
+      "title": "Conversations",
+      "detailKeys": [
+        "channel",
+        "limit"
+      ]
+    },
+    "conversations_send": {
+      "emoji": "📨",
+      "title": "Conversation Send",
+      "detailKeys": [
+        "conversationRef"
+      ]
+    },
+    "conversations_turn": {
+      "emoji": "↔️",
+      "title": "Conversation Turn",
+      "detailKeys": [
+        "conversationRef",
+        "timeoutSeconds"
       ]
     },
     "sessions_send": {
@@ -591,6 +695,21 @@
         "thinking",
         "runTimeoutSeconds",
         "cleanup"
+      ]
+    },
+    "agents_wait": {
+      "emoji": "⏳",
+      "title": "Wait for Agents",
+      "detailKeys": [
+        "ids",
+        "timeoutSeconds"
+      ]
+    },
+    "structured_output": {
+      "emoji": "🧾",
+      "title": "Structured Output",
+      "detailKeys": [
+        "result"
       ]
     },
     "subagents": {

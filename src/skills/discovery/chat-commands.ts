@@ -18,8 +18,10 @@ import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { listReservedChatSlashCommandNames } from "./chat-command-invocation.js";
 import { buildWorkspaceSkillCommandSpecs } from "./command-specs.js";
 export {
+  hasSkillReferenceCandidate,
   listReservedChatSlashCommandNames,
   resolveSkillCommandInvocation,
+  resolveSkillReferenceInvocations,
 } from "./chat-command-invocation.js";
 
 export function listSkillCommandsForWorkspace(params: {
@@ -136,7 +138,3 @@ export function listSkillCommandsForAgents(params: {
     left.skillName.localeCompare(right.skillName, "en"),
   );
 }
-
-export const testing = {
-  dedupeBySkillName,
-};

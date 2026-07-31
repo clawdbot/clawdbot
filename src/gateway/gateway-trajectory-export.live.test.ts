@@ -109,7 +109,7 @@ async function writeLiveGatewayConfig(params: {
     commands: { ownerAllowFrom: ["*"] },
     plugins: { allow: ["codex"] },
     agents: {
-      list: [{ id: "dev", default: true, tools: { exec: { host: "node" } } }],
+      entries: { dev: { default: true, tools: { exec: { host: "node" } } } },
       defaults: {
         workspace: params.workspace,
         skipBootstrap: true,
@@ -202,6 +202,16 @@ function formatTextPreview(texts: string[], maxChars = 800): string {
   return combined.length > maxChars ? `${combined.slice(0, maxChars)}...` : combined;
 }
 
+function findTrajectoryExportInstructionText(
+  texts: string[],
+  expectedTexts: string[],
+): string | undefined {
+  const combined = texts.filter((text) => text.trim().length > 0).join("\n\n");
+  return expectedTexts.every((expectedText) => combined.includes(expectedText))
+    ? combined
+    : undefined;
+}
+
 function extractAssistantTexts(messages: unknown[]): string[] {
   const texts: string[] = [];
   for (const entry of messages) {
@@ -268,7 +278,8 @@ async function waitForTrajectoryExportSignal(params: {
   client: GatewayClient;
   events: EventFrame[];
   eventStartIndex: number;
-  expectedText: string;
+  expectedTexts: string[];
+  initialTexts?: string[];
   runId: string;
   sessionKey: string;
   timeoutMs: number;
@@ -283,7 +294,10 @@ async function waitForTrajectoryExportSignal(params: {
     finalTexts = newEvents
       .map((event) => extractChatFinalText(event, params.runId))
       .filter((text): text is string => typeof text === "string" && text.trim().length > 0);
-    const matchedText = finalTexts.find((text) => text.includes(params.expectedText));
+    const matchedText = findTrajectoryExportInstructionText(
+      [...(params.initialTexts ?? []), ...finalTexts, ...(assistantTexts ?? [])],
+      params.expectedTexts,
+    );
     if (matchedText) {
       return { ...(approvalId ? { approvalId } : {}), instructionText: matchedText };
     }
@@ -298,8 +312,9 @@ async function waitForTrajectoryExportSignal(params: {
           { timeoutMs: 10_000 },
         )) as { messages?: unknown[] };
         assistantTexts = extractAssistantTexts(history.messages ?? []);
-        const matchedHistoryText = assistantTexts.find((text) =>
-          text.includes(params.expectedText),
+        const matchedHistoryText = findTrajectoryExportInstructionText(
+          [...(params.initialTexts ?? []), ...finalTexts, ...assistantTexts],
+          params.expectedTexts,
         );
         if (matchedHistoryText) {
           return { ...(approvalId ? { approvalId } : {}), instructionText: matchedHistoryText };
@@ -554,18 +569,19 @@ describeLive("gateway live trajectory export", () => {
           exportResponse?.status === "ok" ||
           exportResponse?.status === "started",
       ).toBe(true);
-      const exportSignal: TrajectoryExportSignal =
-        typeof exportResponse?.message === "object"
-          ? { instructionText: extractVisibleMessageText(exportResponse.message) ?? "" }
-          : await waitForTrajectoryExportSignal({
-              client,
-              events: gatewayEvents,
-              eventStartIndex: exportEventStartIndex,
-              expectedText: "Trajectory exports can include",
-              runId: exportRunId,
-              sessionKey,
-              timeoutMs: TRAJECTORY_EXPORT_INSTRUCTION_TIMEOUT_MS,
-            });
+      const exportSignal = await waitForTrajectoryExportSignal({
+        client,
+        events: gatewayEvents,
+        eventStartIndex: exportEventStartIndex,
+        expectedTexts: ["Trajectory exports can include", "through exec approval", "Approve once"],
+        initialTexts:
+          typeof exportResponse?.message === "object"
+            ? [extractVisibleMessageText(exportResponse.message) ?? ""]
+            : [],
+        runId: exportRunId,
+        sessionKey,
+        timeoutMs: TRAJECTORY_EXPORT_INSTRUCTION_TIMEOUT_MS,
+      });
       expect(exportSignal.instructionText).toContain("Trajectory exports can include");
       expect(exportSignal.instructionText).toContain("through exec approval");
       expect(exportSignal.instructionText).toContain("Approve once");

@@ -101,7 +101,7 @@ function formatDiscordGatewayErrorMessage(err: unknown): string {
   return detail;
 }
 
-export function classifyDiscordGatewayEvent(params: {
+function classifyDiscordGatewayEvent(params: {
   err: unknown;
   isDisallowedIntentsError: (err: unknown) => boolean;
 }): DiscordGatewayEvent {

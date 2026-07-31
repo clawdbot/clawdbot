@@ -9,19 +9,12 @@ import {
   readClaudeCliFallbackSeed,
   readClaudeCliSessionMessages,
   resolveClaudeCliBindingSessionId,
-  resolveClaudeCliSessionFilePath,
 } from "./cli-session-history.claude.js";
 import { mergeImportedChatHistoryMessages } from "./cli-session-history.merge.js";
 
 const ANTHROPIC_PROVIDER = "anthropic";
 
-export {
-  mergeImportedChatHistoryMessages,
-  readClaudeCliFallbackSeed,
-  readClaudeCliSessionMessages,
-  resolveClaudeCliBindingSessionId,
-  resolveClaudeCliSessionFilePath,
-};
+export { readClaudeCliFallbackSeed, resolveClaudeCliBindingSessionId };
 export type { ClaudeCliFallbackSeed };
 
 type CliSessionHistoryAugmentation = {

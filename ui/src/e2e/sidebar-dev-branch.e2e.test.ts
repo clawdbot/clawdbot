@@ -55,7 +55,16 @@ describeControlUiE2e("Control UI sidebar dev branch badge E2E", () => {
       await expect
         .poll(() => badge.locator(".sidebar-footer-branch__name").textContent())
         .toBe(DEV_BRANCH);
-      await expect.poll(() => badge.getAttribute("title")).toBe(DEV_BRANCH);
+      // The branch name surfaces via the shared tooltip's accessible
+      // description instead of a native title attribute.
+      await expect
+        .poll(() =>
+          badge.evaluate((element) => {
+            const id = element.getAttribute("aria-describedby");
+            return id ? (document.getElementById(id)?.textContent ?? null) : null;
+          }),
+        )
+        .toBe(DEV_BRANCH);
 
       const colors = await badge.evaluate((element) => {
         // Compare resolved colors: getComputedStyle().color returns rgb() while
@@ -92,7 +101,7 @@ describeControlUiE2e("Control UI sidebar dev branch badge E2E", () => {
     try {
       const response = await page.goto(server.baseUrl);
       expect(response?.status()).toBe(200);
-      await page.locator(".sidebar-agent-chip").waitFor();
+      await page.locator(".sidebar-agent-card").waitFor();
       expect(await page.locator(".sidebar-footer-branch").count()).toBe(0);
     } finally {
       await context.close();

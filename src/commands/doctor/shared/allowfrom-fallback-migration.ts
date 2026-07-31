@@ -107,7 +107,9 @@ function schemaAllowsConfigPath(schema: unknown, path: SchemaPath): boolean {
 
 function generatedSchemaAllowsGroupAllowFrom(channelName: string, path: SchemaPath): boolean {
   const schema = findGeneratedChannelConfigSchema(channelName);
-  return !schema || schemaAllowsConfigPath(schema, path);
+  // Extension-installed channels (e.g. ClawHub agentmail) have no generated-metadata entry;
+  // without schema info we can't prove the write is safe, so fail closed rather than open.
+  return schema !== undefined && schemaAllowsConfigPath(schema, path);
 }
 
 function migrateRecord(params: {

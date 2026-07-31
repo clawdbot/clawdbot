@@ -7,7 +7,8 @@ import {
   type PluginRegistrySnapshotDiagnostic,
   type PluginRegistrySnapshotSource,
 } from "./plugin-registry.js";
-import { createEmptyPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import { buildPluginDependencyStatus } from "./status-dependencies-core.js";
 import type { PluginLogger } from "./types.js";
 

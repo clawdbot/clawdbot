@@ -8,7 +8,7 @@ export function validatePrivateKey(key: string): Uint8Array {
   const trimmed = key.trim();
 
   // Handle nsec (bech32) format
-  if (trimmed.startsWith("nsec1")) {
+  if (trimmed.startsWith("nsec1") || trimmed.startsWith("NSEC1")) {
     const decoded = nip19.decode(trimmed);
     if (decoded.type !== "nsec") {
       throw new Error("Invalid nsec key: wrong type");
@@ -44,7 +44,7 @@ export function normalizePubkey(input: string): string {
   const trimmed = input.trim();
 
   // npub format - decode to hex
-  if (trimmed.startsWith("npub1")) {
+  if (trimmed.startsWith("npub1") || trimmed.startsWith("NPUB1")) {
     const decoded = nip19.decode(trimmed);
     if (decoded.type !== "npub" || typeof decoded.data !== "string") {
       throw new Error("Invalid npub key");

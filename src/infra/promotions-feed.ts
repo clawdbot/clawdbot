@@ -32,7 +32,7 @@ type PromotionsFeedDatabase = Pick<
   "clawhub_promotions_feed_state" | "clawhub_promotion_claims"
 >;
 
-export type PromotionsFeedState = {
+type PromotionsFeedState = {
   etag?: string;
   sequence?: number;
   expiresAtMs?: number;
@@ -41,7 +41,7 @@ export type PromotionsFeedState = {
   notifiedSlugs: Set<string>;
 };
 
-export type PromotionClaimRecord = {
+type PromotionClaimRecord = {
   slug: string;
   provider?: string;
   modelKeys: string[];
@@ -125,7 +125,7 @@ function readPromotionsFeedStateWithMetadata(): PromotionsFeedStateRead {
   }
 }
 
-export function readPromotionsFeedState(): PromotionsFeedState {
+function readPromotionsFeedState(): PromotionsFeedState {
   return readPromotionsFeedStateWithMetadata().state;
 }
 

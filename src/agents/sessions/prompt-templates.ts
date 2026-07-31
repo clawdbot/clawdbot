@@ -1,20 +1,16 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  parseCommandArgs,
+  substituteArgs,
+} from "../../../packages/agent-core/src/harness/prompt-template-arguments.js";
 /**
  * Prompt template discovery and loading.
  *
  * Reads markdown prompt templates from user, project, and package sources with frontmatter metadata.
  */
 import { expandTildePath } from "../../shared/tilde-path.js";
-export {
-  parseCommandArgs,
-  substituteArgs,
-} from "../../../packages/agent-core/src/harness/prompt-template-arguments.js";
-import {
-  parseCommandArgs,
-  substituteArgs,
-} from "../../../packages/agent-core/src/harness/prompt-template-arguments.js";
 import { CONFIG_DIR_NAME } from "../config.js";
 import { parseFrontmatter } from "../utils/frontmatter.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";

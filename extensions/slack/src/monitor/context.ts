@@ -3,7 +3,6 @@ import type { App } from "@slack/bolt";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type {
   OpenClawConfig,
   SlackReactionNotificationMode,
@@ -24,6 +23,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackError } from "../errors.js";
 import type { SlackMessageEvent } from "../types.js";
+import { createSlackAgentViewState } from "./agent-view-state.js";
 import { normalizeAllowList, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
 import type { SlackChannelConfigEntries } from "./channel-config.js";
 import { resolveSlackChannelConfig } from "./channel-config.js";
@@ -31,14 +31,15 @@ import { normalizeSlackChannelType } from "./channel-type.js";
 import { resolveSessionKey } from "./config.runtime.js";
 import type { SlackInstallationIdentity } from "./enterprise-install.js";
 import type { SlackEventScope } from "./event-scope.js";
+import { readLruMapEntry, writeLruMapEntry } from "./lru-map-cache.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
+import {
+  type SlackSuggestedPromptsInput,
+  updateSlackSuggestedPrompts,
+} from "./suggested-prompts.js";
 
 export { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
-
-export type SlackAssistantSuggestedPrompt = {
-  title: string;
-  message: string;
-};
+export { DEFAULT_SLACK_SUGGESTED_PROMPTS } from "./suggested-prompts.js";
 
 export type SlackAssistantThreadContext = {
   assistantChannelId: string;
@@ -64,6 +65,7 @@ type SlackChannelCacheEntry = {
 
 const SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT = "assistant_thread_context";
 const SLACK_CHANNEL_CACHE_MAX_ENTRIES = 1024;
+const SLACK_USER_CACHE_MAX_ENTRIES = 2048;
 const SLACK_CHANNEL_DENIAL_WARNING_TTL_MS = 5 * 60_000;
 const SLACK_CHANNEL_DENIAL_WARNING_MAX_ENTRIES = 1024;
 
@@ -146,25 +148,13 @@ export type SlackMonitorContext = {
   replyToMode: "off" | "first" | "all" | "batched";
   threadHistoryScope: "thread" | "channel";
   threadInheritParent: boolean;
-  threadRequireExplicitMention: boolean;
   slashCommand: Required<import("openclaw/plugin-sdk/config-contracts").SlackSlashCommandConfig>;
   textLimit: number;
   ackReactionScope: string;
   typingReaction: string;
   mediaMaxBytes: number;
-  removeAckAfterReply: boolean;
 
   logger: ReturnType<typeof getChildLogger>;
-  markMessageSeen: (
-    channelId: string | undefined,
-    ts?: string,
-    eventScope?: SlackEventScope,
-  ) => boolean;
-  releaseSeenMessage: (
-    channelId: string | undefined,
-    ts?: string,
-    eventScope?: SlackEventScope,
-  ) => void;
   shouldDropMismatchedSlackEvent: (body: unknown) => boolean;
   resolveSlackSystemEventSessionKey: (params: {
     channelId?: string | null;
@@ -209,12 +199,11 @@ export type SlackMonitorContext = {
     context: Omit<SlackAssistantThreadContext, "updatedAt">,
     eventScope?: SlackEventScope,
   ) => void;
-  setSlackAssistantSuggestedPrompts: (params: {
-    channelId: string;
-    threadTs: string;
-    title?: string;
-    prompts: SlackAssistantSuggestedPrompt[];
-  }) => Promise<boolean>;
+  setSlackSuggestedPrompts: (params: SlackSuggestedPromptsInput) => Promise<boolean>;
+  recordSlackAgentView: () => Promise<void>;
+  isSlackAgentView: () => Promise<boolean>;
+  recordSlackManagedViewThread: (channelId: string, threadTs: string) => Promise<void>;
+  isSlackManagedViewThread: (channelId: string, threadTs: string) => Promise<boolean>;
 };
 
 const SLACK_ASSISTANT_CONTEXT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -254,20 +243,17 @@ export function createSlackMonitorContext(params: {
   replyToMode: SlackMonitorContext["replyToMode"];
   threadHistoryScope: SlackMonitorContext["threadHistoryScope"];
   threadInheritParent: SlackMonitorContext["threadInheritParent"];
-  threadRequireExplicitMention: SlackMonitorContext["threadRequireExplicitMention"];
   slashCommand: SlackMonitorContext["slashCommand"];
   textLimit: number;
   ackReactionScope: string;
   typingReaction: string;
   mediaMaxBytes: number;
-  removeAckAfterReply: boolean;
 }): SlackMonitorContext {
   const channelHistories = new Map<string, HistoryEntry[]>();
   const logger = getChildLogger({ module: "slack-auto-reply" });
 
   const channelCache = new Map<string, SlackChannelCacheEntry>();
   const userCache = new Map<string, { name?: string }>();
-  const seenMessages = createDedupeCache({ ttlMs: 60_000, maxSize: 500 });
   // Rate-limit active denials while retaining periodic evidence; bound keys against config churn.
   const channelDenialWarnings = createDedupeCache({
     ttlMs: SLACK_CHANNEL_DENIAL_WARNING_TTL_MS,
@@ -275,6 +261,13 @@ export function createSlackMonitorContext(params: {
   });
   const assistantThreadContexts = new Map<string, SlackAssistantThreadContext>();
   let lastAssistantContextCleanupAt = Date.now();
+  const agentViewState = createSlackAgentViewState({
+    accountId: params.accountId,
+    teamId: params.teamId,
+    apiAppId: params.apiAppId,
+    warn: (action, error) =>
+      logger.warn({ error: formatSlackError(error) }, `Slack Agent View state failed to ${action}`),
+  });
 
   const allowFrom = normalizeAllowList(params.allowFrom);
   const groupDmChannels = normalizeAllowList(params.groupDmChannels);
@@ -287,22 +280,6 @@ export function createSlackMonitorContext(params: {
 
   const scopedKey = (key: string, eventScope?: SlackEventScope) =>
     eventScope ? `${params.accountId}:${eventScope.teamId}:${key}` : key;
-
-  const readCachedChannel = (cacheKey: string): SlackChannelCacheEntry | undefined => {
-    const cached = channelCache.get(cacheKey);
-    if (cached) {
-      // Active rooms stay resident while the bounded cache evicts the oldest entry.
-      channelCache.delete(cacheKey);
-      channelCache.set(cacheKey, cached);
-    }
-    return cached;
-  };
-
-  const writeCachedChannel = (cacheKey: string, entry: SlackChannelCacheEntry): void => {
-    channelCache.delete(cacheKey);
-    channelCache.set(cacheKey, entry);
-    pruneMapToMaxSize(channelCache, SLACK_CHANNEL_CACHE_MAX_ENTRIES);
-  };
 
   const rememberSlackChannelType = (
     channelId: string | null | undefined,
@@ -321,16 +298,21 @@ export function createSlackMonitorContext(params: {
       return;
     }
     const cacheKey = scopedKey(id, eventScope);
-    const cached = readCachedChannel(cacheKey);
+    const cached = readLruMapEntry(channelCache, cacheKey);
     const type = normalizeSlackChannelType(normalizedType, id);
     if (cached?.info.type === type) {
       return;
     }
     // Type-only entries must not suppress a later conversations.info metadata fill.
-    writeCachedChannel(cacheKey, {
-      info: { ...cached?.info, type },
-      metadataLoaded: cached?.metadataLoaded ?? false,
-    });
+    writeLruMapEntry(
+      channelCache,
+      cacheKey,
+      {
+        info: { ...cached?.info, type },
+        metadataLoaded: cached?.metadataLoaded ?? false,
+      },
+      SLACK_CHANNEL_CACHE_MAX_ENTRIES,
+    );
   };
 
   const recallSlackChannelType = (
@@ -338,29 +320,7 @@ export function createSlackMonitorContext(params: {
     eventScope?: SlackEventScope,
   ): SlackMessageEvent["channel_type"] | undefined => {
     const id = normalizeOptionalString(channelId);
-    return id ? readCachedChannel(scopedKey(id, eventScope))?.info.type : undefined;
-  };
-
-  const markMessageSeen = (
-    channelId: string | undefined,
-    ts?: string,
-    eventScope?: SlackEventScope,
-  ) => {
-    if (!channelId || !ts) {
-      return false;
-    }
-    return seenMessages.check(scopedKey(`${channelId}:${ts}`, eventScope));
-  };
-
-  const releaseSeenMessage = (
-    channelId: string | undefined,
-    ts?: string,
-    eventScope?: SlackEventScope,
-  ) => {
-    if (!channelId || !ts) {
-      return;
-    }
-    seenMessages.delete(scopedKey(`${channelId}:${ts}`, eventScope));
+    return id ? readLruMapEntry(channelCache, scopedKey(id, eventScope))?.info.type : undefined;
   };
 
   const assistantContextKey = (channelId: string, threadTs: string, eventScope?: SlackEventScope) =>
@@ -508,7 +468,7 @@ export function createSlackMonitorContext(params: {
 
   const resolveChannelName = async (channelId: string, eventScope?: SlackEventScope) => {
     const cacheKey = scopedKey(channelId, eventScope);
-    const cached = readCachedChannel(cacheKey);
+    const cached = readLruMapEntry(channelCache, cacheKey);
     if (cached?.metadataLoaded) {
       return cached.info;
     }
@@ -537,7 +497,7 @@ export function createSlackMonitorContext(params: {
         info: { name, type: cached?.info.type ?? type, topic, purpose },
         metadataLoaded: true,
       };
-      writeCachedChannel(cacheKey, entry);
+      writeLruMapEntry(channelCache, cacheKey, entry, SLACK_CHANNEL_CACHE_MAX_ENTRIES);
       return entry.info;
     } catch {
       return cached?.info ?? {};
@@ -546,7 +506,7 @@ export function createSlackMonitorContext(params: {
 
   const resolveUserName = async (userId: string, eventScope?: SlackEventScope) => {
     const cacheKey = scopedKey(userId, eventScope);
-    const cached = userCache.get(cacheKey);
+    const cached = readLruMapEntry(userCache, cacheKey);
     if (cached) {
       return cached;
     }
@@ -558,7 +518,7 @@ export function createSlackMonitorContext(params: {
       const profile = info.user?.profile;
       const name = profile?.display_name || profile?.real_name || info.user?.name || undefined;
       const entry = { name };
-      userCache.set(cacheKey, entry);
+      writeLruMapEntry(userCache, cacheKey, entry, SLACK_USER_CACHE_MAX_ENTRIES);
       return entry;
     } catch {
       return {};
@@ -588,38 +548,12 @@ export function createSlackMonitorContext(params: {
     }
   };
 
-  const setSlackAssistantSuggestedPrompts = async (p: {
-    channelId: string;
-    threadTs: string;
-    title?: string;
-    prompts: SlackAssistantSuggestedPrompt[];
-  }) => {
-    const prompts = p.prompts
-      .map((prompt) => ({
-        title: prompt.title.trim(),
-        message: prompt.message.trim(),
-      }))
-      .filter((prompt) => prompt.title && prompt.message)
-      .slice(0, 4);
-    if (prompts.length === 0) {
-      return false;
-    }
-    try {
-      await params.app.client.assistant.threads.setSuggestedPrompts({
-        token: params.botToken,
-        channel_id: p.channelId,
-        thread_ts: p.threadTs,
-        ...(p.title?.trim() ? { title: p.title.trim() } : {}),
-        prompts,
-      });
-      return true;
-    } catch (err) {
-      logVerbose(
-        `slack suggested prompts update failed for channel ${p.channelId}: ${formatSlackError(err)}`,
-      );
-      return false;
-    }
-  };
+  const setSlackSuggestedPrompts = (input: SlackSuggestedPromptsInput) =>
+    updateSlackSuggestedPrompts({
+      ...input,
+      botToken: params.botToken,
+      client: params.app.client,
+    });
 
   const isChannelAllowed = (p: {
     channelId?: string;
@@ -776,16 +710,12 @@ export function createSlackMonitorContext(params: {
     replyToMode: params.replyToMode,
     threadHistoryScope: params.threadHistoryScope,
     threadInheritParent: params.threadInheritParent,
-    threadRequireExplicitMention: params.threadRequireExplicitMention,
     slashCommand: params.slashCommand,
     textLimit: params.textLimit,
     ackReactionScope: params.ackReactionScope,
     typingReaction: params.typingReaction,
     mediaMaxBytes: params.mediaMaxBytes,
-    removeAckAfterReply: params.removeAckAfterReply,
     logger,
-    markMessageSeen,
-    releaseSeenMessage,
     shouldDropMismatchedSlackEvent,
     resolveSlackSystemEventSessionKey,
     isChannelAllowed,
@@ -796,6 +726,10 @@ export function createSlackMonitorContext(params: {
     setSlackThreadStatus,
     getSlackAssistantThreadContext,
     saveSlackAssistantThreadContext,
-    setSlackAssistantSuggestedPrompts,
+    setSlackSuggestedPrompts,
+    recordSlackAgentView: agentViewState.record,
+    isSlackAgentView: agentViewState.isEnabled,
+    recordSlackManagedViewThread: agentViewState.recordManagedThread,
+    isSlackManagedViewThread: agentViewState.isManagedThread,
   };
 }

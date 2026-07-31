@@ -1,48 +1,22 @@
 // Matrix plugin module implements mentions behavior.
+import { decodeHtmlEntities } from "openclaw/plugin-sdk/html-entity-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { RoomMessageEventContent } from "./types.js";
 
-const HTML_ENTITY_REPLACEMENTS: Readonly<Record<string, string>> = {
-  amp: "&",
-  apos: "'",
-  gt: ">",
-  lt: "<",
-  nbsp: " ",
-  quot: '"',
-};
-const MAX_UNICODE_SCALAR_VALUE = 0x10ffff;
+const MATRIX_HTML_ENTITY_RE = /&(?:#x?[0-9a-f]+|amp|apos|gt|lt|nbsp|quot);/gi;
 
-function decodeNumericHtmlEntity(match: string, rawValue: string, radix: 10 | 16): string {
-  const codePoint = Number.parseInt(rawValue, radix);
-  if (
-    !Number.isSafeInteger(codePoint) ||
-    codePoint < 0 ||
-    codePoint > MAX_UNICODE_SCALAR_VALUE ||
-    (codePoint >= 0xd800 && codePoint <= 0xdfff)
-  ) {
-    return match;
-  }
-  return String.fromCodePoint(codePoint);
-}
-
-function decodeHtmlEntities(value: string): string {
-  return value.replace(/&(#x?[0-9a-f]+|\w+);/gi, (match, entity: string) => {
-    const normalized = normalizeLowercaseStringOrEmpty(entity);
-    if (normalized.startsWith("#x")) {
-      return decodeNumericHtmlEntity(match, normalized.slice(2), 16);
-    }
-    if (normalized.startsWith("#")) {
-      return decodeNumericHtmlEntity(match, normalized.slice(1), 10);
-    }
-    return HTML_ENTITY_REPLACEMENTS[normalized] ?? match;
+function decodeVisibleHtmlEntities(value: string): string {
+  return value.replace(MATRIX_HTML_ENTITY_RE, (entity) => {
+    const decoded = decodeHtmlEntities(entity.startsWith("&#") ? entity : entity.toLowerCase());
+    return decoded === "\u00a0" ? " " : decoded;
   });
 }
 
 function normalizeVisibleMentionText(value: string): string {
   return normalizeLowercaseStringOrEmpty(
-    decodeHtmlEntities(
+    decodeVisibleHtmlEntities(
       value.replace(/<[^>]+>/g, " ").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, ""),
     ).replace(/\s+/g, " "),
   );

@@ -1,7 +1,7 @@
 // Openai tests cover embedding batch plugin behavior.
 import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
-import { parseOpenAiBatchOutput, runOpenAiEmbeddingBatches } from "./embedding-batch.js";
+import { runOpenAiEmbeddingBatches } from "./embedding-batch.js";
 
 const jsonlEncoder = new TextEncoder();
 
@@ -83,12 +83,6 @@ async function closeServer(server: ReturnType<typeof createServer>): Promise<voi
 }
 
 describe("OpenAI embedding batch output", () => {
-  it("wraps malformed JSONL output", () => {
-    expect(() => parseOpenAiBatchOutput('{"custom_id":"ok"}\n{not json')).toThrow(
-      "OpenAI embedding batch output contained malformed JSONL",
-    );
-  });
-
   it("reads a completed error file before downloading successful output", async () => {
     let outputFetched = false;
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

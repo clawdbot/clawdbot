@@ -3,8 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { drainSessionStoreWriterQueuesForTest } from "../config/sessions.js";
+import { describe, expect, it, vi } from "vitest";
 import {
   readCompactionCount,
   seedSessionStore,
@@ -129,10 +128,6 @@ function loggedInfoMessageAt(info: ReturnType<typeof vi.fn>, index: number): str
   }
   return message;
 }
-
-afterEach(async () => {
-  await drainSessionStoreWriterQueuesForTest();
-});
 
 describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
   it("raises the stored compaction count to the observed value", async () => {

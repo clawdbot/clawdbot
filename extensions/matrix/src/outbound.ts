@@ -4,7 +4,10 @@ import {
   renderMessagePresentationFallbackText,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import { resolvePayloadMediaUrls } from "openclaw/plugin-sdk/reply-payload";
+import {
+  resolvePayloadMediaUrls,
+  sendPayloadMediaSequence,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
 import type { MatrixExtraContentFields } from "./matrix/send/types.js";
@@ -154,32 +157,34 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     const urls = resolvePayloadMediaUrls(payload);
     const payloadText = resolveMatrixPayloadText(payload);
     if (urls.length > 0) {
-      let lastResult: Awaited<ReturnType<typeof send>> | undefined;
-      for (let i = 0; i < urls.length; i++) {
-        const isFirst = i === 0;
-        lastResult = await send(to, isFirst ? payloadText : "", {
-          cfg,
-          mediaUrl: urls[i],
-          mediaAccess,
-          mediaLocalRoots,
-          mediaReadFile,
-          replyToId: resolveReplyToId(),
-          threadId: resolvedThreadId,
-          accountId: accountId ?? undefined,
-          audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
-          extraContent: isFirst ? resolveMatrixExtraContent(payload) : undefined,
-          onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
-        });
+      const lastResult = await sendPayloadMediaSequence({
+        text: payloadText,
+        mediaUrls: urls,
+        send: async ({ text, mediaUrl, isFirst }) =>
+          await send(to, text, {
+            cfg,
+            mediaUrl,
+            mediaAccess,
+            mediaLocalRoots,
+            mediaReadFile,
+            replyToId: resolveReplyToId(),
+            threadId: resolvedThreadId,
+            accountId: accountId ?? undefined,
+            audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
+            extraContent: isFirst ? resolveMatrixExtraContent(payload) : undefined,
+            onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
+          }),
+      });
+      if (lastResult !== undefined) {
+        return {
+          channel: "matrix",
+          messageId: lastResult.messageId,
+          roomId: lastResult.roomId,
+        };
       }
-      return {
-        channel: "matrix",
-        messageId: lastResult!.messageId,
-        roomId: lastResult!.roomId,
-      };
     }
     const result = await send(to, payloadText, {
       cfg,
-      mediaUrl: payload.mediaUrl,
       mediaAccess,
       mediaLocalRoots,
       mediaReadFile,

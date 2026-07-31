@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawChatUI
 import SwiftUI
 
 struct GatewaySessionDefaultsRecord: Codable {
@@ -228,16 +229,16 @@ enum SessionLoader {
         includeGlobal: Bool = true,
         includeUnknown: Bool = true) async throws -> SessionStoreSnapshot
     {
-        var params: [String: AnyHashable] = [
-            "includeGlobal": AnyHashable(includeGlobal),
-            "includeUnknown": AnyHashable(includeUnknown),
-        ]
-        if let activeMinutes { params["activeMinutes"] = AnyHashable(activeMinutes) }
-        if let limit { params["limit"] = AnyHashable(limit) }
-
         let data: Data
         do {
-            data = try await ControlChannel.shared.request(method: "sessions.list", params: params)
+            let request = OpenClawChatGatewayRequests.sessionsList(
+                limit: limit,
+                search: nil,
+                archived: false,
+                includeGlobal: includeGlobal,
+                includeUnknown: includeUnknown,
+                activeMinutes: activeMinutes)
+            data = try await ControlChannel.shared.request(request)
         } catch {
             let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             if msg.localizedCaseInsensitiveContains("unknown method: sessions.list") {
@@ -297,9 +298,9 @@ enum SessionLoader {
     }
 }
 
-func relativeAge(from date: Date?) -> String {
+func relativeAge(from date: Date?, now: Date = Date()) -> String {
     guard let date else { return "unknown" }
-    let delta = Date().timeIntervalSince(date)
+    let delta = now.timeIntervalSince(date)
     if delta < 60 { return "just now" }
     let minutes = Int(round(delta / 60))
     if minutes < 60 { return "\(minutes)m ago" }

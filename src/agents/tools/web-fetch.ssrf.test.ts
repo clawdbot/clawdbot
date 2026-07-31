@@ -16,7 +16,7 @@ function redirectResponse(location: string): Response {
     ok: false,
     status: 302,
     headers: makeFetchHeaders({ location }),
-    body: { cancel: vi.fn() },
+    body: { cancel: vi.fn(async () => undefined) },
   } as unknown as Response;
 }
 

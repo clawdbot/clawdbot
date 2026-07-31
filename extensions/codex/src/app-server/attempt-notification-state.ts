@@ -68,17 +68,11 @@ export function isTerminalCodexTurnNotificationForTurn(params: {
   notification: CodexServerNotification;
   threadId: string;
   turnId: string;
-  currentPromptTexts: string[];
 }): boolean {
   if (!isCodexNotificationForTurn(params.notification.params, params.threadId, params.turnId)) {
     return false;
   }
-  return (
-    params.notification.method === "turn/completed" ||
-    isCodexTurnAbortMarkerNotification(params.notification, {
-      currentPromptTexts: params.currentPromptTexts,
-    })
-  );
+  return params.notification.method === "turn/completed";
 }
 
 /**
@@ -285,7 +279,6 @@ export function applyCodexTurnNotificationState(params: {
     notification,
     threadId: params.threadId,
     turnId: params.turnId,
-    currentPromptTexts: params.currentPromptTexts,
   });
 
   return {

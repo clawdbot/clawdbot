@@ -16,7 +16,7 @@ Extract text and fallback page images from local document attachments.
 
 ## Surface
 
-contracts: documentExtractors
+contracts: `documentExtractors`
 
 ## Related docs
 

@@ -2,10 +2,11 @@ title: Telegram commands list reply
 
 scenario:
   id: telegram-commands-command
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
-    primary: [channels.native-commands]
+    primary:
+      - telegram.built-in-commands
   objective: Verify Telegram renders the full native command catalog.
   successCriteria:
     - The command list is returned through the Telegram group command path.
@@ -32,8 +33,8 @@ flow:
             conversation: { id: telegram-command-room, kind: group }
             senderId: qa-command-operator
             senderName: QA Command Operator
-            text:
-              expr: "transport.id === 'telegram' ? '/commands@openclaw' : '/commands'"
+            text: /commands
+            nativeCommand: { name: commands }
         - waitForOutbound:
             conversation: { id: telegram-command-room, kind: group }
             sinceIndex: { ref: startIndex }

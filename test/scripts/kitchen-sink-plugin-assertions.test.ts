@@ -71,11 +71,13 @@ function runAssertInstalled({
   diagnostics = [],
   env = {},
   inspectPayload,
+  surfaceMode = "full",
 }: {
   allInspectPayload?: unknown;
   diagnostics?: Array<{ level: string; message: string }>;
   env?: NodeJS.ProcessEnv;
   inspectPayload?: ReturnType<typeof fullSurfaceInspectPayload>;
+  surfaceMode?: string;
 } = {}) {
   const label = `diagnostics-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const pluginId = "openclaw-kitchen-sink-fixture";
@@ -121,7 +123,7 @@ function runAssertInstalled({
         KITCHEN_SINK_LABEL: label,
         KITCHEN_SINK_SOURCE: "npm",
         KITCHEN_SINK_SPEC: "npm:@openclaw/kitchen-sink@latest",
-        KITCHEN_SINK_SURFACE_MODE: "full",
+        KITCHEN_SINK_SURFACE_MODE: surfaceMode,
         KITCHEN_SINK_TMP_DIR: scratchRoot,
       },
     });
@@ -311,6 +313,18 @@ describe("kitchen-sink plugin assertions", () => {
     });
 
     expect(result.status).toBe(0);
+  });
+
+  it("rejects diagnostics in conformance mode", () => {
+    const result = runAssertInstalled({
+      diagnostics: diagnosticErrors(["plugin must declare contracts.tools for: kitchen-sink-tool"]),
+      surfaceMode: "conformance",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "unexpected kitchen-sink diagnostic errors: plugin must declare contracts.tools for: kitchen-sink-tool",
+    );
   });
 
   it("requires kitchen-sink plugins to appear in inspect-all output", () => {

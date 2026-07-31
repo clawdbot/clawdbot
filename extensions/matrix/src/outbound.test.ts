@@ -241,6 +241,38 @@ describe("matrixOutbound cfg threading", () => {
     });
   });
 
+  it("keeps typed select commands actionable in Matrix fallback content", async () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "select" as const,
+          placeholder: "Environment",
+          options: [
+            {
+              label: "Production",
+              action: { type: "command" as const, command: "/deploy production" },
+            },
+            {
+              label: "Opaque",
+              action: { type: "callback" as const, value: "private-callback-token" },
+            },
+          ],
+        },
+      ],
+    };
+
+    const rendered = await matrixOutbound.renderPresentation!({
+      payload: { text: "Choose", presentation },
+      presentation,
+      ctx: {} as never,
+    });
+
+    expect(rendered?.text).toBe(
+      "Choose\n\nEnvironment:\n- Production: `/deploy production`\n- Opaque",
+    );
+    expect(rendered?.text).not.toContain("private-callback-token");
+  });
+
   it("passes Matrix presentation metadata through sendPayload extraContent", async () => {
     const cfg = {
       channels: {
@@ -464,6 +496,80 @@ describe("matrixOutbound cfg threading", () => {
     expect(
       mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix", 1).extraContent,
     ).toBeUndefined();
+  });
+
+  it("applies caption and presentation metadata to the first non-empty media URL", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accessToken: "test-access-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    await matrixOutbound.sendPayload!({
+      cfg,
+      to: "room:!room:example",
+      text: "caption",
+      payload: {
+        text: "caption",
+        mediaUrls: ["", "file:///tmp/a.png"],
+        channelData: {
+          matrix: {
+            extraContent: {
+              "com.openclaw.presentation": {
+                version: 1,
+                type: "message.presentation",
+              },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(mocks.sendMessageMatrix).toHaveBeenCalledOnce();
+    const call = mockCall(mocks.sendMessageMatrix, "sendMessageMatrix");
+    expect(call[1]).toBe("caption");
+    const options = mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix");
+    expect(options.mediaUrl).toBe("file:///tmp/a.png");
+    expect(options.extraContent).toEqual({
+      "com.openclaw.presentation": {
+        version: 1,
+        type: "message.presentation",
+      },
+    });
+  });
+
+  it("falls back to a text send when every media URL is empty", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accessToken: "test-access-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await matrixOutbound.sendPayload!({
+      cfg,
+      to: "room:!room:example",
+      text: "caption",
+      payload: {
+        text: "caption",
+        mediaUrls: [""],
+      },
+      accountId: "default",
+    });
+
+    expect(mocks.sendMessageMatrix).toHaveBeenCalledOnce();
+    const call = mockCall(mocks.sendMessageMatrix, "sendMessageMatrix");
+    expect(call[1]).toBe("caption");
+    expect(mockOptions(mocks.sendMessageMatrix, "sendMessageMatrix").mediaUrl).toBeUndefined();
+    expect(result).toEqual({
+      channel: "matrix",
+      messageId: "evt-1",
+      roomId: "!room:example",
+    });
   });
 
   it("regression: mediaUrls are never silently dropped by sendPayload", async () => {

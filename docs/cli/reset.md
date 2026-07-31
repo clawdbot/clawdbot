@@ -27,17 +27,18 @@ openclaw reset --scope full --yes --non-interactive
 
 ## Scopes
 
-| Scope                   | Removes                                                                                               | Stops gateway first |
-| ----------------------- | ----------------------------------------------------------------------------------------------------- | ------------------- |
-| `config`                | config file only                                                                                      | no                  |
-| `config+creds+sessions` | config file, OAuth/credentials dir, per-agent session directories                                     | yes                 |
-| `full`                  | state dir (including config/creds if nested inside it) plus workspace dirs and workspace attestations | yes                 |
+| Scope                   | Removes                                                                     | Stops gateway first |
+| ----------------------- | --------------------------------------------------------------------------- | ------------------- |
+| `config`                | config file only                                                            | no                  |
+| `config+creds+sessions` | config file, OAuth/credentials dir, per-agent session directories           | yes                 |
+| `full`                  | state dir (including the shared SQLite database) plus workspace directories | yes                 |
 
 `config+creds+sessions` and `full` stop a running managed gateway service before deleting state.
 
 ## Notes
 
 - Run `openclaw backup create` first for a restorable snapshot before removing local state.
+- Workspace setup state and attestations are rows in the shared SQLite database, so `full` removes them with the state directory; there are no current attestation sidecar files to remove separately.
 - Without `--scope`, `openclaw reset` prompts interactively for the scope to remove.
 - `--non-interactive` is only valid when both `--scope` and `--yes` are set.
 - `config+creds+sessions` and `full` print `Next: openclaw onboard --install-daemon` when done.

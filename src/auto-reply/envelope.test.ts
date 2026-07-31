@@ -64,6 +64,24 @@ describe("formatAgentEnvelope", () => {
     expect(body).toMatch(/\[WebChat Thu 2025-01-02 04:04:05 [^\]]+\] hello/);
   });
 
+  it("falls back to the host timezone for an invalid configured user timezone", () => {
+    const ts = Date.UTC(2025, 0, 2, 3, 4, 5);
+    const options = resolveEnvelopeFormatOptions({
+      agents: { defaults: { userTimezone: "Not/A_Timezone" } },
+    });
+    expect(options.timezone).toBe("local");
+    expect(formatEnvelopeTimestamp(ts, options)).toBe(
+      formatEnvelopeTimestamp(ts, { timezone: "local" }),
+    );
+  });
+
+  it("keeps the UTC fallback for an invalid explicit timezone option", () => {
+    const ts = Date.UTC(2025, 0, 2, 3, 4, 5);
+    expect(formatEnvelopeTimestamp(ts, { timezone: "Not/A_Timezone" })).toBe(
+      formatEnvelopeTimestamp(ts, { timezone: "utc" }),
+    );
+  });
+
   it("omits timestamps when configured", () => {
     const ts = Date.UTC(2025, 0, 2, 3, 4);
     const body = formatAgentEnvelope({
@@ -78,6 +96,16 @@ describe("formatAgentEnvelope", () => {
   it("handles missing optional fields", () => {
     const body = formatAgentEnvelope({ channel: "Telegram", body: "hi" });
     expect(body).toBe("[Telegram] hi");
+  });
+
+  it("formats the Unix epoch timestamp", () => {
+    const body = formatAgentEnvelope({
+      channel: "WebChat",
+      timestamp: 0,
+      envelope: { timezone: "utc" },
+      body: "hello",
+    });
+    expect(body).toBe("[WebChat Thu 1970-01-01T00:00:00Z] hello");
   });
 });
 
@@ -198,7 +226,7 @@ describe("formatInboundEnvelope", () => {
     expect(body).toBe("[WhatsApp Family Chat] Alice: hello");
   });
 
-  it("resolves envelope options from config", () => {
+  it("uses fixed envelope options while preserving the user timezone", () => {
     const options = resolveEnvelopeFormatOptions({
       agents: {
         defaults: {
@@ -210,9 +238,9 @@ describe("formatInboundEnvelope", () => {
       },
     });
     expect(options).toEqual({
-      timezone: "user",
-      includeTimestamp: false,
-      includeElapsed: false,
+      timezone: "Europe/Vienna",
+      includeTimestamp: true,
+      includeElapsed: true,
       userTimezone: "Europe/Vienna",
     });
   });

@@ -18,7 +18,6 @@ import type {
   QaTransportPolicy,
   QaTransportReportParams,
 } from "./qa-transport.js";
-import { qaChannelPlugin } from "./runtime-api.js";
 
 const QA_CHANNEL_ID = "qa-channel";
 const QA_CHANNEL_ACCOUNT_ID = "default";
@@ -53,8 +52,7 @@ async function waitForQaChannelReady(params: {
         >;
       };
       const accounts = payload.channelAccounts?.[QA_CHANNEL_ID] ?? [];
-      const account =
-        accounts.find((entry) => entry.accountId === QA_CHANNEL_ACCOUNT_ID) ?? accounts[0];
+      const account = accounts.find((entry) => entry.accountId === QA_CHANNEL_ACCOUNT_ID);
       lastProbeError = null;
       lastAccountStatus = account
         ? JSON.stringify({
@@ -62,7 +60,11 @@ async function waitForQaChannelReady(params: {
             running: account.running ?? null,
             restartPending: account.restartPending ?? null,
           })
-        : "no qa-channel accounts reported";
+        : accounts.length > 0
+          ? `qa-channel account "${QA_CHANNEL_ACCOUNT_ID}" not reported; available accounts: ${accounts
+              .map((entry) => entry.accountId ?? "unknown")
+              .join(", ")}`
+          : "no qa-channel accounts reported";
       if (account?.running && account.restartPending !== true) {
         return;
       }
@@ -132,7 +134,7 @@ function createQaChannelReportNotes(params: QaTransportReportParams) {
     params.isolatedWorkers === true
       ? `Scenarios run in isolated gateway workers with concurrency ${params.concurrency}.`
       : "Scenarios run serially in one gateway worker.",
-    "Cron uses a one-minute schedule assertion plus forced execution for fast verification.",
+    "Scheduling scenarios verify stored schedules and execution behavior through the Gateway.",
   ];
 }
 
@@ -142,6 +144,7 @@ async function handleQaChannelAction(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }) {
+  const { qaChannelPlugin } = await import("openclaw/plugin-sdk/qa-channel");
   return await qaChannelPlugin.actions?.handleAction?.({
     channel: QA_CHANNEL_ID,
     action: params.action,
@@ -184,6 +187,7 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
   }
   async waitForOutboundSequence(input: QaTransportOutboundSequenceMatch) {
     return await waitForQaTransportOutboundSequence({
+      accountId: this.accountId,
       input,
       readEvents: () => this.state.getSnapshot().events,
     });

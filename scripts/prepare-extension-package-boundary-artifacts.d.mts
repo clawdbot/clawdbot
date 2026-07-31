@@ -1,3 +1,9 @@
+/** Resolve tsx's loader through the selected checkout toolchain. */
+export function resolveTsxImportSpecifier(options?: {
+  resolveTool?: (toolName: string) => string;
+  createRequireFrom?: (filename: string) => { resolve(packageName: string): string };
+  ensureToolchain?: (toolPath: string) => string | null;
+}): string;
 /**
  * Lists entry-shim artifacts written by scripts/write-plugin-sdk-entry-dts.ts.
  */

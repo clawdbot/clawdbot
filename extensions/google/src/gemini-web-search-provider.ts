@@ -9,11 +9,6 @@ import {
   type WebSearchProviderToolDefinition,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  resolveGeminiApiKey,
-  resolveGeminiBaseUrl,
-  resolveGeminiModel,
-} from "./gemini-web-search-provider.shared.js";
 
 const GEMINI_CREDENTIAL_PATH = "plugins.entries.google.config.webSearch.apiKey";
 const GOOGLE_PROVIDER_CREDENTIAL_PATH = "models.providers.google.apiKey";
@@ -145,10 +140,3 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
       ),
   };
 }
-
-export const testing = {
-  resolveGeminiApiKey,
-  resolveGeminiBaseUrl,
-  resolveGeminiModel,
-  withGoogleModelProviderFallbacks,
-} as const;

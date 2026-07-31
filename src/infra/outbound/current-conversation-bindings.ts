@@ -15,6 +15,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { normalizeConversationRef } from "./session-binding-normalization.js";
 import type {
@@ -223,6 +224,9 @@ function supportsGenericCurrentConversationBinding(ref: {
     ...ref,
     conversationId: "capability-check",
   });
+  if (normalized.channel === INTERNAL_MESSAGE_CHANNEL) {
+    return true;
+  }
   return resolveChannelSupportsCurrentConversationBinding({
     channel: normalized.channel,
     accountId: normalized.accountId,

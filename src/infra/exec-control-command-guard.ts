@@ -10,7 +10,7 @@ type ParsedExecApprovalCommand = {
   decision: "allow-once" | "allow-always" | "deny";
 };
 
-export type UnsafeExecControlShellCommandKind = "approve" | "channel-login";
+type UnsafeExecControlShellCommandKind = "approve" | "channel-login";
 
 function parseExecApprovalShellCommand(raw: string): ParsedExecApprovalCommand | null {
   const normalized = raw.trimStart();
@@ -78,7 +78,7 @@ function stripOpenClawPackageRunner(argv: string[]): string[] {
   return argv;
 }
 
-export function parseOpenClawChannelsLoginShellCommand(raw: string): boolean {
+function parseOpenClawChannelsLoginShellCommand(raw: string): boolean {
   const argv = splitShellArgs(raw);
   if (!argv) {
     return false;

@@ -10,7 +10,7 @@
  * Preserves conversation language and persona while keeping the SDK's required
  * summary structure intact.
  */
-export const DEFAULT_COMPACTION_INSTRUCTIONS =
+const DEFAULT_COMPACTION_INSTRUCTIONS =
   "Write the summary body in the primary language used in the conversation.\n" +
   "Focus on factual content: what was discussed, decisions made, and current state.\n" +
   "Keep the required summary structure and section headers unchanged.\n" +

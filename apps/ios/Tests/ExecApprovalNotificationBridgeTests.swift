@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawProtocol
 import Testing
 import UserNotifications
 @testable import OpenClaw
@@ -289,5 +290,110 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
             "exec.approval-v2.6:legacy.approval-shared",
         ]])
         #expect(center.deliveredRemovedIdentifiers == [["legacy-ownerless"]])
+    }
+}
+
+@Suite(.serialized) struct PluginApprovalNotificationBridgeTests {
+    @Test func `parses requested and resolved plugin pushes with kind tag`() throws {
+        let requested = try #require(PluginApprovalNotificationBridge.parseRequestedPush(userInfo: [
+            "openclaw": [
+                "kind": PluginApprovalNotificationBridge.requestedKind,
+                "approvalId": "plugin-approval-1",
+                "gatewayDeviceId": "gateway-a",
+            ],
+        ]))
+        let resolved = try #require(PluginApprovalNotificationBridge.parseResolvedPush(userInfo: [
+            "openclaw": [
+                "kind": PluginApprovalNotificationBridge.resolvedKind,
+                "approvalId": "plugin-approval-1",
+                "gatewayDeviceId": "gateway-a",
+            ],
+        ]))
+
+        #expect(requested == ApprovalNotificationPrompt(
+            approvalId: "plugin-approval-1",
+            gatewayDeviceId: "gateway-a",
+            kind: .plugin))
+        #expect(resolved.kind == .plugin)
+    }
+
+    @Test func `routes default tap and plugin review action`() {
+        let userInfo: [AnyHashable: Any] = [
+            "openclaw": [
+                "kind": PluginApprovalNotificationBridge.requestedKind,
+                "approvalId": "plugin-approval-2",
+            ],
+        ]
+
+        #expect(PluginApprovalNotificationBridge.parsePrompt(
+            actionIdentifier: UNNotificationDefaultActionIdentifier,
+            userInfo: userInfo)?.kind == .plugin)
+        #expect(PluginApprovalNotificationBridge.parsePrompt(
+            actionIdentifier: PluginApprovalNotificationBridge.reviewActionIdentifier,
+            userInfo: userInfo)?.kind == .plugin)
+        #expect(ApprovalNotificationBridge.parsePrompt(
+            actionIdentifier: PluginApprovalNotificationBridge.reviewActionIdentifier,
+            userInfo: userInfo)?.kind == .plugin)
+    }
+
+    @Test func `exec and plugin bridges do not cross match`() {
+        let execUserInfo: [AnyHashable: Any] = [
+            "openclaw": [
+                "kind": ExecApprovalNotificationBridge.requestedKind,
+                "approvalId": "shared-approval-id",
+            ],
+        ]
+        let pluginUserInfo: [AnyHashable: Any] = [
+            "openclaw": [
+                "kind": PluginApprovalNotificationBridge.requestedKind,
+                "approvalId": "shared-approval-id",
+            ],
+        ]
+
+        #expect(PluginApprovalNotificationBridge.parseRequestedPush(userInfo: execUserInfo) == nil)
+        #expect(ExecApprovalNotificationBridge.parseRequestedPush(userInfo: pluginUserInfo) == nil)
+        #expect(PluginApprovalNotificationBridge.parsePrompt(
+            actionIdentifier: ExecApprovalNotificationBridge.reviewActionIdentifier,
+            userInfo: pluginUserInfo) == nil)
+        #expect(ExecApprovalNotificationBridge.parsePrompt(
+            actionIdentifier: PluginApprovalNotificationBridge.reviewActionIdentifier,
+            userInfo: execUserInfo) == nil)
+    }
+
+    @Test @MainActor func `plugin cleanup uses distinct identifiers and preserves exec notification`() async {
+        let center = MockNotificationCenter()
+        center.delivered = [
+            NotificationSnapshot(
+                identifier: "plugin-request",
+                userInfo: [
+                    "openclaw": [
+                        "kind": PluginApprovalNotificationBridge.requestedKind,
+                        "approvalId": "shared-approval-id",
+                        "gatewayDeviceId": "gateway-a",
+                    ],
+                ]),
+            NotificationSnapshot(
+                identifier: "exec-request",
+                userInfo: [
+                    "openclaw": [
+                        "kind": ExecApprovalNotificationBridge.requestedKind,
+                        "approvalId": "shared-approval-id",
+                        "gatewayDeviceId": "gateway-a",
+                    ],
+                ]),
+        ]
+
+        await PluginApprovalNotificationBridge.removeNotifications(
+            for: ApprovalNotificationPrompt(
+                approvalId: "shared-approval-id",
+                gatewayDeviceId: "gateway-a",
+                kind: .plugin),
+            notificationCenter: center)
+
+        #expect(center.pendingRemovedIdentifiers == [[
+            "plugin.approval-v2.9:gateway-a.shared-approval-id",
+            "plugin.approval.gateway-a.shared-approval-id",
+        ]])
+        #expect(center.deliveredRemovedIdentifiers == [["plugin-request"]])
     }
 }

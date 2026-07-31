@@ -1,4 +1,7 @@
-import { extractLeadingHttpStatus } from "../../shared/assistant-error-format.js";
+import {
+  extractLeadingHttpStatus,
+  extractProviderWrappedHttpStatus,
+} from "../../shared/assistant-error-format.js";
 import type { AssistantMessage } from "../types.js";
 import { classifyRateLimitWindow } from "./rate-limit-window.js";
 
@@ -15,11 +18,11 @@ const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
   "out of budget",
 ]);
 
-const RETRYABLE_HTTP_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+const RETRYABLE_HTTP_STATUS_CODES = new Set([429, 500, 502, 503, 504, 524]);
 const RATE_LIMIT_CONTEXT_PATTERN = buildProviderErrorPattern([
   "rate.?limit",
   "too many requests",
-  "resource_exhausted",
+  "resource[_ -]?exhausted",
   "daily (?:request|usage) limit",
   "requests? per day",
   "tokens? per day",
@@ -44,6 +47,7 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
   "upstream.?connect",
   "reset before headers",
   "socket hang up",
+  "socket connection was closed",
   "timed? out",
   "timeout",
   "terminated",
@@ -56,6 +60,7 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
   "you can retry your request",
   "try your request again",
   "please retry your request",
+  "resource[_ -]?exhausted",
 ]);
 
 /** Classify transient provider/transport failures for outer retry policy. */
@@ -67,7 +72,9 @@ export function isRetryableAssistantError(message: AssistantMessage): boolean {
   if (NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.test(errorMessage)) {
     return false;
   }
-  const status = extractLeadingHttpStatus(errorMessage)?.code;
+  const status =
+    extractLeadingHttpStatus(errorMessage)?.code ??
+    extractProviderWrappedHttpStatus(errorMessage)?.code;
   if (status && status !== 429 && RETRYABLE_HTTP_STATUS_CODES.has(status)) {
     return true;
   }

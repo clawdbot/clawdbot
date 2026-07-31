@@ -1,5 +1,5 @@
 ---
-summary: "Location command for nodes (location.get), permission modes, and Android foreground behavior"
+summary: "Location command for nodes, platform permission modes, and Linux GeoClue setup"
 read_when:
   - Adding location node support or permissions UI
   - Designing Android location permissions or foreground behavior
@@ -85,6 +85,32 @@ Errors (stable codes):
 - Android third-party builds accept background `location.get` only when the user selected `Always` and Android granted background location. The existing persistent node service adds the `location` service type and discloses `Location: Always` while active.
 - Android Play builds and `While Using` mode deny `location.get` while backgrounded.
 - Other node platforms may differ.
+
+## Linux node host
+
+The bundled Linux Node plugin adds `location.get` to the CLI `openclaw node` service, including headless hosts without the Linux desktop app. Location defaults to off. Enable it under the plugin entry, then restart the node service:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "linux-node": {
+        config: {
+          location: { enabled: true },
+        },
+      },
+    },
+  },
+}
+```
+
+Install GeoClue2 and its `where-am-i` demo (`geoclue-2-demo` on Debian and Ubuntu). The node-service user must be allowed by the host's GeoClue policy and authorization agent.
+
+The plugin uses `where-am-i` instead of a sequence of `busctl` calls. GeoClue ties client creation, properties, start, updates, and stop to one D-Bus client connection; the demo keeps that lifecycle together while separate `busctl` subprocesses do not. No npm dependency is added.
+
+Linux maps `coarse`, `balanced`, and `precise` to GeoClue accuracy levels `4`, `6`, and `8`. It validates `maxAgeMs` against the returned timestamp. GeoClue's demo does not expose the selected provider, so `source` is `unknown`; `isPrecise` is true only when reported accuracy is 100 meters or better.
+
+Linux uses the same stable errors: `LOCATION_DISABLED`, `LOCATION_TIMEOUT`, and `LOCATION_UNAVAILABLE`.
 
 ## Model/tooling integration
 

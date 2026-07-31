@@ -59,6 +59,22 @@ describe("RetrySupervisor", () => {
       vi.useRealTimers();
     }
   });
+
+  it("can unref the scheduled timer", async () => {
+    const controller = new AbortController();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const sleeper = sleepWithAbort(60_000, controller.signal, { ref: false });
+      const timer = setTimeoutSpy.mock.results.at(-1)?.value as NodeJS.Timeout | undefined;
+
+      expect(timer?.hasRef()).toBe(false);
+      controller.abort();
+      await expect(sleeper).rejects.toMatchObject({ message: "aborted" });
+    } finally {
+      controller.abort();
+      setTimeoutSpy.mockRestore();
+    }
+  });
 });
 
 describe("retryAsync", () => {

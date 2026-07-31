@@ -1,0 +1,14 @@
+{
+  "id": "linux-canvas",
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": true,
+  "name": "Linux Canvas",
+  "description": "Canvas rendering bridge for the OpenClaw Linux desktop app.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

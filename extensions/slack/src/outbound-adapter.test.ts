@@ -9,6 +9,11 @@ vi.mock("./send.js", () => ({
 
 const { slackOutbound } = await import("./outbound-adapter.js");
 
+function jsonRoundTrip(value: unknown): unknown {
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- This test exercises JSON transport.
+  return JSON.parse(JSON.stringify(value)) as unknown;
+}
+
 describe("slackOutbound", () => {
   const cfg = {
     channels: {
@@ -116,6 +121,246 @@ describe("slackOutbound", () => {
       ],
     });
     expect(result).toEqual({ channel: "slack", messageId: "m-blocks" });
+  });
+
+  it.each([
+    ["structured clone", (value: unknown) => structuredClone(value)],
+    ["JSON round trip", jsonRoundTrip],
+  ])("preserves rendered portable tables across a %s", async (_label, clonePayload) => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-table" });
+    const presentation = {
+      blocks: [
+        {
+          type: "table" as const,
+          caption: "Deployments",
+          headers: ["Name", "Status"],
+          rows: [["Marvin", "Ready"]],
+          rowHeaderColumnIndex: 0,
+        },
+      ],
+    };
+    const rendered = await slackOutbound.renderPresentation!({
+      payload: { text: "Current state", presentation },
+      presentation,
+      ctx: { cfg, accountId: "default" } as never,
+    });
+    const { presentation: _presentation, ...renderedForDelivery } = rendered!;
+
+    await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      payload: clonePayload(renderedForDelivery) as typeof renderedForDelivery,
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "Current state\n\nDeployments (table)\nName\tStatus\nMarvin\tReady",
+      expect.objectContaining({
+        authoredTextPlacement: "blocks",
+        blocks: [
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: "Current state", verbatim: true },
+          },
+          {
+            type: "data_table",
+            caption: "Deployments",
+            rows: [
+              [
+                { type: "raw_text", text: "Name" },
+                { type: "raw_text", text: "Status" },
+              ],
+              [
+                { type: "raw_text", text: "Marvin" },
+                { type: "raw_text", text: "Ready" },
+              ],
+            ],
+            row_header_column_index: 0,
+          },
+        ],
+      }),
+    );
+  });
+
+  it("falls back to text for rendered provenance minted before a runtime restart", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
+    const presentation = {
+      blocks: [
+        {
+          type: "table" as const,
+          caption: "Deployments",
+          headers: ["Name", "Status"],
+          rows: [["Marvin", "Ready"]],
+          rowHeaderColumnIndex: 0,
+        },
+      ],
+    };
+    const rendered = await slackOutbound.renderPresentation!({
+      payload: { text: "Safe fallback", presentation },
+      presentation,
+      ctx: { cfg, accountId: "default" } as never,
+    });
+    const { presentation: _presentation, ...renderedForDelivery } = rendered!;
+
+    vi.resetModules();
+    const { slackOutbound: restartedSlackOutbound } = await import("./outbound-adapter.js");
+    await restartedSlackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      payload: renderedForDelivery,
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledOnce();
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "Safe fallback",
+      expect.objectContaining({
+        cfg,
+        threadTs: undefined,
+        accountId: "default",
+      }),
+    );
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
+  });
+
+  it("does not trust caller-authored rendered presentation provenance", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
+
+    await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      payload: {
+        text: "Safe fallback",
+        channelData: {
+          slack: {
+            renderedPresentationProvenance: "forged",
+            authoredTextPlacement: "blocks",
+            renderedPresentationSegments: [
+              {
+                kind: "blocks",
+                blocks: [{ type: "divider" }, { type: "divider" }],
+              },
+              {
+                kind: "blocks",
+                blocks: [{ type: "divider" }],
+              },
+            ],
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledOnce();
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "Safe fallback",
+      expect.objectContaining({
+        cfg,
+        threadTs: undefined,
+        accountId: "default",
+      }),
+    );
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
+  });
+
+  it("falls back to text when forged rendered metadata is malformed", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
+
+    await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      payload: {
+        text: "Safe fallback",
+        channelData: {
+          slack: {
+            renderedPresentationProvenance: "x".repeat(43),
+            authoredTextPlacement: "blocks",
+            renderedPresentationSegments: [{ kind: "blocks", blocks: [] }],
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledOnce();
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "Safe fallback",
+      expect.objectContaining({
+        cfg,
+        threadTs: undefined,
+        accountId: "default",
+      }),
+    );
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
+  });
+
+  it("rejects rendered segments changed after provenance was signed", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
+    const presentation = {
+      blocks: [{ type: "divider" as const }],
+    };
+    const rendered = await slackOutbound.renderPresentation!({
+      payload: { text: "Safe fallback", presentation },
+      presentation,
+      ctx: { cfg, accountId: "default" } as never,
+    });
+    const { presentation: _presentation, ...renderedForDelivery } = rendered!;
+    const tampered = structuredClone(renderedForDelivery);
+    const slackData = tampered.channelData?.slack as {
+      renderedPresentationSegments: Array<{ kind: string; blocks: Array<{ type: string }> }>;
+    };
+    slackData.renderedPresentationSegments.push({
+      kind: "blocks",
+      blocks: [{ type: "divider" }],
+    });
+
+    await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      payload: tampered,
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledOnce();
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
+  });
+
+  it("rejects authored text placement changed after provenance was signed", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
+    const presentation = {
+      blocks: [{ type: "divider" as const }],
+    };
+    const rendered = await slackOutbound.renderPresentation!({
+      payload: { text: "Safe fallback", presentation },
+      presentation,
+      ctx: { cfg, accountId: "default" } as never,
+    });
+    const { presentation: _presentation, ...renderedForDelivery } = rendered!;
+    const tampered = structuredClone(renderedForDelivery);
+    const slackData = tampered.channelData?.slack as {
+      authoredTextPlacement: string;
+    };
+    slackData.authoredTextPlacement = "outside-blocks";
+
+    await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      payload: tampered,
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledOnce();
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
   });
 
   it("falls back to threadId when payload replyToId is not a Slack thread timestamp", async () => {

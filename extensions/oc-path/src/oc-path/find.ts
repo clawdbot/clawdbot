@@ -41,7 +41,7 @@ import { resolveOcPath } from "./universal.js";
 // ---------- Public types ---------------------------------------------------
 
 /** A find result: a concrete (wildcard-free) path plus its match info. */
-export interface OcPathMatch {
+interface OcPathMatch {
   readonly path: OcPath;
   readonly match: OcMatch;
 }
@@ -827,3 +827,4 @@ function jsoncChildFieldText(node: JsoncValue, key: string): string | null {
   }
   return null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

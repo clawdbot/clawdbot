@@ -1,12 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { AuditEventInput } from "./audit-event-types.js";
 import type { AuditEventWriter } from "./audit-event-writer.js";
 import { createAuditEventRecorder } from "./audit-recorder.js";
-import {
-  emitTrustedMessageAuditEvent,
-  onTrustedMessageAuditEvent,
-  resetMessageAuditEventsForTest,
-} from "./message-audit-events.js";
+import { emitTrustedMessageAuditEvent } from "./message-audit-events.js";
+import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "./message-audit-events.test-support.js";
 
 function captureWriter(inputs: AuditEventInput[]): AuditEventWriter {
   return {
@@ -33,10 +30,6 @@ function emitMessage(conversationKind: "direct" | "group") {
     outcome: "completed",
   });
 }
-
-afterEach(() => {
-  resetMessageAuditEventsForTest();
-});
 
 describe("message audit recorder", () => {
   it("keeps message events off by default policy", async () => {

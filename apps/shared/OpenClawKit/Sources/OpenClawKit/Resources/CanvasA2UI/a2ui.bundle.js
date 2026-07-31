@@ -4098,6 +4098,18 @@ var A2uiValidationError = class extends A2uiError {
 		this.details = details;
 	}
 };
+(class extends A2uiError {
+	constructor(message, path) {
+		super(message, "DATA_ERROR");
+		this.path = path;
+	}
+});
+(class extends A2uiError {
+	constructor(message, expression) {
+		super(message, "EXPRESSION_ERROR");
+		this.expression = expression;
+	}
+});
 /**
 * Thrown for structural issues in the UI tree (missing surfaces, duplicate components).
 */
@@ -4335,7 +4347,7 @@ var A2uiMessageProcessor = class A2uiMessageProcessor {
 		const componentType = Object.keys(componentProps)[0];
 		const unresolvedProperties = componentProps[componentType];
 		const resolvedProperties = new this.objCtor();
-		if (isObject(unresolvedProperties)) for (const [key, value] of Object.entries(unresolvedProperties)) resolvedProperties[key] = this.resolvePropertyValue(value, surface, visited, dataContextPath, idSuffix);
+		if (isObject(unresolvedProperties)) for (const [key, value] of Object.entries(unresolvedProperties)) resolvedProperties[key] = this.resolvePropertyValue(value, surface, visited, dataContextPath, idSuffix, key === "action");
 		visited.delete(fullId);
 		const baseNode = {
 			id: fullId,
@@ -4481,9 +4493,9 @@ var A2uiMessageProcessor = class A2uiMessageProcessor {
 	* a child node (a string that matches a component ID), an explicitList of
 	* children, or a template, these will be built out here.
 	*/
-	resolvePropertyValue(value, surface, visited, dataContextPath, idSuffix = "") {
-		if (typeof value === "string" && surface.components.has(value)) return this.buildNodeRecursive(value, surface, visited, dataContextPath, idSuffix);
-		if (isComponentArrayReference(value)) {
+	resolvePropertyValue(value, surface, visited, dataContextPath, idSuffix = "", isInsideAction = false) {
+		if (!isInsideAction && typeof value === "string" && surface.components.has(value)) return this.buildNodeRecursive(value, surface, visited, dataContextPath, idSuffix);
+		if (!isInsideAction && isComponentArrayReference(value)) {
 			if (value.explicitList) return value.explicitList.map((id) => this.buildNodeRecursive(id, surface, visited, dataContextPath, idSuffix));
 			if (value.template) {
 				const fullDataPath = this.resolvePath(value.template.dataBinding, dataContextPath);
@@ -4502,7 +4514,7 @@ var A2uiMessageProcessor = class A2uiMessageProcessor {
 				return new this.arrayCtor();
 			}
 		}
-		if (Array.isArray(value)) return value.map((item) => this.resolvePropertyValue(item, surface, visited, dataContextPath, idSuffix));
+		if (Array.isArray(value)) return value.map((item) => this.resolvePropertyValue(item, surface, visited, dataContextPath, idSuffix, isInsideAction));
 		if (isObject(value)) {
 			const newObj = new this.objCtor();
 			for (const [key, propValue] of Object.entries(value)) {
@@ -4512,7 +4524,7 @@ var A2uiMessageProcessor = class A2uiMessageProcessor {
 					newObj[key] = propertyValue;
 					continue;
 				}
-				newObj[key] = this.resolvePropertyValue(propertyValue, surface, visited, dataContextPath, idSuffix);
+				newObj[key] = this.resolvePropertyValue(propertyValue, surface, visited, dataContextPath, idSuffix, isInsideAction || key === "action");
 			}
 			return newObj;
 		}
@@ -5894,7 +5906,10 @@ const Data = {
 * Copyright 2019 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
 */
-const t$7 = globalThis, e$13 = t$7.ShadowRoot && (void 0 === t$7.ShadyCSS || t$7.ShadyCSS.nativeShadow) && "adoptedStyleSheets" in Document.prototype && "replace" in CSSStyleSheet.prototype, s$9 = Symbol(), o$14 = /* @__PURE__ */ new WeakMap();
+const t$7 = globalThis;
+const e$13 = t$7.ShadowRoot && (void 0 === t$7.ShadyCSS || t$7.ShadyCSS.nativeShadow) && "adoptedStyleSheets" in Document.prototype && "replace" in CSSStyleSheet.prototype;
+const s$9 = Symbol();
+const o$14 = /* @__PURE__ */ new WeakMap();
 var n$13 = class {
 	constructor(t, e, o) {
 		if (this._$cssResult$ = !0, o !== s$9) throw Error("CSSResult is not constructable. Use `unsafeCSS` or `css` instead.");
@@ -5913,19 +5928,22 @@ var n$13 = class {
 		return this.cssText;
 	}
 };
-const r$11 = (t) => new n$13("string" == typeof t ? t : t + "", void 0, s$9), i$10 = (t, ...e) => {
+const r$11 = (t) => new n$13("string" == typeof t ? t : t + "", void 0, s$9);
+const i$10 = (t, ...e) => {
 	return new n$13(1 === t.length ? t[0] : e.reduce((e, s, o) => e + ((t) => {
 		if (!0 === t._$cssResult$) return t.cssText;
 		if ("number" == typeof t) return t;
 		throw Error("Value passed to 'css' function must be a 'css' function result: " + t + ". Use 'unsafeCSS' to pass non-literal values, but take care to ensure page security.");
 	})(s) + t[o + 1], t[0]), t, s$9);
-}, S$1 = (s, o) => {
+};
+const S$1 = (s, o) => {
 	if (e$13) s.adoptedStyleSheets = o.map((t) => t instanceof CSSStyleSheet ? t : t.styleSheet);
 	else for (const e of o) {
 		const o = document.createElement("style"), n = t$7.litNonce;
 		void 0 !== n && o.setAttribute("nonce", n), o.textContent = e.cssText, s.appendChild(o);
 	}
-}, c$7 = e$13 ? (t) => t : (t) => t instanceof CSSStyleSheet ? ((t) => {
+};
+const c$7 = e$13 ? (t) => t : (t) => t instanceof CSSStyleSheet ? ((t) => {
 	let e = "";
 	for (const s of t.cssRules) e += s.cssText;
 	return r$11(e);
@@ -6163,11 +6181,37 @@ y$1.elementStyles = [], y$1.shadowRootOptions = { mode: "open" }, y$1[d$2("eleme
 * Copyright 2017 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
 */
-const t$6 = globalThis, i$8 = (t) => t, s$8 = t$6.trustedTypes, e$11 = s$8 ? s$8.createPolicy("lit-html", { createHTML: (t) => t }) : void 0, h$6 = "$lit$", o$12 = `lit$${Math.random().toFixed(9).slice(2)}$`, n$11 = "?" + o$12, r$9 = `<${n$11}>`, l$3 = document, c$5 = () => l$3.createComment(""), a = (t) => null === t || "object" != typeof t && "function" != typeof t, u$2 = Array.isArray, d$1 = (t) => u$2(t) || "function" == typeof t?.[Symbol.iterator], f$2 = "[ 	\n\f\r]", v$1 = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g, _ = /-->/g, m$3 = />/g, p$1 = RegExp(`>|${f$2}(?:([^\\s"'>=/]+)(${f$2}*=${f$2}*(?:[^ \t\n\f\r"'\`<>=]|("|')|))|$)`, "g"), g = /'/g, $ = /"/g, y = /^(?:script|style|textarea|title)$/i, x = (t) => (i, ...s) => ({
+const t$6 = globalThis;
+const i$8 = (t) => t;
+const s$8 = t$6.trustedTypes;
+const e$11 = s$8 ? s$8.createPolicy("lit-html", { createHTML: (t) => t }) : void 0;
+const h$6 = "$lit$";
+const o$12 = `lit$${Math.random().toFixed(9).slice(2)}$`;
+const n$11 = "?" + o$12;
+const r$9 = `<${n$11}>`;
+const l$3 = document;
+const c$5 = () => l$3.createComment("");
+const a = (t) => null === t || "object" != typeof t && "function" != typeof t;
+const u$2 = Array.isArray;
+const d$1 = (t) => u$2(t) || "function" == typeof t?.[Symbol.iterator];
+const f$2 = "[ 	\n\f\r]";
+const v$1 = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g;
+const _ = /-->/g;
+const m$3 = />/g;
+const p$1 = RegExp(`>|${f$2}(?:([^\\s"'>=/]+)(${f$2}*=${f$2}*(?:[^ \t\n\f\r"'\`<>=]|("|')|))|$)`, "g");
+const g = /'/g;
+const $ = /"/g;
+const y = /^(?:script|style|textarea|title)$/i;
+const x = (t) => (i, ...s) => ({
 	_$litType$: t,
 	strings: i,
 	values: s
-}), b = x(1), E = Symbol.for("lit-noChange"), A = Symbol.for("lit-nothing"), C = /* @__PURE__ */ new WeakMap(), P = l$3.createTreeWalker(l$3, 129);
+});
+const b = x(1);
+const E = Symbol.for("lit-noChange");
+const A = Symbol.for("lit-nothing");
+const C = /* @__PURE__ */ new WeakMap();
+const P = l$3.createTreeWalker(l$3, 129);
 function V(t, i) {
 	if (!u$2(t) || !t.hasOwnProperty("raw")) throw Error("invalid template strings array");
 	return void 0 !== e$11 ? e$11.createHTML(i) : i;
@@ -6412,7 +6456,8 @@ const j$1 = {
 	U: z,
 	B: I,
 	F: Z
-}, B = t$6.litHtmlPolyfillSupport;
+};
+const B = t$6.litHtmlPolyfillSupport;
 B?.(S, k), (t$6.litHtmlVersions ??= []).push("3.3.3");
 const D = (t, i, s) => {
 	const e = s?.renderBefore ?? i;
@@ -6479,7 +6524,8 @@ const t$5 = (t) => (e, o) => {
 	converter: u$3,
 	reflect: !1,
 	hasChanged: f$3
-}, r$8 = (t = o$9, e, r) => {
+};
+const r$8 = (t = o$9, e, r) => {
 	const { kind: n, metadata: i } = r;
 	let s = globalThis.litPropertyMetadata.get(i);
 	if (void 0 === s && globalThis.litPropertyMetadata.set(i, s = /* @__PURE__ */ new Map()), "setter" === n && ((t = Object.create(t)).wrapped = !0), s.set(r.name, t), "accessor" === n) {
@@ -6591,9 +6637,12 @@ const s$6 = new Signal.subtle.Watcher(() => {
 		for (const t of s$6.getPending()) t.get();
 		s$6.watch();
 	}));
-}), h$5 = Symbol("SignalWatcherBrand"), e$7 = new FinalizationRegistry((i) => {
+});
+const h$5 = Symbol("SignalWatcherBrand");
+const e$7 = new FinalizationRegistry((i) => {
 	i.unwatch(...Signal.subtle.introspectSources(i));
-}), n$7 = /* @__PURE__ */ new WeakMap();
+});
+const n$7 = /* @__PURE__ */ new WeakMap();
 function o$7(i) {
 	return !0 === i[h$5] ? (console.warn("SignalWatcher should not be applied to the same class more than once."), i) : class extends i {
 		constructor() {
@@ -6668,7 +6717,8 @@ const t$3 = {
 	BOOLEAN_ATTRIBUTE: 4,
 	EVENT: 5,
 	ELEMENT: 6
-}, e$6 = (t) => (...e) => ({
+};
+const e$6 = (t) => (...e) => ({
 	_$litDirective$: t,
 	values: e
 });
@@ -6723,13 +6773,15 @@ var i$5 = class {
 	if (void 0 === e) return !1;
 	for (const i of e) i._$AO?.(t, !1), s$4(i, t);
 	return !0;
-}, o$6 = (i) => {
+};
+const o$6 = (i) => {
 	let t, e;
 	do {
 		if (void 0 === (t = i._$AM)) break;
 		e = t._$AN, e.delete(i), i = t;
 	} while (0 === e?.size);
-}, r$3 = (i) => {
+};
+const r$3 = (i) => {
 	for (let t; t = i._$AM; i = t) {
 		let e = t._$AN;
 		if (void 0 === e) t._$AN = e = /* @__PURE__ */ new Set();
@@ -6781,6 +6833,35 @@ const n$4 = new Signal.subtle.Watcher(async () => {
 		for (const i of n$4.getPending()) i.get();
 		n$4.watch();
 	}));
+});
+(class extends f {
+	_$S_() {
+		var i, t;
+		void 0 === this._$Sm && (this._$Sj = new Signal.Computed(() => {
+			var i;
+			const t = null === (i = this._$SW) || void 0 === i ? void 0 : i.get();
+			return this.setValue(t), t;
+		}), this._$Sm = null !== (t = null === (i = this._$Sk) || void 0 === i ? void 0 : i.h) && void 0 !== t ? t : n$4, this._$Sm.watch(this._$Sj), Signal.subtle.untrack(() => {
+			var i;
+			return null === (i = this._$Sj) || void 0 === i ? void 0 : i.get();
+		}));
+	}
+	_$Sp() {
+		void 0 !== this._$Sm && (this._$Sm.unwatch(this._$SW), this._$Sm = void 0);
+	}
+	render(i) {
+		return Signal.subtle.untrack(() => i.get());
+	}
+	update(i, [t]) {
+		var o, n;
+		return null !== (o = this._$Sk) && void 0 !== o || (this._$Sk = null === (n = i.options) || void 0 === n ? void 0 : n.host), t !== this._$SW && void 0 !== this._$SW && this._$Sp(), this._$SW = t, this._$S_(), Signal.subtle.untrack(() => this._$SW.get());
+	}
+	disconnected() {
+		this._$Sp();
+	}
+	reconnected() {
+		this._$S_();
+	}
 });
 /**
 * @license
@@ -7689,7 +7770,9 @@ let Root = (() => {
 * @license
 * Copyright 2018 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
-*/ const n$2 = "important", i$1 = " !important", o$2 = e$6(class extends i$5 {
+*/ const n$2 = "important";
+const i$1 = " !important";
+const o$2 = e$6(class extends i$5 {
 	constructor(t) {
 		if (super(t), t.type !== t$3.ATTRIBUTE || "style" !== t.name || t.strings?.length > 2) throw Error("The `styleMap` directive must be used in the `style` attribute and must be the only part in the attribute.");
 	}
@@ -8710,6 +8793,12 @@ var __runInitializers$13 = function(thisArg, initializers, value) {
         padding: 8px;
         border: 1px solid #ccc;
         width: 100%;
+        color: #333;
+      }
+
+      input::-webkit-datetime-edit,
+      input::-webkit-datetime-edit-fields-wrapper {
+        color: #333;
       }
     `];
 		}
@@ -8835,12 +8924,66 @@ var __runInitializers$12 = function(thisArg, initializers, value) {
 	let _classExtraInitializers = [];
 	let _classThis;
 	let _classSuper = Root;
+	let _axis_decorators;
+	let _axis_initializers = [];
+	let _axis_extraInitializers = [];
+	let _color_decorators;
+	let _color_initializers = [];
+	let _color_extraInitializers = [];
+	let _thickness_decorators;
+	let _thickness_initializers = [];
+	let _thickness_extraInitializers = [];
 	var Divider = class extends _classSuper {
 		static {
 			_classThis = this;
 		}
 		static {
 			const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : void 0;
+			_axis_decorators = [n$9()];
+			_color_decorators = [n$9()];
+			_thickness_decorators = [n$9({ type: Number })];
+			__esDecorate$12(this, null, _axis_decorators, {
+				kind: "accessor",
+				name: "axis",
+				static: false,
+				private: false,
+				access: {
+					has: (obj) => "axis" in obj,
+					get: (obj) => obj.axis,
+					set: (obj, value) => {
+						obj.axis = value;
+					}
+				},
+				metadata: _metadata
+			}, _axis_initializers, _axis_extraInitializers);
+			__esDecorate$12(this, null, _color_decorators, {
+				kind: "accessor",
+				name: "color",
+				static: false,
+				private: false,
+				access: {
+					has: (obj) => "color" in obj,
+					get: (obj) => obj.color,
+					set: (obj, value) => {
+						obj.color = value;
+					}
+				},
+				metadata: _metadata
+			}, _color_initializers, _color_extraInitializers);
+			__esDecorate$12(this, null, _thickness_decorators, {
+				kind: "accessor",
+				name: "thickness",
+				static: false,
+				private: false,
+				access: {
+					has: (obj) => "thickness" in obj,
+					get: (obj) => obj.thickness,
+					set: (obj, value) => {
+						obj.thickness = value;
+					}
+				},
+				metadata: _metadata
+			}, _thickness_initializers, _thickness_extraInitializers);
 			__esDecorate$12(null, _classDescriptor = { value: _classThis }, _classDecorators, {
 				kind: "class",
 				name: _classThis.name,
@@ -8854,26 +8997,77 @@ var __runInitializers$12 = function(thisArg, initializers, value) {
 				value: _metadata
 			});
 		}
+		#axis_accessor_storage = __runInitializers$12(this, _axis_initializers, "horizontal");
+		get axis() {
+			return this.#axis_accessor_storage;
+		}
+		set axis(value) {
+			this.#axis_accessor_storage = value;
+		}
+		#color_accessor_storage = (__runInitializers$12(this, _axis_extraInitializers), __runInitializers$12(this, _color_initializers, null));
+		get color() {
+			return this.#color_accessor_storage;
+		}
+		set color(value) {
+			this.#color_accessor_storage = value;
+		}
+		#thickness_accessor_storage = (__runInitializers$12(this, _color_extraInitializers), __runInitializers$12(this, _thickness_initializers, null));
+		get thickness() {
+			return this.#thickness_accessor_storage;
+		}
+		set thickness(value) {
+			this.#thickness_accessor_storage = value;
+		}
 		static {
 			this.styles = [structuralStyles, i$10`
       :host {
         display: block;
         min-height: 0;
         overflow: auto;
+        align-self: stretch;
+      }
+
+      hr,
+      .vertical-divider {
+        background: #ccc;
+        border: none;
       }
 
       hr {
         height: 1px;
-        background: #ccc;
-        border: none;
+      }
+
+      .vertical-divider {
+        width: 1px;
+        height: 100%;
       }
     `];
 		}
 		render() {
-			return b`<hr
-      class=${e$2(this.theme.components.Divider)}
-      style=${this.theme.additionalStyles?.Divider ? o$2(this.theme.additionalStyles?.Divider) : A}
-    />`;
+			const classes = {
+				...typeof this.theme?.components?.Divider === "string" ? { [this.theme.components.Divider]: true } : this.theme?.components?.Divider,
+				vertical: this.axis === "vertical",
+				horizontal: this.axis !== "vertical"
+			};
+			const dynamicStyle = {};
+			if (this.color) dynamicStyle["background-color"] = this.color;
+			if (this.thickness !== null && this.thickness !== void 0) if (this.axis === "vertical") dynamicStyle["width"] = `${this.thickness}px`;
+			else dynamicStyle["height"] = `${this.thickness}px`;
+			const style = {
+				...this.theme?.additionalStyles?.Divider,
+				...dynamicStyle
+			};
+			return this.axis === "vertical" ? b`<div
+          class=${e$2({
+				...classes,
+				"vertical-divider": true
+			})}
+          style=${o$2(style)}
+        ></div>` : b`<hr class=${e$2(classes)} style=${o$2(style)} />`;
+		}
+		constructor() {
+			super(...arguments);
+			__runInitializers$12(this, _thickness_extraInitializers);
 		}
 		static {
 			__runInitializers$12(_classThis, _classExtraInitializers);
@@ -10011,7 +10205,8 @@ var __runInitializers$8 = function(thisArg, initializers, value) {
 * Copyright 2020 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
 */
-const o$1 = /* @__PURE__ */ new WeakMap(), n$1 = e$6(class extends f {
+const o$1 = /* @__PURE__ */ new WeakMap();
+const n$1 = e$6(class extends f {
 	render(i) {
 		return A;
 	}
@@ -10945,7 +11140,8 @@ const u = (e, s, t) => {
 	const r = /* @__PURE__ */ new Map();
 	for (let l = s; l <= t; l++) r.set(e[l], l);
 	return r;
-}, c$1 = e$6(class extends i$5 {
+};
+const c$1 = e$6(class extends i$5 {
 	constructor(e) {
 		if (super(e), e.type !== t$3.CHILD) throw Error("repeat() can only be used in text expressions");
 	}
@@ -11478,7 +11674,8 @@ var i = class {
 * @license
 * Copyright 2017 Google LLC
 * SPDX-License-Identifier: BSD-3-Clause
-*/ const n = (t) => !n$6(t) && "function" == typeof t.then, h = 1073741823;
+*/ const n = (t) => !n$6(t) && "function" == typeof t.then;
+const h = 1073741823;
 var c = class extends f {
 	constructor() {
 		super(...arguments), this._$Cwt = h, this._$Cbt = [], this._$CK = new s(this), this._$CX = new i();

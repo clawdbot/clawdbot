@@ -36,9 +36,7 @@ function isMattermostBypassPath(path: string): boolean {
   return path === DEFAULT_SLASH_CALLBACK_PATH || path.startsWith("/api/channels/mattermost/");
 }
 
-export function collectMattermostSlashCallbackPaths(
-  raw?: MattermostSlashCommandConfigInput,
-): string[] {
+function collectMattermostSlashCallbackPaths(raw?: MattermostSlashCommandConfigInput): string[] {
   const paths = new Set<string>([normalizeCallbackPath(raw?.callbackPath)]);
   const callbackUrl = readTrimmedString(raw?.callbackUrl);
   if (callbackUrl) {

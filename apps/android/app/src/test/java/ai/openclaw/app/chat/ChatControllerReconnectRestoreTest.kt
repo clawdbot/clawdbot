@@ -25,11 +25,14 @@ import org.junit.Test
 class ChatControllerReconnectRestoreTest {
   private val json = Json { ignoreUnknownKeys = true }
 
-  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = ChatController(scope = this, json = json, requestGateway = gateway::request)
+  // The controller runs on backgroundScope: while a restored run stays in flight the
+  // pending-run watchdog keeps re-arming, so its timer must be cancelled by runTest
+  // instead of counting as an uncompleted test coroutine.
+  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = ChatController(scope = backgroundScope, json = json, requestGateway = gateway::request)
 
   private fun TestScope.newScopedController(gateway: ScriptedGateway): ChatController =
     ChatController(
-      scope = this,
+      scope = backgroundScope,
       json = json,
       requestGateway = gateway::request,
       requestGatewayForGateway = { _, method, paramsJson -> gateway.request(method, paramsJson) },
@@ -408,6 +411,249 @@ class ChatControllerReconnectRestoreTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun reconnectRestoresInFlightPlanSnapshot() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      val controller = newController(gateway)
+      controller.load("main")
+      runCurrent()
+
+      gateway.respondWith(
+        "chat.history",
+        historyResponse(
+          "session-1",
+          emptyList(),
+          inFlightRun = "run-active" to "working",
+          inFlightPlan =
+            ChatPlanSnapshot(
+              steps =
+                listOf(
+                  ChatPlanStep("Inspect", ChatPlanStepStatus.Completed),
+                  ChatPlanStep("Reconnect", ChatPlanStepStatus.InProgress),
+                ),
+              explanation = "Restore checklist",
+            ),
+        ),
+      )
+      controller.onDisconnected("Reconnecting…")
+      controller.onGatewayConnected()
+      runCurrent()
+
+      assertEquals(
+        listOf(
+          ChatPlanStep("Inspect", ChatPlanStepStatus.Completed),
+          ChatPlanStep("Reconnect", ChatPlanStepStatus.InProgress),
+        ),
+        controller.planSteps.value,
+      )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun historyPlanReconciliationContract() =
+    runTest {
+      val retainedSteps = listOf(ChatPlanStep("Retained", ChatPlanStepStatus.InProgress))
+
+      data class Case(
+        val name: String,
+        val history: String,
+        val expectedSteps: List<ChatPlanStep>,
+        val staleAfterLivePlan: Boolean = false,
+        val snapshotForNewLiveRun: ChatPlanSnapshot? = null,
+        val gatewayScopeChange: Boolean = false,
+      )
+
+      val cases =
+        listOf(
+          Case(
+            name = "replace",
+            history =
+              historyResponse(
+                "session-1",
+                emptyList(),
+                inFlightRun = "run-retained" to "working",
+                inFlightPlan =
+                  ChatPlanSnapshot(
+                    steps = listOf(ChatPlanStep("Replacement", ChatPlanStepStatus.Completed)),
+                  ),
+              ),
+            expectedSteps = listOf(ChatPlanStep("Replacement", ChatPlanStepStatus.Completed)),
+          ),
+          Case(
+            name = "legacy-preserve",
+            history =
+              historyResponse(
+                "session-1",
+                emptyList(),
+                inFlightRun = "run-retained" to "working",
+              ),
+            expectedSteps = retainedSteps,
+          ),
+          Case(
+            name = "superseded",
+            history =
+              historyResponse(
+                "session-1",
+                emptyList(),
+                inFlightRun = "run-next" to "next",
+                inFlightPlan =
+                  ChatPlanSnapshot(
+                    steps = listOf(ChatPlanStep("Next run", ChatPlanStepStatus.InProgress)),
+                  ),
+              ),
+            expectedSteps = listOf(ChatPlanStep("Next run", ChatPlanStepStatus.InProgress)),
+          ),
+          Case(
+            name = "active-preserve",
+            history =
+              historyResponse(
+                "session-1",
+                emptyList(),
+                hasActiveRun = true,
+                activeRunIds = listOf("run-retained"),
+              ),
+            expectedSteps = retainedSteps,
+          ),
+          Case(
+            name = "terminal-clear",
+            history =
+              historyResponse(
+                "session-1",
+                emptyList(),
+                hasActiveRun = false,
+                activeRunIds = emptyList(),
+              ),
+            expectedSteps = emptyList(),
+          ),
+          Case(
+            name = "no-evidence-preserve",
+            history =
+              historyResponse(
+                "session-1",
+                emptyList(),
+                hasActiveRun = null,
+                activeRunIds = null,
+              ),
+            expectedSteps = retainedSteps,
+          ),
+          Case(
+            name = "stale-response-does-not-clobber-newer-live-plan",
+            history =
+              historyResponse(
+                "session-1",
+                emptyList(),
+                hasActiveRun = false,
+                activeRunIds = emptyList(),
+              ),
+            expectedSteps = listOf(ChatPlanStep("New live plan", ChatPlanStepStatus.InProgress)),
+            staleAfterLivePlan = true,
+          ),
+          Case(
+            name = "stale-previous-run-snapshot-does-not-clobber-newer-live-plan",
+            history =
+              historyResponse(
+                "session-1",
+                emptyList(),
+                inFlightRun = "run-previous" to "stale",
+                inFlightPlan = ChatPlanSnapshot(steps = emptyList()),
+              ),
+            expectedSteps = listOf(ChatPlanStep("New live plan", ChatPlanStepStatus.InProgress)),
+            staleAfterLivePlan = true,
+          ),
+          Case(
+            name = "snapshot-for-newer-owned-run-is-accepted",
+            history = historyResponse("session-1", emptyList()),
+            expectedSteps = listOf(ChatPlanStep("Matching snapshot", ChatPlanStepStatus.Completed)),
+            staleAfterLivePlan = true,
+            snapshotForNewLiveRun =
+              ChatPlanSnapshot(
+                steps = listOf(ChatPlanStep("Matching snapshot", ChatPlanStepStatus.Completed)),
+              ),
+          ),
+          Case(
+            name = "explicit-empty-clears",
+            history =
+              historyResponse(
+                "session-1",
+                emptyList(),
+                inFlightRun = "run-retained" to "working",
+                inFlightPlan = ChatPlanSnapshot(steps = emptyList()),
+              ),
+            expectedSteps = emptyList(),
+          ),
+          Case(
+            name = "gateway-scope-change-clears",
+            history = historyResponse("session-1", emptyList()),
+            expectedSteps = emptyList(),
+            gatewayScopeChange = true,
+          ),
+        )
+
+      for (testCase in cases) {
+        val gateway = ScriptedGateway(json)
+        if (testCase.staleAfterLivePlan) {
+          gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+        } else {
+          gateway.respondWith(
+            "chat.history",
+            historyResponse(
+              "session-1",
+              emptyList(),
+              inFlightRun = "run-retained" to "working",
+              inFlightPlan = ChatPlanSnapshot(steps = retainedSteps),
+            ),
+          )
+        }
+        val controller = newController(gateway)
+        controller.load("main")
+        runCurrent()
+
+        if (testCase.staleAfterLivePlan) {
+          val historyStarted = CompletableDeferred<Unit>()
+          val releaseHistory = CompletableDeferred<String>()
+          gateway.respond("chat.history") {
+            historyStarted.complete(Unit)
+            releaseHistory.await()
+          }
+          gateway.respondChatSend(status = "started")
+          controller.refresh()
+          runCurrent()
+          historyStarted.await()
+          assertTrue(controller.sendMessageAwaitAcceptance("new work", "off", emptyList()))
+          val runId = requireNotNull(gateway.lastRunId)
+          controller.handleGatewayEvent(
+            "agent",
+            """{"sessionKey":"main","runId":"$runId","seq":1,"ts":10,"stream":"plan","data":{"phase":"update","steps":[{"step":"New live plan","status":"in_progress"}]}}""",
+          )
+          releaseHistory.complete(
+            testCase.snapshotForNewLiveRun?.let { plan ->
+              historyResponse(
+                "session-1",
+                emptyList(),
+                inFlightRun = runId to "matching",
+                inFlightPlan = plan,
+              )
+            } ?: testCase.history,
+          )
+          runCurrent()
+          assertEquals(testCase.name, 1, controller.pendingRunCount.value)
+        } else if (testCase.gatewayScopeChange) {
+          controller.onGatewayScopeChanging()
+          runCurrent()
+        } else {
+          gateway.respondWith("chat.history", testCase.history)
+          controller.onDisconnected("Reconnecting…")
+          controller.onGatewayConnected()
+          runCurrent()
+        }
+
+        assertEquals(testCase.name, testCase.expectedSteps, controller.planSteps.value)
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun reconnectWithoutInFlightRunStaysClean() =
     runTest {
       val gateway = ScriptedGateway(json)
@@ -547,6 +793,88 @@ class ChatControllerReconnectRestoreTest {
       assertNull(controller.errorText.value)
       assertNull(controller.streamingAssistantText.value)
       assertTrue(controller.pendingToolCalls.value.isEmpty())
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun recoveredPendingRunStopsWatchdogWhenRefreshFails() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith(
+        "chat.history",
+        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "working"),
+      )
+      val controller = newController(gateway)
+      controller.load("main")
+      runCurrent()
+      assertEquals(1, controller.pendingRunCount.value)
+
+      gateway.respond("chat.history") { error("history unavailable") }
+      advanceTimeBy(120_000)
+      runCurrent()
+
+      assertEquals(2, gateway.callCount("chat.history"))
+      assertEquals(0, controller.pendingRunCount.value)
+      assertNull(controller.streamingAssistantText.value)
+
+      advanceTimeBy(120_000)
+      runCurrent()
+      assertEquals(2, gateway.callCount("chat.history"))
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun newerRecoverySnapshotCanSupersedePendingRunWatchdogRefresh() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith(
+        "chat.history",
+        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "working"),
+      )
+      val controller = newController(gateway)
+      controller.load("main")
+      runCurrent()
+
+      val watchdogRefreshStarted = CompletableDeferred<Unit>()
+      val releaseWatchdogRefresh = CompletableDeferred<String>()
+      val newerRefreshStarted = CompletableDeferred<Unit>()
+      val releaseNewerRefresh = CompletableDeferred<String>()
+      var refreshCalls = 0
+      gateway.respond("chat.history") {
+        refreshCalls += 1
+        if (refreshCalls == 1) {
+          watchdogRefreshStarted.complete(Unit)
+          releaseWatchdogRefresh.await()
+        } else {
+          newerRefreshStarted.complete(Unit)
+          releaseNewerRefresh.await()
+        }
+      }
+
+      advanceTimeBy(120_000)
+      runCurrent()
+      watchdogRefreshStarted.await()
+      controller.refresh()
+      runCurrent()
+      newerRefreshStarted.await()
+      releaseWatchdogRefresh.complete(
+        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "stale working"),
+      )
+      runCurrent()
+
+      assertEquals(1, controller.pendingRunCount.value)
+      assertEquals("working", controller.streamingAssistantText.value)
+      assertNull(controller.errorText.value)
+
+      releaseNewerRefresh.complete(
+        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "still working"),
+      )
+      runCurrent()
+
+      assertEquals(3, gateway.callCount("chat.history"))
+      assertEquals(1, controller.pendingRunCount.value)
+      assertEquals("still working", controller.streamingAssistantText.value)
+      assertNull(controller.errorText.value)
     }
 
   @Test

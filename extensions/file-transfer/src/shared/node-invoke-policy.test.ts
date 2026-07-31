@@ -5,7 +5,7 @@ import { gzipSync } from "node:zlib";
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { appendFileTransferAudit } from "./audit.js";
-import { createFileTransferNodeInvokePolicy, testing } from "./node-invoke-policy.js";
+import { createFileTransferNodeInvokePolicy } from "./node-invoke-policy.js";
 
 vi.mock("./audit.js", () => ({
   appendFileTransferAudit: vi.fn(async () => undefined),
@@ -155,13 +155,6 @@ function requireInvokeParams(
 }
 
 describe("file-transfer node invoke policy", () => {
-  it("maps only transfer payload sizes into audit records", () => {
-    expect(testing.readAuditSizeBytes("file.fetch", { size: 3 })).toBe(3);
-    expect(testing.readAuditSizeBytes("file.write", { size: 4 })).toBe(4);
-    expect(testing.readAuditSizeBytes("dir.fetch", { tarBytes: 999 }, 5)).toBe(5);
-    expect(testing.readAuditSizeBytes("dir.list", { size: 6 })).toBeUndefined();
-  });
-
   it("injects policy-owned limits before invoking the node", async () => {
     const policy = createFileTransferNodeInvokePolicy();
     const { ctx, invokeNode } = createCtx({

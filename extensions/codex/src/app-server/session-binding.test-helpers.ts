@@ -127,10 +127,6 @@ export async function writeCodexAppServerBinding(
   await testCodexAppServerBindingStore.mutate(testIdentity(sessionId), { kind: "set", binding });
 }
 
-export async function clearCodexAppServerBinding(sessionId: string): Promise<void> {
-  await testCodexAppServerBindingStore.mutate(testIdentity(sessionId), { kind: "clear" });
-}
-
 export async function clearCodexAppServerBindingForThread(
   sessionId: string,
   threadId: string,

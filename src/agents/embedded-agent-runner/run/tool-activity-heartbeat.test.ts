@@ -1,25 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getPluginToolMeta, setPluginToolMeta } from "../../../plugins/tools.js";
+import { getChannelAgentToolMeta, setChannelAgentToolMeta } from "../../channel-tool-metadata.js";
+import { isCodeModeControlTool, markCodeModeControlTool } from "../../code-mode-control-tools.js";
 import {
-  copyPluginToolMeta,
-  getPluginToolMeta,
-  setPluginToolMeta,
-} from "../../../plugins/tools.js";
-import { copyBeforeToolCallHookMarker } from "../../agent-tools.before-tool-call.js";
-import {
-  copyChannelAgentToolMeta,
-  getChannelAgentToolMeta,
-  setChannelAgentToolMeta,
-} from "../../channel-tool-metadata.js";
-import {
-  copyToolTerminalPresentation,
-  setToolTerminalPresentation,
   getToolTerminalPresentation,
+  setToolTerminalPresentation,
 } from "../../tool-terminal-presentation.js";
 import {
   clearToolActivityRun,
   getLastToolActivityMs,
   notifyToolActivity,
   onToolActivity,
+  wrapEmbeddedAttemptToolWithActivity,
 } from "./tool-activity-heartbeat.js";
 
 const RUN = "test-run";
@@ -110,23 +102,15 @@ describe("tool-activity-heartbeat", () => {
 });
 
 describe("heartbeat wrapper metadata preservation", () => {
-  // Regression: the heartbeat execute wrapper in attempt.ts replaces tool
-  // objects via spread ({ ...tool, execute: ... }), which copies own enumerable
-  // properties but loses WeakMap-keyed metadata. The copy calls below are the
-  // same pattern used in attempt.ts to preserve plugin, channel, before-tool-call,
-  // and terminal presentation metadata across the wrapper boundary.
+  // The attempt tool-catalog phase replaces tool objects to add heartbeats.
+  // These tests exercise the production wrapper so identity-keyed metadata
+  // cannot silently disappear across that boundary.
 
   it("preserves channel tool metadata on heartbeat-wrapped tools", () => {
     const source = { name: "test-tool", execute: vi.fn() as never };
     setChannelAgentToolMeta(source as never, { channelId: "telegram" });
 
-    // Same wrap pattern as attempt.ts effectiveTools.map()
-    const wrapped = {
-      ...source,
-      execute: ((...args: unknown[]) =>
-        (source.execute as (...a: unknown[]) => unknown)(...args)) as never,
-    };
-    copyChannelAgentToolMeta(source as never, wrapped as never);
+    const wrapped = wrapEmbeddedAttemptToolWithActivity(source as never, RUN) as typeof source;
 
     expect(getChannelAgentToolMeta(wrapped as never)).toEqual({ channelId: "telegram" });
   });
@@ -135,12 +119,7 @@ describe("heartbeat wrapper metadata preservation", () => {
     const source = { name: "test-tool", execute: vi.fn() as never };
     setPluginToolMeta(source as never, { pluginId: "test-plugin", optional: false });
 
-    const wrapped = {
-      ...source,
-      execute: ((...args: unknown[]) =>
-        (source.execute as (...a: unknown[]) => unknown)(...args)) as never,
-    };
-    copyPluginToolMeta(source as never, wrapped as never);
+    const wrapped = wrapEmbeddedAttemptToolWithActivity(source as never, RUN) as typeof source;
 
     const meta = getPluginToolMeta(wrapped as never);
     expect(meta?.pluginId).toBe("test-plugin");
@@ -158,12 +137,7 @@ describe("heartbeat wrapper metadata preservation", () => {
       enumerable: false,
     });
 
-    const wrapped = {
-      ...source,
-      execute: ((...args: unknown[]) =>
-        (source.execute as (...a: unknown[]) => unknown)(...args)) as never,
-    };
-    copyBeforeToolCallHookMarker(source as never, wrapped as never);
+    const wrapped = wrapEmbeddedAttemptToolWithActivity(source as never, RUN) as typeof source;
 
     expect((wrapped as Record<symbol, unknown>)[Symbol.for("openclaw:beforeToolCallWrapped")]).toBe(
       true,
@@ -175,15 +149,21 @@ describe("heartbeat wrapper metadata preservation", () => {
     const formatter = () => ({ text: "web_fetch: 3 pages" });
     setToolTerminalPresentation(source as never, formatter);
 
-    const wrapped = {
-      ...source,
-      execute: ((...args: unknown[]) =>
-        (source.execute as (...a: unknown[]) => unknown)(...args)) as never,
-    };
-    copyToolTerminalPresentation(source as never, wrapped as never);
+    const wrapped = wrapEmbeddedAttemptToolWithActivity(source as never, RUN) as typeof source;
 
     const copiedFormatter = getToolTerminalPresentation(wrapped as never);
     expect(copiedFormatter).toBe(formatter);
     expect(copiedFormatter?.(undefined, { content: [] } as never)?.text).toBe("web_fetch: 3 pages");
+  });
+
+  it("preserves code-mode control identity on heartbeat-wrapped tools", () => {
+    const source = markCodeModeControlTool({
+      name: "exec",
+      execute: vi.fn() as never,
+    } as never);
+
+    const wrapped = wrapEmbeddedAttemptToolWithActivity(source, RUN);
+
+    expect(isCodeModeControlTool(wrapped)).toBe(true);
   });
 });

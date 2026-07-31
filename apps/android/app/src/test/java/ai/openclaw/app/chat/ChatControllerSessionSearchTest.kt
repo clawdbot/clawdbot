@@ -1,9 +1,12 @@
 package ai.openclaw.app.chat
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -107,6 +110,23 @@ class ChatControllerSessionSearchTest {
     }
 
   @Test
+  fun fetchSessionListDoesNotGuessMainWhileDefaultOwnerIsUnknown() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = gateway::request,
+          currentDefaultAgentId = { null },
+        )
+
+      assertTrue(controller.fetchSessionList(search = "trip", archived = false).isEmpty())
+      assertTrue(controller.fetchSessionList(search = null, archived = true).isEmpty())
+      assertTrue(gateway.calls.isEmpty())
+    }
+
+  @Test
   fun fetchSessionListRethrowsCancellationInsteadOfFallingBack() =
     runTest {
       val gateway = ScriptedGateway(json)
@@ -119,5 +139,39 @@ class ChatControllerSessionSearchTest {
       } catch (_: CancellationException) {
         // A superseded search must cancel, not repaint stale fallback rows.
       }
+    }
+
+  @Test
+  fun fetchSessionListDropsAResponseAfterOwnerOrGatewayChanges() =
+    runTest {
+      var defaultAgentId = "agent-a"
+      var defaultAgentRevision = 1L
+      var cacheScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
+      val requestStarted = CompletableDeferred<Unit>()
+      val releaseResponse = CompletableDeferred<String>()
+      val gateway = ScriptedGateway(json)
+      gateway.respond("sessions.list") {
+        requestStarted.complete(Unit)
+        releaseResponse.await()
+      }
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = gateway::request,
+          cacheScope = { cacheScope },
+          currentDefaultAgentId = { defaultAgentId },
+          currentDefaultAgentRevision = { defaultAgentRevision },
+        )
+
+      val pending = async { controller.fetchSessionList(search = "trip", archived = false) }
+      runCurrent()
+      requestStarted.await()
+      defaultAgentId = "agent-b"
+      defaultAgentRevision += 1
+      cacheScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2)
+      releaseResponse.complete(sessionsListJson(sessionRowJson(key = "agent:agent-a:old", updatedAt = 10)))
+
+      assertTrue(pending.await().isEmpty())
     }
 }

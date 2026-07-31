@@ -18,8 +18,10 @@ import {
   setMemoryWorkspaceDir,
   type MemoryReadParams,
 } from "./memory-tool-manager.test-mocks.js";
-import { testing as shortTermPromotionTesting } from "./short-term-promotion.js";
-import { createMemoryCoreTestHarness } from "./test-helpers.js";
+import {
+  createMemoryCoreTestHarness,
+  shortTermTestState as shortTermPromotionTesting,
+} from "./test-helpers.js";
 import {
   createMemoryGetTool,
   createMemorySearchTool,
@@ -91,6 +93,7 @@ describe("memory search citations", () => {
     return result;
   }
 
+  // The first tool call pays Vitest's cold lazy-runtime transform cost on Node 24 CI.
   it("appends source information when citations are enabled", async () => {
     setMemoryBackend("builtin");
     const cfg = asOpenClawConfig({
@@ -103,7 +106,7 @@ describe("memory search citations", () => {
     const firstResult = expectFirstMemoryResult(details);
     expect(firstResult.snippet).toMatch(/Source: MEMORY.md#L5-L7/);
     expect(firstResult.citation).toBe("MEMORY.md#L5-L7");
-  });
+  }, 180_000);
 
   it("leaves snippet untouched when citations are off", async () => {
     setMemoryBackend("builtin");

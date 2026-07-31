@@ -17,7 +17,7 @@ export type UpdatePackageManagerFailureReason =
   | "pnpm-corepack-missing"
   | "pnpm-npm-bootstrap-failed";
 
-export type PackageManagerCommandRunner = (
+type PackageManagerCommandRunner = (
   argv: string[],
   options: { timeoutMs: number; env?: NodeJS.ProcessEnv },
 ) => Promise<{ stdout: string; stderr: string; code: number | null }>;

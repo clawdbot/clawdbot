@@ -1,6 +1,16 @@
 // Memory Wiki plugin entrypoint registers its OpenClaw integration.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { definePluginEntry, type OpenClawConfig } from "./api.js";
 import { registerWikiCli } from "./src/cli.js";
+import {
+  activateMemoryWikiCompiledCacheOwner,
+  configureMemoryWikiCompiledCacheStore,
+  createMemoryWikiCompiledCacheStore,
+  deactivateMemoryWikiCompiledCacheOwnersExcept,
+  reconcileMemoryWikiCompiledCacheOwner,
+  resolveMemoryWikiCompiledCacheOwnerId,
+} from "./src/compiled-cache.js";
 import {
   memoryWikiConfigSchema,
   resolveMemoryWikiAgentConfig,
@@ -14,7 +24,14 @@ import {
   configureMemoryWikiImportRunStateStore,
   createMemoryWikiImportRunStateStore,
 } from "./src/import-runs-state.js";
-import { createWikiPromptSectionBuilder } from "./src/prompt-section.js";
+import {
+  ensureMemoryWikiVaultGeneration,
+  loadMemoryWikiValidatedVaultIdentity,
+} from "./src/log.js";
+import {
+  createWikiPromptSectionBuilder,
+  createWikiPromptSectionPreparer,
+} from "./src/prompt-section.js";
 import {
   configureMemoryWikiSourceSyncStateStore,
   createMemoryWikiSourceSyncStateStore,
@@ -26,6 +43,36 @@ import {
   createWikiSearchTool,
   createWikiStatusTool,
 } from "./src/tool.js";
+
+async function loadConfiguredVaultIdentity(vaultRoot: string): Promise<{
+  vaultGeneration: string;
+  compiledCachePublicationId: string | null;
+} | null> {
+  const identity = await loadMemoryWikiValidatedVaultIdentity(vaultRoot);
+  if (identity.vaultGeneration) {
+    return {
+      vaultGeneration: identity.vaultGeneration,
+      compiledCachePublicationId: identity.compiledCachePublicationId,
+    };
+  }
+  try {
+    const stat = await fs.stat(path.join(vaultRoot, ".openclaw-wiki", "log.jsonl"));
+    if (!stat.isFile()) {
+      return null;
+    }
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+  // Cache data is rebuildable, but an initialized pre-generation vault still
+  // needs a stable owner identity before an external compiler can publish it.
+  return {
+    vaultGeneration: await ensureMemoryWikiVaultGeneration(vaultRoot),
+    compiledCachePublicationId: null,
+  };
+}
 
 export default definePluginEntry({
   id: "memory-wiki",
@@ -56,8 +103,62 @@ export default definePluginEntry({
     configureMemoryWikiImportRunStateStore(
       createMemoryWikiImportRunStateStore(api.runtime.state.openKeyedStore),
     );
+    const compiledCacheStore = createMemoryWikiCompiledCacheStore(api.runtime.state.openBlobStore, {
+      onReadError(error) {
+        api.logger.warn(`memory-wiki: compiled cache unavailable: ${String(error)}`);
+      },
+    });
+    configureMemoryWikiCompiledCacheStore(compiledCacheStore);
+    api.registerService({
+      id: "memory-wiki-compiled-cache-owner-cleanup",
+      async start() {
+        const appConfig = getAppConfig();
+        const activeConfigs =
+          config.vault.scope === "global"
+            ? [resolveConfig(undefined, appConfig)]
+            : resolveMemoryWikiConfiguredAgentIds(appConfig).map((agentId) =>
+                resolveConfig(agentId, appConfig),
+              );
+        // Clear every previously trusted owner before fallible vault reads. A failed
+        // lifecycle refresh must leave prompt preparation closed, not stale-but-active.
+        deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
+        const preparedOwners: Array<{
+          config: ReturnType<MemoryWikiConfigResolver>;
+          identity: {
+            vaultGeneration: string;
+            compiledCachePublicationId: string | null;
+          };
+        }> = [];
+        for (const activeConfig of activeConfigs) {
+          const identity = await loadConfiguredVaultIdentity(activeConfig.vault.path);
+          if (identity) {
+            preparedOwners.push({ config: activeConfig, identity });
+          }
+        }
+        const activeOwnerIds = new Set<string>();
+        try {
+          for (const { config: activeConfig, identity } of preparedOwners) {
+            activateMemoryWikiCompiledCacheOwner(
+              activeConfig,
+              identity.vaultGeneration,
+              identity.compiledCachePublicationId,
+            );
+            await reconcileMemoryWikiCompiledCacheOwner(activeConfig, () =>
+              loadMemoryWikiValidatedVaultIdentity(activeConfig.vault.path),
+            );
+            activeOwnerIds.add(resolveMemoryWikiCompiledCacheOwnerId(activeConfig));
+          }
+        } catch (error) {
+          deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
+          throw error;
+        }
+        deactivateMemoryWikiCompiledCacheOwnersExcept(activeOwnerIds);
+        await compiledCacheStore.deleteOwnersExcept(activeOwnerIds);
+      },
+    });
 
-    api.registerMemoryPromptSupplement(createWikiPromptSectionBuilder({ config, resolveConfig }));
+    api.registerMemoryPromptSupplement(createWikiPromptSectionBuilder());
+    api.registerMemoryPromptPreparation(createWikiPromptSectionPreparer({ config, resolveConfig }));
     api.registerMemoryCorpusSupplement(createWikiCorpusSupplement({ resolveConfig, getAppConfig }));
     registerMemoryWikiGatewayMethods({
       api,

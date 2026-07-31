@@ -348,11 +348,17 @@ function emitKeychainOnlyMigrationHintOnce(profileId: string): void {
   );
 }
 
-export const legacyOAuthSidecarInternalTestUtils = {
+const legacyOAuthSidecarInternalTestUtils = {
   resetKeychainOnlyMigrationHint(): void {
     keychainOnlyMigrationHintEmitted = false;
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.legacyOAuthSidecarInternalTestApi")
+  ] = legacyOAuthSidecarInternalTestUtils;
+}
 
 export function loadLegacyOAuthSidecarMaterial(params: {
   ref: LegacyOAuthRef;

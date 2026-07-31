@@ -1,11 +1,12 @@
 // Telegram tests cover topic name cache plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setTelegramRuntime } from "./runtime.js";
 import {
-  getTopicName,
-  resetTopicNameCacheForTest,
-  setTelegramTopicNameStoreFactoryForTest,
-  updateTopicName,
-} from "./topic-name-cache.js";
+  clearTelegramRuntimeForTest,
+  resetTelegramTopicNameCacheForTest,
+} from "./runtime.test-support.js";
+import type { TelegramRuntime } from "./runtime.types.js";
+import { getTopicName, updateTopicName } from "./topic-name-cache.js";
 
 type TopicEntry = {
   name: string;
@@ -43,24 +44,29 @@ function topicStoreSize(stores: Map<string, Map<string, TopicEntry>>): number {
 
 function installMemoryStores() {
   const stores = new Map<string, Map<string, TopicEntry>>();
-  setTelegramTopicNameStoreFactoryForTest((namespace) => {
-    const entries = stores.get(namespace) ?? new Map<string, TopicEntry>();
-    stores.set(namespace, entries);
-    return {
-      async register(key, value) {
-        entries.set(key, value);
-      },
-      async entries() {
-        return Array.from(entries, ([key, value]) => ({ key, value }));
-      },
-      async delete(key) {
-        return entries.delete(key);
-      },
-      async clear() {
-        entries.clear();
-      },
-    };
-  });
+  setTelegramRuntime({
+    state: {
+      openKeyedStore: (({ namespace }: { namespace: string }) => {
+        const entries = stores.get(namespace) ?? new Map<string, TopicEntry>();
+        stores.set(namespace, entries);
+        return {
+          async register(key: string, value: TopicEntry) {
+            entries.set(key, value);
+          },
+          async entries() {
+            return Array.from(entries, ([key, value]) => ({ key, value }));
+          },
+          async delete(key: string) {
+            return entries.delete(key);
+          },
+          async clear() {
+            entries.clear();
+          },
+        };
+      }) as unknown as TelegramRuntime["state"]["openKeyedStore"],
+    },
+    channel: {},
+  } as TelegramRuntime);
   return stores;
 }
 
@@ -70,12 +76,12 @@ describe("topic-name-cache", () => {
   beforeEach(async () => {
     vi.useRealTimers();
     stores = installMemoryStores();
-    resetTopicNameCacheForTest();
+    resetTelegramTopicNameCacheForTest();
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    setTelegramTopicNameStoreFactoryForTest(undefined);
+    clearTelegramRuntimeForTest();
   });
 
   it("stores and retrieves a topic name", async () => {
@@ -162,7 +168,7 @@ describe("topic-name-cache", () => {
 
   it("reloads persisted entries from plugin state", async () => {
     await updateTopicName(-100123, 42, { name: "Deployments" }, "first");
-    resetTopicNameCacheForTest();
+    resetTelegramTopicNameCacheForTest();
     await expect(getTopicName(-100123, 42, "first")).resolves.toBe("Deployments");
   });
 

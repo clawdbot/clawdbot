@@ -1,0 +1,20 @@
+title: WhatsApp direct Gateway message.action react and upload-file execute
+scenario:
+  id: whatsapp-message-actions
+  surface: channels
+  coverage:
+    primary:
+      - channels.message-actions
+      - whatsapp.outbound-image
+  execution:
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 120000
+    retryCount: 1
+    suiteIsolation: isolated
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppScenario
+  args:
+    - { expr: whatsappScenarioContext }
+    - { moduleExport: whatsappQaMessageActionsScenario }

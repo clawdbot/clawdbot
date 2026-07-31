@@ -297,9 +297,3 @@ function isNotFoundError(err: unknown): boolean {
   const code = (err as Record<string, unknown>).code;
   return code === "ENOENT" || code === "ENOTDIR";
 }
-
-export const testing = {
-  isGeneratedPluginSkillEntry,
-  publishPluginSkills,
-  resolvePluginSkillLinkType,
-};

@@ -7,14 +7,10 @@ import type { PresenceEntry } from "../../api/types.ts";
 import { normalizeOptionalString } from "../string-coerce.ts";
 import type { PairedDevice } from "./index.ts";
 
-export type NodeApprovalState =
-  | "approved"
-  | "pending-approval"
-  | "pending-reapproval"
-  | "unapproved";
+type NodeApprovalState = "approved" | "pending-approval" | "pending-reapproval" | "unapproved";
 
 /** Typed projection of one raw `node.list` row. */
-export type NodeListEntry = {
+type NodeListEntry = {
   nodeId: string;
   displayName?: string;
   platform?: string;
@@ -85,7 +81,7 @@ function stringList(value: unknown): string[] {
     .filter((entry): entry is string => entry !== undefined);
 }
 
-export function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null {
+function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null {
   const nodeId = normalizeOptionalString(raw.nodeId);
   if (!nodeId) {
     return null;

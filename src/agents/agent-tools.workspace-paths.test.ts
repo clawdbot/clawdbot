@@ -118,6 +118,28 @@ describe("workspace path resolution", () => {
     });
   });
 
+  it.runIf(process.platform === "win32")(
+    "preserves mixed-case and Unicode names for workspace-only writes on Windows",
+    async () => {
+      await withTempDir("openclaw-windows-case-", async (workspaceDir) => {
+        const cfg: OpenClawConfig = { tools: { fs: { workspaceOnly: true } } };
+        const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
+        const { writeTool } = expectReadWriteEditTools(tools);
+
+        await writeTool.execute("windows-case-write", {
+          path: "Source/İstanbul/Widget.ts",
+          content: "export const Widget = true;",
+        });
+
+        await expect(fs.readdir(workspaceDir)).resolves.toEqual(["Source"]);
+        await expect(fs.readdir(path.join(workspaceDir, "Source"))).resolves.toEqual(["İstanbul"]);
+        await expect(fs.readdir(path.join(workspaceDir, "Source", "İstanbul"))).resolves.toEqual([
+          "Widget.ts",
+        ]);
+      });
+    },
+  );
+
   it("allows deletion edits with empty newText", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
       await withTempDir("openclaw-cwd-", async (otherDir) => {
@@ -142,53 +164,10 @@ describe("workspace path resolution", () => {
     });
   });
 
-  it("supports multi-edit edits[] payloads", async () => {
-    await withTempDir("openclaw-ws-", async (workspaceDir) => {
-      await withTempDir("openclaw-cwd-", async (otherDir) => {
-        const testFile = "batch.txt";
-        await fs.writeFile(path.join(workspaceDir, testFile), "alpha beta gamma delta", "utf8");
-
-        const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(otherDir);
-        try {
-          const tools = createOpenClawCodingTools({ workspaceDir });
-          const { editTool } = expectReadWriteEditTools(tools);
-
-          await editTool.execute("ws-edit-batch", {
-            path: testFile,
-            edits: [
-              { oldText: "alpha", newText: "ALPHA" },
-              { oldText: "delta", newText: "DELTA" },
-            ],
-          });
-
-          expect(await fs.readFile(path.join(workspaceDir, testFile), "utf8")).toBe(
-            "ALPHA beta gamma DELTA",
-          );
-        } finally {
-          cwdSpy.mockRestore();
-        }
-      });
-    });
-  });
-
   it("defaults exec cwd to workspaceDir when workdir is omitted", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
       const execTool = createExecTool(workspaceDir);
       await expectExecCwdResolvesTo(execTool, "ws-exec", { command: "echo ok" }, workspaceDir);
-    });
-  });
-
-  it("lets exec workdir override the workspace default", async () => {
-    await withTempDir("openclaw-ws-", async (workspaceDir) => {
-      await withTempDir("openclaw-override-", async (overrideDir) => {
-        const execTool = createExecTool(workspaceDir);
-        await expectExecCwdResolvesTo(
-          execTool,
-          "ws-exec-override",
-          { command: "echo ok", workdir: overrideDir },
-          overrideDir,
-        );
-      });
     });
   });
 

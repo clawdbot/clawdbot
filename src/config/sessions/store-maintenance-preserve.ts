@@ -4,7 +4,7 @@ import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 
 /** Provider hook for session keys that maintenance/pruning should preserve. */
-export type SessionMaintenancePreserveKeysProvider = () => Iterable<string> | undefined;
+type SessionMaintenancePreserveKeysProvider = () => Iterable<string> | undefined;
 
 const preserveKeysProviders = new Set<SessionMaintenancePreserveKeysProvider>();
 

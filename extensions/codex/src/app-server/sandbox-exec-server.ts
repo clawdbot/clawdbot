@@ -6,6 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { isIP, type AddressInfo } from "node:net";
+import { pathToFileURL } from "node:url";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
@@ -14,16 +15,22 @@ import type { CodexAppServerStartOptions } from "./config.js";
 import type { JsonValue } from "./protocol.js";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import {
+  closeAllFileReads,
+  closeFile,
+  type CodexSandboxFileReadHandles,
   createDirectory,
   copyPath,
   getMetadata,
+  openFile,
   readDirectory,
   readFile,
+  readFileBlock,
   removePath,
   writeFile,
 } from "./sandbox-exec-server/filesystem.js";
 import { httpRequest } from "./sandbox-exec-server/http.js";
 import {
+  JSON_RPC_METHOD_NOT_FOUND,
   JsonRpcProtocolError,
   parseRequest,
   sendError,
@@ -252,12 +259,14 @@ function isAuthorizedExecServerRequest(
 
 function handleConnection(execServer: OpenClawExecServer, socket: WebSocket): void {
   const processes = new Map<string, ManagedProcess>();
+  const fileReads: CodexSandboxFileReadHandles = new Map();
   socket.on("message", (data) => {
-    void handleMessage(execServer, processes, socket, data).catch((error: unknown) => {
+    void handleMessage(execServer, processes, fileReads, socket, data).catch((error: unknown) => {
       embeddedAgentLog.warn("codex sandbox exec-server message failed", { error });
     });
   });
   socket.on("close", () => {
+    closeAllFileReads(fileReads);
     for (const process of processes.values()) {
       process.abortController.abort();
     }
@@ -271,6 +280,7 @@ function handleExecServerSocketError(error: unknown): void {
 async function handleMessage(
   execServer: OpenClawExecServer,
   processes: Map<string, ManagedProcess>,
+  fileReads: CodexSandboxFileReadHandles,
   socket: WebSocket,
   data: RawData,
 ): Promise<void> {
@@ -287,7 +297,10 @@ async function handleMessage(
     return;
   }
   try {
-    const result = await dispatchRequest(execServer, processes, socket, { ...request, method });
+    const result = await dispatchRequest(execServer, processes, fileReads, socket, {
+      ...request,
+      method,
+    });
     sendResult(socket, request.id, result);
   } catch (error) {
     sendError(
@@ -302,12 +315,22 @@ async function handleMessage(
 async function dispatchRequest(
   execServer: OpenClawExecServer,
   processes: Map<string, ManagedProcess>,
+  fileReads: CodexSandboxFileReadHandles,
   socket: WebSocket,
   request: Required<Pick<JsonRpcRequest, "method">> & Pick<JsonRpcRequest, "id" | "params">,
 ): Promise<JsonValue | undefined> {
   switch (request.method) {
     case "initialize":
       return { sessionId: randomUUID() };
+    case "environment/info":
+      // The shell and cwd describe the sandbox target, not the Gateway host.
+      return {
+        shell: { name: "sh", path: "/bin/sh" },
+        cwd: pathToFileURL(execServer.sandbox.containerWorkdir, { windows: false }).href,
+        capabilities: { networkProxyLaunch: false },
+      };
+    case "environment/status":
+      return { status: "ready" };
     // These method names are the Codex exec-server remote-environment RPCs.
     // The app-server process-control surface uses different names such as
     // process/spawn, but those are not sent to registered exec-server URLs.
@@ -319,6 +342,12 @@ async function dispatchRequest(
       return writeProcess(processes, request.params);
     case "process/terminate":
       return terminateProcess(processes, request.params);
+    case "fs/open":
+      return await openFile(execServer, fileReads, request.params);
+    case "fs/readBlock":
+      return readFileBlock(fileReads, request.params);
+    case "fs/close":
+      return closeFile(fileReads, request.params);
     case "fs/readFile":
       return await readFile(execServer, request.params);
     case "fs/writeFile":
@@ -340,6 +369,9 @@ async function dispatchRequest(
     case "http/request":
       return await httpRequest(execServer, socket, request.params);
     default:
-      throw new Error(`Unsupported OpenClaw sandbox exec-server method: ${request.method}`);
+      throw new JsonRpcProtocolError(
+        JSON_RPC_METHOD_NOT_FOUND,
+        `Unsupported OpenClaw sandbox exec-server method: ${request.method}`,
+      );
   }
 }

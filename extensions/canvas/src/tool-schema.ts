@@ -23,15 +23,6 @@ const CANVAS_ACTIONS = [
 /** Snapshot formats accepted by the Canvas tool. */
 const CANVAS_SNAPSHOT_FORMATS = ["png", "jpg", "jpeg"] as const;
 
-/** Gateway capability required for inline transcript widgets. */
-export const SHOW_WIDGET_REQUIRED_CLIENT_CAPS = ["inline-widgets"];
-
-/** TypeBox schema for inline web chat widgets. */
-export const ShowWidgetToolSchema = Type.Object({
-  title: Type.String(),
-  widget_code: Type.String(),
-});
-
 /** TypeBox schema for the model-facing Canvas tool arguments. */
 export const CanvasToolSchema = Type.Object({
   action: stringEnum(CANVAS_ACTIONS),

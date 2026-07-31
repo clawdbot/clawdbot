@@ -27,8 +27,6 @@ export interface RemindParams {
   jobId?: string;
 }
 
-const QQBOT_DEFAULT_REMINDER_TIMEZONE = "Asia/Shanghai";
-
 /**
  * Context supplied by the bridge layer so the engine can remain free of
  * framework / AsyncLocalStorage dependencies. `fallbackTo` and
@@ -99,7 +97,7 @@ export const RemindSchema = {
     timezone: {
       type: "string",
       description:
-        "Optional IANA timezone used for cron reminders. Include it when the user provides or confirms a timezone; if omitted, QQBot preserves its existing default timezone.",
+        "Optional IANA timezone used for cron reminders. Include it when the user provides or confirms a timezone; if omitted, Gateway cron uses the host timezone.",
     },
     name: {
       type: "string",
@@ -121,7 +119,7 @@ export const RemindSchema = {
  *
  * @returns Milliseconds or null if unparseable.
  */
-export function parseRelativeTime(timeStr: string): number | null {
+function parseRelativeTime(timeStr: string): number | null {
   const s = timeStr.trim().toLowerCase();
   if (/^\d+$/.test(s)) {
     return Number.parseInt(s, 10) * 60_000;
@@ -166,7 +164,7 @@ export function parseRelativeTime(timeStr: string): number | null {
  * Check whether a time string is a cron expression (3–6 space-separated fields).
  * 判断时间字符串是否为 cron 表达式。
  */
-export function isCronExpression(timeStr: string): boolean {
+function isCronExpression(timeStr: string): boolean {
   const parts = timeStr.trim().split(/\s+/);
   if (parts.length < 3 || parts.length > 6) {
     return false;
@@ -178,14 +176,14 @@ export function isCronExpression(timeStr: string): boolean {
  * Generate a cron job name from reminder content (first 20 chars).
  * 根据提醒内容生成 cron job 名称。
  */
-export function generateJobName(content: string): string {
+function generateJobName(content: string): string {
   const trimmed = content.trim();
   const short = trimmed.length > 20 ? `${truncateUtf16Safe(trimmed, 20)}…` : trimmed;
   return `Reminder: ${short}`;
 }
 
 /** Build the reminder system prompt sent to the AI. */
-export function buildReminderPrompt(content: string): string {
+function buildReminderPrompt(content: string): string {
   return (
     `You are a warm reminder assistant. Please remind the user about: ${content}. ` +
     `Requirements: (1) do not reply with HEARTBEAT_OK (2) do not explain who you are ` +
@@ -202,13 +200,15 @@ function buildOnceJob(params: RemindParams, atMs: number, to: string, accountId:
     action: "add" as const,
     job: {
       name,
-      schedule: { kind: "at" as const, atMs },
+      schedule: { kind: "at" as const, at: new Date(atMs).toISOString() },
       sessionTarget: "isolated" as const,
       wakeMode: "now" as const,
       deleteAfterRun: true,
       payload: {
         kind: "agentTurn" as const,
         message: buildReminderPrompt(content),
+        // The scheduled turn only renders reminder text; delivery is host-owned.
+        toolsAllow: [],
       },
       delivery: {
         mode: "announce" as const,
@@ -224,17 +224,23 @@ function buildOnceJob(params: RemindParams, atMs: number, to: string, accountId:
 function buildCronJob(params: RemindParams, to: string, accountId: string) {
   const content = params.content!;
   const name = params.name || generateJobName(content);
-  const tz = params.timezone || QQBOT_DEFAULT_REMINDER_TIMEZONE;
+  const timezone = params.timezone?.trim();
   return {
     action: "add" as const,
     job: {
       name,
-      schedule: { kind: "cron" as const, expr: params.time!.trim(), tz },
+      schedule: {
+        kind: "cron" as const,
+        expr: params.time!.trim(),
+        ...(timezone ? { tz: timezone } : {}),
+      },
       sessionTarget: "isolated" as const,
       wakeMode: "now" as const,
       payload: {
         kind: "agentTurn" as const,
         message: buildReminderPrompt(content),
+        // The scheduled turn only renders reminder text; delivery is host-owned.
+        toolsAllow: [],
       },
       delivery: {
         mode: "announce" as const,
@@ -247,7 +253,7 @@ function buildCronJob(params: RemindParams, to: string, accountId: string) {
 }
 
 /** Format a delay in milliseconds as a short string (e.g. "5m", "1h30m"). */
-export function formatDelay(ms: number): string {
+function formatDelay(ms: number): string {
   const totalSeconds = Math.round(ms / 1000);
   if (totalSeconds < 60) {
     return `${totalSeconds}s`;
@@ -268,7 +274,7 @@ function formatSchedulerError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function prepareRemindCronAction(
+function prepareRemindCronAction(
   params: RemindParams,
   ctx: RemindExecuteContext = {},
 ): RemindCronPlan {
@@ -305,11 +311,12 @@ export function prepareRemindCronAction(
   const resolvedAccountId = ctx.fallbackAccountId || "default";
 
   if (isCronExpression(params.time)) {
+    const timezone = params.timezone?.trim();
     return {
       ok: true,
       action: "add",
       cronAction: buildCronJob(params, resolvedTo, resolvedAccountId),
-      summary: `⏰ Recurring reminder: "${params.content}" (${params.time}, tz=${params.timezone || QQBOT_DEFAULT_REMINDER_TIMEZONE})`,
+      summary: `⏰ Recurring reminder: "${params.content}" (${params.time}, tz=${timezone || "gateway local"})`,
     };
   }
 

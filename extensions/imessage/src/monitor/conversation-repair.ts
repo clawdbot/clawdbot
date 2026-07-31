@@ -1,4 +1,5 @@
 // Imessage plugin module implements conversation repair behavior.
+import { hasNonEmptyString as isNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { IMessageRpcClient } from "../client.js";
 import type { IMessagePayload } from "./types.js";
 
@@ -40,10 +41,6 @@ type AuthoritativeRecoveryProjection = {
   is_from_me: boolean;
 };
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim() !== "";
-}
-
 function hasPositiveChatId(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
@@ -64,7 +61,7 @@ function hasUsableConversationAnchor(projection: {
   );
 }
 
-export function isIMessageAnchorless(message: IMessagePayload): boolean {
+function isIMessageAnchorless(message: IMessagePayload): boolean {
   const hasUsableAnchor =
     hasPositiveChatId(message.chat_id) ||
     isNonEmptyString(message.chat_guid) ||

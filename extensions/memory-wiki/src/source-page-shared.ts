@@ -36,6 +36,7 @@ export async function writeImportedSourcePage(params: {
   vaultRoot: string;
   syncKey: string;
   sourcePath: string;
+  sourceContent?: string;
   sourceUpdatedAtMs: number;
   sourceSize: number;
   renderFingerprint: string;
@@ -70,7 +71,7 @@ export async function writeImportedSourcePage(params: {
   });
   const created = !pageStat;
   const updatedAt = timestampMsToIsoString(params.sourceUpdatedAtMs) ?? new Date().toISOString();
-  const raw = await fs.readFile(params.sourcePath, "utf8");
+  const raw = params.sourceContent ?? (await fs.readFile(params.sourcePath, "utf8"));
   const rendered = params.buildRendered(raw, updatedAt);
   const existing = pageStat ? await readExistingImportedSourcePage(vault, params.pagePath) : "";
   const nextRendered = existing ? preserveHumanNotesBlock(rendered, existing) : rendered;

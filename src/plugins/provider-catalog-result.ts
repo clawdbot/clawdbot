@@ -3,7 +3,7 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import {
   copyArrayEntries,
   copyRecordEntries,
-  isRecord,
+  isRecordWithoutThrowing,
   readRecordValue,
 } from "../shared/safe-record.js";
 import type { ProviderCatalogResult } from "./types.js";
@@ -92,7 +92,7 @@ export function copyProviderCatalogModels(
 }
 
 function copyProviderCatalogModel(model: unknown): ModelDefinitionConfig | undefined {
-  if (!isRecord(model)) {
+  if (!isRecordWithoutThrowing(model)) {
     return undefined;
   }
   const id = readRecordValue(model, "id");
@@ -118,7 +118,7 @@ function copyProviderCatalogModel(model: unknown): ModelDefinitionConfig | undef
 function copyProviderCatalogProviderConfig(
   providerConfig: unknown,
 ): ModelProviderConfig | undefined {
-  if (!isRecord(providerConfig)) {
+  if (!isRecordWithoutThrowing(providerConfig)) {
     return undefined;
   }
 

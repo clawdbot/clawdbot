@@ -11,6 +11,7 @@ import {
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { isTerminalConfigEnabled } from "./enabled.js";
 
 /** Why a terminal cannot open, or `null` when it can. */
 type TerminalLaunchBlock =
@@ -19,12 +20,16 @@ type TerminalLaunchBlock =
   | { kind: "sandboxed"; agentId: string; mode: "all" };
 
 /** Resolved plan for a host terminal session. */
-type TerminalLaunchPlan = {
+export type TerminalLaunchPlan = {
   agentId: string;
   cwd: string;
   shell: string;
   args: string[];
+  initialCommand?: string[];
+  cwdOverride?: string;
 };
+
+export type TerminalSpawnPlan = Pick<TerminalLaunchPlan, "agentId" | "shell" | "args" | "cwd">;
 
 /** Terminal launch resolution result: either a runnable plan or a block reason. */
 export type TerminalLaunchResolution =
@@ -40,7 +45,7 @@ type TerminalLaunchPolicy = {
 };
 
 /** Picks the interactive shell: explicit config, then the host login shell. */
-export function resolveTerminalShell(params: {
+function resolveTerminalShell(params: {
   configuredShell?: string;
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
@@ -72,7 +77,7 @@ export function resolveTerminalShell(params: {
  * handing back an unconfined shell — fail-closed. `"non-main"` keeps the agent's
  * main session on the host, so a host terminal is allowed there.
  */
-export function resolveTerminalLaunch(params: {
+function resolveTerminalLaunch(params: {
   config: OpenClawConfig;
   enabled: boolean;
   agentId?: string;
@@ -136,13 +141,13 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
     const terminalConfig = config.gateway?.terminal;
     return resolveTerminalLaunch({
       config,
-      enabled: terminalConfig?.enabled === true,
+      enabled: isTerminalConfigEnabled(config),
       agentId,
       configuredShell: terminalConfig?.shell,
     });
   };
   const accumulateRestartRestrictions = (config: OpenClawConfig) => {
-    if (config.gateway?.terminal?.enabled !== true) {
+    if (!isTerminalConfigEnabled(config)) {
       terminalDisabledUntilRestart = true;
       return;
     }
@@ -158,7 +163,7 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
     }
   };
   const accumulateCommitRestrictions = (config: OpenClawConfig) => {
-    if (config.gateway?.terminal?.enabled !== true) {
+    if (!isTerminalConfigEnabled(config)) {
       terminalDisabledUntilCommit = true;
       return;
     }
@@ -201,10 +206,10 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
       return active;
     },
     isEnabled: () =>
-      activeConfig.gateway?.terminal?.enabled === true &&
+      isTerminalConfigEnabled(activeConfig) &&
       !terminalDisabledUntilRestart &&
       !terminalDisabledUntilCommit &&
-      (preparedConfig === null || preparedConfig.gateway?.terminal?.enabled === true),
+      (preparedConfig === null || isTerminalConfigEnabled(preparedConfig)),
     prepareConfig: (config, options) => {
       if (options.restartPending) {
         hasPendingRestart = true;
@@ -283,6 +288,37 @@ export function buildTerminalEnv(baseEnv: NodeJS.ProcessEnv): Record<string, str
   // Lets shells and prompts detect that they are inside an OpenClaw terminal.
   env.OPENCLAW_TERMINAL = "1";
   return env;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+/** Converts a policy-approved plan into the exact local PTY spawn. */
+export function resolveTerminalSpawnPlan(
+  plan: TerminalLaunchPlan,
+  options: { env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform } = {},
+): TerminalSpawnPlan {
+  const env = options.env ?? process.env;
+  const cwd = existingDirOrHome(plan.cwdOverride ?? plan.cwd, env);
+  const command = plan.initialCommand;
+  if (!command || command.length === 0) {
+    return { agentId: plan.agentId, shell: plan.shell, args: plan.args, cwd };
+  }
+  if ((options.platform ?? process.platform) === "win32") {
+    return {
+      agentId: plan.agentId,
+      shell: command[0] ?? plan.shell,
+      args: command.slice(1),
+      cwd,
+    };
+  }
+  return {
+    agentId: plan.agentId,
+    shell: plan.shell,
+    args: ["-il", "-c", command.map(shellQuote).join(" ")],
+    cwd,
+  };
 }
 
 // A workspace dir that has not been created yet would make the PTY spawn fail;

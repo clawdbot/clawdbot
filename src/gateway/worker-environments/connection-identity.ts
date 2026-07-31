@@ -4,6 +4,7 @@ export type WorkerConnectionIdentity = {
   credentialHash: string;
   bundleHash: string;
   sessionId: string | null;
+  runId: string | null;
   ownerEpoch: number;
   rpcSetVersion: number;
   protocolFeatures: string[];

@@ -49,10 +49,13 @@ const hoisted = vi.hoisted(() => {
   const accountConfig = {
     dm: {},
   };
+  const inboundReplayClaim = {
+    keys: ["test"] as const,
+    commit: vi.fn(async () => true),
+    release: vi.fn(),
+  };
   const inboundDeduper = {
-    claimEvent: vi.fn(async () => true),
-    commitEvent: vi.fn(async () => undefined),
-    releaseEvent: vi.fn(),
+    claim: vi.fn(async () => ({ kind: "claimed" as const, handle: inboundReplayClaim })),
   };
   const createMatrixInboundEventDeduper = vi.fn(() => inboundDeduper);
   const client = Object.assign(createEmitter(), {
@@ -118,6 +121,7 @@ const hoisted = vi.hoisted(() => {
     getMemberDisplayName,
     getRoomInfo,
     inboundDeduper,
+    inboundReplayClaim,
     logger,
     registeredOnRoomMessage: null as null | ((roomId: string, event: unknown) => Promise<void>),
     releaseSharedClientInstance,
@@ -187,32 +191,6 @@ vi.mock("../../runtime-api.js", () => {
       groupPolicy: "allowlist",
       providerMissingFallbackApplied: false,
     }),
-    resolveChannelEntryMatch: ({
-      entries,
-      keys,
-      wildcardKey,
-    }: {
-      entries: Record<string, unknown>;
-      keys: string[];
-      wildcardKey: string;
-    }) => {
-      for (const key of keys) {
-        if (Object.hasOwn(entries, key)) {
-          return {
-            entry: entries[key],
-            key,
-            wildcardEntry: Object.hasOwn(entries, wildcardKey) ? entries[wildcardKey] : undefined,
-            wildcardKey: Object.hasOwn(entries, wildcardKey) ? wildcardKey : undefined,
-          };
-        }
-      }
-      return {
-        entry: undefined,
-        key: undefined,
-        wildcardEntry: Object.hasOwn(entries, wildcardKey) ? entries[wildcardKey] : undefined,
-        wildcardKey: Object.hasOwn(entries, wildcardKey) ? wildcardKey : undefined,
-      };
-    },
     resolveDefaultGroupPolicy: () => "allowlist",
     resolveOutboundSendDep: () => null,
     resolveThreadBindingFarewellText: () => null,
@@ -385,12 +363,11 @@ vi.mock("./startup.js", () => ({
   runMatrixStartupMaintenance: hoisted.runMatrixStartupMaintenance,
 }));
 
-let matrixMonitorTesting: typeof import("./index.js").testing;
 let monitorMatrixProvider: typeof import("./index.js").monitorMatrixProvider;
 
 describe("monitorMatrixProvider", () => {
   beforeAll(async () => {
-    ({ testing: matrixMonitorTesting, monitorMatrixProvider } = await import("./index.js"));
+    ({ monitorMatrixProvider } = await import("./index.js"));
   });
 
   async function flushUntil(predicate: () => boolean, message: string): Promise<void> {
@@ -461,6 +438,7 @@ describe("monitorMatrixProvider", () => {
     hoisted.callOrder.length = 0;
     hoisted.state.startClientError = null;
     hoisted.accountConfig.dm = {};
+    delete (hoisted.accountConfig as { streaming?: unknown }).streaming;
     delete (hoisted.accountConfig as { rooms?: Record<string, unknown> }).rooms;
     hoisted.resolveTextChunkLimit.mockReset().mockReturnValue(4000);
     hoisted.releaseSharedClientInstance.mockReset().mockResolvedValue(true);
@@ -497,9 +475,11 @@ describe("monitorMatrixProvider", () => {
     hoisted.client.hasPersistedSyncState.mockReset().mockReturnValue(false);
     hoisted.client.stopSyncWithoutPersist.mockReset();
     hoisted.client.drainPendingDecryptions.mockReset().mockResolvedValue(undefined);
-    hoisted.inboundDeduper.claimEvent.mockReset().mockResolvedValue(true);
-    hoisted.inboundDeduper.commitEvent.mockReset().mockResolvedValue(undefined);
-    hoisted.inboundDeduper.releaseEvent.mockReset();
+    hoisted.inboundDeduper.claim
+      .mockReset()
+      .mockResolvedValue({ kind: "claimed" as const, handle: hoisted.inboundReplayClaim });
+    hoisted.inboundReplayClaim.commit.mockReset().mockResolvedValue(true);
+    hoisted.inboundReplayClaim.release.mockReset();
     hoisted.createMatrixInboundEventDeduper.mockReset().mockReturnValue(hoisted.inboundDeduper);
     hoisted.backfillMatrixAuthDeviceIdAfterStartup.mockReset().mockResolvedValue(undefined);
     hoisted.runMatrixStartupMaintenance.mockReset().mockResolvedValue(undefined);
@@ -510,14 +490,6 @@ describe("monitorMatrixProvider", () => {
 
   it.each([
     [undefined, "off", false],
-    // Scalar/boolean spellings stay honored for schema-open account entries
-    // until the flat-key deprecation window closes; doctor migrates them.
-    [false, "off", false],
-    [true, "partial", true],
-    ["off", "off", false],
-    ["partial", "partial", true],
-    ["quiet", "quiet", true],
-    ["progress", "progress", true],
     [{}, "off", false],
     [{ mode: "off" }, "off", false],
     [{ mode: "partial" }, "partial", true],
@@ -534,15 +506,19 @@ describe("monitorMatrixProvider", () => {
       false,
     ],
     [{ mode: "off", preview: { toolProgress: true } }, "off", false],
-  ] satisfies Array<
-    [MatrixConfig["streaming"] | MatrixStreamingMode | boolean, MatrixStreamingMode, boolean]
-  >)(
+  ] satisfies Array<[MatrixConfig["streaming"], MatrixStreamingMode, boolean]>)(
     "resolves streaming=%j to mode=%s and toolProgress=%s",
-    (streaming, expectedMode, expectedPreviewToolProgressEnabled) => {
-      expect(matrixMonitorTesting.resolveMatrixStreamingMode(streaming)).toBe(expectedMode);
-      expect(matrixMonitorTesting.resolveMatrixPreviewToolProgressEnabled(streaming)).toBe(
-        expectedPreviewToolProgressEnabled,
-      );
+    async (streaming, expectedMode, expectedPreviewToolProgressEnabled) => {
+      (hoisted.accountConfig as { streaming?: unknown }).streaming = streaming;
+
+      await startMonitorAndAbortAfterStartup();
+
+      const handlerParams = mockCallArg(hoisted.createMatrixRoomMessageHandler) as {
+        streaming?: MatrixStreamingMode;
+        previewToolProgressEnabled?: boolean;
+      };
+      expect(handlerParams.streaming).toBe(expectedMode);
+      expect(handlerParams.previewToolProgressEnabled).toBe(expectedPreviewToolProgressEnabled);
     },
   );
 

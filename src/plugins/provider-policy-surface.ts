@@ -86,6 +86,17 @@ function resolveCachedProviderPolicySurface(params: {
 export function resolveDirectBundledProviderPolicySurface(
   pluginId: string,
 ): BundledProviderPolicySurface | null {
+  // Provider refs are not necessarily plugin directories. Let manifest-owned
+  // policy resolution handle namespaced refs without weakening artifact path checks.
+  if (
+    pluginId === "." ||
+    pluginId === ".." ||
+    pluginId.includes("/") ||
+    pluginId.includes("\\") ||
+    pluginId.includes(":")
+  ) {
+    return null;
+  }
   return resolveCachedProviderPolicySurface({
     cacheKey: `${resolveBundledPluginsDir() ?? ""}\0${pluginId}`,
     loadModule: (artifactBasename) =>

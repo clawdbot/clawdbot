@@ -17,6 +17,8 @@ vi.mock("../session-utils.js", async () => {
     ...actual,
     loadSessionEntry: (...args: unknown[]) =>
       loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
+    loadSessionEntryReadOnly: (...args: unknown[]) =>
+      loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
   };
 });
 
@@ -41,6 +43,7 @@ function createContext(params: {
   replay?: SessionApprovalReplay;
   replayError?: Error;
   globalScope?: boolean;
+  mainKey?: string;
   agents?: Array<{ id: string; default?: boolean }>;
 }) {
   const rollbackSubscription = vi.fn();
@@ -55,7 +58,14 @@ function createContext(params: {
   const context = {
     getRuntimeConfig: () => ({
       agents: { list: params.agents ?? [{ id: "main", default: true }] },
-      ...(params.globalScope ? { session: { scope: "global" as const } } : {}),
+      ...(params.globalScope || params.mainKey
+        ? {
+            session: {
+              ...(params.globalScope ? { scope: "global" as const } : {}),
+              ...(params.mainKey ? { mainKey: params.mainKey } : {}),
+            },
+          }
+        : {}),
     }),
     listSessionPendingApprovals,
     logGateway: { error: logError },
@@ -93,11 +103,9 @@ async function subscribe(params: {
 describe("sessions.messages.subscribe approval opt-in", () => {
   beforeEach(() => {
     loadSessionEntryMock.mockReset();
-    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({ canonicalKey: sessionKey }));
   });
 
   it("allows an admin without a paired device and uses the exact scoped subscription key", async () => {
-    loadSessionEntryMock.mockReturnValueOnce({ canonicalKey: "global" });
     const approvalReplay = {
       sessionKey: "agent:work:global",
       updatedAtMs: 42,
@@ -111,7 +119,7 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     });
 
     const respond = await subscribe({
-      body: { key: "agent:work:main", includeApprovals: true },
+      body: { key: "global", agentId: "work", includeApprovals: true },
       client: createClient({ scopes: ["operator.admin"], connId: " conn-admin " }),
       context,
     });
@@ -125,16 +133,17 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     );
     expect(subscribeSessionMessageEvents).toHaveBeenCalledWith("conn-admin", "agent:work:global", {
       includeApprovals: true,
+      provisional: true,
     });
     expect(respond).toHaveBeenCalledWith(
       true,
       { subscribed: true, key: "global", approvalReplay },
       undefined,
     );
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
   });
 
   it("allows a paired device with approval scope", async () => {
-    loadSessionEntryMock.mockReturnValueOnce({ canonicalKey: "agent:main:child" });
     const approvalReplay = {
       sessionKey: "agent:main:child",
       updatedAtMs: 43,
@@ -152,7 +161,7 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
       "conn-approval-reviewer",
       "agent:main:child",
-      { includeApprovals: true },
+      { includeApprovals: true, provisional: true },
     );
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -194,7 +203,6 @@ describe("sessions.messages.subscribe approval opt-in", () => {
   });
 
   it("keeps the non-approval response shape and skips replay", async () => {
-    loadSessionEntryMock.mockReturnValueOnce({ canonicalKey: "agent:main:child" });
     const { context, listSessionPendingApprovals, subscribeSessionMessageEvents } = createContext(
       {},
     );
@@ -219,6 +227,27 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("approvalReplay");
   });
 
+  it("canonicalizes configured main aliases without loading the session store", async () => {
+    const { context, subscribeSessionMessageEvents } = createContext({ mainKey: "work" });
+
+    const respond = await subscribe({
+      body: { key: "main" },
+      client: createClient({ scopes: ["operator.read"] }),
+      context,
+    });
+
+    expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
+      "conn-approval-reviewer",
+      "agent:main:work",
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { subscribed: true, key: "agent:main:work" },
+      undefined,
+    );
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     { name: "throws", replayError: new Error("database unavailable") },
     { name: "returns no snapshot", replayError: undefined },
@@ -240,7 +269,7 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
       "conn-approval-reviewer",
       "agent:main:child",
-      { includeApprovals: true },
+      { includeApprovals: true, provisional: true },
     );
     expect(subscribeSessionMessageEvents.mock.invocationCallOrder[0]).toBeLessThan(
       listSessionPendingApprovals.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,

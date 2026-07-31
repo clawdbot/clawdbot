@@ -196,7 +196,7 @@ describe("doctor command", () => {
     }
   });
 
-  it("warns about opencode provider overrides", async () => {
+  it("warns about active OpenCode provider overrides", async () => {
     mockDoctorConfigSnapshot({
       config: {
         models: {
@@ -1123,3 +1123,4 @@ describe("doctor command", () => {
     expect(warned).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

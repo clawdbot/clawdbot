@@ -55,7 +55,7 @@ const DEFAULT_FS: FsLike = {
 };
 
 /** Find global node_modules symlinks that still point at stale plugin-runtime deps. */
-export async function collectStalePluginRuntimeSymlinks(
+async function collectStalePluginRuntimeSymlinks(
   packageRoot: string | null | undefined,
   options: PluginRuntimeSymlinkOptions = {},
 ): Promise<StalePluginRuntimeSymlink[]> {
@@ -101,9 +101,7 @@ export async function collectStalePluginRuntimeSymlinks(
   return stale.toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
-export function stalePluginRuntimeSymlinkToHealthFinding(
-  item: StalePluginRuntimeSymlink,
-): HealthFinding {
+function stalePluginRuntimeSymlinkToHealthFinding(item: StalePluginRuntimeSymlink): HealthFinding {
   return {
     checkId: "core/doctor/stale-plugin-runtime-symlinks",
     severity: "warning",

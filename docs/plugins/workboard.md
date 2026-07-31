@@ -87,6 +87,30 @@ operator see how a card moved through the board without opening the linked
 session; it is local operating context, not a replacement for session
 transcripts or GitHub issue history.
 
+The plugin and Control UI use one Workboard card contract. Dashboard refreshes
+therefore preserve workspace provenance and authority, claim state, diagnostic
+actions, and notification sequence numbers instead of projecting a smaller
+UI-only copy of the card. Unknown diagnostic kinds, diagnostic severities, and
+notification kinds are ignored until both surfaces support them; they are never
+rewritten into another valid state.
+
+The open dashboard updates from `plugin.workboard.changed` invalidations. Each
+event contains only a store epoch and revision; the UI then rereads canonical
+cards through the normal `operator.read` RPC. Multiple revisions coalesce into
+one follow-up read. Workboard defers that read while a card is being dragged,
+edited, or written, then resumes after the local interaction finishes. A
+reconnect always performs a canonical reload. There is no routine full-card
+poll, and **Refresh** remains available as manual recovery.
+
+When more than one board exists, the toolbar includes a **Board** filter backed
+by persisted board metadata rather than only the currently visible cards. Empty
+and archived boards therefore remain selectable. Cards without an explicit
+board id belong to the canonical `default` board. Each board has a canonical
+`/workboard/<boardId>` page that can be bookmarked, shared, or pinned in the
+sidebar. The previously shipped `/workboard?board=<boardId>` form remains a
+compatibility alias and redirects to that page while preserving other query
+parameters. Choosing **All boards** returns to `/workboard`.
+
 Cards are stored in the plugin's own Gateway state and move with the rest of
 that Gateway's OpenClaw state (see [Storage](#storage)).
 
@@ -136,7 +160,18 @@ rule as linked sessions (see [Session lifecycle sync](#session-lifecycle-sync)).
 | `workboard_promote` / `workboard_reassign` / `workboard_reclaim`                                                                                 | Recover or hand off stuck work.                                                                                                                                                           |
 | `workboard_comment` / `workboard_proof`                                                                                                          | Add handoff notes or attach proof/artifact references.                                                                                                                                    |
 | `workboard_unblock`                                                                                                                              | Move blocked work back to `todo`.                                                                                                                                                         |
-| `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup.                                                                                                                                        |
+| `workboard_move`                                                                                                                                 | Move a card to another status; claimed cards require the caller's agent claim scope.                                                                                                      |
+| `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                        |
+
+Proof statuses are worker-reported outcomes, not independent verification. A `passed`
+entry means the worker reports that its command or check succeeded; consumers that need
+an independent quality gate should inspect the attached command, URL, or artifact and
+run their own verifier. `workboard_proof` returns the new record's `proofId`. When
+`workboard_complete` reports that same proof's terminal status, pass `proofId` so the
+pending record is resolved in place without losing its identity or timestamp. A proof that
+already has the same terminal status is reused unchanged. Completion proof without
+`proofId` remains append-only, so a later retry cannot rewrite older history merely because
+its command or note is identical.
 
 Claimed cards reject agent-tool mutations from other agents unless the caller
 holds the claim token returned by `workboard_claim`. Every card returned by an
@@ -161,6 +196,35 @@ OpenClaw subagent sessions still own execution. One dispatch pass:
 
 Workers get bounded card context plus the claim token needed to heartbeat,
 complete, or block the card through the Workboard tools.
+
+Workspace paths follow the caller's existing filesystem authority. Gateway
+clients with `operator.write` can use configured agent workspaces;
+`operator.admin` clients can use other host checkouts. Sandboxed agent tools use
+their sandbox workspace access, while unsandboxed workspace-only tools use their
+configured workspace root. Workboard records that authority when a workspace is
+assigned and intersects it with the current caller's authority again at dispatch,
+so a persisted card cannot widen a later caller's access. Older cards with an
+explicit host workspace but no recorded authority must have that workspace
+re-saved before a full-host dispatch; cards without a host path adopt the
+current caller's authority when first dispatched.
+
+Workspace-bound dispatch accepts a directory or Git checkout only when its
+repository root exactly matches the target agent workspace. A worktree request
+is narrowed to that directory and persisted as a directory workspace, so the
+host does not materialize the checkout or execute repository setup code. The
+target worker must use a writable, non-shared Docker sandbox for that exact
+workspace, without elevated execution, persisted host/node exec overrides, or
+unclassified plugin and MCP tools. Workboard enumerates its registered tools
+instead of trusting a `workboard_*` prefix, and dispatch refuses a hot Docker
+container whose live mount/config hash is stale. Dispatch reports the
+incompatible target policy instead of starting a less-confined worker.
+Full-host dispatch may target other local checkouts and keeps normal managed-
+worktree setup.
+
+Workspace authority does not create a second card-lifecycle permission model.
+Callers that may mutate Workboard cards can manually move them through the same
+statuses on every surface; read-only workspace access only prevents worker
+dispatch that needs writes.
 
 ### Worker selection
 
@@ -212,23 +276,28 @@ through the normal Workboard tools.
 openclaw workboard list [--board <id>] [--status <status>] [--include-archived] [--json]
 openclaw workboard create "Fix stale card lifecycle" --priority high --labels bug,workboard
 openclaw workboard show <card-id> [--json]
+openclaw workboard move <card-id> --status <status> [--json]
 openclaw workboard dispatch [--board <id>] [--json]
 ```
 
 `list` text output hides archived cards by default (`--include-archived`
 overrides); `--json` always includes archived cards, matching the full-card
-contract used by existing scripts. `show` accepts an unambiguous id prefix.
-`list`, `create`, and `show` always read/write local plugin state directly.
-Only `dispatch` calls the running Gateway, with the fallback described above.
+contract used by existing scripts. `show` and `move` accept an unambiguous id
+prefix. `list`, `create`, `show`, and `move` always read/write local plugin
+state directly. Only `dispatch` calls the running Gateway, with the fallback
+described above.
 
 See [Workboard CLI](/cli/workboard) for full flags, JSON output, Gateway
 fallback behavior, id-prefix handling, dispatch selection rules, and
 troubleshooting.
 
 `/workboard list`, `/workboard show <card-id>`, `/workboard create <title>`,
-and `/workboard dispatch` mirror the CLI. List and show are read operations
-for any authorized command sender. Create and dispatch require owner status on
-chat surfaces, or a Gateway client with `operator.write`/`operator.admin`.
+`/workboard move <card-id> --status <status>`, and `/workboard dispatch` mirror
+the CLI. List and show are read operations for any authorized command sender.
+Create, move, and dispatch require owner status on chat surfaces, or a Gateway
+client with `operator.write`/`operator.admin`. Manual operator moves use the
+same claim-override behavior as dashboard drag-and-drop. Their worktree access
+still follows the same workspace boundary described above.
 
 ## Session lifecycle sync
 
@@ -273,11 +342,26 @@ the template id is stored as card metadata.
    optional linked session - or open Sessions and choose **Add to Workboard**
    for an existing session.
 3. Drag the card between columns, or focus its compact status control and use
-   the menu or ArrowLeft/ArrowRight.
+   the menu or ArrowLeft/ArrowRight. During a drag, the source card dims and
+   available drop columns gain an outline.
 4. Start work from the card to create or reuse a dashboard session.
 5. Open the linked session from the card while the agent works.
 6. Let lifecycle sync move running work into `review`/`blocked`, then manually
    move the card to `done` when accepted.
+
+### Session-board widgets
+
+Workboard ships two native widgets for session dashboards (see
+[Dashboards](/web/dashboards)). The agent pins them with its `dashboard` tool
+using `content: { kind: "plugin", pluginKind, props }`, and they render as
+first-party UI with live data — no sandbox frame or capability grant:
+
+- `workboard:card` with `props: { cardId }` shows one card with its status
+  control, priority, and assigned agent.
+- `workboard:mini` with optional `props: { boardId, limit }` shows per-status
+  counts plus the top ready/running cards, and links to the full board page.
+  Without `boardId` it aggregates every board; with `boardId` it scopes to that
+  board (cards created without an explicit board id live on `default`).
 
 ## Diagnostics
 
@@ -302,7 +386,8 @@ Gateway RPC methods live under `workboard.*`:
 | `operator.write` | `cards.diagnostics.refresh`, create/update/move/delete/comment/link/linkDependency/proof/artifact, attachment add/delete, worker log, protocol violation, claim/heartbeat/release/promote/reassign/reclaim/complete/block/unblock, `cards.dispatch`, `cards.bulk`, archive, `boards.upsert`/`archive`/`delete`, `cards.specify`/`decompose`, notification subscribe/delete/advance |
 
 No RPC method requires `operator.admin`. Browsers connected with read-only
-operator access can inspect the board but cannot mutate cards.
+operator access can inspect the board but cannot mutate cards. An admin scope
+widens accepted Workboard host paths; it does not change the methods available.
 
 ## Storage
 

@@ -164,7 +164,7 @@ function requestMismatch(details?: Record<string, unknown>): SystemRunApprovalMa
   };
 }
 
-export function matchSystemRunApprovalEnvHash(params: {
+function matchSystemRunApprovalEnvHash(params: {
   expectedEnvHash: string | null;
   actualEnvHash: string | null;
   actualEnvKeys: string[];

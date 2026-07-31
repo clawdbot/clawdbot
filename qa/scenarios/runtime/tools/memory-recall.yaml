@@ -3,10 +3,10 @@ title: "Runtime tool fixture — memory.recall"
 scenario:
   id: runtime-tool-memory-recall
   surface: runtime-tools
-  runtimeParityTier: optional
+  runtimePairLane: extended
   coverage:
     primary:
-      - tools.memory.recall
+      - session-memory.memory-recall-tool
   objective: Verify memory_recall parity when the memory plugin exposes the tool.
   successCriteria:
     - If memory_recall is present, the fixture exercises happy and failure paths.

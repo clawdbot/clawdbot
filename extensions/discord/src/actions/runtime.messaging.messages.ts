@@ -112,6 +112,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       );
       return jsonResult({
         ok: true,
+        channelId,
         messages: messages.map((message) => ctx.normalizeMessage(message)),
       });
     }

@@ -1,6 +1,6 @@
 // Covers target input normalization, provider plugin normalizers, resolver
 // caching, and id-like lookup heuristics.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
@@ -16,7 +16,6 @@ let maybeResolvePluginMessagingTarget: TargetNormalizationModule["maybeResolvePl
 let normalizeChannelTargetInput: TargetNormalizationModule["normalizeChannelTargetInput"];
 let resolveNormalizedTargetInput: TargetNormalizationModule["resolveNormalizedTargetInput"];
 let normalizeTargetForProvider: TargetNormalizationModule["normalizeTargetForProvider"];
-let resetTargetNormalizerCacheForTests: TargetNormalizationModule["testing"]["resetTargetNormalizerCacheForTests"];
 
 vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../channels/plugins/registry-loaded.js")>();
@@ -35,7 +34,11 @@ vi.mock("../../plugins/runtime.js", () => ({
     getActivePluginChannelRegistryVersionMock(...args),
 }));
 
-beforeAll(async () => {
+beforeEach(async () => {
+  vi.resetModules();
+  getLoadedChannelPluginMock.mockReset();
+  getChannelPluginMock.mockReset();
+  getActivePluginChannelRegistryVersionMock.mockReset();
   ({
     buildTargetResolverSignature,
     looksLikeTargetId,
@@ -44,16 +47,6 @@ beforeAll(async () => {
     normalizeTargetForProvider,
     resolveNormalizedTargetInput,
   } = await import("./target-normalization.js"));
-  ({
-    testing: { resetTargetNormalizerCacheForTests },
-  } = await import("./target-normalization.js"));
-});
-
-beforeEach(() => {
-  getLoadedChannelPluginMock.mockReset();
-  getChannelPluginMock.mockReset();
-  getActivePluginChannelRegistryVersionMock.mockReset();
-  resetTargetNormalizerCacheForTests();
 });
 
 describe("normalizeChannelTargetInput", () => {

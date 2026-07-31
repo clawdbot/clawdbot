@@ -32,7 +32,7 @@ function collectPluginIdentities(extensionsRoot) {
 }
 
 /** Resolve public Docker selections to the source directories used by build and prune steps. */
-export function resolveDockerPluginSelection(params) {
+function resolveDockerPluginSelection(params) {
   const selection = typeof params.selection === "string" ? params.selection : "";
   const selectedIds = new Set(
     selection

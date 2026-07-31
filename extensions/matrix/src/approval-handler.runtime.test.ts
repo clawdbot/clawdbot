@@ -6,8 +6,8 @@ import type {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixApprovalNativeRuntime } from "./approval-handler.runtime.js";
 import {
-  clearMatrixApprovalReactionTargetsForTest,
   resolveMatrixApprovalReactionTargetWithPersistence as resolveMatrixApprovalReactionTargetWithPersistenceRaw,
+  unregisterMatrixApprovalReactionTargetsForApproval,
 } from "./approval-reactions.js";
 
 type ResolveTargetParams = Parameters<
@@ -192,8 +192,17 @@ async function buildPendingPayload(view: MatrixPendingApprovalView) {
 }
 
 describe("matrixApprovalNativeRuntime", () => {
-  beforeEach(() => {
-    clearMatrixApprovalReactionTargetsForTest();
+  beforeEach(async () => {
+    await unregisterMatrixApprovalReactionTargetsForApproval({
+      accountId: "default",
+      approvalId: "req-1",
+      approvalKind: "exec",
+    });
+    await unregisterMatrixApprovalReactionTargetsForApproval({
+      accountId: "default",
+      approvalId: "plugin:req-1",
+      approvalKind: "plugin",
+    });
   });
 
   it("sends versioned Matrix approval content with pending exec approvals", async () => {

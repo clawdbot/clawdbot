@@ -2,12 +2,12 @@
 // Rejects published placeholder auth values before the gateway starts.
 import type { ResolvedGatewayAuth } from "./auth.js";
 
-export const KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS = [
+const KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS = [
   "change-me-to-a-long-random-token",
   "change-me-now",
 ] as const;
 
-export const KNOWN_WEAK_GATEWAY_PASSWORD_PLACEHOLDERS = ["change-me-to-a-strong-password"] as const;
+const KNOWN_WEAK_GATEWAY_PASSWORD_PLACEHOLDERS = ["change-me-to-a-strong-password"] as const;
 
 /**
  * Placeholder credentials that have ever shipped in `.env.example` or been

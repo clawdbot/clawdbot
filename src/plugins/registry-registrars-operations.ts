@@ -26,8 +26,9 @@ import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import type {
   OpenClawGatewayDiscoveryService,
-  OpenClawPluginCliCommandDescriptor,
+  OpenClawPluginCliRegistrationOptions,
   OpenClawPluginCliRegistrar,
+  OpenClawPluginCliRootCommandDescriptor,
   OpenClawPluginCommandDefinition,
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
@@ -64,11 +65,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
   const registerCli = (
     record: PluginRecord,
     registrar: OpenClawPluginCliRegistrar,
-    opts?: {
-      parentPath?: string[];
-      commands?: string[];
-      descriptors?: OpenClawPluginCliCommandDescriptor[];
-    },
+    opts?: OpenClawPluginCliRegistrationOptions,
   ) => {
     const normalizeCommandRoot = (raw: string, source: "command" | "descriptor") => {
       const normalized = normalizeCommandDescriptorName(raw);
@@ -89,16 +86,29 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       return;
     }
     const normalizedParentPath = parentPath as string[];
+    const rootRegistration = normalizedParentPath.length === 0;
     const descriptors = (opts?.descriptors ?? [])
       .map((descriptor) => {
         const name = normalizeCommandRoot(descriptor.name, "descriptor");
         const description = sanitizeCommandDescriptorDescription(descriptor.description);
-        return name && description
-          ? { name, description, hasSubcommands: descriptor.hasSubcommands }
-          : null;
+        const machineOutput = rootRegistration
+          ? (descriptor as OpenClawPluginCliRootCommandDescriptor).machineOutput
+          : undefined;
+        if (!name || !description) {
+          return null;
+        }
+        const normalized: OpenClawPluginCliRootCommandDescriptor = {
+          name,
+          description,
+          hasSubcommands: descriptor.hasSubcommands,
+        };
+        if (machineOutput) {
+          normalized.machineOutput = machineOutput;
+        }
+        return normalized;
       })
       .filter(
-        (descriptor): descriptor is OpenClawPluginCliCommandDescriptor => descriptor !== null,
+        (descriptor): descriptor is OpenClawPluginCliRootCommandDescriptor => descriptor !== null,
       );
     const commands = [
       ...(opts?.commands ?? []),
@@ -197,7 +207,11 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    if (reservedNodeHostCommands.has(command)) {
+    // Native nodes already own system.notify. A bundled node-host plugin may
+    // supply it on platforms without a native app, while external plugins stay blocked.
+    const bundledSystemNotify =
+      record.origin === "bundled" && command === NODE_SYSTEM_NOTIFY_COMMAND;
+    if (reservedNodeHostCommands.has(command) && !bundledSystemNotify) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,

@@ -35,7 +35,7 @@ export type RealtimeVoiceMarkStrategy = "transport" | "ack-immediately" | "ignor
  */
 export type RealtimeVoiceBridgeSession = {
   bridge: RealtimeVoiceBridge;
-  acknowledgeMark(): void;
+  acknowledgeMark(markName?: string): void;
   close(): void;
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
@@ -60,6 +60,7 @@ export type RealtimeVoiceBridgeSessionParams = {
   audioFormat?: RealtimeVoiceAudioFormat;
   audioSink: RealtimeVoiceAudioSink;
   instructions?: string;
+  language?: string;
   initialGreetingInstructions?: string;
   autoRespondToAudio?: boolean;
   interruptResponseOnInputAudio?: boolean;
@@ -97,7 +98,7 @@ export function createRealtimeVoiceBridgeSession(
     get bridge() {
       return requireBridge();
     },
-    acknowledgeMark: () => requireBridge().acknowledgeMark(),
+    acknowledgeMark: (markName) => requireBridge().acknowledgeMark(markName),
     close: () => {
       const bridge = requireBridge();
       isActive = false;
@@ -135,6 +136,7 @@ export function createRealtimeVoiceBridgeSession(
     providerConfig: params.providerConfig,
     audioFormat: params.audioFormat,
     instructions: params.instructions,
+    language: params.language,
     autoRespondToAudio: params.autoRespondToAudio,
     interruptResponseOnInputAudio: params.interruptResponseOnInputAudio,
     tools: params.tools,
@@ -155,7 +157,7 @@ export function createRealtimeVoiceBridgeSession(
         return;
       }
       if (params.markStrategy === "ack-immediately") {
-        bridgeRef.current?.acknowledgeMark();
+        bridgeRef.current?.acknowledgeMark(markName);
         return;
       }
       if (params.markStrategy === undefined || params.markStrategy === "transport") {

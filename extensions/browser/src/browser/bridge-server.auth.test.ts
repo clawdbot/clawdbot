@@ -1,4 +1,5 @@
 // Browser tests cover bridge server.auth plugin behavior.
+import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./bridge-server.js";
@@ -94,6 +95,33 @@ describe("startBrowserBridgeServer auth", () => {
         resolved: buildResolvedConfig(),
       }),
     ).rejects.toThrow(/requires auth/i);
+  });
+
+  it("rejects startup when the bridge port is already in use", async () => {
+    const blocker = createServer();
+    await new Promise<void>((resolve) => {
+      blocker.listen(0, "127.0.0.1", resolve);
+    });
+    const address = blocker.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected blocker TCP address");
+    }
+
+    try {
+      await expect(
+        startBrowserBridgeServer({
+          resolved: buildResolvedConfig(),
+          authToken: "secret-token",
+          host: "127.0.0.1",
+          port: address.port,
+          skipRouteRegistrationForTest: true,
+        }),
+      ).rejects.toMatchObject({ code: "EADDRINUSE" });
+    } finally {
+      await new Promise<void>((resolve) => {
+        blocker.close(() => resolve());
+      });
+    }
   });
 
   it("closes ingress but retains exact bridge cleanup state for retry", async () => {

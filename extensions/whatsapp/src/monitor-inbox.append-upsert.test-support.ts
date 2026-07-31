@@ -11,7 +11,7 @@ import {
 describe("append upsert handling (#20952)", () => {
   installWebMonitorInboxUnitTestHooks();
 
-  it("processes recent append messages (within 60s of connect)", async () => {
+  it("delivery coordinator processes recent append messages", async () => {
     const onMessage = vi.fn(async () => {});
     const { listener, sock } = await startInboxMonitor(onMessage);
 
@@ -35,7 +35,7 @@ describe("append upsert handling (#20952)", () => {
     await listener.close();
   });
 
-  it("skips stale append messages (older than 60s before connect)", async () => {
+  it("delivery coordinator skips stale append messages", async () => {
     const onMessage = vi.fn(async () => {});
     const { listener, sock } = await startInboxMonitor(onMessage);
 
@@ -59,7 +59,7 @@ describe("append upsert handling (#20952)", () => {
     await listener.close();
   });
 
-  it("processes only reconnect catch-up appends within the dedupe age", async () => {
+  it("delivery coordinator limits reconnect catch-up appends by dedupe age", async () => {
     const onMessage = vi.fn(async () => {});
     const { listener, sock } = await startInboxMonitor(onMessage, {
       appendReplyWindow: {
@@ -100,7 +100,7 @@ describe("append upsert handling (#20952)", () => {
     await listener.close();
   });
 
-  it("ends reconnect catch-up while preserving fresh appends after the window expires", async () => {
+  it("delivery coordinator preserves fresh appends after catch-up expires", async () => {
     const onMessage = vi.fn(async () => {});
     const { listener, sock } = await startInboxMonitor(onMessage, {
       appendReplyWindow: {
@@ -143,7 +143,7 @@ describe("append upsert handling (#20952)", () => {
     await listener.close();
   });
 
-  it("processes a distinct catch-up message from the boundary second", async () => {
+  it("delivery coordinator processes distinct catch-up messages at the boundary", async () => {
     // Baileys timestamps use whole seconds. Freeze this inclusive boundary so
     // async monitor startup cannot age the fixture beyond maxAgeMs.
     const nowMs = 1_700_000_000_000;
@@ -185,7 +185,7 @@ describe("append upsert handling (#20952)", () => {
     }
   });
 
-  it("skips append messages with NaN/non-finite timestamps", async () => {
+  it("delivery coordinator skips append messages with non-finite timestamps", async () => {
     const onMessage = vi.fn(async () => {});
     const { listener, sock } = await startInboxMonitor(onMessage);
 
@@ -208,7 +208,7 @@ describe("append upsert handling (#20952)", () => {
     await listener.close();
   });
 
-  it("skips append messages with non-decimal string timestamps", async () => {
+  it("delivery coordinator skips append messages with non-decimal timestamps", async () => {
     const onMessage = vi.fn(async () => {});
     const { listener, sock } = await startInboxMonitor(onMessage);
 
@@ -231,7 +231,7 @@ describe("append upsert handling (#20952)", () => {
     await listener.close();
   });
 
-  it("handles Long-like protobuf timestamps correctly", async () => {
+  it("delivery coordinator handles Long-like protobuf timestamps", async () => {
     const onMessage = vi.fn(async () => {});
     const { listener, sock } = await startInboxMonitor(onMessage);
 
@@ -257,7 +257,7 @@ describe("append upsert handling (#20952)", () => {
     await listener.close();
   });
 
-  it("always processes notify messages regardless of timestamp", async () => {
+  it("delivery coordinator always processes notify messages", async () => {
     const onMessage = vi.fn(async () => {});
     const { listener, sock } = await startInboxMonitor(onMessage);
 

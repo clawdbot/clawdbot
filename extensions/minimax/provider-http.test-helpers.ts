@@ -91,6 +91,15 @@ function resolveMockProviderTimeoutMs(
   return typeof timeoutMs === "function" ? timeoutMs() : (timeoutMs ?? 60_000);
 }
 
+function resolveMockProviderDownloadTimeoutMs(params: FetchProviderDownloadResponseParams) {
+  if (!params.deadline) {
+    return resolveMockProviderTimeoutMs(params.timeoutMs);
+  }
+  return params.deadline.deadlineAtMs === undefined
+    ? (params.deadline.timeoutMs ?? 60_000)
+    : Math.max(1, params.deadline.deadlineAtMs - Date.now());
+}
+
 minimaxProviderHttpMocks.fetchProviderOperationResponseMock.mockImplementation(
   async (params: FetchProviderOperationResponseParams) => {
     const response = await minimaxProviderHttpMocks.fetchWithTimeoutMock(
@@ -114,7 +123,7 @@ minimaxProviderHttpMocks.fetchProviderDownloadResponseMock.mockImplementation(
     const response = await minimaxProviderHttpMocks.fetchWithTimeoutMock(
       params.url,
       params.init ?? {},
-      resolveMockProviderTimeoutMs(params.timeoutMs),
+      resolveMockProviderDownloadTimeoutMs(params),
       params.fetchFn,
     );
     await minimaxProviderHttpMocks.assertOkOrThrowHttpErrorMock(
@@ -156,15 +165,34 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
       timeoutMs,
     }: {
       label: string;
-      timeoutMs?: number;
-    }) => ({
-      label,
-      timeoutMs,
-    }),
+      timeoutMs?: number | (() => number);
+    }) => {
+      const resolvedTimeoutMs = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
+      return {
+        label,
+        timeoutMs: resolvedTimeoutMs,
+        deadlineAtMs:
+          typeof resolvedTimeoutMs === "number" ? Date.now() + resolvedTimeoutMs : undefined,
+      };
+    },
     createProviderOperationTimeoutResolver:
-      ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
-      () =>
+      ({
+        deadline,
         defaultTimeoutMs,
+      }: {
+        deadline: { deadlineAtMs?: number; label: string; timeoutMs?: number };
+        defaultTimeoutMs: number;
+      }) =>
+      () => {
+        if (typeof deadline.deadlineAtMs !== "number") {
+          return defaultTimeoutMs;
+        }
+        const remainingMs = deadline.deadlineAtMs - Date.now();
+        if (remainingMs <= 0) {
+          throw new Error(`${deadline.label} timed out after ${deadline.timeoutMs}ms`);
+        }
+        return Math.min(defaultTimeoutMs, remainingMs);
+      },
     executeProviderOperationWithRetry:
       minimaxProviderHttpMocks.executeProviderOperationWithRetryMock,
     fetchProviderDownloadResponse: minimaxProviderHttpMocks.fetchProviderDownloadResponseMock,

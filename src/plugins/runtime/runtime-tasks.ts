@@ -206,12 +206,11 @@ function createRuntimeTaskFlows(): PluginRuntimeTaskFlows {
 }
 
 export function createRuntimeTasks(params: {
-  legacyTaskFlow: PluginRuntimeTaskFlow;
+  managedTaskFlow: PluginRuntimeTaskFlow;
 }): PluginRuntimeTasks {
   return {
     runs: createRuntimeTaskRuns(),
     flows: createRuntimeTaskFlows(),
-    managedFlows: params.legacyTaskFlow,
-    flow: params.legacyTaskFlow,
+    managedFlows: params.managedTaskFlow,
   };
 }

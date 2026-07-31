@@ -1,7 +1,11 @@
 // Imessage tests cover accounts plugin behavior.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   collectIMessageDuplicateAccountSourceWarnings,
+  hasExclusiveIMessageLocalDatabase,
   listEnabledIMessageAccounts,
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
@@ -180,5 +184,133 @@ describe("iMessage duplicate-source watcher ownership", () => {
     } as never;
 
     expect(collectIMessageDuplicateAccountSourceWarnings({ cfg })).toEqual([]);
+  });
+});
+
+describe("iMessage local database account ownership", () => {
+  function createLocalFixture() {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imessage-account-db-"));
+    const cliPath = path.join(root, "imsg");
+    const firstDbPath = path.join(root, "first.db");
+    const secondDbPath = path.join(root, "second.db");
+    fs.writeFileSync(cliPath, Buffer.from("cafebabe", "hex"));
+    fs.writeFileSync(firstDbPath, "");
+    fs.writeFileSync(secondDbPath, "");
+    return { root, cliPath, firstDbPath, secondDbPath };
+  }
+
+  it("rejects a database shared by two enabled accounts", () => {
+    const fixture = createLocalFixture();
+    try {
+      const cfg = {
+        channels: {
+          imessage: {
+            accounts: {
+              work: { cliPath: fixture.cliPath, dbPath: fixture.firstDbPath },
+              home: { cliPath: fixture.cliPath, dbPath: fixture.firstDbPath },
+            },
+          },
+        },
+      } as never;
+      const account = resolveIMessageAccount({ cfg, accountId: "work" });
+
+      expect(
+        hasExclusiveIMessageLocalDatabase({
+          cfg,
+          account,
+          cliPath: fixture.cliPath,
+          dbPath: fixture.firstDbPath,
+        }),
+      ).toBe(false);
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects hard-linked paths to the same database", () => {
+    const fixture = createLocalFixture();
+    const linkedDbPath = path.join(fixture.root, "linked.db");
+    fs.linkSync(fixture.firstDbPath, linkedDbPath);
+    try {
+      const cfg = {
+        channels: {
+          imessage: {
+            accounts: {
+              work: { cliPath: fixture.cliPath, dbPath: fixture.firstDbPath },
+              home: { cliPath: fixture.cliPath, dbPath: linkedDbPath },
+            },
+          },
+        },
+      } as never;
+      const account = resolveIMessageAccount({ cfg, accountId: "work" });
+
+      expect(
+        hasExclusiveIMessageLocalDatabase({
+          cfg,
+          account,
+          cliPath: fixture.cliPath,
+          dbPath: fixture.firstDbPath,
+        }),
+      ).toBe(false);
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts distinct proven local databases and ignores explicit remote accounts", () => {
+    const fixture = createLocalFixture();
+    try {
+      const cfg = {
+        channels: {
+          imessage: {
+            accounts: {
+              work: { cliPath: fixture.cliPath, dbPath: fixture.firstDbPath },
+              home: { cliPath: fixture.cliPath, dbPath: fixture.secondDbPath },
+              remote: { cliPath: "/usr/local/bin/remote-imsg", remoteHost: "qa@example.invalid" },
+            },
+          },
+        },
+      } as never;
+      const account = resolveIMessageAccount({ cfg, accountId: "work" });
+
+      expect(
+        hasExclusiveIMessageLocalDatabase({
+          cfg,
+          account,
+          cliPath: fixture.cliPath,
+          dbPath: fixture.firstDbPath,
+        }),
+      ).toBe(true);
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when another local account source cannot be attested", () => {
+    const fixture = createLocalFixture();
+    try {
+      const cfg = {
+        channels: {
+          imessage: {
+            accounts: {
+              work: { cliPath: fixture.cliPath, dbPath: fixture.firstDbPath },
+              unknown: { cliPath: path.join(fixture.root, "unknown-imsg") },
+            },
+          },
+        },
+      } as never;
+      const account = resolveIMessageAccount({ cfg, accountId: "work" });
+
+      expect(
+        hasExclusiveIMessageLocalDatabase({
+          cfg,
+          account,
+          cliPath: fixture.cliPath,
+          dbPath: fixture.firstDbPath,
+        }),
+      ).toBe(false);
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
   });
 });

@@ -12,9 +12,10 @@ import type {
 } from "../../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { hasModelExtraParams } from "../model-extra-params.js";
+import { hasAuthoredProviderRequestParams } from "../model-extra-params.js";
 import { canonicalizeProviderModelId } from "../provider-model-route.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
+import { resolveAgentHarnessAutoSelectionHint } from "./auto-selection.js";
 import { listRegisteredAgentHarnesses } from "./registry.js";
 import type {
   AgentHarness,
@@ -95,7 +96,7 @@ export function buildAgentHarnessSupportContext(params: {
   const agentId =
     params.agentId ??
     (params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined);
-  const hasConfiguredParams = hasModelExtraParams({
+  const hasConfiguredProviderRequestParams = hasAuthoredProviderRequestParams({
     config: params.config,
     provider: params.provider,
     modelId: params.modelId,
@@ -121,11 +122,11 @@ export function buildAgentHarnessSupportContext(params: {
   const requestTransportOverrides: ProviderRouteOverridePresence =
     params.modelProvider?.requestTransportOverrides === "present" ||
     configuredModelProvider?.requestTransportOverrides === "present" ||
-    hasConfiguredParams
+    hasConfiguredProviderRequestParams
       ? "present"
       : "none";
   const modelProviderFacts =
-    params.modelProvider || configuredModelProvider || hasConfiguredParams
+    params.modelProvider || configuredModelProvider || hasConfiguredProviderRequestParams
       ? {
           api: params.modelProvider?.api ?? configuredModelProvider?.api,
           baseUrl: params.modelProvider?.baseUrl ?? configuredModelProvider?.baseUrl,
@@ -215,12 +216,26 @@ export function resolveAutoAgentHarnessId(params: {
   agentId?: string;
   sessionKey?: string;
 }): string | undefined {
+  const registeredHarnesses = listRegisteredAgentHarnesses();
+  if (registeredHarnesses.length === 0) {
+    return undefined;
+  }
+  const candidates = registeredHarnesses.map(({ harness }) => ({
+    harness,
+    support: resolveAgentHarnessAutoSelectionHint({ harness, provider: params.provider }),
+  }));
+  if (candidates.every((entry) => entry.support !== undefined)) {
+    return undefined;
+  }
   const supportContext = buildAgentHarnessSupportContext({
     ...params,
     requestedRuntime: "auto",
   });
-  return listRegisteredAgentHarnesses()
-    .map(({ harness }) => ({ harness, support: harness.supports(supportContext) }))
+  return candidates
+    .map(({ harness, support }) => ({
+      harness,
+      support: support ?? harness.supports(supportContext),
+    }))
     .filter(isSupportedHarness)
     .toSorted(compareHarnessSupport)[0]?.harness.id;
 }

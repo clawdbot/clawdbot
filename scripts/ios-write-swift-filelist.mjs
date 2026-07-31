@@ -16,6 +16,7 @@ const iosSourceRoots = [
 const sharedSourceRoots = [
   path.join("..", "shared", "OpenClawKit", "Sources", "OpenClawChatUI"),
   path.join("..", "shared", "OpenClawKit", "Sources", "OpenClawKit"),
+  path.join("..", "shared", "OpenClawKit", "Sources", "OpenClawNativeState"),
   path.join("..", "shared", "OpenClawKit", "Sources", "OpenClawProtocol"),
   path.join("..", "swabble", "Sources", "SwabbleKit"),
 ];

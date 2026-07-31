@@ -2,7 +2,7 @@ import OpenClawProtocol
 
 public enum GatewayServerCapability: String, CaseIterable, Sendable {
     case chatSendRoutingContract = "chat-send-routing-contract"
-    case crestodianSetupModelRef = "crestodian-setup-model-ref"
+    case systemAgentSetupModelRef = "openclaw-setup-model-ref"
 }
 
 extension HelloOk {

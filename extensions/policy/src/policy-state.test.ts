@@ -1,6 +1,58 @@
 // Policy tests cover policy state plugin behavior.
 import { describe, expect, it } from "vitest";
-import { scanPolicyChannels, scanPolicyExecApprovals, scanPolicyTools } from "./policy-state.js";
+import { scanPolicySandboxPosture } from "./policy-state-sandbox.js";
+import { collectPolicyEvidence } from "./policy-state.js";
+
+const scanPolicyChannels = (cfg: Record<string, unknown>) => collectPolicyEvidence(cfg).channels;
+
+async function scanPolicyTools(raw: string) {
+  const evidence = await collectPolicyEvidence({}, { toolsRaw: raw });
+  return evidence.tools ?? [];
+}
+
+const scanPolicyExecApprovals = (raw: string) =>
+  collectPolicyEvidence({}, { execApprovalsRaw: raw }).execApprovals ?? [];
+
+describe("scanPolicySandboxPosture", () => {
+  it("keeps explicit Podman identity while exposing shared container settings", () => {
+    const evidence = scanPolicySandboxPosture({
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            backend: "Podman",
+            docker: {
+              network: "bridge",
+              seccompProfile: "custom-seccomp.json",
+              binds: ["/host/data:/data:ro"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "backend", value: "podman" }),
+        expect.objectContaining({
+          kind: "containerNetwork",
+          networkSurface: "docker",
+          value: "bridge",
+        }),
+        expect.objectContaining({
+          kind: "containerSecurityProfile",
+          profile: "seccomp",
+          value: "custom-seccomp.json",
+        }),
+        expect.objectContaining({
+          kind: "containerMount",
+          bindSurface: "docker",
+          bind: "/host/data:/data:ro",
+        }),
+      ]),
+    );
+  });
+});
 
 describe("scanPolicyChannels", () => {
   it("ignores reserved channel config namespaces", () => {
@@ -37,6 +89,14 @@ describe("scanPolicyChannels", () => {
   });
 });
 
+describe("scanPolicyRouting", () => {
+  it("is opt-in so existing evidence and attestations remain stable", () => {
+    const cfg = { channels: { imessage: {} }, bindings: [] };
+    expect(collectPolicyEvidence(cfg)).not.toHaveProperty("routing");
+    expect(collectPolicyEvidence(cfg, { routing: {} })).toHaveProperty("routing");
+  });
+});
+
 describe("scanPolicyTools", () => {
   it("scans documented bullet tool declarations", async () => {
     await expect(
@@ -52,7 +112,7 @@ describe("scanPolicyTools", () => {
     ).resolves.toEqual([
       {
         id: "deploy-tool",
-        source: "oc://TOOLS.md/tools/deploy-tool",
+        source: "oc://AGENTS.md/tools/deploy-tool",
         line: 2,
         risk: "critical",
         sensitivity: "restricted",
@@ -61,7 +121,7 @@ describe("scanPolicyTools", () => {
       },
       {
         id: "inspect",
-        source: "oc://TOOLS.md/tools/inspect",
+        source: "oc://AGENTS.md/tools/inspect",
         line: 3,
         risk: "low",
         sensitivity: "public",
@@ -76,12 +136,105 @@ describe("scanPolicyTools", () => {
     ).resolves.toEqual([
       {
         id: "deploy",
-        source: "oc://TOOLS.md/tools/deploy",
+        source: "oc://AGENTS.md/tools/deploy",
         line: 2,
         risk: "critical",
         owner: "ops",
       },
     ]);
+  });
+
+  it("ignores local-note examples inside fenced blocks", async () => {
+    await expect(
+      scanPolicyTools(
+        [
+          "## Tools",
+          "```markdown",
+          "- SSH: home-server -> 192.168.1.100",
+          "### Cameras",
+          "```",
+        ].join("\n"),
+      ),
+    ).resolves.toEqual([]);
+  });
+
+  it("ignores the complete local-notes subsection", async () => {
+    await expect(
+      scanPolicyTools(
+        ["## Tools", "### Local notes", "- SSH: prod-host", "### deploy risk: high"].join("\n"),
+      ),
+    ).resolves.toEqual([expect.objectContaining({ id: "deploy", risk: "high" })]);
+  });
+
+  it("parses a tool literally named tools after local notes", async () => {
+    await expect(
+      scanPolicyTools(
+        [
+          "## Tools",
+          "### Local notes",
+          "- SSH: prod-host",
+          "### tools risk: high sensitivity: restricted owner: ops",
+        ].join("\n"),
+      ),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "tools",
+        risk: "high",
+        sensitivity: "restricted",
+        owner: "ops",
+      }),
+    ]);
+  });
+
+  it("ignores deeper Tools sections outside the governed H1/H2 contract", async () => {
+    await expect(
+      scanPolicyTools(
+        [
+          "## Build",
+          "### Tools",
+          "- npm: risk: high owner: ops",
+          "## Tools",
+          "### deploy risk: low owner: release",
+        ].join("\n"),
+      ),
+    ).resolves.toEqual([expect.objectContaining({ id: "deploy", risk: "low", owner: "release" })]);
+  });
+
+  it("does not carry metadata across repeated Tools section boundaries", async () => {
+    const evidence = await scanPolicyTools(
+      [
+        "## Tools",
+        "### deploy risk: high",
+        "## Tools",
+        "owner: ops",
+        "### inspect risk: low owner: support",
+      ].join("\n"),
+    );
+    expect(evidence).toEqual([
+      expect.objectContaining({ id: "deploy", risk: "high" }),
+      expect.objectContaining({ id: "inspect", owner: "support" }),
+    ]);
+    expect(evidence[0]).not.toHaveProperty("owner");
+  });
+
+  it("keeps longer fences open across shorter delimiter runs", async () => {
+    await expect(
+      scanPolicyTools(["## Tools", "````markdown", "```", "- SSH: home-server", "````"].join("\n")),
+    ).resolves.toEqual([]);
+  });
+
+  it("scans a migrated legacy Tools section after its document heading", async () => {
+    await expect(
+      scanPolicyTools(
+        [
+          "## Tools",
+          "### Local notes (migrated from TOOLS.md)",
+          "# TOOLS.md",
+          "## Tools",
+          "### deploy risk: high sensitivity: restricted owner: ops",
+        ].join("\n"),
+      ),
+    ).resolves.toEqual([expect.objectContaining({ id: "deploy", risk: "high", owner: "ops" })]);
   });
 });
 

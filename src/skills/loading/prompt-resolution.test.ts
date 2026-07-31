@@ -1,8 +1,17 @@
 // Prompt resolution tests cover skill prompt lookup and active skill selection.
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
+import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
-import type { SkillEntry } from "../types.js";
-import { resolveSkillsPromptForRun } from "./workspace.js";
+import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION, type SkillEntry } from "../types.js";
+import { buildWorkspaceSkillSnapshot, resolveSkillsPromptForRun } from "./workspace.js";
+
+afterEach(() => {
+  setActiveDegradedSecretOwners([]);
+});
 
 describe("resolveSkillsPromptForRun", () => {
   it("prefers snapshot prompt when available", () => {
@@ -29,6 +38,208 @@ describe("resolveSkillsPromptForRun", () => {
     });
     expect(prompt).toContain("<available_skills>");
     expect(prompt).toContain("/app/skills/demo-skill/SKILL.md");
+  });
+
+  it("keeps an empty snapshot authoritative over current entries", () => {
+    const entry: SkillEntry = {
+      skill: createCanonicalFixtureSkill({
+        name: "new-skill",
+        description: "New",
+        filePath: "/app/skills/new-skill/SKILL.md",
+        baseDir: "/app/skills/new-skill",
+        source: "openclaw-workspace",
+      }),
+      frontmatter: {},
+    };
+
+    expect(
+      resolveSkillsPromptForRun({
+        skillsSnapshot: { prompt: "", skills: [] },
+        entries: [entry],
+        workspaceDir: "/tmp/openclaw",
+      }),
+    ).toBe("");
+  });
+
+  it("fails closed before filtering an unsupported degraded prompt format", () => {
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: "skill:cold-skill",
+        state: "unavailable",
+        paths: ["skills.entries.cold-skill.apiKey"],
+        refKeys: ["env:default:MISSING_SKILL_KEY"],
+        reason: "secret provider failed",
+      },
+    ]);
+
+    expect(
+      resolveSkillsPromptForRun({
+        skillsSnapshot: {
+          prompt:
+            "LEAKED COLD INSTRUCTIONS\n<available_skills>\n  <skill>\n    <name>cold-skill</name>\n  </skill>\n</available_skills>",
+          skills: [{ name: "cold-skill", skillKey: "cold-skill" }],
+          promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION - 1,
+        },
+        workspaceDir: "/tmp/openclaw",
+      }),
+    ).toBe("");
+  });
+
+  it("fails closed for a legacy snapshot whose owner identity is ambiguous", () => {
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: "skill:cold-skill",
+        state: "unavailable",
+        paths: ["skills.entries.cold-skill.apiKey"],
+        refKeys: ["env:default:MISSING_SKILL_KEY"],
+        reason: "secret provider failed",
+      },
+    ]);
+
+    const prompt = resolveSkillsPromptForRun({
+      skillsSnapshot: {
+        prompt: "LEGACY SKILL PROMPT",
+        skills: [{ name: "cold-skill" }, { name: "healthy-skill" }],
+      },
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toBe("");
+  });
+
+  it("matches unavailable owners against a snapshot skill's config key", () => {
+    const cold: SkillEntry = {
+      skill: createCanonicalFixtureSkill({
+        name: "cold-skill",
+        description: "Cold",
+        filePath: "/app/skills/cold-skill/SKILL.md",
+        baseDir: "/app/skills/cold-skill",
+        source: "openclaw-workspace",
+      }),
+      frontmatter: {},
+      metadata: { skillKey: "cold-alias" },
+    };
+    const healthy: SkillEntry = {
+      skill: createCanonicalFixtureSkill({
+        name: "healthy-skill",
+        description: "Healthy",
+        filePath: "/app/skills/healthy-skill/SKILL.md",
+        baseDir: "/app/skills/healthy-skill",
+        source: "openclaw-workspace",
+      }),
+      frontmatter: {},
+    };
+    const snapshot = buildWorkspaceSkillSnapshot("/tmp/openclaw", {
+      entries: [cold, healthy],
+    });
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: "skill:cold-alias",
+        state: "unavailable",
+        paths: ["skills.entries.cold-alias.apiKey"],
+        refKeys: ["env:default:MISSING_SKILL_KEY"],
+        reason: "secret provider failed",
+      },
+    ]);
+
+    const prompt = resolveSkillsPromptForRun({
+      skillsSnapshot: snapshot,
+      entries: [cold, healthy],
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).not.toContain("/app/skills/cold-skill/SKILL.md");
+    expect(prompt).toContain("/app/skills/healthy-skill/SKILL.md");
+  });
+
+  it("does not add supplied skills outside the saved snapshot during a degraded rebuild", () => {
+    const createEntry = (name: string): SkillEntry => ({
+      skill: createCanonicalFixtureSkill({
+        name,
+        description: name,
+        filePath: `/app/skills/${name}/SKILL.md`,
+        baseDir: `/app/skills/${name}`,
+        source: "openclaw-workspace",
+      }),
+      frontmatter: {},
+    });
+    const capturedEntries = [createEntry("cold-skill"), createEntry("healthy-skill")];
+    const snapshot = buildWorkspaceSkillSnapshot("/tmp/openclaw", {
+      entries: capturedEntries,
+    });
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: "skill:cold-skill",
+        state: "unavailable",
+        paths: ["skills.entries.cold-skill.apiKey"],
+        refKeys: ["env:default:MISSING_SKILL_KEY"],
+        reason: "secret provider failed",
+      },
+    ]);
+
+    const prompt = resolveSkillsPromptForRun({
+      skillsSnapshot: snapshot,
+      entries: [...capturedEntries, createEntry("new-skill")],
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).not.toContain("/app/skills/cold-skill/SKILL.md");
+    expect(prompt).toContain("/app/skills/healthy-skill/SKILL.md");
+    expect(prompt).not.toContain("/app/skills/new-skill/SKILL.md");
+  });
+
+  it("preserves captured skill content during degraded prompt filtering", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-prompt-"));
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "cold-skill"),
+      name: "cold-skill",
+      description: "Captured cold",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "healthy-skill"),
+      name: "healthy-skill",
+      description: "Captured healthy",
+    });
+    const snapshot = buildWorkspaceSkillSnapshot(workspaceDir);
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "healthy-skill"),
+      name: "healthy-skill",
+      description: "Replacement healthy",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "new-skill"),
+      name: "new-skill",
+      description: "New skill",
+    });
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: "skill:cold-skill",
+        state: "unavailable",
+        paths: ["skills.entries.cold-skill.apiKey"],
+        refKeys: ["env:default:MISSING_SKILL_KEY"],
+        reason: "secret provider failed",
+      },
+    ]);
+
+    try {
+      const prompt = resolveSkillsPromptForRun({
+        skillsSnapshot: snapshot,
+        workspaceDir,
+      });
+
+      expect(prompt).not.toContain("cold-skill/SKILL.md");
+      expect(prompt).toContain("healthy-skill/SKILL.md");
+      expect(prompt).toContain("Captured healthy");
+      expect(prompt).not.toContain("Replacement healthy");
+      expect(prompt).not.toContain("new-skill/SKILL.md");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps legacy entries with disableModelInvocation hidden when exposure metadata is absent", () => {

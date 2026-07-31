@@ -68,6 +68,7 @@ describe("shouldSkipRespawnForArgv", () => {
     { argv: ["node", "openclaw", "tui"] },
     { argv: ["node", "openclaw", "terminal"] },
     { argv: ["node", "openclaw", "chat"] },
+    { argv: ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"] },
     { argv: ["node", "openclaw", "gateway"] },
     { argv: ["node", "openclaw", "gateway", "--port", "14720", "--bind", "loopback"] },
     { argv: ["node", "openclaw", "gateway", "run", "--port=14720", "--bind", "loopback"] },
@@ -85,11 +86,21 @@ describe("shouldSkipRespawnForArgv", () => {
   ] as const)("keeps respawn path for argv %j", ({ argv }) => {
     expect(shouldSkipRespawnForArgv([...argv]), argv.join(" ")).toBe(false);
   });
+
+  it("keeps native hook relay respawn behavior unchanged on Windows", () => {
+    expect(
+      shouldSkipRespawnForArgv(
+        ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"],
+        "win32",
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("shouldSkipStartupEnvironmentRespawnForArgv", () => {
   it.each([
     { argv: ["node", "openclaw", "--help"] },
+    { argv: ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"] },
     { argv: ["node", "openclaw", "gateway"] },
     { argv: ["node", "openclaw", "gateway", "run", "--port=14720"] },
   ] as const)("skips startup env respawn for argv %j", ({ argv }) => {
@@ -103,6 +114,15 @@ describe("shouldSkipStartupEnvironmentRespawnForArgv", () => {
     { argv: ["node", "openclaw", "status"] },
   ] as const)("allows startup env respawn for argv %j", ({ argv }) => {
     expect(shouldSkipStartupEnvironmentRespawnForArgv([...argv]), argv.join(" ")).toBe(false);
+  });
+
+  it("keeps native hook relay startup environment respawn on Windows", () => {
+    expect(
+      shouldSkipStartupEnvironmentRespawnForArgv(
+        ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"],
+        "win32",
+      ),
+    ).toBe(false);
   });
 });
 

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
@@ -41,6 +42,7 @@ describe("Control UI Vite config", () => {
 
   it("embeds one canonical artifact identity from explicit build inputs", () => {
     const readGitCommit = vi.fn(() => "f".repeat(40));
+    const readGitCommitTimestamp = vi.fn(() => "2026-07-10T10:11:12.000Z");
     expect(
       resolveControlUiBuildInfo({
         env: {
@@ -48,6 +50,7 @@ describe("Control UI Vite config", () => {
           OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T12:34:56Z",
         },
         readGitCommit,
+        readGitCommitTimestamp,
         readGitBranch: () => null,
         readGitDirty: () => null,
         readPackageVersion: () => "2026.7.10",
@@ -55,12 +58,15 @@ describe("Control UI Vite config", () => {
     ).toEqual({
       version: "2026.7.10",
       commit: "0123456789abcdef0123456789abcdef01234567",
+      commitAt: "2026-07-10T10:11:12.000Z",
       builtAt: "2026-07-10T12:34:56.000Z",
       branch: null,
       dirty: null,
+      release: false,
       buildId: "2026.7.10-0123456789ab-2026-07-10T12-34-56.000Z",
     });
     expect(readGitCommit).not.toHaveBeenCalled();
+    expect(readGitCommitTimestamp).toHaveBeenCalledWith("0123456789abcdef0123456789abcdef01234567");
   });
 
   it("falls back to Git and the current UTC time only when inputs are absent", () => {
@@ -69,6 +75,7 @@ describe("Control UI Vite config", () => {
         env: {},
         now: () => new Date("2026-07-10T13:14:15.000Z"),
         readGitCommit: () => "a".repeat(40),
+        readGitCommitTimestamp: () => null,
         readGitBranch: () => null,
         readGitDirty: () => null,
         readPackageVersion: () => null,
@@ -76,11 +83,46 @@ describe("Control UI Vite config", () => {
     ).toEqual({
       version: null,
       commit: "a".repeat(40),
+      commitAt: null,
       builtAt: "2026-07-10T13:14:15.000Z",
       branch: null,
       dirty: null,
+      release: false,
       buildId: "aaaaaaaaaaaa-2026-07-10T13-14-15.000Z",
     });
+  });
+
+  it("records release packaging as an explicit artifact fact", () => {
+    expect(
+      resolveControlUiBuildInfo({
+        env: {
+          OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1",
+          OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T13:14:15.000Z",
+        },
+        readGitCommit: () => "a".repeat(40),
+        readGitCommitTimestamp: () => null,
+        readGitBranch: () => "release/2026.7.10",
+        readGitDirty: () => false,
+        readPackageVersion: () => "2026.7.10",
+      }),
+    ).toMatchObject({
+      version: "2026.7.10",
+      commit: "a".repeat(40),
+      branch: "release/2026.7.10",
+      dirty: false,
+      release: true,
+      buildId: "2026.7.10-release-aaaaaaaaaaaa-2026-07-10T13-14-15.000Z",
+    });
+  });
+
+  it("rejects malformed release-build identity", () => {
+    expect(() =>
+      resolveControlUiBuildInfo({
+        env: { OPENCLAW_CONTROL_UI_RELEASE_BUILD: "true" },
+        readGitCommit: () => null,
+        readPackageVersion: () => "2026.7.10",
+      }),
+    ).toThrow("OPENCLAW_CONTROL_UI_RELEASE_BUILD must be 1 when set");
   });
 
   it("uses checked-out Git instead of unverified GitHub workflow context", () => {
@@ -215,6 +257,19 @@ describe("Control UI Vite config", () => {
     ).toBe("2026.7.10-aaaaaaaaaaaa-2026-07-10T13-14-15.000Z");
   });
 
+  it("ignores a whitespace-only explicit build id", () => {
+    expect(
+      resolveControlUiBuildInfo({
+        env: {
+          OPENCLAW_CONTROL_UI_BUILD_ID: "   ",
+          OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T13:14:15.000Z",
+        },
+        readGitCommit: () => "a".repeat(40),
+        readPackageVersion: () => "2026.7.10",
+      }).buildId,
+    ).toBe("2026.7.10-aaaaaaaaaaaa-2026-07-10T13-14-15.000Z");
+  });
+
   it("fails closed for nonempty invalid explicit build inputs", () => {
     const readGitCommit = vi.fn(() => "a".repeat(40));
     expect(() =>
@@ -244,18 +299,39 @@ describe("Control UI Vite config", () => {
   it("resolves Control UI dev-server source aliases for internal packages", () => {
     const aliases = resolveSourcePackageAliasesForVite();
     expect(
+      aliases.find((alias) => alias.find === "@openclaw/normalization-core/json-schema"),
+    )?.toEqual({
+      find: "@openclaw/normalization-core/json-schema",
+      replacement: path.join(repoRoot, "packages/normalization-core/src/json-schema.ts"),
+    });
+    expect(
       aliases.find((alias) => alias.find === "@openclaw/normalization-core/string-coerce"),
     )?.toEqual({
       find: "@openclaw/normalization-core/string-coerce",
       replacement: path.join(repoRoot, "packages/normalization-core/src/string-coerce.ts"),
     });
+    expect(
+      aliases.find((alias) => alias.find === "@openclaw/normalization-core/phone-presentation"),
+    )?.toEqual({
+      find: "@openclaw/normalization-core/phone-presentation",
+      replacement: path.join(repoRoot, "packages/normalization-core/src/phone-presentation.ts"),
+    });
   });
 
-  it("resolves published OpenClaw packages before the broad plugin alias", () => {
-    const aliases = resolveExternalPackageAliasesForVite();
+  it("uses Node package resolution for external packages inherited by worktrees", () => {
+    const resolvePackage = vi.fn((specifier: string) =>
+      path.join("/parent/node_modules", specifier),
+    );
+
+    const aliases = resolveExternalPackageAliasesForVite(resolvePackage);
+
+    expect(resolvePackage.mock.calls).toEqual([
+      ["@openclaw/libterminal/package.json"],
+      ["@openclaw/uirouter/package.json"],
+    ]);
     expect(aliases.find((alias) => alias.find === "@openclaw/libterminal/browser")).toEqual({
       find: "@openclaw/libterminal/browser",
-      replacement: path.join(repoRoot, "node_modules/@openclaw/libterminal/dist/browser.js"),
+      replacement: path.join("/parent/node_modules/@openclaw/libterminal", "dist/browser.js"),
     });
   });
 

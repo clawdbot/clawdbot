@@ -24,6 +24,13 @@ function isCancellationStopReason(stopReason: string | undefined): boolean {
   return stopReason === "cancel" || stopReason === "cancelled" || stopReason === "manual-cancel";
 }
 
+/** Resolves legacy and current done events to the manager's canonical terminal status. */
+function resolveAcpTurnTerminalStatus(
+  event: Extract<AcpRuntimeEvent, { type: "done" }>,
+): "completed" | "cancelled" {
+  return event.status ?? (isCancellationStopReason(event.stopReason) ? "cancelled" : "completed");
+}
+
 async function consumeAcpTurnEvents(params: {
   events: AsyncIterable<AcpRuntimeEvent>;
   eventGate: AcpTurnEventGate;
@@ -40,10 +47,11 @@ async function consumeAcpTurnEvents(params: {
     if (!params.eventGate.open) {
       continue;
     }
+    let forwardedEvent = event;
     if (event.type === "done") {
       // Legacy runTurn adapters may omit status but retain the cancellation reason.
-      terminalStatus =
-        event.status ?? (isCancellationStopReason(event.stopReason) ? "cancelled" : "completed");
+      terminalStatus = resolveAcpTurnTerminalStatus(event);
+      forwardedEvent = { ...event, status: terminalStatus };
     } else if (event.type === "error") {
       streamError = new AcpRuntimeError(
         normalizeAcpErrorCode(event.code),
@@ -54,7 +62,7 @@ async function consumeAcpTurnEvents(params: {
       sawOutput = true;
       await params.onOutputEvent?.(event);
     }
-    await params.onEvent?.(event);
+    await params.onEvent?.(forwardedEvent);
   }
 
   if (params.eventGate.open && streamError) {

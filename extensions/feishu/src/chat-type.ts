@@ -1,4 +1,4 @@
-export type ResolvedFeishuChatType = "p2p" | "group";
+type ResolvedFeishuChatType = "p2p" | "group";
 
 export function normalizeFeishuChatType(value: unknown): ResolvedFeishuChatType | undefined {
   if (value === "group" || value === "topic_group") {

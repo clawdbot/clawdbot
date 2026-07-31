@@ -8,13 +8,27 @@ import {
 } from "../secrets/runtime.js";
 import {
   captureSharedGatewaySessionGenerationOwnership,
-  claimSharedGatewaySessionGeneration,
+  claimSharedGatewaySessionGenerationIfOwned,
   enforceSharedGatewaySessionGenerationForConfigWrite,
   finalizeOwnedSharedGatewaySessionGeneration,
-  replaceSharedGatewaySessionGenerationState,
   setRequiredSharedGatewaySessionGenerationIfOwned,
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
+
+function claimGeneration(
+  state: SharedGatewaySessionGenerationState,
+  generation: string | undefined,
+) {
+  const ownership = claimSharedGatewaySessionGenerationIfOwned(
+    state,
+    captureSharedGatewaySessionGenerationOwnership(state),
+    generation,
+  );
+  if (!ownership) {
+    throw new Error("expected generation ownership claim");
+  }
+  return ownership;
+}
 
 describe("shared gateway generation publication", () => {
   afterEach(() => {
@@ -26,7 +40,7 @@ describe("shared gateway generation publication", () => {
       current: "generation-a",
       required: "generation-a",
     };
-    const ownership = claimSharedGatewaySessionGeneration(state, "generation-a");
+    const ownership = claimGeneration(state, "generation-a");
     const snapshot = {
       sourceConfig: {},
       config: {},
@@ -50,7 +64,7 @@ describe("shared gateway generation publication", () => {
       current: "generation-a",
       required: "generation-a",
     };
-    const ownership = claimSharedGatewaySessionGeneration(state, "generation-a");
+    const ownership = claimGeneration(state, "generation-a");
     enforceSharedGatewaySessionGenerationForConfigWrite({
       state,
       nextConfig: { gateway: { reload: { mode: "off" } } },
@@ -67,7 +81,7 @@ describe("shared gateway generation publication", () => {
       current: "generation-a",
       required: "generation-a",
     };
-    const ownership = claimSharedGatewaySessionGeneration(state, "generation-b");
+    const ownership = claimGeneration(state, "generation-b");
 
     expect(finalizeOwnedSharedGatewaySessionGeneration(state, ownership)).toBe(true);
     expect(state).toEqual({ current: "generation-b", required: null });
@@ -78,10 +92,12 @@ describe("shared gateway generation publication", () => {
       current: "generation-a",
       required: "generation-a",
     };
-    const ownership = claimSharedGatewaySessionGeneration(state, "generation-a");
-    replaceSharedGatewaySessionGenerationState(state, {
-      current: "generation-b",
-      required: "generation-b",
+    const ownership = claimGeneration(state, "generation-a");
+    enforceSharedGatewaySessionGenerationForConfigWrite({
+      state,
+      nextConfig: { gateway: { reload: { mode: "off" } } },
+      resolveRuntimeSnapshotGeneration: () => "generation-b",
+      clients: [],
     });
 
     expect(finalizeOwnedSharedGatewaySessionGeneration(state, ownership)).toBe(false);

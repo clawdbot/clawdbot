@@ -1,7 +1,8 @@
+import { PLUGIN_REGISTRY_STATE } from "./runtime-state-key.js";
 // Stores plugin runtime registry state for the current process lifecycle.
 import { getActivePluginRegistryWorkspaceDirFromState as getPinnedWorkspaceDirFromState } from "./runtime-workspace-state.js";
 
-export const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
+export { PLUGIN_REGISTRY_STATE };
 
 type PluginRegistry = import("./registry-types.js").PluginRegistry;
 

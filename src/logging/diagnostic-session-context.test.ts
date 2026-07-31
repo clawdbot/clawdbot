@@ -1,7 +1,7 @@
 // Diagnostic session context tests cover session context capture for diagnostics.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveCronStore } from "../cron/store.js";
 import {
   createOpenClawTestState,
@@ -10,8 +10,6 @@ import {
 import {
   formatCronSessionDiagnosticFields,
   formatStoppedCronSessionDiagnosticFields,
-  parseCronRunSessionKey,
-  readLastAssistantFromSessionFile,
   resolveCronSessionDiagnosticContext,
 } from "./diagnostic-session-context.js";
 
@@ -39,11 +37,11 @@ describe("diagnostic session context", () => {
   });
 
   it("parses cron run session keys", () => {
-    expect(parseCronRunSessionKey("agent:clawblocker:cron:job-123:run:run-456")).toEqual({
-      agentId: "clawblocker",
-      cronJobId: "job-123",
-      cronRunId: "run-456",
-    });
+    expect(
+      resolveCronSessionDiagnosticContext({
+        sessionKey: "agent:clawblocker:cron:job-123:run:run-456",
+      }),
+    ).toMatchObject({ agentId: "clawblocker", cronJobId: "job-123", cronRunId: "run-456" });
   });
 
   it("formats cron job and last assistant context for stalled session logs", async () => {
@@ -93,14 +91,36 @@ describe("diagnostic session context", () => {
   });
 
   it("reads the latest assistant message from a transcript tail", () => {
-    const filePath = path.join(tempDir!, "session.jsonl");
+    const filePath = path.join(tempDir!, "agents", "clawblocker", "sessions", "run-456.jsonl");
     writeJsonl(filePath, [
       { message: { role: "assistant", content: "older" } },
       { message: { role: "user", content: "later user" } },
       { message: { role: "assistant", content: "newer" } },
     ]);
 
-    expect(readLastAssistantFromSessionFile(filePath)).toBe("newer");
+    const realReadSync = fs.readSync.bind(fs);
+    let shortReadCalls = 0;
+    const readSpy = vi.spyOn(fs, "readSync").mockImplementation(((
+      fd: number,
+      buffer: NodeJS.ArrayBufferView,
+      offset: number,
+      length: number,
+      position: fs.ReadPosition | null,
+    ) => {
+      shortReadCalls += 1;
+      return realReadSync(fd, buffer, offset, Math.min(length, 16), position);
+    }) as typeof fs.readSync);
+
+    try {
+      expect(
+        resolveCronSessionDiagnosticContext({
+          sessionKey: "agent:clawblocker:cron:job-123:run:run-456",
+        }).lastAssistant,
+      ).toBe("newer");
+      expect(shortReadCalls).toBeGreaterThan(1);
+    } finally {
+      readSpy.mockRestore();
+    }
   });
 
   it("keeps bounded quoted fields UTF-16 safe", () => {
@@ -112,6 +132,11 @@ describe("diagnostic session context", () => {
   });
 
   it("ignores missing transcript tail files", () => {
-    expect(readLastAssistantFromSessionFile(path.join(tempDir!, "missing.jsonl"))).toBeUndefined();
+    expect(
+      resolveCronSessionDiagnosticContext({
+        sessionKey: "agent:clawblocker:cron:job-123:run:run-456",
+        activeSessionId: "missing",
+      }).lastAssistant,
+    ).toBeUndefined();
   });
 });

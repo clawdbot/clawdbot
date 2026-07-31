@@ -1,7 +1,8 @@
 // Voyage batch tests cover bounded status/error response reads.
 import { describe, expect, it } from "vitest";
-import { runVoyageEmbeddingBatches, testing } from "./embedding-batch.js";
+import { runVoyageEmbeddingBatches } from "./embedding-batch.js";
 import type { VoyageEmbeddingClient } from "./embedding-provider.js";
+import { voyageEmbeddingBatchTesting as testing } from "./test-support.js";
 
 const { fetchVoyageBatchStatus, readVoyageBatchError, VOYAGE_BATCH_RESPONSE_MAX_BYTES } = testing;
 

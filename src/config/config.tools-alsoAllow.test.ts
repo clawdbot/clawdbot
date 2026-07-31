@@ -19,24 +19,23 @@ describe("config: tools.alsoAllow", () => {
     }
   });
 
-  it("rejects agents.list[].tools.allow + alsoAllow together", () => {
+  it("rejects agents.entries.*.tools.allow + alsoAllow together", () => {
     const res = validateConfigObject({
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             tools: {
               allow: ["group:fs"],
               alsoAllow: ["lobster"],
             },
           },
-        ],
+        },
       },
     });
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.map((issue) => issue.path)).toContain("agents.list.0.tools");
+      expect(res.issues.map((issue) => issue.path)).toContain("agents.entries.main.tools");
     }
   });
 
@@ -54,9 +53,8 @@ describe("config: tools.alsoAllow", () => {
   it("allows per-agent message tool cross-context policy", () => {
     const res = validateConfigObject({
       agents: {
-        list: [
-          {
-            id: "sandbox",
+        entries: {
+          sandbox: {
             tools: {
               message: {
                 crossContext: {
@@ -66,7 +64,7 @@ describe("config: tools.alsoAllow", () => {
               },
             },
           },
-        ],
+        },
       },
     });
 
@@ -76,9 +74,8 @@ describe("config: tools.alsoAllow", () => {
   it("allows per-agent message tool action allowlists", () => {
     const res = validateConfigObject({
       agents: {
-        list: [
-          {
-            id: "sandbox",
+        entries: {
+          sandbox: {
             tools: {
               message: {
                 actions: {
@@ -87,7 +84,7 @@ describe("config: tools.alsoAllow", () => {
               },
             },
           },
-        ],
+        },
       },
     });
 

@@ -10,11 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { createSubsystemLogger } from "../../logging.js";
 import { resolvePluginActivationSourceConfig } from "../activation-source-config.js";
-import {
-  clearCurrentPluginMetadataSnapshot,
-  isReusableCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../current-plugin-metadata-snapshot.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../installed-plugin-index-install-records.js";
 import type { PluginLoadOptions } from "../loader.js";
 import type { PluginManifestRegistry } from "../manifest-registry.js";
@@ -143,6 +139,7 @@ type PluginRuntimeLoadContextOptions = {
   activationSourceConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
+  onlyPluginIds?: readonly string[];
   logger?: PluginLogger;
   manifestRegistry?: PluginManifestRegistry;
 };
@@ -172,6 +169,7 @@ export function resolvePluginRuntimeLoadContext(
           env,
           workspaceDir: rawWorkspaceDir,
           allowWorkspaceScopedCurrent: true,
+          ...(options?.onlyPluginIds !== undefined ? { pluginIds: options.onlyPluginIds } : {}),
         })
       : undefined;
   const manifestRegistry = options?.manifestRegistry ?? initialMetadataSnapshot?.manifestRegistry;
@@ -206,23 +204,21 @@ export function resolvePluginRuntimeLoadContext(
             workspaceDir,
             allowWorkspaceScopedCurrent: true,
             ...(initialMetadataSnapshot ? { index: initialMetadataSnapshot.index } : {}),
+            ...(options?.onlyPluginIds !== undefined ? { pluginIds: options.onlyPluginIds } : {}),
           });
   const finalManifestRegistry = options?.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
   const installRecords = metadataSnapshot
     ? extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index)
     : undefined;
-  if (metadataSnapshot) {
-    // Reusable snapshots stay available to later manifest-policy lookups for this runtime load.
-    if (isReusableCurrentPluginMetadataSnapshot(metadataSnapshot)) {
-      setCurrentPluginMetadataSnapshot(metadataSnapshot, {
-        config: rawConfig,
-        compatibleConfigs: [config, activationSourceConfig],
-        env,
-        workspaceDir,
-      });
-    } else {
-      clearCurrentPluginMetadataSnapshot();
-    }
+  if (metadataSnapshot && metadataSnapshot.pluginIds === undefined) {
+    // Scoped graphs are request-local; publishing one would hide other installed
+    // providers from process-wide model normalization and later runtime loads.
+    setCurrentPluginMetadataSnapshot(metadataSnapshot, {
+      config: rawConfig,
+      compatibleConfigs: [config, activationSourceConfig],
+      env,
+      workspaceDir,
+    });
   }
   return {
     rawConfig,

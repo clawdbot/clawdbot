@@ -1231,6 +1231,10 @@ describe("handleSlackAction", () => {
     const details = requireDetails(result);
     expect(details.ok).toBe(true);
     expect(details.hasMore).toBe(false);
+    expectRecordFields(details, {
+      channelId: "C1",
+    });
+    expect(details).not.toHaveProperty("threadId");
     const messages = requireArray(details.messages, "read messages");
     expectRecordFields(requireRecord(messages[0], "first message"), {
       ts: "1712345678.123456",
@@ -1242,10 +1246,15 @@ describe("handleSlackAction", () => {
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
 
     const cfg = slackConfig();
-    await handleSlackAction(
+    const result = await handleSlackAction(
       { action: "readMessages", channelId: "C1", threadId: "1712345678.123456" },
       cfg,
     );
+
+    expectRecordFields(requireDetails(result), {
+      channelId: "C1",
+      threadId: "1712345678.123456",
+    });
 
     expect(requireMockArg(readSlackMessages, "readSlackMessages", 0, 0)).toBe("C1");
     expectRecordFields(requireRecordArg(readSlackMessages, "readSlackMessages", 0, 1), {
@@ -1626,6 +1635,33 @@ describe("handleSlackAction", () => {
     expect(token).toBe("xoxp-user");
   });
 
+  it("uses the user token for user-identity writes", async () => {
+    const token = await resolveSendToken({
+      channels: {
+        slack: {
+          postAs: "user",
+          userToken: "test-user-token",
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(token).toBe("test-user-token");
+  });
+
+  it("does not fall back to a bot token when a user identity has no user token", async () => {
+    await expect(
+      resolveSendToken({
+        channels: {
+          slack: {
+            postAs: "user",
+            botToken: "test-bot-token",
+          },
+        },
+      } as OpenClawConfig),
+    ).rejects.toThrow('Slack operation token missing for account "default".');
+    expect(sendSlackMessage).not.toHaveBeenCalled();
+  });
+
   it("returns all emojis when no limit is provided", async () => {
     listSlackEmojis.mockResolvedValueOnce({
       ok: true,
@@ -1672,3 +1708,4 @@ describe("handleSlackAction", () => {
     expect(listSlackEmojis).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

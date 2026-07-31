@@ -98,6 +98,7 @@ export function githubApi(
   options?: {
     fetchImpl?: typeof fetch;
     responseMaxBodyBytes?: number;
+    retryDelaysMs?: readonly number[];
     timeoutMs?: number;
   },
 ): { request(path: string, options?: Record<string, unknown>): Promise<unknown> };

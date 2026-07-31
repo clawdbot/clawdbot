@@ -2,7 +2,7 @@
  * Gateway server-agent integration tests for agent startup and session dispatch.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -14,7 +14,7 @@ import {
   createDirectOutboundTestAdapter,
 } from "../test-utils/channel-plugins.js";
 import { waitForAgentCommandCall } from "./agent-command.test-helpers.js";
-import { resetModelCatalogCacheForTest as resetGatewayModelCatalogCacheForTest } from "./server-model-catalog.js";
+import { resetPreparedModelCatalogForTest } from "./server-model-catalog.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
@@ -98,9 +98,16 @@ async function runMainAgentDeliveryWithSession(params: {
 async function setGatewayModelCatalogForTest(
   models: typeof agentDiscoveryMock.models,
 ): Promise<void> {
+  testState.sessionStorePath = gatewaySuite.sessionStorePath;
   agentDiscoveryMock.enabled = true;
   agentDiscoveryMock.models = models;
-  await resetGatewayModelCatalogCacheForTest();
+  await resetPreparedModelCatalogForTest();
+  const [
+    { refreshPreparedModelRuntimeSnapshots },
+    { clearRuntimeConfigSnapshot, getRuntimeConfig },
+  ] = await Promise.all([import("../agents/prepared-model-runtime.js"), import("../config/io.js")]);
+  clearRuntimeConfigSnapshot();
+  await refreshPreparedModelRuntimeSnapshots(getRuntimeConfig(), { gatewayLifecycle: true });
 }
 
 const baseImageAttachment = () => ({
@@ -109,11 +116,20 @@ const baseImageAttachment = () => ({
   content: BASE_IMAGE_PNG,
 });
 
+const offloadedImageAttachment = () => ({
+  ...baseImageAttachment(),
+  fileName: "large.png",
+  content: Buffer.concat([Buffer.from(BASE_IMAGE_PNG, "base64"), Buffer.alloc(2_000_001)]).toString(
+    "base64",
+  ),
+});
+
 async function runAgentImageRequest(params: {
   idempotencyKey: string;
   sessionId: string;
   sessionKey?: string;
   agentId?: string;
+  attachment?: ReturnType<typeof baseImageAttachment>;
   failureMessage: string;
 }) {
   await setTestSessionStore({
@@ -130,7 +146,7 @@ async function runAgentImageRequest(params: {
     message: "what is in the image?",
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionKey: params.sessionKey ?? "main",
-    attachments: [baseImageAttachment()],
+    attachments: [params.attachment ?? baseImageAttachment()],
     idempotencyKey: params.idempotencyKey,
   });
   expect(res.ok, `${params.failureMessage}: ${JSON.stringify(res)}`).toBe(true);
@@ -351,6 +367,53 @@ describe("gateway server agent", () => {
     expect(persisted?.spawnedBy).toBe("agent:main:main");
   });
 
+  test("agent stamps create-on-run session rows without guessing an actor", async () => {
+    await setTestSessionStore({ entries: {} });
+    const sessionKey = "agent:main:dashboard:create-on-run";
+    const res = await rpcReq(gatewaySuite.ws, "agent", {
+      message: "hi",
+      sessionKey,
+      idempotencyKey: "idem-agent-create-on-run",
+    });
+    expect(res.ok).toBe(true);
+    await waitForAgentCommandCall("idem-agent-create-on-run");
+
+    expect(
+      loadSessionEntry({ sessionKey, storePath: gatewaySuite.sessionStorePath }),
+    ).toMatchObject({
+      createdVia: "run",
+      createdAt: expect.any(Number),
+    });
+    expect(
+      loadSessionEntry({ sessionKey, storePath: gatewaySuite.sessionStorePath })?.createdActor,
+    ).toBeUndefined();
+  });
+
+  test("agent links the previous generation when a missing transcript rotates the session", async () => {
+    const sessionKey = "agent:main:dashboard:rotate-missing-transcript";
+    await setTestSessionStore({
+      entries: {
+        [sessionKey]: {
+          sessionId: "missing-transcript-generation",
+          status: "failed",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const res = await rpcReq(gatewaySuite.ws, "agent", {
+      message: "continue",
+      sessionKey,
+      idempotencyKey: "idem-agent-rotate-missing-transcript",
+    });
+    expect(res.ok).toBe(true);
+    await waitForAgentCommandCall("idem-agent-rotate-missing-transcript");
+
+    const persisted = loadSessionEntry({ sessionKey, storePath: gatewaySuite.sessionStorePath });
+    expect(persisted?.sessionId).not.toBe("missing-transcript-generation");
+    expect(persisted?.previousSessionId).toBe("missing-transcript-generation");
+  });
+
   test("agent derives sessionKey from agentId", async () => {
     testState.agentsConfig = { list: [{ id: "ops" }] };
     await setTestSessionStore({
@@ -507,6 +570,27 @@ describe("gateway server agent", () => {
     expect(typeof call.message).toBe("string");
     expect(call.message).toContain("what is in the image?");
     expectBaseImageForwarded(call.images);
+  });
+
+  test("agent retains image offload facts beside the claim-check line", async () => {
+    testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
+    await setGatewayModelCatalogForTest([TEXT_ONLY_AGENT_MODEL, VISION_AGENT_MODEL]);
+    const call = await runAgentImageRequest({
+      idempotencyKey: "idem-agent-offloaded-media",
+      sessionId: "sess-main-offloaded-media",
+      attachment: offloadedImageAttachment(),
+      failureMessage: "agent RPC failed before forwarding offloaded media facts",
+    });
+
+    const media = call.media as
+      | Array<{ path?: string; url?: string; contentType?: string }>
+      | undefined;
+    expect(call.images).toEqual([]);
+    expect(media).toHaveLength(1);
+    expect(media?.[0]).toMatchObject({ contentType: "image/png" });
+    expect(media?.[0]?.path).toMatch(/\/media\/inbound\//);
+    expect(media?.[0]?.url).toMatch(/^media:\/\/inbound\//);
+    expect(call.message).toBe(`what is in the image?\n[media attached: ${media?.[0]?.url}]`);
   });
 
   test("agent validates first image attachment against per-agent model for fresh sessions", async () => {

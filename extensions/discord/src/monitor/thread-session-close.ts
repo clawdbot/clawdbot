@@ -1,20 +1,16 @@
 // Discord plugin module implements thread session close behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  deleteSessionEntry,
   listSessionEntries,
-  patchSessionEntry,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
- * Marks every session entry in the store whose key contains {@link threadId}
- * as "reset" by setting `updatedAt` to 0.
- *
- * This mirrors how the daily / idle session reset works: zeroing `updatedAt`
- * makes `evaluateSessionFreshness` treat the session as stale on the next
- * inbound message, so the bot starts a fresh conversation without deleting
- * any on-disk transcript history.
+ * Closes every session entry in the store whose key contains {@link threadId}.
+ * The explicit lifecycle deletion archives the old transcript and guarantees
+ * that a later inbound message starts a fresh session in every reset mode.
  */
 export async function closeDiscordThreadSessions(params: {
   cfg: OpenClawConfig;
@@ -49,28 +45,17 @@ export async function closeDiscordThreadSessions(params: {
   let resetCount = 0;
 
   for (const { sessionKey, entry } of listSessionEntries({ storePath })) {
-    if (!sessionKeyContainsThreadId(sessionKey) || entry.updatedAt === 0) {
+    if (!sessionKeyContainsThreadId(sessionKey)) {
       continue;
     }
-    // Setting updatedAt to 0 signals that this session is stale.
-    // evaluateSessionFreshness will create a new session on the next message.
-    let resetEntry = false;
-    await patchSessionEntry({
-      storePath,
+    const deleted = await deleteSessionEntry({
+      archiveTranscript: true,
+      expectedSessionId: entry.sessionId ?? null,
+      expectedUpdatedAt: entry.updatedAt,
       sessionKey,
-      replaceEntry: true,
-      update: (current) => {
-        if (current.updatedAt === 0) {
-          return null;
-        }
-        if (current.updatedAt !== entry.updatedAt || current.sessionId !== entry.sessionId) {
-          return null;
-        }
-        resetEntry = true;
-        return { ...current, updatedAt: 0 };
-      },
+      storePath,
     });
-    if (resetEntry) {
+    if (deleted) {
       resetCount += 1;
     }
   }

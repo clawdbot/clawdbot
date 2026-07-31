@@ -1,5 +1,5 @@
-export type CancelAfterCommit = () => void;
-export type CompleteAfterCommit = () => void;
+type CancelAfterCommit = () => void;
+type CompleteAfterCommit = () => void;
 export type AfterCommitEffect = (complete: CompleteAfterCommit) => CancelAfterCommit | void;
 
 /**
@@ -13,13 +13,4 @@ export interface RenderLifecycle {
    * calls `complete` when done so the lifecycle owns it through teardown.
    */
   afterCommit(effect: AfterCommitEffect, onCancel?: () => void): CancelAfterCommit;
-}
-
-export function waitForCommit(renderLifecycle: RenderLifecycle): Promise<boolean> {
-  return new Promise((resolve) => {
-    renderLifecycle.afterCommit(
-      () => resolve(true),
-      () => resolve(false),
-    );
-  });
 }

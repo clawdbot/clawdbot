@@ -313,11 +313,6 @@ async function writeExternalArtifactFile(params: {
   });
 }
 
-export async function resetSharedBrowserStateForTests(): Promise<void> {
-  executablePathCache = null;
-  await closeSharedBrowser();
-}
-
 function injectBaseHref(html: string): string {
   if (html.includes("<base ")) {
     return html;

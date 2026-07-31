@@ -81,7 +81,7 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
 } {
   const fromConfig = readConfiguredSecretString(
     perplexity?.apiKey,
-    "tools.web.search.perplexity.apiKey",
+    "plugins.entries.perplexity.config.webSearch.apiKey",
   );
   if (fromConfig) {
     return { apiKey: fromConfig, source: "config" };
@@ -227,10 +227,10 @@ async function runPerplexitySearchApi(params: {
     body.search_language_filter = params.searchLanguageFilter;
   }
   if (params.searchAfterDate) {
-    body.search_after_date = params.searchAfterDate;
+    body.search_after_date_filter = params.searchAfterDate;
   }
   if (params.searchBeforeDate) {
-    body.search_before_date = params.searchBeforeDate;
+    body.search_before_date_filter = params.searchBeforeDate;
   }
   if (params.maxTokens !== undefined) {
     body.max_tokens = params.maxTokens;
@@ -318,7 +318,7 @@ export async function executePerplexitySearch(
     return {
       error: "missing_perplexity_api_key",
       message:
-        "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
+        "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure plugins.entries.perplexity.config.webSearch.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }

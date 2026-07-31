@@ -30,7 +30,6 @@ describe("maybeHandleQueueDirective", () => {
         messages: {
           queue: {
             mode: "collect",
-            debounceMs: 1500,
             cap: 9,
             drop: "summarize",
           },
@@ -39,7 +38,7 @@ describe("maybeHandleQueueDirective", () => {
       channel: "quietchat",
     });
     expect(current?.text).toContain(
-      "Current queue settings: mode=collect, debounce=1500ms, cap=9, drop=summarize.",
+      "Current queue settings: mode=collect, debounce=500ms, cap=9, drop=summarize.",
     );
     expect(current?.text).toContain(
       "Options: modes steer, followup, collect, interrupt; debounce:<ms|s|m>, cap:<n>, drop:old|new|summarize.",

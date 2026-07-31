@@ -4,7 +4,7 @@ import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 
 const INIT_DATA_MAX_AGE_MS = 300_000;
 
-export type TelegramMiniAppInitData = {
+type TelegramMiniAppInitData = {
   hash: string;
   authDateMs: number;
   userId: string;

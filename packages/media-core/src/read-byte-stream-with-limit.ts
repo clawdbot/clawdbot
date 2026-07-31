@@ -28,20 +28,23 @@ function normalizeByteChunk(chunk: unknown): Buffer {
 
 function destroyReadableOnOverflow(stream: unknown, err: Error): void {
   const readable = stream as {
-    destroy?: (error?: Error) => unknown;
+    destroy?: () => unknown;
     cancel?: (reason?: unknown) => unknown;
   };
   // Stop upstream producers immediately after overflow; otherwise large media
   // streams can continue buffering after the caller has already failed.
   if (typeof readable.destroy === "function") {
     try {
-      readable.destroy(err);
+      // The helper already throws the overflow error to its caller. Passing the
+      // same error to destroy() also emits it on Node streams, which can become
+      // an unrelated uncaught exception after the awaited rejection settles.
+      readable.destroy();
     } catch {}
     return;
   }
   if (typeof readable.cancel === "function") {
     try {
-      void readable.cancel(err);
+      void Promise.resolve(readable.cancel(err)).catch(() => undefined);
     } catch {}
   }
 }

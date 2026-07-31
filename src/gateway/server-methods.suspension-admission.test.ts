@@ -1,9 +1,6 @@
 // Proves dispatcher root-work accounting and fail-closed suspension behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  resetGatewaySuspendCoordinatorForTest,
-  resumeGatewaySuspend,
-} from "../infra/gateway-suspend-coordinator.js";
+import { resumeGatewaySuspend } from "../infra/gateway-suspend-coordinator.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -72,12 +69,10 @@ function dispatch(params: {
 }
 
 beforeEach(() => {
-  resetGatewaySuspendCoordinatorForTest();
   resetGatewayWorkAdmission();
 });
 
 afterEach(() => {
-  resetGatewaySuspendCoordinatorForTest();
   resetGatewayWorkAdmission();
 });
 

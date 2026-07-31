@@ -6,8 +6,16 @@ export function resolveRepoSpecifier(
   specifier: unknown,
   importerFile: unknown,
 ): string | null;
-/** Visit static and dynamic module specifiers in a parsed TypeScript source file. */
-export function visitModuleSpecifiers(ts: unknown, sourceFile: unknown, visit: unknown): void;
+/** Visit module specifiers, optionally including packaged-runtime dependencies. */
+export function visitModuleSpecifiers(
+  ts: unknown,
+  sourceFile: unknown,
+  visit: unknown,
+  options?: {
+    includeCommonJs?: boolean;
+    includeImportMetaUrl?: boolean;
+  },
+): void;
 /** Diff expected and actual inventory entries using JSON identity. */
 export function diffInventoryEntries(
   expected: unknown,

@@ -1,10 +1,311 @@
 import Foundation
+import OpenClawChatUI
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
 @Suite(.serialized)
 @MainActor
 struct UpdateOrchestrationTests {
+    @Test func `Sparkle receipt appears only after the target app launches`() throws {
+        let suite = "UpdateOrchestrationTests.post-update.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let now = Date(timeIntervalSince1970: 1_720_000_000)
+
+        PostAppUpdateReceiptStore.record(
+            fromVersion: "2026.7.3",
+            toVersion: "2026.7.4",
+            defaults: defaults,
+            now: now)
+
+        #expect(PostAppUpdateReceiptStore.pending(
+            currentVersion: "2026.7.3",
+            defaults: defaults) == nil)
+        #expect(PostAppUpdateReceiptStore.pending(
+            currentVersion: "2026.7.4",
+            defaults: defaults) == PostAppUpdateReceipt(
+            fromVersion: "2026.7.3",
+            toVersion: "2026.7.4",
+            recordedAt: now))
+        let receipt = try #require(PostAppUpdateReceiptStore.pending(
+            currentVersion: "2026.7.4",
+            defaults: defaults))
+        let incomplete = PostAppUpdateReceiptStore.setGatewayUpdateIncomplete(
+            true,
+            receipt: receipt,
+            defaults: defaults)
+        #expect(incomplete.gatewayUpdateIncomplete)
+        #expect(PostAppUpdateReceiptStore.pending(
+            currentVersion: "2026.7.4",
+            defaults: defaults) == incomplete)
+        let completed = PostAppUpdateReceiptStore.setGatewayUpdateIncomplete(
+            false,
+            receipt: incomplete,
+            defaults: defaults)
+        let inFlight = PostAppUpdateReceiptStore.setNotificationInFlight(
+            true,
+            receipt: completed,
+            defaults: defaults)
+        #expect(inFlight.notificationInFlight)
+        #expect(!PostUpdateController.isNotificationOnlyRetry(inFlight))
+        let readyToRetry = PostAppUpdateReceiptStore.setNotificationInFlight(
+            false,
+            receipt: inFlight,
+            defaults: defaults)
+        let firstNotificationFailure = PostAppUpdateReceiptStore.recordNotificationFailure(
+            receipt: readyToRetry,
+            defaults: defaults)
+        #expect(firstNotificationFailure.notificationAttempts == 1)
+        #expect(!firstNotificationFailure.gatewayUpdateIncomplete)
+        #expect(!firstNotificationFailure.notificationInFlight)
+        let finalNotificationFailure = PostAppUpdateReceiptStore.recordNotificationFailure(
+            receipt: firstNotificationFailure,
+            defaults: defaults)
+        #expect(finalNotificationFailure.notificationAttempts == PostAppUpdateReceiptStore.notificationRetryLimit)
+        #expect(PostUpdateController.isNotificationOnlyRetry(firstNotificationFailure))
+        #expect(!PostUpdateController.isNotificationOnlyRetry(incomplete))
+        PostAppUpdateReceiptStore.clear(defaults: defaults)
+        #expect(PostAppUpdateReceiptStore.pending(
+            currentVersion: "2026.7.4",
+            defaults: defaults) == nil)
+    }
+
+    @Test func `launch transition bootstraps upgrades but not fresh onboarding`() throws {
+        let suite = "UpdateOrchestrationTests.launch-transition.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let now = Date(timeIntervalSince1970: 1_720_000_000)
+
+        PostAppUpdateReceiptStore.record(
+            fromVersion: "2026.7.3",
+            toVersion: "2026.7.4",
+            defaults: defaults,
+            now: now)
+        #expect(PostAppUpdateReceiptStore.pendingForLaunch(
+            currentVersion: "2026.7.4",
+            onboardingSeen: false,
+            defaults: defaults,
+            now: now) == nil)
+        #expect(defaults.string(forKey: lastLaunchedAppVersionKey) == "2026.7.4")
+        #expect(PostAppUpdateReceiptStore.pending(
+            currentVersion: "2026.7.4",
+            defaults: defaults) == nil)
+        #expect(PostAppUpdateReceiptStore.pendingForLaunch(
+            currentVersion: "2026.7.4",
+            onboardingSeen: true,
+            defaults: defaults,
+            now: now) == nil)
+
+        defaults.removeObject(forKey: lastLaunchedAppVersionKey)
+        #expect(PostAppUpdateReceiptStore.pendingForLaunch(
+            currentVersion: "2026.7.5-dev",
+            onboardingSeen: true,
+            allowsUpdateWorkflow: false,
+            defaults: defaults,
+            now: now) == nil)
+        #expect(defaults.string(forKey: lastLaunchedAppVersionKey) == "2026.7.5-dev")
+
+        defaults.removeObject(forKey: lastLaunchedAppVersionKey)
+        let bootstrap = try #require(PostAppUpdateReceiptStore.pendingForLaunch(
+            currentVersion: "2026.7.5",
+            onboardingSeen: true,
+            defaults: defaults,
+            now: now))
+        #expect(bootstrap == PostAppUpdateReceipt(
+            fromVersion: "unknown",
+            toVersion: "2026.7.5",
+            recordedAt: now))
+
+        PostAppUpdateReceiptStore.clear(defaults: defaults)
+        defaults.set("2026.7.5", forKey: lastLaunchedAppVersionKey)
+        let transition = try #require(PostAppUpdateReceiptStore.pendingForLaunch(
+            currentVersion: "2026.7.6",
+            onboardingSeen: true,
+            defaults: defaults,
+            now: now))
+        #expect(transition.fromVersion == "2026.7.5")
+        #expect(transition.toVersion == "2026.7.6")
+    }
+
+    @Test func `post-update notice pages to latest direct top-level interaction`() async throws {
+        var requestedOffsets: [Int] = []
+        let selected = try #require(try await PostUpdateController.preferredNotificationSession(loadPage: { offset in
+            requestedOffsets.append(offset)
+            if offset == 0 {
+                return PostUpdateSessionsResponse(
+                    sessions: [
+                        PostUpdateSession(
+                            key: "agent:main:group:release",
+                            kind: "group",
+                            lastChannel: "webchat",
+                            lastInteractionAt: 500,
+                            spawnedBy: nil,
+                            parentSessionKey: nil),
+                        PostUpdateSession(
+                            key: "agent:main:telegram:direct:other-user",
+                            kind: "direct",
+                            lastChannel: "telegram",
+                            lastInteractionAt: 450,
+                            spawnedBy: nil,
+                            parentSessionKey: nil),
+                        PostUpdateSession(
+                            key: "agent:main:subagent:child",
+                            kind: "direct",
+                            lastChannel: "webchat",
+                            lastInteractionAt: 400,
+                            spawnedBy: "agent:main:main",
+                            parentSessionKey: "agent:main:main"),
+                    ],
+                    nextOffset: 2)
+            }
+            return PostUpdateSessionsResponse(
+                sessions: [
+                    PostUpdateSession(
+                        key: "agent:main:main",
+                        kind: "direct",
+                        lastChannel: "webchat",
+                        lastInteractionAt: 300,
+                        spawnedBy: nil,
+                        parentSessionKey: nil),
+                ],
+                nextOffset: nil)
+        }))
+
+        #expect(selected.key == "agent:main:main")
+        #expect(requestedOffsets == [0, 2])
+    }
+
+    @Test func `post-update receipt survives transient notification failure`() {
+        #expect(PostUpdateNotificationOutcome.delivered.consumesReceipt)
+        #expect(PostUpdateNotificationOutcome.noEligibleSession.consumesReceipt)
+        #expect(PostUpdateNotificationOutcome.deliveryUnconfirmed.consumesReceipt)
+        #expect(PostUpdateNotificationOutcome.skippedUnsupportedGateway.consumesReceipt)
+        #expect(PostUpdateNotificationOutcome.skippedWhilePaused.consumesReceipt)
+        #expect(!PostUpdateNotificationOutcome.retryLater.consumesReceipt)
+    }
+
+    @Test func `post-update notification requires a compatible remote Gateway`() {
+        #expect(PostUpdateController.supportsPostUpdateNotification(
+            gatewayVersion: "2026.7.4",
+            appVersion: "2026.7.4"))
+        #expect(PostUpdateController.supportsPostUpdateNotification(
+            gatewayVersion: "2026.7.5",
+            appVersion: "2026.7.4"))
+        #expect(!PostUpdateController.supportsPostUpdateNotification(
+            gatewayVersion: "2026.7.3",
+            appVersion: "2026.7.4"))
+        #expect(!PostUpdateController.supportsPostUpdateNotification(
+            gatewayVersion: "2026.7.4-beta.1",
+            appVersion: "2026.7.4"))
+        #expect(!PostUpdateController.supportsPostUpdateNotification(
+            gatewayVersion: nil,
+            appVersion: "2026.7.4"))
+        #expect(PostUpdateController.remoteNotificationBlocker(
+            gatewayVersion: nil,
+            appVersion: "2026.7.4") == .retryLater)
+        #expect(PostUpdateController.remoteNotificationBlocker(
+            gatewayVersion: "2026.7.3",
+            appVersion: "2026.7.4") == .skippedUnsupportedGateway)
+        #expect(PostUpdateController.remoteNotificationBlocker(
+            gatewayVersion: "2026.7.4",
+            appVersion: "2026.7.4") == nil)
+    }
+
+    @Test func `post-update runtime ownership follows the active service`() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let managedEntry = "\(home)/.openclaw/lib/node_modules/openclaw/dist/index.js"
+
+        #expect(PostUpdateController.ownsManagedRuntime(
+            connectionMode: .local,
+            programArguments: ["/usr/local/bin/node", managedEntry, "gateway"],
+            gatewayUpdateChannel: nil,
+            installPolicy: "exact",
+            launchAgentWriteDisabled: false))
+        #expect(!PostUpdateController.ownsManagedRuntime(
+            connectionMode: .local,
+            programArguments: ["/usr/local/bin/node", managedEntry, "gateway"],
+            gatewayUpdateChannel: nil,
+            installPolicy: "exact",
+            launchAgentWriteDisabled: true))
+        #expect(PostUpdateController.ownsManagedRuntime(
+            connectionMode: .remote,
+            programArguments: ["/usr/local/bin/node", managedEntry, "node", "run"],
+            gatewayUpdateChannel: nil,
+            installPolicy: "exact",
+            launchAgentWriteDisabled: true))
+        #expect(!PostUpdateController.ownsManagedRuntime(
+            connectionMode: .remote,
+            programArguments: ["/usr/local/bin/node", "/opt/openclaw/dist/index.js", "node", "run"],
+            gatewayUpdateChannel: nil,
+            installPolicy: "exact",
+            launchAgentWriteDisabled: false))
+    }
+
+    @Test func `post-update window is reserved for managed Gateway work`() {
+        let managed = CLIInstaller.managedExecutableLocation()
+
+        #expect(PostUpdateController.gatewayAction(
+            status: .ready(location: managed, version: "2026.7.4"),
+            ownsManagedRuntime: true,
+            gatewayUpdateIncomplete: false) == .none)
+        #expect(PostUpdateController.gatewayAction(
+            status: .ready(location: managed, version: "2026.7.4"),
+            ownsManagedRuntime: true,
+            gatewayUpdateIncomplete: true) == .repair)
+        #expect(PostUpdateController.gatewayAction(
+            status: .incompatible(location: managed, found: "2026.7.3", required: "2026.7.4"),
+            ownsManagedRuntime: true,
+            gatewayUpdateIncomplete: false) == .update)
+        #expect(PostUpdateController.gatewayAction(
+            status: .missing(location: managed),
+            ownsManagedRuntime: true,
+            gatewayUpdateIncomplete: false) == .install)
+        #expect(PostUpdateController.gatewayAction(
+            status: .incompatible(location: managed, found: "2026.7.5", required: "2026.7.4"),
+            ownsManagedRuntime: true,
+            gatewayUpdateIncomplete: false) == .none)
+        #expect(PostUpdateController.gatewayAction(
+            status: .incompatible(location: managed, found: "2026.7.3", required: "2026.7.4"),
+            ownsManagedRuntime: false,
+            gatewayUpdateIncomplete: false) == .none)
+        #expect(PostUpdateController.gatewayAction(
+            status: .ready(location: managed, version: "2026.7.4"),
+            ownsManagedRuntime: false,
+            gatewayUpdateIncomplete: true) == .ownershipFailure)
+    }
+
+    @Test func `incomplete managed update keeps ownership failures retryable`() {
+        #expect(PostUpdateController.shouldPresentOwnershipFailure(
+            connectionMode: .local,
+            gatewayUpdateIncomplete: true))
+        #expect(PostUpdateController.shouldPresentOwnershipFailure(
+            connectionMode: .remote,
+            gatewayUpdateIncomplete: true))
+        #expect(!PostUpdateController.shouldPresentOwnershipFailure(
+            connectionMode: .local,
+            gatewayUpdateIncomplete: false))
+        #expect(!PostUpdateController.shouldPresentOwnershipFailure(
+            connectionMode: .remote,
+            gatewayUpdateIncomplete: false))
+        #expect(!PostUpdateController.shouldPresentOwnershipFailure(
+            connectionMode: .unconfigured,
+            gatewayUpdateIncomplete: true))
+    }
+
+    @Test func `notification retries only definitely uncommitted sends`() {
+        #expect(PostUpdateController.notificationSendFailureOutcome(
+            OpenClawChatTransportSendError.notDispatched) == .retryLater)
+        #expect(PostUpdateController.notificationSendFailureOutcome(
+            GatewayResponseError(
+                method: "system-event",
+                code: "INVALID_REQUEST",
+                message: "unsupported",
+                details: nil)) == .retryLater)
+        #expect(PostUpdateController.notificationSendFailureOutcome(
+            NSError(domain: NSURLErrorDomain, code: NSURLErrorNetworkConnectionLost)) == .deliveryUnconfirmed)
+    }
+
     @Test func `Sparkle channels follow the Gateway update channel`() {
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: "beta") == ["beta"])
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: "dev") == ["beta"])

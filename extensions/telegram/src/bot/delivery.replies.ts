@@ -31,7 +31,7 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "../button-types.js";
-import { splitTelegramCaption } from "../caption.js";
+import { resolveTelegramPlainCaption, splitTelegramCaption } from "../caption.js";
 import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,
@@ -44,10 +44,19 @@ import {
   canonicalizeTelegramPresentationPayload,
   resolveTelegramInteractiveTextFallback,
 } from "../interactive-fallback.js";
+import { resolveTelegramOutboundMediaFilename } from "../outbound-media.js";
 import type { TelegramPromptContextProjectionSequence } from "../prompt-context-projection.js";
-import { splitTelegramRichMessageTextChunks, TELEGRAM_RICH_TEXT_LIMIT } from "../rich-message.js";
+import type { TelegramRichBlocksDegradationReason } from "../rich-block-model.js";
+import {
+  isEmptyTelegramRichMessage,
+  splitTelegramRichMessageTextChunks,
+  TELEGRAM_RICH_TEXT_LIMIT,
+  type TelegramInputRichMessage,
+} from "../rich-message.js";
 import { isTelegramHtmlParseError } from "../rich-plain-fallback.js";
+import { isTelegramPhotoLimitError } from "../send-error-predicates.js";
 import { buildInlineKeyboard, reactMessageTelegram } from "../send.js";
+import { resolveTelegramTargetChatType } from "../targets.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
   buildTelegramSendParams,
@@ -91,7 +100,9 @@ type TelegramReplyQuoteForSend = {
 type TelegramDeliveryTextChunk = {
   text: string;
   plainText: string;
-  textMode: "html";
+  textMode: "html" | "markdown";
+  richMessage?: TelegramInputRichMessage;
+  richDegradationReasons?: readonly TelegramRichBlocksDegradationReason[];
 };
 
 type ChunkTextFn = (markdown: string) => TelegramDeliveryTextChunk[];
@@ -104,16 +115,24 @@ function buildChunkTextResolver(params: {
   skipEntityDetection?: boolean;
   textMode?: "html";
 }): ChunkTextFn {
-  if (params.richMessages === true) {
+  // Caller-authored HTML keeps legacy parse_mode HTML semantics even on rich
+  // accounts; the rich blocks path is markdown-only.
+  if (params.richMessages === true && params.textMode !== "html") {
     return (text: string) =>
       splitTelegramRichMessageTextChunks({
         text,
         textLimit: Math.min(params.textLimit, TELEGRAM_RICH_TEXT_LIMIT),
-        textMode: params.textMode ?? "markdown",
-        chunkMode: params.chunkMode,
         tableMode: params.tableMode,
         skipEntityDetection: params.skipEntityDetection,
-      });
+      }).map((chunk) => ({
+        // text/textMode describe the non-rich fallback body, not the rich wire
+        // payload; plain text keeps the fallback parse-safe for both inputs.
+        text: chunk.plainText,
+        plainText: chunk.plainText,
+        textMode: "markdown" as const,
+        richMessage: chunk.richMessage,
+        richDegradationReasons: chunk.degradationReasons,
+      }));
   }
   if (params.textMode === "html") {
     return (html: string) =>
@@ -157,10 +176,18 @@ function markDelivered(progress: DeliveryProgress): void {
   progress.deliveredCount += 1;
 }
 
-function filterEmptyTelegramTextChunks<T extends { text: string }>(chunks: readonly T[]): T[] {
+function filterEmptyTelegramTextChunks<
+  T extends { text: string; richMessage?: TelegramInputRichMessage },
+>(chunks: readonly T[]): T[] {
   // Telegram rejects whitespace-only text payloads; drop them before sendMessage so
   // hook-mutated or model-emitted empty replies become a no-op instead of a 400.
-  return chunks.filter((chunk) => chunk.text.trim().length > 0);
+  // Rich chunks gate on the rich payload: valid rich content (media/divider HTML)
+  // can have an empty plain projection and must still send.
+  return chunks.filter((chunk) =>
+    chunk.richMessage
+      ? !isEmptyTelegramRichMessage(chunk.richMessage)
+      : chunk.text.trim().length > 0,
+  );
 }
 
 function resolveReplyQuoteForSend(params: {
@@ -252,6 +279,8 @@ async function deliverTextReply(params: {
           textMode: chunk.textMode,
           plainText: chunk.plainText,
           richMessages: params.richMessages,
+          richMessage: chunk.richMessage,
+          richDegradationReasons: chunk.richDegradationReasons,
           linkPreview: params.linkPreview,
           tableMode: params.tableMode,
           silent: params.silent,
@@ -322,7 +351,7 @@ async function sendTelegramCaptionedMediaWithFallback<T>(params: {
       send: params.send,
     });
   if (!params.plainCaption) {
-    return await sendMedia(params.requestParams);
+    return await sendMedia(params.requestParams, params.shouldLog);
   }
   try {
     return await sendMedia(
@@ -341,7 +370,10 @@ async function sendTelegramCaptionedMediaWithFallback<T>(params: {
         err,
       )}`,
     );
-    return await sendMedia(buildPlainCaptionParams(params.requestParams, params.plainCaption));
+    return await sendMedia(
+      buildPlainCaptionParams(params.requestParams, params.plainCaption),
+      params.shouldLog,
+    );
   }
 }
 
@@ -420,18 +452,26 @@ async function deliverMediaReply(params: {
       contentType: media.contentType,
       fileName: media.fileName,
     });
-    const fileName = media.fileName ?? (isGif ? "animation.gif" : "file");
+    const fileName = resolveTelegramOutboundMediaFilename({
+      fileName: media.fileName,
+      contentType: media.contentType,
+      kind,
+      isGif,
+    });
     const file = new InputFile(media.buffer, fileName);
-    const { caption, followUpText } = splitTelegramCaption(
-      isFirstMedia ? (params.reply.text ?? undefined) : undefined,
-    );
-    const htmlCaption = caption
+    const captionText = isFirstMedia ? (params.reply.text ?? undefined) : undefined;
+    const trimmedCaption = captionText?.trim();
+    const renderedCaption = trimmedCaption
       ? params.textMode === "html"
-        ? caption
-        : renderTelegramHtmlText(caption, { tableMode: params.tableMode })
+        ? trimmedCaption
+        : renderTelegramHtmlText(trimmedCaption, { tableMode: params.tableMode })
       : undefined;
-    const plainCaption =
-      caption && params.textMode === "html" ? telegramHtmlToPlainTextFallback(caption) : caption;
+    const { caption, followUpText } = splitTelegramCaption(captionText, renderedCaption);
+    const htmlCaption = caption ? renderedCaption : undefined;
+    const plainCaption = resolveTelegramPlainCaption(
+      caption && params.textMode === "html" ? telegramHtmlToPlainTextFallback(caption) : caption,
+      htmlCaption,
+    );
     if (followUpText) {
       pendingFollowUpText = followUpText;
     }
@@ -468,14 +508,34 @@ async function deliverMediaReply(params: {
           params.bot.api.sendAnimation(params.chatId, file, { ...effectiveParams }),
       });
     } else if (kind === "image") {
-      await deliverAcceptedMedia({
-        operation: "sendPhoto",
-        requestParams: mediaParams,
-        plainCaption,
-        text: plainCaption,
-        send: (effectiveParams) =>
-          params.bot.api.sendPhoto(params.chatId, file, { ...effectiveParams }),
-      });
+      try {
+        await deliverAcceptedMedia({
+          operation: "sendPhoto",
+          requestParams: mediaParams,
+          plainCaption,
+          text: plainCaption,
+          shouldLog: (error) => !isTelegramPhotoLimitError(error),
+          send: (effectiveParams) =>
+            params.bot.api.sendPhoto(params.chatId, file, { ...effectiveParams }),
+        });
+      } catch (error) {
+        if (!isTelegramPhotoLimitError(error)) {
+          throw error;
+        }
+        // Let Telegram validate photo limits without decoding image buffers;
+        // retry the same accepted caption, topic, quote, and markup as a file.
+        logVerbose(
+          `telegram sendPhoto exceeded photo limits; retrying as document: ${formatErrorMessage(error)}`,
+        );
+        await deliverAcceptedMedia({
+          operation: "sendDocument",
+          requestParams: mediaParams,
+          plainCaption,
+          text: plainCaption,
+          send: (effectiveParams) =>
+            params.bot.api.sendDocument(params.chatId, file, { ...effectiveParams }),
+        });
+      }
     } else if (kind === "video") {
       await deliverAcceptedMedia({
         operation: "sendVideo",
@@ -682,7 +742,7 @@ function buildTelegramSentHookContext(params: EmitMessageSentHookParams) {
   });
 }
 
-export function emitInternalMessageSentHook(params: EmitMessageSentHookParams): void {
+function emitInternalMessageSentHook(params: EmitMessageSentHookParams): void {
   if (!params.sessionKeyForInternalHooks) {
     return;
   }
@@ -818,7 +878,9 @@ export async function deliverReplies(params: {
     }),
   );
   for (const originalReply of normalizedReplies) {
-    let reply = canonicalizeTelegramPresentationPayload(originalReply);
+    let reply = canonicalizeTelegramPresentationPayload(originalReply, {
+      allowWebAppButtons: resolveTelegramTargetChatType(params.chatId) === "direct",
+    });
     const mediaList = reply?.mediaUrls?.length
       ? reply.mediaUrls
       : reply?.mediaUrl
@@ -1045,3 +1107,4 @@ export async function deliverReplies(params: {
 
   return { delivered: progress.hasDelivered };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

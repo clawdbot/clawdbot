@@ -40,6 +40,7 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
   const metadataSeq = typeof metadata.seq === "number" ? metadata.seq : undefined;
   const metadataIdempotencyKey =
     typeof metadata.idempotencyKey === "string" ? metadata.idempotencyKey : undefined;
+  const turnBoundary = metadata.turnBoundary === true;
   return {
     role,
     timestamp,
@@ -48,6 +49,7 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
       ...(metadataId ? { id: metadataId } : {}),
       ...(metadataSeq !== undefined ? { seq: metadataSeq } : {}),
       ...(metadataIdempotencyKey ? { idempotencyKey: metadataIdempotencyKey } : {}),
+      ...(turnBoundary ? { turnBoundary: true } : {}),
       truncated: true,
       reason: "oversized",
     },
@@ -98,11 +100,11 @@ export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; max
 export function reportOmittedChatHistory(params: {
   originalMessages: unknown[];
   finalMessages: unknown[];
-  normalizedBytes: number;
+  getNormalizedBytes: () => number;
   maxHistoryBytes: number;
   logDebug: (message: string) => void;
 }): number {
-  const { originalMessages, finalMessages, normalizedBytes, maxHistoryBytes, logDebug } = params;
+  const { originalMessages, finalMessages, getNormalizedBytes, maxHistoryBytes, logDebug } = params;
   const survivors = new Set(finalMessages);
   let omittedCount = 0;
   for (const message of originalMessages) {
@@ -117,7 +119,7 @@ export function reportOmittedChatHistory(params: {
   logLargePayload({
     surface: "gateway.chat.history",
     action: "truncated",
-    bytes: normalizedBytes,
+    bytes: getNormalizedBytes(),
     limitBytes: maxHistoryBytes,
     count: omittedCount,
     reason: "chat_history_budget",

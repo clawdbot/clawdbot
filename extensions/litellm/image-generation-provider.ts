@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 // Litellm provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -62,7 +63,8 @@ function isAutoAllowedLitellmHostname(hostname: string): boolean {
   ) {
     return true;
   }
-  if (lowered === "127.0.0.1" || lowered.startsWith("127.")) {
+  // Only IPv4 literals may use the 127/8 loopback exemption.
+  if (isIP(lowered) === 4 && lowered.startsWith("127.")) {
     return true;
   }
   if (lowered === "::1" || lowered === "0:0:0:0:0:0:0:1") {

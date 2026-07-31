@@ -29,8 +29,6 @@ import type {
   TelegramUpdateOffsetRotationInfo,
 } from "./update-offset-store.js";
 
-export type { MonitorTelegramOpts } from "./monitor.types.js";
-
 function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
   return {
     sink: {
@@ -287,12 +285,10 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         log,
         telegramTransport,
         createTelegramTransport: createTelegramTransportForPolling,
-        stallThresholdMs: account.config.pollingStallThresholdMs,
         setStatus: opts.setStatus,
         isolatedIngress: {
           enabled: opts.isolatedIngress?.enabled ?? true,
           apiRoot: account.config.apiRoot,
-          timeoutSeconds: account.config.timeoutSeconds,
           proxy: account.config.proxy,
           network: account.config.network,
         },

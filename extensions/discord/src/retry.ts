@@ -7,11 +7,13 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
+  classifyTransientNetworkErrorCode,
+  createChannelApiRetryRunner,
   resolveRetryConfig,
   retryAsync,
   type RetryConfig,
 } from "openclaw/plugin-sdk/retry-runtime";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { RateLimitError } from "./internal/discord.js";
 
 const DISCORD_RETRY_DEFAULTS = {
@@ -23,30 +25,8 @@ const DISCORD_RETRY_DEFAULTS = {
 const DISCORD_GATEWAY_RECONNECT_EXTRA_ATTEMPTS = 2;
 
 const DISCORD_RETRYABLE_STATUS_CODES = new Set([408, 429]);
-const DISCORD_RETRYABLE_ERROR_CODES = new Set([
-  "EAI_AGAIN",
-  "ECONNREFUSED",
-  "ECONNRESET",
-  "ENETUNREACH",
-  "ENOTFOUND",
-  "EPIPE",
-  "ETIMEDOUT",
-  "UND_ERR_BODY_TIMEOUT",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_HEADERS_TIMEOUT",
-  "UND_ERR_SOCKET",
-]);
 const DISCORD_TRANSIENT_MESSAGE_RE =
   /\b(?:bad gateway|fetch failed|network error|networkerror|service unavailable|socket hang up|temporarily unavailable|timed out|timeout)\b|connection (?:closed|reset|refused)/i;
-const DISCORD_PRECONNECT_ERROR_CODES = new Set([
-  "EAI_AGAIN",
-  "ECONNREFUSED",
-  "ENETUNREACH",
-  "ENOTFOUND",
-  "UND_ERR_CONNECT_TIMEOUT",
-]);
-const log = createSubsystemLogger("discord/retry");
-
 type DiscordRetrySafety = "idempotent" | "nonce-protected-create" | "non-idempotent-create";
 
 export type DiscordRetryRunner = <T>(
@@ -68,7 +48,7 @@ function readDiscordErrorStatus(err: unknown): number | undefined {
   return parseStrictNonNegativeInteger(raw);
 }
 
-export function isRetryableDiscordTransientError(err: unknown): boolean {
+function isRetryableDiscordTransientError(err: unknown): boolean {
   if (err instanceof RateLimitError) {
     return true;
   }
@@ -80,8 +60,7 @@ export function isRetryableDiscordTransientError(err: unknown): boolean {
     if (status !== undefined && (DISCORD_RETRYABLE_STATUS_CODES.has(status) || status >= 500)) {
       return true;
     }
-    const code = extractErrorCode(candidate);
-    if (code && DISCORD_RETRYABLE_ERROR_CODES.has(code.toUpperCase())) {
+    if (classifyTransientNetworkErrorCode(extractErrorCode(candidate))) {
       return true;
     }
     if (readErrorName(candidate) === "AbortError") {
@@ -97,7 +76,7 @@ export function isRetryableDiscordTransientError(err: unknown): boolean {
   return false;
 }
 
-export function isRetryableDiscordPreConnectError(err: unknown): boolean {
+function isRetryableDiscordPreConnectError(err: unknown): boolean {
   if (err instanceof RateLimitError) {
     return true;
   }
@@ -108,8 +87,7 @@ export function isRetryableDiscordPreConnectError(err: unknown): boolean {
     if (readDiscordErrorStatus(candidate) === 429) {
       return true;
     }
-    const code = extractErrorCode(candidate);
-    if (code && DISCORD_PRECONNECT_ERROR_CODES.has(code.toUpperCase())) {
+    if (classifyTransientNetworkErrorCode(extractErrorCode(candidate)) === "pre-connect") {
       return true;
     }
   }
@@ -133,14 +111,11 @@ function isRetryableDiscordGatewayTransportError(err: unknown): boolean {
 
 export function createDiscordRetryRunner(params: {
   retry?: RetryConfig;
-  configRetry?: RetryConfig;
   verbose?: boolean;
   isGatewayDisconnected?: () => boolean;
+  signal?: AbortSignal;
 }): DiscordRetryRunner {
-  const retryConfig = resolveRetryConfig(DISCORD_RETRY_DEFAULTS, {
-    ...params.configRetry,
-    ...params.retry,
-  });
+  const retryConfig = resolveRetryConfig(DISCORD_RETRY_DEFAULTS, params.retry);
   // Extend only the per-request runner. A delivery may contain several REST
   // writes, so replaying its outer adapter can duplicate already-sent chunks.
   const attempts =
@@ -152,6 +127,11 @@ export function createDiscordRetryRunner(params: {
     const isRetryable = resolveDiscordRetryPredicate(options?.safety ?? "idempotent");
     let observedGatewayDisconnect = false;
     const runRequest = async () => {
+      if (params.signal?.aborted) {
+        throw params.signal.reason instanceof Error
+          ? params.signal.reason
+          : new Error("Discord request aborted");
+      }
       observedGatewayDisconnect ||= params.isGatewayDisconnected?.() === true;
       try {
         return await fn();
@@ -160,24 +140,38 @@ export function createDiscordRetryRunner(params: {
         throw err;
       }
     };
-    return retryAsync(runRequest, {
-      ...retryConfig,
-      attempts,
-      label,
-      shouldRetry: (err, attempt) =>
-        isRetryable(err) &&
-        (attempt < retryConfig.attempts ||
-          (observedGatewayDisconnect && isRetryableDiscordGatewayTransportError(err))),
-      retryAfterMs: (err) => (err instanceof RateLimitError ? err.retryAfter * 1000 : undefined),
-      onRetry: params.verbose
-        ? (info) => {
-            const maxAttempts = observedGatewayDisconnect ? attempts : retryConfig.attempts;
-            const maxRetries = Math.max(1, maxAttempts - 1);
-            log.warn(
-              `discord ${info.label ?? "request"} retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
-            );
+    const shouldRetry = (err: unknown, attempt: number) =>
+      isRetryable(err) &&
+      (attempt < retryConfig.attempts ||
+        (observedGatewayDisconnect && isRetryableDiscordGatewayTransportError(err)));
+    const retryAfterMs = (err: unknown) =>
+      err instanceof RateLimitError ? err.retryAfter * 1000 : undefined;
+    const signal = params.signal;
+    if (signal) {
+      return retryAsync(runRequest, {
+        ...retryConfig,
+        attempts,
+        label,
+        shouldRetry,
+        retryAfterMs,
+        sleep: async (delayMs) => {
+          try {
+            await sleepWithAbort(delayMs, signal);
+          } catch (error) {
+            // Preserve the owner's timeout error and clear the pending retry timer
+            // when a webhook deadline expires in the middle of Discord backoff.
+            throw signal.aborted && signal.reason instanceof Error ? signal.reason : error;
           }
-        : undefined,
+        },
+      });
+    }
+    const runWithRetry = createChannelApiRetryRunner({
+      retry: { ...retryConfig, attempts },
+      shouldRetry,
+      strictShouldRetry: true,
+      retryAfterMs,
+      verbose: params.verbose,
     });
+    return runWithRetry(runRequest, label);
   };
 }

@@ -115,6 +115,9 @@ export function createChannelRuntimeContextRegistry(): ChannelRuntimeContextRegi
           return;
         }
         disposed = true;
+        // Detach before the token check: stale leases disposed after a replacement
+        // registered must still release their listener on long-lived signals.
+        params.abortSignal?.removeEventListener("abort", dispose);
         const current = runtimeContexts.get(normalized.mapKey);
         if (!current || current.token !== token) {
           return;

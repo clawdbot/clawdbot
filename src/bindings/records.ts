@@ -7,7 +7,6 @@ import {
   getSessionBindingService,
   type ConversationRef,
   type SessionBindingBindInput,
-  type SessionBindingCapabilities,
   type SessionBindingRecord,
   type SessionBindingUnbindInput,
 } from "../infra/outbound/session-binding-service.js";
@@ -16,17 +15,6 @@ export async function createConversationBindingRecord(
   input: SessionBindingBindInput,
 ): Promise<SessionBindingRecord> {
   return await getSessionBindingService().bind(input);
-}
-
-export function getConversationBindingCapabilities(params: {
-  channel: string;
-  accountId: string;
-}): SessionBindingCapabilities {
-  return getSessionBindingService().getCapabilities(params);
-}
-
-export function listSessionBindingRecords(targetSessionKey: string): SessionBindingRecord[] {
-  return getSessionBindingService().listBySession(targetSessionKey);
 }
 
 export function resolveConversationBindingRecord(

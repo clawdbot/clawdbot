@@ -21,7 +21,7 @@ type PluginInteractiveDispatchRegistration = {
 };
 
 /** Resolved interactive handler match passed to plugin callback dispatch. */
-export type PluginInteractiveMatch<TRegistration extends PluginInteractiveDispatchRegistration> = {
+type PluginInteractiveMatch<TRegistration extends PluginInteractiveDispatchRegistration> = {
   registration: RegisteredInteractiveHandler & TRegistration;
   namespace: string;
   payload: string;
@@ -29,10 +29,8 @@ export type PluginInteractiveMatch<TRegistration extends PluginInteractiveDispat
 
 export {
   clearPluginInteractiveHandlers,
-  clearPluginInteractiveHandlersForPlugin,
   registerPluginInteractiveHandler,
 } from "./interactive-registry.js";
-export type { InteractiveRegistrationResult } from "./interactive-registry.js";
 
 function resolveLivePluginInteractiveNamespaceMatch(channel: string, data: string) {
   const existing = resolvePluginInteractiveNamespaceMatch(channel, data);

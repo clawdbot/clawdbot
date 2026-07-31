@@ -1,13 +1,15 @@
-import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
 // Google tests cover google plugin behavior.
+import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
+import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { normalizeTranscriptForMatch } from "openclaw/plugin-sdk/provider-test-contracts";
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
+import { buildGoogleLiveCatalogProvider } from "./provider-catalog.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
 const GOOGLE_API_KEY =
@@ -72,6 +74,43 @@ const registerGooglePlugin = () =>
   });
 
 describeLive("google plugin live", () => {
+  it.each(["gemini-3.6-flash", "gemini-3.5-flash-lite"])(
+    "discovers and completes through %s",
+    async (modelId) => {
+      const provider = await buildGoogleLiveCatalogProvider({
+        apiKey: "GEMINI_API_KEY",
+        discoveryApiKey: GOOGLE_API_KEY,
+      });
+      const definition = provider.models.find((model) => model.id === modelId);
+      expect(definition, `${modelId} missing from Google models.list`).toBeDefined();
+
+      const response = await completeSimple(
+        {
+          ...definition!,
+          provider: "google",
+          baseUrl: provider.baseUrl,
+          api: "google-generative-ai",
+        } as Model<"google-generative-ai">,
+        {
+          messages: [
+            {
+              role: "user",
+              content: "Reply with exactly: OpenClaw live catalog OK",
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        { apiKey: GOOGLE_API_KEY, maxTokens: 64 },
+      );
+
+      expect(response.stopReason).not.toBe("error");
+      expect(response.content.some((block) => block.type === "text" && block.text.trim())).toBe(
+        true,
+      );
+    },
+    90_000,
+  );
+
   it("synthesizes speech through the registered provider", async () => {
     const { speechProviders } = await registerGooglePlugin();
     const provider = requireRegisteredProvider(speechProviders, "google");

@@ -2,6 +2,8 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { isModelsStatusJsonOutput } from "./models-output-mode.js";
+import { setCommandJsonMode } from "./program/json-mode.js";
 
 type ModelsCliRuntime = typeof import("./models-cli.runtime.js");
 
@@ -48,6 +50,7 @@ export function registerModelsCli(program: Command) {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/models", "docs.openclaw.ai/cli/models")}\n`,
     );
+  setCommandJsonMode(models, "output", ({ argv }) => isModelsStatusJsonOutput(argv));
 
   models
     .command("list")
@@ -108,6 +111,17 @@ export function registerModelsCli(program: Command) {
           },
           defaultRuntime,
         );
+      });
+    });
+
+  models
+    .command("refresh")
+    .description("Refresh the hosted model catalog")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await withModelsRuntime(async ({ defaultRuntime }) => {
+        const { modelsRefreshCommand } = await import("../commands/models/refresh.js");
+        await modelsRefreshCommand({ json: Boolean(opts.json) }, defaultRuntime);
       });
     });
 
@@ -343,6 +357,27 @@ export function registerModelsCli(program: Command) {
     });
 
   auth
+    .command("logout")
+    .description("Remove a saved auth profile (see `models auth list` for ids)")
+    .argument("<profileId>", "Auth profile id (e.g. openai:manual)")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option("--yes", "Skip the confirmation prompt", false)
+    .action(async (profileId: string, opts, command) => {
+      await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
+        const agent = resolveModelAgentOption(command, opts);
+        const { modelsAuthLogoutCommand } = await import("../commands/models/auth-logout.js");
+        await modelsAuthLogoutCommand(
+          {
+            profileId,
+            agent,
+            yes: Boolean(opts.yes),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  auth
     .command("login")
     .description("Run a provider plugin auth flow (OAuth/API key)")
     .option("--provider <id>", "Provider id registered by a plugin")
@@ -467,7 +502,7 @@ export function registerModelsCli(program: Command) {
 
   order
     .command("get")
-    .description("Show per-agent auth order override (from auth-state.json)")
+    .description("Show per-agent auth profile order override")
     .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
     .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--json", "Output JSON", false)
@@ -488,7 +523,7 @@ export function registerModelsCli(program: Command) {
 
   order
     .command("set")
-    .description("Set per-agent auth order override (writes auth-state.json)")
+    .description("Set per-agent auth profile order override")
     .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
     .option("--agent <id>", "Agent id (default: configured default agent)")
     .argument("<profileIds...>", "Auth profile ids (e.g. anthropic:default)")
@@ -509,7 +544,7 @@ export function registerModelsCli(program: Command) {
 
   order
     .command("clear")
-    .description("Clear per-agent auth order override (fall back to config/round-robin)")
+    .description("Clear per-agent auth profile order override")
     .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
     .option("--agent <id>", "Agent id (default: configured default agent)")
     .action(async (opts, command) => {

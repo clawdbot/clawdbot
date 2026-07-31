@@ -15,7 +15,7 @@ import type { ChannelConfiguredBindingConversationRef } from "./types.adapters.j
 /**
  * Parsed session-key facts used by configured binding consumers.
  */
-export type ParsedConfiguredBindingSessionKey = {
+type ParsedConfiguredBindingSessionKey = {
   channel: string;
   accountId: string;
 };

@@ -29,6 +29,7 @@ If no `index.html` exists at the root, the app shows a built-in scaffold page.
 ## Panel behavior
 
 - Borderless, resizable panel anchored near the menu bar (or mouse cursor).
+- Presenting Canvas does not switch apps or steal keyboard focus.
 - Remembers size/position per session.
 - Auto-reloads when local canvas files change.
 - Only one Canvas panel is visible at a time (session switches as needed).
@@ -48,6 +49,11 @@ openclaw nodes canvas navigate --node <id> "/"
 openclaw nodes canvas eval --node <id> --js "document.title"
 openclaw nodes canvas snapshot --node <id>
 ```
+
+`eval` and `a2ui.*` update content without opening or revealing the panel. Only
+`present`, `navigate`, or a user action shows it; after a hide, content updates
+continue to apply to the hidden panel. `snapshot` needs a visible panel and
+returns `CANVAS_HIDDEN` otherwise; run `present` first.
 
 `canvas.navigate` accepts local canvas paths, `http(s)` URLs, and `file://`
 URLs. Passing `"/"` shows the local scaffold or `index.html`.

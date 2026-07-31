@@ -1,3 +1,4 @@
+import type { ScopeTree } from "openclaw/plugin-sdk/channel-policy";
 // Telegram helper module supports group config helpers behavior.
 import type {
   TelegramAccountConfig,
@@ -27,7 +28,16 @@ export function resolveTelegramScopedGroupConfig(
   };
   const chatIdStr = String(chatId);
   const scopedConfigs = chatIdStr.startsWith("-") ? telegramCfg.groups : telegramCfg.direct;
-  const groupConfig = scopedConfigs?.[chatIdStr] ?? scopedConfigs?.["*"];
+  // Whole-entry selection: an exact chat hides every wildcard field.
+  const tree = { scopes: scopedConfigs ?? {} } as ScopeTree;
+  const groupKey = Object.hasOwn(tree.scopes, chatIdStr)
+    ? chatIdStr
+    : Object.hasOwn(tree.scopes, "*")
+      ? "*"
+      : undefined;
+  const path = groupKey ? [groupKey] : [];
+  const matchKey = path[0];
+  const groupConfig = matchKey ? scopedConfigs?.[matchKey] : undefined;
   const topicConfig = resolveTopicConfig(groupConfig);
   return { groupConfig, topicConfig };
 }

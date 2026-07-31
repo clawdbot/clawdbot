@@ -1,14 +1,11 @@
 // Removes installed plugins and updates plugin index records.
-import { realpathSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  readOpenClawManagedNpmRootOverrides,
-  syncManagedNpmRootPeerDependencies,
-} from "../infra/npm-managed-root.js";
+import { readOpenClawManagedNpmRootOverrides } from "../infra/npm-managed-root.js";
 import { createSafeNpmInstallEnv } from "../infra/safe-package-install.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -18,7 +15,8 @@ import {
   resolvePluginNpmProjectsDir,
 } from "./install-paths.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-link.js";
-import { defaultSlotIdForKey } from "./slots.js";
+import { defaultSlotIdForKey, resetPluginSlotsToDefaults } from "./slots.js";
+import { pruneManagedNpmPeerDependenciesAfterUninstall } from "./uninstall-managed-npm.js";
 
 type UninstallActions = {
   entry: boolean;
@@ -80,6 +78,26 @@ export function formatUninstallActionLabels(actions: UninstallActions): string[]
   return UNINSTALL_ACTION_ORDER.flatMap((key) =>
     actions[key] ? [UNINSTALL_ACTION_LABELS[key]] : [],
   );
+}
+
+/** Keep a staged plugin disabled until its managed directory is removed. */
+export function prepareConfigForPendingPluginDirectoryRemoval(
+  config: OpenClawConfig,
+  pluginId: string,
+): OpenClawConfig {
+  return {
+    ...config,
+    plugins: {
+      ...config.plugins,
+      entries: {
+        ...config.plugins?.entries,
+        [pluginId]: {
+          ...config.plugins?.entries?.[pluginId],
+          enabled: false,
+        },
+      },
+    },
+  };
 }
 
 function hasUninstallAction(actions: Omit<UninstallActions, "directory">): boolean {
@@ -437,19 +455,12 @@ export function removePluginFromConfig(
   // Reset slots if this plugin was selected.
   let slots = pluginsConfig.slots;
   if (slots?.memory === pluginId) {
-    slots = {
-      ...slots,
-      memory: defaultSlotIdForKey("memory"),
-    };
     actions.memorySlot = true;
   }
   if (slots?.contextEngine === pluginId) {
-    slots = {
-      ...slots,
-      contextEngine: defaultSlotIdForKey("contextEngine"),
-    };
     actions.contextEngineSlot = true;
   }
+  slots = resetPluginSlotsToDefaults(slots, pluginId);
   if (slots && Object.keys(slots).length === 0) {
     slots = undefined;
   }
@@ -602,6 +613,15 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
   };
 }
 
+export function pluginUninstallTargetExists(target: string): boolean {
+  try {
+    lstatSync(target);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+  }
+}
+
 export async function applyPluginUninstallDirectoryRemoval(
   removal: PluginUninstallDirectoryRemoval | null,
 ): Promise<{ directoryRemoved: boolean; warnings: string[] }> {
@@ -609,11 +629,7 @@ export async function applyPluginUninstallDirectoryRemoval(
     return { directoryRemoved: false, warnings: [] };
   }
 
-  const existed =
-    (await fs
-      .access(removal.target)
-      .then(() => true)
-      .catch(() => false)) ?? false;
+  const existed = pluginUninstallTargetExists(removal.target);
   const warnings: string[] = [];
   if (!existed && removal.cleanup?.kind !== "npm") {
     return { directoryRemoved: false, warnings };
@@ -665,43 +681,13 @@ export async function applyPluginUninstallDirectoryRemoval(
     }
     try {
       const managedOverrides = await readOpenClawManagedNpmRootOverrides();
-      const syncedPeerDependencies = await syncManagedNpmRootPeerDependencies({
+      const warning = await pruneManagedNpmPeerDependenciesAfterUninstall({
         npmRoot: removal.cleanup.npmRoot,
+        packageName: removal.cleanup.packageName,
         managedOverrides,
       });
-      if (syncedPeerDependencies) {
-        const cleanup = await runCommandWithTimeout(
-          [
-            "npm",
-            "install",
-            "--omit=dev",
-            "--omit=peer",
-            "--loglevel=error",
-            "--legacy-peer-deps",
-            "--ignore-scripts",
-            "--no-audit",
-            "--no-fund",
-          ],
-          {
-            cwd: removal.cleanup.npmRoot,
-            timeoutMs: 300_000,
-            env: createSafeNpmInstallEnv(process.env, {
-              legacyPeerDeps: true,
-              npmConfigCwd: removal.cleanup.npmRoot,
-              packageLock: true,
-              quiet: true,
-            }),
-          },
-        );
-        if (cleanup.code !== 0) {
-          warnings.push(
-            `Failed to prune managed peer dependencies after uninstalling ${removal.cleanup.packageName}: ${
-              cleanup.stderr.trim() ||
-              cleanup.stdout.trim() ||
-              `npm exited with code ${cleanup.code}`
-            }`,
-          );
-        }
+      if (warning) {
+        warnings.push(warning);
       }
     } catch (error) {
       warnings.push(

@@ -15,7 +15,7 @@ enum RemoteOnboardingProbeState: Equatable {
     case failed(String)
 }
 
-enum OnboardingCrestodianResumeStore {
+enum OnboardingSystemAgentResumeStore {
     struct ActivationOwner: Equatable {
         let id: String
         let routeFingerprint: String
@@ -130,7 +130,7 @@ enum OnboardingCrestodianResumeStore {
     static func markPending(
         routeIdentity: String?,
         activationOwner: ActivationOwner? = nil,
-        activationTimeoutMs: Double = OnboardingCrestodianResumeStore.maximumActivationTimeoutMs,
+        activationTimeoutMs: Double = OnboardingSystemAgentResumeStore.maximumActivationTimeoutMs,
         defaults: UserDefaults = .standard,
         now: Date = Date())
         -> Date?
@@ -264,14 +264,27 @@ enum OnboardingCrestodianResumeStore {
     }
 
     static func clear(defaults: UserDefaults = .standard) {
-        defaults.removeObject(forKey: onboardingCrestodianPendingKey)
+        defaults.removeObject(forKey: onboardingSystemAgentPendingKey)
+        defaults.removeObject(forKey: onboardingSystemAgentPendingRetiredKey)
+    }
+
+    /// Pre-rename releases stored the lease under the Crestodian key; adopt it once
+    /// so an app upgrade cannot orphan a live activation record.
+    private static func storedPendingPayload(defaults: UserDefaults) -> Any? {
+        if let stored = defaults.object(forKey: onboardingSystemAgentPendingKey) { return stored }
+        guard let retired = defaults.object(forKey: onboardingSystemAgentPendingRetiredKey) else {
+            return nil
+        }
+        defaults.set(retired, forKey: onboardingSystemAgentPendingKey)
+        defaults.removeObject(forKey: onboardingSystemAgentPendingRetiredKey)
+        return retired
     }
 
     private static func loadRecords(
         defaults: UserDefaults,
         now: Date = Date()) -> [String: Record]
     {
-        guard let stored = defaults.object(forKey: onboardingCrestodianPendingKey) else { return [:] }
+        guard let stored = self.storedPendingPayload(defaults: defaults) else { return [:] }
         if let legacyRoute = normalized(stored as? String) {
             let records = [legacyRoute: conservativeLegacyRecord(now: now)]
             self.writeRecords(records, defaults: defaults)
@@ -400,7 +413,7 @@ enum OnboardingCrestodianResumeStore {
         }
         defaults.set(
             ["version": self.recordVersion, "records": payload],
-            forKey: onboardingCrestodianPendingKey)
+            forKey: onboardingSystemAgentPendingKey)
     }
 
     private static func date(_ value: Any?) -> Date? {
@@ -496,6 +509,7 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         UserDefaults.standard.set(true, forKey: onboardingSeenKey)
         UserDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
         AppStateStore.shared.onboardingSeen = true
+        DashboardManager.shared.handleOnboardingCompletion()
     }
 
     func show() {
@@ -513,20 +527,36 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         let hosting = NSHostingController(rootView: OnboardingView())
         let window = NSWindow(contentViewController: hosting)
         window.title = UIStrings.welcomeTitle
-        window.setContentSize(NSSize(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight))
         window.styleMask = Self.windowStyleMask
+        window.setContentSize(NSSize(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight))
+        if let visibleFrame = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame {
+            // Constrain the full window frame, not only its content. Otherwise the
+            // navigation bar can land below the Dock on shorter displays.
+            window.setFrame(Self.initialWindowFrame(visibleFrame: visibleFrame), display: false)
+        } else {
+            window.center()
+        }
         // Keep the focused dialog width while letting taller displays give setup more breathing room.
-        window.contentMinSize = NSSize(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight)
+        window.contentMinSize = NSSize(
+            width: OnboardingView.windowWidth,
+            height: OnboardingView.minimumWindowHeight)
         window.contentMaxSize = NSSize(width: OnboardingView.windowWidth, height: .greatestFiniteMagnitude)
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
         window.delegate = self
-        window.center()
         DockIconManager.shared.temporarilyShowDock()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
+    }
+
+    static func initialWindowFrame(visibleFrame: NSRect) -> NSRect {
+        let contentRect = NSRect(
+            origin: .zero,
+            size: NSSize(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight))
+        let preferredFrame = NSWindow.frameRect(forContentRect: contentRect, styleMask: self.windowStyleMask)
+        return WindowPlacement.centeredFrame(size: preferredFrame.size, in: visibleFrame)
     }
 
     func close() {
@@ -592,25 +622,29 @@ struct OnboardingView: View {
     @State var suppressRemoteProbeReset = false
     @State var gatewayDiscovery: GatewayDiscoveryModel
     @State var onboardingSkillsModel = SkillsSettingsModel()
-    @State var crestodianState = OnboardingCrestodianChatState()
+    @State var systemAgentState = OnboardingSystemAgentChatState()
     @State var aiSetup = OnboardingAISetupModel()
+    @State var memoryImport = OnboardingMemoryImportModel()
     @State var configuredGatewayProbe = OnboardingConfiguredGatewayProbe()
     @State var didLoadOnboardingSkills = false
     @State var localGatewayProbe: LocalGatewayProbe?
     @State var defaultsToLocalGateway: Bool
     @Bindable var state: AppState
     var permissionMonitor: PermissionMonitor
-    let crestodianDefaults: UserDefaults
+    let systemAgentDefaults: UserDefaults
     let aiSetupRouteIdentityProvider: @MainActor () -> String?
     let gatewaySelectionPersister: @MainActor () -> Bool
+    let memoryImportGateway: GatewayConnection
 
     static let windowWidth: CGFloat = 630
     static let windowHeight: CGFloat = 752 // ~+10% to fit full onboarding content
+    static let minimumWindowHeight: CGFloat = 520
 
     let pageWidth: CGFloat = Self.windowWidth
     let connectionPageIndex = 1
     let cliPageIndex = 2
     let aiPageIndex = 3
+    let memoryImportPageIndex = 4
     let onboardingChatPageIndex = 8
     let readyPageIndex = 9
 
@@ -624,21 +658,21 @@ struct OnboardingView: View {
         130
     }
 
-    /// The baseline fits every setup control. Taller windows donate all extra room
-    /// to the active page instead of leaving the content pinned to a fixed canvas.
+    /// The active page is scrollable on short screens. Taller windows donate all
+    /// extra room instead of leaving the content pinned to a fixed canvas.
     func contentHeight(for windowHeight: CGFloat) -> CGFloat {
         Self.contentHeight(for: windowHeight, usesCompactHero: self.usesCompactHero)
     }
 
     static func contentHeight(for windowHeight: CGFloat, usesCompactHero: Bool) -> CGFloat {
-        let availableHeight = max(Self.windowHeight, windowHeight)
         let heroHeight: CGFloat = usesCompactHero ? 78 : 145
-        return availableHeight - heroHeight - 72
+        return max(0, windowHeight - heroHeight - 72)
     }
 
     static func pageOrder(
         for mode: AppState.ConnectionMode,
-        requiresCLIInstall: Bool) -> [Int]
+        requiresCLIInstall: Bool,
+        memoryImportEligible: Bool = false) -> [Int]
     {
         switch mode {
         case .remote:
@@ -649,9 +683,31 @@ struct OnboardingView: View {
         case .unconfigured:
             return [0, 1, 9]
         case .local:
-            let setupPages = requiresCLIInstall ? [0, 1, 2, 3, 5] : [0, 1, 3, 5]
+            let memoryPages = memoryImportEligible ? [4] : []
+            let setupPages = (requiresCLIInstall ? [0, 1, 2, 3] : [0, 1, 3]) + memoryPages + [5]
             return setupPages + [9]
         }
+    }
+
+    static func shouldIncludeMemoryImportPage(
+        for mode: AppState.ConnectionMode,
+        modelEligible: Bool) -> Bool
+    {
+        mode == .local && modelEligible
+    }
+
+    static func reconciledPageCursor(
+        currentPage: Int,
+        previousOrder: [Int],
+        newOrder: [Int]) -> Int
+    {
+        guard !newOrder.isEmpty else { return 0 }
+        guard !previousOrder.isEmpty else { return min(max(0, currentPage), newOrder.count - 1) }
+        let previousCursor = min(max(0, currentPage), previousOrder.count - 1)
+        let previousPage = previousOrder[previousCursor]
+        if let exact = newOrder.firstIndex(of: previousPage) { return exact }
+        if let next = newOrder.firstIndex(where: { $0 > previousPage }) { return next }
+        return newOrder.count - 1
     }
 
     static func shouldActivateLocalGateway(afterCLIInstallFor mode: AppState.ConnectionMode) -> Bool {
@@ -670,9 +726,14 @@ struct OnboardingView: View {
     }
 
     var pageOrder: [Int] {
-        Self.pageOrder(
+        let requiresCLIInstall = !self.cliInstalled
+        let includeMemoryImport = Self.shouldIncludeMemoryImportPage(
             for: self.state.connectionMode,
-            requiresCLIInstall: !self.cliInstalled)
+            modelEligible: self.memoryImport.pageEligible)
+        return Self.pageOrder(
+            for: self.state.connectionMode,
+            requiresCLIInstall: requiresCLIInstall,
+            memoryImportEligible: includeMemoryImport)
     }
 
     var pageCount: Int {
@@ -721,7 +782,7 @@ struct OnboardingView: View {
     }
 
     var canAdvance: Bool {
-        !self.isCLIBlocking && !self.isAISetupBlocking
+        !self.isCLIBlocking && !self.isAISetupBlocking && !self.memoryImport.isApplying
     }
 
     struct LocalGatewayProbe: Equatable {
@@ -738,27 +799,28 @@ struct OnboardingView: View {
             localDisplayName: InstanceIdentity.displayName,
             filterLocalGateways: false),
         aiSetupGateway: GatewayConnection = .shared,
-        crestodianDefaults: UserDefaults = .standard,
+        systemAgentDefaults: UserDefaults = .standard,
         aiSetupRouteIdentityProvider: (@MainActor () -> String?)? = nil,
         configuredGatewayProbeTimeoutMs: Double = 15000,
         gatewaySelectionPersister: (@MainActor () -> Bool)? = nil)
     {
         self.state = state
         self.permissionMonitor = permissionMonitor
-        self.crestodianDefaults = crestodianDefaults
+        self.systemAgentDefaults = systemAgentDefaults
         let routeIdentityProvider = aiSetupRouteIdentityProvider ?? {
-            OnboardingCrestodianResumeStore.selectedRouteIdentity(state: state)
+            OnboardingSystemAgentResumeStore.selectedRouteIdentity(state: state)
         }
         self.aiSetupRouteIdentityProvider = routeIdentityProvider
         self.gatewaySelectionPersister = gatewaySelectionPersister ?? {
             state.syncGatewayConfigNow()
         }
+        self.memoryImportGateway = aiSetupGateway
         _defaultsToLocalGateway = State(
             initialValue: !state.onboardingSeen && state.connectionMode == .unconfigured)
         _gatewayDiscovery = State(initialValue: discoveryModel)
         _aiSetup = State(initialValue: OnboardingAISetupModel(
             gateway: aiSetupGateway,
-            defaults: crestodianDefaults,
+            defaults: systemAgentDefaults,
             routeIdentityProvider: routeIdentityProvider))
         _configuredGatewayProbe = State(
             initialValue: OnboardingConfiguredGatewayProbe(

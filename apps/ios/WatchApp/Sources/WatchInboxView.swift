@@ -145,6 +145,15 @@ private struct WatchControlSurfaceView: View {
                 }
                 self.inboxPromptBlock
             } else {
+                // The decorative mascot belongs only to the empty or waiting inbox surface.
+                WatchMascot(
+                    mood: watchInboxMascotMood(
+                        hasSnapshot: self.store.hasAppSnapshot,
+                        hasApprovals: self.approvalCount > 0,
+                        hasChats: self.chatCount > 0),
+                    size: 72)
+                    .frame(maxWidth: .infinity)
+
                 WatchHeroCard(
                     label: .localized("Clear"),
                     title: .localized("Caught up"),
@@ -386,13 +395,12 @@ private struct WatchControlSurfaceView: View {
 
     private var chatTimelineDestination: some View {
         WatchChatTimelineView(
+            store: self.store,
             items: self.chatItems,
             statusText: self.chatStatusText,
             sendStatusText: self.chatSendStatusText,
             avatarImageSource: self.avatarImageSource,
             avatarText: self.avatarText,
-            completedChatCommandId: self.store.chatCompletion?.commandId,
-            completedChatReplyText: self.store.chatCompletion?.replyText,
             onRefresh: self.onRefreshAppSnapshot,
             onSendMessage: self.onSendChatMessage)
     }
@@ -1167,16 +1175,14 @@ private struct WatchChatBubble: View {
 }
 
 private struct WatchChatTimelineView: View {
+    var store: WatchInboxStore
     let items: [WatchChatItem]
     let statusText: String
     let sendStatusText: String?
     var avatarImageSource: String?
     var avatarText: String?
-    var completedChatCommandId: String?
-    var completedChatReplyText: String?
     var onRefresh: (() -> Void)?
     var onSendMessage: ((String) -> String?)?
-    @State private var voiceTurnTracker = WatchVoiceTurnTracker()
     @State private var speechPlayback = WatchSpeechPlayback()
     @State private var voiceReplyTimeout: Task<Void, Never>?
 
@@ -1229,7 +1235,7 @@ private struct WatchChatTimelineView: View {
                 onStartVoiceTurn: {
                     self.startVoiceTurn()
                 },
-                isAwaitingVoiceReply: self.voiceTurnTracker.isAwaitingReply,
+                isAwaitingVoiceReply: self.store.isAwaitingVoiceReply,
                 onCancelVoiceTurn: {
                     self.cancelVoiceTurn()
                 },
@@ -1242,11 +1248,15 @@ private struct WatchChatTimelineView: View {
         }
         .background(WatchClawStyle.background.ignoresSafeArea())
         .navigationTitle("Chat")
-        .onChange(of: self.completedChatCommandId) { _, commandId in
-            self.handleCompletedVoiceTurn(commandId: commandId)
+        .onChange(of: self.store.chatCompletion?.commandId) { _, _ in
+            self.handleCompletedVoiceTurn()
+        }
+        .onAppear {
+            self.handleCompletedVoiceTurn()
+            self.scheduleVoiceReplyTimeout()
         }
         .onDisappear {
-            self.cancelVoiceTurn()
+            self.voiceReplyTimeout?.cancel()
             self.speechPlayback.stop()
         }
     }
@@ -1261,7 +1271,7 @@ private struct WatchChatTimelineView: View {
         if self.speechPlayback.isSpeaking {
             return String(localized: "Speaking reply…")
         }
-        if self.voiceTurnTracker.isAwaitingReply {
+        if self.store.isAwaitingVoiceReply {
             return String(localized: "Waiting for spoken reply…")
         }
         return nil
@@ -1270,33 +1280,29 @@ private struct WatchChatTimelineView: View {
     private func startVoiceTurn() {
         WatchNativeTextInput.present(suggestions: []) { text in
             guard let commandId = self.sendMessage(text) else { return }
-            self.voiceTurnTracker.begin(commandId: commandId)
+            self.store.beginVoiceTurn(commandId: commandId)
             self.scheduleVoiceReplyTimeout()
         }
     }
 
-    private func handleCompletedVoiceTurn(commandId: String?) {
-        guard let reply = voiceTurnTracker.takeReply(
-            completedCommandId: commandId,
-            text: completedChatReplyText)
-        else {
-            return
-        }
+    private func handleCompletedVoiceTurn() {
+        guard let reply = self.store.takeVoiceReply() else { return }
         self.voiceReplyTimeout?.cancel()
         self.speechPlayback.speak(reply)
     }
 
     private func cancelVoiceTurn() {
         self.voiceReplyTimeout?.cancel()
-        self.voiceTurnTracker.cancel()
+        self.store.cancelVoiceTurn()
     }
 
     private func scheduleVoiceReplyTimeout() {
         self.voiceReplyTimeout?.cancel()
+        guard let delayNanoseconds = self.store.voiceReplyTimeoutNanoseconds() else { return }
         self.voiceReplyTimeout = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(90))
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
             guard !Task.isCancelled else { return }
-            self.voiceTurnTracker.cancel()
+            self.store.cancelVoiceTurn()
         }
     }
 }

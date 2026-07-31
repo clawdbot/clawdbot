@@ -13,13 +13,17 @@ export function requestUrl(url: string | URL | Request): string {
   return url.url;
 }
 
-export function createMattermostTestConfig(): OpenClawConfig {
+let testConfigSequence = 0;
+
+export function createMattermostTestConfig(
+  cacheKey = String(++testConfigSequence),
+): OpenClawConfig {
   return {
     channels: {
       mattermost: {
         enabled: true,
-        botToken: "test-token",
-        baseUrl: "https://chat.example.com",
+        botToken: `test-token-${cacheKey}`,
+        baseUrl: `https://${cacheKey}.chat.example.com`,
       },
     },
   };
@@ -30,6 +34,9 @@ export function createMattermostReactionFetchMock(params: {
   emojiName: string;
   mode: "add" | "remove" | "both";
   userId?: string;
+  postChannelId?: string | null;
+  channelType?: string;
+  channelName?: string;
   status?: number;
   body?: unknown;
 }) {
@@ -43,11 +50,27 @@ export function createMattermostReactionFetchMock(params: {
 
   return vi.fn<typeof fetch>(async (url, init) => {
     const urlText = requestUrl(url);
+    if (params.postChannelId !== undefined && urlText.endsWith(`/api/v4/posts/${params.postId}`)) {
+      return new Response(JSON.stringify({ id: params.postId, channel_id: params.postChannelId }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
     if (urlText.endsWith("/api/v4/users/me")) {
       return new Response(JSON.stringify({ id: userId }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
+    }
+    if (params.postChannelId && urlText.endsWith(`/api/v4/channels/${params.postChannelId}`)) {
+      return new Response(
+        JSON.stringify({
+          id: params.postChannelId,
+          type: params.channelType ?? "O",
+          name: params.channelName ?? "fixture-channel",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }
 
     if (allowAdd && urlText.endsWith("/api/v4/reactions")) {

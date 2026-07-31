@@ -1,17 +1,19 @@
 // Codex tests cover protocol validators plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
+  assertCodexThreadForkParams,
   readCodexModelListResponse,
   readCodexTurn,
   assertCodexThreadStartResponse,
   assertCodexThreadResumeResponse,
 } from "./protocol-validators.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 function makeMinimalThread(overrides: Record<string, unknown> = {}) {
   return {
     id: "thread-1",
     sessionId: "session-1",
-    cliVersion: "0.129.0",
+    cliVersion: CODEX_APP_SERVER_VERSION,
     createdAt: 1715299200,
     updatedAt: 1715299200,
     cwd: "/tmp",
@@ -38,8 +40,8 @@ function makeMinimalResponse(threadOverrides: Record<string, unknown> = {}) {
 }
 
 describe("Codex thread response validators", () => {
-  // The 0.143 floor guarantees both thread ids; pre-0.131 servers without
-  // sessionId must fail loudly instead of being silently normalized.
+  // The pinned Codex protocol requires both thread identities; never silently
+  // invent a session identity when a malformed response omits one.
   it("rejects thread responses missing sessionId", () => {
     for (const assertResponse of [
       assertCodexThreadStartResponse,
@@ -49,6 +51,24 @@ describe("Codex thread response validators", () => {
       delete (response.thread as Record<string, unknown>).sessionId;
       expect(() => assertResponse(response)).toThrow("Invalid Codex app-server");
     }
+  });
+});
+
+describe("assertCodexThreadForkParams", () => {
+  it("accepts the experimental beforeTurnId boundary", () => {
+    expect(
+      assertCodexThreadForkParams({
+        threadId: "thread-1",
+        beforeTurnId: "turn-2",
+        excludeTurns: true,
+      }),
+    ).toMatchObject({ beforeTurnId: "turn-2" });
+  });
+
+  it("rejects a non-string beforeTurnId", () => {
+    expect(() => assertCodexThreadForkParams({ threadId: "thread-1", beforeTurnId: 2 })).toThrow(
+      "Invalid Codex app-server thread/fork params",
+    );
   });
 });
 
@@ -63,6 +83,24 @@ describe("assertCodexThreadStartResponse", () => {
 
   it("throws on invalid response", () => {
     expect(() => assertCodexThreadStartResponse({})).toThrow("Invalid Codex app-server");
+  });
+});
+
+describe("assertCodexThreadResumeResponse", () => {
+  it("accepts the bounded initial turns page shipped by the managed Codex version", () => {
+    const result = assertCodexThreadResumeResponse({
+      ...makeMinimalResponse(),
+      initialTurnsPage: {
+        data: [{ id: "turn-running", items: [], status: "inProgress" }],
+        nextCursor: null,
+        backwardsCursor: "resume-anchor",
+      },
+    });
+
+    expect(result.thread.turns).toEqual([]);
+    expect(result.initialTurnsPage?.data).toEqual([
+      { id: "turn-running", items: [], status: "inProgress" },
+    ]);
   });
 });
 

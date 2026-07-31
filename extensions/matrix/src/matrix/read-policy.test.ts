@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { installMatrixTestRuntime } from "../test-runtime.js";
 import type { CoreConfig } from "../types.js";
 import { withAuthorizedMatrixReadTarget } from "./read-policy.js";
 import type { MatrixClient } from "./sdk.js";
@@ -32,6 +33,10 @@ function createClient(
 }
 
 describe("Matrix read policy", () => {
+  beforeEach(() => {
+    installMatrixTestRuntime();
+  });
+
   it("allows configured rooms and rejects other rooms before the read", async () => {
     const client = createClient(["@bot:example.org", "@alice:example.org", "@bob:example.org"]);
     const cfg = {

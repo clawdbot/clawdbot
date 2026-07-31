@@ -21,7 +21,7 @@ export async function readEmbeddingBatchJsonl<T>(
   }
 
   const maxRecordBytes = options.maxRecordBytes ?? DEFAULT_BATCH_OUTPUT_RECORD_MAX_BYTES;
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let recordCount = 0;
   let recordBytes = 0;
   let recordBuffer: Uint8Array | undefined;
@@ -61,7 +61,13 @@ export async function readEmbeddingBatchJsonl<T>(
     if (recordCount > options.maxRecords) {
       throw new Error(`${options.label}: JSONL output exceeds ${options.maxRecords} records`);
     }
-    const text = decoder.decode(recordBuffer?.subarray(0, recordBytes)).trim();
+    let text: string;
+    try {
+      text = decoder.decode(recordBuffer?.subarray(0, recordBytes)).trim();
+    } catch {
+      recordBytes = 0;
+      throw new Error(`${options.label}: malformed JSONL record`);
+    }
     recordBytes = 0;
     if (!text) {
       return true;

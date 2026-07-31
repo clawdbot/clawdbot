@@ -102,7 +102,7 @@ import {
   loadSessionUsageTimeSeries,
 } from "../../infra/session-cost-usage.js";
 import { loadCombinedSessionStoreForGateway } from "../session-utils.js";
-import { usageHandlers } from "./usage.js";
+import { testApi, usageHandlers } from "./usage.js";
 
 const TEST_RUNTIME_CONFIG = {
   agents: {
@@ -205,6 +205,7 @@ async function withUsageState(
 
 describe("sessions.usage", () => {
   beforeEach(() => {
+    testApi.sessionsUsageCache.clear();
     vi.useRealTimers();
     vi.clearAllMocks();
   });
@@ -361,6 +362,25 @@ describe("sessions.usage", () => {
       expect.objectContaining({
         dayBucket: { mode: "utc-offset", utcOffsetMinutes: -300 },
       }),
+    );
+  });
+
+  it("includes untimestamped entries only for the all-time range", async () => {
+    await runSessionsUsage({ range: "all", limit: 10 });
+    await runSessionsUsage({ ...BASE_USAGE_RANGE, limit: 10 });
+    await runSessionsUsage({ startDate: "1970-01-01", endDate: "2026-02-02", limit: 10 });
+
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ includeUntimestamped: true }),
+    );
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ includeUntimestamped: undefined }),
+    );
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ includeUntimestamped: undefined, startMs: 0 }),
     );
   });
 

@@ -1,5 +1,6 @@
 // Verifies sandbox media paths resolve through bridge and workspace-only guards.
 import { describe, expect, it, vi } from "vitest";
+import { readOutboundMediaFile } from "../media/bounded-read-file.js";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
@@ -17,10 +18,13 @@ describe("createSandboxBridgeReadFile", () => {
         } as unknown as SandboxFsBridge,
       },
     });
-    await expect(scopedRead("media/inbound/example.png")).resolves.toEqual(Buffer.from("ok"));
+    await expect(
+      readOutboundMediaFile(scopedRead, "media/inbound/example.png", { maxBytes: 1024 }),
+    ).resolves.toEqual(Buffer.from("ok"));
     expect(readFile).toHaveBeenCalledWith({
       filePath: "media/inbound/example.png",
       cwd: "/tmp/sandbox-root",
+      maxBytes: 1024,
     });
   });
 

@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
@@ -28,9 +29,7 @@ import {
   resolveBindingKey,
   resolveEffectiveBindingExpiry,
   setBindingRecord,
-  setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingManagerEntry,
-  setMatrixThreadBindingMaxAgeBySessionKey,
   toMatrixBindingTargetKind,
   toSessionBindingRecord,
   type MatrixThreadBindingManager,
@@ -588,7 +587,7 @@ export async function createMatrixThreadBindingManager(params: {
         targetSessionKey,
         agentId:
           normalizeOptionalString(input.metadata?.agentId) ||
-          resolveAgentIdFromSessionKey(targetSessionKey),
+          resolveAgentIdFromSessionKey(targetSessionKey, resolveDefaultAgentId(params.cfg)),
         label: normalizeOptionalString(input.metadata?.label) || undefined,
         boundBy: normalizeOptionalString(input.metadata?.boundBy) || "system",
         boundAt: now,
@@ -709,9 +708,4 @@ export async function createMatrixThreadBindingManager(params: {
   });
   return manager;
 }
-export {
-  getMatrixThreadBindingManager,
-  resetMatrixThreadBindingsForTests,
-  setMatrixThreadBindingIdleTimeoutBySessionKey,
-  setMatrixThreadBindingMaxAgeBySessionKey,
-};
+export { getMatrixThreadBindingManager, resetMatrixThreadBindingsForTests };

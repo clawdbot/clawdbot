@@ -1,22 +1,19 @@
 // @vitest-environment node
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined, isRecord } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
   getRemoteCommandEntries,
+  getSkillCommandCompletions,
   parseSlashCommand,
   replaceSlashCommands,
-  resetSlashCommandsForTest,
   SLASH_COMMANDS,
 } from "./commands.ts";
 
 afterEach(() => {
-  resetSlashCommandsForTest();
+  replaceSlashCommands(buildFallbackSlashCommands());
 });
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!isRecord(value)) {
@@ -165,6 +162,7 @@ describe("parseSlashCommand", () => {
         textAliases: ["/prose"],
         description: "Draft polished prose.",
         source: "skill",
+        skillModelVisible: true,
         scope: "both",
         acceptsArgs: true,
       },
@@ -182,8 +180,62 @@ describe("parseSlashCommand", () => {
     expectRecordFields(requireCommandByName("prose"), "prose command", {
       key: "prose",
       executeLocal: false,
+      source: "skill",
+      skillModelVisible: true,
     });
     expectParsedSlash("/dock_discord", { name: "dock-discord" }, "");
+    expect(getSkillCommandCompletions("pro").map((command) => command.name)).toEqual(["prose"]);
+  });
+
+  it("normalizes hyphenated skill reference queries", () => {
+    applyRemoteEntries([
+      {
+        name: "release_notes",
+        textAliases: ["/release_notes"],
+        description: "Draft release notes.",
+        source: "skill",
+        skillModelVisible: true,
+        scope: "both",
+        acceptsArgs: true,
+      },
+    ]);
+
+    expect(getSkillCommandCompletions("release-n").map((command) => command.name)).toEqual([
+      "release_notes",
+    ]);
+  });
+
+  it("keeps model-hidden skills in slash commands but out of $ completions", () => {
+    applyRemoteEntries([
+      {
+        name: "hidden_skill",
+        textAliases: ["/hidden_skill"],
+        description: "Slash-only skill.",
+        source: "skill",
+        skillModelVisible: false,
+        scope: "both",
+        acceptsArgs: true,
+      },
+    ]);
+
+    expectParsedSlash("/hidden_skill", { name: "hidden_skill" }, "");
+    expect(getSkillCommandCompletions("hidden")).toEqual([]);
+  });
+
+  it("fails closed when an older gateway omits skill visibility metadata", () => {
+    applyRemoteEntries([
+      {
+        name: "legacy_skill",
+        textAliases: ["/legacy_skill"],
+        description: "Legacy skill command.",
+        source: "skill",
+        scope: "both",
+        acceptsArgs: true,
+      },
+    ]);
+
+    expectParsedSlash("/legacy_skill", { name: "legacy_skill" }, "");
+    expect(getSkillCommandCompletions("legacy")).toEqual([]);
   });
 
   it("does not let remote commands collide with reserved local commands", () => {
