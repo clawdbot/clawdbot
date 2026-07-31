@@ -532,9 +532,51 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
 
   it("keeps signal-zero probes non-mutating unless a later signal overrides them", () => {
     expect(requiresApproval("pkill -0 -x openclaw", ["pkill", "-0", "-x", "openclaw"])).toBe(false);
+    expect(
+      requiresApproval("pkill --signal 0 -f openclaw", [
+        "pkill",
+        "--signal",
+        "0",
+        "-f",
+        "openclaw",
+      ]),
+    ).toBe(false);
+    expect(requiresApproval("pkill -s 0 -f openclaw", ["pkill", "-s", "0", "-f", "openclaw"])).toBe(
+      true,
+    );
     expect(requiresApproval("pkill -0 -TERM openclaw", ["pkill", "-0", "-TERM", "openclaw"])).toBe(
       true,
     );
+  });
+
+  it("fails closed when an unknown package option can consume a no-execute flag", () => {
+    expect(
+      requiresApproval("npm install --user-agent --dry-run openclaw", [
+        "npm",
+        "install",
+        "--user-agent",
+        "--dry-run",
+        "openclaw",
+      ]),
+    ).toBe(true);
+    expect(
+      requiresApproval("npm install --user-agent=agent --dry-run openclaw", [
+        "npm",
+        "install",
+        "--user-agent=agent",
+        "--dry-run",
+        "openclaw",
+      ]),
+    ).toBe(false);
+  });
+
+  it("does not inspect an uninvoked shell function body", () => {
+    const command = "sh -c 'f(){ openclaw gateway restart; }'";
+    expect(requiresApproval(command, ["sh", "-c", "f(){ openclaw gateway restart; }"])).toBe(false);
+    const substitution = `sh -c 'f(){ echo "$(openclaw gateway restart)"; }'`;
+    expect(
+      requiresApproval(substitution, ["sh", "-c", `f(){ echo "$(openclaw gateway restart)"; }`]),
+    ).toBe(false);
   });
 
   it("does not honor killall help operands after the option terminator", () => {

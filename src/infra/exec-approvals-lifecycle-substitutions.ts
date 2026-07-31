@@ -12,7 +12,10 @@ import {
 } from "./exec-approvals-lifecycle-plugins.js";
 import { unresolvedOpenClawApprovalPolicyActionMayMutate } from "./exec-approvals-lifecycle-policy.js";
 import { unresolvedOpenClawResetArgvMayMutate } from "./exec-approvals-lifecycle-reset.js";
-import type { LifecycleShellDialect } from "./exec-approvals-lifecycle-shell.js";
+import {
+  lifecycleExecutableCommandText,
+  type LifecycleShellDialect,
+} from "./exec-approvals-lifecycle-shell.js";
 import { lifecycleBooleanOptionValueMayBeDynamic } from "./exec-approvals-lifecycle-tokens.js";
 // Extracts shell command/process substitutions without treating quoted text as executable.
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
@@ -179,7 +182,7 @@ export function extractShellSubstitutionCommands(
   command: string,
   dialect: LifecycleShellDialect = "posix",
 ): ShellSubstitutionScan {
-  return extractAtDepth(command, 0, dialect);
+  return extractAtDepth(lifecycleExecutableCommandText(command, dialect), 0, dialect);
 }
 
 function optionName(token: string): string {

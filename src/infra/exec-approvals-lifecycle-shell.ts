@@ -3,6 +3,31 @@ import { splitShellArgs } from "../utils/shell-argv.js";
 
 export type LifecycleShellDialect = "cmd" | "posix" | "powershell";
 
+const POSIX_FUNCTION_DEFINITION_RE =
+  /(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*(?:\(\s*\))?\s*\{((?:[^{}]|\$\{[^{}]*\})*)\}/gu;
+
+function escapedRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+/** Remove function bodies that cannot execute because their function is never invoked. */
+export function lifecycleExecutableCommandText(
+  command: string,
+  dialect: LifecycleShellDialect,
+): string {
+  if (dialect !== "posix") {
+    return command;
+  }
+  return command.replace(POSIX_FUNCTION_DEFINITION_RE, (definition, name, _body, offset) => {
+    const invocation = new RegExp(
+      String.raw`(?:^|[;&|}\n()]|(?:if|then|elif|while|until|do|else)\s+)\s*${escapedRegExp(name)}(?:\s|[;&|]|$)`,
+      "u",
+    );
+    const tail = command.slice(offset + definition.length);
+    return invocation.test(tail) ? definition : " ".repeat(definition.length);
+  });
+}
+
 function stripBraceTokens(argv: readonly string[]): string[] {
   let start = 0;
   let end = argv.length;
@@ -325,7 +350,8 @@ export function splitLifecycleInlineCommands(
   command: string,
   dialect: LifecycleShellDialect = "posix",
 ): string[] {
-  return splitLifecycleCommandText(command, new Set([";", "|", "&", "\n", "\r"]), dialect)
+  const executableText = lifecycleExecutableCommandText(command, dialect);
+  return splitLifecycleCommandText(executableText, new Set([";", "|", "&", "\n", "\r"]), dialect)
     .map((fragment) => normalizeCompoundFragment(fragment, dialect))
     .filter(Boolean);
 }

@@ -68,7 +68,10 @@ function normalizedToken(value: string | undefined): string {
   return (value ?? "").trim().toLowerCase().replaceAll("`", "").replaceAll("^", "");
 }
 
-export function lifecycleArgvUsesSignalZero(argv: readonly string[]): boolean {
+export function lifecycleArgvUsesSignalZero(
+  argv: readonly string[],
+  shortSignalOptionIsSignal = true,
+): boolean {
   let effectiveSignal: string | undefined;
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -78,11 +81,11 @@ export function lifecycleArgvUsesSignalZero(argv: readonly string[]): boolean {
     const lower = normalizedToken(token);
     if (lower === "-0") {
       effectiveSignal = "0";
-    } else if (lower.startsWith("-s") && lower.length > 2) {
+    } else if (shortSignalOptionIsSignal && lower.startsWith("-s") && lower.length > 2) {
       effectiveSignal = lower.slice(2);
     } else if (lower.startsWith("--signal=")) {
       effectiveSignal = lower.slice("--signal=".length);
-    } else if (lower === "-s" || lower === "--signal") {
+    } else if ((shortSignalOptionIsSignal && lower === "-s") || lower === "--signal") {
       effectiveSignal = normalizedToken(argv[index + 1]);
       index += 1;
     } else if (SHORT_SIGNAL_OPTION_RE.test(lower)) {

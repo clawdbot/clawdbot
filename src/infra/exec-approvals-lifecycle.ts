@@ -226,8 +226,9 @@ function classifyProcessMutation(
   if (shellContext === "powershell" && powerShellArgvUsesWhatIf(argv)) {
     return false;
   }
-  if (matchesExecutable("killall", "pkill")) {
-    if (hasHelpOrVersion(argv, new Set(["-l", "--list"])) || argvUsesSignalZero(argv)) {
+  const pkill = matchesExecutable("pkill");
+  if (pkill || matchesExecutable("killall")) {
+    if (hasHelpOrVersion(argv, new Set(["-l", "--list"])) || argvUsesSignalZero(argv, !pkill)) {
       return false;
     }
     return argv.slice(1).some(matchesOpenClawProcessPattern);

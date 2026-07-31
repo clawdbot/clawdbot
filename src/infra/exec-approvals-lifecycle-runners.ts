@@ -74,6 +74,11 @@ const PACKAGE_DRY_RUN_OPTION = new Set(["--dry-run"]);
 const PACKAGE_DRY_RUN_SCAN_OPTIONS = new Set(["--dry-run", "--no-dry-run"]);
 const PACKAGE_HELP_OPTIONS = new Set(["-h", "--help"]);
 const PACKAGE_VERSION_OPTIONS = new Set(["-v", "--version"]);
+const PACKAGE_NO_EXECUTE_SCAN_OPTIONS = new Set([
+  ...PACKAGE_DRY_RUN_SCAN_OPTIONS,
+  ...PACKAGE_HELP_OPTIONS,
+  ...PACKAGE_VERSION_OPTIONS,
+]);
 const JAVASCRIPT_EXECUTABLE_RUNNERS = new Set([
   "babel-node",
   "bun",
@@ -254,6 +259,32 @@ function hasEffectivePackageNoExecute(argv: readonly string[], start: number): b
   );
 }
 
+function packageNoExecuteOptionMayBeConsumed(argv: readonly string[], start: number): boolean {
+  for (let index = start; index < argv.length; index += 1) {
+    const token = argv[index]?.trim() ?? "";
+    if (token === "--") {
+      break;
+    }
+    const name = optionName(token);
+    if (PACKAGE_TARGET_OPTIONS_WITH_VALUE.has(name)) {
+      if (!token.includes("=")) {
+        index += 1;
+      }
+      continue;
+    }
+    const nextName = optionName(argv[index + 1] ?? "");
+    if (
+      token.startsWith("-") &&
+      !token.includes("=") &&
+      !PACKAGE_NO_EXECUTE_SCAN_OPTIONS.has(name) &&
+      PACKAGE_NO_EXECUTE_SCAN_OPTIONS.has(nextName)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function hasEffectivePackageInfoOnly(
   argv: readonly string[],
   start: number,
@@ -323,10 +354,15 @@ function packageOperationMutatesOpenClaw(
   subcommandIndex: number,
 ): boolean {
   const operation = normalizedToken(argv[subcommandIndex]);
-  if (!PACKAGE_MUTATION_ALIASES.has(operation) || hasEffectivePackageNoExecute(argv, 1)) {
+  if (!PACKAGE_MUTATION_ALIASES.has(operation)) {
     return false;
   }
-  return packageTargets(argv, subcommandIndex + 1).some(isOpenClawPackageTarget);
+  const targetIsOpenClaw = packageTargets(argv, subcommandIndex + 1).some(isOpenClawPackageTarget);
+  return (
+    targetIsOpenClaw &&
+    (packageNoExecuteOptionMayBeConsumed(argv, subcommandIndex + 1) ||
+      !hasEffectivePackageNoExecute(argv, 1))
+  );
 }
 
 /** Resolve command argv launched by npm-compatible package runners. */
