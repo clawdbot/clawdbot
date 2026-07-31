@@ -128,8 +128,9 @@ sequenced frames; the message corpus does not replace the frame vectors.
 All integer fields, including integers nested inside invocation parameters or
 success payloads, must remain in JSON's exact `-(2^53 - 1)..=2^53 - 1` range.
 Serialization and deserialization reject values outside that range; the shared
-corpus exercises the positive boundary. Floating-point JSON numbers retain
-their normal finite IEEE-754 semantics. Runtime adapter traffic reports the
+corpus exercises the positive boundary. Integer-valued decimal or exponent
+forms follow the same bound; genuine fractional JSON numbers retain their
+normal finite IEEE-754 semantics. Runtime adapter traffic reports the
 distinct `SIDECAR_NON_PORTABLE_JSON` failure rather than misclassifying these
 values as oversized payloads.
 

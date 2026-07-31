@@ -24,6 +24,7 @@ use crate::{
 
 const MAX_PORTABLE_JSON_INTEGER: u64 = crate::SIDECAR_MAX_FEATURE_BITS;
 const MIN_PORTABLE_JSON_INTEGER: i64 = -9_007_199_254_740_991;
+const MAX_PORTABLE_JSON_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde `serialize_with` contract
 fn serialize_portable_u64<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
@@ -78,7 +79,9 @@ fn portable_json_value(value: &Value) -> bool {
             } else if let Some(value) = number.as_i64() {
                 value >= MIN_PORTABLE_JSON_INTEGER
             } else {
-                number.as_f64().is_some()
+                number.as_f64().is_some_and(|value| {
+                    value.fract() != 0.0 || value.abs() <= MAX_PORTABLE_JSON_INTEGER_F64
+                })
             }
         }
         Value::Array(values) => values.iter().all(portable_json_value),
@@ -2063,6 +2066,12 @@ mod tests {
             },
         };
         assert!(serde_json::to_string(&invalid_payload).is_err());
+
+        let float_encoded_integer = format!(
+            "{{\"type\":\"result\",\"invocationId\":\"invoke-float\",\"result\":{{\"outcome\":\"success\",\"payload\":{{\"unsafe\":{}.0}}}}}}",
+            MAX_PORTABLE_JSON_INTEGER + 1
+        );
+        assert!(serde_json::from_str::<SidecarRuntimeMessage>(&float_encoded_integer).is_err());
 
         let mut invalid_configuration = configuration();
         invalid_configuration.manifest_generation = above_max;
