@@ -815,6 +815,26 @@ describe("createWebSendApi", () => {
       id: "quoted-1",
     });
   });
+
+  it("aligns a lookup-proven LID quote with the final PN destination", async () => {
+    await api.sendMessage("+1555", "hello", undefined, undefined, {
+      quotedMessageKey: {
+        id: "quoted-self",
+        remoteJid: "277038292303944@lid",
+        fromMe: true,
+        lookupTargetJid: "1555@s.whatsapp.net",
+        messageText: "quoted body",
+      },
+    });
+
+    expectFirstSendJid("1555@s.whatsapp.net");
+    const quoted = requireRecord(requireSendOptions().quoted, "quoted message");
+    expectRecordFields(requireRecord(quoted.key, "quoted key"), {
+      remoteJid: "1555@s.whatsapp.net",
+      id: "quoted-self",
+      fromMe: true,
+    });
+  });
 });
 
 // Integration tests for issue #67378: createWebSendApi must route outbound
