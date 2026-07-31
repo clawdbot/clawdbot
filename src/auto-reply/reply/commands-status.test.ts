@@ -33,11 +33,10 @@ import {
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
-  consumePendingDelegates,
   consumeStagedPostCompactionDelegates,
-  enqueuePendingDelegate,
   stagePostCompactionDelegate,
-} from "../continuation/delegate-store.js";
+} from "../continuation/delegate-store-post-compaction.js";
+import { consumePendingDelegates, enqueuePendingDelegate } from "../continuation/delegate-store.js";
 import { buildStatusPluginsReply, buildStatusReply, buildStatusText } from "./commands-status.js";
 import {
   baseCommandTestConfig,

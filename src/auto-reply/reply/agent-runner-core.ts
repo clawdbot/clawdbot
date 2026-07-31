@@ -20,7 +20,7 @@ import {
   type DeliveryContext,
   normalizeDeliveryContext,
 } from "../../utils/delivery-context.shared.js";
-import { stagePostCompactionDelegate } from "../continuation/delegate-store.js";
+import { stagePostCompactionDelegate } from "../continuation/delegate-store-post-compaction.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {

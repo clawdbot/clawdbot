@@ -1,4 +1,5 @@
 import { dispatchToolDelegates } from "../auto-reply/continuation/delegate-dispatch.js";
+import { stagePostCompactionDelegate } from "../auto-reply/continuation/delegate-store-post-compaction.js";
 import {
   clearQueuedDelegatesChainTokensFold,
   consumePendingDelegates,
@@ -6,7 +7,6 @@ import {
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
   revalidatePendingDelegateForSpawn,
-  stagePostCompactionDelegate,
 } from "../auto-reply/continuation/delegate-store.js";
 import { stripContinuationSignal } from "../auto-reply/continuation/signal.js";
 import {

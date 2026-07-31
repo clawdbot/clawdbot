@@ -62,7 +62,7 @@ vi.mock("../../config/sessions/paths.js", () => ({
 }));
 
 const sessionSystemEventsMocks = vi.hoisted(() => {
-  const drainFormattedSystemEvents = vi.fn(
+  const drainFormattedSystemEventsMock = vi.fn(
     async (_params: unknown): Promise<string | undefined> => undefined,
   );
   const state: {
@@ -77,7 +77,7 @@ const sessionSystemEventsMocks = vi.hoisted(() => {
   } = { preparedQueue: [] };
   return {
     state,
-    drainFormattedSystemEvents,
+    drainFormattedSystemEvents: drainFormattedSystemEventsMock,
     prepareFormattedSystemEvents: vi.fn(async (params: unknown) => {
       const queued = state.preparedQueue.shift();
       if (queued) {
@@ -86,7 +86,7 @@ const sessionSystemEventsMocks = vi.hoisted(() => {
       if (state.prepared) {
         return state.prepared;
       }
-      const text = await drainFormattedSystemEvents(params);
+      const text = await drainFormattedSystemEventsMock(params);
       return {
         blocks: text ? [{ text }] : [],
         managedDeliveries: [],

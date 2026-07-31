@@ -25,10 +25,8 @@ import { resolveOpenAITextVerbosity } from "../agents/openai-text-verbosity.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import { getVolitionalCompactionCount } from "../agents/tools/request-compaction-tool.js";
 import { resolveContinuationRuntimeConfig } from "../auto-reply/continuation/config.js";
-import {
-  pendingDelegateCount,
-  stagedPostCompactionDelegateCount,
-} from "../auto-reply/continuation/delegate-store.js";
+import { stagedPostCompactionDelegateCount } from "../auto-reply/continuation/delegate-store-post-compaction.js";
+import { pendingDelegateCount } from "../auto-reply/continuation/delegate-store.js";
 import {
   formatProviderModelRef,
   resolveSelectedAndActiveModel,

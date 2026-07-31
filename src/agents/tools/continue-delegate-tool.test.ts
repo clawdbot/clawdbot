@@ -1,9 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { consumeStagedPostCompactionDelegates } from "../../auto-reply/continuation/delegate-store-post-compaction.js";
 import {
   cancelPendingDelegates,
   consumePendingDelegates,
-  consumeStagedPostCompactionDelegates,
 } from "../../auto-reply/continuation/delegate-store.js";
 import {
   resetContinueDelegateTurnAdmissionForTests,

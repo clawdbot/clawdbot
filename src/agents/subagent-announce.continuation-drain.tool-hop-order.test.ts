@@ -252,6 +252,12 @@ vi.mock("../auto-reply/continuation/delegate-store.js", async (importOriginal) =
     enqueuePendingDelegateMock(sessionKey, delegate),
   clearQueuedDelegatesChainTokensFold: (sessionKey: string) =>
     clearQueuedDelegatesChainTokensFoldMock(sessionKey),
+}));
+
+vi.mock("../auto-reply/continuation/delegate-store-post-compaction.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../auto-reply/continuation/delegate-store-post-compaction.js")
+  >()),
   stagePostCompactionDelegate: (sessionKey: string, delegate: unknown) =>
     stagePostCompactionDelegateMock(sessionKey, delegate),
 }));

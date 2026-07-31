@@ -9,11 +9,8 @@ import { generateChainId } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveLiveContinuationRuntimeConfig } from "../continuation/config.js";
-import {
-  enqueuePendingDelegate,
-  pendingDelegateCount,
-  stagePostCompactionDelegate,
-} from "../continuation/delegate-store.js";
+import { stagePostCompactionDelegate } from "../continuation/delegate-store-post-compaction.js";
+import { enqueuePendingDelegate, pendingDelegateCount } from "../continuation/delegate-store.js";
 import type { ContinuationSignalExtraction } from "../continuation/signal.js";
 import { hasCrossSessionDelegateTargeting } from "../continuation/targeting-pure.js";
 import type { ChainState, ContinueWorkRequest } from "../continuation/types.js";

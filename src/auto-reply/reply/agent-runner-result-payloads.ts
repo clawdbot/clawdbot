@@ -14,10 +14,8 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveLiveContinuationRuntimeConfig } from "../continuation/config.js";
-import {
-  pendingDelegateCount,
-  stagedPostCompactionDelegateCount,
-} from "../continuation/delegate-store.js";
+import { stagedPostCompactionDelegateCount } from "../continuation/delegate-store-post-compaction.js";
+import { pendingDelegateCount } from "../continuation/delegate-store.js";
 import { buildFallbackClearedNotice, buildFallbackNotice } from "../fallback-state.js";
 import {
   isReplyPayloadStatusNotice,

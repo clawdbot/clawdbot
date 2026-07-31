@@ -19,7 +19,7 @@ import {
   finalizeStagedPostCompactionDelegates,
   requeueReleasedPostCompactionDelegate,
   stagePostCompactionDelegate,
-} from "../continuation/delegate-store.js";
+} from "../continuation/delegate-store-post-compaction.js";
 import {
   classifyPostCompactionDelegateAge,
   formatPostCompactionStaleRejection,

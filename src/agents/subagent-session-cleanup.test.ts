@@ -22,8 +22,11 @@ vi.mock("../auto-reply/continuation/work-store.js", () => ({
 }));
 
 vi.mock("../auto-reply/continuation/delegate-store.js", () => ({
-  failStagedPostCompactionDelegatesForCleanup: failStagedPostCompactionDelegatesForCleanupMock,
   hasRecoverablePendingDelegate: hasRecoverablePendingDelegateMock,
+}));
+
+vi.mock("../auto-reply/continuation/delegate-store-post-compaction.js", () => ({
+  failStagedPostCompactionDelegatesForCleanup: failStagedPostCompactionDelegatesForCleanupMock,
 }));
 
 vi.mock("./subagent-registry-runtime.js", () => ({

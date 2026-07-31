@@ -23,7 +23,8 @@ import {
   type HeartbeatRunOptions,
 } from "./heartbeat-runner-execution.js";
 import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
-import { HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, type HeartbeatRunResult } from "./heartbeat-wake.js";
+import type { HeartbeatRunResult } from "./heartbeat-wake-contract.js";
+import { HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } from "./heartbeat-wake.js";
 import { resolveAgentOutboundIdentity } from "./outbound/identity.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 

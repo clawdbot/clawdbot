@@ -1,13 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  cancelPendingDelegates,
   consumeStagedPostCompactionDelegates,
   finalizeStagedPostCompactionDelegates,
   listRecoverableStagedPostCompactionDelegates,
   stagePostCompactionDelegate,
   stagedPostCompactionDelegateCount,
-} from "../continuation/delegate-store.js";
+} from "../continuation/delegate-store-post-compaction.js";
+import { cancelPendingDelegates } from "../continuation/delegate-store.js";
 
 // Staged post-compaction delegates must
 // stay non-terminal until the durable handoff (session-delivery enqueue /

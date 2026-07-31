@@ -231,14 +231,13 @@ import {
 } from "./delegate-dispatch-recovery.js";
 import { dispatchToolDelegates, resetDelegateDispatchHedgesForTests } from "./delegate-dispatch.js";
 import {
-  cancelPendingDelegates,
   claimStagedPostCompactionTaskFlowDelegates,
-  enqueuePendingDelegate,
   listRecoverableStagedPostCompactionDelegates,
   requeueReleasedPostCompactionTaskFlowDelegate,
   stagePostCompactionTaskFlowDelegate,
   stagedPostCompactionDelegateCount,
-} from "./delegate-store.js";
+} from "./delegate-store-post-compaction.js";
+import { cancelPendingDelegates, enqueuePendingDelegate } from "./delegate-store.js";
 import { dispatchStagedPostCompactionDelegates } from "./post-compaction-staged-dispatch.js";
 import { hasLiveContinuationTimerRefs, resetContinuationStateForTests } from "./state.js";
 import type { ContinuationRuntimeConfig } from "./types.js";

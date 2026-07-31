@@ -57,6 +57,15 @@ vi.mock("./continuation/delegate-store.js", async () => {
     ...actual,
     pendingDelegateCount: (sessionKey: string): number =>
       continuationMocks.pending.get(sessionKey) ?? 0,
+  };
+});
+
+vi.mock("./continuation/delegate-store-post-compaction.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("./continuation/delegate-store-post-compaction.js")
+  >("./continuation/delegate-store-post-compaction.js");
+  return {
+    ...actual,
     stagedPostCompactionDelegateCount: (sessionKey: string): number =>
       continuationMocks.staged.get(sessionKey) ?? 0,
   };

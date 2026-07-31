@@ -16,7 +16,7 @@ import { clearMemoryPluginState } from "../../plugins/memory-state.js";
 import { resetTaskFlowRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resetDelegateDispatchHedgesForTests } from "../continuation/delegate-dispatch.js";
-import { stagedPostCompactionDelegateCount } from "../continuation/delegate-store.js";
+import { stagedPostCompactionDelegateCount } from "../continuation/delegate-store-post-compaction.js";
 import { resetContinuationStateForTests } from "../continuation/state.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";

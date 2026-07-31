@@ -3,7 +3,7 @@ import { listAgentIds } from "../agents/agent-scope.js";
 import type { ContinuationTrigger } from "../auto-reply/get-reply-options.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import type { HeartbeatWakeIntent, HeartbeatWakeSource } from "./heartbeat-wake.js";
+import type { HeartbeatWakeIntent, HeartbeatWakeSource } from "./heartbeat-wake-contract.js";
 
 export type HeartbeatWakePayloadFlags = {
   isExecEventWake: boolean;

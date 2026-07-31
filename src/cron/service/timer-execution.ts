@@ -1,6 +1,6 @@
+import type { HeartbeatRunResult } from "../../infra/heartbeat-wake-contract.js";
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
-  type HeartbeatRunResult,
   isRetryableHeartbeatBusySkipReason,
 } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";

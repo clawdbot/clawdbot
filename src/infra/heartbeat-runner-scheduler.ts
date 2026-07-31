@@ -26,16 +26,18 @@ import {
   seekNextActivePhaseDueMs,
 } from "./heartbeat-schedule.js";
 import { resolveHeartbeatIntervalMs } from "./heartbeat-summary.js";
+import type {
+  HeartbeatRunResult,
+  HeartbeatWakeHandler,
+  HeartbeatWakeIntent,
+  HeartbeatWakeRequest,
+} from "./heartbeat-wake-contract.js";
 import {
   isConfiguredHeartbeatAgent,
   isTargetedImmediateSystemEventWake,
 } from "./heartbeat-wake-policy.js";
 import {
   areHeartbeatsEnabled,
-  type HeartbeatRunResult,
-  type HeartbeatWakeHandler,
-  type HeartbeatWakeIntent,
-  type HeartbeatWakeRequest,
   isRetryableHeartbeatBusySkipReason,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";

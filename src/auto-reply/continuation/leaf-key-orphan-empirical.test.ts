@@ -8,7 +8,7 @@ import {
   stagePostCompactionDelegate,
   consumeStagedPostCompactionDelegates,
   stagedPostCompactionDelegateCount,
-} from "../continuation/delegate-store.js";
+} from "../continuation/delegate-store-post-compaction.js";
 
 describe("leaf-key post-compaction staging", () => {
   const leafKey = "leaf-session::oneshot-deny-tools";

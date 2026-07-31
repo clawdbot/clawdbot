@@ -27,10 +27,8 @@ import {
   resolveMainSessionAlias,
 } from "../agents/tools/sessions-helpers.js";
 import { resolveContinuationRuntimeConfig } from "../auto-reply/continuation/config.js";
-import {
-  pendingDelegateCount,
-  stagedPostCompactionDelegateCount,
-} from "../auto-reply/continuation/delegate-store.js";
+import { stagedPostCompactionDelegateCount } from "../auto-reply/continuation/delegate-store-post-compaction.js";
+import { pendingDelegateCount } from "../auto-reply/continuation/delegate-store.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";

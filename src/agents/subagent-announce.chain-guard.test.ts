@@ -59,19 +59,22 @@ vi.mock("../auto-reply/continuation/delegate-store.js", () => ({
   clearQueuedDelegatesChainTokensFold: vi.fn(() => 0),
   consumePendingDelegates: vi.fn(() => []),
   enqueuePendingDelegate: vi.fn(),
-  failStagedPostCompactionDelegatesForCleanup: vi.fn(() => 0),
   hasRecoverablePendingDelegate: vi.fn(() => false),
   markPendingDelegateFailed: vi.fn(),
   markPendingDelegateSpawnAccepted: vi.fn(),
   peekSoonestUnmaturedDelegateDueAt: vi.fn(() => undefined),
   revalidatePendingDelegateForSpawn: vi.fn(() => ({ allowed: true })),
+}));
+
+vi.mock("../auto-reply/continuation/delegate-store-post-compaction.js", () => ({
+  failStagedPostCompactionDelegatesForCleanup: vi.fn(() => 0),
   stagePostCompactionDelegate: vi.fn(),
 }));
 
+import { stagePostCompactionDelegate } from "../auto-reply/continuation/delegate-store-post-compaction.js";
 import {
   consumePendingDelegates,
   markPendingDelegateFailed,
-  stagePostCompactionDelegate,
 } from "../auto-reply/continuation/delegate-store.js";
 import {
   clearRuntimeConfigSnapshot,

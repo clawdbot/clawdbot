@@ -7,6 +7,9 @@ const delegateCounts = vi.hoisted(() => ({
 
 vi.mock("./delegate-store.js", () => ({
   pendingDelegateCount: () => delegateCounts.pendingDelegates,
+}));
+
+vi.mock("./delegate-store-post-compaction.js", () => ({
   stagedPostCompactionDelegateCount: () => delegateCounts.stagedPostCompaction,
 }));
 

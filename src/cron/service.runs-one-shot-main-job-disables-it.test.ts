@@ -1,9 +1,9 @@
 // One-shot main job tests cover disabling cron jobs after a single run.
 import { describe, expect, it, vi } from "vitest";
+import type { HeartbeatRunResult } from "../infra/heartbeat-wake-contract.js";
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-  type HeartbeatRunResult,
 } from "../infra/heartbeat-wake.js";
 import {
   consumeSelectedSystemEventEntries,

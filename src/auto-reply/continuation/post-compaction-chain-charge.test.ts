@@ -19,9 +19,9 @@ vi.mock("../../tasks/task-flow-registry.js", async () => {
 
 import {
   claimStagedPostCompactionTaskFlowDelegates,
-  markPendingDelegateSpawnAccepted,
   stagePostCompactionTaskFlowDelegate,
-} from "./delegate-store.js";
+} from "./delegate-store-post-compaction.js";
+import { markPendingDelegateSpawnAccepted } from "./delegate-store.js";
 import { resetMockTaskFlows } from "./delegate-taskflow-registry.test-harness.js";
 import { reserveAcceptedPostCompactionChainHop } from "./post-compaction-chain-charge.js";
 import type { ChainState } from "./types.js";

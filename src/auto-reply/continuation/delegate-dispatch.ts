@@ -32,6 +32,11 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
 import { partitionKnownAcceptedDelegateChildren } from "./delegate-dispatch-accepted-children.js";
+import {
+  DelegateTerminalChainStatePersistError,
+  formatDelegateDispatchError as formatErrorMessage,
+  persistChainStateBeforeTerminalCommit,
+} from "./delegate-dispatch-chain-state.js";
 import type {
   DelegateDispatchParams,
   DelegateDispatchResult,
@@ -47,7 +52,6 @@ import {
   annotateQueuedDelegatesInheritedPolicy,
   clearRecoverableDelegatesChainTokensFold,
   consumePendingDelegates,
-  markPendingDelegateChainStatePersistPlanned,
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
   peekSoonestUnmaturedDelegateDueAt,
@@ -59,50 +63,9 @@ import { hasCrossSessionDelegateTargeting } from "./targeting-pure.js";
 import type { PendingContinuationDelegate } from "./types.js";
 const log = createSubsystemLogger("continuation/delegate-dispatch");
 
-const formatErrorMessage = (err: unknown): string =>
-  err instanceof Error ? err.message : String(err);
-
 function formatDelegateTaskForSystemEvent(task: string): string {
   return task;
 }
-/** @internal One-way recovery classifier for persist-before-terminal failures. */
-export class DelegateTerminalChainStatePersistError extends Error {
-  readonly originalError: unknown;
-
-  constructor(originalError: unknown) {
-    super(formatErrorMessage(originalError));
-    this.name = "DelegateTerminalChainStatePersistError";
-    this.originalError = originalError;
-  }
-}
-
-async function persistChainStateBeforeTerminalCommit(
-  params: {
-    persistBeforeTerminalCommit?: boolean;
-    persistChainState?: (chainState: ChainState) => void | Promise<void>;
-  },
-  delegate: PendingContinuationDelegate,
-  chainState: ChainState,
-  options: { markPlannedChainState?: boolean; markerKind?: "advanced" | "terminal" } = {},
-): Promise<PendingContinuationDelegate> {
-  if (!params.persistBeforeTerminalCommit || !params.persistChainState) {
-    return delegate;
-  }
-  try {
-    const plannedDelegate = options.markPlannedChainState
-      ? markPendingDelegateChainStatePersistPlanned(
-          delegate,
-          chainState,
-          options.markerKind ?? "advanced",
-        )
-      : delegate;
-    await params.persistChainState(chainState);
-    return plannedDelegate;
-  } catch (err) {
-    throw new DelegateTerminalChainStatePersistError(err);
-  }
-}
-
 /**
  * Consume and dispatch all pending tool-dispatched delegates for a session.
  *

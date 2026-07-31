@@ -7,7 +7,7 @@ import {
   validateSessionsCompactParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { stagedPostCompactionDelegateCount } from "../../auto-reply/continuation/delegate-store.js";
+import { stagedPostCompactionDelegateCount } from "../../auto-reply/continuation/delegate-store-post-compaction.js";
 import type { FollowupRun } from "../../auto-reply/reply/queue.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import {

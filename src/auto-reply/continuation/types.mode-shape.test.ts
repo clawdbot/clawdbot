@@ -98,11 +98,10 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
 }));
 
 import {
-  consumePendingDelegates,
   claimStagedPostCompactionTaskFlowDelegates,
-  enqueuePendingDelegate,
   stagePostCompactionTaskFlowDelegate,
-} from "./delegate-store.js";
+} from "./delegate-store-post-compaction.js";
+import { consumePendingDelegates, enqueuePendingDelegate } from "./delegate-store.js";
 import type { PendingContinuationDelegate } from "./types.js";
 
 const SESSION_KEY = "test-session-438";

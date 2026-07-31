@@ -23,7 +23,8 @@ const continuationTimerRefs = new Map<string, number>();
 // the source of truth is the TaskFlow registry.
 // ---------------------------------------------------------------------------
 
-import { pendingDelegateCount, stagedPostCompactionDelegateCount } from "./delegate-store.js";
+import { stagedPostCompactionDelegateCount } from "./delegate-store-post-compaction.js";
+import { pendingDelegateCount } from "./delegate-store.js";
 import { pendingWorkCount } from "./work-store.js";
 
 export function hasDelegatePending(sessionKey: string): boolean {

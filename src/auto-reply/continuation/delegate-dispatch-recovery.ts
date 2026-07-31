@@ -11,19 +11,19 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
+import { DelegateTerminalChainStatePersistError } from "./delegate-dispatch-chain-state.js";
 import type { DelegateDispatchContext } from "./delegate-dispatch-contract.js";
-import {
-  DelegateTerminalChainStatePersistError,
-  dispatchToolDelegates,
-} from "./delegate-dispatch.js";
+import { dispatchToolDelegates } from "./delegate-dispatch.js";
 import {
   assertStagedPostCompactionFinalizationComplete,
-  classifyRecoverablePendingDelegates,
-  clearRecoverableDelegatesChainTokensFold,
   finalizeStagedPostCompactionDelegates,
-  listPendingDelegateSessionKeysForRecovery,
   listRecoverableStagedPostCompactionDelegates,
   requeueAwaitingNextCompactionDelegates as requeueAwaitingNextCompactionDelegateRows,
+} from "./delegate-store-post-compaction.js";
+import {
+  classifyRecoverablePendingDelegates,
+  clearRecoverableDelegatesChainTokensFold,
+  listPendingDelegateSessionKeysForRecovery,
 } from "./delegate-store.js";
 import {
   dispatchStagedPostCompactionDelegates,

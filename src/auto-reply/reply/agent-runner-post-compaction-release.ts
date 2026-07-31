@@ -8,7 +8,7 @@ import {
 import { resolveSessionEntryFromStore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { stagePostCompactionDelegate } from "../continuation/delegate-store.js";
+import { stagePostCompactionDelegate } from "../continuation/delegate-store-post-compaction.js";
 import type { FollowupRun } from "./queue.js";
 
 export async function releaseQueuedCompactionCompletion(params: {

@@ -18,10 +18,8 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { InlineAttachment, InlineAttachmentMount } from "../../shared/inline-attachments.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
 import { partitionKnownAcceptedDelegateChildren } from "./delegate-dispatch-accepted-children.js";
-import {
-  requeueReleasedPostCompactionTaskFlowDelegate,
-  revalidatePendingDelegateForSpawn,
-} from "./delegate-store.js";
+import { requeueReleasedPostCompactionTaskFlowDelegate } from "./delegate-store-post-compaction.js";
+import { revalidatePendingDelegateForSpawn } from "./delegate-store.js";
 import {
   classifyPostCompactionDelegateAge,
   formatPostCompactionStaleRejection,

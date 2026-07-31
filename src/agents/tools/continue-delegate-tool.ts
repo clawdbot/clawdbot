@@ -4,10 +4,10 @@ import {
   resolveContinuationRuntimeConfig,
 } from "../../auto-reply/continuation/config.js";
 import { getContinuationDelegateQueueDepths } from "../../auto-reply/continuation/delegate-flow-store.js";
+import { stagePostCompactionTaskFlowDelegate } from "../../auto-reply/continuation/delegate-store-post-compaction.js";
 import {
   enqueuePendingDelegate,
   removeUnacceptedContinuationDelegate,
-  stagePostCompactionTaskFlowDelegate,
 } from "../../auto-reply/continuation/delegate-store.js";
 import {
   peekContinueDelegatesScheduledThisTurn,
