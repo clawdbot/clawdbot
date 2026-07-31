@@ -534,7 +534,7 @@ struct OnboardingAISetupView: View {
                                 }
                             }
                             Spacer(minLength: 0)
-                            Text("Connect / Set up")
+                            Text(option.actionLabel ?? String(localized: "Connect / Set up"))
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(Color.accentColor)
                         }

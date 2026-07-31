@@ -58,6 +58,7 @@
       "method": "local",
       "choiceId": "ollama",
       "appGuidedDiscovery": true,
+      "appGuidedActionLabel": "Choose connection",
       "choiceLabel": "Ollama",
       "choiceHint": "Connect to an Ollama server and select a cloud or local model",
       "icon": "https://cdn.simpleicons.org/ollama",

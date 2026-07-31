@@ -34971,7 +34971,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 156,
+      "line": 159,
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupSupport.swift",
       "source": "The Gateway setup request failed.",
       "surface": "apple",
@@ -34979,7 +34979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 157,
+      "line": 160,
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupSupport.swift",
       "source": "The Gateway setup request failed. Show details to inspect or copy the error.",
       "surface": "apple",
@@ -34987,7 +34987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 241,
+      "line": 244,
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupSupport.swift",
       "source": "\\(label) couldn’t complete the test.",
       "surface": "apple",
@@ -34995,7 +34995,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 242,
+      "line": 245,
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupSupport.swift",
       "source": "\\(label) couldn’t complete the test. Show details to inspect or copy the error.",
       "surface": "apple",
@@ -35202,7 +35202,7 @@
       "id": "native.apple.780c1aa1c8868cc4"
     },
     {
-      "kind": "ui-call",
+      "kind": "ui-localized-call",
       "line": 537,
       "path": "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
       "source": "Connect / Set up",

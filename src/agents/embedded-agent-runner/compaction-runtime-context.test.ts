@@ -58,6 +58,17 @@ describe("resolveEmbeddedCompactionThinkingLevel", () => {
       }),
     ).toBe("off");
   });
+
+  it("preserves thinking when the resolved Ollama model reports reasoning support", () => {
+    expect(
+      resolveEmbeddedCompactionThinkingLevel({
+        provider: "ollama",
+        modelId: "qwen3.5:4b",
+        inheritedLevel: "high",
+        catalog: [{ provider: "ollama", id: "qwen3.5:4b", reasoning: true }],
+      }),
+    ).toBe("high");
+  });
 });
 
 describe("buildEmbeddedCompactionRuntimeContext", () => {

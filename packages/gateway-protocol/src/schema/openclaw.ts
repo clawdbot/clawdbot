@@ -266,6 +266,7 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
         brandId: Type.Optional(NonEmptyString),
         label: NonEmptyString,
         hint: Type.Optional(Type.String()),
+        actionLabel: Type.Optional(NonEmptyString),
         icon: Type.Optional(SetupInferenceHttpsUrl),
         website: Type.Optional(SetupInferenceHttpsUrl),
       }),

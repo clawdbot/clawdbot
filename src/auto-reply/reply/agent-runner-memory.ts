@@ -1527,6 +1527,7 @@ export async function runMemoryFlushIfNeeded(params: {
           provider,
           modelId: model,
           level: params.followupRun.run.thinkLevel,
+          catalog: params.followupRun.run.thinkingCatalog,
           agentId: params.followupRun.run.agentId,
           sessionKey:
             params.runtimePolicySessionKey ??

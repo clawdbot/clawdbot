@@ -436,7 +436,7 @@ function renderPrepare(props: ModelSetupViewProps, result: SystemAgentSetupDetec
                 ?disabled=${props.actionsDisabled}
                 @click=${() => props.onStartPrepare(option)}
               >
-                ${t("modelSetup.prepare.ollamaButton")}
+                ${option.actionLabel ?? t("modelSetup.prepare.ollamaButton")}
               </button>
             </div>
           `,
