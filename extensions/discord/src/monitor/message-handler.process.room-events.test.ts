@@ -112,6 +112,7 @@ describe("processDiscordMessage session routing and room events", () => {
       inboundEventKind: "room_event",
       baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
       route: BASE_CHANNEL_ROUTE,
+      sender: { id: "U1", label: "user", name: "alice", isPluralKit: false },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -124,6 +125,10 @@ describe("processDiscordMessage session routing and room events", () => {
         body: "hi",
         messageId: "m1",
         sender: "Alice",
+        senderProvenance: {
+          id: "U1",
+          memberRoleIds: [],
+        },
       },
     ]);
   });

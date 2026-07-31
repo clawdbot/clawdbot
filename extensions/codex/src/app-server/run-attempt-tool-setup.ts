@@ -229,7 +229,10 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     hookContext: {
       agentId: sessionAgentId,
       config: params.config,
+      contextWindowTokens: params.contextTokenBudget ?? params.model.contextWindow,
       workspaceDir: effectiveWorkspace,
+      remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
+      remoteWorkspaceRequestTimeoutMs: connection.appServer.requestTimeoutMs,
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
       runId: params.runId,

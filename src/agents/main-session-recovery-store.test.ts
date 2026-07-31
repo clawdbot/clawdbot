@@ -241,6 +241,35 @@ describe("main session recovery store", () => {
     expect(readStore()[legacyKey]).toMatchObject({ abortedLastRun: true });
   });
 
+  it("transfers a resumed recovery run to one durable lifecycle owner", async () => {
+    await write(
+      interruptedEntry({
+        restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-old" }],
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 2,
+          chargedAttempts: 1,
+          reservation: { runId: "recovery-1", attempt: 1, lifecycleGeneration },
+        },
+      }),
+    );
+
+    const admitted = await commitMainSessionRecovery({
+      command: {
+        kind: "admit_recovery",
+        lifecycleGeneration,
+        now: 300,
+        runId: "recovery-1",
+        sessionId: "session-1",
+      },
+      target: { sessionKey, storePath },
+    });
+
+    expect(admitted.transition).toEqual({ kind: "admitted_recovery" });
+    expect(read().restartRecoveryRuns).toEqual([{ runId: "recovery-1", lifecycleGeneration }]);
+    expect(read().abortedLastRun).toBe(false);
+  });
+
   it("rejects an observation after the session is replaced", async () => {
     await write({
       sessionId: "session-2",
@@ -389,6 +418,65 @@ describe("main session recovery store", () => {
     });
     expect(read().restartRecoveryRuns).toBeUndefined();
     expect(read().mainRestartRecovery).toBeUndefined();
+  });
+
+  it("atomically clears orphaned recovery residue from a terminal row", async () => {
+    await write(
+      interruptedEntry({
+        status: "failed",
+        mainRestartRecovery: undefined,
+        restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "dead-generation" }],
+      }),
+    );
+
+    await expect(
+      claimMainSessionRecoveryOwner({
+        lifecycleGeneration,
+        sessionId: "session-1",
+        target: { sessionKey, storePath },
+      }),
+    ).resolves.toEqual({ kind: "not_required" });
+    expect(read()).toMatchObject({
+      sessionId: "session-1",
+      status: "failed",
+      abortedLastRun: false,
+    });
+    expect(read().restartRecoveryRuns).toBeUndefined();
+    expect(read().mainRestartRecovery).toBeUndefined();
+    expect(read().restartRecoveryDeliveryRunId).toBeUndefined();
+  });
+
+  it("inspects terminal recovery residue as non-blocking before foreground cleanup", async () => {
+    const residue = interruptedEntry({
+      status: "done",
+      mainRestartRecovery: undefined,
+      restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "dead-generation" }],
+    });
+    await write(residue);
+
+    await expect(
+      inspectMainSessionRecoveryRequired({
+        expectedSessionId: "session-1",
+        lifecycleGeneration,
+        target: { sessionKey, storePath },
+      }),
+    ).resolves.toEqual({ kind: "not_required" });
+    expect(read()).toMatchObject({
+      status: "done",
+      abortedLastRun: true,
+      restartRecoveryRuns: residue.restartRecoveryRuns,
+    });
+    expect(read().mainRestartRecovery).toBeUndefined();
+
+    await expect(
+      claimMainSessionRecoveryOwner({
+        lifecycleGeneration,
+        sessionId: "session-1",
+        target: { sessionKey, storePath },
+      }),
+    ).resolves.toEqual({ kind: "not_required" });
+    expect(read()).toMatchObject({ status: "done", abortedLastRun: false });
+    expect(read().restartRecoveryRuns).toBeUndefined();
   });
 
   it("binds a foreground claim to its lifecycle run", async () => {

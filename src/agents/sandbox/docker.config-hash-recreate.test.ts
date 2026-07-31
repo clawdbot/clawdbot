@@ -20,6 +20,7 @@ type SpawnCall = {
 
 const spawnState = vi.hoisted(() => ({
   calls: [] as SpawnCall[],
+  containerExists: true,
   inspectRunning: true,
   labelHash: "",
 }));
@@ -63,19 +64,43 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     code = 1;
     stderr = `unexpected command: ${command}`;
   } else if (args[0] === "inspect" && args[1] === "-f" && args[2] === "{{.State.Running}}") {
-    stdout = spawnState.inspectRunning ? "true\n" : "false\n";
+    if (!spawnState.containerExists) {
+      code = 1;
+      stderr = "No such object";
+    } else {
+      stdout = spawnState.inspectRunning ? "true\n" : "false\n";
+    }
   } else if (
     args[0] === "inspect" &&
     args[1] === "-f" &&
     args[2]?.includes('index .Config.Labels "openclaw.configHash"')
   ) {
-    stdout = `${spawnState.labelHash}\n`;
-  } else if (
-    (args[0] === "rm" && args[1] === "-f") ||
-    (args[0] === "image" && args[1] === "inspect") ||
-    args[0] === "create" ||
-    args[0] === "start"
-  ) {
+    if (!spawnState.containerExists) {
+      code = 1;
+      stderr = "No such object";
+    } else {
+      stdout = `${spawnState.labelHash}\n`;
+    }
+  } else if (args[0] === "rm" && args[1] === "-f") {
+    spawnState.containerExists = false;
+    spawnState.inspectRunning = false;
+  } else if (args[0] === "image" && args[1] === "inspect") {
+    code = 0;
+  } else if (args[0] === "create") {
+    if (spawnState.containerExists) {
+      code = 1;
+      stderr = "container name is already in use";
+    } else {
+      spawnState.containerExists = true;
+      spawnState.inspectRunning = false;
+      spawnState.labelHash =
+        args
+          .find((arg) => arg.startsWith("openclaw.configHash="))
+          ?.slice("openclaw.configHash=".length) ?? "";
+    }
+  } else if (args[0] === "start") {
+    spawnState.inspectRunning = true;
+  } else if (args[0] === "exec") {
     code = 0;
   } else {
     code = 1;
@@ -165,11 +190,11 @@ function createSandboxConfig(
 async function ensureSandboxCreateCallForTest(params: {
   cfg: SandboxConfig;
   workspaceDir?: string;
-  sessionKey?: string;
+  scopeKey?: string;
 }): Promise<SpawnCall> {
   const workspaceDir = params.workspaceDir ?? "/tmp/workspace";
   await ensureSandboxContainer({
-    sessionKey: params.sessionKey ?? "agent:main:session-1",
+    scopeKey: params.scopeKey ?? "shared",
     workspaceDir,
     agentWorkspaceDir: workspaceDir,
     cfg: params.cfg,
@@ -193,6 +218,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
 
   beforeEach(async () => {
     spawnState.calls.length = 0;
+    spawnState.containerExists = true;
     spawnState.inspectRunning = true;
     spawnState.labelHash = "";
     registryMocks.readRegistryEntry.mockClear();
@@ -200,6 +226,55 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     registryMocks.updateRegistry.mockResolvedValue(undefined);
     runtimeMocks.log.mockClear();
     await loadFreshDockerModuleForTest();
+  });
+
+  it("serializes concurrent provisioning for one container", async () => {
+    const workspaceDir = makeTempDir();
+    const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`]);
+    spawnState.containerExists = false;
+    spawnState.inspectRunning = false;
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+
+    const params = {
+      scopeKey: "shared",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      cfg,
+    };
+    const [first, second] = await Promise.all([
+      ensureSandboxContainer(params),
+      ensureSandboxContainer(params),
+    ]);
+
+    expect(first).toBe("oc-test-shared");
+    expect(second).toBe(first);
+    expect(spawnState.calls.filter((call) => call.args[0] === "create")).toHaveLength(1);
+    expect(spawnState.calls.filter((call) => call.args[0] === "start")).toHaveLength(1);
+    expect(registryMocks.updateRegistry).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the canonical non-shared scope for Docker names, labels, and registry identity", async () => {
+    const workspaceDir = makeTempDir();
+    const cfg = createSandboxConfig([], [`${workspaceDir}:/workspace:rw`]);
+    cfg.scope = "agent";
+    spawnState.containerExists = false;
+    spawnState.inspectRunning = false;
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+    const scopeKey = `agent:poly:workspace:${"a".repeat(32)}`;
+
+    const createCall = await ensureSandboxCreateCallForTest({
+      cfg,
+      workspaceDir,
+      scopeKey,
+    });
+
+    const containerName = createCall.args[createCall.args.indexOf("--name") + 1];
+    expect(containerName).toMatch(/^oc-test-workspace-[a-f0-9]{32}$/);
+    expect(createCall.args).toContain(`openclaw.sessionKey=${scopeKey}`);
+    expect(registryMocks.updateRegistry.mock.calls.at(-1)?.[0]).toMatchObject({
+      containerName,
+      sessionKey: scopeKey,
+    });
   });
 
   it("recreates shared container when array-order change alters hash", async () => {
@@ -240,7 +315,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     });
 
     const containerName = await ensureSandboxContainer({
-      sessionKey: "agent:main:session-1",
+      scopeKey: "shared",
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
       cfg: newCfg,
@@ -329,7 +404,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     });
 
     await ensureSandboxContainer({
-      sessionKey: "agent:main:session-1",
+      scopeKey: "shared",
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
       cfg,
@@ -358,7 +433,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
 
     await expect(
       ensureSandboxContainer({
-        sessionKey: "agent:main:session-1",
+        scopeKey: "shared",
         workspaceDir,
         agentWorkspaceDir: workspaceDir,
         cfg,

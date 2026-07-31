@@ -194,8 +194,10 @@ export function buildWindowsPathBootstrapScript(
   options: { includeCurrentProcessPath?: boolean } = {},
 ) {
   const includeCurrentProcessPath = options.includeCurrentProcessPath !== false;
+  // setup-node provisions the supported runtime in the current process PATH. Keep it ahead of
+  // stale runner image entries while still merging newly persisted user and machine paths.
   const pathCandidates = includeCurrentProcessPath
-    ? "@($userPath, $machinePath, $env:Path)"
+    ? "@($env:Path, $userPath, $machinePath)"
     : "@($userPath, $machinePath)";
   return `
 $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
@@ -374,6 +376,23 @@ export async function runInstalledCli(params: {
     timeoutMs: params.timeoutMs,
     check: params.check ?? true,
   });
+}
+
+export async function resolveInstalledGatewayStopArgs(params: {
+  cliPath: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  logPath: string;
+}) {
+  const help = await runInstalledCli({
+    cliPath: params.cliPath,
+    args: ["gateway", "stop", "--help"],
+    cwd: params.cwd,
+    env: params.env,
+    logPath: params.logPath,
+    timeoutMs: 15_000,
+  });
+  return buildGatewayStopArgsFromHelpText(`${help.stdout}\n${help.stderr}`);
 }
 
 async function readInstalledUpdateStatus(params: {
@@ -570,6 +589,13 @@ export function buildGatewayStatusArgsFromHelpText(
     ];
   }
   return ["gateway", "status"];
+}
+
+export function buildGatewayStopArgsFromHelpText(helpText: string) {
+  if (helpText.includes("--force")) {
+    return ["gateway", "stop", "--force"];
+  }
+  return ["gateway", "stop"];
 }
 
 export function appendGatewayStatusHelpProbeFallback(logPath: string, error: unknown) {

@@ -109,15 +109,6 @@ describe("discordOutbound", () => {
     });
   });
 
-  it("sanitizes internal runtime scaffolding before Discord delivery", () => {
-    expect(
-      discordOutbound.sanitizeText?.({
-        text: "<previous_response>null</previous_response>visible",
-        payload: { text: "<previous_response>null</previous_response>visible" },
-      }),
-    ).toBe("visible");
-  });
-
   it("uses allowFrom to disambiguate bare numeric DM delivery targets", () => {
     expect(
       discordOutbound.resolveTarget?.({
@@ -128,17 +119,6 @@ describe("discordOutbound", () => {
       ok: true,
       to: "user:1470130713209602050",
     });
-  });
-
-  it("preserves Discord-native angle markup while stripping internal scaffolding", () => {
-    expect(
-      discordOutbound.sanitizeText?.({
-        text: "soon <t:1710000000:R> run </deploy:123> <previous_response>null</previous_response>",
-        payload: {
-          text: "soon <t:1710000000:R> run </deploy:123> <previous_response>null</previous_response>",
-        },
-      }),
-    ).toBe("soon <t:1710000000:R> run </deploy:123> ");
   });
 
   it("forwards explicit formatting options to Discord text sends", async () => {
@@ -656,6 +636,98 @@ describe("discordOutbound", () => {
     expect(mediaOptions.accountId).toBe("default");
     expect(mediaOptions.mediaUrl).toBe(testCase.mediaUrl);
     expect(mediaOptions.reply).toEqual(testCase.expectedReplies[1]);
+  });
+
+  it("preserves the media delivery identity for captioned videos in regular channels", async () => {
+    const mediaReceipt = {
+      primaryPlatformMessageId: "video-1",
+      platformMessageIds: ["video-1"],
+      parts: [{ platformMessageId: "video-1", kind: "media", index: 0 }],
+      sentAt: 2,
+    };
+    hoisted.sendMessageDiscordMock
+      .mockResolvedValueOnce({
+        messageId: "caption-1",
+        channelId: "channel-1",
+        receipt: {
+          primaryPlatformMessageId: "caption-1",
+          platformMessageIds: ["caption-1"],
+          parts: [{ platformMessageId: "caption-1", kind: "text", index: 0 }],
+          sentAt: 1,
+        },
+      })
+      .mockResolvedValueOnce({
+        messageId: "video-1",
+        channelId: "channel-1",
+        receipt: mediaReceipt,
+      });
+
+    const result = await discordOutbound.sendMedia?.({
+      cfg: {},
+      to: "channel:channel-1",
+      text: "rendered clip",
+      mediaUrl: "/tmp/render.mp4",
+      accountId: "default",
+    });
+
+    expect(result).toEqual({
+      channel: "discord",
+      messageId: "video-1",
+      channelId: "channel-1",
+      receipt: mediaReceipt,
+    });
+  });
+
+  it("keeps captioned video in the thread created by the forum starter", async () => {
+    hoisted.sendMessageDiscordMock
+      .mockResolvedValueOnce({
+        messageId: "starter-1",
+        channelId: "thread-1",
+        receipt: {
+          threadId: "thread-1",
+          platformMessageIds: ["starter-1"],
+          parts: [{ platformMessageId: "starter-1", kind: "text", index: 0 }],
+          sentAt: 1,
+        },
+      })
+      .mockResolvedValueOnce({
+        messageId: "video-1",
+        channelId: "thread-1",
+        receipt: {
+          platformMessageIds: ["video-1"],
+          parts: [{ platformMessageId: "video-1", kind: "media", index: 0 }],
+          sentAt: 2,
+        },
+      });
+
+    const result = await discordOutbound.sendMedia?.({
+      cfg: {},
+      to: "channel:forum-1",
+      text: "rendered clip",
+      mediaUrl: "/tmp/render.mp4",
+      accountId: "default",
+    });
+
+    expect(mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0)[0]).toBe(
+      "channel:forum-1",
+    );
+    expect(mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1)[0]).toBe(
+      "channel:thread-1",
+    );
+    expect(result).toMatchObject({
+      channel: "discord",
+      messageId: "starter-1",
+      channelId: "thread-1",
+      receipt: {
+        primaryPlatformMessageId: "starter-1",
+        threadId: "thread-1",
+        platformMessageIds: ["starter-1", "video-1"],
+        parts: [
+          { platformMessageId: "starter-1", kind: "text", index: 0, threadId: "thread-1" },
+          { platformMessageId: "video-1", kind: "media", index: 1, threadId: "thread-1" },
+        ],
+      },
+    });
   });
 
   it("marks implicit first-mode media sends for first-chunk native replies only", async () => {

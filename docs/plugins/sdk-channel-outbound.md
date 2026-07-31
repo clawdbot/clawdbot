@@ -58,10 +58,12 @@ returns.
 Optional settings include custom append delays, a `drain` option block for
 advanced drain ordering/concurrency/retry policy, an external `abortSignal`, a
 clock, pump error reporting, a stopped-error factory, and admission policy.
-The returned monitor exposes `admit`, `start`, `pause`, `stop`, `waitForIdle`,
-`isRunning`, and `isStopped`. `stop` first settles accepted admissions, then
-aborts and disposes the drain, waits for the pump and active deliveries, and
-disposes again to close the lazy-creation race.
+The returned monitor exposes `admit`, `ensureQueueAvailable`, `start`, `pause`,
+`stop`, `waitForIdle`, `isRunning`, and `isStopped`. Use the idempotent
+`ensureQueueAvailable()` check when plugin-owned migration or preparation must
+run after the queue opens but before the drain starts. `stop` first settles
+accepted admissions, then aborts and disposes the drain, waits for the pump and
+active deliveries, and disposes again to close the lazy-creation race.
 
 Keep transport-specific redaction, raw-envelope validation, non-retryable
 classification, and persisted payload shape in the plugin. Webhook transports

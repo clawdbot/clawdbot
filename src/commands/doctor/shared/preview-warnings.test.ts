@@ -315,7 +315,7 @@ vi.mock("./stale-auth-order.js", () => ({
 }));
 
 vi.mock("./active-tool-schema-warnings.js", () => ({
-  collectActiveToolSchemaProjectionWarnings: () => activeToolSchemaState.warnings,
+  collectActiveToolSchemaProjectionWarnings: async () => activeToolSchemaState.warnings,
 }));
 
 vi.mock("./codex-route-warnings.js", () => ({

@@ -100,7 +100,11 @@ async function resolveGeneratedImagePath(params: {
           }
           const mediaPath = extractMediaPathFromText(request.toolOutput);
           if (mediaPath) {
-            return mediaPath;
+            const stat = await fs.stat(mediaPath).catch(() => null);
+            // Request snapshots include previous runs; only fresh, nonempty files prove this run.
+            if (stat?.isFile() && stat.size > 0 && stat.mtimeMs >= params.startedAtMs - 1_000) {
+              return mediaPath;
+            }
           }
         }
       } catch {
@@ -119,7 +123,7 @@ async function resolveGeneratedImagePath(params: {
       entries.map(async (entry) => {
         const fullPath = path.join(mediaDir, entry);
         const stat = await fs.stat(fullPath).catch(() => null);
-        if (!stat?.isFile()) {
+        if (!stat?.isFile() || stat.size === 0) {
           return null;
         }
         return {

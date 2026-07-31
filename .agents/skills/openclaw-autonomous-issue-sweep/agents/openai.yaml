@@ -1,0 +1,4 @@
+interface:
+  display_name: "OpenClaw Autonomous Issue Sweep"
+  short_description: "Autonomously fix, refactor, land, and close issues"
+  default_prompt: "Use $openclaw-autonomous-issue-sweep to orchestrate 64 subagents through OpenClaw issues newest to oldest; reuse existing PRs, prove and land high-confidence fixes or refactors, close resolved issues, and report concise progress plus URLs."

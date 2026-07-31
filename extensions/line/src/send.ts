@@ -7,7 +7,7 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveLineAccount } from "./accounts.js";
-import { messageAction } from "./actions.js";
+import { messageAction, normalizeLineMessageActions } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import { validateLineMediaUrl } from "./outbound-media.js";
 import { createLineSendReceipt } from "./send-receipt.js";
@@ -73,6 +73,18 @@ interface LinePushBehavior {
 
 interface LineReplyBehavior {
   verboseMessage?: (messageCount: number) => string;
+}
+
+function resolveLineProviderMessageIds(
+  response: messagingApi.PushMessageResponse | messagingApi.ReplyMessageResponse,
+  operation: "push" | "reply",
+): { messageId: string; messageIds: string[] } {
+  const messageIds = response?.sentMessages?.map(({ id }) => id.trim()) ?? [];
+  const messageId = messageIds[0];
+  if (!messageId || messageIds.some((id) => !id)) {
+    throw new Error(`LINE ${operation} response did not include a sent message id`);
+  }
+  return { messageId, messageIds };
 }
 
 function normalizeTarget(to: string): string {
@@ -241,19 +253,19 @@ async function pushLineMessages(
   }
 
   const { account, client, chatId } = createLinePushContext(to, opts);
+  const normalizedMessages = messages.map(normalizeLineMessageActions);
   const pushRequest = client.pushMessage({
     to: chatId,
-    messages,
+    messages: normalizedMessages,
   });
 
-  if (behavior.errorContext) {
-    await pushRequest.catch((err: unknown) => {
-      logLineHttpError(err, behavior.errorContext!);
-      throw err;
-    });
-  } else {
-    await pushRequest;
-  }
+  const response = behavior.errorContext
+    ? await pushRequest.catch((err: unknown) => {
+        logLineHttpError(err, behavior.errorContext!);
+        throw err;
+      })
+    : await pushRequest;
+  const { messageId, messageIds } = resolveLineProviderMessageIds(response, "push");
 
   recordLineOutboundActivity(account.accountId);
 
@@ -265,10 +277,11 @@ async function pushLineMessages(
   }
 
   return {
-    messageId: "push",
+    messageId,
     chatId,
     receipt: createLineSendReceipt({
-      messageId: "push",
+      messageId,
+      messageIds,
       chatId,
       kind: resolveLineReceiptKind(messages),
       messageCount: messages.length,
@@ -281,13 +294,15 @@ async function replyLineMessages(
   messages: Message[],
   opts: LinePushOpts,
   behavior: LineReplyBehavior = {},
-): Promise<void> {
+): Promise<{ messageId: string; messageIds: string[] }> {
   const { account, client } = createLineMessagingClient(opts);
+  const normalizedMessages = messages.map(normalizeLineMessageActions);
 
-  await client.replyMessage({
+  const response = await client.replyMessage({
     replyToken,
-    messages,
+    messages: normalizedMessages,
   });
+  const result = resolveLineProviderMessageIds(response, "reply");
 
   recordLineOutboundActivity(account.accountId);
 
@@ -297,6 +312,8 @@ async function replyLineMessages(
         `line: replied with ${messages.length} messages`,
     );
   }
+
+  return result;
 }
 
 export async function sendMessageLine(
@@ -344,15 +361,16 @@ export async function sendMessageLine(
   }
 
   if (opts.replyToken) {
-    await replyLineMessages(opts.replyToken, messages, opts, {
+    const { messageId, messageIds } = await replyLineMessages(opts.replyToken, messages, opts, {
       verboseMessage: () => `line: replied to ${chatId}`,
     });
 
     return {
-      messageId: "reply",
+      messageId,
       chatId,
       receipt: createLineSendReceipt({
-        messageId: "reply",
+        messageId,
+        messageIds,
         chatId,
         kind: resolveLineReceiptKind(messages),
         messageCount: messages.length,

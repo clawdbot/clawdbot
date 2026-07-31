@@ -153,7 +153,6 @@ export type SlackMonitorContext = {
   ackReactionScope: string;
   typingReaction: string;
   mediaMaxBytes: number;
-  removeAckAfterReply: boolean;
 
   logger: ReturnType<typeof getChildLogger>;
   shouldDropMismatchedSlackEvent: (body: unknown) => boolean;
@@ -249,7 +248,6 @@ export function createSlackMonitorContext(params: {
   ackReactionScope: string;
   typingReaction: string;
   mediaMaxBytes: number;
-  removeAckAfterReply: boolean;
 }): SlackMonitorContext {
   const channelHistories = new Map<string, HistoryEntry[]>();
   const logger = getChildLogger({ module: "slack-auto-reply" });
@@ -717,7 +715,6 @@ export function createSlackMonitorContext(params: {
     ackReactionScope: params.ackReactionScope,
     typingReaction: params.typingReaction,
     mediaMaxBytes: params.mediaMaxBytes,
-    removeAckAfterReply: params.removeAckAfterReply,
     logger,
     shouldDropMismatchedSlackEvent,
     resolveSlackSystemEventSessionKey,

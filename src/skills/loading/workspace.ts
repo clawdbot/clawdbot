@@ -10,6 +10,7 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSandboxPath } from "../../agents/sandbox-paths.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
+import { isDefaultStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { resolveOsHomeDir } from "../../infra/home-dir.js";
@@ -17,6 +18,7 @@ import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveConfigDir, resolveUserPath } from "../../utils.js";
 import {
+  isSessionSkillEnabled,
   resolveEffectiveAgentSkillFilter,
   resolveEffectiveAgentSkillsLimits,
 } from "../discovery/agent-filter.js";
@@ -200,23 +202,26 @@ function filterSkillEntries(
   entries: SkillEntry[],
   config?: OpenClawConfig,
   skillFilter?: string[],
+  skillOverrides?: Readonly<Record<string, boolean>>,
   eligibility?: SkillEligibilityContext,
 ): SkillEntry[] {
   const bundledAllowlist = resolveBundledAllowlist(config);
   let filtered = entries.filter((entry) =>
     shouldIncludeSkill({ entry, config, bundledAllowlist, eligibility }),
   );
-  // If skillFilter is provided, only include skills in the filter list.
-  if (skillFilter !== undefined) {
+  if (skillFilter !== undefined || skillOverrides !== undefined) {
     const normalized = normalizeSkillFilter(skillFilter) ?? [];
     const label = normalized.length > 0 ? normalized.join(", ") : "(none)";
     skillsLogger.debug(`Applying skill filter: ${label}`);
-    if (normalized.length > 0) {
-      const allowed = new Set(normalized);
-      filtered = filtered.filter((entry) => allowed.has(entry.skill.name));
-    } else {
-      filtered = [];
-    }
+    const resolvedFilter = skillFilter === undefined ? undefined : normalized;
+    filtered = filtered.filter((entry) =>
+      isSessionSkillEnabled(
+        entry.skill.name,
+        resolvedFilter,
+        skillOverrides,
+        resolveSkillKey(entry.skill, entry),
+      ),
+    );
     skillsLogger.debug(
       `After skill filter: ${filtered.map((entry) => entry.skill.name).join(", ") || "(none)"}`,
     );
@@ -1227,12 +1232,13 @@ function loadSkillEntries(
   const personalAgentsSkillsDir = osHomeDir
     ? path.resolve(osHomeDir, ".agents", "skills")
     : path.resolve(".agents", "skills");
-  const personalAgentsSkills = workspaceOnly
-    ? []
-    : loadSkills({
-        dir: personalAgentsSkillsDir,
-        source: "agents-skills-personal",
-      });
+  const personalAgentsSkills =
+    workspaceOnly || !isDefaultStateDir()
+      ? []
+      : loadSkills({
+          dir: personalAgentsSkillsDir,
+          source: "agents-skills-personal",
+        });
   const projectAgentsSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
   const projectAgentsSkills = workspaceOnly
     ? []
@@ -1415,14 +1421,20 @@ function buildRenderedSkillsPrompt(params: {
   skills: Skill[];
   total: number;
   format: SkillsPromptFormat;
+  includeLimitNote?: boolean;
 }): string {
+  // resolveCodeModeSkills in src/agents/code-mode-skills.ts parses this exact format; update both together.
+  // The production-renderer parity test in src/agents/code-mode.test.ts enforces this coupling.
   const truncated = params.skills.length < params.total;
-  const limitNote = buildSkillsLimitNote({
-    truncated,
-    format: params.format,
-    included: params.skills.length,
-    total: params.total,
-  });
+  const limitNote =
+    params.includeLimitNote === false
+      ? ""
+      : buildSkillsLimitNote({
+          truncated,
+          format: params.format,
+          included: params.skills.length,
+          total: params.total,
+        });
   const catalog =
     params.format.kind === "compact"
       ? formatSkillsCompact(params.skills, {
@@ -1437,31 +1449,45 @@ function applySkillsPromptLimits(params: {
   config?: OpenClawConfig;
   agentId?: string;
   remoteNote?: string;
-}): {
-  skillsForPrompt: Skill[];
-  format: SkillsPromptFormat;
-} {
+}): string {
   const limits = resolveSkillsLimits(params.config, params.agentId);
   const total = params.skills.length;
   const byCount = params.skills.slice(0, Math.max(0, limits.maxSkillsInPrompt));
 
   let skillsForPrompt = byCount;
 
-  const fitsFull = (skills: Skill[]): boolean =>
-    buildRenderedSkillsPrompt({
-      remoteNote: params.remoteNote,
-      skills,
-      total,
-      format: { kind: "full" },
-    }).length <= limits.maxSkillsPromptChars;
+  const renderWithinLimit = (
+    skills: Skill[],
+    format: SkillsPromptFormat,
+    includeLimitNote = true,
+  ): string | undefined => {
+    // Optional context must disappear whole; clipping it could corrupt skill guidance or XML.
+    const remoteNotes = params.remoteNote ? [params.remoteNote, undefined] : [undefined];
+    for (const remoteNote of remoteNotes) {
+      const prompt = buildRenderedSkillsPrompt({
+        remoteNote,
+        skills,
+        total,
+        format,
+        includeLimitNote,
+      });
+      if (prompt.length <= limits.maxSkillsPromptChars) {
+        return prompt;
+      }
+    }
+    return undefined;
+  };
 
-  const fitsCompact = (skills: Skill[], descriptionMaxChars: number): boolean =>
-    buildRenderedSkillsPrompt({
-      remoteNote: params.remoteNote,
-      skills,
-      total,
-      format: { kind: "compact", descriptionMaxChars },
-    }).length <= limits.maxSkillsPromptChars;
+  const fitsFull = (skills: Skill[], includeLimitNote = true): boolean =>
+    renderWithinLimit(skills, { kind: "full" }, includeLimitNote) !== undefined;
+
+  const fitsCompact = (
+    skills: Skill[],
+    descriptionMaxChars: number,
+    includeLimitNote = true,
+  ): boolean =>
+    renderWithinLimit(skills, { kind: "compact", descriptionMaxChars }, includeLimitNote) !==
+    undefined;
 
   if (!fitsFull(skillsForPrompt)) {
     // Identity coverage takes priority over descriptions. Find the same largest
@@ -1481,13 +1507,39 @@ function applySkillsPromptLimits(params: {
       skillsForPrompt = skillsForPrompt.slice(0, lo);
     }
 
+    if (skillsForPrompt.length === 0 && byCount.length > 0) {
+      // Keep complete skill instructions ahead of a notice when only one can fit.
+      const fullWithoutNotice = renderWithinLimit(byCount, { kind: "full" }, false);
+      if (fullWithoutNotice !== undefined) {
+        return fullWithoutNotice;
+      }
+
+      let lo = 0;
+      let hi = byCount.length;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (fitsCompact(byCount.slice(0, mid), 0, false)) {
+          lo = mid;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      if (lo > 0) {
+        skillsForPrompt = byCount.slice(0, lo);
+      }
+    }
+
+    const includeLimitNote = fitsCompact(skillsForPrompt, 0);
     let descriptionMaxChars = 0;
-    if (skillsForPrompt.length > 0 && fitsCompact(skillsForPrompt, COMPACT_DESCRIPTION_MIN_CHARS)) {
+    if (
+      skillsForPrompt.length > 0 &&
+      fitsCompact(skillsForPrompt, COMPACT_DESCRIPTION_MIN_CHARS, includeLimitNote)
+    ) {
       let lo = COMPACT_DESCRIPTION_MIN_CHARS;
       let hi = COMPACT_DESCRIPTION_MAX_CHARS;
       while (lo < hi) {
         const mid = Math.ceil((lo + hi) / 2);
-        if (fitsCompact(skillsForPrompt, mid)) {
+        if (fitsCompact(skillsForPrompt, mid, includeLimitNote)) {
           lo = mid;
         } else {
           hi = mid - 1;
@@ -1495,10 +1547,16 @@ function applySkillsPromptLimits(params: {
       }
       descriptionMaxChars = lo;
     }
-    return { skillsForPrompt, format: { kind: "compact", descriptionMaxChars } };
+    return (
+      renderWithinLimit(
+        skillsForPrompt,
+        { kind: "compact", descriptionMaxChars },
+        includeLimitNote,
+      ) ?? ""
+    );
   }
 
-  return { skillsForPrompt, format: { kind: "full" } };
+  return renderWithinLimit(skillsForPrompt, { kind: "full" }) ?? "";
 }
 
 export function buildWorkspaceSkillSnapshot(
@@ -1516,6 +1574,7 @@ export function buildWorkspaceSkillSnapshot(
       requiredEnv: entry.metadata?.requires?.env?.slice(),
     })),
     ...(skillFilter === undefined ? {} : { skillFilter }),
+    ...(opts?.skillOverrides ? { skillOverrides: opts.skillOverrides } : {}),
     ...(opts?.eligibility?.nodeSkills
       ? { nodeSkillsEligibility: opts.eligibility.nodeSkills }
       : {}),
@@ -1544,6 +1603,7 @@ type WorkspaceSkillBuildOptions = {
   agentId?: string;
   /** If provided, only include skills with these names */
   skillFilter?: string[];
+  skillOverrides?: Record<string, boolean>;
   eligibility?: SkillEligibilityContext;
 };
 
@@ -1568,9 +1628,6 @@ function resolveWorkspaceSkillPromptState(
   resolvedSkills: Skill[];
 } {
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
-  if (effectiveSkillFilter !== undefined && effectiveSkillFilter.length === 0) {
-    return { eligible: [], prompt: "", resolvedSkills: [] };
-  }
   const skillEntries = opts?.entries
     ? filterArchivedSkillEntries(opts.entries)
     : mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {
@@ -1581,6 +1638,7 @@ function resolveWorkspaceSkillPromptState(
     skillEntries,
     opts?.config,
     effectiveSkillFilter,
+    opts?.skillOverrides,
     opts?.eligibility,
   );
   const promptEntries = filterPromptVisibleSkillEntries(eligible);
@@ -1593,17 +1651,11 @@ function resolveWorkspaceSkillPromptState(
   const promptSkills = compactSkillPaths(resolvedSkills).toSorted((a, b) =>
     a.name.localeCompare(b.name, "en"),
   );
-  const { skillsForPrompt, format } = applySkillsPromptLimits({
+  const prompt = applySkillsPromptLimits({
     skills: promptSkills,
     config: opts?.config,
     agentId: opts?.agentId,
     remoteNote,
-  });
-  const prompt = buildRenderedSkillsPrompt({
-    remoteNote,
-    skills: skillsForPrompt,
-    total: resolvedSkills.length,
-    format,
   });
   return { eligible, prompt, resolvedSkills };
 }
@@ -1704,6 +1756,7 @@ export function loadWorkspaceSkillEntries(
     bundledSkillsDir?: string;
     pluginSkillsDir?: string;
     skillFilter?: string[];
+    skillOverrides?: Record<string, boolean>;
     agentId?: string;
     eligibility?: SkillEligibilityContext;
     workspaceOnly?: boolean;
@@ -1715,10 +1768,20 @@ export function loadWorkspaceSkillEntries(
     node: opts?.eligibility?.nodeSkills?.node,
   });
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
-  if (effectiveSkillFilter === undefined && opts?.eligibility === undefined) {
+  if (
+    effectiveSkillFilter === undefined &&
+    opts?.skillOverrides === undefined &&
+    opts?.eligibility === undefined
+  ) {
     return entries;
   }
-  return filterSkillEntries(entries, opts?.config, effectiveSkillFilter, opts?.eligibility);
+  return filterSkillEntries(
+    entries,
+    opts?.config,
+    effectiveSkillFilter,
+    opts?.skillOverrides,
+    opts?.eligibility,
+  );
 }
 
 export function loadVisibleWorkspaceSkillEntries(
@@ -1728,6 +1791,7 @@ export function loadVisibleWorkspaceSkillEntries(
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
     skillFilter?: string[];
+    skillOverrides?: Record<string, boolean>;
     agentId?: string;
     eligibility?: SkillEligibilityContext;
   },
@@ -1737,7 +1801,13 @@ export function loadVisibleWorkspaceSkillEntries(
     node: opts?.eligibility?.nodeSkills?.node,
   });
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
-  return filterSkillEntries(entries, opts?.config, effectiveSkillFilter, opts?.eligibility);
+  return filterSkillEntries(
+    entries,
+    opts?.config,
+    effectiveSkillFilter,
+    opts?.skillOverrides,
+    opts?.eligibility,
+  );
 }
 
 function resolveUniqueSyncedSkillDirName(base: string, used: Set<string>): string {
@@ -1887,9 +1957,16 @@ export function filterWorkspaceSkillEntriesWithOptions(
   opts?: {
     config?: OpenClawConfig;
     skillFilter?: string[];
+    skillOverrides?: Record<string, boolean>;
     eligibility?: SkillEligibilityContext;
   },
 ): SkillEntry[] {
-  return filterSkillEntries(entries, opts?.config, opts?.skillFilter, opts?.eligibility);
+  return filterSkillEntries(
+    entries,
+    opts?.config,
+    opts?.skillFilter,
+    opts?.skillOverrides,
+    opts?.eligibility,
+  );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

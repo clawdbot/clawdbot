@@ -43,6 +43,9 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
       "dist/extensions/diffs/assets/viewer-runtime.js",
       "dist/extensions/discord/assets/embedded-app-sdk.mjs",
+      "dist/extensions/onepassword/onepassword-op-path.js",
+      "dist/extensions/onepassword/onepassword-secret-id.js",
+      "dist/extensions/onepassword/onepassword-secret-ref-resolver.js",
       "dist/extensions/vault/vault-secret-id.js",
       "dist/extensions/vault/vault-secret-ref-resolver.js",
     ]);
@@ -66,6 +69,9 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
       "dist/extensions/diffs/assets/viewer-runtime.js",
       "dist/extensions/discord/assets/embedded-app-sdk.mjs",
+      "dist/extensions/onepassword/onepassword-op-path.js",
+      "dist/extensions/onepassword/onepassword-secret-id.js",
+      "dist/extensions/onepassword/onepassword-secret-ref-resolver.js",
       "dist/extensions/vault/vault-secret-id.js",
       "dist/extensions/vault/vault-secret-ref-resolver.js",
     ]);
@@ -221,6 +227,28 @@ describe("runtime postbuild static assets", () => {
     await expect(fs.readFile(path.join(rootDir, runtimeAsset), "utf8")).resolves.toBe(
       "export const viewer = true;\n",
     );
+  });
+
+  it("validates every postbuild root before running any phase", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-roots-");
+    const distFile = path.join(rootDir, "dist", "keep.js");
+    const targetDir = path.join(rootDir, "gateway-runtime");
+    await fs.mkdir(path.dirname(distFile), { recursive: true });
+    await fs.mkdir(targetDir);
+    await fs.writeFile(distFile, "keep\n");
+    await fs.symlink(targetDir, path.join(rootDir, "dist-runtime"), "dir");
+
+    expect(() =>
+      runRuntimePostBuild({
+        cwd: rootDir,
+        repoRoot: rootDir,
+        rootDir,
+        timings: false,
+      }),
+    ).toThrow(/symbolic link/u);
+
+    await expect(fs.readdir(path.join(rootDir, "dist"))).resolves.toEqual(["keep.js"]);
+    await expect(fs.readFile(distFile, "utf8")).resolves.toBe("keep\n");
   });
 
   it("preserves restored dist static assets when plugin sources are absent", async () => {
@@ -407,6 +435,22 @@ describe("runtime postbuild static assets", () => {
       'export * from "./runtime-tts.runtime-AbCd1234.js";\n',
     );
     await expectPathMissing(path.join(distDir, "library.js"));
+  });
+
+  it("refuses to rewrite stable aliases through a symlinked dist root", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-symlink-");
+    const targetDir = path.join(rootDir, "gateway-dist");
+    await fs.mkdir(targetDir, { recursive: true });
+    const hashedFile = path.join(targetDir, "runtime-model-auth.runtime-XyZ987.js");
+    await fs.writeFile(hashedFile, "export const auth = true;\n", "utf8");
+    const distLink = path.join(rootDir, "dist");
+    await fs.symlink(targetDir, distLink, "dir");
+
+    expect(() => writeStableRootRuntimeAliases({ rootDir })).toThrow(/symbolic link/u);
+
+    expect(await fs.readlink(distLink)).toBe(targetDir);
+    expect(await fs.readFile(hashedFile, "utf8")).toBe("export const auth = true;\n");
+    await expectPathMissing(path.join(targetDir, "runtime-model-auth.runtime.js"));
   });
 
   it("forwards default exports through stable and legacy aliases", async () => {

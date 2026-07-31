@@ -7,7 +7,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
-import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, type SecretInput } from "../config/types.secrets.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
@@ -57,6 +56,7 @@ import { createLiveTargetMatcher } from "./live-target-matcher.js";
 import {
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
+  readLiveTestConfig,
   requiresLiveProfileCredential,
   resolveLiveCredentialPrecedence,
 } from "./live-test-helpers.js";
@@ -1704,7 +1704,7 @@ describeLive("live models (profile keys)", () => {
     async () => {
       logProgress("[live-models] loading config");
       const loadedCfg = await withLiveStageTimeout(
-        Promise.resolve().then(() => getRuntimeConfig()),
+        readLiveTestConfig(),
         "[live-models] load config",
       );
       const rawModels = process.env.OPENCLAW_LIVE_MODELS?.trim();
@@ -1752,7 +1752,7 @@ describeLive("live models (profile keys)", () => {
         ? []
         : collectProviderApiKeys("anthropic");
       if (anthropicKeys.length > 0) {
-        process.env.ANTHROPIC_API_KEY = anthropicKeys[0];
+        vi.stubEnv("ANTHROPIC_API_KEY", expectDefined(anthropicKeys[0], "Anthropic API key 1"));
         logProgress(`[live-models] anthropic keys loaded: ${anthropicKeys.length}`);
       }
 
@@ -1952,9 +1952,6 @@ describeLive("live models (profile keys)", () => {
             model.provider === "anthropic" && anthropicKeys.length > 0
               ? expectDefined(anthropicKeys[attempt], `Anthropic API key ${attempt + 1}`)
               : undefined;
-          if (anthropicApiKey) {
-            process.env.ANTHROPIC_API_KEY = anthropicApiKey;
-          }
           const apiKey = anthropicApiKey ?? requireApiKey(apiKeyInfo, model.provider);
           try {
             // Special regression: OpenAI requires replayed `reasoning` items for tool-only turns.

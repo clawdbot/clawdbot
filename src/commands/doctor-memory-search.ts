@@ -10,7 +10,7 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import {
   hasAnyAuthProfileStoreSource,
@@ -27,6 +27,10 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DoctorMemoryEmbeddingRuntimePayload } from "../gateway/server-methods/doctor.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  resolveMemoryDreamingConfig,
+  resolveMemoryDreamingPluginConfig,
+} from "../memory-host-sdk/dreaming.js";
 import {
   checkQmdBinaryAvailability,
   resolveQmdBinaryUnavailableReason,
@@ -322,6 +326,10 @@ function buildDreamingArtifactIssueNote(audit: DreamingArtifactsAuditSummary): s
 export async function noteMemoryRecallHealth(cfg: OpenClawConfig): Promise<void> {
   const scopes = resolveMemoryDoctorAgentScopes(cfg);
   const labelAgents = scopes.length > 1;
+  const dreaming = resolveMemoryDreamingConfig({
+    cfg,
+    pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
+  });
   for (const scope of scopes) {
     try {
       const context = await resolveRuntimeMemoryAuditContext(cfg, scope.agentId);
@@ -354,6 +362,15 @@ export async function noteMemoryRecallHealth(cfg: OpenClawConfig): Promise<void>
           scope.agentId,
           labelAgents,
           `Memory recall audit could not be completed: ${formatErrorMessage(err)}`,
+        ),
+        "Memory search",
+      );
+    } finally {
+      note(
+        formatAgentMessage(
+          scope.agentId,
+          labelAgents,
+          `Dreaming: ${dreaming.enabled ? "enabled" : "disabled"} (cadence ${dreaming.frequency}).`,
         ),
         "Memory search",
       );
@@ -398,7 +415,7 @@ export async function maybeRepairMemoryRecallHealth(params: {
           message: formatAgentMessage(
             scope.agentId,
             labelAgents,
-            "Normalize memory recall artifacts and remove stale promotion locks?",
+            "Remove dangling memory recalls, normalize recall artifacts, and remove stale promotion locks?",
           ),
           initialValue: true,
         });
@@ -409,6 +426,9 @@ export async function maybeRepairMemoryRecallHealth(params: {
             const details = [
               repair.removedInvalidEntries > 0
                 ? `-${repair.removedInvalidEntries} invalid entries`
+                : null,
+              (repair.removedDanglingEntries ?? 0) > 0
+                ? `-${repair.removedDanglingEntries} dangling entries`
                 : null,
               removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow entries` : null,
             ]
@@ -590,7 +610,7 @@ export async function noteMemorySearchHealth(
   opts?: MemorySearchHealthOptions,
 ): Promise<void> {
   const scopes = resolveMemoryDoctorAgentScopes(cfg);
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const labelAgents = scopes.length > 1;
   for (const scope of scopes) {
     if (opts?.includeWorkspaceMemoryHealth !== false) {

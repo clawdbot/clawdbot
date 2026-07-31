@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { removePathIfExists } from "./runtime-postbuild-shared.mjs";
 
 function relativeSymlinkTarget(sourcePath, targetPath) {
@@ -77,7 +78,7 @@ function writeJsonFile(targetPath, value) {
 
 const PRIVATE_LOCAL_ONLY_PLUGIN_SDK_DIST_FILE_NAME_FALLBACK = [
   "codex-mcp-projection.js",
-  "codex-native-task-runtime.js",
+  "codex-session-transcript-runtime.js",
   "qa-channel.js",
   "qa-channel-protocol.js",
   "qa-lab.js",
@@ -322,6 +323,8 @@ export function stageBundledPluginRuntime(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const distRoot = path.join(repoRoot, "dist");
   const runtimeRoot = path.join(repoRoot, "dist-runtime");
+  assertRealOutputRoot(distRoot);
+  assertRealOutputRoot(runtimeRoot);
   const distExtensionsRoot = path.join(distRoot, "extensions");
   const runtimeExtensionsRoot = path.join(runtimeRoot, "extensions");
 

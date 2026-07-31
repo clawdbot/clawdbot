@@ -12,7 +12,7 @@ import {
   resolveEnvelopeFormatOptions,
   resolveInboundMentionDecision,
   resolveInboundSupplementalSenderAllowed,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
   type ChannelInboundMediaInput,
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -993,7 +993,7 @@ export async function buildIMessageInboundContext(params: {
           })
         : undefined;
 
-  const media = toInboundMediaFacts(
+  const media = await toInboundMediaFactsWithMetadata(
     params.media?.facts?.map((entry) => ({ ...entry, url: entry.url ?? entry.path })),
   );
   const ctxPayload = buildChannelInboundEventContext({
@@ -1038,6 +1038,7 @@ export async function buildIMessageInboundContext(params: {
       rawBody: decision.bodyText,
       commandBody: decision.bodyText,
     },
+    sessionTranscript: { historyLimit: decision.isGroup ? params.historyLimit : 0 },
     access: {
       mentions: {
         canDetectMention: decision.isGroup,

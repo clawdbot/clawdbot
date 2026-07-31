@@ -42,7 +42,7 @@ function makeIndex(record: InstalledPluginIndex["plugins"][number]): InstalledPl
   };
 }
 
-function makeRegistry(pluginId: string): PluginManifestRegistry {
+function makeRegistry(pluginId: string, channels: string[] = [pluginId]): PluginManifestRegistry {
   return {
     plugins: [
       {
@@ -51,7 +51,7 @@ function makeRegistry(pluginId: string): PluginManifestRegistry {
         rootDir: `/app/dist/extensions/${pluginId}`,
         source: `/app/dist/extensions/${pluginId}/index.js`,
         origin: "bundled",
-        channels: [pluginId],
+        channels,
         providers: [],
         cliBackends: [],
         syntheticAuthRefs: [],
@@ -160,6 +160,83 @@ describe("listPersistedBundledPluginLocationBridges", () => {
         npmSpec: "@openclaw/diagnostics-otel",
         clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
         channelIds: ["diagnostics-otel"],
+      },
+    ]);
+  });
+
+  it.each([
+    ["byteplus", "@openclaw/byteplus-provider", true],
+    ["duckduckgo", "@openclaw/duckduckgo-plugin", false],
+    ["synthetic", "@openclaw/synthetic-provider", true],
+    ["teams-meetings", "@openclaw/teams-meetings", true],
+    ["volcengine", "@openclaw/volcengine-provider", true],
+    ["voyage", "@openclaw/voyage-provider", true],
+    ["vydra", "@openclaw/vydra-provider", true],
+    ["xiaomi", "@openclaw/xiaomi-provider", true],
+    ["zoom-meetings", "@openclaw/zoom-meetings", true],
+  ] as const)(
+    "externalizes the shipped bundled %s plugin using official install metadata",
+    async (pluginId, npmSpec, enabledByDefault) => {
+      readPersistedInstalledPluginIndexMock.mockResolvedValue(
+        makeIndex({
+          pluginId,
+          manifestPath: `/app/dist/extensions/${pluginId}/openclaw.plugin.json`,
+          manifestHash: "hash",
+          source: `/app/dist/extensions/${pluginId}/index.js`,
+          rootDir: `/app/dist/extensions/${pluginId}`,
+          origin: "bundled",
+          enabled: true,
+          ...(enabledByDefault ? { enabledByDefault: true } : {}),
+          startup: startupInfo,
+          compat: [],
+          packageInstall: {
+            warnings: [],
+          },
+        }),
+      );
+      loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue(makeRegistry(pluginId, []));
+
+      await expect(listPersistedBundledPluginLocationBridges({})).resolves.toEqual([
+        {
+          bundledPluginId: pluginId,
+          pluginId,
+          preferredSource: "npm",
+          npmSpec,
+          clawhubSpec: `clawhub:${npmSpec}`,
+          ...(enabledByDefault ? { enabledByDefault: true } : {}),
+        },
+      ]);
+    },
+  );
+
+  it("externalizes the shipped bundled ComfyUI plugin while preserving default enablement", async () => {
+    readPersistedInstalledPluginIndexMock.mockResolvedValue(
+      makeIndex({
+        pluginId: "comfy",
+        manifestPath: "/app/dist/extensions/comfy/openclaw.plugin.json",
+        manifestHash: "hash",
+        source: "/app/dist/extensions/comfy/index.js",
+        rootDir: "/app/dist/extensions/comfy",
+        origin: "bundled",
+        enabled: true,
+        enabledByDefault: true,
+        startup: startupInfo,
+        compat: [],
+        packageInstall: {
+          warnings: [],
+        },
+      }),
+    );
+    loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue(makeRegistry("comfy", []));
+
+    await expect(listPersistedBundledPluginLocationBridges({})).resolves.toEqual([
+      {
+        bundledPluginId: "comfy",
+        pluginId: "comfy",
+        preferredSource: "npm",
+        npmSpec: "@openclaw/comfy-provider",
+        clawhubSpec: "clawhub:@openclaw/comfy-provider",
+        enabledByDefault: true,
       },
     ]);
   });

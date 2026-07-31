@@ -264,7 +264,7 @@ describe("detectChangedScope", () => {
       "scripts/ios-write-swift-filelist.mjs",
       "scripts/ios-version.ts",
       "scripts/lib/ios-version.ts",
-      "scripts/lib/npm-publish-plan.mjs",
+      "scripts/lib/release-version.mjs",
       "scripts/lib/version-script-args.ts",
     ]) {
       expect(detectChangedScope([helperPath])).toEqual({
@@ -365,7 +365,7 @@ describe("detectChangedScope", () => {
     });
   });
 
-  it("keeps native platform lanes scoped when the CI workflow changes", () => {
+  it("runs CI-owned platform lanes when the CI workflow changes", () => {
     expect(detectChangedScope([".github/workflows/ci.yml"])).toEqual({
       runNode: true,
       runMacos: false,
@@ -375,7 +375,7 @@ describe("detectChangedScope", () => {
       runSkillsPython: false,
       runChangedSmoke: false,
       runControlUiI18n: false,
-      runUiTests: false,
+      runUiTests: true,
     });
   });
 

@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   runSubagentAnnounceFlow: vi.fn().mockResolvedValue(false),
   captureSubagentCompletionReply: vi.fn(),
   loadSubagentRegistryFromSqlite: vi.fn(() => new Map()),
+  saveSubagentRegistryChangesToSqlite: vi.fn(),
   saveSubagentRegistryToSqlite: vi.fn(),
   resolveAgentTimeoutMs: vi.fn(() => 60_000),
   scheduleOrphanRecovery: vi.fn(),
@@ -41,13 +42,19 @@ vi.mock("../config/sessions.js", () => ({
   updateSessionStore: mocks.updateSessionStore,
 }));
 
-vi.mock("../config/sessions/session-accessor.js", () => ({
-  listSessionEntries: () =>
-    Object.entries(sessionStore).map(([sessionKey, entry]) => ({ sessionKey, entry })),
-  loadSessionEntry: (scope: { sessionKey: keyof typeof sessionStore }) =>
-    sessionStore[scope.sessionKey],
-  patchSessionEntry: async () => null,
-}));
+vi.mock("../config/sessions/session-accessor.js", () => {
+  const listSessionEntries = () =>
+    Object.entries(sessionStore).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+  const loadSessionEntry = (scope: { sessionKey: keyof typeof sessionStore }) =>
+    sessionStore[scope.sessionKey];
+  return {
+    listSessionEntries,
+    listSessionEntriesReadOnly: listSessionEntries,
+    loadSessionEntry,
+    loadSessionEntryReadOnly: loadSessionEntry,
+    patchSessionEntry: async () => null,
+  };
+});
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
@@ -62,6 +69,7 @@ vi.mock("../infra/agent-events.js", () => ({
 
 vi.mock("./subagent-registry.store.sqlite.js", () => ({
   loadSubagentRegistryFromSqlite: mocks.loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryChangesToSqlite: mocks.saveSubagentRegistryChangesToSqlite,
   saveSubagentRegistryToSqlite: mocks.saveSubagentRegistryToSqlite,
 }));
 
@@ -125,6 +133,7 @@ describe("announce loop guard (#18264)", () => {
     mocks.runSubagentAnnounceFlow.mockReset();
     mocks.runSubagentAnnounceFlow.mockResolvedValue(false);
     mocks.scheduleOrphanRecovery.mockClear();
+    mocks.saveSubagentRegistryChangesToSqlite.mockClear();
     mocks.saveSubagentRegistryToSqlite.mockClear();
     mocks.updateSessionStore.mockClear();
     registry.resetSubagentRegistryForTests({ persist: false });
@@ -215,6 +224,9 @@ describe("announce loop guard (#18264)", () => {
 
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expect(entry.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeInit);
+    expect(mocks.saveSubagentRegistryChangesToSqlite).toHaveBeenCalledWith(expect.any(Map), [
+      entry.runId,
+    ]);
   });
 
   test("expired completion-message entries are still resumed for announce", async () => {

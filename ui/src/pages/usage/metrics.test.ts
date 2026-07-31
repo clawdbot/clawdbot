@@ -358,6 +358,34 @@ describe("usage mosaic token buckets", () => {
     expect(container.querySelector(".usage-mosaic-total")?.textContent).toContain("10.0K");
   });
 
+  it("renders named, focusable hour toggles and preserves shift selection", () => {
+    const session = makeSessionWithTokenBuckets([
+      { date: "2026-02-01", quarterIndex: 40, totalTokens: 10_000 },
+    ]);
+    const onSelectHour = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(renderUsageMosaic([session], "utc", [10], onSelectHour), container);
+
+    const cells = container.querySelectorAll<HTMLButtonElement>(".usage-hour-cell");
+    const selectedHour = cells[10];
+    const unselectedHour = cells[11];
+    expect(selectedHour).toBeInstanceOf(HTMLButtonElement);
+    expect(selectedHour?.type).toBe("button");
+    expect(selectedHour?.getAttribute("aria-label")).toBe("10:00 · 10.0K tokens");
+    expect(selectedHour?.getAttribute("aria-pressed")).toBe("true");
+    expect(unselectedHour?.getAttribute("aria-pressed")).toBe("false");
+
+    selectedHour?.focus();
+    expect(document.activeElement).toBe(selectedHour);
+    selectedHour?.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+    expect(onSelectHour).toHaveBeenCalledWith(10, true);
+    unselectedHour?.click();
+    expect(onSelectHour).toHaveBeenCalledWith(11, false);
+
+    container.remove();
+  });
+
   it("renders precise UTC buckets in their local hour", () => {
     vi.spyOn(Date.prototype, "getHours").mockImplementation(function (this: Date) {
       return (this.getUTCHours() + 8) % 24;

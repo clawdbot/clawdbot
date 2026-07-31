@@ -44,6 +44,7 @@ Make display-name pings work even when WhatsApp strips the visual `@` from the t
   agents: {
     entries: {
       main: {
+        default: true,
         groupChat: {
           mentionPatterns: ["@?openclaw", "\\+?15555550123"],
         },

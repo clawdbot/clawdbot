@@ -1,3 +1,4 @@
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   XAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX,
@@ -6,6 +7,8 @@ import {
   type XaiRealtimeEvent,
 } from "./realtime-voice-config.js";
 import { XaiRealtimeVoiceProtocol } from "./realtime-voice-protocol.js";
+
+export class XaiRealtimeMalformedAudioError extends Error {}
 
 export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
   private assistantTranscriptBuffer = "";
@@ -70,7 +73,13 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
         if (!audioDelta) {
           return;
         }
-        this.config.onAudio(Buffer.from(audioDelta, "base64"));
+        const canonicalAudio = canonicalizeBase64(audioDelta);
+        if (!canonicalAudio) {
+          throw new XaiRealtimeMalformedAudioError(
+            "xAI realtime voice stream returned malformed base64 audio data",
+          );
+        }
+        this.config.onAudio(Buffer.from(canonicalAudio, "base64"));
         if (event.item_id && event.item_id !== this.lastAssistantItemId) {
           this.lastAssistantItemId = event.item_id;
           this.responseStartTimestamp = this.latestMediaTimestamp;
@@ -91,9 +100,15 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
           this.appendAssistantTranscriptDelta(event.delta);
         }
         return;
+      case "response.text.done":
       case "response.output_text.done":
       case "response.output_audio_transcript.done":
         this.flushAssistantTranscript(event.transcript ?? event.text);
+        return;
+      case "conversation.item.input_audio_transcription.delta":
+        if (event.delta) {
+          this.config.onTranscript?.("user", event.delta, false);
+        }
         return;
       case "conversation.item.input_audio_transcription.updated":
         if (event.transcript) {
@@ -109,6 +124,10 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
         }
         return;
       }
+      case "conversation.item.input_audio_transcription.failed":
+        this.inputTranscriptReplacements.delete(this.inputTranscriptKey(event));
+        this.config.onError?.(new Error(readXaiRealtimeErrorDetail(event.error)));
+        return;
       case "response.done":
         this.flushAssistantTranscript();
         this.responseActive = false;
@@ -137,7 +156,8 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
           itemId: event.item_id,
           callId: buffered?.callId || event.call_id,
           name: buffered?.name || event.name,
-          rawArgs: buffered?.args || event.arguments,
+          // The done payload owns the final JSON; streamed chunks may be stale or incomplete.
+          rawArgs: event.arguments ?? buffered?.args,
         });
         this.toolCallBuffers.delete(key);
         return;
@@ -200,7 +220,10 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
   }
 
   private describeServerEvent(event: XaiRealtimeEvent): string | undefined {
-    if (event.type === "error") {
+    if (
+      event.type === "error" ||
+      event.type === "conversation.item.input_audio_transcription.failed"
+    ) {
       return readXaiRealtimeErrorDetail(event.error);
     }
     if (event.type !== "response.done") {

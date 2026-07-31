@@ -4,6 +4,10 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import {
+  resolveChannelSetupFieldCliAttributeName,
+  type ChannelSetupFieldMetadata,
+} from "../channels/plugins/setup-contract.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import type { PluginCandidate } from "./discovery.js";
@@ -434,6 +438,75 @@ function normalizePackageChannelCliOptions(
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizePackageChannelSetup(setup: unknown): PluginPackageChannel["setup"] | undefined {
+  if (!isRecord(setup) || !Array.isArray(setup.fields)) {
+    return undefined;
+  }
+  const fields: ChannelSetupFieldMetadata[] = [];
+  for (const value of setup.fields) {
+    if (!isRecord(value) || !isRecord(value.cli)) {
+      continue;
+    }
+    const key = normalizeOptionalString(value.key);
+    const kind = normalizeOptionalString(value.kind);
+    const flags = normalizeOptionalString(value.cli.flags);
+    const negatedFlags = normalizeOptionalString(value.cli.negatedFlags);
+    const description = normalizeOptionalString(value.cli.description);
+    if (
+      !key ||
+      !flags ||
+      !description ||
+      !kind ||
+      (kind !== "string" &&
+        kind !== "boolean" &&
+        kind !== "integer" &&
+        kind !== "string-list" &&
+        kind !== "choice")
+    ) {
+      continue;
+    }
+    try {
+      if (
+        resolveChannelSetupFieldCliAttributeName(flags) !== key ||
+        (negatedFlags && resolveChannelSetupFieldCliAttributeName(negatedFlags) !== key)
+      ) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+    const defaultValue =
+      typeof value.cli.defaultValue === "boolean" || typeof value.cli.defaultValue === "string"
+        ? value.cli.defaultValue
+        : undefined;
+    const cli = {
+      flags,
+      ...(negatedFlags ? { negatedFlags } : {}),
+      description,
+      ...(defaultValue !== undefined ? { defaultValue } : {}),
+    };
+    if (kind === "choice") {
+      const choices = normalizeOptionalTrimmedStringList(value.choices);
+      if (!choices?.length) {
+        continue;
+      }
+      fields.push({ key, kind, choices, cli });
+      continue;
+    }
+    if (kind === "string" || kind === "string-list") {
+      fields.push({
+        key,
+        kind,
+        ...(value.sensitive === true ? { sensitive: true } : {}),
+        cli,
+      });
+      continue;
+    }
+    fields.push({ key, kind, cli });
+  }
+  return { fields };
+}
+
 function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -497,6 +570,10 @@ function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel 
   const doctorCapabilities = normalizePackageChannelDoctorCapabilities(value.doctorCapabilities);
   if (doctorCapabilities) {
     channel.doctorCapabilities = doctorCapabilities;
+  }
+  const setup = normalizePackageChannelSetup(value.setup);
+  if (setup) {
+    channel.setup = setup;
   }
   const cliAddOptions = normalizePackageChannelCliOptions(value.cliAddOptions);
   if (cliAddOptions) {

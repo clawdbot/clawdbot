@@ -110,7 +110,6 @@ export const TARGET_KEYS = [
   "agents.defaults.typingMode",
   "agents.defaults.typingIntervalSeconds",
   "agents.entries.*.typingMode",
-  "agents.entries.*.typingIntervalSeconds",
   "session.mainKey",
   "session.sendPolicy",
   "session.sendPolicy.default",
@@ -307,6 +306,8 @@ export const TARGET_KEYS = [
   "plugins.entries.*.llm",
   "plugins.entries.*.llm.allowModelOverride",
   "plugins.entries.*.llm.allowedModels",
+  "plugins.entries.*.llm.allowedCompletionModels",
+  "plugins.entries.*.llm.allowAuthProfileOverride",
   "plugins.entries.*.llm.allowAgentIdOverride",
   "plugins.entries.*.apiKey",
   "plugins.entries.*.env",
@@ -341,7 +342,6 @@ export const TARGET_KEYS = [
   "agents.defaults.compaction.postCompactionSections",
   "agents.defaults.compaction.timeoutSeconds",
   "agents.defaults.compaction.model",
-  "agents.defaults.compaction.truncateAfterCompaction",
   "agents.defaults.compaction.maxActiveTranscriptBytes",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",
@@ -350,6 +350,7 @@ export const TARGET_KEYS = [
 ] as const;
 
 export const ENUM_EXPECTATIONS: Record<string, string[]> = {
+  "skills.workshop.autonomous.mode": ['"off"', '"propose"', '"auto"'],
   "memory.citations": ['"auto"', '"on"', '"off"'],
   "memory.backend": ['"builtin"', '"qmd"'],
   "memory.qmd.searchMode": ['"query"', '"search"', '"vsearch"'],
@@ -498,7 +499,6 @@ export const FINAL_BACKLOG_TARGET_KEYS = [
   "skills.load.allowSymlinkTargets",
   "skills.load.extraDirs",
   "skills.load.watch",
-  "skills.load.watchDebounceMs",
   "skills.workshop.allowSymlinkTargetWrites",
   "ui.assistant.avatar",
   "ui.assistant.name",

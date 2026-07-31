@@ -146,6 +146,7 @@ describe("doctor session state provider routes", () => {
         providerOverride: "openai-codex",
         modelOverride: "gpt-5.4",
         modelOverrideSource: "auto",
+        modelOverrideRouteResolution: "resolved",
         modelProvider: "openai-codex",
         model: "gpt-5.4",
         contextTokens: 1_050_000,
@@ -171,6 +172,7 @@ describe("doctor session state provider routes", () => {
     expect(result.changes.join("\n")).toContain("Cleared stale Codex session routing state");
     expect(repaired.providerOverride).toBeUndefined();
     expect(repaired.modelOverride).toBeUndefined();
+    expect(repaired.modelOverrideRouteResolution).toBeUndefined();
     expect(repaired.modelProvider).toBeUndefined();
     expect(repaired.agentHarnessId).toBeUndefined();
     expect(repaired.authProfileOverride).toBeUndefined();

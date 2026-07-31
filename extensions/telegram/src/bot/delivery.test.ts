@@ -932,35 +932,73 @@ describe("deliverReplies", () => {
     });
   });
 
-  it("falls back to a plain media caption when Telegram rejects caption HTML", async () => {
+  it("keeps formatted media replies within Telegram's parsed-caption limit", async () => {
     const runtime = createRuntime();
-    const sendPhoto = vi
-      .fn()
-      .mockRejectedValueOnce(createHtmlParseError("sendPhoto"))
-      .mockResolvedValueOnce({
-        message_id: 3,
-        chat: { id: "123" },
-      });
-    const bot = createBot({ sendPhoto });
+    const visibleCaption = "x".repeat(1022);
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 2, chat: { id: "123" } });
+    const sendMessage = vi.fn();
+    const bot = createBot({ sendPhoto, sendMessage });
 
     mockMediaLoad("photo.jpg", "image/jpeg", "image");
 
     await deliverWith({
-      replies: [{ mediaUrl: "https://example.com/photo.jpg", text: "hi **boss**" }],
+      replies: [{ mediaUrl: "https://example.com/photo.jpg", text: `**${visibleCaption}**` }],
       runtime,
       bot,
     });
 
-    expect(sendPhoto).toHaveBeenCalledTimes(2);
     expectRecordFields(mockCallArg(sendPhoto, 0, 2), {
-      caption: "hi <b>boss</b>",
+      caption: `<b>${visibleCaption}</b>`,
       parse_mode: "HTML",
     });
-    expectRecordFields(mockCallArg(sendPhoto, 1, 2), {
-      caption: "hi **boss**",
-    });
-    expect(mockCallArg(sendPhoto, 1, 2)).not.toHaveProperty("parse_mode");
+    expect(sendMessage).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      kind: "ordinary Markdown",
+      caption: "hi **boss**",
+      htmlCaption: "hi <b>boss</b>",
+      plainCaption: "hi **boss**",
+    },
+    {
+      kind: "markup-heavy Markdown",
+      caption: `**${"x".repeat(1022)}**`,
+      htmlCaption: `<b>${"x".repeat(1022)}</b>`,
+      plainCaption: "x".repeat(1022),
+    },
+  ])(
+    "falls back to a valid $kind media caption when Telegram rejects HTML",
+    async ({ caption, htmlCaption, plainCaption }) => {
+      const runtime = createRuntime();
+      const sendPhoto = vi
+        .fn()
+        .mockRejectedValueOnce(createHtmlParseError("sendPhoto"))
+        .mockResolvedValueOnce({
+          message_id: 3,
+          chat: { id: "123" },
+        });
+      const bot = createBot({ sendPhoto });
+
+      mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+      await deliverWith({
+        replies: [{ mediaUrl: "https://example.com/photo.jpg", text: caption }],
+        runtime,
+        bot,
+      });
+
+      expect(sendPhoto).toHaveBeenCalledTimes(2);
+      expectRecordFields(mockCallArg(sendPhoto, 0, 2), {
+        caption: htmlCaption,
+        parse_mode: "HTML",
+      });
+      expectRecordFields(mockCallArg(sendPhoto, 1, 2), {
+        caption: plainCaption,
+      });
+      expect(mockCallArg(sendPhoto, 1, 2)).not.toHaveProperty("parse_mode");
+    },
+  );
 
   it("passes probed dimensions to video reply sends", async () => {
     const runtime = createRuntime();

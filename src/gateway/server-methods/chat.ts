@@ -2,7 +2,6 @@
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateChatInjectParams,
   validateChatToolTitlesParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -14,7 +13,11 @@ import {
   projectChatDisplayMessage,
   resolveEffectiveChatHistoryMaxChars,
 } from "../chat-display-projection.js";
-import { loadSessionEntry, resolveSessionModelRef } from "../session-utils.js";
+import {
+  loadSessionEntry,
+  loadSessionEntryReadOnly,
+  resolveSessionModelRef,
+} from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { sendGlobalAwareNodeChatPayload } from "./chat-broadcast.js";
@@ -25,6 +28,7 @@ import { handleChatSend } from "./chat-send-handler.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 export {
   augmentChatHistoryWithCanvasBlocks,
@@ -45,15 +49,7 @@ export const chatHandlers: GatewayRequestHandlers = {
   ...chatHistoryHandlers,
   ...chatMessageGetHandlers,
   "chat.toolTitles": async ({ params, respond, context }) => {
-    if (!validateChatToolTitlesParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid chat.toolTitles params: ${formatValidationErrors(validateChatToolTitlesParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateChatToolTitlesParams, "chat.toolTitles", respond)) {
       return;
     }
     const cfg = context.getRuntimeConfig();
@@ -88,7 +84,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       // Session entry carries per-session model overrides; utility routing must
       // derive its small-model default from the provider this session actually
       // uses, not the agent's configured default.
-      const { cfg: sessionCfg, entry } = loadSessionEntry(
+      const { cfg: sessionCfg, entry } = loadSessionEntryReadOnly(
         params.sessionKey,
         selectedAgent.agentId ? { agentId: selectedAgent.agentId } : undefined,
       );
@@ -111,15 +107,7 @@ export const chatHandlers: GatewayRequestHandlers = {
   "chat.abort": handleChatAbortRequest,
   "chat.send": handleChatSend,
   "chat.inject": async ({ params, respond, context }) => {
-    if (!validateChatInjectParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid chat.inject params: ${formatValidationErrors(validateChatInjectParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateChatInjectParams, "chat.inject", respond)) {
       return;
     }
     const p = params as {
@@ -191,7 +179,6 @@ export const chatHandlers: GatewayRequestHandlers = {
               label: p.label,
               sessionId,
               storePath,
-              sessionFile: entry.sessionFile,
               agentId,
               createIfMissing: true,
               cfg,

@@ -6,51 +6,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { createAbortError } from "./abort-signal.js";
 import { hasInvalidLifecycleStartTimestamp } from "./agent-event-lifecycle.js";
-
-/** Stream name for agent events delivered to gateway listeners and plugin host hooks. */
-export type AgentEventStream =
-  | "lifecycle"
-  | "tool"
-  | "assistant"
-  | "error"
-  | "item"
-  | "plan"
-  | "approval"
-  | "command_output"
-  | "patch"
-  | "compaction"
-  | "thinking"
-  | (string & {});
-
-/** Lifecycle phase for a visible item in the agent activity feed. */
-type AgentItemEventPhase = "start" | "update" | "end";
-/** Status rendered for an item-level agent activity event. */
-type AgentItemEventStatus = "running" | "completed" | "failed" | "blocked";
-/** Item category used by channels and Control UI to choose progress presentation. */
-type AgentItemEventKind = "tool" | "command" | "patch" | "search" | "analysis" | (string & {});
-
-/** Payload for a single item shown in the agent activity stream. */
-export type AgentItemEventData = {
-  itemId: string;
-  phase: AgentItemEventPhase;
-  kind: AgentItemEventKind;
-  title: string;
-  status: AgentItemEventStatus;
-  name?: string;
-  meta?: string;
-  toolCallId?: string;
-  startedAt?: number;
-  endedAt?: number;
-  error?: string;
-  summary?: string;
-  progressText?: string;
-  /** Preserve item telemetry while letting channel progress render a sibling tool event instead. */
-  suppressChannelProgress?: boolean;
-  /** Preserve activity telemetry without rendering this internal item in channel progress. */
-  hideFromChannelProgress?: boolean;
-  approvalId?: string;
-  approvalSlug?: string;
-};
+import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
 
 /** Approval event phase for request/resolution transitions. */
 type AgentApprovalEventPhase = "requested" | "resolved";
@@ -76,32 +32,21 @@ export type AgentApprovalEventData = {
   message?: string;
 };
 
-/** Incremental command output payload associated with an item/tool call. */
-export type AgentCommandOutputEventData = {
-  itemId: string;
-  phase: "delta" | "end";
-  title: string;
-  toolCallId: string;
-  name?: string;
-  output?: string;
-  status?: AgentItemEventStatus | "running";
-  exitCode?: number | null;
-  durationMs?: number;
-  cwd?: string;
-};
-
-/** Patch summary payload emitted after an agent applies file changes. */
-export type AgentPatchSummaryEventData = {
-  itemId: string;
-  phase: "end";
-  title: string;
-  toolCallId: string;
-  name?: string;
-  added: string[];
-  modified: string[];
-  deleted: string[];
-  summary: string;
-};
+/** Stream name for agent events delivered to gateway listeners and plugin host hooks. */
+export type AgentEventStream =
+  | "lifecycle"
+  | "tool"
+  | "assistant"
+  | "usage"
+  | "error"
+  | "item"
+  | "plan"
+  | "approval"
+  | "command_output"
+  | "patch"
+  | "compaction"
+  | "thinking"
+  | (string & {});
 
 /** Enriched event delivered to subscribers after sequencing and context stamping. */
 export type AgentEventPayload = {
@@ -127,6 +72,7 @@ export type AgentEventRuntimePayload = AgentEventPayload & {
   readonly controlUiVisible?: boolean;
   readonly contextClaimId?: string;
   readonly deliverySessionKey?: string;
+  readonly projectSessionLifecycle?: boolean;
 };
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
@@ -143,6 +89,8 @@ type AgentRunContext = {
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
   projectSessionActive?: boolean;
+  /** Whether lifecycle events may update the shared session row. */
+  projectSessionLifecycle?: boolean;
   /** Active cadence state by job; admission permits one invocation per job. */
   cronRunsByJobId?: Map<string, { pacingEnabled: boolean; nextCheckMs?: number }>;
   /** Timestamp when this context was first registered (for TTL-based cleanup). */
@@ -326,6 +274,9 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext,
   if (context.projectSessionActive !== undefined) {
     existing.projectSessionActive = context.projectSessionActive;
   }
+  if (context.projectSessionLifecycle !== undefined) {
+    existing.projectSessionLifecycle = context.projectSessionLifecycle;
+  }
   if (context.cronRunsByJobId !== undefined) {
     existing.cronRunsByJobId ??= new Map();
     for (const [jobId, cronRun] of context.cronRunsByJobId) {
@@ -431,6 +382,7 @@ export function claimAgentRunContext(
     registeredAt: context.registeredAt ?? Date.now(),
   });
   state.seqByRun.delete(runId);
+  clearAgentRunUsage(runId);
   return claimId;
 }
 
@@ -506,24 +458,42 @@ export function listAgentRunsForSession(params: {
   );
 }
 
+export type ProjectedAgentRunIndex = {
+  sessionKeys: ReadonlySet<string>;
+  sessionIds: ReadonlySet<string>;
+};
+
+export function buildProjectedAgentRunIndex(): ProjectedAgentRunIndex {
+  const state = getAgentEventState();
+  const sessionKeys = new Set<string>();
+  const sessionIds = new Set<string>();
+  for (const context of state.runContextById.values()) {
+    if (
+      context.projectSessionActive !== true ||
+      context.lifecycleGeneration !== state.lifecycleGeneration
+    ) {
+      continue;
+    }
+    if (context.sessionKey !== undefined) {
+      sessionKeys.add(context.sessionKey);
+    }
+    if (context.sessionId !== undefined) {
+      sessionIds.add(context.sessionId);
+    }
+  }
+  return { sessionKeys, sessionIds };
+}
+
 export function hasProjectedAgentRunForSession(params: {
   sessionKeys: readonly string[];
   sessionId?: string;
+  index?: ProjectedAgentRunIndex;
 }): boolean {
-  const lifecycleGeneration = getAgentEventState().lifecycleGeneration;
-  for (const context of getAgentEventState().runContextById.values()) {
-    const matches =
-      (context.sessionKey !== undefined && params.sessionKeys.includes(context.sessionKey)) ||
-      (params.sessionId !== undefined && context.sessionId === params.sessionId);
-    if (
-      matches &&
-      context.projectSessionActive === true &&
-      context.lifecycleGeneration === lifecycleGeneration
-    ) {
-      return true;
-    }
-  }
-  return false;
+  const index = params.index ?? buildProjectedAgentRunIndex();
+  return (
+    params.sessionKeys.some((sessionKey) => index.sessionKeys.has(sessionKey)) ||
+    (params.sessionId !== undefined && index.sessionIds.has(params.sessionId))
+  );
 }
 
 /** Clears context and sequence state for a run that has ended or been discarded. */
@@ -561,6 +531,7 @@ export function clearAgentRunContext(
   }
   state.runContextById.delete(runId);
   state.seqByRun.delete(runId);
+  clearAgentRunUsage(runId, lifecycleGeneration ?? existing?.lifecycleGeneration);
 }
 
 /** Releases one tracked owner and clears its context after the final owner exits. */
@@ -603,6 +574,7 @@ export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
     if (age > maxAgeMs) {
       state.runContextById.delete(runId);
       state.seqByRun.delete(runId);
+      clearAgentRunUsage(runId, ctx.lifecycleGeneration);
       getAgentRunContextOwners(state).delete(runId);
       swept++;
     }
@@ -693,6 +665,12 @@ function enrichAgentEvent(
       enumerable: false,
     });
   }
+  if (context?.projectSessionLifecycle !== undefined) {
+    Object.defineProperty(enriched, "projectSessionLifecycle", {
+      value: context.projectSessionLifecycle,
+      enumerable: false,
+    });
+  }
   if (claimId !== undefined) {
     Object.defineProperty(enriched, "contextClaimId", {
       value: claimId,
@@ -708,12 +686,19 @@ function enrichAgentEvent(
   return enriched;
 }
 
+/** Emits an event only when its run ownership is still current. */
+export function emitAgentEventIfCurrent(event: Omit<AgentEventPayload, "seq" | "ts">): boolean {
+  const enriched = enrichAgentEvent(event);
+  if (!enriched) {
+    return false;
+  }
+  notifyListeners(getAgentEventState().listeners, enriched);
+  return true;
+}
+
 /** Emits an agent event after assigning per-run sequence, timestamp, and context metadata. */
 export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
-  const enriched = enrichAgentEvent(event);
-  if (enriched) {
-    notifyListeners(getAgentEventState().listeners, enriched);
-  }
+  emitAgentEventIfCurrent(event);
 }
 
 export function emitAgentEventForOwner(
@@ -741,62 +726,6 @@ export function emitAgentAuditEvent(event: Omit<AgentEventPayload, "seq" | "ts">
   }
 }
 
-/** Emits an item activity event on the shared agent event bus. */
-export function emitAgentItemEvent(params: {
-  runId: string;
-  data: AgentItemEventData;
-  sessionKey?: string;
-}) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "item",
-    data: params.data as unknown as Record<string, unknown>,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
-}
-
-/** Emits an approval event on the shared agent event bus. */
-export function emitAgentApprovalEvent(params: {
-  runId: string;
-  data: AgentApprovalEventData;
-  sessionKey?: string;
-}) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "approval",
-    data: params.data as unknown as Record<string, unknown>,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
-}
-
-/** Emits command output for a running or completed item/tool call. */
-export function emitAgentCommandOutputEvent(params: {
-  runId: string;
-  data: AgentCommandOutputEventData;
-  sessionKey?: string;
-}) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "command_output",
-    data: params.data as unknown as Record<string, unknown>,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
-}
-
-/** Emits a patch summary for a completed file-editing item/tool call. */
-export function emitAgentPatchSummaryEvent(params: {
-  runId: string;
-  data: AgentPatchSummaryEventData;
-  sessionKey?: string;
-}) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "patch",
-    data: params.data as unknown as Record<string, unknown>,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
-}
-
 /** Subscribes to sequenced agent events; returns an unsubscribe callback. */
 export function onAgentEvent(listener: (evt: AgentEventPayload) => void) {
   const state = getAgentEventState();
@@ -817,6 +746,7 @@ export function onAgentAuditEvent(listener: (evt: AgentEventPayload) => void) {
 export function resetAgentEventsForTest(options?: { preserveListeners?: boolean }) {
   const state = getAgentEventState();
   state.seqByRun.clear();
+  resetAgentRunUsageForTest();
   if (!options?.preserveListeners) {
     state.listeners.clear();
     state.auditListeners.clear();

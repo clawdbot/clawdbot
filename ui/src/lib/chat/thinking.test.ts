@@ -88,4 +88,40 @@ describe("chat thinking helpers", () => {
 
     expect(state.options.map((option) => option.value)).not.toContain("ultra");
   });
+
+  it("uses identical reasoning options for a canonical default and explicit selection", () => {
+    const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map(
+      (id) => ({ id, label: id }),
+    );
+    const defaults = {
+      modelProvider: "openai",
+      model: "gpt-5.6-sol",
+      contextTokens: null,
+      thinkingLevels,
+      thinkingOptions: thinkingLevels.map((level) => level.label),
+      thinkingDefault: "medium",
+    };
+    const inherited = resolveChatThinkingSelectState({
+      catalog: [{ provider: "openai", id: "gpt-5.6-sol", reasoning: true }],
+      defaults,
+      sessionKey: "new-session:main",
+      session: { key: "new-session:main", kind: "direct", updatedAt: null },
+      sessionsResult: null,
+    });
+    const explicit = resolveChatThinkingSelectState({
+      catalog: [{ provider: "openai", id: "gpt-5.6-sol", reasoning: true }],
+      defaults,
+      sessionKey: "new-session:main",
+      session: {
+        key: "new-session:main",
+        kind: "direct",
+        updatedAt: null,
+        modelProvider: "openai",
+        model: "gpt-5.6-sol",
+      },
+      sessionsResult: null,
+    });
+
+    expect(explicit).toEqual(inherited);
+  });
 });

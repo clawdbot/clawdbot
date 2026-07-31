@@ -137,7 +137,8 @@ vi.mock("../agents/agent-scope.js", () => ({
     agents?: { list?: Array<{ id?: string; default?: boolean }> };
   }) =>
     cfg?.agents?.list?.find((agent) => agent.default)?.id ?? cfg?.agents?.list?.[0]?.id ?? "main",
-  resolveSessionAgentId: () => "main",
+  resolveSessionAgentId: (params: { sessionKey?: string; agentId?: string }) =>
+    params.agentId ?? /^agent:([^:]+):/.exec(params.sessionKey ?? "")?.[1] ?? "main",
 }));
 
 vi.mock("../agents/runtime-plugins.js", () => ({
@@ -208,6 +209,8 @@ vi.mock("../gateway/session-utils.js", () => ({
   loadCombinedSessionStoreForGateway: (...args: unknown[]) =>
     loadCombinedSessionStoreForGatewayMock(...args),
   loadSessionEntry: (sessionKey: string, opts?: { agentId?: string }) =>
+    loadSessionEntryMock(sessionKey, opts),
+  loadSessionEntryReadOnly: (sessionKey: string, opts?: { agentId?: string }) =>
     loadSessionEntryMock(sessionKey, opts),
   migrateAndPruneGatewaySessionStoreKey: ({ key }: { key: string }) => ({
     primaryKey: key,
@@ -468,6 +471,8 @@ describe("EmbeddedTuiBackend", () => {
         event: "agent",
         payload: {
           runId: "run-local-1",
+          sessionKey: "agent:main:main",
+          agentId: "main",
           stream: "assistant",
           data: { delta: "hello" },
         },
@@ -477,6 +482,7 @@ describe("EmbeddedTuiBackend", () => {
         payload: {
           runId: "run-local-1",
           sessionKey: "agent:main:main",
+          agentId: "main",
           state: "delta",
           deltaText: "hello",
           message: {
@@ -490,6 +496,8 @@ describe("EmbeddedTuiBackend", () => {
         event: "agent",
         payload: {
           runId: "run-local-1",
+          sessionKey: "agent:main:main",
+          agentId: "main",
           stream: "lifecycle",
           data: { phase: "end", stopReason: "stop" },
         },
@@ -499,6 +507,7 @@ describe("EmbeddedTuiBackend", () => {
         payload: {
           runId: "run-local-1",
           sessionKey: "agent:main:main",
+          agentId: "main",
           state: "final",
           stopReason: "stop",
           message: {
@@ -795,7 +804,10 @@ describe("EmbeddedTuiBackend", () => {
 
     await backend.listSessions({ agentId: "work", includeGlobal: true, search: "global" });
 
-    expect(loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith({}, { agentId: "work" });
+    expect(loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(
+      {},
+      { agentId: "work", projection: "list" },
+    );
     expect(listSessionsFromStoreAsyncMock).toHaveBeenCalledWith({
       cfg: {},
       storePath: "/tmp/openclaw-sessions.json",
@@ -931,7 +943,62 @@ describe("EmbeddedTuiBackend", () => {
       sessionId: "session-work-global",
       messages: [],
     });
-    expect(loadSessionEntryMock).toHaveBeenCalledWith("global", { agentId: "work" });
+    expect(loadSessionEntryMock).toHaveBeenCalledWith("global", {
+      agentId: "work",
+      includeStoreChildEntries: true,
+    });
+  });
+
+  it("reports the newest matching non-BTW local run in embedded history", async () => {
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+      cfg: {},
+      canonicalKey: sessionKey,
+      storePath: "/tmp/openclaw-work-sessions.json",
+      store: {},
+      entry: { sessionId: "session-work-global" },
+    }));
+    const first = deferred<{ payloads: Array<{ text: string }>; meta: Record<string, unknown> }>();
+    const second = deferred<{ payloads: Array<{ text: string }>; meta: Record<string, unknown> }>();
+    const side = deferred<{ text: string }>();
+    agentCommandFromIngressMock
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    runBtwSideQuestionMock.mockReturnValueOnce(side.promise);
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "global",
+      agentId: "work",
+      message: "first",
+      runId: "run-work-first",
+    });
+    await backend.sendChat({
+      sessionKey: "global",
+      agentId: "work",
+      message: "second",
+      runId: "run-work-newest",
+    });
+    await backend.sendChat({
+      sessionKey: "global",
+      agentId: "work",
+      message: "/btw detached",
+      runId: "run-work-btw",
+    });
+
+    await expect(
+      backend.loadHistory({ sessionKey: "global", agentId: "work" }),
+    ).resolves.toMatchObject({
+      inFlightRun: { runId: "run-work-newest", text: "" },
+    });
+
+    side.resolve({ text: "side done" });
+    first.resolve({ payloads: [{ text: "first done" }], meta: {} });
+    await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2));
+    second.resolve({ payloads: [{ text: "second done" }], meta: {} });
+    await flushMicrotasks();
+    await backend.stop();
   });
 
   it("uses reset-archive fallback for embedded TUI history reads", async () => {
@@ -1002,7 +1069,7 @@ describe("EmbeddedTuiBackend", () => {
     await expect(backend.loadHistory({ sessionKey: "agent:main:main" })).resolves.toMatchObject({
       sessionKey: "agent:main:main",
       messages: [],
-      runtimePluginsPrewarm: { status: "failed", error: "Error: runtime unavailable" },
+      runtimePluginsPrewarm: { status: "failed", error: "runtime unavailable" },
     });
   });
 
@@ -1037,6 +1104,59 @@ describe("EmbeddedTuiBackend", () => {
     } finally {
       await backend.stop();
     }
+  });
+
+  it("stamps the selected global agent on chat, agent, and BTW envelopes", async () => {
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+      cfg: {},
+      canonicalKey: sessionKey,
+      storePath: "/tmp/openclaw-work-sessions.json",
+      store: {},
+      entry: { sessionId: "session-work-global" },
+    }));
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+    runBtwSideQuestionMock.mockResolvedValueOnce({ text: "side done" });
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (event) => events.push({ event: event.event, payload: event.payload });
+    backend.start();
+
+    await backend.sendChat({
+      sessionKey: "global",
+      agentId: "work",
+      message: "hello",
+      runId: "run-global-work",
+    });
+    registeredListener?.({
+      runId: "run-global-work",
+      stream: "assistant",
+      data: { delta: "hello" },
+    });
+    pending.resolve({ payloads: [{ text: "hello" }], meta: {} });
+    await flushMicrotasks();
+    await backend.sendChat({
+      sessionKey: "global",
+      agentId: "work",
+      message: "/btw detached",
+      runId: "run-global-work-btw",
+    });
+    await flushMicrotasks();
+
+    expect(
+      events.filter((event) => ["chat", "agent", "chat.side_result"].includes(event.event)),
+    ).not.toHaveLength(0);
+    for (const event of events) {
+      if (!["chat", "agent", "chat.side_result"].includes(event.event)) {
+        continue;
+      }
+      expect(event.payload).toMatchObject({ sessionKey: "global", agentId: "work" });
+    }
+    await backend.stop();
   });
 
   it("waits for local post-turn maintenance before emitting chat final", async () => {
@@ -1718,6 +1838,7 @@ describe("EmbeddedTuiBackend", () => {
       payload: {
         runId: "run-local-first-terminal",
         sessionKey: "agent:main:main",
+        agentId: "main",
         state: "aborted",
       },
     });
@@ -1766,6 +1887,7 @@ describe("EmbeddedTuiBackend", () => {
       payload: {
         runId: "run-validation-loop",
         sessionKey: "agent:main:main",
+        agentId: "main",
         state: "aborted",
         errorMessage: "edit tool validation failed: edits: must have required properties edits",
       },
@@ -1822,6 +1944,7 @@ describe("EmbeddedTuiBackend", () => {
         payload: {
           runId: "run-recovered-validation",
           sessionKey: "agent:main:main",
+          agentId: "main",
           state: "aborted",
         },
       });
@@ -1864,6 +1987,7 @@ describe("EmbeddedTuiBackend", () => {
       payload: {
         runId: "run-unsafe-abort",
         sessionKey: "agent:main:main",
+        agentId: "main",
         state: "aborted",
       },
     });
@@ -1921,6 +2045,7 @@ describe("EmbeddedTuiBackend", () => {
       payload: {
         runId: "run-local-idle-stop",
         sessionKey: "agent:main:main",
+        agentId: "main",
         state: "final",
         message: {
           role: "assistant",
@@ -2294,6 +2419,80 @@ describe("EmbeddedTuiBackend", () => {
     expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    {
+      name: "replaces streamed drafts with the authoritative final answer",
+      finalPayloads: [{ text: "Authoritative final answer" }],
+      expectedText: "Authoritative final answer",
+    },
+    {
+      name: "keeps an authoritative final answer that extends the streamed draft",
+      finalPayloads: [{ text: "Draft answer with its complete authoritative tail" }],
+      expectedText: "Draft answer with its complete authoritative tail",
+    },
+    {
+      name: "preserves every authoritative final payload block",
+      finalPayloads: [{ text: "First final block" }, { text: "Second final block" }],
+      expectedText: "First final block\n\nSecond final block",
+    },
+    {
+      name: "preserves streamed text when the final payload contains no text",
+      finalPayloads: [],
+      expectedText: "Draft answer",
+    },
+  ])("$name", async ({ finalPayloads, expectedText }) => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (event) => {
+      events.push({ event: event.event, payload: event.payload });
+    };
+
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "finish the draft",
+      runId: "run-local-authoritative-final",
+    });
+
+    registeredListener?.({
+      runId: "run-local-authoritative-final",
+      stream: "assistant",
+      data: { text: "Draft answer", delta: "Draft answer" },
+    });
+    registeredListener?.({
+      runId: "run-local-authoritative-final",
+      stream: "lifecycle",
+      data: { phase: "end", stopReason: "stop" },
+    });
+
+    pending.resolve({ payloads: finalPayloads, meta: {} });
+    await flushMicrotasks();
+
+    const chatPayloads = events
+      .filter((event) => event.event === "chat")
+      .map((event) => event.payload);
+
+    expect(chatPayloads.at(-1)).toStrictEqual({
+      runId: "run-local-authoritative-final",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      state: "final",
+      stopReason: "stop",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: expectedText }],
+        timestamp: embeddedEventTimestamp,
+      },
+    });
+  });
+
   it("keeps final short replies like No after suppressing lead-fragment deltas", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const pending = deferred<{
@@ -2348,6 +2547,7 @@ describe("EmbeddedTuiBackend", () => {
     expect(chatPayloads.at(-1)).toStrictEqual({
       runId: "run-local-no",
       sessionKey: "agent:main:main",
+      agentId: "main",
       state: "final",
       stopReason: "stop",
       message: {
@@ -2595,6 +2795,7 @@ describe("EmbeddedTuiBackend", () => {
           kind: "btw",
           runId: "run-btw-1",
           sessionKey: "agent:main:main",
+          agentId: "main",
           question: "what changed?",
           text: "nothing important",
         },
@@ -2604,6 +2805,7 @@ describe("EmbeddedTuiBackend", () => {
         payload: {
           runId: "run-btw-1",
           sessionKey: "agent:main:main",
+          agentId: "main",
           state: "final",
         },
       },
@@ -2660,6 +2862,7 @@ describe("EmbeddedTuiBackend", () => {
           kind: "btw",
           runId: "run-side-1",
           sessionKey: "agent:main:main",
+          agentId: "main",
           question: "what changed?",
           text: "alias answer",
         },
@@ -2669,6 +2872,7 @@ describe("EmbeddedTuiBackend", () => {
         payload: {
           runId: "run-side-1",
           sessionKey: "agent:main:main",
+          agentId: "main",
           state: "final",
         },
       },
@@ -2710,6 +2914,7 @@ describe("EmbeddedTuiBackend", () => {
         payload: {
           runId: "run-tool-first",
           sessionKey: "agent:main:main",
+          agentId: "main",
           state: "delta",
           deltaText: "",
           message: {
@@ -2723,6 +2928,8 @@ describe("EmbeddedTuiBackend", () => {
         event: "agent",
         payload: {
           runId: "run-tool-first",
+          sessionKey: "agent:main:main",
+          agentId: "main",
           stream: "tool",
           data: { phase: "start", toolCallId: "tc-tool-first", name: "exec" },
         },
@@ -2732,6 +2939,7 @@ describe("EmbeddedTuiBackend", () => {
         payload: {
           runId: "run-tool-first",
           sessionKey: "agent:main:main",
+          agentId: "main",
           state: "final",
           message: {
             role: "assistant",

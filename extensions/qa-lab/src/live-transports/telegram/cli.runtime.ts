@@ -6,12 +6,12 @@ import type { LiveTransportQaCommandOptions } from "openclaw/plugin-sdk/qa-runti
 import type { QaGatewayChildCommand } from "../../gateway-child.js";
 import { runQaFlowSuiteFromRuntime } from "../../suite-launch.runtime.js";
 import type { QaSuiteRoundTripProbe } from "../../suite-round-trip.js";
-import { readQaSuiteFailedScenarioCountFromFile } from "../../suite-summary.js";
+import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "../../suite-summary.js";
 // Qa Lab plugin module implements cli behavior.
 import { printLiveTransportQaArtifacts } from "../shared/live-artifacts.js";
 import { createTelegramQaTransportAdapter } from "./adapter.runtime.js";
-import { listTelegramQaScenarios, resolveTelegramQaScenarioIds } from "./profiles.js";
 import { resolveTelegramQaRunOptions } from "./run-options.runtime.js";
+import { listTelegramQaScenarios, resolveTelegramQaScenarioIds } from "./scenario-selection.js";
 
 const TELEGRAM_QA_SUT_OPENCLAW_COMMAND_ENV = "OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND";
 const TELEGRAM_QA_SUT_UID_ENV = "OPENCLAW_QA_TELEGRAM_SUT_UID";
@@ -146,7 +146,10 @@ type TelegramQaSuiteOptions = LiveTransportQaCommandOptions & {
 export async function runQaTelegramSuite(opts: TelegramQaSuiteOptions) {
   const runOptions = resolveTelegramQaRunOptions(opts);
   if (runOptions.listScenarios) {
-    for (const scenario of listTelegramQaScenarios(runOptions.providerMode)) {
+    for (const scenario of listTelegramQaScenarios({
+      primaryModel: runOptions.primaryModel,
+      providerMode: runOptions.providerMode,
+    })) {
       const defaultLabel = scenario.defaultEnabled ? "default" : "optional";
       const refs =
         scenario.regressionRefs.length > 0 ? ` refs=${scenario.regressionRefs.join(",")}` : "";
@@ -160,6 +163,7 @@ export async function runQaTelegramSuite(opts: TelegramQaSuiteOptions) {
     ? [...opts.resolvedScenarioIds]
     : resolveTelegramQaScenarioIds({
         profile: opts.profile,
+        primaryModel: runOptions.primaryModel,
         providerMode: runOptions.providerMode,
         scenarioIds: runOptions.scenarioIds,
       });
@@ -195,11 +199,12 @@ export async function runQaTelegramSuite(opts: TelegramQaSuiteOptions) {
     report: result.reportPath,
     summary: result.summaryPath,
   });
-  if (!runOptions.allowFailures) {
-    const failedScenarioCount = await readQaSuiteFailedScenarioCountFromFile(result.summaryPath);
-    if (failedScenarioCount > 0) {
-      process.exitCode = 1;
-    }
+  const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
+    result.summaryPath,
+    { requireExecutedScenario: runOptions.allowFailures === true },
+  );
+  if (!runOptions.allowFailures && blockingScenarioCount > 0) {
+    process.exitCode = 1;
   }
   return result;
 }
@@ -211,6 +216,7 @@ export async function runQaTelegramCommand(opts: LiveTransportQaCommandOptions) 
   }
   const resolvedScenarioIds = resolveTelegramQaScenarioIds({
     profile: opts.profile,
+    primaryModel: runOptions.primaryModel,
     providerMode: runOptions.providerMode,
     scenarioIds: runOptions.scenarioIds,
   });

@@ -4,13 +4,16 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
-import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
 import { normalizeAgentId, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isGatewayCliClient,
@@ -37,24 +40,7 @@ const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
 ]);
 const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
 
-type ChatSendDeliveryEntry = {
-  route?: ChannelRouteRef;
-  deliveryContext?: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
-  origin?: {
-    provider?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
-  lastChannel?: string;
-  lastTo?: string;
-  lastAccountId?: string;
-  lastThreadId?: string | number;
-};
+type ChatSendDeliveryEntry = Pick<SessionEntry, "delivery">;
 
 type ChatSendOriginatingRoute = {
   originatingChannel: string;
@@ -212,19 +198,13 @@ export function resolveChatSendOriginatingRoute(params: {
   }
 
   const sessionDeliveryContext = deliveryContextFromSession(params.entry);
+  const sessionOrigin = sessionDeliveryOrigin(params.entry);
   const routeChannelCandidate = normalizeMessageChannel(
-    sessionDeliveryContext?.channel ?? params.entry?.lastChannel ?? params.entry?.origin?.provider,
+    sessionDeliveryContext?.channel ?? sessionOrigin?.provider,
   );
-  const routeToCandidate = sessionDeliveryContext?.to ?? params.entry?.lastTo;
-  const routeAccountIdCandidate =
-    sessionDeliveryContext?.accountId ??
-    params.entry?.lastAccountId ??
-    params.entry?.origin?.accountId ??
-    undefined;
-  const routeThreadIdCandidate =
-    sessionDeliveryContext?.threadId ??
-    params.entry?.lastThreadId ??
-    params.entry?.origin?.threadId;
+  const routeToCandidate = sessionDeliveryContext?.to;
+  const routeAccountIdCandidate = sessionDeliveryContext?.accountId ?? sessionOrigin?.accountId;
+  const routeThreadIdCandidate = sessionDeliveryContext?.threadId ?? sessionOrigin?.threadId;
   if (params.sessionKey.length > CHAT_SEND_SESSION_KEY_MAX_LENGTH) {
     return { originatingChannel: INTERNAL_MESSAGE_CHANNEL, explicitDeliverRoute: false };
   }

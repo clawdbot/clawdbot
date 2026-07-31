@@ -17,7 +17,7 @@ import {
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
-import { loadNodeHostConfig } from "../../../node-host/config.js";
+import { resolveLocalNodeId } from "../../../node-host/local-id.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import {
@@ -61,16 +61,6 @@ type AuthenticatedNodePairingAdmission = {
 
 function isReleasedVersion(version: string): boolean {
   return RELEASED_VERSION_RE.test(version);
-}
-
-/**
- * Lazily resolve the local node host's nodeId from canonical shared SQLite state.
- * Process-stable: only changes on `openclaw node install`, which requires restart.
- */
-let cachedLocalNodeId: Promise<string | null> | undefined;
-async function resolveLocalNodeId(): Promise<string | null> {
-  cachedLocalNodeId ??= loadNodeHostConfig().then((config) => config?.nodeId ?? null);
-  return await cachedLocalNodeId;
 }
 
 function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {
@@ -213,7 +203,6 @@ export async function attachAuthenticatedGatewayConnect(
       );
     }
   }
-
   const pluginSurfaceUrls: Record<string, string> = {};
   const pluginNodeCapabilitySurfaces = indexPluginNodeCapabilitySurfaces(pluginNodeCapabilities);
   const pendingPluginNodeCapabilities: Array<{
@@ -221,8 +210,14 @@ export async function attachAuthenticatedGatewayConnect(
     capability: string;
     expiresAtMs: number;
   }> = [];
+  const effectiveNodeCaps = role === "node" ? new Set(connectParams.caps ?? []) : undefined;
   if (pluginSurfaceBaseUrl && !usesLegacyNodeProtocol) {
     for (const pluginCapabilitySurface of Object.values(pluginNodeCapabilitySurfaces)) {
+      // Node reconciliation replaces declared caps with the approved surface.
+      // Issuing a route capability for a withheld cap would bypass node.pair.approve.
+      if (effectiveNodeCaps && !effectiveNodeCaps.has(pluginCapabilitySurface.surface)) {
+        continue;
+      }
       const capability = mintPluginNodeCapabilityToken();
       const expiresAtMs = resolvePluginNodeCapabilityExpiresAtMs(pluginCapabilitySurface);
       if (expiresAtMs === undefined) {
@@ -296,10 +291,17 @@ export async function attachAuthenticatedGatewayConnect(
   clearHandshakeTimer();
   const nextClient: GatewayWsClient = {
     socket,
-    connect: connectParams,
+    connect: state.controlUiDeviceAuthMigrationPending
+      ? { ...connectParams, scopes }
+      : connectParams,
     connId,
     connectionKind: "gateway",
     isDeviceTokenAuth: authMethod === "device-token",
+    isControlUiDeviceAuthMigrationSession: state.controlUiDeviceAuthMigrationPending,
+    // Only identity-bearing migration sessions may use bounded self-pairing.
+    // Device-less sessions remain pairing-scoped until reopened securely.
+    isControlUiDeviceAuthMigration:
+      state.controlUiDeviceAuthMigrationPending && Boolean(connectParams.device),
     pairedClientId: isBrowserCopilotClient(connectParams.client)
       ? connectParams.client.id
       : undefined,
@@ -379,6 +381,31 @@ export async function attachAuthenticatedGatewayConnect(
       close(1008, truncateCloseReason(message));
       return;
     }
+  }
+
+  if (
+    state.controlUiDeviceAuthMigrationPending &&
+    context.handler.isControlUiDeviceAuthMigrationPending?.() !== true
+  ) {
+    const hasDeviceIdentity = Boolean(device);
+    const message = "device auth migration completed during connect; reconnect";
+    markHandshakeFailure("control-ui-device-auth-migration-completed", {
+      device: hasDeviceIdentity ? "yes" : "no",
+    });
+    sendHandshakeErrorResponse(
+      hasDeviceIdentity ? ErrorCodes.NOT_PAIRED : ErrorCodes.INVALID_REQUEST,
+      message,
+      {
+        details: {
+          code: hasDeviceIdentity
+            ? ConnectErrorDetailCodes.PAIRING_REQUIRED
+            : ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+        },
+      },
+    );
+    await releasePendingNodePairingCleanup();
+    close(1008, truncateCloseReason(message));
+    return;
   }
 
   if (!setClient(nextClient)) {

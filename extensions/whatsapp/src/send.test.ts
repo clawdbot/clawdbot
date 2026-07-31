@@ -142,6 +142,57 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
   });
 
+  it.each([
+    { name: "text", mediaUrl: undefined },
+    { name: "media", mediaUrl: "/tmp/pic.jpg" },
+  ])("still sends $name when composing presence fails", async ({ mediaUrl }) => {
+    const mediaBuffer = Buffer.from("img");
+    if (mediaUrl) {
+      loadWebMediaMock.mockResolvedValueOnce({
+        buffer: mediaBuffer,
+        contentType: "image/jpeg",
+        kind: "image",
+      });
+    }
+    sendComposingTo.mockRejectedValueOnce(new Error("presence update unavailable"));
+
+    await expect(
+      sendMessageWhatsApp("+1555", "hi", {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+        ...(mediaUrl ? { mediaUrl } : {}),
+      }),
+    ).resolves.toEqual({
+      messageId: "msg123",
+      toJid: "1555@s.whatsapp.net",
+    });
+
+    expect(sendComposingTo).toHaveBeenCalledWith("+1555");
+    expect(sendMessage).toHaveBeenCalledWith(
+      "+1555",
+      "hi",
+      mediaUrl ? mediaBuffer : undefined,
+      mediaUrl ? "image/jpeg" : undefined,
+    );
+  });
+
+  it("re-chunks after WhatsApp marker expansion", async () => {
+    const onDeliveryResult = vi.fn();
+    await sendMessageWhatsApp("+1555", Array.from({ length: 8 }, () => "`x`").join(" "), {
+      verbose: false,
+      cfg: { channels: { whatsapp: { textChunkLimit: 20 } } },
+      onDeliveryResult,
+    });
+
+    const sentText = (sendMessage.mock.calls as unknown as Array<[string, string]>).map(
+      ([, chunk]) => chunk,
+    );
+    expect(sentText.length).toBeGreaterThan(1);
+    expect(sentText.every((chunk) => chunk.length <= 20)).toBe(true);
+    expect(sentText.join("")).not.toContain("\uE000");
+    expect(onDeliveryResult).toHaveBeenCalledTimes(sentText.length);
+  });
+
   it("checks send readiness before composing or sending direct messages", async () => {
     const assertSendReady = vi.fn(async () => {
       throw new Error("WhatsApp reachout timelock is active");
@@ -358,7 +409,7 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenNthCalledWith(2, "+1555", "voice note", undefined, undefined);
   });
 
-  it("normalizes MIME parameters when inferring media kind", async () => {
+  it("normalizes MIME parameters before handing media to the socket transport", async () => {
     const buf = Buffer.from("image");
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: buf,
@@ -371,12 +422,7 @@ describe("web outbound", () => {
       mediaUrl: "/tmp/image.png",
     });
 
-    expect(sendMessage).toHaveBeenLastCalledWith(
-      "+1555",
-      "caption",
-      buf,
-      " Image/PNG; charset=binary ",
-    );
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "caption", buf, "image/png");
   });
 
   it("reports the accepted voice send before a caption failure", async () => {

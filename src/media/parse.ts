@@ -477,11 +477,6 @@ function collectMarkdownImageSegments(params: { line: string; media: string[] })
   };
 }
 
-// Check if a character offset is inside any fenced code block
-function isInsideFence(fenceSpans: Array<{ start: number; end: number }>, offset: number): boolean {
-  return fenceSpans.some((span) => offset >= span.start && offset < span.end);
-}
-
 /** Splits tool/stdout text into visible text, media attachments, voice tags, and ordered segments. */
 export function splitMediaFromOutput(
   raw: string,
@@ -510,17 +505,20 @@ export function splitMediaFromOutput(
   const media: string[] = [];
   let foundMediaToken = false;
   const segments: ParsedMediaOutputSegment[] = [];
+  let lastTextSegment: Extract<ParsedMediaOutputSegment, { type: "text" }> | undefined;
 
   const pushTextSegment = (text: string) => {
-    if (!text) {
-      return;
-    }
     const last = segments[segments.length - 1];
     if (last?.type === "text") {
-      last.text = `${last.text}\n${text}`;
-      return;
+      last.text = `${last.text}\n${text.trim() ? text : ""}`;
+    } else if (!text.trim()) {
+      if (last?.type === "media" && lastTextSegment && !lastTextSegment.text.endsWith("\n")) {
+        lastTextSegment.text += "\n";
+      }
+    } else {
+      lastTextSegment = { type: "text", text };
+      segments.push(lastTextSegment);
     }
-    segments.push({ type: "text", text });
   };
 
   // Parse fenced code blocks to avoid extracting MEDIA tokens from inside them
@@ -534,7 +532,7 @@ export function splitMediaFromOutput(
   let lineOffset = 0; // Track character offset for fence checking
   for (const line of lines) {
     // Fenced examples must remain text; extracting their MEDIA tokens would mutate transcripts.
-    if (hasFenceMarkers && isInsideFence(fenceSpans, lineOffset)) {
+    if (fenceSpans.some((span) => lineOffset >= span.start && lineOffset < span.end)) {
       keptLines.push(line);
       pushTextSegment(line);
       lineOffset += line.length + 1; // +1 for newline
@@ -687,19 +685,10 @@ export function splitMediaFromOutput(
     lineOffset += line.length + 1; // +1 for newline
   }
 
-  let cleanedText = keptLines
-    .join("\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/\n{2,}/g, "\n")
-    .trim();
-
-  // Detect and strip [[audio_as_voice]] tag
-  const audioTagResult = parseAudioTag(cleanedText);
+  const visibleText = keptLines.join("\n").replace(/^(?:[ \t]*\n)+/, "");
+  const audioTagResult = parseAudioTag(visibleText);
+  const cleanedText = audioTagResult.text.trimEnd();
   const hasAudioAsVoice = audioTagResult.audioAsVoice;
-  if (audioTagResult.hadTag) {
-    cleanedText = audioTagResult.text.replace(/\n{2,}/g, "\n").trim();
-  }
 
   if (media.length === 0) {
     const parsedText = foundMediaToken || hasAudioAsVoice ? cleanedText : trimmedRaw;

@@ -1,5 +1,7 @@
 /** Gateway health probes used by doctor before deeper daemon and memory diagnostics. */
 import { note } from "../../packages/terminal-core/src/note.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -17,6 +19,7 @@ import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { redactSecretDegradationReason } from "../secrets/runtime-degraded-state.js";
+import type { StatusSummary } from "../status/types.js";
 import { VERSION } from "../version.js";
 import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
@@ -24,7 +27,6 @@ import {
   gatewayProbeResultSawGateway,
 } from "./gateway-health-auth-diagnostic.js";
 import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
-import type { StatusSummary } from "./status.types.js";
 
 type GatewayMemoryProbe = {
   checked: boolean;
@@ -115,6 +117,7 @@ export async function checkGatewayHealth(params: {
         method: "channels.status",
         params: { probe: true, timeoutMs: 5000 },
         timeoutMs: 6000,
+        config: params.cfg,
       });
       const issues = collectChannelStatusIssues(statusLocal);
       if (issues.length > 0) {
@@ -130,8 +133,14 @@ export async function checkGatewayHealth(params: {
           "Channel warnings",
         );
       }
-    } catch {
-      // ignore: doctor already reported gateway health
+    } catch (error) {
+      note(
+        [
+          `Channel status probe failed: ${sanitizeTerminalText(formatErrorMessage(error))}`,
+          `Retry: ${formatCliCommand("openclaw channels status --probe")}`,
+        ].join("\n"),
+        "Channel warnings",
+      );
     }
     return { healthOk, authenticated: true, status };
   } catch (err) {

@@ -59,6 +59,7 @@ import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   requiresClaudeMandatoryAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
@@ -81,6 +82,10 @@ function usesClaudeFable5BedrockContract(model: Model<"bedrock-converse-stream">
   return resolveClaudeFable5ModelIdentity(model) !== undefined;
 }
 
+function usesClaudeOpus5BedrockContract(model: Model<"bedrock-converse-stream">): boolean {
+  return resolveClaudeOpus5ModelIdentity(model) !== undefined;
+}
+
 function usesClaudeSonnet5BedrockContract(model: Model<"bedrock-converse-stream">): boolean {
   return resolveClaudeSonnet5ModelIdentity(model) !== undefined;
 }
@@ -91,6 +96,7 @@ function usesClaudeStreamingRefusalBedrockContract(
   return (
     usesClaudeFable5BedrockContract(model) ||
     resolveClaudeMythos5ModelIdentity(model) !== undefined ||
+    usesClaudeOpus5BedrockContract(model) ||
     usesClaudeSonnet5BedrockContract(model)
   );
 }
@@ -326,7 +332,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         }
       }
 
-      if (refusalBuffer && !sawMessageStop) {
+      if (!sawMessageStop) {
         throw new Error("Bedrock stream ended before messageStop");
       }
       if (options.signal?.aborted) {
@@ -416,7 +422,8 @@ function resolveSimpleBedrockOptions(
   }
   if (!options?.reasoning) {
     const reasoning =
-      isAnthropicClaudeModel(model) && requiresMandatoryAdaptiveThinking(model)
+      usesClaudeOpus5BedrockContract(model) ||
+      (isAnthropicClaudeModel(model) && requiresMandatoryAdaptiveThinking(model))
         ? "high"
         : undefined;
     return {
@@ -626,9 +633,10 @@ function resolveClaudeProfileNameModelId(modelName?: string): string | undefined
   if (!normalized.includes("claude")) {
     return undefined;
   }
-  const family = /(?:fable-5|mythos-(?:5|preview)|opus-4-(?:6|7|8)|sonnet-(?:5|4-6))(?:$|-)/.exec(
-    normalized,
-  )?.[0];
+  const family =
+    /(?:fable-5|mythos-(?:5|preview)|opus-(?:5|4-(?:6|7|8))|sonnet-(?:5|4-6))(?:$|-)/.exec(
+      normalized,
+    )?.[0];
   return family ? `claude-${family.replace(/-$/, "")}` : undefined;
 }
 
@@ -804,7 +812,7 @@ function createBedrockToolResult(message: ToolResultMessage): ContentBlock.ToolR
       content.push({ text: sanitizeSurrogates(block.text) });
       continue;
     }
-    if (describeToolResultMediaPlaceholder([block])) {
+    if (block.type === "image" && describeToolResultMediaPlaceholder([block])) {
       content.push({ image: createImageBlock(block.mimeType, block.data) });
     }
   }
@@ -812,7 +820,10 @@ function createBedrockToolResult(message: ToolResultMessage): ContentBlock.ToolR
   return {
     toolResult: {
       toolUseId: message.toolCallId,
-      content: content.length > 0 ? content : [{ text: "(no output)" }],
+      content:
+        content.length > 0
+          ? content
+          : [{ text: describeToolResultMediaPlaceholder(message.content) ?? "(no output)" }],
       status: message.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
     },
   };

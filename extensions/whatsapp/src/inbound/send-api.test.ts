@@ -5,6 +5,7 @@ import path from "node:path";
 import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage } from "baileys";
 import { listMessageReceiptPlatformIds } from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { prepareWhatsAppOutboundMedia } from "../outbound-media-contract.js";
 import { resolveWhatsAppOutboundMentions } from "./outbound-mentions.js";
 import { createWebSendApi } from "./send-api.js";
 import type { WhatsAppSendResult } from "./send-result.js";
@@ -328,6 +329,25 @@ describe("createWebSendApi", () => {
       mimetype: "image/jpeg",
     });
   });
+
+  it.each([
+    { kind: "image", contentType: " Image/PNG; charset=binary ", mimetype: "image/png" },
+    { kind: "video", contentType: " Video/MP4; charset=binary ", mimetype: "video/mp4" },
+  ])(
+    "preserves the native $kind payload after canonicalizing mixed-case media MIME",
+    async ({ kind, contentType, mimetype }) => {
+      const payload = Buffer.from(kind);
+      const media = await prepareWhatsAppOutboundMedia({ buffer: payload, contentType });
+
+      await api.sendMessage("+1555", "cap", media.buffer, media.mimetype);
+
+      expectSendContentFields(0, {
+        [kind]: payload,
+        caption: "cap",
+        mimetype,
+      });
+    },
+  );
 
   it("prepopulates image thumbnails and dimensions before Baileys media upload", async () => {
     const payload = Buffer.from("img");

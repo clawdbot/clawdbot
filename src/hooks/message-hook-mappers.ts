@@ -9,11 +9,7 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import {
-  hasStagedMediaProjection,
-  projectMediaFacts,
-  resolveMediaFacts,
-} from "../media/media-facts.js";
+import { normalizeMediaFacts } from "../media/media-facts.js";
 import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
@@ -29,6 +25,7 @@ import type {
   MessageSentHookContext,
   MessageTranscribedHookContext,
 } from "./internal-hooks.js";
+import { projectMessageHookMediaFacts, type MessageHookMediaFact } from "./message-hook-media.js";
 
 type CanonicalInboundMessageHookContext = {
   from: string;
@@ -58,6 +55,8 @@ type CanonicalInboundMessageHookContext = {
   surface?: string;
   threadId?: string | number;
   threadParentId?: string | number;
+  media?: MessageHookMediaFact[];
+  originalMedia?: MessageHookMediaFact[];
   // `mediaPath(s)` are files OpenClaw has already staged locally. `mediaUrl(s)`
   // are provider/media-server references that may not exist on this host.
   mediaPath?: string;
@@ -127,6 +126,19 @@ function assignRemoteMediaStagingMetadata(
   }
 }
 
+function projectHookMediaState(canonical: CanonicalInboundMessageHookContext) {
+  const stagingPending = canonical.mediaStagingPending === true;
+  const media = stagingPending ? undefined : canonical.media;
+  const originalMedia = canonical.originalMedia ?? (stagingPending ? canonical.media : undefined);
+  return {
+    ...(media?.length ? { media: media.map((entry) => Object.assign({}, entry)) } : {}),
+    ...(originalMedia?.length
+      ? { originalMedia: originalMedia.map((entry) => Object.assign({}, entry)) }
+      : {}),
+    ...(stagingPending ? { mediaStagingPending: true as const } : {}),
+  };
+}
+
 export function deriveInboundMessageHookContext(
   ctx: FinalizedMsgContext,
   overrides?: {
@@ -149,14 +161,16 @@ export function deriveInboundMessageHookContext(
     ctx.From ??
     internalSessionConversationId(channelId, ctx.SessionKey);
   const isGroup = Boolean(ctx.GroupSubject || ctx.GroupChannel);
-  const mediaPayload = hasStagedMediaProjection(ctx)
-    ? ctx
-    : ctx.media?.length
-      ? projectMediaFacts(resolveMediaFacts(ctx))
-      : ctx;
-  const mediaPaths = mediaPayload.MediaPaths?.filter(Boolean);
-  const mediaTypes = mediaPayload.MediaTypes?.filter(Boolean);
-  const mediaUrls = mediaPayload.MediaUrls?.filter(Boolean);
+  const media = normalizeMediaFacts(ctx.media);
+  const hookMedia = projectMessageHookMediaFacts(media);
+  const compact = (values: Array<string | undefined>) => {
+    const entries = values.filter((value): value is string => Boolean(value));
+    return entries.length > 0 ? entries : undefined;
+  };
+  const mediaPaths = compact(media.map((fact) => fact.path));
+  const mediaUrls = compact(media.map((fact) => fact.url ?? fact.path));
+  const mediaTypes = compact(media.map((fact) => fact.contentType ?? fact.kind));
+  const firstMedia = media[0];
   return {
     from: ctx.From ?? "",
     to: ctx.To,
@@ -174,11 +188,11 @@ export function deriveInboundMessageHookContext(
     sessionKey: ctx.SessionKey,
     agentId: ctx.AgentId,
     messageId:
-      overrides?.messageId ??
-      ctx.MessageSidFull ??
-      ctx.MessageSid ??
-      ctx.MessageSidFirst ??
-      ctx.MessageSidLast,
+      normalizeOptionalString(overrides?.messageId) ??
+      normalizeOptionalString(ctx.MessageSidFull) ??
+      normalizeOptionalString(ctx.MessageSid) ??
+      normalizeOptionalString(ctx.MessageSidFirst) ??
+      normalizeOptionalString(ctx.MessageSidLast),
     senderId: ctx.SenderId,
     senderName: ctx.SenderName,
     senderUsername: ctx.SenderUsername,
@@ -192,9 +206,10 @@ export function deriveInboundMessageHookContext(
     surface: ctx.Surface,
     threadId: ctx.MessageThreadId,
     threadParentId: ctx.ThreadParentId,
-    mediaPath: mediaPayload.MediaPath ?? mediaPaths?.[0],
-    mediaUrl: mediaPayload.MediaUrl ?? mediaUrls?.[0],
-    mediaType: mediaPayload.MediaType ?? mediaTypes?.[0],
+    ...(hookMedia.length > 0 ? { media: hookMedia } : {}),
+    mediaPath: firstMedia?.path ?? mediaPaths?.[0],
+    mediaUrl: firstMedia?.url ?? firstMedia?.path ?? mediaUrls?.[0],
+    mediaType: firstMedia?.contentType ?? firstMedia?.kind ?? mediaTypes?.[0],
     mediaPaths,
     mediaUrls,
     mediaTypes,
@@ -240,6 +255,20 @@ export function buildCanonicalSentMessageHookContext(params: {
     isGroup: params.isGroup,
     groupId: params.groupId,
   };
+}
+
+/** Resolves the outbound hook target for a reply produced by an inbound channel turn. */
+export function resolveInboundReplyHookTarget(
+  finalized: FinalizedMsgContext,
+  hookCtx: CanonicalInboundMessageHookContext,
+): string {
+  if (typeof finalized.OriginatingTo === "string" && finalized.OriginatingTo.trim()) {
+    return finalized.OriginatingTo;
+  }
+  if (hookCtx.isGroup) {
+    return hookCtx.conversationId ?? hookCtx.to ?? hookCtx.from;
+  }
+  return hookCtx.from || hookCtx.conversationId || hookCtx.to || "";
 }
 
 type DiagnosticTraceHookFields = Pick<
@@ -339,10 +368,13 @@ function resolveInboundConversation(canonical: CanonicalInboundMessageHookContex
   return { conversationId: baseConversationId };
 }
 
-export function toPluginInboundClaimContext(
+function buildPluginInboundClaimContext(
   canonical: CanonicalInboundMessageHookContext,
+  conversation: {
+    conversationId?: string;
+    parentConversationId?: string;
+  },
 ): PluginHookInboundClaimContext {
-  const conversation = resolveInboundConversation(canonical);
   const context: PluginHookInboundClaimContext = {
     channelId: canonical.channelId,
     accountId: canonical.accountId,
@@ -374,14 +406,14 @@ export function toPluginInboundClaimContext(
   return context;
 }
 
-export function toPluginInboundClaimEvent(
+function buildPluginInboundClaimEvent(
   canonical: CanonicalInboundMessageHookContext,
+  context: PluginHookInboundClaimContext,
   extras?: {
     commandAuthorized?: boolean;
     wasMentioned?: boolean;
   },
 ): PluginHookInboundClaimEvent {
-  const context = toPluginInboundClaimContext(canonical);
   const event: PluginHookInboundClaimEvent = {
     content: canonical.content,
     body: canonical.body,
@@ -407,6 +439,7 @@ export function toPluginInboundClaimEvent(
     isGroup: canonical.isGroup,
     commandAuthorized: extras?.commandAuthorized,
     wasMentioned: extras?.wasMentioned,
+    ...projectHookMediaState(canonical),
     metadata: {
       from: canonical.from,
       to: canonical.to,
@@ -420,12 +453,12 @@ export function toPluginInboundClaimEvent(
       replyToBody: canonical.replyToBody,
       replyToSender: canonical.replyToSender,
       replyToIsQuote: canonical.replyToIsQuote,
-      mediaPath: canonical.mediaPath,
-      mediaUrl: canonical.mediaUrl,
-      mediaType: canonical.mediaType,
-      mediaPaths: canonical.mediaPaths,
-      mediaUrls: canonical.mediaUrls,
-      mediaTypes: canonical.mediaTypes,
+      mediaPath: canonical.mediaStagingPending ? undefined : canonical.mediaPath,
+      mediaUrl: canonical.mediaStagingPending ? undefined : canonical.mediaUrl,
+      mediaType: canonical.mediaStagingPending ? undefined : canonical.mediaType,
+      mediaPaths: canonical.mediaStagingPending ? undefined : canonical.mediaPaths,
+      mediaUrls: canonical.mediaStagingPending ? undefined : canonical.mediaUrls,
+      mediaTypes: canonical.mediaStagingPending ? undefined : canonical.mediaTypes,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
       groupId: canonical.groupId,
@@ -437,6 +470,24 @@ export function toPluginInboundClaimEvent(
   }
   assignTraceFields(event, canonical.trace);
   return event;
+}
+
+export function toPluginInboundClaimPair(
+  canonical: CanonicalInboundMessageHookContext,
+  extras?: {
+    commandAuthorized?: boolean;
+    wasMentioned?: boolean;
+  },
+): {
+  context: PluginHookInboundClaimContext;
+  event: PluginHookInboundClaimEvent;
+} {
+  const conversation = resolveInboundConversation(canonical);
+  const context = buildPluginInboundClaimContext(canonical, conversation);
+  return {
+    context,
+    event: buildPluginInboundClaimEvent(canonical, context, extras),
+  };
 }
 
 export function toPluginMessageReceivedEvent(
@@ -456,6 +507,7 @@ export function toPluginMessageReceivedEvent(
     ...(canonical.replyToIsQuote !== undefined ? { replyToIsQuote: canonical.replyToIsQuote } : {}),
     sessionKey: canonical.sessionKey,
     runId: canonical.runId,
+    ...projectHookMediaState(canonical),
     metadata: {
       to: canonical.to,
       provider: canonical.provider,
@@ -473,12 +525,12 @@ export function toPluginMessageReceivedEvent(
       replyToBody: canonical.replyToBody,
       replyToSender: canonical.replyToSender,
       replyToIsQuote: canonical.replyToIsQuote,
-      mediaPath: canonical.mediaPath,
-      mediaUrl: canonical.mediaUrl,
-      mediaType: canonical.mediaType,
-      mediaPaths: canonical.mediaPaths,
-      mediaUrls: canonical.mediaUrls,
-      mediaTypes: canonical.mediaTypes,
+      mediaPath: canonical.mediaStagingPending ? undefined : canonical.mediaPath,
+      mediaUrl: canonical.mediaStagingPending ? undefined : canonical.mediaUrl,
+      mediaType: canonical.mediaStagingPending ? undefined : canonical.mediaType,
+      mediaPaths: canonical.mediaStagingPending ? undefined : canonical.mediaPaths,
+      mediaUrls: canonical.mediaStagingPending ? undefined : canonical.mediaUrls,
+      mediaTypes: canonical.mediaStagingPending ? undefined : canonical.mediaTypes,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
       topicName: canonical.topicName,
@@ -518,6 +570,7 @@ export function toInternalMessageReceivedContext(
     accountId: canonical.accountId,
     conversationId: canonical.conversationId,
     messageId: canonical.messageId,
+    ...projectHookMediaState(canonical),
     metadata: {
       to: canonical.to,
       provider: canonical.provider,
@@ -527,12 +580,12 @@ export function toInternalMessageReceivedContext(
       senderName: canonical.senderName,
       senderUsername: canonical.senderUsername,
       senderE164: canonical.senderE164,
-      mediaPath: canonical.mediaPath,
-      mediaUrl: canonical.mediaUrl,
-      mediaType: canonical.mediaType,
-      mediaPaths: canonical.mediaPaths,
-      mediaUrls: canonical.mediaUrls,
-      mediaTypes: canonical.mediaTypes,
+      mediaPath: canonical.mediaStagingPending ? undefined : canonical.mediaPath,
+      mediaUrl: canonical.mediaStagingPending ? undefined : canonical.mediaUrl,
+      mediaType: canonical.mediaStagingPending ? undefined : canonical.mediaType,
+      mediaPaths: canonical.mediaStagingPending ? undefined : canonical.mediaPaths,
+      mediaUrls: canonical.mediaStagingPending ? undefined : canonical.mediaUrls,
+      mediaTypes: canonical.mediaStagingPending ? undefined : canonical.mediaTypes,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
       topicName: canonical.topicName,
@@ -585,8 +638,9 @@ function toInternalInboundMessageHookContextBase(canonical: CanonicalInboundMess
     senderUsername: canonical.senderUsername,
     provider: canonical.provider,
     surface: canonical.surface,
-    mediaPath: canonical.mediaPath,
-    mediaType: canonical.mediaType,
+    ...projectHookMediaState(canonical),
+    mediaPath: canonical.mediaStagingPending ? undefined : canonical.mediaPath,
+    mediaType: canonical.mediaStagingPending ? undefined : canonical.mediaType,
   };
 }
 

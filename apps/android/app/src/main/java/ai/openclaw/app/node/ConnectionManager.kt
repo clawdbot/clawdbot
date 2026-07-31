@@ -14,7 +14,7 @@ import android.os.Build
 /**
  * Builds gateway connect metadata from current Android permissions, settings, and device identity.
  */
-class ConnectionManager(
+class ConnectionManager internal constructor(
   private val prefs: SecurePrefs,
   private val cameraEnabled: () -> Boolean,
   private val locationMode: () -> LocationMode,
@@ -27,7 +27,9 @@ class ConnectionManager(
   private val photosAvailable: () -> Boolean,
   private val installedAppsSharingEnabled: () -> Boolean,
   private val voiceWakeAvailable: () -> Boolean,
+  private val mobileUiAvailable: () -> Boolean,
   private val inlineWidgetsAvailable: () -> Boolean,
+  private val permissionSnapshot: () -> AndroidPermissionSnapshot,
   private val manualTls: (GatewayEndpoint) -> Boolean,
 ) {
   companion object {
@@ -148,6 +150,7 @@ class ConnectionManager(
       installedAppsSharingEnabled = installedAppsSharingEnabled(),
       debugBuild = BuildConfig.DEBUG,
       voiceWakeEnabled = prefs.voiceWakeEnabled.value && voiceWakeAvailable(),
+      mobileUiAvailable = mobileUiAvailable(),
     )
 
   /** Builds the gateway-advertised node.invoke command list from current permission and feature state. */
@@ -155,6 +158,9 @@ class ConnectionManager(
 
   /** Builds the gateway-advertised capability list from current permission and feature state. */
   fun buildCapabilities(): List<String> = InvokeCommandRegistry.advertisedCapabilities(runtimeFlags())
+
+  /** Builds the current independently grantable Android permission surface. */
+  fun buildPermissions(): Map<String, Boolean> = permissionSnapshot().gatewayPermissions()
 
   /**
    * Debug Android builds advertise a dev version so gateway logs do not look like release clients.
@@ -211,7 +217,7 @@ class ConnectionManager(
       scopes = emptyList(),
       caps = buildCapabilities(),
       commands = buildInvokeCommands(),
-      permissions = emptyMap(),
+      permissions = buildPermissions(),
       client = buildClientInfo(clientId = "openclaw-android", clientMode = "node"),
       userAgent = buildUserAgent(),
     )

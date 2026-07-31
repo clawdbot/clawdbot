@@ -88,6 +88,7 @@ The host is responsible for:
 - creating a `GatewayProtocolSocket` adapter around the browser WebSocket;
 - loading and storing browser device identity and issued device tokens;
 - signing the challenge-bound device payload;
+- using the Gateway challenge `ts` as the device proof's `signedAt` value;
 - supplying the client identity, role, scopes, and authentication selection;
 - choosing close and reconnect behavior for product-specific errors.
 

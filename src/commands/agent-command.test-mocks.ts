@@ -64,6 +64,10 @@ vi.mock("../agents/model-catalog.js", () => ({
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadPreparedModelCatalog: vi.fn(),
+  loadPreparedModelCatalogSnapshot: vi.fn(async () => ({
+    entries: [],
+    routeVariants: [],
+  })),
 }));
 
 vi.mock("../agents/model-selection.js", () => {

@@ -213,6 +213,15 @@ export type SessionThreadBindingsConfig = {
   defaultSpawnContext?: "isolated" | "fork";
 };
 
+export type SessionSharingConfig = {
+  /** Allow owners/admins to set sessions read-only. Default: true. */
+  readOnly?: boolean;
+  /** Allow owners/admins to select suggest mode. Default: true. */
+  suggest?: boolean;
+  /** Allow owners/admins to hide draft sessions from other operators. Default: true. */
+  drafts?: boolean;
+};
+
 export type SessionConfig = {
   scope?: SessionScope;
   /** DM session scoping (default: "main"). */
@@ -229,6 +238,8 @@ export type SessionConfig = {
   sendPolicy?: SessionSendPolicyConfig;
   /** Shared defaults for thread-bound session routing across channels/providers. */
   threadBindings?: SessionThreadBindingsConfig;
+  /** Collaboration modes owners and administrators may select. */
+  sharing?: SessionSharingConfig;
   /** Automatic session store maintenance (pruning, capping, archive retention, disk budget). */
   maintenance?: SessionMaintenanceConfig;
 };
@@ -294,35 +305,13 @@ export type DiagnosticsOtelConfig = {
   sampleRate?: number;
   /** Metric export interval (ms). */
   flushIntervalMs?: number;
-  /**
-   * Opt-in raw content capture for OTEL span attributes.
-   * Boolean `true` captures non-system message/tool content; the object form
-   * can enable each content class explicitly.
-   */
-  captureContent?:
-    | boolean
-    | {
-        enabled?: boolean;
-        inputMessages?: boolean;
-        outputMessages?: boolean;
-        toolInputs?: boolean;
-        toolOutputs?: boolean;
-        systemPrompt?: boolean;
-        toolDefinitions?: boolean;
-      };
+  /** Opt in to raw non-system message/tool content in OTEL span attributes. */
+  captureContent?: boolean;
 };
 
 export type DiagnosticsCacheTraceConfig = {
   /** Write prompt-cache trace artifacts for debugging deterministic cache input. */
   enabled?: boolean;
-  /** @deprecated Doctor-only legacy input. */
-  filePath?: string;
-  /** @deprecated Doctor-only legacy input. */
-  includeMessages?: boolean;
-  /** @deprecated Doctor-only legacy input. */
-  includePrompt?: boolean;
-  /** @deprecated Doctor-only legacy input. */
-  includeSystem?: boolean;
 };
 
 export type AuditConfig = {

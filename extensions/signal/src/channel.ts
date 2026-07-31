@@ -46,7 +46,7 @@ import { resolveSignalOutboundTarget } from "./outbound-session.js";
 import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
 import { resolveSignalReplyContextWithPersistence } from "./reply-authors.js";
-import { signalSetupAdapter } from "./setup-core.js";
+import { signalSetupContract } from "./setup-core.js";
 import {
   createSignalPluginBase,
   signalConfigAdapter,
@@ -482,7 +482,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
     base: {
       ...createSignalPluginBase({
         setupWizard: signalSetupWizard,
-        setup: signalSetupAdapter,
+        setupContract: signalSetupContract,
       }),
       actions: signalMessageActions,
       approvalCapability: signalApprovalCapability,
@@ -579,10 +579,12 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             lastProbeAt: snapshot.lastProbeAt ?? null,
           }),
         probeAccount: async ({ account, timeoutMs }) => {
-          const baseUrl = account.baseUrl;
-          const { probeSignal } = await loadSignalProbeModule();
-          return await probeSignal(baseUrl, timeoutMs, {
-            apiMode: account.config?.apiMode ?? "auto",
+          const { probeSignalAccount } = await loadSignalProbeModule();
+          return await probeSignalAccount({
+            baseUrl: account.baseUrl,
+            timeoutMs,
+            transportKind: account.transport.kind,
+            account: account.config.account,
           });
         },
         formatCapabilitiesProbe: ({ probe }) =>

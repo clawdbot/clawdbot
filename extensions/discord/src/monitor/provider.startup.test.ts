@@ -92,6 +92,9 @@ vi.mock("./listeners.js", () => ({
   DiscordReactionRemoveListener: function DiscordReactionRemoveListener() {
     return { type: "reaction-remove" };
   },
+  DiscordThreadDeleteListener: function DiscordThreadDeleteListener() {
+    return { type: "thread-delete" };
+  },
   DiscordThreadUpdateListener: function DiscordThreadUpdateListener() {
     return { type: "thread-update" };
   },
@@ -397,7 +400,12 @@ describe("registerDiscordMonitorListeners", () => {
   it("skips reaction listeners when every configured guild disables reactions and DMs are off", () => {
     registerDiscordMonitorListeners(createListenerParams());
 
-    expect(registeredListenerTypes()).toEqual(["interaction", "message", "thread-update"]);
+    expect(registeredListenerTypes()).toEqual([
+      "interaction",
+      "message",
+      "thread-update",
+      "thread-delete",
+    ]);
   });
 
   it("keeps reaction listeners when direct messages can emit reaction notifications", () => {
@@ -440,6 +448,7 @@ describe("registerDiscordMonitorListeners", () => {
       "interaction",
       "message",
       "thread-update",
+      "thread-delete",
       "presence",
       "presence-guild-create",
       "presence-guild-delete",

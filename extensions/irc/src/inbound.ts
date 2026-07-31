@@ -35,6 +35,7 @@ import {
 import type { ResolvedIrcAccount } from "./accounts.js";
 import type { IrcIngressDispatchResult, IrcIngressLifecycle } from "./irc-ingress.js";
 import { buildIrcAllowlistCandidates, normalizeIrcAllowEntry } from "./normalize.js";
+import { sanitizeIrcAssistantText } from "./outbound-base.js";
 import { resolveIrcGroupMatch, resolveIrcGroupRequireMention } from "./policy.js";
 import { getIrcRuntime } from "./runtime.js";
 import { sendMessageIrc } from "./send.js";
@@ -80,6 +81,27 @@ const ircIngressIdentity = defineStableChannelIngressIdentity({
 });
 
 const escapeIrcRegexLiteral = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// IRC nicknames permit punctuation, so ASCII word boundaries lose valid leading/trailing chars.
+const IRC_NICK_CHARACTER = String.raw`[A-Za-z0-9_\-\[\]\\\x60^{}|~]`;
+const IRC_RFC1459_CASE_EQUIVALENTS = new Map([
+  ["[", "{"],
+  ["{", "["],
+  ["]", "}"],
+  ["}", "]"],
+  ["\\", "|"],
+  ["|", "\\"],
+  ["^", "~"],
+  ["~", "^"],
+]);
+
+function buildIrcNickMentionPattern(value: string): string {
+  return Array.from(value, (character) => {
+    const equivalent = IRC_RFC1459_CASE_EQUIVALENTS.get(character);
+    return equivalent
+      ? `[${escapeIrcRegexLiteral(character)}${escapeIrcRegexLiteral(equivalent)}]`
+      : escapeIrcRegexLiteral(character);
+  }).join("");
+}
 
 function isBareNick(value: string): boolean {
   return !value.includes("!") && !value.includes("@");
@@ -180,7 +202,10 @@ async function deliverIrcReply(params: {
   statusSink?: (patch: { lastOutboundAt?: number }) => void;
 }) {
   await deliverFormattedTextWithAttachments({
-    payload: params.payload,
+    payload: {
+      ...params.payload,
+      text: sanitizeIrcAssistantText(params.payload.text ?? ""),
+    },
     send: async ({ text, replyToId }) => {
       if (params.sendReply) {
         await params.sendReply(params.target, text, replyToId);
@@ -262,7 +287,10 @@ export async function handleIrcInbound(params: {
   const mentionRegexes = core.channel.mentions.buildMentionRegexes(config as OpenClawConfig);
   const mentionNick = connectedNick?.trim() || account.nick;
   const explicitMentionRegex = mentionNick
-    ? new RegExp(`\\b${escapeIrcRegexLiteral(mentionNick)}\\b[:,]?`, "i")
+    ? new RegExp(
+        `(?<!${IRC_NICK_CHARACTER})${buildIrcNickMentionPattern(mentionNick)}(?!${IRC_NICK_CHARACTER})[:,]?`,
+        "i",
+      )
     : null;
   const wasMentioned =
     core.channel.mentions.matchesMentionPatterns(rawBody, mentionRegexes) ||

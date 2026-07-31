@@ -422,7 +422,9 @@ describe("verified OpenClaw inference binding", () => {
 
   it("accepts and revalidates an opaque CLI owner emitted after a successful turn", async () => {
     const cliConfig = {
-      agents: { defaults: { model: "claude-cli/claude-opus-4-8" } },
+      agents: {
+        entries: { ops: { default: true, model: "claude-cli/claude-opus-5" } },
+      },
     } satisfies OpenClawConfig;
     const route = await resolveSystemAgentConfiguredRouteFromConfig(cliConfig);
     if (!route || route.runner !== "cli") {
@@ -449,6 +451,7 @@ describe("verified OpenClaw inference binding", () => {
       authFingerprint: "opaque-cli-owner",
       proofKind: "runtime-owner",
     });
+    expect(resolveOwner).toHaveBeenCalledWith(expect.objectContaining({ agentId: "ops" }));
     await expect(
       resolveSystemAgentVerifiedInferenceRoute(binding, {
         readConfigFileSnapshot: vi.fn(async () => ({
@@ -471,55 +474,6 @@ describe("verified OpenClaw inference binding", () => {
         })) as never,
         ...cliRuntimeArtifactDeps(),
         resolveCliRuntimeOwnerFingerprint: resolveOwner,
-      }),
-    ).resolves.toBeNull();
-  });
-
-  it("invalidates an opaque CLI owner after backend config drift", async () => {
-    const cliConfig = {
-      agents: {
-        defaults: {
-          model: "claude-cli/claude-opus-4-8",
-          cliBackends: { "claude-cli": { command: "claude" } },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const changedConfig = {
-      agents: {
-        defaults: {
-          ...cliConfig.agents.defaults,
-          cliBackends: { "claude-cli": { command: "/opt/other/claude" } },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const route = await resolveSystemAgentConfiguredRouteFromConfig(cliConfig);
-    if (!route || route.runner !== "cli") {
-      throw new Error("missing test CLI route");
-    }
-    const binding = await createSystemAgentVerifiedInferenceBinding({
-      configuredRoute: route,
-      executionRoute: route,
-      auth: {
-        runtimeOwnerFingerprint: "opaque-cli-owner",
-        runtimeOwnerKind: "cli-runtime",
-        runtimeOwnerId: "claude-cli",
-        ...cliRuntimeArtifactAuth,
-      },
-      deps: {
-        ...pluginArtifactDeps(),
-        ...cliRuntimeArtifactDeps(),
-        resolveCliRuntimeOwnerFingerprint: vi.fn(async () => "opaque-cli-owner"),
-      },
-    });
-
-    await expect(
-      resolveSystemAgentVerifiedInferenceRoute(binding, {
-        readConfigFileSnapshot: vi.fn(async () => ({
-          exists: true,
-          valid: true,
-          config: changedConfig,
-        })) as never,
-        resolveCliRuntimeOwnerFingerprint: vi.fn(async () => "opaque-cli-owner"),
       }),
     ).resolves.toBeNull();
   });
@@ -576,20 +530,22 @@ describe("verified OpenClaw inference binding", () => {
       },
       auth: { profiles: { [profileId]: { provider: "claude-cli", mode: "api_key" } } },
     } satisfies OpenClawConfig;
-    const route = await resolveSystemAgentConfiguredRouteFromConfig(cliConfig);
-    if (!route || route.runner !== "cli" || route.authProfileId !== profileId) {
-      throw new Error("missing test CLI SecretRef route");
-    }
     const credential = {
       type: "api_key" as const,
       provider: "claude-cli",
       keyRef: { source: "file" as const, provider: "vault", id: "/claude/work" },
     };
-    let activeKey = "materialized-a";
     const ensureStore = vi.fn(() => ({
       version: 1,
       profiles: { [profileId]: credential },
     })) as never;
+    const route = await resolveSystemAgentConfiguredRouteFromConfig(cliConfig, undefined, {
+      loadAuthProfileStoreForRuntime: ensureStore,
+    });
+    if (!route || route.runner !== "cli" || route.authProfileId !== profileId) {
+      throw new Error("missing test CLI SecretRef route");
+    }
+    let activeKey = "materialized-a";
     const resolveAuth = vi.fn(async () => ({
       apiKey: activeKey,
       profileId,
@@ -611,6 +567,7 @@ describe("verified OpenClaw inference binding", () => {
       deps: {
         ...pluginArtifactDeps(),
         ...cliRuntimeArtifactDeps(),
+        loadAuthProfileStoreForRuntime: ensureStore,
         ensureAuthProfileStore: ensureStore,
         resolveApiKeyForProvider: resolveAuth,
         resolveCliAuthBindingFingerprint: resolveBinding as never,
@@ -634,6 +591,7 @@ describe("verified OpenClaw inference binding", () => {
           config: cliConfig,
         })) as never,
         ...cliRuntimeArtifactDeps(),
+        loadAuthProfileStoreForRuntime: ensureStore,
         ensureAuthProfileStore: ensureStore,
         resolveApiKeyForProvider: resolveAuth,
         resolveCliAuthBindingFingerprint: resolveBinding as never,

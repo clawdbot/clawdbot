@@ -9,6 +9,9 @@ import {
 } from "./live.js";
 import { createMessageReceiveContext } from "./receive.js";
 
+type LivePreviewMediaPayload = { text?: string; mediaUrl: string };
+type LivePreviewMediaEdit = { text?: string };
+
 function requireMockCall(
   mock: { mock: { calls: unknown[][] } },
   callIndex: number,
@@ -92,9 +95,9 @@ describe("message lifecycle primitives", () => {
     const deliverSupplemental = vi.fn(async () => true);
 
     const result = await deliverFinalizableLivePreview<
-      { text?: string; mediaUrl: string },
+      LivePreviewMediaPayload,
       string,
-      { text?: string }
+      LivePreviewMediaEdit
     >({
       kind: "final",
       payload: { text: "done", mediaUrl: "file:///tmp/reply.mp3" },
@@ -115,6 +118,78 @@ describe("message lifecycle primitives", () => {
     expect(editFinal).toHaveBeenCalledWith("preview-1", { text: "done" });
     expect(deliverNormally).not.toHaveBeenCalled();
     expect(deliverSupplemental).toHaveBeenCalledWith({ mediaUrl: "file:///tmp/reply.mp3" });
+  });
+
+  it("falls back to normal supplemental delivery when its dedicated sender reports no send", async () => {
+    const deliverNormally = vi.fn(async () => true);
+    const deliverSupplemental = vi.fn(async () => false);
+
+    const result = await deliverFinalizableLivePreview<
+      LivePreviewMediaPayload,
+      string,
+      LivePreviewMediaEdit
+    >({
+      kind: "final",
+      payload: { text: "done", mediaUrl: "file:///tmp/reply.mp3" },
+      draft: {
+        flush: vi.fn(async () => undefined),
+        id: () => "preview-supplement-fallback",
+        clear: vi.fn(async () => undefined),
+      },
+      buildFinalEdit: (payload) => ({ text: payload.text }),
+      editFinal: vi.fn(async () => undefined),
+      buildSupplementalPayload: (payload) => ({ mediaUrl: payload.mediaUrl }),
+      deliverSupplemental,
+      deliverNormally,
+    });
+
+    expect(result.kind).toBe("preview-finalized");
+    expect(deliverSupplemental).toHaveBeenCalledWith({ mediaUrl: "file:///tmp/reply.mp3" });
+    expect(deliverNormally).toHaveBeenCalledWith({ mediaUrl: "file:///tmp/reply.mp3" });
+  });
+
+  it("uses normal delivery when a finalized preview has no supplemental sender", async () => {
+    const deliverNormally = vi.fn(async () => true);
+
+    const result = await deliverFinalizableLivePreview<
+      LivePreviewMediaPayload,
+      string,
+      LivePreviewMediaEdit
+    >({
+      kind: "final",
+      payload: { text: "done", mediaUrl: "file:///tmp/reply.mp3" },
+      draft: {
+        flush: vi.fn(async () => undefined),
+        id: () => "preview-no-supplement-sender",
+        clear: vi.fn(async () => undefined),
+      },
+      buildFinalEdit: (payload) => ({ text: payload.text }),
+      editFinal: vi.fn(async () => undefined),
+      buildSupplementalPayload: (payload) => ({ mediaUrl: payload.mediaUrl }),
+      deliverNormally,
+    });
+
+    expect(result.kind).toBe("preview-finalized");
+    expect(deliverNormally).toHaveBeenCalledWith({ mediaUrl: "file:///tmp/reply.mp3" });
+  });
+
+  it("surfaces supplemental delivery failure after both sender paths report no send", async () => {
+    await expect(
+      deliverFinalizableLivePreview<LivePreviewMediaPayload, string, LivePreviewMediaEdit>({
+        kind: "final",
+        payload: { text: "done", mediaUrl: "file:///tmp/reply.mp3" },
+        draft: {
+          flush: vi.fn(async () => undefined),
+          id: () => "preview-supplement-unsent",
+          clear: vi.fn(async () => undefined),
+        },
+        buildFinalEdit: (payload) => ({ text: payload.text }),
+        editFinal: vi.fn(async () => undefined),
+        buildSupplementalPayload: (payload) => ({ mediaUrl: payload.mediaUrl }),
+        deliverSupplemental: vi.fn(async () => false),
+        deliverNormally: vi.fn(async () => false),
+      }),
+    ).rejects.toThrow("Live preview supplemental payload was not delivered");
   });
 
   it("treats live preview fallback delivery as terminal state", async () => {

@@ -1,10 +1,13 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import {
   appendTranscriptMessage,
+  appendTranscriptMessages,
   isSessionTranscriptProjectionUnavailableError,
   loadSessionEntry,
   loadTranscriptEvents,
   publishTranscriptUpdate,
+  persistSessionTranscriptTurn,
   readTranscriptRawDelta,
   readSessionTranscriptVisibleMessageDelta as readVisibleMessageDelta,
   readLatestTranscriptAssistantText,
@@ -34,6 +37,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
 import type { AgentMessage } from "./agent-core.js";
+import { withProjectedSessionTranscriptWriteLock } from "./session-transcript-lock-runtime.js";
 import {
   formatSessionTranscriptMemoryHitKey,
   parseSessionTranscriptMemoryHitKey,
@@ -126,6 +130,20 @@ export type SessionTranscriptTarget = SessionTranscriptIdentity & {
 
 export type SessionTranscriptAppendMessageParams<TMessage> = SessionTranscriptTargetParams &
   TranscriptMessageAppendOptions<TMessage>;
+
+export type SessionTranscriptAppendMessagesParams<TMessage> = SessionTranscriptTargetParams & {
+  config?: TranscriptMessageAppendOptions<TMessage>["config"];
+  cwd?: string;
+  messages: readonly Omit<
+    TranscriptMessageAppendOptions<TMessage>,
+    "config" | "cwd" | "parentId" | "prepareMessageAfterIdempotencyCheck" | "useRawWhenLinear"
+  >[];
+};
+
+export type SessionTranscriptStrictMessageAppendResult<TMessage> =
+  | { kind: "result"; result: TranscriptMessageAppendResult<TMessage> }
+  | { kind: "suppressed" }
+  | { kind: "rejected"; reason: "session-rebound" };
 
 export type SessionTranscriptAssistantMirrorAppendParams = SessionTranscriptReadParams & {
   config?: OpenClawConfig;
@@ -334,12 +352,65 @@ export async function appendAssistantMirrorMessageByIdentity(
 }
 
 /**
- * Appends a transcript message by scoped transcript target.
+ * Appends an already-canonical transcript message by scoped transcript target.
+ * Media-bearing user turns use ordered `message.__openclaw.media` facts; this
+ * low-level API does not infer deprecated top-level Media* projections.
  */
 export async function appendSessionTranscriptMessageByIdentity<TMessage>(
   params: SessionTranscriptAppendMessageParams<TMessage>,
 ): Promise<TranscriptMessageAppendResult<TMessage> | undefined> {
   return await appendTranscriptMessage(params, params);
+}
+
+/** Appends one message while preserving distinct suppression and session-rebind outcomes. */
+export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
+  params: SessionTranscriptAppendMessageParams<TMessage>,
+): Promise<SessionTranscriptStrictMessageAppendResult<TMessage>> {
+  const expectedSessionId = params.sessionId?.trim();
+  if (!expectedSessionId) {
+    throw new Error("Cannot strictly append a transcript message without an exact session id");
+  }
+  const turn = await persistSessionTranscriptTurn(params, {
+    ...(params.config ? { config: params.config } : {}),
+    ...(params.cwd ? { cwd: params.cwd } : {}),
+    expectedSessionId,
+    messages: [
+      {
+        ...(params.eventId !== undefined ? { eventId: params.eventId } : {}),
+        ...(params.idempotencyLookup !== undefined
+          ? { idempotencyLookup: params.idempotencyLookup }
+          : {}),
+        message: params.message,
+        ...(params.now !== undefined ? { now: params.now } : {}),
+        ...(params.parentId !== undefined ? { parentId: params.parentId } : {}),
+        ...(params.prepareMessageAfterIdempotencyCheck
+          ? {
+              prepareMessageAfterIdempotencyCheck: (message: unknown) =>
+                params.prepareMessageAfterIdempotencyCheck?.(message as TMessage),
+            }
+          : {}),
+        ...(params.useRawWhenLinear !== undefined
+          ? { useRawWhenLinear: params.useRawWhenLinear }
+          : {}),
+      },
+    ],
+    updateMode: "none",
+  });
+  if (turn.rejectedReason) {
+    return { kind: "rejected", reason: turn.rejectedReason };
+  }
+  const result = turn.messages[0] as TranscriptMessageAppendResult<TMessage> | undefined;
+  return result ? { kind: "result", result } : { kind: "suppressed" };
+}
+
+/**
+ * Atomically appends one ordered, already-hooked message group. Preparation and
+ * redaction finish before SQLite begins; this is the canonical future harness seam.
+ */
+export async function appendSessionTranscriptMessagesByIdentity<TMessage>(
+  params: SessionTranscriptAppendMessagesParams<TMessage>,
+): Promise<TranscriptMessageAppendResult<TMessage>[]> {
+  return await appendTranscriptMessages(params, params);
 }
 
 /**
@@ -375,42 +446,7 @@ export async function withSessionTranscriptWriteLock<T>(
   params: SessionTranscriptWriteLockParams,
   run: (context: SessionTranscriptWriteLockContext) => Promise<T> | T,
 ): Promise<T> {
-  const storageTarget = await resolveSessionTranscriptRuntimeTarget(params);
-  const target = projectPublicTarget({
-    ...storageTarget,
-    targetKind: "runtime-session",
-  });
-  const boundScope = {
-    ...params,
-    sessionId: storageTarget.sessionId,
-    sessionKey: storageTarget.sessionKey,
-  };
-  // Treat publishUpdate as a post-commit callback: future transactional stores
-  // must not expose updates when the scoped write callback fails.
-  const queuedUpdates: Array<TranscriptUpdatePayload | undefined> = [];
-  const result = await withTranscriptWriteLock(
-    boundScope,
-    async (locked) =>
-      await run({
-        target,
-        readEvents: locked.readEvents,
-        appendMessage: (options) =>
-          locked.appendMessage({
-            ...options,
-            ...(params.config !== undefined ? { config: params.config } : {}),
-          }),
-        publishUpdate: async (update) => {
-          queuedUpdates.push(update ? { ...update } : undefined);
-        },
-      }),
-  );
-  for (const update of queuedUpdates) {
-    await publishSessionTranscriptUpdateByIdentity({
-      ...boundScope,
-      update,
-    });
-  }
-  return result;
+  return await withProjectedSessionTranscriptWriteLock(params, run, (context) => context);
 }
 
 function createAssistantMirrorMessage(params: {
@@ -483,10 +519,6 @@ function extractAssistantMirrorComparableText(
 
 function isDeliveryMirrorAssistantMessage(message: SessionTranscriptAssistantMessage): boolean {
   return message.provider === "openclaw" && message.model === "delivery-mirror";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readNonEmptyString(value: unknown): string | undefined {

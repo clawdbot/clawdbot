@@ -271,9 +271,8 @@ Automatic fallback across authenticated providers is always enabled. A per-call
 <AccordionGroup>
   <Accordion title="ComfyUI">
     Workflow-driven and depends on the configured graph plus node mapping
-    for prompt/output fields. The bundled `comfy` plugin plugs into the
-    shared `music_generate` tool through the music-generation provider
-    registry.
+    for prompt/output fields. The `comfy` plugin plugs into the shared
+    `music_generate` tool through the music-generation provider registry.
   </Accordion>
   <Accordion title="fal">
     Uses fal model endpoints through the shared provider auth path. The

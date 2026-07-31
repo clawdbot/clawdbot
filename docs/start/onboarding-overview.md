@@ -16,13 +16,13 @@ detailed setup.
 
 ## Which path should I use?
 
-|                | CLI onboarding                         | macOS app onboarding           |
-| -------------- | -------------------------------------- | ------------------------------ |
-| **Platforms**  | macOS, Linux, Windows (native or WSL2) | macOS only                     |
-| **Interface**  | Inference setup, then OpenClaw         | Inference setup, then OpenClaw |
-| **Best for**   | Servers, headless, full control        | Desktop Mac, visual setup      |
-| **Automation** | `--non-interactive` for scripts        | Manual only                    |
-| **Command**    | `openclaw onboard`                     | Launch the app                 |
+|                | CLI onboarding                         | macOS app onboarding                                          |
+| -------------- | -------------------------------------- | ------------------------------------------------------------- |
+| **Platforms**  | macOS, Linux, Windows (native or WSL2) | macOS only                                                    |
+| **Interface**  | Inference setup, then OpenClaw         | Inference setup, then OpenClaw                                |
+| **Best for**   | Servers, headless, full control        | Desktop Mac, visual setup                                     |
+| **Automation** | `--non-interactive` for scripts        | Manual only                                                   |
+| **Command**    | `openclaw onboard`                     | [Download the app](/platforms/macos#download), then launch it |
 
 Most users should start with **CLI onboarding** — it works everywhere and gives
 you the most control.
@@ -81,7 +81,8 @@ CLI command docs: [`openclaw onboard`](/cli/onboard)
 
 ## macOS app onboarding
 
-Open the OpenClaw app. If its configured local or remote Gateway is reachable
+[Download the macOS app](/platforms/macos#download), then open it. If its
+configured local or remote Gateway is reachable
 and the default agent already has a configured model, the app skips onboarding
 and OpenClaw and opens the normal agent UI immediately.
 
@@ -92,8 +93,10 @@ offering a verified manual API-key step when nothing is found. Sensitive
 credentials use masked input. Once inference passes, OpenClaw starts and
 helps configure the rest.
 
-Gemini CLI remains available for normal agents after setup, but it is not
-offered for this inference gate because it cannot enforce the tool-free probe.
+Gemini CLI remains available as an explicitly configured runtime after setup,
+but Gemini CLI and Antigravity are not offered as detected inference routes.
+Use Google AI Studio API-key or Vertex AI for guided setup. The optional Gemini
+CLI runtime specifically requires an AI Studio API-key profile.
 
 Full reference: [Onboarding (macOS App)](/start/onboarding)
 

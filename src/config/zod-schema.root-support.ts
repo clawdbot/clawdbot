@@ -192,6 +192,8 @@ export const PluginEntrySchema = z.strictObject({
     .strictObject({
       allowModelOverride: z.boolean().optional(),
       allowedModels: z.array(z.string()).optional(),
+      allowedCompletionModels: z.array(z.string()).optional(),
+      allowAuthProfileOverride: z.boolean().optional(),
       allowAgentIdOverride: z.boolean().optional(),
     })
     .optional(),
@@ -245,6 +247,7 @@ const TalkRealtimeSchema = z
 
 export const TalkSchema = z
   .strictObject({
+    agentId: z.string().trim().min(1).optional(),
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
     realtime: TalkRealtimeSchema.optional(),
@@ -389,9 +392,45 @@ const McpServerSchema = z
   })
   .catchall(z.unknown());
 
+const RESERVED_MCP_SERVER_NAME = "__proto__";
+const RESERVED_MCP_SERVER_NAME_ERROR = 'MCP server name "__proto__" is reserved; rename the server';
+
+export const McpServerNameSchema = z
+  .string()
+  .refine((value) => value !== RESERVED_MCP_SERVER_NAME, RESERVED_MCP_SERVER_NAME_ERROR);
+
+export const NodeHostMcpServerNameSchema = McpServerNameSchema.refine(
+  (value) => value.length > 0 && value === value.trim(),
+  "MCP server name must be non-empty and must not have surrounding whitespace",
+);
+
+function createMcpServersSchema(serverNameSchema: z.ZodType<string>) {
+  return z.preprocess(
+    (value, ctx) => {
+      // Plain assignment treats "__proto__" as a setter, so one unhardened map builder
+      // can silently drop the server. Reject the name at the config boundary instead.
+      if (
+        value !== null &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        Object.hasOwn(value, RESERVED_MCP_SERVER_NAME)
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [RESERVED_MCP_SERVER_NAME],
+          message: RESERVED_MCP_SERVER_NAME_ERROR,
+        });
+        return z.NEVER;
+      }
+      return value;
+    },
+    z.record(serverNameSchema, McpServerSchema),
+  );
+}
+
 export const McpConfigSchema = z
   .strictObject({
-    servers: z.record(z.string(), McpServerSchema).optional(),
+    servers: createMcpServersSchema(McpServerNameSchema).optional(),
     apps: z
       .strictObject({
         enabled: z.boolean().optional(),
@@ -418,13 +457,6 @@ export const McpConfigSchema = z
   })
   .optional();
 
-const NodeHostMcpServerNameSchema = z
-  .string()
-  .refine(
-    (value) => value.length > 0 && value === value.trim(),
-    "MCP server name must be non-empty and must not have surrounding whitespace",
-  );
-
 export const NodeHostSchema = z
   .strictObject({
     agentRuns: NodeHostAgentRunsSchema,
@@ -436,7 +468,7 @@ export const NodeHostSchema = z
       .optional(),
     mcp: z
       .strictObject({
-        servers: z.record(NodeHostMcpServerNameSchema, McpServerSchema).optional(),
+        servers: createMcpServersSchema(NodeHostMcpServerNameSchema).optional(),
       })
       .optional(),
     skills: z

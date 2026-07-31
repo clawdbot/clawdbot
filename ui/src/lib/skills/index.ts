@@ -1,4 +1,3 @@
-// Shared skill Gateway operations and state helpers.
 import {
   ClawHubTrustErrorCodes,
   readClawHubTrustErrorDetails,
@@ -10,12 +9,19 @@ import type {
   SkillStatusEntry,
   SkillStatusReport,
 } from "../../api/types.ts";
+import {
+  normalizeSkillApiKeyReplacement,
+  runSkillConfigMutation,
+  skillConfigMutationSuccess,
+  type SkillConfigMutationOwner,
+} from "./config-mutations.ts";
 
 export type ClawHubSearchResult = {
   score: number;
   slug: string;
   displayName: string;
   summary?: string;
+  icon?: string | null;
   version?: string;
   updatedAt?: number;
 };
@@ -25,6 +31,7 @@ export type ClawHubSkillDetail = {
     slug: string;
     displayName: string;
     summary?: string;
+    icon?: string | null;
     tags?: Record<string, string>;
     channel?: string | null;
     isOfficial?: boolean | null;
@@ -77,6 +84,7 @@ export type ClawHubSkillSecurityVerdict = {
 type SkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  runtimeConfig: SkillConfigMutationOwner;
   skillsAgentId: string | null;
   skillsAgentRevision: number;
   skillsLoading: boolean;
@@ -156,9 +164,8 @@ function getClawHubTrustDetailsFromError(err: unknown) {
   return readClawHubTrustErrorDetails((err as { details?: unknown }).details);
 }
 
-function formatClawHubInstallMessage(message: string, warning?: string): string {
-  return warning ? `${message}\n\n${warning}` : message;
-}
+const formatClawHubInstallMessage = (message: string, warning?: string): string =>
+  warning ? `${message}\n\n${warning}` : message;
 
 function formatClawHubAcknowledgementMessage(warning?: string): string {
   return formatClawHubInstallMessage(
@@ -257,14 +264,6 @@ async function runStaleAwareRequest<T>(
     onError(err);
   }
   onFinally();
-}
-
-export function setClawHubSearchQuery(state: SkillsState, query: string) {
-  state.clawhubSearchQuery = query;
-  state.clawhubInstallMessage = null;
-  state.clawhubSearchResults = null;
-  state.clawhubSearchError = null;
-  state.clawhubSearchLoading = false;
 }
 
 export function setSkillsAgentId(state: SkillsState, agentId: string | null) {
@@ -569,22 +568,28 @@ async function runSkillMutation(
 
 export async function updateSkillEnabled(state: SkillsState, skillKey: string, enabled: boolean) {
   await runSkillMutation(state, skillKey, async (client) => {
-    await client.request("skills.update", { skillKey, enabled });
-    return {
-      kind: "success",
-      message: enabled ? "Skill enabled" : "Skill disabled",
-    };
+    const refreshError = await runSkillConfigMutation(state.runtimeConfig, client, {
+      skillKey,
+      enabled,
+    });
+    return skillConfigMutationSuccess(enabled ? "Skill enabled" : "Skill disabled", refreshError);
   });
 }
 
 export async function saveSkillApiKey(state: SkillsState, skillKey: string) {
+  const apiKey = normalizeSkillApiKeyReplacement(state.skillEdits[skillKey]);
+  if (!apiKey) {
+    return;
+  }
   await runSkillMutation(state, skillKey, async (client) => {
-    const editValue = state.skillEdits[skillKey] ?? "";
-    await client.request("skills.update", { skillKey, apiKey: editValue });
-    return {
-      kind: "success",
-      message: `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
-    };
+    const refreshError = await runSkillConfigMutation(state.runtimeConfig, client, {
+      skillKey,
+      apiKey,
+    });
+    return skillConfigMutationSuccess(
+      `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
+      refreshError,
+    );
   });
 }
 
@@ -610,44 +615,20 @@ export async function installSkill(
   });
 }
 
-export async function searchClawHub(state: SkillsState, query: string) {
-  if (!state.client || !state.connected) {
-    return;
-  }
+export async function searchClawHub(
+  client: GatewayBrowserClient,
+  query: string,
+  signal?: AbortSignal,
+): Promise<ClawHubSearchResult[]> {
   if (!query.trim()) {
-    state.clawhubSearchResults = null;
-    state.clawhubSearchError = null;
-    state.clawhubSearchLoading = false;
-    return;
+    return [];
   }
-  const client = state.client;
-  const agentScope = captureSkillsAgentScope(state);
-  // Clear stale entries as soon as a new search begins so the UI cannot act on
-  // results that no longer match the current query while the next request is in flight.
-  state.clawhubSearchResults = null;
-  state.clawhubSearchLoading = true;
-  state.clawhubSearchError = null;
-  await runStaleAwareRequest(
-    () =>
-      state.connected &&
-      state.client === client &&
-      query === state.clawhubSearchQuery &&
-      isSkillsAgentScopeCurrent(state, agentScope),
-    () =>
-      client.request<{ results: ClawHubSearchResult[] }>("skills.search", {
-        query,
-        limit: 20,
-      }),
-    (res) => {
-      state.clawhubSearchResults = res?.results ?? [];
-    },
-    (err) => {
-      state.clawhubSearchError = getErrorMessage(err);
-    },
-    () => {
-      state.clawhubSearchLoading = false;
-    },
+  const response = await client.request<{ results: ClawHubSearchResult[] }>(
+    "skills.search",
+    { query, limit: 20 },
+    { signal },
   );
+  return response?.results ?? [];
 }
 
 export async function loadClawHubDetail(state: SkillsState, slug: string) {

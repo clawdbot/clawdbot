@@ -36,6 +36,7 @@ import {
   getTelegramTextParts,
   hasBotMention,
   isBinaryContent,
+  joinTelegramTextParts,
   normalizeForwardedContext,
   resolveTelegramPrimaryMedia,
   resolveTelegramRichMessageBody,
@@ -58,11 +59,12 @@ export {
   getTelegramTextParts,
   hasBotMention,
   isBinaryContent,
+  joinTelegramTextParts,
   normalizeForwardedContext,
   resolveTelegramPrimaryMedia,
 };
 
-const TELEGRAM_GENERAL_TOPIC_ID = 1;
+export const TELEGRAM_GENERAL_TOPIC_ID = 1;
 const TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS = 1024;
 const TELEGRAM_FORUM_FLAG_CACHE_TTL_MS = 10 * 60_000;
 const telegramForumFlagByChatId = new Map<string, { expiresAtMs: number; isForum: boolean }>();

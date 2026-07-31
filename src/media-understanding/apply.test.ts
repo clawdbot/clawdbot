@@ -208,7 +208,6 @@ async function withMediaAutoDetectEnv<T>(
       GROQ_API_KEY: undefined,
       DEEPGRAM_API_KEY: undefined,
       GEMINI_API_KEY: undefined,
-      OPENCLAW_ANTIGRAVITY_CLI: undefined,
       OPENCLAW_AGENT_DIR: undefined,
       ...env,
     },
@@ -228,8 +227,7 @@ async function createAudioCtx(params?: {
   });
   return {
     Body: params?.body ?? "",
-    MediaPath: mediaPath,
-    MediaType: params?.mediaType ?? "audio/ogg",
+    media: [{ path: mediaPath, contentType: params?.mediaType ?? "audio/ogg" }],
   } satisfies MsgContext;
 }
 
@@ -275,8 +273,7 @@ async function applyWithDisabledMedia(params: {
 }) {
   const ctx: MsgContext = {
     Body: params.body,
-    MediaPath: params.mediaPath,
-    ...(params.mediaType ? { MediaType: params.mediaType } : {}),
+    media: [{ path: params.mediaPath, contentType: params.mediaType }],
   };
   const result = await applyMediaUnderstanding({
     ctx,
@@ -468,8 +465,7 @@ describe("applyMediaUnderstanding", () => {
   it("handles URL-only attachments for audio transcription", async () => {
     const ctx: MsgContext = {
       Body: "",
-      MediaUrl: "https://example.com/note.ogg",
-      MediaType: "audio/ogg",
+      media: [{ url: "https://example.com/note.ogg", contentType: "audio/ogg" }],
       ChatType: "direct",
     };
     const cfg: OpenClawConfig = {
@@ -547,8 +543,7 @@ describe("applyMediaUnderstanding", () => {
 
     const ctx: MsgContext = {
       Body: "",
-      MediaUrl: "https://example.com/tiny.ogg",
-      MediaType: "audio/ogg",
+      media: [{ url: "https://example.com/tiny.ogg", contentType: "audio/ogg" }],
       ChatType: "dm",
     };
     const transcribeAudio = vi.fn(async () => ({ text: "should-not-run" }));
@@ -824,7 +819,7 @@ describe("applyMediaUnderstanding", () => {
       `--encoder=${path.join(modelDir, "encoder.onnx")}`,
       `--decoder=${path.join(modelDir, "decoder.onnx")}`,
       `--joiner=${path.join(modelDir, "joiner.onnx")}`,
-      await fs.realpath(ctx.MediaPath ?? ""),
+      await fs.realpath(ctx.media?.[0]?.path ?? ""),
     ]);
     expectCliRunOptions(options);
   });
@@ -891,7 +886,7 @@ describe("applyMediaUnderstanding", () => {
     expect(args.slice(0, 4)).toEqual(["-m", modelPath, "-otxt", "-of"]);
     expect(typeof args[4]).toBe("string");
     expect(String(args[4]).endsWith("sample")).toBe(true);
-    expect(args.slice(5)).toEqual(["-nt", await fs.realpath(ctx.MediaPath ?? "")]);
+    expect(args.slice(5)).toEqual(["-nt", await fs.realpath(ctx.media?.[0]?.path ?? "")]);
     if (process.platform === "linux") {
       expect(mockedRunExec.mock.calls).toContainEqual([
         "readelf",
@@ -1033,7 +1028,7 @@ describe("applyMediaUnderstanding", () => {
     expect(mockedRunExec).not.toHaveBeenCalled();
   });
 
-  it("uses Antigravity CLI as the last auto image fallback", async () => {
+  it("does not auto-detect Antigravity CLI for images", async () => {
     clearMediaUnderstandingBinaryCacheForTests();
     const binDir = await createTempMediaDir();
     await createMockExecutable(binDir, "agy");
@@ -1043,48 +1038,21 @@ describe("applyMediaUnderstanding", () => {
     });
     const ctx: MsgContext = {
       Body: "",
-      MediaPath: imagePath,
-      MediaType: "image/jpeg",
+      media: [{ path: imagePath, contentType: "image/jpeg" }],
     };
     const cfg: OpenClawConfig = { tools: { media: { image: {} } } };
     mockedResolveApiKey.mockResolvedValue({
       source: "none",
       mode: "api-key",
     });
-    mockedRunExec.mockImplementation(async (_command, args) => {
-      if (Array.isArray(args) && args.includes("--help")) {
-        return { stdout: "--print\n--add-dir\n--sandbox\n", stderr: "" };
-      }
-      return { stdout: "antigravity image description\n", stderr: "" };
-    });
 
     await withMediaAutoDetectEnv({ PATH: binDir }, async () => {
       const result = await applyMediaUnderstanding({ ctx, cfg });
-      expect(result.appliedImage).toBe(true);
+      expect(result.appliedImage).toBe(false);
     });
 
-    expect(ctx.Body).toBe("[Image]\nDescription:\nantigravity image description");
-    expect(mockedRunExec).toHaveBeenCalledTimes(2);
-    const realImagePath = await fs.realpath(imagePath);
-    const [_probeCommand, _probeArgs, probeOptions] = getRunExecCall(0);
-    expect(probeOptions).toEqual({
-      timeoutMs: 3000,
-      cwd: expect.stringContaining("openclaw-antigravity-probe-"),
-    });
-    const [command, args, options] = getRunExecCall(1);
-    expect(command).toBe(path.join(binDir, "agy"));
-    expect(args).toEqual([
-      "--sandbox",
-      "--add-dir",
-      path.dirname(realImagePath),
-      "--print",
-      expect.stringContaining(realImagePath),
-    ]);
-    expect(options).toEqual({
-      timeoutMs: 60_000,
-      maxBuffer: CLI_OUTPUT_MAX_BUFFER,
-      cwd: path.dirname(realImagePath),
-    });
+    expect(ctx.Body).toBe("");
+    expect(mockedRunExec).not.toHaveBeenCalled();
   });
 
   it("uses CLI image understanding and preserves caption for commands", async () => {
@@ -1095,8 +1063,7 @@ describe("applyMediaUnderstanding", () => {
 
     const ctx: MsgContext = {
       Body: "show Dom",
-      MediaPath: imagePath,
-      MediaType: "image/jpeg",
+      media: [{ path: imagePath, contentType: "image/jpeg" }],
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -1142,8 +1109,7 @@ describe("applyMediaUnderstanding", () => {
 
     const ctx: MsgContext = {
       Body: "",
-      MediaPath: imagePath,
-      MediaType: "image/jpeg",
+      media: [{ path: imagePath, contentType: "image/jpeg" }],
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -1183,8 +1149,7 @@ describe("applyMediaUnderstanding", () => {
     const describeImage = vi.fn(async () => ({ text: "workspace image" }));
     const ctx: MsgContext = {
       Body: "",
-      MediaPath: relativeImagePath,
-      MediaType: "image/jpeg",
+      media: [{ path: relativeImagePath, contentType: "image/jpeg" }],
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -1237,8 +1202,7 @@ describe("applyMediaUnderstanding", () => {
     const describeImage = vi.fn(async () => ({ text: "normalized image" }));
     const ctx: MsgContext = {
       Body: "",
-      MediaPath: imagePath,
-      MediaType: "image/heic",
+      media: [{ path: imagePath, contentType: "image/heic" }],
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -1290,8 +1254,7 @@ describe("applyMediaUnderstanding", () => {
 
     const ctx: MsgContext = {
       Body: "",
-      MediaPath: audioPath,
-      MediaType: "audio/ogg",
+      media: [{ path: audioPath, contentType: "audio/ogg" }],
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -1372,8 +1335,10 @@ describe("applyMediaUnderstanding", () => {
 
     const ctx: MsgContext = {
       Body: "",
-      MediaPaths: [audioPathA, audioPathB],
-      MediaTypes: ["audio/ogg", "audio/ogg"],
+      media: [
+        { path: audioPathA, contentType: "audio/ogg" },
+        { path: audioPathB, contentType: "audio/ogg" },
+      ],
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -1416,8 +1381,10 @@ describe("applyMediaUnderstanding", () => {
 
     const ctx: MsgContext = {
       Body: "",
-      MediaPaths: [validPath, tinyPath],
-      MediaTypes: ["audio/ogg", "audio/ogg"],
+      media: [
+        { path: validPath, contentType: "audio/ogg" },
+        { path: tinyPath, contentType: "audio/ogg" },
+      ],
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -1466,8 +1433,11 @@ describe("applyMediaUnderstanding", () => {
 
     const ctx: MsgContext = {
       Body: "",
-      MediaPaths: [imagePath, audioPath, videoPath],
-      MediaTypes: ["image/jpeg", "audio/ogg", "video/mp4"],
+      media: [
+        { path: imagePath, contentType: "image/jpeg" },
+        { path: audioPath, contentType: "audio/ogg" },
+        { path: videoPath, contentType: "video/mp4" },
+      ],
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -1532,8 +1502,11 @@ describe("applyMediaUnderstanding", () => {
     const transcribeAudio = vi.fn(async () => ({ text: "audio ok" }));
     const ctx: MsgContext = {
       Body: "",
-      MediaPaths: [imagePath, audioPath, filePath],
-      MediaTypes: ["image/jpeg", "audio/ogg", "text/plain"],
+      media: [
+        { path: imagePath, contentType: "image/jpeg" },
+        { path: audioPath, contentType: "audio/ogg" },
+        { path: filePath, contentType: "text/plain" },
+      ],
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -1583,8 +1556,11 @@ describe("applyMediaUnderstanding", () => {
 
     const ctx: MsgContext = {
       Body: "",
-      MediaPaths: [imagePath, audioPath, videoPath],
-      MediaTypes: ["image/jpeg", "audio/ogg", "video/mp4"],
+      media: [
+        { path: imagePath, contentType: "image/jpeg" },
+        { path: audioPath, contentType: "audio/ogg" },
+        { path: videoPath, contentType: "video/mp4" },
+      ],
     };
     const cfg: OpenClawConfig = {
       tools: {

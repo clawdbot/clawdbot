@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -38,6 +39,7 @@ import { defaultRuntime } from "../runtime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
+import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 function fail(message: string): never {
@@ -196,12 +198,6 @@ const SENSITIVE_HEADER_NAMES = new Set([
 
 const SENSITIVE_KEY_PATTERN =
   /(?:^|[_-])(api[_-]?key|authorization|bearer|password|secret|token)$/i;
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function issue(level: McpDoctorIssue["level"], message: string): McpDoctorIssue {
   return { level, message };
@@ -563,6 +559,30 @@ function applyMcpProbeInitializeTimeout(server: Record<string, unknown>): Record
   };
 }
 
+function resolveMcpProbeIssue(params: {
+  result: ReturnType<typeof formatMcpProbeResult>;
+  servers: Record<string, Record<string, unknown>>;
+  path: string;
+}): string | undefined {
+  if (params.result.diagnostics.length > 0) {
+    const first = expectDefined(params.result.diagnostics[0], "diagnostics entry at 0");
+    return `MCP probe failed for "${first.serverName}" in ${params.path}: ${first.message}`;
+  }
+  for (const [name, server] of Object.entries(params.servers)) {
+    if (server.enabled !== false && !params.result.servers[name]) {
+      return `MCP probe did not connect to "${name}" in ${params.path}.`;
+    }
+  }
+  return undefined;
+}
+
+function failOnMcpProbeIssues(params: Parameters<typeof resolveMcpProbeIssue>[0]): void {
+  const probeIssue = resolveMcpProbeIssue(params);
+  if (probeIssue) {
+    fail(probeIssue);
+  }
+}
+
 async function probeMcpServersOrFail(params: {
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
@@ -582,15 +602,7 @@ async function probeMcpServersOrFail(params: {
   });
   try {
     const result = formatMcpProbeResult(await runtime.getCatalog());
-    if (result.diagnostics.length > 0) {
-      const first = expectDefined(result.diagnostics[0], "diagnostics entry at 0");
-      fail(`MCP probe failed for "${first.serverName}" in ${params.path}: ${first.message}`);
-    }
-    for (const name of Object.keys(params.servers)) {
-      if (!result.servers[name]) {
-        fail(`MCP probe did not connect to "${name}" in ${params.path}.`);
-      }
-    }
+    failOnMcpProbeIssues({ result, servers: params.servers, path: params.path });
     return result;
   } finally {
     await runtime.dispose();
@@ -787,16 +799,23 @@ export function registerMcpCli(program: Command) {
         const result = formatMcpProbeResult(await runtime.getCatalog());
         if (opts.json) {
           printJson(result);
-          return;
+        } else {
+          defaultRuntime.log(`MCP probe (${loaded.path}):`);
+          for (const [serverName, server] of Object.entries(result.servers)) {
+            defaultRuntime.log(
+              `- ${serverName}: ${server.tools} tools${server.resources ? ", resources" : ""}${server.prompts ? ", prompts" : ""}`,
+            );
+          }
+          for (const diagnostic of result.diagnostics) {
+            defaultRuntime.log(`! ${diagnostic.serverName}: ${diagnostic.message}`);
+          }
         }
-        defaultRuntime.log(`MCP probe (${loaded.path}):`);
-        for (const [serverName, server] of Object.entries(result.servers)) {
-          defaultRuntime.log(
-            `- ${serverName}: ${server.tools} tools${server.resources ? ", resources" : ""}${server.prompts ? ", prompts" : ""}`,
-          );
-        }
-        for (const diagnostic of result.diagnostics) {
-          defaultRuntime.log(`! ${diagnostic.serverName}: ${diagnostic.message}`);
+        const probeIssue = resolveMcpProbeIssue({ result, servers, path: loaded.path });
+        if (probeIssue) {
+          defaultRuntime.error(probeIssue);
+          if (!requestExitAfterOneShotOutput(defaultRuntime, 1)) {
+            defaultRuntime.exit(1);
+          }
         }
       } finally {
         await runtime.dispose();

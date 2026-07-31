@@ -9,16 +9,20 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan, ClawAddMutationError } from "./add.js";
+import { ClawCronInstallError } from "./cron.js";
 import { buildClawAddPlan } from "./lifecycle.js";
+import { replaceClawPackageRefExpected } from "./package-update-provenance.js";
 import {
-  persistClawPackageRef,
   persistClawInstallRecord,
-  readClawPackageRefs,
+  persistClawPackageRef,
   readClawInstallRecord,
+  readClawPackageRefs,
+  updateClawInstallRecord,
   updateClawInstallRecordStatus,
+  updateClawPackageRefStatus,
 } from "./provenance.js";
 import { parseClawManifest } from "./schema.js";
-import type { ClawSourceIdentity } from "./types.js";
+import type { ClawOpenClawProfile, ClawSourceIdentity } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -28,7 +32,7 @@ afterEach(() => {
 
 async function makePlan(
   manifestValue: unknown = { schemaVersion: 1, agent: { id: "worker" } },
-  options: { workspace?: string } = {},
+  options: { workspace?: string; openClawProfile?: ClawOpenClawProfile } = {},
 ) {
   const root = tempDirs.make("openclaw-claw-add-");
   const parsed = parseClawManifest(manifestValue);
@@ -47,6 +51,7 @@ async function makePlan(
   };
   const plan = await buildClawAddPlan({
     manifest: parsed.manifest,
+    openClawProfile: options.openClawProfile,
     source,
     context: { workspace: options.workspace ?? join(root, "workspace-worker") },
   });
@@ -212,19 +217,155 @@ describe("Claw root install provenance", () => {
     ).toThrow("did not match the expected phase");
     expect(readClawInstallRecord("worker", options)?.status).toBe("complete");
   });
+
+  it("advances package identity while preserving install creation time", async () => {
+    const { root, plan } = await makePlan();
+    const original = persistClawInstallRecord(plan, { env: stateEnv(root), nowMs: 1 });
+    const target = {
+      ...plan,
+      claw: { ...plan.claw, version: "2.0.0", integrity: "sha256:target" },
+      agent: {
+        ...plan.agent,
+        config: { ...plan.agent.config, name: "Worker v2" },
+      },
+    };
+
+    const updated = updateClawInstallRecord(target, { env: stateEnv(root), nowMs: 2 });
+
+    expect(updated).toMatchObject({
+      claw: { version: "2.0.0", integrity: "sha256:target" },
+      addedAtMs: 1,
+      updatedAtMs: 2,
+      status: "complete",
+    });
+    expect(updated.agentConfigDigest).not.toBe(original.agentConfigDigest);
+    expect(readClawInstallRecord("worker", { env: stateEnv(root) })).toEqual(updated);
+  });
+
+  it("rejects an update when package provenance changed after planning", async () => {
+    const { root, plan } = await makePlan();
+    const original = persistClawInstallRecord(plan, { env: stateEnv(root), nowMs: 1 });
+    const target = {
+      ...plan,
+      claw: { ...plan.claw, version: "2.0.0", integrity: "sha256:target" },
+    };
+
+    expect(() =>
+      updateClawInstallRecord(target, {
+        env: stateEnv(root),
+        nowMs: 2,
+        expectedClaw: { version: "0.9.0", integrity: "sha256:stale" },
+      }),
+    ).toThrow("changed");
+    expect(readClawInstallRecord("worker", { env: stateEnv(root) })).toEqual(original);
+  });
+
+  it("records package references independently of shared package ownership", async () => {
+    const { root, plan } = await makePlan();
+    const pkg = {
+      kind: "plugin" as const,
+      source: "clawhub" as const,
+      ref: "@acme/audit",
+      version: "2.3.4",
+      integrity: "sha256:audit-2.3.4",
+    };
+
+    const record = persistClawPackageRef(plan, pkg, { env: stateEnv(root), nowMs: 43 });
+
+    expect(record).toMatchObject({
+      schemaVersion: "openclaw.clawPackageRef.v1",
+      agentId: "worker",
+      clawName: "@acme/worker",
+      ...pkg,
+    });
+    expect(
+      readClawPackageRefs({
+        env: stateEnv(root),
+        kind: "plugin",
+        source: "clawhub",
+        ref: "@acme/audit",
+        version: "2.3.4",
+      }),
+    ).toEqual([record]);
+  });
+
+  it("rejects a package claim when the persisted reference changed after planning", async () => {
+    const { root, plan } = await makePlan();
+    const options = { env: stateEnv(root) };
+    const pkg = {
+      kind: "plugin" as const,
+      source: "clawhub" as const,
+      ref: "@acme/audit",
+      version: "2.3.4",
+      integrity: "sha256:audit-2.3.4",
+    };
+    const planned = persistClawPackageRef(plan, pkg, { ...options, nowMs: 43 });
+    const current = updateClawPackageRefStatus(planned, "pending", options);
+    const claim = { ...planned, version: "3.0.0", status: "pending" as const };
+
+    expect(() => replaceClawPackageRefExpected(planned, claim, options)).toThrow(
+      "changed after planning",
+    );
+    expect(readClawPackageRefs(options)).toEqual([current]);
+  });
+
+  it("replaces and restores package references with complete timestamps", async () => {
+    const { root, plan } = await makePlan();
+    const options = { env: stateEnv(root) };
+    const planned = persistClawPackageRef(
+      plan,
+      {
+        kind: "plugin",
+        source: "clawhub",
+        ref: "@acme/audit",
+        version: "2.3.4",
+        integrity: "sha256:audit-2.3.4",
+      },
+      { ...options, nowMs: 43 },
+    );
+    const replacement = {
+      ...planned,
+      version: "3.0.0",
+      status: "pending" as const,
+      updatedAtMs: 44,
+    };
+
+    replaceClawPackageRefExpected(planned, replacement, options);
+    expect(readClawPackageRefs(options)).toEqual([replacement]);
+
+    const restored = persistClawPackageRef(
+      plan,
+      {
+        kind: "plugin",
+        source: "clawhub",
+        ref: "@acme/audit",
+        version: "2.3.4",
+        integrity: "sha256:audit-2.3.4",
+      },
+      { ...options, nowMs: 45 },
+    );
+    expect(readClawPackageRefs(options)).toEqual(expect.arrayContaining([replacement, restored]));
+  });
 });
 
 describe("applyClawAddPlan", () => {
   it("appends one agent, preserves defaults and existing agents, and creates a new workspace", async () => {
-    const { root, plan } = await makePlan({
-      schemaVersion: 1,
-      agent: {
-        id: "worker",
-        name: "Worker",
-        identity: { name: "Work" },
-        tools: { deny: ["exec"] },
+    const { root, plan } = await makePlan(
+      {
+        schemaVersion: 1,
+        agent: {
+          id: "worker",
+          name: "Worker",
+          identity: { name: "Work" },
+        },
       },
-    });
+      {
+        openClawProfile: {
+          schemaVersion: 1,
+          agent: { tools: { deny: ["exec"] } },
+        },
+      },
+    );
     let config: OpenClawConfig = {
       agents: {
         defaults: { workspace: "/operator/default" },
@@ -594,5 +735,54 @@ describe("applyClawAddPlan", () => {
       applyClawAddPlan(plan, { consentPlanIntegrity: "sha256:stale" }),
     ).rejects.toMatchObject({ code: "plan_integrity_mismatch" });
     await expect(access(plan.agent.workspace)).rejects.toThrow();
+  });
+
+  it("returns partial cron ownership when scheduler installation fails", async () => {
+    const { root, plan } = await makePlan({
+      schemaVersion: 1,
+      agent: { id: "worker" },
+      cronJobs: [
+        {
+          id: "daily-report",
+          schedule: { cron: "0 9 * * *", timezone: "UTC" },
+          session: "isolated",
+          message: "Prepare report",
+        },
+      ],
+    });
+    const failedRef = {
+      schemaVersion: "openclaw.clawCronRef.v1" as const,
+      agentId: "worker",
+      manifestId: "daily-report",
+      declarationKey: "claw:worker:daily-report",
+      status: "failed" as const,
+      job: {
+        id: "daily-report",
+        schedule: { cron: "0 9 * * *", timezone: "UTC" },
+        session: "isolated" as const,
+        message: "Prepare report",
+      },
+      error: "gateway unavailable",
+      createdAtMs: 1,
+      updatedAtMs: 2,
+    };
+
+    const result = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: stateEnv(root),
+      commitConfig: async (transform) => {
+        transform({});
+      },
+      installCronJobs: async () => {
+        throw new ClawCronInstallError("cron_install_failed", "gateway unavailable", [failedRef]);
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "partial",
+      cronJobs: [{ manifestId: "daily-report", status: "failed" }],
+      installRecord: { status: "config_committed" },
+      error: { code: "cron_install_failed", message: "gateway unavailable" },
+    });
   });
 });

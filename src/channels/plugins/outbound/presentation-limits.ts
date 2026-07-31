@@ -38,6 +38,10 @@ type SelectCandidate = {
 };
 type ButtonSelection = ReadonlySet<MessagePresentationButton> | undefined;
 
+const PRESENTATION_FALLBACK_CONTINUATION = Symbol.for(
+  "openclaw.presentation.fallback-continuation",
+);
+
 function positiveInteger(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
@@ -108,10 +112,14 @@ function fallbackTextBlocks(params: {
   text: string;
   limits?: TextLimits;
 }): MessagePresentationBlock[] {
-  return splitPresentationText(params.text, params.limits).map((text) => ({
-    type: params.blockType,
-    text,
-  }));
+  return splitPresentationText(params.text, params.limits).map((text, index) => {
+    const block = { type: params.blockType, text };
+    if (index > 0) {
+      // Native fallback renderers must reassemble split fragments without inserting paragraph breaks.
+      Object.defineProperty(block, PRESENTATION_FALLBACK_CONTINUATION, { value: true });
+    }
+    return block;
+  });
 }
 
 function utf8ByteLength(value: string): number {
@@ -123,28 +131,26 @@ function fitsByteLimit(value: string | undefined, maxBytes: number | undefined):
   return !value || !limit || utf8ByteLength(value) <= limit;
 }
 
-function fallbackListBlock(params: {
+function fallbackListBlocks(params: {
   blockType: "context" | "text";
   heading: string;
   labels: readonly string[];
-  maxLabelLength?: number;
-}): MessagePresentationBlock | undefined {
-  const labels = normalizeStringEntries(
-    params.labels.map((label) => truncateText(label, params.maxLabelLength)),
-  );
-  return labels.length > 0
-    ? {
-        type: params.blockType,
-        text: `${params.heading}:\n${labels.map((label) => `- ${label}`).join("\n")}`,
-      }
-    : undefined;
+  limits?: TextLimits;
+}): MessagePresentationBlock[] {
+  const labels = normalizeStringEntries(params.labels);
+  if (labels.length === 0) {
+    return [];
+  }
+  // Action labels are operator-visible content; split like chart/table fallbacks instead of dropping them.
+  return fallbackTextBlocks({
+    blockType: params.blockType,
+    text: `${params.heading}:\n${labels.map((label) => `- ${label}`).join("\n")}`,
+    limits: params.limits,
+  });
 }
 
-function buttonFallbackLabel(
-  button: MessagePresentationButton,
-  maxLabelLength: number | undefined,
-): string {
-  const label = truncateText(button.label, maxLabelLength);
+function buttonFallbackLabel(button: MessagePresentationButton): string {
+  const label = button.label;
   if (button.disabled) {
     return label;
   }
@@ -285,6 +291,7 @@ function adaptButtonsBlock(
   budget: ActionBudget,
   fallbackBlockType: "context" | "text",
   buttonSelection: ButtonSelection,
+  textLimits?: TextLimits,
 ): MessagePresentationBlock[] {
   const capacity = buttonCapacity(budget);
   const candidates: ButtonCandidate[] = block.buttons.map((button) => ({
@@ -314,15 +321,16 @@ function adaptButtonsBlock(
   const buttons = selectedCandidates.map((candidate) => candidate.adapted);
   const droppedLabels = candidates
     .filter((candidate) => !candidate.adapted || !selected.has(candidate))
-    .map((candidate) => buttonFallbackLabel(candidate.original, limits?.maxLabelLength));
+    .map((candidate) => buttonFallbackLabel(candidate.original));
   consumeButtonBudget(budget, buttons.length);
-  const fallback = fallbackListBlock({
+  const fallback = fallbackListBlocks({
     blockType: fallbackBlockType,
     heading: "Actions",
     labels: droppedLabels,
+    limits: textLimits,
   });
   if (buttons.length === 0) {
-    return fallback ? [fallback] : [];
+    return fallback;
   }
   const blocks: MessagePresentationBlock[] = chunkButtons(buttons, limits?.maxActionsPerRow).map(
     (row) => ({
@@ -330,9 +338,7 @@ function adaptButtonsBlock(
       buttons: row,
     }),
   );
-  if (fallback) {
-    blocks.push(fallback);
-  }
+  blocks.push(...fallback);
   return blocks;
 }
 
@@ -343,8 +349,11 @@ function appendAdaptedButtonsBlock(
   budget: ActionBudget,
   fallbackBlockType: "context" | "text",
   buttonSelection: ButtonSelection,
+  textLimits?: TextLimits,
 ): void {
-  blocks.push(...adaptButtonsBlock(block, limits, budget, fallbackBlockType, buttonSelection));
+  blocks.push(
+    ...adaptButtonsBlock(block, limits, budget, fallbackBlockType, buttonSelection, textLimits),
+  );
 }
 
 function adaptOption(
@@ -377,6 +386,7 @@ function adaptSelectBlock(
   limits: SelectLimits | undefined,
   budget: ActionBudget,
   fallbackBlockType: "context" | "text",
+  textLimits?: TextLimits,
 ): MessagePresentationBlock[] {
   const candidates: SelectCandidate[] = block.options.map((option) => ({
     original: option,
@@ -393,17 +403,17 @@ function adaptSelectBlock(
   const selected = new Set<SelectCandidate>(selectedCandidates);
   const options = selectedCandidates.map((candidate) => candidate.adapted);
   const canRenderSelect = options.length > 0 && hasActionSlotBudget(budget);
-  const fallback = fallbackListBlock({
+  const fallback = fallbackListBlocks({
     blockType: fallbackBlockType,
     heading: block.placeholder ?? "Options",
     labels: (canRenderSelect
       ? candidates.filter((candidate) => !candidate.adapted || !selected.has(candidate))
       : candidates
     ).map((candidate) => candidate.original.label),
-    maxLabelLength: limits?.maxLabelLength,
+    limits: textLimits,
   });
   if (!canRenderSelect) {
-    return fallback ? [fallback] : [];
+    return fallback;
   }
   consumeSelectBudget(budget);
   const blocks: MessagePresentationBlock[] = [
@@ -415,9 +425,7 @@ function adaptSelectBlock(
       options,
     },
   ];
-  if (fallback) {
-    blocks.push(fallback);
-  }
+  blocks.push(...fallback);
   return blocks;
 }
 
@@ -499,10 +507,17 @@ function adaptTextBlock(
   limits: TextLimits | undefined,
 ): MessagePresentationBlock {
   if (block.type === "text" || block.type === "context") {
-    return {
+    const adapted = {
       ...block,
       text: truncatePresentationText(block.text, limits),
     };
+    if (
+      Object.getOwnPropertyDescriptor(block, PRESENTATION_FALLBACK_CONTINUATION)?.value === true
+    ) {
+      // Text normalization clones blocks; keep continuation ownership across that boundary.
+      Object.defineProperty(adapted, PRESENTATION_FALLBACK_CONTINUATION, { value: true });
+    }
+    return adapted;
   }
   return block;
 }
@@ -551,16 +566,14 @@ export function adaptMessagePresentationForChannel(params: {
     }
     if (block.type === "buttons") {
       if (capabilities?.buttons === false) {
-        const fallback = fallbackListBlock({
-          blockType: fallbackBlockType,
-          heading: "Actions",
-          labels: block.buttons.map((button) =>
-            buttonFallbackLabel(button, limits?.actions?.maxLabelLength),
-          ),
-        });
-        if (fallback) {
-          blocks.push(fallback);
-        }
+        blocks.push(
+          ...fallbackListBlocks({
+            blockType: fallbackBlockType,
+            heading: "Actions",
+            labels: block.buttons.map((button) => buttonFallbackLabel(button)),
+            limits: limits?.text,
+          }),
+        );
         continue;
       }
       appendAdaptedButtonsBlock(
@@ -570,23 +583,25 @@ export function adaptMessagePresentationForChannel(params: {
         actionBudget,
         fallbackBlockType,
         buttonSelection,
+        limits?.text,
       );
       continue;
     }
     if (block.type === "select") {
       if (capabilities?.selects === false) {
-        const fallback = fallbackListBlock({
-          blockType: fallbackBlockType,
-          heading: block.placeholder ?? "Options",
-          labels: block.options.map((option) => option.label),
-          maxLabelLength: limits?.selects?.maxLabelLength,
-        });
-        if (fallback) {
-          blocks.push(fallback);
-        }
+        blocks.push(
+          ...fallbackListBlocks({
+            blockType: fallbackBlockType,
+            heading: block.placeholder ?? "Options",
+            labels: block.options.map((option) => option.label),
+            limits: limits?.text,
+          }),
+        );
         continue;
       }
-      blocks.push(...adaptSelectBlock(block, limits?.selects, actionBudget, fallbackBlockType));
+      blocks.push(
+        ...adaptSelectBlock(block, limits?.selects, actionBudget, fallbackBlockType, limits?.text),
+      );
       continue;
     }
     if (block.type === "context" && capabilities?.context === false) {
@@ -618,6 +633,7 @@ export function applyPresentationActionLimits(
     createActionBudget(capabilities?.limits?.actions),
     capabilities?.context === false ? "text" : "context",
     undefined,
+    capabilities?.limits?.text,
   );
   return block.flatMap((entry) => (entry.type === "buttons" ? entry.buttons : []));
 }

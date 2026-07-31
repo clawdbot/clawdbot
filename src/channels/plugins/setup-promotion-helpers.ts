@@ -31,44 +31,14 @@ type SingleAccountPromotionParams = {
   resolveBundledSurface?: (channelKey: string) => ChannelSetupPromotionSurface | null;
 };
 
-// Shipped Plugin SDK compatibility: out-of-tree setup adapters published before
-// promotion declarations existed still inherit these former core tiers. Remove at
-// the next SDK major after #112238 / PR 3 makes declarations mandatory.
+// Published undeclared adapters still depend on these keys: Chatu, GroupMe, OneBot,
+// and WhatsApp Cloud use accessToken; Claworld uses appToken; OneBot uses httpUrl;
+// MQTT and TrueConf use password; Rocket.Chat uses rooms and userId; WorkClaw and
+// TIMBot use userId; Vama, Pinto, and Roam use webhookSecret (2026-07-22 sweep).
+// Delete each key as soon as no published plugin reads it; no version boundary is needed.
 const LEGACY_UNDECLARED_ADAPTER_PROMOTION_KEYS = {
-  common: [
-    "appToken",
-    "account",
-    "signalNumber",
-    "authDir",
-    "cliPath",
-    "dbPath",
-    "httpUrl",
-    "httpHost",
-    "httpPort",
-    "webhookSecret",
-    "service",
-    "region",
-    "homeserver",
-    "userId",
-    "accessToken",
-    "password",
-    "deviceName",
-    "url",
-    "code",
-  ],
-  setupOnly: [
-    "deviceId",
-    "avatarUrl",
-    "initialSyncLimit",
-    "encryption",
-    "allowlistOnly",
-    "threadReplies",
-    "startupVerification",
-    "startupVerificationCooldownHours",
-    "autoJoin",
-    "autoJoinAllowlist",
-    "rooms",
-  ],
+  common: ["accessToken", "appToken", "httpUrl", "password", "userId", "webhookSecret"],
+  setupOnly: ["rooms"],
 } as const;
 
 const legacyUndeclaredAdapterCommonPromotionKeys = new Set<string>(

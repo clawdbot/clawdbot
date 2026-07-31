@@ -8,11 +8,13 @@ import {
   emitAgentAuditEvent,
   emitAgentEvent,
   emitAgentEventForOwner,
+  emitAgentEventIfCurrent,
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
   listAgentRunsForSession,
   onAgentAuditEvent,
   onAgentEvent,
+  onAgentRuntimeEvent,
   registerAgentRunContext,
   releaseAgentRunContext,
   resetAgentEventsForTest,
@@ -22,6 +24,7 @@ import {
   withAgentRunLifecycleGeneration,
 } from "./agent-events.js";
 import { emitAgentRunStatusEvent } from "./agent-run-status-events.js";
+import { recordAgentRunOutputTokens } from "./agent-run-usage.js";
 
 type AgentEventsModule = typeof import("./agent-events.js");
 
@@ -74,6 +77,41 @@ describe("agent-events sequencing", () => {
 
     clearAgentRunContext("shared-run", "post-restart");
     expect(getAgentRunContext("shared-run")).toBeUndefined();
+  });
+
+  test("accumulates output usage across attempts and resets with run context", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    registerAgentRunContext("usage-run", { sessionKey: "main", lifecycleGeneration });
+    const seen: number[] = [];
+    const stop = onAgentEvent((event) => {
+      if (event.runId === "usage-run" && event.stream === "usage") {
+        seen.push(event.data.outputTokens as number);
+      }
+    });
+    const emitUsage = (outputTokens: number) => {
+      recordAgentRunOutputTokens({
+        runId: "usage-run",
+        lifecycleGeneration,
+        outputTokens,
+        emit: (data) =>
+          emitAgentEventIfCurrent({
+            runId: "usage-run",
+            lifecycleGeneration,
+            stream: "usage",
+            data,
+          }),
+      });
+    };
+
+    emitUsage(12);
+    registerAgentRunContext("usage-run", { sessionKey: "main", lifecycleGeneration });
+    emitUsage(8);
+    clearAgentRunContext("usage-run", lifecycleGeneration);
+    registerAgentRunContext("usage-run", { sessionKey: "main", lifecycleGeneration });
+    emitUsage(3);
+    stop();
+
+    expect(seen).toEqual([12, 20, 3]);
   });
 
   test("clears sequence state when guarded cleanup finds no run context", () => {
@@ -310,18 +348,22 @@ describe("agent-events sequencing", () => {
     const seen: AgentEventPayload[] = [];
     const stop = onAgentEvent((event) => seen.push(event));
 
-    emitAgentEvent({
-      runId: "shared-run",
-      lifecycleGeneration: "pre-restart",
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
-    emitAgentEvent({
-      runId: "shared-run",
-      lifecycleGeneration: activeGeneration,
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
+    expect(
+      emitAgentEventIfCurrent({
+        runId: "shared-run",
+        lifecycleGeneration: "pre-restart",
+        stream: "lifecycle",
+        data: { phase: "end" },
+      }),
+    ).toBe(false);
+    expect(
+      emitAgentEventIfCurrent({
+        runId: "shared-run",
+        lifecycleGeneration: activeGeneration,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1_000 },
+      }),
+    ).toBe(true);
     stop();
 
     expect(seen).toHaveLength(1);
@@ -517,6 +559,35 @@ describe("agent-events sequencing", () => {
     expect(seen.has("old-run")).toBe(false);
     expect(seen.get("new-run")?.generation).toBe(newGeneration);
     expect(seen.get("new-run")?.keys).not.toContain("lifecycleGeneration");
+  });
+
+  test("stamps session lifecycle projection policy without serializing it", () => {
+    registerAgentRunContext("maintenance-run", {
+      projectSessionLifecycle: false,
+      sessionKey: "main",
+    });
+    let received:
+      | {
+          projectSessionLifecycle?: boolean;
+          keys: string[];
+        }
+      | undefined;
+    const stop = onAgentRuntimeEvent((evt) => {
+      received = {
+        projectSessionLifecycle: evt.projectSessionLifecycle,
+        keys: Object.keys(evt),
+      };
+    });
+
+    emitAgentEvent({
+      runId: "maintenance-run",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_234 },
+    });
+    stop();
+
+    expect(received?.projectSessionLifecycle).toBe(false);
+    expect(received?.keys).not.toContain("projectSessionLifecycle");
   });
 
   test("lets a newly admitted retry claim an explicit lifecycle generation", () => {

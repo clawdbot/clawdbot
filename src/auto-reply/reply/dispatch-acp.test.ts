@@ -50,8 +50,13 @@ const policyMocks = vi.hoisted(() => ({
 
 const routeMocks = vi.hoisted(() => ({
   routeReply: vi.fn<
-    (_params: unknown) => Promise<{ ok: true; messageId: string } | { ok: false; error: string }>
-  >(async () => ({ ok: true, messageId: "mock" })),
+    (
+      _params: unknown,
+    ) => Promise<
+      | { ok: true; delivered: boolean; messageId?: string }
+      | { ok: false; delivered: boolean; error: string }
+    >
+  >(async () => ({ ok: true, delivered: true, messageId: "mock" })),
 }));
 
 const channelPluginMocks = vi.hoisted(() => ({
@@ -176,12 +181,12 @@ vi.mock("./dispatch-acp-media.runtime.js", () => ({
     mediaUnderstandingMocks.applyMediaUnderstanding(params),
   isMediaUnderstandingSkipError: (error: unknown): error is MediaUnderstandingSkipError =>
     error instanceof Error && error.name === "MediaUnderstandingSkipError",
-  normalizeAttachments: (ctx: { MediaPath?: string; MediaType?: string }) =>
-    ctx.MediaPath
+  normalizeAttachments: (ctx: { media?: Array<{ path?: string; contentType?: string }> }) =>
+    ctx.media?.[0]?.path
       ? [
           {
-            path: ctx.MediaPath,
-            mime: ctx.MediaType,
+            path: ctx.media[0].path,
+            mime: ctx.media[0].contentType,
             index: 0,
           },
         ]
@@ -485,7 +490,11 @@ describe("tryDispatchAcpReply", () => {
     policyMocks.resolveAcpAgentPolicyError.mockReset();
     policyMocks.resolveAcpAgentPolicyError.mockReturnValue(null);
     routeMocks.routeReply.mockReset();
-    routeMocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+    routeMocks.routeReply.mockResolvedValue({
+      ok: true,
+      delivered: true,
+      messageId: "mock",
+    });
     channelPluginMocks.getChannelPlugin.mockClear();
     messageActionMocks.runMessageAction.mockReset();
     messageActionMocks.runMessageAction.mockResolvedValue({ ok: true as const });
@@ -601,7 +610,11 @@ describe("tryDispatchAcpReply", () => {
   it("persists ACP transcript when routed delivery fails", async () => {
     setReadyAcpResolution();
     mockRoutedTextTurn("hello");
-    routeMocks.routeReply.mockResolvedValue({ ok: false, error: "missing channel adapter" });
+    routeMocks.routeReply.mockResolvedValue({
+      ok: false,
+      delivered: false,
+      error: "missing channel adapter",
+    });
 
     await runDispatch({
       bodyForAgent: "reply",
@@ -655,6 +668,17 @@ describe("tryDispatchAcpReply", () => {
     );
     expect(String(transcript.finalText)).toContain("partial answer");
     expect(String(transcript.finalText)).toContain("acp died after streaming");
+  });
+
+  it("preserves an intentionally empty canonical agent prompt", async () => {
+    setReadyAcpResolution();
+
+    await runDispatch({
+      bodyForAgent: "",
+      ctxOverrides: { BodyForCommands: "/status", CommandBody: "/status" },
+    });
+
+    expect(managerMocks.runTurn).not.toHaveBeenCalled();
   });
 
   it("adds source delivery guidance to tool-only ACP turns", async () => {
@@ -722,7 +746,11 @@ describe("tryDispatchAcpReply", () => {
   it("edits ACP tool lifecycle updates in place when supported", async () => {
     setReadyAcpResolution();
     mockToolLifecycleTurn("call-1");
-    routeMocks.routeReply.mockResolvedValueOnce({ ok: true, messageId: "tool-msg-1" });
+    routeMocks.routeReply.mockResolvedValueOnce({
+      ok: true,
+      delivered: true,
+      messageId: "tool-msg-1",
+    });
 
     const { dispatcher } = createDispatcher();
     await runDispatch({
@@ -743,8 +771,12 @@ describe("tryDispatchAcpReply", () => {
     setReadyAcpResolution();
     mockToolLifecycleTurn("call-2");
     routeMocks.routeReply
-      .mockResolvedValueOnce({ ok: true, messageId: "tool-msg-2" })
-      .mockResolvedValueOnce({ ok: true, messageId: "tool-msg-2-fallback" });
+      .mockResolvedValueOnce({ ok: true, delivered: true, messageId: "tool-msg-2" })
+      .mockResolvedValueOnce({
+        ok: true,
+        delivered: true,
+        messageId: "tool-msg-2-fallback",
+      });
     messageActionMocks.runMessageAction.mockRejectedValueOnce(new Error("edit unsupported"));
 
     const { dispatcher } = createDispatcher();
@@ -1184,24 +1216,36 @@ describe("tryDispatchAcpReply", () => {
         path: "/tmp/recent-2.png",
         contentType: "image/png",
         sender: "Recent 2",
+        sentAtMs: 1_699_999_997_000,
+        messagePosition: 6,
+        messageCount: 9,
         messageId: "recent-2",
       },
       {
         path: "/tmp/recent-3.png",
         contentType: "image/png",
         sender: "Recent 3",
+        sentAtMs: 1_699_999_998_000,
+        messagePosition: 7,
+        messageCount: 9,
         messageId: "recent-3",
       },
       {
         path: "/tmp/recent-4.png",
         contentType: "image/png",
         sender: "Recent 4",
+        sentAtMs: 1_699_999_999_000,
+        messagePosition: 8,
+        messageCount: 9,
         messageId: "recent-4",
       },
       {
         path: "C:\\Users\\Alice\\Pictures\\recent.png",
         contentType: "image/png",
         sender: "Windows",
+        sentAtMs: 1_699_999_999_500,
+        messagePosition: 9,
+        messageCount: 9,
         messageId: "windows",
       },
     ]);
@@ -1215,6 +1259,9 @@ describe("tryDispatchAcpReply", () => {
           path: "/tmp/secret.png",
           contentType: "image/png",
           sender: "@alice",
+          sentAtMs: 1_700_000_000_000,
+          messagePosition: 2,
+          messageCount: 5,
           messageId: "msg-1",
         },
       ],
@@ -1222,6 +1269,8 @@ describe("tryDispatchAcpReply", () => {
 
     expect(text).toContain("what is this?");
     expect(text).toContain("Recent image 1 from @alice, message msg-1");
+    expect(text).toContain("sent at 2023-11-14T22:13:20.000Z");
+    expect(text).toContain("message 2 of 5 in available history");
     expect(text).not.toContain("/tmp/secret.png");
   });
 
@@ -1277,6 +1326,9 @@ describe("tryDispatchAcpReply", () => {
           path: imagePath,
           contentType: "image/png",
           sender: "@alice",
+          sentAtMs: 1_700_000_000_000,
+          messagePosition: 1,
+          messageCount: 1,
           messageId: "msg-1",
         },
       ]);
@@ -1324,8 +1376,7 @@ describe("tryDispatchAcpReply", () => {
         ctx: buildTestCtx({
           Provider: "discord",
           Surface: "discord",
-          MediaPath: currentPath,
-          MediaType: "image/png",
+          media: [{ path: currentPath, contentType: "image/png" }],
           Timestamp: 1_700_000_000_000,
           InboundHistory: [
             {
@@ -1349,7 +1400,9 @@ describe("tryDispatchAcpReply", () => {
           } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
           isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
             false,
-          normalizeAttachments: (ctx) => [{ path: ctx.MediaPath, mime: ctx.MediaType, index: 0 }],
+          normalizeAttachments: (ctx) => [
+            { path: ctx.media?.[0]?.path, mime: ctx.media?.[0]?.contentType, index: 0 },
+          ],
           resolveMediaAttachmentLocalRoots: () => [tempDir],
         },
       });
@@ -1374,8 +1427,7 @@ describe("tryDispatchAcpReply", () => {
         ctx: buildTestCtx({
           Provider: "discord",
           Surface: "discord",
-          MediaPath: currentPath,
-          MediaType: "image/png",
+          media: [{ path: currentPath, contentType: "image/png" }],
           Timestamp: 1_700_000_000_000,
           InboundHistory: [
             {
@@ -1403,7 +1455,9 @@ describe("tryDispatchAcpReply", () => {
           } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
           isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
             false,
-          normalizeAttachments: (ctx) => [{ path: ctx.MediaPath, mime: ctx.MediaType, index: 1 }],
+          normalizeAttachments: (ctx) => [
+            { path: ctx.media?.[0]?.path, mime: ctx.media?.[0]?.contentType, index: 1 },
+          ],
           resolveMediaAttachmentLocalRoots: () => [tempDir],
         },
       });
@@ -1434,8 +1488,7 @@ describe("tryDispatchAcpReply", () => {
         ctx: buildTestCtx({
           Provider: "discord",
           Surface: "discord",
-          MediaPath: documentPath,
-          MediaType: "application/pdf",
+          media: [{ path: documentPath, contentType: "application/pdf" }],
           Timestamp: 1_700_000_000_000,
           InboundHistory: [
             {
@@ -1455,7 +1508,9 @@ describe("tryDispatchAcpReply", () => {
           } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
           isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
             false,
-          normalizeAttachments: (ctx) => [{ path: ctx.MediaPath, mime: ctx.MediaType, index: 0 }],
+          normalizeAttachments: (ctx) => [
+            { path: ctx.media?.[0]?.path, mime: ctx.media?.[0]?.contentType, index: 0 },
+          ],
           resolveMediaAttachmentLocalRoots: () => [tempDir],
         },
       });
@@ -1477,8 +1532,7 @@ describe("tryDispatchAcpReply", () => {
         ctx: buildTestCtx({
           Provider: "discord",
           Surface: "discord",
-          MediaUrl: "https://example.com/current.png",
-          MediaType: "image/png",
+          media: [{ url: "https://example.com/current.png", contentType: "image/png" }],
           Timestamp: 1_700_000_000_000,
           InboundHistory: [
             {
@@ -1505,7 +1559,9 @@ describe("tryDispatchAcpReply", () => {
           } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
           isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
             false,
-          normalizeAttachments: (ctx) => [{ url: ctx.MediaUrl, mime: ctx.MediaType, index: 0 }],
+          normalizeAttachments: (ctx) => [
+            { url: ctx.media?.[0]?.url, mime: ctx.media?.[0]?.contentType, index: 0 },
+          ],
           resolveMediaAttachmentLocalRoots: () => [tempDir],
         },
       });
@@ -1521,6 +1577,9 @@ describe("tryDispatchAcpReply", () => {
           path: historyPath,
           contentType: "image/png",
           sender: "@alice",
+          sentAtMs: 1_700_000_000_000,
+          messagePosition: 1,
+          messageCount: 1,
           messageId: "msg-history",
         },
       ]);
@@ -1557,6 +1616,54 @@ describe("tryDispatchAcpReply", () => {
     ]);
   });
 
+  it("annotates recent history images with sent time and available history position", async () => {
+    setReadyAcpResolution();
+    const historyPath = "/tmp/openclaw-history-metadata.png";
+    const historyImage = Buffer.from("history-image");
+    acpAttachmentBuffers.set(historyPath, historyImage);
+
+    await runDispatch({
+      bodyForAgent: "describe current state",
+      ctxOverrides: {
+        Timestamp: 1_700_000_060_000,
+        InboundHistory: [
+          {
+            sender: "@alice",
+            body: "bug report",
+            timestamp: 1_699_999_980_000,
+            messageId: "msg-before",
+          },
+          {
+            sender: "@bob",
+            body: "<media:image>",
+            timestamp: 1_700_000_000_000,
+            messageId: "msg-history",
+            media: [{ path: historyPath, contentType: "image/png", kind: "image" }],
+          },
+          {
+            sender: "@alice",
+            body: "fixed after refresh",
+            timestamp: 1_700_000_060_000,
+            messageId: "msg-after",
+          },
+        ],
+      },
+    });
+
+    const text = String(runTurnCall().text);
+    expect(text).toContain("describe current state");
+    expect(text).toContain("Recent image 1 from @bob, message msg-history");
+    expect(text).toContain("sent at 2023-11-14T22:13:20.000Z");
+    expect(text).toContain("message 2 of 3 in available history");
+    expect(text).not.toContain(historyPath);
+    expect(runTurnCall().attachments).toEqual([
+      {
+        mediaType: "image/png",
+        data: historyImage.toString("base64"),
+      },
+    ]);
+  });
+
   it("forwards media-understanding PDF page images alongside current image attachments", async () => {
     setReadyAcpResolution();
     const currentPath = "/tmp/openclaw-current-image.png";
@@ -1581,8 +1688,7 @@ describe("tryDispatchAcpReply", () => {
     await runDispatch({
       bodyForAgent: "describe current image and scanned PDF",
       ctxOverrides: {
-        MediaPath: currentPath,
-        MediaType: "image/png",
+        media: [{ path: currentPath, contentType: "image/png" }],
       },
     });
 

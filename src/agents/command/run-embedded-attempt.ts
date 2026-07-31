@@ -29,6 +29,8 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.j
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch.js";
 import { modelKey, resolveThinkingDefault } from "../model-selection.js";
+import { resolveConfiguredThinkingDefault } from "../model-thinking-default.js";
+import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import {
   isAgentRunDirectAbortReason,
@@ -37,6 +39,8 @@ import {
 } from "../run-termination.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
 import {
+  hasResolvedThinkingCatalogEntry,
+  normalizeThinkingCatalogProviders,
   resolveCandidateThinkingLevel,
   resolveEffectiveAgentRuntime,
 } from "../thinking-runtime.js";
@@ -99,7 +103,6 @@ export async function runEmbeddedAgentAttempt(params: {
     storedProviderOverride,
     hasStoredAutoFallbackProvenance,
     autoFallbackPrimaryProbe,
-    thinkingCatalog,
     immutableThinkLevel,
     sessionFile,
   } = params.modelSelection;
@@ -112,6 +115,8 @@ export async function runEmbeddedAgentAttempt(params: {
     storedModelOverrideSource,
     effectiveTurnThinkLevel,
   } = params.modelSelection;
+  let thinkingCatalog = params.modelSelection.thinkingCatalog;
+  let attemptedThinkingCatalogHydration = false;
   let sessionEntry = params.sessionEntry;
   let lifecycleGeneration = params.lifecycleGeneration;
 
@@ -131,6 +136,16 @@ export async function runEmbeddedAgentAttempt(params: {
       })
     : undefined;
   params.trackInternalModelRunTarget(internalSessionTarget);
+  const attemptSessionTarget =
+    internalSessionTarget ??
+    (sessionKey && storePath
+      ? {
+          agentId: sessionAgentId,
+          sessionId,
+          sessionKey,
+          storePath,
+        }
+      : undefined);
   const attemptSessionFile = internalSessionTarget?.sessionFile ?? sessionFile;
 
   const startedAt = Date.now();
@@ -146,28 +161,30 @@ export async function runEmbeddedAgentAttempt(params: {
     params.opts.suppressPromptPersistence === true ||
     (params.opts.transcriptMessage === "" && !hasTranscriptMedia);
   const recorderTranscriptText = transcriptBody || undefined;
-  const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
-    ...(!suppressUserTurnPersistence && (recorderTranscriptText || hasTranscriptMedia)
-      ? {
-          input: {
-            text: recorderTranscriptText,
-            ...(hasTranscriptMedia ? { media: transcriptMedia } : {}),
-          },
-        }
-      : {}),
-    target: {
-      sessionId: internalSessionTarget?.sessionId ?? sessionId,
-      agentId: internalSessionTarget?.agentId ?? sessionAgentId,
-      sessionKey: internalSessionTarget?.sessionKey ?? sessionKey ?? sessionId,
-      sessionEntry: internalSessionTarget?.sessionEntry ?? sessionEntry,
-      sessionStore: params.suppressVisibleSessionEffects ? undefined : sessionStore,
-      storePath: internalSessionTarget?.storePath ?? storePath,
-      cwd: cwd ?? workspaceDir,
-      config: cfg,
-    },
-    beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-    errorContext: "agent command user turn transcript",
-  });
+  const userTurnTranscriptRecorder =
+    (internalSessionTarget ? undefined : params.opts.userTurnTranscriptRecorder) ??
+    createUserTurnTranscriptRecorder({
+      ...(!suppressUserTurnPersistence && (recorderTranscriptText || hasTranscriptMedia)
+        ? {
+            input: {
+              text: recorderTranscriptText,
+              ...(hasTranscriptMedia ? { media: transcriptMedia } : {}),
+            },
+          }
+        : {}),
+      target: {
+        sessionId: internalSessionTarget?.sessionId ?? sessionId,
+        agentId: internalSessionTarget?.agentId ?? sessionAgentId,
+        sessionKey: internalSessionTarget?.sessionKey ?? sessionKey ?? sessionId,
+        sessionEntry: internalSessionTarget?.sessionEntry ?? sessionEntry,
+        sessionStore: params.suppressVisibleSessionEffects ? undefined : sessionStore,
+        storePath: internalSessionTarget?.storePath ?? storePath,
+        cwd: cwd ?? workspaceDir,
+        config: cfg,
+      },
+      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      errorContext: "agent command user turn transcript",
+    });
   if (suppressUserTurnPersistence) {
     userTurnTranscriptRecorder.markBlocked();
   }
@@ -211,7 +228,8 @@ export async function runEmbeddedAgentAttempt(params: {
       const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
       const effectiveFallbacksOverride = isModelSelectionLocked(sessionEntry)
         ? []
-        : resolveEffectiveModelFallbacks({
+        : (params.opts.modelFallbacksOverride ??
+          resolveEffectiveModelFallbacks({
             cfg,
             agentId: sessionAgentId,
             sessionKey,
@@ -221,7 +239,7 @@ export async function runEmbeddedAgentAttempt(params: {
             hasAutoFallbackProvenance: hasExplicitRunOverride
               ? false
               : hasStoredAutoFallbackProvenance,
-          });
+          }));
 
       const fallbackRuntimeState: { originRuntime?: "cli" | "embedded" } = {};
       attemptLifecycleState.currentTurnUserMessagePersisted = false;
@@ -235,6 +253,7 @@ export async function runEmbeddedAgentAttempt(params: {
           cfg,
           provider,
           model,
+          requestedRouteResolution: params.modelSelection.requestedRouteResolution,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
           ...modelManifestContext,
@@ -347,8 +366,51 @@ export async function runEmbeddedAgentAttempt(params: {
             sessionKey,
             sessionEntry: attemptSessionEntry,
           });
-          const candidateRequestedThinkLevel =
+          const candidateConfiguredThinkLevel =
             immutableThinkLevel ??
+            resolveConfiguredThinkingDefault({
+              cfg,
+              provider: providerOverride,
+              model: modelOverride,
+            });
+          if (
+            pluginsEnabled &&
+            candidateConfiguredThinkLevel !== "off" &&
+            !attemptedThinkingCatalogHydration &&
+            !hasResolvedThinkingCatalogEntry({
+              catalog: thinkingCatalog,
+              provider: providerOverride,
+              model: modelOverride,
+            })
+          ) {
+            attemptedThinkingCatalogHydration = true;
+            const { loadPreparedModelCatalogSnapshot } =
+              await import("../model-catalog.runtime.js");
+            const runtimeCatalog = normalizeThinkingCatalogProviders(
+              (
+                await loadPreparedModelCatalogSnapshot({
+                  config: cfg,
+                  agentId: sessionAgentId,
+                  workspaceDir,
+                })
+              ).entries,
+            );
+            const allowedRuntimeCatalog = createModelVisibilityPolicy({
+              cfg,
+              catalog: runtimeCatalog,
+              defaultProvider,
+              defaultModel,
+              agentId: sessionAgentId,
+              allowManifestNormalization: true,
+              allowPluginNormalization: true,
+              ...modelManifestContext,
+            }).allowedCatalog;
+            if (allowedRuntimeCatalog.length > 0) {
+              thinkingCatalog = allowedRuntimeCatalog;
+            }
+          }
+          const candidateRequestedThinkLevel =
+            candidateConfiguredThinkLevel ??
             resolveThinkingDefault({
               cfg,
               provider: providerOverride,
@@ -380,7 +442,7 @@ export async function runEmbeddedAgentAttempt(params: {
             agentHarnessRuntimeOverride,
             sessionId,
             sessionKey,
-            ...(internalSessionTarget ? { sessionTarget: internalSessionTarget } : {}),
+            ...(attemptSessionTarget ? { sessionTarget: attemptSessionTarget } : {}),
             sessionAgentId,
             sessionFile: attemptSessionFile,
             workspaceDir,

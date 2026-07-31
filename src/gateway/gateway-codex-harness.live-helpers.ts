@@ -169,6 +169,10 @@ export function isExpectedNativeCommand(command: string, expectedCommand: string
   return wrappedArgv ? shellArgvMatches(wrappedArgv, expectedArgv) : false;
 }
 
+export function buildCodexHarnessAppServerArgs(overrides: readonly string[]): string[] {
+  return ["app-server", "--listen", "stdio://", ...overrides.flatMap((value) => ["-c", value])];
+}
+
 export function buildCodexHarnessLargeOutputCommand(params: {
   commandMarker: string;
   outputBytes: number;

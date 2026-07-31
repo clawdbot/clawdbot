@@ -8,7 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { BlockReplyContext } from "openclaw/plugin-sdk/reply-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { resolveMarkdownTableMode } from "./bot-message-dispatch.runtime.js";
 import type {
@@ -22,8 +22,11 @@ import { createTelegramDraftStream, type TelegramDraftPreview } from "./draft-st
 import { renderTelegramHtmlText } from "./format.js";
 import type { DraftLaneState, LaneName } from "./lane-delivery.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
+import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
 import { buildTelegramRichMarkdown, TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
+
+const draftLogger = createSubsystemLogger("telegram/draft-stream");
 
 const DRAFT_MIN_INITIAL_CHARS = 30;
 
@@ -59,6 +62,7 @@ function resolveDraftPartialText(
 
 export function createTelegramDraftController(params: {
   accountId: string;
+  allowProviderPreview: boolean;
   bot: Bot;
   cfg: OpenClawConfig;
   chatId: number;
@@ -81,6 +85,7 @@ export function createTelegramDraftController(params: {
     resolveChannelStreamingBlockEnabled(params.telegramCfg) ??
     params.cfg.agents?.defaults?.blockStreamingDefault === "on";
   const canStreamAnswerDraft =
+    params.allowProviderPreview &&
     streamDeliveryEnabled &&
     !params.hasTelegramQuoteReply &&
     !accountBlockStreamingEnabled &&
@@ -89,7 +94,10 @@ export function createTelegramDraftController(params: {
   const streamReasoningInProgressDraft =
     streamReasoningDraft && params.streamMode === "progress" && canStreamAnswerDraft;
   const canStreamReasoningDraft =
-    !params.isRoomEvent && streamReasoningDraft && !streamReasoningInProgressDraft;
+    params.allowProviderPreview &&
+    !params.isRoomEvent &&
+    streamReasoningDraft &&
+    !streamReasoningInProgressDraft;
   const draftMaxChars =
     params.streamMode === "block"
       ? Math.min(
@@ -127,6 +135,7 @@ export function createTelegramDraftController(params: {
           replyToMessageId: params.draftReplyToMessageId,
           replyToMode: params.replyToMode,
           richMessages: params.telegramCfg.richMessages,
+          linkPreview: params.telegramCfg.linkPreview,
           minInitialChars: params.streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS,
           renderText: renderStreamText,
           onRetainedPage: (page) => {
@@ -135,8 +144,35 @@ export function createTelegramDraftController(params: {
               text: page.textSnapshot,
             });
           },
+          onProviderMessage: async (message) => {
+            await (
+              params.telegramDeps.recordOutboundMessageForPromptContext ??
+              recordOutboundMessageForPromptContext
+            )({
+              cfg: params.cfg,
+              account: {
+                accountId: params.accountId,
+                ...(params.telegramCfg.name !== undefined ? { name: params.telegramCfg.name } : {}),
+              },
+              chatId: params.chatId,
+              message,
+              messageId: message.message_id,
+              ...(params.threadSpec.id !== undefined
+                ? { messageThreadId: params.threadSpec.id }
+                : {}),
+              successfulSendThread: params.threadSpec,
+            });
+          },
           log: logVerbose,
-          warn: logVerbose,
+          // Draft delivery failures must stay operator-visible: verbose-only
+          // logging hid preview send/edit/cleanup errors, so a dead progress
+          // stream looked like the bot silently ignoring the user.
+          warn: (message) =>
+            draftLogger.warn(message, {
+              lane: laneName,
+              chatId: params.chatId,
+              threadId: params.threadSpec.id,
+            }),
         })
       : undefined;
     return {
@@ -438,6 +474,15 @@ export function createTelegramDraftController(params: {
     answerLane,
     reasoningLane,
     lanes,
+    beginQueuedFollowup: () => {
+      for (const lane of [answerLane, reasoningLane]) {
+        if (!lane.stream) {
+          continue;
+        }
+        lane.stream.forceNewMessage();
+        resetLaneState(lane);
+      }
+    },
     canPushAnswerDraft: () => Boolean(answerLane.stream),
     cleanup: async (superseded: boolean) => {
       for (const lane of [answerLane, reasoningLane]) {

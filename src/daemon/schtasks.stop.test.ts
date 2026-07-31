@@ -60,6 +60,8 @@ const {
 } = await import("./schtasks.js");
 const GATEWAY_PORT = 18789;
 const SUCCESS_RESPONSE = { code: 0, stdout: "", stderr: "" } as const;
+const INSTALLED_GATEWAY_COMMAND_LINE =
+  '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port 18789';
 
 function pushSuccessfulSchtasksResponses(count: number) {
   for (let i = 0; i < count; i += 1) {
@@ -90,6 +92,7 @@ function busyPortUsage(
       {
         pid,
         command: options.command ?? "node.exe",
+        address: `127.0.0.1:${GATEWAY_PORT}`,
         ...(options.commandLine ? { commandLine: options.commandLine } : {}),
       },
     ],
@@ -103,6 +106,18 @@ function expectGatewayTermination(pid: number) {
     return;
   }
   expect(killProcessTree).toHaveBeenCalledWith(pid, { graceMs: 300 });
+}
+
+function setTaskStateProbeResult(state: number) {
+  const stdout = String(state);
+  spawnSync.mockReturnValueOnce({
+    pid: 0,
+    output: [null, stdout, ""],
+    stdout,
+    stderr: "",
+    status: 0,
+    signal: null,
+  });
 }
 
 async function withPreparedGatewayTask(
@@ -336,20 +351,116 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
-  it("kills lingering verified gateway listeners after schtasks stop", async () => {
+  it.each([
+    { state: 1, label: "disabled" },
+    { state: 3, label: "ready" },
+  ])("accepts a localized /End failure when COM proves the task is $label", async ({ state }) => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      const onMutation = vi.fn();
+      schtasksResponses.push(
+        { ...SUCCESS_RESPONSE },
+        { ...SUCCESS_RESPONSE },
+        {
+          code: 1,
+          stdout: "",
+          stderr: "FEHLER: Die Aufgabe wird derzeit nicht ausgeführt.",
+        },
+      );
+      setTaskStateProbeResult(state);
+
+      await expect(stopScheduledTask({ env, stdout, onMutation })).resolves.toBeUndefined();
+
+      expect(schtasksCalls).toEqual([
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Gateway"],
+        ["/End", "/TN", "OpenClaw Gateway"],
+      ]);
+      expect(spawnSync).toHaveBeenCalledOnce();
+      expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-stop" });
+    });
+  });
+
+  it.each([
+    { state: 0, label: "unknown" },
+    { state: 2, label: "queued" },
+    { state: 4, label: "running" },
+  ])("fails closed after a localized /End failure when the task is $label", async ({ state }) => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      const onMutation = vi.fn();
+      schtasksResponses.push(
+        { ...SUCCESS_RESPONSE },
+        { ...SUCCESS_RESPONSE },
+        {
+          code: 1,
+          stdout: "",
+          stderr: "FEHLER: Die Aufgabe konnte nicht beendet werden.",
+        },
+      );
+      setTaskStateProbeResult(state);
+
+      await expect(stopScheduledTask({ env, stdout, onMutation })).rejects.toThrow(
+        "schtasks end failed: FEHLER: Die Aufgabe konnte nicht beendet werden.",
+      );
+
+      expect(spawnSync).toHaveBeenCalledOnce();
+      expect(onMutation).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    { label: "malformed", status: 0, probeOutput: "3 trailing output" },
+    { label: "missing", status: 1, probeOutput: "-2147024894" },
+    { label: "unavailable", status: 1, probeOutput: "-2147024891" },
+  ])(
+    "fails closed after a localized /End failure when the state probe is $label",
+    async ({ status, probeOutput }) => {
+      await withPreparedGatewayTask(async ({ env, stdout }) => {
+        const onMutation = vi.fn();
+        schtasksResponses.push(
+          { ...SUCCESS_RESPONSE },
+          { ...SUCCESS_RESPONSE },
+          {
+            code: 1,
+            stdout: "",
+            stderr: "FEHLER: Der Aufgabenstatus ist nicht verfügbar.",
+          },
+        );
+        spawnSync.mockReturnValueOnce({
+          pid: 0,
+          output: [null, probeOutput, ""],
+          stdout: probeOutput,
+          stderr: "",
+          status,
+          signal: null,
+        });
+
+        await expect(stopScheduledTask({ env, stdout, onMutation })).rejects.toThrow(
+          "schtasks end failed: FEHLER: Der Aufgabenstatus ist nicht verfügbar.",
+        );
+
+        expect(spawnSync).toHaveBeenCalledOnce();
+        expect(onMutation).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it("kills the lingering gateway process owned by the persisted task command", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       const onMutation = vi.fn();
       pushSuccessfulSchtasksResponses(3);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
       inspectPortUsage
-        .mockResolvedValueOnce(busyPortUsage(4242))
+        .mockResolvedValueOnce(busyPortUsage(4242, { commandLine: INSTALLED_GATEWAY_COMMAND_LINE }))
         .mockResolvedValueOnce(freePortUsage());
 
       await stopScheduledTask({ env, stdout, onMutation });
 
-      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
+      expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
       expectGatewayTermination(4242);
       expect(inspectPortUsage).toHaveBeenCalledTimes(2);
+      expect(inspectPortUsage).toHaveBeenCalledWith(GATEWAY_PORT, {
+        probeHosts: ["127.0.0.1"],
+      });
       expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-stop" });
     });
   });
@@ -403,27 +514,27 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
-  it("force-kills remaining busy port listeners when the first stop pass does not free the port", async () => {
+  it("does not kill an unrelated listener when the owned process leaves another required host busy", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       pushSuccessfulSchtasksResponses(3);
-      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
-      inspectPortUsage.mockResolvedValueOnce(busyPortUsage(4242));
-      for (let i = 0; i < 19; i += 1) {
-        inspectPortUsage.mockResolvedValueOnce(busyPortUsage(4242));
+      inspectPortUsage.mockResolvedValueOnce(
+        busyPortUsage(4242, { commandLine: INSTALLED_GATEWAY_COMMAND_LINE }),
+      );
+      for (let i = 0; i < 20; i += 1) {
+        inspectPortUsage.mockResolvedValueOnce(busyPortUsage(5252));
       }
-      inspectPortUsage
-        .mockResolvedValueOnce(busyPortUsage(5252))
-        .mockResolvedValueOnce(freePortUsage());
 
-      await stopScheduledTask({ env, stdout });
+      await expect(stopScheduledTask({ env, stdout })).rejects.toThrow(
+        "remaining listener ownership could not be verified",
+      );
 
       if (process.platform !== "win32") {
-        expect(killProcessTree).toHaveBeenNthCalledWith(1, 4242, { graceMs: 300 });
-        expect(killProcessTree).toHaveBeenNthCalledWith(2, 5252, { graceMs: 300 });
+        expect(killProcessTree).toHaveBeenCalledOnce();
+        expect(killProcessTree).toHaveBeenCalledWith(4242, { graceMs: 300 });
       } else {
         expect(killProcessTree).not.toHaveBeenCalled();
       }
-      expect(inspectPortUsage.mock.calls.length).toBeGreaterThanOrEqual(22);
+      expect(killProcessTree).not.toHaveBeenCalledWith(5252, { graceMs: 300 });
     });
   });
 
@@ -468,22 +579,25 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
-  it("kills lingering verified gateway listeners and waits for port release before restart", async () => {
+  it("kills the owned gateway process and waits for port release before restart", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       const onMutation = vi.fn();
       pushSuccessfulSchtasksResponses(4);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5151]);
       inspectPortUsage
-        .mockResolvedValueOnce(busyPortUsage(5151))
+        .mockResolvedValueOnce(busyPortUsage(5151, { commandLine: INSTALLED_GATEWAY_COMMAND_LINE }))
         .mockResolvedValueOnce(freePortUsage());
 
       await expect(restartScheduledTask({ env, stdout, onMutation })).resolves.toEqual({
         outcome: "completed",
       });
 
-      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
+      expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
       expectGatewayTermination(5151);
-      expect(inspectPortUsage).toHaveBeenCalledTimes(2);
+      expect(inspectPortUsage.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(inspectPortUsage).toHaveBeenCalledWith(GATEWAY_PORT, {
+        probeHosts: ["127.0.0.1"],
+      });
       expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-restart" });
       expect(schtasksCalls).toEqual([
         ["/Query"],

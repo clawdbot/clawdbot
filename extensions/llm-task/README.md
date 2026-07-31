@@ -43,11 +43,15 @@ Designed to be called from workflow engines (for example, Lobster via
     "entries": {
       "llm-task": {
         "enabled": true,
+        "llm": {
+          "allowModelOverride": true,
+          "allowedCompletionModels": ["openai/gpt-5.6-sol"],
+          "allowAuthProfileOverride": true
+        },
         "config": {
           "defaultProvider": "openai",
           "defaultModel": "gpt-5.6-sol",
           "defaultAuthProfileId": "main",
-          "allowedModels": ["openai/gpt-5.6-sol"],
           "maxTokens": 800,
           "timeoutMs": 30000
         }
@@ -57,8 +61,11 @@ Designed to be called from workflow engines (for example, Lobster via
 }
 ```
 
-`allowedModels` is an allowlist of `provider/model` strings. If set, any request
-outside the list is rejected.
+The host-owned `llm` policy authorizes model/profile overrides. Its
+`allowedCompletionModels` restricts every completion, including the resolved agent
+default. Run `openclaw doctor --fix` once for entries created by older releases;
+Doctor grants the shipped selection permissions and moves legacy
+`config.allowedModels` values into `llm.allowedCompletionModels` without widening them.
 
 ## Tool API
 

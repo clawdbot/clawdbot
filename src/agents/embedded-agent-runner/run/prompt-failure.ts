@@ -1,5 +1,6 @@
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
+import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import {
   classifyFailoverReason,
@@ -40,7 +41,7 @@ export async function handleEmbeddedPromptFailure(input: {
   runParams: RunEmbeddedAgentParams;
   attempt: EmbeddedRunAttemptResult;
   promptError: unknown;
-  promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"];
+  promptErrorSource: AgentRunAttemptFailureSource | null;
   activeErrorContext: { provider: string; model: string };
   provider: string;
   modelId: string;

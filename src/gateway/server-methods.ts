@@ -7,7 +7,7 @@ import {
   gatewayStartupUnavailableDetails,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../packages/gateway-protocol/src/startup-unavailable.js";
-import { getPluginRegistryState } from "../plugins/runtime-state.js";
+import { getActivePluginHttpRouteRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   getGatewaySuspendAdmissionPhase,
@@ -44,10 +44,18 @@ import type {
   GatewayRequestHandlers,
   GatewayRequestOptions,
 } from "./server-methods/types.js";
+import {
+  resolveSessionMutationAuthorization,
+  SessionMutationAuthorizationChangedError,
+} from "./session-sharing.js";
 
 const loadAgentHandlers = lazyHandlerModule(
   () => import("./server-methods/agent.js"),
   (module) => module.agentHandlers,
+);
+const loadAgentIdentityHandlers = lazyHandlerModule(
+  () => import("./server-methods/agent-identity.js"),
+  (module) => module.agentIdentityHandlers,
 );
 const loadAgentsHandlers = lazyHandlerModule(
   () => import("./server-methods/agents.js"),
@@ -80,6 +88,10 @@ const loadAttachHandlers = lazyHandlerModule(
 const loadChannelsHandlers = lazyHandlerModule(
   () => import("./server-methods/channels.js"),
   (module) => module.channelsHandlers,
+);
+const loadChannelPairingHandlers = lazyHandlerModule(
+  () => import("./server-methods/channel-pairing.js"),
+  (module) => module.channelPairingHandlers,
 );
 const loadChatHandlers = lazyHandlerModule(
   () => import("./server-methods/chat.js"),
@@ -148,6 +160,10 @@ const loadHealthHandlers = lazyHandlerModule(
 const loadLogsHandlers = lazyHandlerModule(
   () => import("./server-methods/logs.js"),
   (module) => module.logsHandlers,
+);
+const loadMemorySearchHandlers = lazyHandlerModule(
+  () => import("./server-methods/memory-search.js"),
+  (module) => module.memorySearchHandlers,
 );
 const loadTerminalHandlers = lazyHandlerModule(
   () => import("./server-methods/terminal.js"),
@@ -232,6 +248,10 @@ const loadSessionDiscussionHandlers = lazyHandlerModule(
 const loadSessionObserverHandlers = lazyHandlerModule(
   () => import("./session-observer-rpc.js"),
   (module) => module.sessionObserverHandlers,
+);
+const loadSessionCompanionHandlers = lazyHandlerModule(
+  () => import("./session-companion-rpc.js"),
+  (module) => module.sessionCompanionHandlers,
 );
 const loadSkillsHandlers = lazyHandlerModule(
   () => import("./server-methods/skills.js"),
@@ -427,6 +447,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadChannelsHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["channels.pairing.list", "channels.pairing.approve", "channels.pairing.dismiss"],
+    loadHandlers: loadChannelPairingHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: [
       "chat.history",
       "chat.startup",
@@ -449,6 +473,8 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "cron.list",
       "cron.status",
       "cron.get",
+      "cron.scratch.get",
+      "cron.scratch.set",
       "cron.add",
       "cron.update",
       "cron.remove",
@@ -478,7 +504,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadDiagnosticsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["controlUi.githubPreview", "controlUi.sessionPullRequests"],
+    methods: ["controlUi.githubPreview", "controlUi.sessionPullRequests.subscribe"],
     loadHandlers: loadControlUiHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -699,8 +725,12 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadSessionDiscussionHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["sessions.observer.ask"],
+    methods: ["sessions.observer.visibility"],
     loadHandlers: loadSessionObserverHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["sessions.companion.ask", "sessions.companion.state", "sessions.companion.reset"],
+    loadHandlers: loadSessionCompanionHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -709,6 +739,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.cleanup",
       "sessions.subscribe",
       "sessions.unsubscribe",
+      "sessions.viewers.set",
       "sessions.messages.subscribe",
       "sessions.messages.unsubscribe",
       "sessions.preview",
@@ -738,6 +769,14 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.groups.delete",
       "sessions.dispatch",
       "sessions.reclaim",
+      "session.visibility.set",
+      "session.members.list",
+      "session.members.add",
+      "session.members.remove",
+      "session.suggestions.add",
+      "session.suggestions.list",
+      "session.suggestions.resolve",
+      "session.typing",
     ],
     loadHandlers: loadSessionsHandlers,
   }),
@@ -822,8 +861,12 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadUsageHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["agent", "agent.identity.get", "agent.wait"],
+    methods: ["agent", "agent.wait"],
     loadHandlers: loadAgentHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["agent.identity.get"],
+    loadHandlers: loadAgentIdentityHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -840,6 +883,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["agents.workspace.list", "agents.workspace.get"],
     loadHandlers: loadAgentsWorkspaceHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["memory.search"],
+    loadHandlers: loadMemorySearchHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["artifacts.list", "artifacts.get", "artifacts.download"],
@@ -868,10 +915,11 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
 function createRequestGatewayMethodRegistry(
   extraHandlers?: GatewayRequestHandlers,
 ): GatewayMethodRegistry {
-  const activePluginRegistry = getPluginRegistryState()?.activeRegistry;
-  const activePluginHandlers = activePluginRegistry?.gatewayHandlers ?? {};
+  // Attached gateway methods must not be shadowed by agent-scoped registry loads.
+  const gatewayPluginRegistry = getActivePluginHttpRouteRegistry();
+  const gatewayPluginHandlers = gatewayPluginRegistry?.gatewayHandlers ?? {};
   const extraHandlerEntries = Object.entries(extraHandlers ?? {});
-  const pluginMethodNames = new Set(Object.keys(activePluginHandlers));
+  const pluginMethodNames = new Set(Object.keys(gatewayPluginHandlers));
   const coreDescriptorHandlers = { ...coreGatewayHandlers };
   for (const [method, extraHandler] of extraHandlerEntries) {
     // Tests and local harnesses can override classified core methods, but plugin-provided
@@ -895,7 +943,7 @@ function createRequestGatewayMethodRegistry(
   );
   return createGatewayMethodRegistry([
     ...coreDescriptors,
-    ...(activePluginRegistry ? createPluginGatewayMethodDescriptors(activePluginRegistry) : []),
+    ...(gatewayPluginRegistry ? createPluginGatewayMethodDescriptors(gatewayPluginRegistry) : []),
     ...createGatewayMethodDescriptorsFromHandlers({
       handlers: auxHandlers,
       owner: { kind: "aux", area: "gateway-extra" },
@@ -908,11 +956,11 @@ function createRequestGatewayMethodRegistry(
 export async function handleGatewayRequest(
   opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
 ): Promise<void> {
-  const { req, respond, client, isWebchatConnect, context } = opts;
+  const { req, respond, client, isWebchatConnect, context, signal } = opts;
   // Prefer the caller-attached registry when it owns the requested method so plugin dispatch
   // metadata newer than global runtime state still authorizes and dispatches correctly. When the
-  // attached snapshot does not own the method, rebuild from the live plugin registry so plugin RPC
-  // methods registered after the startup snapshot stay reachable (#94127).
+  // attached snapshot does not own the method, rebuild from the gateway-pinned registry. Without
+  // a gateway pin, that registry follows active plugins so late methods remain reachable (#94127).
   const methodRegistry =
     opts.methodRegistry?.getHandler(req.method) !== undefined
       ? opts.methodRegistry
@@ -920,6 +968,16 @@ export async function handleGatewayRequest(
   const authError = authorizeGatewayMethod(req.method, client, req.params, methodRegistry);
   if (authError) {
     respond(false, undefined, authError);
+    return;
+  }
+  const sessionMutation = resolveSessionMutationAuthorization({
+    client: client ?? null,
+    method: req.method,
+    requestParams: req.params,
+    context,
+  });
+  if (sessionMutation.error) {
+    respond(false, undefined, sessionMutation.error);
     return;
   }
   if (
@@ -1046,16 +1104,29 @@ export async function handleGatewayRequest(
       isWebchatConnect,
       respond,
       context,
+      ...(signal ? { signal } : {}),
+      ...(sessionMutation.authorization
+        ? { sessionMutationAuthorization: sessionMutation.authorization }
+        : {}),
     });
   // All handlers run inside a request scope so that plugin runtime
   // subagent methods (e.g. context engine tools spawning sub-agents
   // during tool execution) can dispatch back into the gateway.
   // The scope also carries caller identity into plugin-owned gateway methods.
-  const invokeWithRequestScope = async () =>
-    await withPluginRuntimeGatewayRequestScope(
-      { context, client, isWebchatConnect },
-      invokeHandler,
-    );
+  const invokeWithRequestScope = async () => {
+    try {
+      await withPluginRuntimeGatewayRequestScope(
+        { context, client, isWebchatConnect },
+        invokeHandler,
+      );
+    } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        respond(false, undefined, error.error);
+        return;
+      }
+      throw error;
+    }
+  };
   if (!rootWorkAdmission) {
     await invokeWithRequestScope();
     return;

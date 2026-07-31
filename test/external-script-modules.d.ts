@@ -16,6 +16,12 @@ declare module "*scripts/ui.js" {
       windowsVerbatimArguments?: boolean;
     };
   };
+  export function assertUiBuildOutputRoot(params?: {
+    rootDir?: string;
+    fs?: {
+      lstatSync(path: string): { isSymbolicLink(): boolean };
+    };
+  }): void;
   export function shouldUseCmdExeForCommand(cmd: string, platform?: NodeJS.Platform): boolean;
   export function resolveSpawnCall(
     cmd: string,
@@ -173,6 +179,7 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
   };
   export function countTopLevelSectionBullets(sectionSource: string, heading: string): number;
   export function highlightCountError(sectionSource: string): string | undefined;
+  export function isEligibleHandle(handle: string): boolean;
   export function ledgerChecks(...args: unknown[]): string[];
 }
 
