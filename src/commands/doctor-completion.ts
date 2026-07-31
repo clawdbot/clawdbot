@@ -41,13 +41,11 @@ function findProfileWriteError(err: unknown): NodeJS.ErrnoException | undefined 
 }
 
 function resolveCompletionReloadPath(shell: CompletionShell): string {
-  if (shell === "powershell") {
-    return resolveCompletionProfilePath("powershell");
-  }
-  if (shell === "bash") {
-    return `~/${path.basename(resolveCompletionProfilePath("bash"))}`;
-  }
-  return `~/.${shell === "zsh" ? "zshrc" : "config/fish/config.fish"}`;
+  const profilePath = resolveCompletionProfilePath(shell);
+  const home = process.env.HOME;
+  return shell !== "powershell" && home && profilePath.startsWith(`${home}${path.sep}`)
+    ? `~/${path.relative(home, profilePath)}`
+    : profilePath;
 }
 
 function formatCompletionReloadNote(

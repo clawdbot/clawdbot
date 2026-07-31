@@ -100,7 +100,14 @@ export function formatCompletionReloadCommand(shell: CompletionShell, profilePat
   if (shell === "powershell") {
     return `. '${escapePowerShellSingleQuotedString(profilePath)}'`;
   }
-  return `source ${profilePath}`;
+  if (/^[a-zA-Z0-9_./~+-]+$/u.test(profilePath)) {
+    return `source ${profilePath}`;
+  }
+  const homePrefix = profilePath.startsWith("~/") ? "~/" : "";
+  const value = profilePath.slice(homePrefix.length);
+  const escapedPath =
+    shell === "fish" ? value.replace(/[\\']/gu, "\\$&") : value.replaceAll("'", "'\\''");
+  return `source ${homePrefix}'${escapedPath}'`;
 }
 
 function isCompletionProfileHeader(line: string): boolean {
@@ -267,7 +274,7 @@ export function resolveCompletionProfilePath(
   const platform = options.platform ?? process.platform;
   const home = env.HOME || homeDir();
   if (shell === "zsh") {
-    return path.join(home, ".zshrc");
+    return path.join(env.ZDOTDIR === undefined ? home : env.ZDOTDIR || path.sep, ".zshrc");
   }
   if (shell === "bash") {
     // Installation, status, and repairs must inspect the same real Bash profile.
@@ -275,7 +282,8 @@ export function resolveCompletionProfilePath(
     return existsSync(bashrc) ? bashrc : path.join(home, ".bash_profile");
   }
   if (shell === "fish") {
-    return path.join(home, ".config", "fish", "config.fish");
+    const configHome = normalizeOptionalString(env.XDG_CONFIG_HOME) ?? path.join(home, ".config");
+    return path.join(configHome, "fish", "config.fish");
   }
   if (platform === "win32") {
     const shellPath = normalizeOptionalString(env.SHELL) ?? "";
@@ -348,26 +356,8 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     );
   }
 
-  let profilePath: string;
-  let sourceLine: string;
-  switch (shell) {
-    case "zsh":
-      profilePath = resolveCompletionProfilePath("zsh");
-      sourceLine = formatCompletionSourceLine("zsh", cachePath);
-      break;
-    case "bash":
-      profilePath = resolveCompletionProfilePath("bash");
-      sourceLine = formatCompletionSourceLine("bash", cachePath);
-      break;
-    case "fish":
-      profilePath = resolveCompletionProfilePath("fish");
-      sourceLine = formatCompletionSourceLine("fish", cachePath);
-      break;
-    case "powershell":
-      profilePath = resolveCompletionProfilePath("powershell");
-      sourceLine = formatCompletionSourceLine("powershell", cachePath);
-      break;
-  }
+  const profilePath = resolveCompletionProfilePath(shell);
+  const sourceLine = formatCompletionSourceLine(shell, cachePath);
 
   try {
     try {

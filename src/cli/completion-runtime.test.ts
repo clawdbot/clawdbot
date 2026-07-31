@@ -31,6 +31,62 @@ async function withBashCompletionHome(
 }
 
 describe("completion-runtime", () => {
+  it.each([
+    {
+      shell: "zsh" as const,
+      variable: "ZDOTDIR",
+      profileName: ".zshrc",
+    },
+    {
+      shell: "fish" as const,
+      variable: "XDG_CONFIG_HOME",
+      profileName: path.join("fish", "config.fish"),
+    },
+  ])("installs $shell completion into its configured shell startup directory", async (testCase) => {
+    const homeDir = tempDirs.make("openclaw-shell-profile-home-");
+    const stateDir = tempDirs.make("openclaw-shell-profile-state-");
+    const configDir = tempDirs.make(`openclaw-${testCase.shell} profile config-`);
+
+    await withEnvAsync(
+      {
+        HOME: homeDir,
+        OPENCLAW_STATE_DIR: stateDir,
+        ZDOTDIR: testCase.variable === "ZDOTDIR" ? configDir : undefined,
+        XDG_CONFIG_HOME: testCase.variable === "XDG_CONFIG_HOME" ? configDir : undefined,
+      },
+      async () => {
+        const cachePath = resolveCompletionCachePath(testCase.shell, "openclaw");
+        await fs.mkdir(path.dirname(cachePath), { recursive: true });
+        await fs.writeFile(cachePath, "OPENCLAW_COMPLETION_LOADED=ready\n", "utf-8");
+
+        await installCompletion(testCase.shell, true, "openclaw");
+
+        const profilePath = path.join(configDir, testCase.profileName);
+        expect(resolveCompletionProfilePath(testCase.shell)).toBe(profilePath);
+        await expect(fs.readFile(profilePath, "utf-8")).resolves.toContain(cachePath);
+        await expect(isCompletionInstalled(testCase.shell, "openclaw")).resolves.toBe(true);
+
+        if (testCase.shell === "zsh") {
+          const shell = spawnSync("zsh", ["-ic", '[[ "$OPENCLAW_COMPLETION_LOADED" = ready ]]'], {
+            encoding: "utf8",
+            env: process.env,
+          });
+          expect(shell.stderr).toBe("");
+          expect(shell.status).toBe(0);
+        }
+      },
+    );
+  });
+
+  it("preserves zsh's set-but-empty startup directory contract", () => {
+    expect(
+      resolveCompletionProfilePath("zsh", {
+        env: { HOME: "/tmp/openclaw-home", ZDOTDIR: "" },
+        homeDir: () => "/tmp/openclaw-home",
+      }),
+    ).toBe(path.join(path.sep, ".zshrc"));
+  });
+
   it("resolves the documented Bash login profile when .bashrc is absent", async () => {
     await withBashCompletionHome(async ({ homeDir }) => {
       expect(resolveCompletionProfilePath("bash")).toBe(path.join(homeDir, ".bash_profile"));
@@ -318,6 +374,42 @@ describe("completion-runtime", () => {
       ". 'C:\\Users\\Ada\\profile.ps1'",
     );
   });
+
+  it.each(["bash", "zsh"] as const)(
+    "reloads a %s profile when its absolute path contains spaces",
+    async (shellName) => {
+      const profileDir = tempDirs.make(`openclaw ${shellName} Ada's !42 reload profile-`);
+      const profilePath = path.join(profileDir, ".shellrc");
+      await fs.writeFile(profilePath, "OPENCLAW_COMPLETION_LOADED=ready\n", "utf-8");
+
+      const reloadCommand = formatCompletionReloadCommand(shellName, profilePath);
+      const shell = spawnSync(
+        shellName,
+        ["-c", `${reloadCommand}; [ "$OPENCLAW_COMPLETION_LOADED" = ready ]`],
+        {
+          encoding: "utf8",
+        },
+      );
+
+      expect(shell.stderr).toBe("");
+      expect(shell.status).toBe(0);
+    },
+  );
+
+  it("quotes Fish reload profile paths containing spaces", () => {
+    expect(formatCompletionReloadCommand("fish", "/tmp/Ada's !42 Lovelace/config.fish")).toBe(
+      "source '/tmp/Ada\\'s !42 Lovelace/config.fish'",
+    );
+  });
+
+  it.each(["bash", "zsh"] as const)(
+    "preserves tilde expansion while quoting %s profile paths",
+    (shellName) => {
+      expect(formatCompletionReloadCommand(shellName, "~/Ada's !42 profile/.shellrc")).toBe(
+        "source ~/'Ada'\\''s !42 profile/.shellrc'",
+      );
+    },
+  );
 
   it("detects PowerShell shell names from Windows paths", () => {
     expect(resolveShellFromEnv({ SHELL: "C:\\Program Files\\PowerShell\\7\\pwsh.exe" })).toBe(
