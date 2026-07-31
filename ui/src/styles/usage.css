@@ -1582,21 +1582,45 @@ details.usage-filter-select summary::-webkit-details-marker,
 }
 
 .session-bar-label,
+.session-bar-selection,
 .session-bar-actions,
 .session-detail-header-left {
   min-width: 0;
 }
 
+.session-bar-selection {
+  flex: 1 1 auto;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-bar-selection:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .session-bar-label {
+  display: block;
   flex: 1 1 auto;
 }
 
 .session-bar-title {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
   color: var(--text-strong);
+}
+
+.session-bar-meta {
+  display: block;
 }
 
 .session-bar-actions {
