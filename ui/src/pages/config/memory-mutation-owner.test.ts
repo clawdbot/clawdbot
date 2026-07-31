@@ -155,6 +155,55 @@ describe("Memory plugin mutation ownership", () => {
     }
   });
 
+  it("samples the queued add-on process only when its own mutation begins", async () => {
+    const firstMutation = createMemoryTestDeferred<unknown>();
+    const observedProcesses: string[] = [];
+    let processInstanceId = "process-before-restart";
+    const setEnabled = vi.fn((pluginId: string, enabled: boolean) =>
+      pluginId === "active-memory"
+        ? firstMutation.promise
+        : Promise.resolve({
+            restartRequired: true,
+            plugin: createMemoryTestAddon(pluginId, enabled),
+          }),
+    );
+    const { element, runExternalMutation } = createMemoryPage({
+      configObject: {},
+      catalog: [
+        createMemoryTestAddon("active-memory", true),
+        createMemoryTestAddon("memory-wiki", false),
+      ],
+      processInfo: () => {
+        observedProcesses.push(processInstanceId);
+        return Promise.resolve({ processInstanceId });
+      },
+      setEnabled,
+    });
+    document.body.append(element);
+    try {
+      await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+      toggleAddon(element, "Active memory", false);
+      await waitForFast(() => expect(setEnabled).toHaveBeenCalledOnce());
+      toggleAddon(element, "Memory wiki", true);
+      await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
+
+      expect(observedProcesses).toEqual(["process-before-restart"]);
+      processInstanceId = "process-after-restart";
+      firstMutation.resolve({ restartRequired: false });
+
+      await waitForFast(() =>
+        expect(element.textContent).toContain(
+          "Enabled memory-wiki. A Gateway restart is required to apply the change.",
+        ),
+      );
+      expect(observedProcesses).toContain("process-after-restart");
+    } finally {
+      firstMutation.resolve({ restartRequired: false });
+      await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
+      element.remove();
+    }
+  });
+
   it("reloads the replacement connection after an older engine change commits", async () => {
     const pendingMutation = createMemoryTestDeferred<unknown>();
     const { element, request, runExternalMutation, setPhase } = createMemoryPage({

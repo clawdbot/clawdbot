@@ -474,13 +474,18 @@ class MemorySettingsPage extends OpenClawLightDomElement {
     errors.delete(pluginId);
     this.addonErrors = errors;
     try {
-      const processInstanceIdPromise = this.readProcessInstanceId(client);
       const mutation = await runPluginConfigMutation(
         this.context.runtimeConfig,
         client,
-        (current) => setPluginEnabled(current, pluginId, enabled),
+        async (current) => {
+          const processInstanceId = this.readProcessInstanceId(current);
+          return {
+            result: await setPluginEnabled(current, pluginId, enabled),
+            processInstanceId,
+          };
+        },
       );
-      const result = mutation.value;
+      const { result, processInstanceId } = mutation.value;
       const key = enabled ? "pluginsPage.enabledRestart" : "pluginsPage.disabledRestart";
       const warnings = "warnings" in result ? (result.warnings ?? []) : [];
       const notice = [
@@ -492,10 +497,10 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       ]
         .filter(Boolean)
         .join(" ");
-      const processInstanceId = notice ? await processInstanceIdPromise : null;
+      const noticeProcessInstanceId = notice ? await processInstanceId : null;
       const notices = new Map(this.addonNotices);
       if (notice) {
-        notices.set(pluginId, { message: notice, processInstanceId });
+        notices.set(pluginId, { message: notice, processInstanceId: noticeProcessInstanceId });
       } else {
         notices.delete(pluginId);
       }
