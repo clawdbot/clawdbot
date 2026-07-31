@@ -73,7 +73,7 @@ export function normalizeSkillWorkshopRevision(
   };
 }
 
-function normalizeQueueItem(value: unknown): ChatQueueItem | null {
+export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -165,7 +165,7 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
   const normalizedQueue = Array.isArray(entry.queue)
     ? entry.queue
         .slice(0, MAX_RETAINED_QUEUE_ITEMS)
-        .map(normalizeQueueItem)
+        .map(normalizeStoredQueueItem)
         .filter((item): item is ChatQueueItem => item !== null)
     : undefined;
   // v1 writers used bounded tombstones. Consume them while reading legacy
