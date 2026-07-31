@@ -11,21 +11,27 @@ function createReactionsClient(params: {
   }>;
   userId?: string | null;
 }) {
-  const doRequest = vi.fn(async (_method: string, _path: string, _query: unknown) => ({
-    chunk: params.chunk.map((item) => ({
-      event_id: item.event_id ?? "",
-      sender: item.sender ?? "",
-      content: item.key
-        ? {
-            "m.relates_to": {
-              rel_type: "m.annotation",
-              event_id: "$target",
-              key: item.key,
-            },
-          }
-        : {},
-    })),
-  }));
+  const doRequest = vi.fn(
+    async (
+      _method: string,
+      _path: string,
+      _query: unknown,
+    ): Promise<{ chunk: Array<Record<string, unknown>>; next_batch?: string }> => ({
+      chunk: params.chunk.map((item) => ({
+        event_id: item.event_id ?? "",
+        sender: item.sender ?? "",
+        content: item.key
+          ? {
+              "m.relates_to": {
+                rel_type: "m.annotation",
+                event_id: "$target",
+                key: item.key,
+              },
+            }
+          : {},
+      })),
+    }),
+  );
   const getUserId = vi.fn(async () => params.userId ?? null);
   const redactEvent = vi.fn(async () => undefined);
 
@@ -92,6 +98,87 @@ describe("matrix reaction actions", () => {
     expect(result).toEqual({ removed: 1 });
     expect(redactEvent).toHaveBeenCalledTimes(1);
     expect(redactEvent).toHaveBeenCalledWith("!room:example.org", "$1");
+  });
+
+  it("removes current-user reactions found after the first relations page", async () => {
+    const { client, doRequest, redactEvent } = createReactionsClient({
+      chunk: [],
+      userId: "@me:example.org",
+    });
+    doRequest
+      .mockResolvedValueOnce({
+        chunk: [
+          {
+            event_id: "$other",
+            sender: "@other:example.org",
+            content: {
+              "m.relates_to": { rel_type: "m.annotation", event_id: "$msg", key: "👍" },
+            },
+          },
+        ],
+        next_batch: "older-reactions",
+      })
+      .mockResolvedValueOnce({
+        chunk: [
+          {
+            event_id: "$mine",
+            sender: "@me:example.org",
+            content: {
+              "m.relates_to": { rel_type: "m.annotation", event_id: "$msg", key: "👍" },
+            },
+          },
+        ],
+      });
+
+    await expect(
+      removeMatrixReactions("!room:example.org", "$msg", { client, emoji: "👍" }),
+    ).resolves.toEqual({ removed: 1 });
+    expect(doRequest).toHaveBeenNthCalledWith(
+      2,
+      "GET",
+      "/_matrix/client/v1/rooms/!room%3Aexample.org/relations/%24msg/m.annotation/m.reaction",
+      { dir: "b", limit: 200, from: "older-reactions" },
+    );
+    expect(redactEvent).toHaveBeenCalledWith("!room:example.org", "$mine");
+  });
+
+  it("continues listing across empty relation pages", async () => {
+    const { client, doRequest } = createReactionsClient({
+      chunk: [],
+      userId: "@me:example.org",
+    });
+    doRequest
+      .mockResolvedValueOnce({ chunk: [], next_batch: "older-reactions" })
+      .mockResolvedValueOnce({
+        chunk: [
+          {
+            event_id: "$mine",
+            sender: "@me:example.org",
+            content: {
+              "m.relates_to": { rel_type: "m.annotation", event_id: "$msg", key: "👍" },
+            },
+          },
+        ],
+      });
+
+    await expect(listMatrixReactions("!room:example.org", "$msg", { client })).resolves.toEqual([
+      { key: "👍", count: 1, users: ["@me:example.org"] },
+    ]);
+    expect(doRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails visibly when the relations server repeats a pagination cursor", async () => {
+    const { client, doRequest, redactEvent } = createReactionsClient({
+      chunk: [],
+      userId: "@me:example.org",
+    });
+    doRequest.mockResolvedValue({ chunk: [], next_batch: "same-cursor" });
+
+    await expect(removeMatrixReactions("!room:example.org", "$msg", { client })).rejects.toThrow(
+      "repeated cursor",
+    );
+    expect(doRequest).toHaveBeenCalledTimes(2);
+    expect(redactEvent).not.toHaveBeenCalled();
   });
 
   it("returns removed=0 when current user id is unavailable", async () => {
