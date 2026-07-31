@@ -1,3 +1,4 @@
+import { resolveConfiguredAgentWorkspaceDirs } from "../agents/agent-scope-config.js";
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
 import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
@@ -508,6 +509,10 @@ export async function prepareGatewayServerBootstrap(input: {
   setCurrentPluginMetadataSnapshot(pluginLookUpTable, {
     config: startupActivationSourceConfig,
     compatibleConfigs: [startupRuntimeConfig, cfgAtStart, gatewayPluginConfigAtStart],
+    // Every configured agent's own workspace, not just the gateway's default one --
+    // a multi-agent gateway routes each agent's own workspaceDir through plugin
+    // metadata lookups, and the single held snapshot must recognize all of them.
+    compatibleWorkspaceDirs: resolveConfiguredAgentWorkspaceDirs(cfgAtStart, process.env),
     env: process.env,
     workspaceDir: defaultWorkspaceDir,
   });

@@ -1,4 +1,5 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveConfiguredAgentWorkspaceDirs } from "../agents/agent-scope-config.js";
 import {
   getLoadedChannelPluginEntryById,
   listLoadedChannelPlugins,
@@ -495,6 +496,11 @@ export async function startGatewayCoreRuntime(input: {
     });
     setCurrentPluginMetadataSnapshot(nextPluginLookUpTable, {
       config: params.nextConfig,
+      // Without these two the reload silently dropped the compatibility set the
+      // startup publish established, degrading the fast path to a single-config,
+      // single-workspace match for the rest of the process lifetime.
+      compatibleConfigs: [params.nextConfig],
+      compatibleWorkspaceDirs: resolveConfiguredAgentWorkspaceDirs(params.nextConfig, params.env),
       env: params.env,
       workspaceDir: defaultWorkspaceDir,
     });
