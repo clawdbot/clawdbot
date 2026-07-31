@@ -2080,6 +2080,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/wrouter:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/xai:
     dependencies:
       typebox:

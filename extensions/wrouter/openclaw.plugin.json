@@ -1,0 +1,250 @@
+{
+  "id": "wrouter",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providerCatalogEntry": "./provider-discovery.ts",
+  "providers": [
+    "wrouter"
+  ],
+  "providerEndpoints": [
+    {
+      "endpointClass": "wrouter",
+      "hosts": [
+        "wrouter.ai"
+      ]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "wrouter": {
+        "family": "openai-compatible"
+      }
+    }
+  },
+  "modelCatalog": {
+    "providers": {
+      "wrouter": {
+        "baseUrl": "https://wrouter.ai/v1",
+        "api": "openai-completions",
+        "defaultModel": "claude-sonnet-5",
+        "models": [
+          {
+            "id": "claude-sonnet-5",
+            "name": "Claude Sonnet 5",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 64000,
+            "cost": {
+              "input": 3,
+              "output": 15
+            }
+          },
+          {
+            "id": "claude-opus-4-8",
+            "name": "Claude Opus 4.8",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 32000,
+            "cost": {
+              "input": 5,
+              "output": 25
+            }
+          },
+          {
+            "id": "claude-haiku-4-5",
+            "name": "Claude Haiku 4.5",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 64000,
+            "cost": {
+              "input": 1,
+              "output": 5
+            }
+          },
+          {
+            "id": "gpt-5",
+            "name": "GPT-5",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 1.25,
+              "output": 10
+            }
+          },
+          {
+            "id": "gpt-5-mini",
+            "name": "GPT-5 mini",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0.25,
+              "output": 2
+            }
+          },
+          {
+            "id": "gpt-5-nano",
+            "name": "GPT-5 nano",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0.05,
+              "output": 0.4
+            }
+          },
+          {
+            "id": "gpt-4o",
+            "name": "GPT-4o",
+            "reasoning": false,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 16384,
+            "cost": {
+              "input": 2.5,
+              "output": 10
+            }
+          },
+          {
+            "id": "gpt-4o-mini",
+            "name": "GPT-4o mini",
+            "reasoning": false,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 128000,
+            "maxTokens": 16384,
+            "cost": {
+              "input": 0.15,
+              "output": 0.6
+            }
+          },
+          {
+            "id": "gpt-4.1",
+            "name": "GPT-4.1",
+            "reasoning": false,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 1047576,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 2,
+              "output": 8
+            }
+          },
+          {
+            "id": "gemini-2.5-pro",
+            "name": "Gemini 2.5 Pro",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 1.25,
+              "output": 5
+            }
+          },
+          {
+            "id": "gemini-2.5-flash",
+            "name": "Gemini 2.5 Flash",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0.3,
+              "output": 2.5
+            }
+          },
+          {
+            "id": "gemini-2.5-flash-lite",
+            "name": "Gemini 2.5 Flash Lite",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0.1,
+              "output": 0.4
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "wrouter": "refreshable"
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "wrouter",
+        "envVars": [
+          "WROUTER_API_KEY"
+        ]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "wrouter",
+      "method": "api-key",
+      "choiceId": "wrouter-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "WRouter API key",
+      "groupId": "wrouter",
+      "groupLabel": "WRouter",
+      "groupHint": "API key",
+      "optionKey": "wrouterApiKey",
+      "cliFlag": "--wrouter-api-key",
+      "cliOption": "--wrouter-api-key <key>",
+      "cliDescription": "WRouter API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

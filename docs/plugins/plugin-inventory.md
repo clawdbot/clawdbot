@@ -51,7 +51,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-66 plugins
+67 plugins
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
 
@@ -180,6 +180,8 @@ Each entry lists the package, distribution route, and description.
 - **[webhooks](/plugins/reference/webhooks)** (`@openclaw/webhooks`) - included in OpenClaw. Authenticated inbound webhooks that bind external automation to OpenClaw TaskFlows.
 
 - **[workboard](/plugins/reference/workboard)** (`@openclaw/workboard`) - included in OpenClaw. Dashboard workboard for agent-owned issues and sessions.
+
+- **[wrouter](/plugins/reference/wrouter)** (`@openclaw/wrouter-provider`) - included in OpenClaw; npm; ClawHub: `clawhub:@openclaw/wrouter-provider`. Adds Wrouter model provider support to OpenClaw.
 
 - **[xai](/plugins/reference/xai)** (`@openclaw/xai-plugin`) - included in OpenClaw. Adds xAI model provider support to OpenClaw.
 

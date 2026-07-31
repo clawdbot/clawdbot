@@ -7570,6 +7570,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/wrouter.md
+
+- Route: /plugins/reference/wrouter
+- Headings:
+  - H1: Wrouter plugin
+  - H2: Distribution
+  - H2: Surface
+
 ## plugins/reference/xai.md
 
 - Route: /plugins/reference/xai
