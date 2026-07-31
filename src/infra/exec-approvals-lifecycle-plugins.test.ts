@@ -134,6 +134,53 @@ describe("OpenClaw lifecycle runner parsing edges", () => {
     ).toBe(false);
   });
 
+  it("does not execute unsafe process-selector regexes", () => {
+    expect(
+      requiresApproval(String.raw`pkill -f '^([A-Za-z0-9 /._:]+)+Z$'`, [
+        "pkill",
+        "-f",
+        String.raw`^([A-Za-z0-9 /._:]+)+Z$`,
+      ]),
+    ).toBe(true);
+  });
+
+  it("expands embedded POSIX array positionals conservatively", () => {
+    expect(
+      requiresApproval(`sh -c 'open$@ gateway restart' sh claw`, [
+        "sh",
+        "-c",
+        "open$@ gateway restart",
+        "sh",
+        "claw",
+      ]),
+    ).toBe(true);
+  });
+
+  it("honors negated dry-run options in argument order", () => {
+    expect(
+      requiresApproval("npm install --dry-run --no-dry-run openclaw", [
+        "npm",
+        "install",
+        "--dry-run",
+        "--no-dry-run",
+        "openclaw",
+      ]),
+    ).toBe(true);
+  });
+
+  it("keeps option-terminated policy operands mutating", () => {
+    expect(
+      requiresApproval("openclaw approvals allowlist add -- --help", [
+        "openclaw",
+        "approvals",
+        "allowlist",
+        "add",
+        "--",
+        "--help",
+      ]),
+    ).toBe(true);
+  });
+
   it.each([
     ["& { openclaw gateway restart }", ["&", "{", "openclaw", "gateway", "restart", "}"]],
     [

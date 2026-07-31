@@ -1,4 +1,5 @@
 // Matches executable shell glob patterns that can resolve to the OpenClaw CLI.
+import { compileSafeRegexDetailed, testRegexWithBoundedInput } from "../security/safe-regex.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 
 /** Return true for known OpenClaw CLI entry scripts under an OpenClaw path. */
@@ -85,6 +86,9 @@ export function isOpenClawExecutablePattern(value: string | undefined): boolean 
 /** Return true when a process selector regex or wildcard can select OpenClaw. */
 export function matchesOpenClawProcessPattern(value: string | undefined): boolean {
   const pattern = (value ?? "").trim().toLowerCase().replace(/["']/gu, "");
+  if (!pattern) {
+    return false;
+  }
   const spellsOpenClaw =
     /o[^a-z0-9]*p[^a-z0-9]*e[^a-z0-9]*n[^a-z0-9]*c[^a-z0-9]*l[^a-z0-9]*a[^a-z0-9]*w/iu;
   if (pattern.includes("openclaw") || spellsOpenClaw.test(pattern)) {
@@ -108,12 +112,12 @@ export function matchesOpenClawProcessPattern(value: string | undefined): boolea
   ) {
     return true;
   }
-  try {
-    const regex = new RegExp(pattern, "iu");
-    return candidates.some((name) => regex.test(name));
-  } catch {
-    return false;
+  const compiled = compileSafeRegexDetailed(pattern, "iu");
+  if (!compiled.regex) {
+    // Unsafe or unsupported selectors fail closed before process selection.
+    return true;
   }
+  return candidates.some((name) => testRegexWithBoundedInput(compiled.regex, name));
 }
 
 /** Return true when a system service/unit glob can select an OpenClaw unit. */

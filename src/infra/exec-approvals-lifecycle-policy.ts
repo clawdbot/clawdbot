@@ -18,17 +18,22 @@ function optionName(token: string): string {
 
 function positionals(argv: readonly string[], start: number): string[] {
   const values: string[] = [];
+  let parsingOptions = true;
   for (let index = start; index < argv.length; index += 1) {
     const token = argv[index]?.trim() ?? "";
+    if (parsingOptions && token === "--") {
+      parsingOptions = false;
+      continue;
+    }
     const name = optionName(token);
-    if (HELP_OR_VERSION_FLAGS.has(token)) {
+    if (parsingOptions && HELP_OR_VERSION_FLAGS.has(token)) {
       return [];
     }
-    if (OPTIONS_WITH_VALUE.has(name)) {
+    if (parsingOptions && OPTIONS_WITH_VALUE.has(name)) {
       if (!token.includes("=")) {
         index += 1;
       }
-    } else if (!token.startsWith("-") || token === "-") {
+    } else if (!parsingOptions || !token.startsWith("-") || token === "-") {
       values.push(token.toLowerCase());
     }
   }

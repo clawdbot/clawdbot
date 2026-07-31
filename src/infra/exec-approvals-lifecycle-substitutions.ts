@@ -384,18 +384,24 @@ export function bindLifecyclePosixShellPositionals(
   positionalArgv: readonly string[],
 ): string[] {
   const bound: string[] = [];
+  const arrayPositionals = positionalArgv.slice(1);
   for (const token of argv) {
     if (/^\$(?:@|\*|\{@\}|\{\*\})$/u.test(token)) {
-      bound.push(...positionalArgv.slice(1));
+      bound.push(...arrayPositionals);
       continue;
     }
-    const replaced = token.replace(
-      /\$(?:\{([0-9]+)\}|([0-9]+))/gu,
-      (_match, bracedIndex: string | undefined, bareIndex: string | undefined) => {
-        const index = Number.parseInt(bracedIndex ?? bareIndex ?? "", 10);
-        return Number.isSafeInteger(index) ? (positionalArgv[index] ?? "") : "";
-      },
-    );
+    const replaced = token
+      // Quote provenance is unavailable here. Joining embedded array
+      // positionals deliberately over-approximates executable names such as
+      // `open$@` so they cannot hide a lifecycle command.
+      .replace(/\$(?:@|\*|\{@\}|\{\*\})/gu, arrayPositionals.join(""))
+      .replace(
+        /\$(?:\{([0-9]+)\}|([0-9]+))/gu,
+        (_match, bracedIndex: string | undefined, bareIndex: string | undefined) => {
+          const index = Number.parseInt(bracedIndex ?? bareIndex ?? "", 10);
+          return Number.isSafeInteger(index) ? (positionalArgv[index] ?? "") : "";
+        },
+      );
     if (replaced) {
       bound.push(replaced);
     }

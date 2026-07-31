@@ -24,6 +24,11 @@ export function lifecycleHasEffectiveBooleanOption(
       index += 1;
       continue;
     }
+    const negatedName = name.startsWith("--no-") ? `--${name.slice("--no-".length)}` : "";
+    if (negatedName && names.has(negatedName)) {
+      enabled = false;
+      continue;
+    }
     if (names.has(name)) {
       const value = token.includes("=")
         ? token.slice(token.indexOf("=") + 1).toLowerCase()
