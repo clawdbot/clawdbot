@@ -39,10 +39,34 @@ function globPatternSource(pattern: string): string {
       }
     }
     if (char === "{") {
-      const end = pattern.indexOf("}", index + 1);
+      let depth = 1;
+      let end = index + 1;
+      for (; end < pattern.length && depth > 0; end += 1) {
+        if (pattern[end] === "{") {
+          depth += 1;
+        } else if (pattern[end] === "}") {
+          depth -= 1;
+        }
+      }
+      end = depth === 0 ? end - 1 : -1;
       if (end !== -1) {
         const body = pattern.slice(index + 1, end);
         const range = /^([a-z])\.\.([a-z])$/iu.exec(body);
+        const alternatives: string[] = [];
+        let alternativeStart = 0;
+        let alternativeDepth = 0;
+        for (let offset = 0; offset <= body.length; offset += 1) {
+          const bodyChar = body[offset];
+          if (bodyChar === "{") {
+            alternativeDepth += 1;
+          } else if (bodyChar === "}") {
+            alternativeDepth = Math.max(0, alternativeDepth - 1);
+          }
+          if ((bodyChar === "," && alternativeDepth === 0) || offset === body.length) {
+            alternatives.push(body.slice(alternativeStart, offset));
+            alternativeStart = offset + 1;
+          }
+        }
         const choices = range
           ? Array.from(
               { length: Math.abs(range[1]!.charCodeAt(0) - range[2]!.charCodeAt(0)) + 1 },
@@ -52,7 +76,7 @@ function globPatternSource(pattern: string): string {
                     offset * (range[1]!.charCodeAt(0) <= range[2]!.charCodeAt(0) ? 1 : -1),
                 ),
             )
-          : body.split(",").map(globPatternSource);
+          : alternatives.map(globPatternSource);
         source += choices.length === 1 ? (choices[0] ?? "") : `(?:${choices.join("|")})`;
         index = end;
         continue;
@@ -67,6 +91,19 @@ function globPatternToRegExp(pattern: string): RegExp {
   return new RegExp(`^${globPatternSource(pattern)}$`, "iu");
 }
 
+/** Return true when an executable token is or can glob-expand to a candidate basename. */
+export function matchesLifecycleExecutablePattern(
+  value: string | undefined,
+  candidates: ReadonlySet<string>,
+): boolean {
+  const executable = normalizeExecutableToken(value ?? "");
+  return (
+    candidates.has(executable) ||
+    (/[*?[{]/u.test(executable) &&
+      [...candidates].some((candidate) => globPatternToRegExp(executable).test(candidate)))
+  );
+}
+
 /** Return true when an executable token is or can glob-expand to OpenClaw. */
 export function isOpenClawExecutablePattern(value: string | undefined): boolean {
   const executable = normalizeExecutableToken(value ?? "");
@@ -79,11 +116,9 @@ export function isOpenClawExecutablePattern(value: string | undefined): boolean 
   ) {
     return true;
   }
-  return (
-    /[*?[{]/u.test(executable) &&
-    ["openclaw", "openclaw.mjs", "openclaw.ps1"].some((candidate) =>
-      globPatternToRegExp(executable).test(candidate),
-    )
+  return matchesLifecycleExecutablePattern(
+    executable,
+    new Set(["openclaw", "openclaw.mjs", "openclaw.ps1"]),
   );
 }
 

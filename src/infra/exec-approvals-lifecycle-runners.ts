@@ -209,6 +209,9 @@ function isOpenClawPackageTarget(token: string): boolean {
 }
 
 function resolvedPackageRunnerPlan(argv: string[]): LifecyclePackageRunnerPlan {
+  if (isOpenClawPackageTarget(argv[0] ?? "")) {
+    return { kind: "argv", argv: ["openclaw", ...argv.slice(1)] };
+  }
   if (JAVASCRIPT_EXECUTABLE_RUNNERS.has(normalizeExecutableToken(argv[0] ?? ""))) {
     const entryIndex = argv.findIndex(
       (token, index) => index > 0 && isOpenClawEntryScriptPath(token),

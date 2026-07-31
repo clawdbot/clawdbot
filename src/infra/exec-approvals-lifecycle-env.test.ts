@@ -462,6 +462,31 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
 
   it.each([
     [
+      "/usr/bin/syste?ctl restart openclaw-gateway.service",
+      ["/usr/bin/syste?ctl", "restart", "openclaw-gateway.service"],
+    ],
+    ["/usr/bin/pk?ll -TERM openclaw", ["/usr/bin/pk?ll", "-TERM", "openclaw"]],
+    [
+      "{{openclaw,--dev},--no-color} gateway restart",
+      ["{{openclaw,--dev},--no-color}", "gateway", "restart"],
+    ],
+    [
+      "npm exec -- oc@npm:openclaw@latest gateway restart",
+      ["npm", "exec", "--", "oc@npm:openclaw@latest", "gateway", "restart"],
+    ],
+    [
+      "pnpm dlx oc@npm:openclaw@latest gateway restart",
+      ["pnpm", "dlx", "oc@npm:openclaw@latest", "gateway", "restart"],
+    ],
+  ] as Array<[string, string[]]>)(
+    "classifies executable expansion carriers: %s",
+    (command, argv) => {
+      expect(requiresApproval(command, argv)).toBe(true);
+    },
+  );
+
+  it.each([
+    [
       "hash -p /usr/local/bin/openclaw oc; oc gateway restart",
       ["hash", "-p", "/usr/local/bin/openclaw", "oc", ";", "oc", "gateway", "restart"],
     ],

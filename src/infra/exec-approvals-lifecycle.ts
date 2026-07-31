@@ -20,6 +20,7 @@ import {
 import { resolveNodeOpenClawArgv } from "./exec-approvals-lifecycle-node.js";
 import {
   isOpenClawExecutablePattern,
+  matchesLifecycleExecutablePattern,
   matchesOpenClawProcessPattern,
   matchesOpenClawUnitPattern,
 } from "./exec-approvals-lifecycle-patterns.js";
@@ -158,8 +159,9 @@ function classifyLaunchctl(
 }
 
 function classifyServiceManager(argv: readonly string[]): boolean {
-  const executable = normalizeExecutableToken(argv[0] ?? "");
-  if (executable === "service") {
+  const matchesExecutable = (...names: string[]) =>
+    matchesLifecycleExecutablePattern(argv[0], new Set(names));
+  if (matchesExecutable("service")) {
     return (
       looksLikeOpenClaw(argv[1]) &&
       ["force-reload", "reload", "restart", "start", "stop", "try-restart"].includes(
@@ -167,7 +169,7 @@ function classifyServiceManager(argv: readonly string[]): boolean {
       )
     );
   }
-  if (executable === "sc") {
+  if (matchesExecutable("sc")) {
     const actionIndex = argv[1]?.startsWith("\\\\") ? 2 : 1;
     return (
       [
@@ -192,7 +194,7 @@ function classifyServiceManager(argv: readonly string[]): boolean {
       argv.slice(actionIndex + 1).some(looksLikeOpenClaw)
     );
   }
-  if (executable === "net") {
+  if (matchesExecutable("net")) {
     return (
       ["continue", "pause", "start", "stop"].includes(normalizedToken(argv[1])) &&
       argv.slice(2).some(looksLikeOpenClaw)
@@ -219,22 +221,24 @@ function classifyProcessMutation(
   shellContext: ShellContext,
 ): boolean {
   const executable = normalizeExecutableToken(argv[0] ?? "");
+  const matchesExecutable = (...names: string[]) =>
+    matchesLifecycleExecutablePattern(argv[0], new Set(names));
   if (shellContext === "powershell" && powerShellArgvUsesWhatIf(argv)) {
     return false;
   }
-  if (["killall", "pkill"].includes(executable)) {
+  if (matchesExecutable("killall", "pkill")) {
     if (hasHelpOrVersion(argv, new Set(["-l", "--list"])) || argvUsesSignalZero(argv)) {
       return false;
     }
     return argv.slice(1).some(matchesOpenClawProcessPattern);
   }
-  if (executable === "taskkill") {
+  if (matchesExecutable("taskkill")) {
     return (
       !argv.some((token) => normalizedToken(token) === "/?") &&
       argv.some(matchesOpenClawProcessPattern)
     );
   }
-  if (executable === "kill") {
+  if (matchesExecutable("kill")) {
     if (shellContext === "powershell") {
       return argv.slice(1).some(matchesOpenClawProcessPattern);
     }
@@ -262,7 +266,10 @@ function classifyProcessMutation(
       /\$\([^)]*\bopenclaw\b[^)]*\)|`[^`]*\bopenclaw\b[^`]*`/iu.test(normalizedRaw)
     );
   }
-  if (POWERSHELL_SERVICE_MUTATIONS.has(executable)) {
+  if (
+    POWERSHELL_SERVICE_MUTATIONS.has(executable) ||
+    matchesLifecycleExecutablePattern(argv[0], POWERSHELL_SERVICE_MUTATIONS)
+  ) {
     return argv.slice(1).some(matchesOpenClawProcessPattern);
   }
   return false;
@@ -540,8 +547,7 @@ function classifyArgv(
     return classifyOpenClawArgv(powerShellStartArgv);
   }
 
-  const executable = normalizeExecutableToken(argv[0] ?? "");
-  if (executable === "launchctl") {
+  if (matchesLifecycleExecutablePattern(argv[0], new Set(["launchctl"]))) {
     return classifyLaunchctl(
       argv,
       raw,
@@ -552,10 +558,10 @@ function classifyArgv(
       substitutionTokensAreSyntax,
     );
   }
-  if (executable === "systemctl") {
+  if (matchesLifecycleExecutablePattern(argv[0], new Set(["systemctl"]))) {
     return classifySystemctl(argv);
   }
-  if (executable === "schtasks") {
+  if (matchesLifecycleExecutablePattern(argv[0], new Set(["schtasks"]))) {
     return classifyScheduledTask(argv);
   }
   return classifyServiceManager(argv) || classifyProcessMutation(argv, raw, shellContext);
