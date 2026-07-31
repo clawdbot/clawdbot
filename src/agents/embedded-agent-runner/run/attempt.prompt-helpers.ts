@@ -102,6 +102,8 @@ export async function resolvePromptBuildHookResult(params: {
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
   bootstrapContextRunKind?: EmbeddedRunAttemptParams["bootstrapContextRunKind"];
+  /** Tool-policy owners must not turn a failed restriction hook into unrestricted execution. */
+  failClosedBeforePromptBuild?: boolean;
 }): Promise<PluginHookBeforePromptBuildResult> {
   const runId = params.hookCtx.runId;
   const cachedInjections = runId ? promptBuildDrainCache.get(runId) : undefined;
@@ -173,6 +175,9 @@ export async function resolvePromptBuildHookResult(params: {
         )
         .catch((hookErr: unknown) => {
           log.warn(`before_prompt_build hook failed: ${String(hookErr)}`);
+          if (params.failClosedBeforePromptBuild) {
+            throw hookErr;
+          }
           return undefined;
         })
     : undefined;

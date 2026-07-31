@@ -164,6 +164,26 @@ describe("resolvePromptBuildHookResult", () => {
     expect(result.appendSystemContext).toBe(wrappedPluginSystemContext("prompt append"));
   });
 
+  it("fails closed on before_prompt_build errors when tool-policy resolution requires it", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => {
+        throw new Error("policy unavailable");
+      }),
+    };
+
+    await expect(
+      resolvePromptBuildHookResult({
+        config: {},
+        prompt: "hello",
+        messages: [],
+        hookCtx: {},
+        hookRunner,
+        failClosedBeforePromptBuild: true,
+      }),
+    ).rejects.toThrow("policy unavailable");
+  });
+
   it("applies heartbeat prompt contributions only during heartbeat turns", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "heartbeat_prompt_contribution"),

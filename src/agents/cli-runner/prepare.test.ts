@@ -2006,7 +2006,7 @@ describe("prepareCliRunContext", () => {
     expect(promptContext?.senderId).toBe("user-789");
   });
 
-  it("preserves the base prompt when prompt-build hooks fail", async () => {
+  it("fails closed when prompt-build hooks fail", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
       runBeforePromptBuild: vi.fn(async () => {
@@ -2015,12 +2015,9 @@ describe("prepareCliRunContext", () => {
     };
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
-    const context = await fixture.prepare({});
-
-    expect(context.params.prompt).toBe("latest ask");
-    expect(context.systemPrompt).toContain("You are a personal assistant running inside OpenClaw.");
-    expect(context.systemPrompt).toContain("Current model identity: test-cli/test-model.");
-    expect(context.systemPrompt).not.toContain("hook exploded");
+    await expect(fixture.prepare({})).rejects.toThrow(
+      "CLI before_prompt_build hook failed before tool restrictions could be resolved",
+    );
     expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
   });
 
@@ -3508,6 +3505,119 @@ describe("prepareCliRunContext", () => {
     expect(context.params.prompt).toContain("message-tool-available:false");
     expect(context.params.transcriptPrompt).toBe("latest ask");
     await context.preparedBackend.cleanup?.();
+  });
+
+  it.each([
+    {
+      name: "materializes exact availability when the caller did not provide it",
+      cliToolAvailability: undefined,
+      hookToolsAllow: ["read"],
+      projectedToolNames: ["read", "message"],
+    },
+    {
+      name: "keeps existing CLI availability as the upper bound",
+      cliToolAvailability: { native: [], openClaw: ["read", "message"] },
+      hookToolsAllow: ["read", "write"],
+      projectedToolNames: ["read", "message", "write"],
+    },
+  ])(
+    "applies before_prompt_build tool filtering before CLI guidance and submission: $name",
+    async ({ cliToolAvailability, hookToolsAllow, projectedToolNames }) => {
+      const prepareExecution = vi.fn(async () => ({ toolAvailabilityEnforced: true as const }));
+      const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
+      const hookRunner = {
+        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+        runBeforePromptBuild: vi.fn(async () => ({ toolsAllow: hookToolsAllow })),
+      };
+      mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+      setRawCliBackendForPrepareTest({
+        id: "claude-cli",
+        pluginId: "anthropic",
+        bundleMcp: true,
+        bundleMcpMode: "claude-config-file",
+        nativeToolMode: "selectable",
+        toolAvailabilityEnforcement: "prepare-execution",
+        prepareExecution,
+        config: {
+          command: "claude",
+          args: ["--print"],
+          output: "jsonl",
+          input: "stdin",
+          sessionMode: "existing",
+        },
+      });
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime: vi.fn(() => ({
+          port: 31783,
+          ownerToken: "loopback-owner-token",
+          nonOwnerToken: "loopback-non-owner-token",
+        })),
+        createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+        mintMcpLoopbackClientGrant,
+        resolveMcpLoopbackScopedTools: vi.fn(() => ({
+          agentId: "main",
+          tools: projectedToolNames.map((name) => ({ name })),
+        })),
+      });
+      const finalizePromptForResolvedTools = vi.fn(
+        ({ prompt, messageToolAvailable }: { prompt: string; messageToolAvailable: boolean }) =>
+          `${prompt}\nmessage-tool-available:${messageToolAvailable}`,
+      );
+
+      const context = await fixture.prepare({
+        provider: "claude-cli",
+        ...(cliToolAvailability ? { cliToolAvailability } : {}),
+        finalizePromptForResolvedTools,
+      });
+
+      expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledTimes(1);
+      expect(hookRunner.runBeforePromptBuild.mock.invocationCallOrder[0]).toBeLessThan(
+        prepareExecution.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(context.params.cliToolAvailability).toEqual({
+        native: [],
+        openClaw: ["read"],
+      });
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolAvailability: { native: [], openClaw: ["read"], mcp: ["mcp__openclaw__read"] },
+        }),
+      );
+      expect(mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context.toolsAllow).toEqual(["read"]);
+      expect(context.systemPromptReport.tools.entries.map((entry) => entry.name)).toEqual(["read"]);
+      expect(finalizePromptForResolvedTools).toHaveBeenCalledWith({
+        prompt: "latest ask",
+        messageToolAvailable: false,
+      });
+      expect(context.params.prompt).toContain("message-tool-available:false");
+      expect(context.params.transcriptPrompt).toBe("latest ask");
+      await context.preparedBackend.cleanup?.();
+    },
+  );
+
+  it("fails closed when a prompt hook restricts an always-on CLI backend", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => ({ toolsAllow: ["read"] })),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setRawCliBackendForPrepareTest({
+      id: "test-cli",
+      pluginId: "test-plugin",
+      bundleMcp: false,
+      nativeToolMode: "always-on",
+      config: {
+        command: "test-cli",
+        args: ["--print"],
+        output: "text",
+        input: "arg",
+        sessionMode: "existing",
+      },
+    });
+
+    await expect(fixture.prepare({ provider: "test-cli" })).rejects.toThrow(
+      'CLI backend "test-cli" cannot enforce before_prompt_build tool restrictions',
+    );
   });
 
   it("keeps runtime toolsAllow canonical and bounds the backend-independent MCP grant", async () => {
