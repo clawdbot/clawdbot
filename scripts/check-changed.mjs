@@ -224,14 +224,8 @@ export function buildChangedCheckCrabboxArgs(argv = [], options = {}) {
     "run",
     "--workload",
     "ci-fast",
-    "--blacksmith-org",
-    "openclaw",
-    "--blacksmith-workflow",
-    ".github/workflows/ci-check-testbox.yml",
-    "--blacksmith-job",
-    "check",
-    "--blacksmith-ref",
-    "main",
+    // Keep workload-routed calls provider-neutral. Blacksmith reads its workflow
+    // defaults from .crabbox.yaml; cloud fallbacks must not receive its flags.
     "--idle-timeout",
     "90m",
     "--ttl",
