@@ -165,7 +165,18 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     runAuthFlow,
     requestExit,
   } = context;
-  let sessionCreationInFlight = false;
+  let sessionTransitionInFlight: "new" | "reset" | null = null;
+
+  // Hold one owner through the full identity transition so later input cannot
+  // target the session being retired while create/reset awaits the backend.
+  const beginSessionTransition = (command: "new" | "reset") => {
+    sessionTransitionInFlight = command;
+    return () => {
+      if (sessionTransitionInFlight === command) {
+        sessionTransitionInFlight = null;
+      }
+    };
+  };
 
   const addUnsupportedLocalCommand = (name: string) => {
     chatLog.addSystem(`/${name} is not available in local embedded mode; message not sent`);
@@ -434,8 +445,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     if (!name) {
       return;
     }
-    if (sessionCreationInFlight && name !== "exit" && name !== "quit") {
-      chatLog.addSystem("session change in progress; wait for /new to finish");
+    if (sessionTransitionInFlight && name !== "exit" && name !== "quit") {
+      chatLog.addSystem(
+        `session change in progress; wait for /${sessionTransitionInFlight} to finish`,
+      );
       tui.requestRender();
       return;
     }
@@ -797,11 +810,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         break;
       }
-      case "new":
+      case "new": {
         if (rejectUnsafeSessionRollover("new")) {
           break;
         }
-        sessionCreationInFlight = true;
+        const finishSessionTransition = beginSessionTransition("new");
         try {
           // Clear token counts immediately to avoid stale display (#1523)
           state.sessionInfo.inputTokens = null;
@@ -825,15 +838,17 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         } catch (err) {
           chatLog.addSystem(`new session failed: ${formatTuiErrorMessage(err)}`);
         } finally {
-          sessionCreationInFlight = false;
+          finishSessionTransition();
         }
         break;
+      }
       case "reset": {
         if (rejectUnsafeSessionRollover("reset")) {
           break;
         }
         const resetSelection = captureSessionSelection();
         let resetResultSelection = resetSelection;
+        const finishSessionTransition = beginSessionTransition("reset");
         try {
           // Clear token counts immediately to avoid stale display (#1523)
           state.sessionInfo.inputTokens = null;
@@ -866,6 +881,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             return;
           }
           chatLog.addSystem(`reset failed: ${formatTuiErrorMessage(err)}`);
+        } finally {
+          finishSessionTransition();
         }
         break;
       }
@@ -903,7 +920,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       tui.requestRender();
       return;
     }
-    if (sessionCreationInFlight) {
+    if (sessionTransitionInFlight) {
       chatLog.addSystem("session change in progress; message not sent");
       tui.requestRender();
       return;

@@ -1536,6 +1536,37 @@ describe("tui command handlers", () => {
     await creating;
   });
 
+  it("serializes input until /reset commits the replacement session", async () => {
+    const deferred = createDeferred<{
+      ok: true;
+      key: string;
+      entry: { sessionId: string };
+    }>();
+    const resetSession = vi.fn(() => deferred.promise);
+    const applySessionMutationResult = vi.fn().mockReturnValue(true);
+    const { handleCommand, sendMessage, sendChat, addSystem } = createHarness({
+      resetSession,
+      applySessionMutationResult,
+    });
+
+    const resetting = handleCommand("/reset");
+    await vi.waitFor(() => expect(resetSession).toHaveBeenCalledOnce());
+    await sendMessage("must not reach the resetting session");
+    await handleCommand("/reset");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(resetSession).toHaveBeenCalledOnce();
+    expect(addSystem).toHaveBeenCalledWith("session change in progress; message not sent");
+    expect(addSystem).toHaveBeenCalledWith("session change in progress; wait for /reset to finish");
+
+    deferred.resolve({
+      ok: true,
+      key: "agent:main:main",
+      entry: { sessionId: "session-after-reset" },
+    });
+    await resetting;
+  });
+
   it("reloads history after /reset when the backend does not return a session entry", async () => {
     const loadHistory = vi.fn().mockResolvedValue(undefined);
     const applySessionMutationResult = vi.fn().mockReturnValue(false);
