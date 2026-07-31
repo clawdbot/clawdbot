@@ -506,14 +506,10 @@ function resolvePendingPersistedEchoTtlMs(timeoutMs: number): number {
   );
 }
 
-function isAttachmentCommandFallbackError(error: unknown, replyToId?: string): boolean {
+function isAttachmentCommandFallbackError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return (
-    /(?:unknown|unrecognized|invalid|unsupported)\s+(?:command|subcommand)|not a recognized command|send-attachment.*(?:not found|unsupported|unavailable)|private api bridge.*unavailable|requires the imsg private api bridge|run imsg launch/iu.test(
-      message,
-    ) ||
-    // Let threaded voice rejection reach the existing RPC owner's unthreaded retry.
-    (Boolean(replyToId) && isThreadedReplyUnsupportedError(error))
+  return /(?:unknown|unrecognized|invalid|unsupported)\s+(?:command|subcommand)|not a recognized command|send-attachment.*(?:not found|unsupported|unavailable)|private api bridge.*unavailable|requires the imsg private api bridge|run imsg launch/iu.test(
+    message,
   );
 }
 
@@ -574,6 +570,11 @@ async function trySendAttachmentForTarget(params: {
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
   resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
 }): Promise<IMessageSendResult | null> {
+  if (params.audioAsVoice && params.sendTransport === "applescript") {
+    throw new Error(
+      "iMessage voice messages require bridge transport; AppleScript cannot send native voice notes. Set sendTransport to bridge or auto.",
+    );
+  }
   let attachmentChatTarget: string | null;
   try {
     attachmentChatTarget = await resolveAttachmentChatTarget({
@@ -582,12 +583,15 @@ async function trySendAttachmentForTarget(params: {
       runCliJson: params.runCliJson,
     });
   } catch (error) {
-    if (isAttachmentCommandFallbackError(error)) {
+    if (!params.audioAsVoice && isAttachmentCommandFallbackError(error)) {
       return null;
     }
     throw error;
   }
   if (!attachmentChatTarget) {
+    if (params.audioAsVoice) {
+      throw new Error("iMessage voice messages require an existing chat and bridge transport.");
+    }
     return null;
   }
 
@@ -616,11 +620,12 @@ async function trySendAttachmentForTarget(params: {
       ...(params.audioAsVoice ? ["--audio"] : []),
       ...(params.replyToId ? ["--reply-to", params.replyToId] : []),
       "--transport",
-      params.sendTransport,
+      // One-shot imsg names its private-API transport dylib; JSON-RPC calls it bridge.
+      params.sendTransport === "bridge" ? "dylib" : params.sendTransport,
     ]);
   } catch (error) {
     forgetPersistedIMessageEchoKey(pendingEchoKey);
-    if (isAttachmentCommandFallbackError(error, params.replyToId)) {
+    if (!params.audioAsVoice && isAttachmentCommandFallbackError(error)) {
       return null;
     }
     throw error;
@@ -629,7 +634,7 @@ async function trySendAttachmentForTarget(params: {
   if (failure) {
     const error = new Error(failure);
     forgetPersistedIMessageEchoKey(pendingEchoKey);
-    if (isAttachmentCommandFallbackError(error, params.replyToId)) {
+    if (!params.audioAsVoice && isAttachmentCommandFallbackError(error)) {
       return null;
     }
     throw error;

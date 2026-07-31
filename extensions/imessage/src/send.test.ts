@@ -596,7 +596,6 @@ describe("sendMessageIMessage receipts", () => {
     { name: "media", audioAsVoice: false, sendTransport: "bridge" },
     { name: "media", audioAsVoice: false, sendTransport: "applescript" },
     { name: "voice", audioAsVoice: true, sendTransport: "bridge" },
-    { name: "voice", audioAsVoice: true, sendTransport: "applescript" },
   ] as const)(
     "honors the configured $sendTransport transport for $name attachment sends",
     async ({ audioAsVoice, sendTransport }) => {
@@ -632,7 +631,7 @@ describe("sendMessageIMessage receipts", () => {
         mediaPath,
         ...(audioAsVoice ? ["--audio"] : []),
         "--transport",
-        sendTransport,
+        sendTransport === "bridge" ? "dylib" : sendTransport,
       ]);
       expect(getClientMocks(client).request).not.toHaveBeenCalled();
     },
@@ -675,57 +674,52 @@ describe("sendMessageIMessage receipts", () => {
     expect(client["request"]).not.toHaveBeenCalled();
   });
 
-  it("falls back to an unthreaded AppleScript voice send when threaded replies are unsupported", async () => {
-    const unsupportedReply = new Error(
-      "reply_to requires bridge transport; AppleScript fallback cannot send threaded replies",
-    );
-    const client = createClient({ guid: "p:0/unthreaded-voice-guid" });
-    const clientMocks = getClientMocks(client);
-    clientMocks.request.mockRejectedValueOnce(unsupportedReply);
-    const runCliJson = vi.fn().mockRejectedValueOnce(unsupportedReply);
+  it.each([undefined, "p:0/reply-guid"])(
+    "rejects AppleScript voice notes without downgrading native audio (reply: %s)",
+    async (replyToId) => {
+      const client = createClient({ guid: "should-not-send" });
+      const runCliJson = vi.fn();
 
-    const result = await sendMessageIMessage("chat_guid:chat-1", "", {
-      config: { channels: { imessage: { sendTransport: "applescript" } } },
-      client,
-      conversationReadOrigin: "direct-operator",
-      mediaUrl: "/tmp/voice.caf",
-      audioAsVoice: true,
-      replyToId: "p:0/reply-guid",
-      resolveAttachmentImpl: async () => ({ path: "/tmp/voice.caf", contentType: "audio/x-caf" }),
-      runCliJson,
-    });
+      await expect(
+        sendMessageIMessage("chat_guid:chat-1", "", {
+          config: { channels: { imessage: { sendTransport: "applescript" } } },
+          client,
+          conversationReadOrigin: "direct-operator",
+          mediaUrl: "/tmp/voice.caf",
+          audioAsVoice: true,
+          replyToId,
+          resolveAttachmentImpl: async () => ({
+            path: "/tmp/voice.caf",
+            contentType: "audio/x-caf",
+          }),
+          runCliJson,
+        }),
+      ).rejects.toThrow("voice messages require bridge transport");
 
-    expect(runCliJson).toHaveBeenCalledWith([
-      "send-attachment",
-      "--chat",
-      "chat-1",
-      "--file",
-      "/tmp/voice.caf",
-      "--audio",
-      "--reply-to",
-      "p:0/reply-guid",
-      "--transport",
-      "applescript",
-    ]);
-    expect(clientMocks.request).toHaveBeenNthCalledWith(
-      1,
-      "send",
-      expect.objectContaining({
-        chat_guid: "chat-1",
-        file: "/tmp/voice.caf",
-        reply_to: "p:0/reply-guid",
-        transport: "applescript",
+      expect(runCliJson).not.toHaveBeenCalled();
+      expect(getClientMocks(client).request).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not downgrade voice notes when the native attachment bridge is unavailable", async () => {
+    const client = createClient({ guid: "should-not-send" });
+    const runCliJson = vi.fn().mockRejectedValueOnce(new Error("private API bridge unavailable"));
+
+    await expect(
+      sendMessageIMessage("chat_guid:chat-1", "", {
+        config: IMESSAGE_TEST_CFG,
+        client,
+        mediaUrl: "/tmp/voice.caf",
+        audioAsVoice: true,
+        resolveAttachmentImpl: async () => ({
+          path: "/tmp/voice.caf",
+          contentType: "audio/x-caf",
+        }),
+        runCliJson,
       }),
-      expect.any(Object),
-    );
-    expect(clientMocks.request).toHaveBeenNthCalledWith(
-      2,
-      "send",
-      expect.not.objectContaining({ reply_to: expect.anything() }),
-      expect.any(Object),
-    );
-    expect(result.messageId).toBe("p:0/unthreaded-voice-guid");
-    expect(result.receipt.replyToId).toBeUndefined();
+    ).rejects.toThrow("private API bridge unavailable");
+
+    expect(getClientMocks(client).request).not.toHaveBeenCalled();
   });
 
   it("drops reply metadata from media sends when reply actions are disabled", async () => {
