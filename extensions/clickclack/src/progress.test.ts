@@ -8,6 +8,7 @@ describe("ClickClack native agent progress", () => {
       client: { publishEphemeral },
       target: { workspaceId: "ws_1", channelId: "chn_1" },
       turnId: "msg_1",
+      agentLabel: "Blackbird",
     });
 
     publisher.start();
@@ -38,7 +39,7 @@ describe("ClickClack native agent progress", () => {
       payload: {
         turn_id: "msg_1",
         op: "append",
-        line: { id: "turn", text: "Agent is responding", status: "running" },
+        line: { id: "turn", text: "Blackbird is responding", status: "running" },
       },
     });
     expect(publishEphemeral.mock.calls[1]?.[0].payload).toMatchObject({

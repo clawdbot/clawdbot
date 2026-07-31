@@ -398,12 +398,13 @@ ClickClack before enabling media-producing agent replies.
 
 ## Native progress and agent activity rows
 
-Native progress is opt-in per account. Set `nativeProgress: true` to show
-transient `Agent is responding` status and progress lines while an agent turn
-runs. These use ephemeral `agent.progress` events and are cleared when the turn
-ends; only the final reply is durable. Set `agentActivity: true` separately to
-publish durable `agent_commentary` and `agent_tool` message rows while the turn
-is in progress:
+Native progress is opt-in per account. Set `nativeProgress: true` to show a
+transient `<agent name> is responding` status and progress lines while an agent
+turn runs. The agent name comes from the configured account name, ClickClack bot
+handle, or agent ID. These use ephemeral `agent.progress` events and are cleared
+when the turn ends; only the final reply is durable. Set `agentActivity: true`
+separately to publish durable `agent_commentary` and `agent_tool` message rows
+while the turn is in progress:
 
 ```json5
 {

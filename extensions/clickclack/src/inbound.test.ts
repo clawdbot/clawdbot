@@ -505,7 +505,7 @@ describe("handleClickClackInbound", () => {
     setClickClackRuntime(runtime);
 
     await handleClickClackInbound({
-      account: createAgentAccount(),
+      account: createAgentAccount({ nativeProgress: true }),
       config: {} as CoreConfig,
       message: createMessage({ id: "msg_invalid" }),
     });

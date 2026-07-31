@@ -147,6 +147,7 @@ export function createClickClackAgentProgressPublisher(params: {
   client: ClickClackProgressClient;
   target: ClickClackProgressTarget;
   turnId: string;
+  agentLabel?: string;
   onError?: (error: unknown) => void;
 }): ClickClackAgentProgressPublisher {
   let sequence = 0;
@@ -276,7 +277,12 @@ export function createClickClackAgentProgressPublisher(params: {
       started = true;
       enqueue({
         op: "append",
-        line: { id: "turn", kind: "commentary", text: "Agent is responding", status: "running" },
+        line: {
+          id: "turn",
+          kind: "commentary",
+          text: params.agentLabel ? `${params.agentLabel} is responding` : "Agent is responding",
+          status: "running",
+        },
       });
     },
     onItemEvent(payload) {

@@ -116,6 +116,11 @@ export async function handleClickClackInbound(params: {
           ? { workspaceId: message.workspace_id, channelId: message.channel_id }
           : { workspaceId: message.workspace_id, conversationId },
         turnId: message.id,
+        agentLabel:
+          params.account.name?.trim() ||
+          params.account.botHandle?.trim() ||
+          params.account.agentId?.trim() ||
+          params.account.accountId,
         onError: (error) => {
           runtime.logging
             .getChildLogger({ plugin: "clickclack", feature: "agent-progress" })
