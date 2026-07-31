@@ -101,7 +101,9 @@ acceptance larger than the negotiated ceiling can still be delivered. Both
 peers preserve the existing directional sequence state.
 
 The `SidecarHandshake` state machine is bound to one exact authenticated
-channel instance and accepts only this two-frame ordering.
+channel instance and accepts only this two-frame ordering. Substituting another
+channel is rejected before frame processing or handshake mutation and retires
+the supplied replacement; the original bound handshake can continue.
 Wrong roles, incompatible versions, malformed/authentication failures, forged
 selection, repeated/out-of-order messages, and unencodable bootstrap messages
 retire the handshake and channel. Negotiation must complete before accepting

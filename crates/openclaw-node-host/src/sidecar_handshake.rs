@@ -97,7 +97,8 @@ impl SidecarHandshake {
         channel: &mut AuthenticatedSidecarChannel,
     ) -> Result<Vec<u8>, SidecarHandshakeError> {
         if let Err(error) = self.bind_channel(channel) {
-            return self.fail(channel, error);
+            channel.retire();
+            return Err(error);
         }
         if channel.role() != self.local_offer.peer.role {
             return self.fail(channel, SidecarHandshakeError::ChannelRoleMismatch);
@@ -125,15 +126,19 @@ impl SidecarHandshake {
     /// # Errors
     ///
     /// Returns an error for framing/authentication failure, incompatible or
-    /// forged negotiation, wrong peer roles, or invalid message ordering. Any
-    /// error permanently retires the channel and handshake.
+    /// forged negotiation, wrong peer roles, or invalid message ordering.
+    /// Frame and state-machine errors permanently retire the bound channel and
+    /// handshake. A different channel instance is rejected before processing:
+    /// only that supplied replacement is retired, and the bound handshake is
+    /// unchanged.
     pub fn receive(
         &mut self,
         channel: &mut AuthenticatedSidecarChannel,
         frame: &[u8],
     ) -> Result<Option<Vec<u8>>, SidecarHandshakeError> {
         if let Err(error) = self.bind_channel(channel) {
-            return self.fail(channel, error);
+            channel.retire();
+            return Err(error);
         }
         if channel.role() != self.local_offer.peer.role {
             return self.fail(channel, SidecarHandshakeError::ChannelRoleMismatch);
@@ -159,14 +164,16 @@ impl SidecarHandshake {
     /// # Errors
     ///
     /// Returns an error for the wrong channel, role, state, a retired channel,
-    /// or an invalid negotiated selection. Every error retires this channel
-    /// and handshake.
+    /// or an invalid negotiated selection. State and negotiation errors retire
+    /// the bound channel and handshake. A different channel instance is
+    /// rejected before processing and retires only the supplied replacement.
     pub fn complete_acceptance(
         &mut self,
         channel: &mut AuthenticatedSidecarChannel,
     ) -> Result<(), SidecarHandshakeError> {
         if let Err(error) = self.bind_channel(channel) {
-            return self.fail(channel, error);
+            channel.retire();
+            return Err(error);
         }
         if channel.role() != SidecarPeerRole::Runtime {
             return self.fail(channel, SidecarHandshakeError::ChannelRoleMismatch);
@@ -618,9 +625,18 @@ mod tests {
             supervisor.receive(&mut other_supervisor_channel, &acceptance),
             Err(SidecarHandshakeError::ChannelInstanceMismatch)
         ));
-        assert_eq!(supervisor.state(), SidecarHandshakeState::Failed);
+        assert_eq!(
+            supervisor.state(),
+            SidecarHandshakeState::AwaitingAcceptance
+        );
         assert!(other_supervisor_channel.is_retired());
         assert!(!original_channel.is_retired());
+
+        assert!(supervisor
+            .receive(&mut original_channel, &acceptance)
+            .unwrap()
+            .is_none());
+        assert_eq!(supervisor.state(), SidecarHandshakeState::Authenticated);
     }
 
     #[test]
