@@ -22,8 +22,9 @@ export OPENCLAW_EXPERIMENTAL_CLAWS=1
 ```
 
 The current CLI reads a local package directory, `CLAW.md`, or grouped JSON manifest.
-Publishing, searching, and installing whole Claws through ClawHub are a
-separate registry track and are not part of this command surface yet.
+ClawHub publishing remains a separate registry track. An experimental Gateway
+can, however, search immutable ClawHub releases and drive the same preview and
+apply lifecycle through the Control UI.
 
 ## Create a Claw package
 
@@ -405,11 +406,29 @@ credentials, sessions, and unowned local state are excluded.
 ## Inspect Claws in the Control UI
 
 When experimental Claws are enabled on the connected Gateway, the Control UI
-adds a **Claws** destination. It shows installed Claws, lifecycle
-health, doctor findings, and managed/referenced provenance. The Gateway
-advertises this surface to the UI and returns a secret-safe projection; the
-browser does not receive the environment flag, package paths, configuration
-values, file contents, or scheduled prompts.
+adds a **Claws** destination. It shows installed Claws, lifecycle health,
+doctor findings, and managed/referenced provenance. When the Gateway advertises
+the ClawHub methods, the same destination can search ClawHub and inspect a
+schema-version-1 package before changing local state.
+
+Adding, updating, and removing from the browser remain preview-first. The UI
+shows the bounded action list, blockers, capability disclosures, readiness,
+and any ClawHub trust warning returned by the Gateway. Apply requires
+`operator.admin`, the exact `planIntegrity` token, and explicit acknowledgement
+when package trust requires it. Changing the optional removal cleanup choice
+builds a new preview because that choice is part of the plan digest.
+
+Package discovery and previews require only read access. A read-only operator
+can inspect plans but cannot apply them. The Gateway returns a secret-safe
+projection; the browser does not receive the environment flag, package paths,
+configuration values, file contents, scheduled prompts, installer output, or
+resolved credentials.
+
+After add or update, **Open chat** starts the native agent conversation. If the
+package supplied `BOOTSTRAP.md`, the new agent's normal workspace bootstrap
+flow performs the first-run interview there; Claws do not add a second setup
+form or answer store. Removal retains referenced artifacts by default and
+offers explicit cleanup only for unused eligible resources.
 
 ## Command reference
 

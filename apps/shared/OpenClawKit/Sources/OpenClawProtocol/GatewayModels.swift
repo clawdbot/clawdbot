@@ -11134,6 +11134,114 @@ public struct WebLoginWaitParams: Codable, Sendable {
     }
 }
 
+public struct ClawCatalogDetail: Codable, Sendable {
+    public let packagename: String
+    public let displayname: String
+    public let summary: String?
+    public let channel: AnyCodable
+    public let official: Bool
+    public let version: String
+    public let agentname: String?
+    public let agentdescription: String?
+    public let workspacefiles: Int
+    public let skills: Int
+    public let plugins: Int
+    public let mcpservers: Int
+    public let scheduledjobs: Int
+    public let scanstatus: String?
+
+    public init(
+        packagename: String,
+        displayname: String,
+        summary: String? = nil,
+        channel: AnyCodable,
+        official: Bool,
+        version: String,
+        agentname: String? = nil,
+        agentdescription: String? = nil,
+        workspacefiles: Int,
+        skills: Int,
+        plugins: Int,
+        mcpservers: Int,
+        scheduledjobs: Int,
+        scanstatus: String? = nil)
+    {
+        self.packagename = packagename
+        self.displayname = displayname
+        self.summary = summary
+        self.channel = channel
+        self.official = official
+        self.version = version
+        self.agentname = agentname
+        self.agentdescription = agentdescription
+        self.workspacefiles = workspacefiles
+        self.skills = skills
+        self.plugins = plugins
+        self.mcpservers = mcpservers
+        self.scheduledjobs = scheduledjobs
+        self.scanstatus = scanstatus
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case packagename = "packageName"
+        case displayname = "displayName"
+        case summary
+        case channel
+        case official
+        case version
+        case agentname = "agentName"
+        case agentdescription = "agentDescription"
+        case workspacefiles = "workspaceFiles"
+        case skills
+        case plugins
+        case mcpservers = "mcpServers"
+        case scheduledjobs = "scheduledJobs"
+        case scanstatus = "scanStatus"
+    }
+}
+
+public struct ClawCatalogEntry: Codable, Sendable {
+    public let packagename: String
+    public let displayname: String
+    public let summary: String?
+    public let channel: AnyCodable
+    public let official: Bool
+    public let latestversion: String?
+    public let downloads: Int
+    public let updatedatms: Int
+
+    public init(
+        packagename: String,
+        displayname: String,
+        summary: String? = nil,
+        channel: AnyCodable,
+        official: Bool,
+        latestversion: String? = nil,
+        downloads: Int,
+        updatedatms: Int)
+    {
+        self.packagename = packagename
+        self.displayname = displayname
+        self.summary = summary
+        self.channel = channel
+        self.official = official
+        self.latestversion = latestversion
+        self.downloads = downloads
+        self.updatedatms = updatedatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case packagename = "packageName"
+        case displayname = "displayName"
+        case summary
+        case channel
+        case official
+        case latestversion = "latestVersion"
+        case downloads
+        case updatedatms = "updatedAtMs"
+    }
+}
+
 public struct ClawDoctorFinding: Codable, Sendable {
     public let severity: AnyCodable
     public let message: String
@@ -11161,6 +11269,86 @@ public struct ClawDoctorFinding: Codable, Sendable {
         case path
         case requirement
         case fixhint = "fixHint"
+    }
+}
+
+public struct ClawLifecycleApplyResult: Codable, Sendable {
+    public let schemaversion: String
+    public let operation: AnyCodable
+    public let status: AnyCodable
+    public let agentid: String
+    public let message: String
+
+    public init(
+        schemaversion: String,
+        operation: AnyCodable,
+        status: AnyCodable,
+        agentid: String,
+        message: String)
+    {
+        self.schemaversion = schemaversion
+        self.operation = operation
+        self.status = status
+        self.agentid = agentid
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaversion = "schemaVersion"
+        case operation
+        case status
+        case agentid = "agentId"
+        case message
+    }
+}
+
+public struct ClawLifecyclePlanResult: Codable, Sendable {
+    public let schemaversion: String
+    public let operation: AnyCodable
+    public let planintegrity: String
+    public let target: [String: AnyCodable]
+    public let actions: [[String: AnyCodable]]
+    public let capabilities: [[String: AnyCodable]]
+    public let blockers: [[String: AnyCodable]]
+    public let trustwarning: String?
+    public let riskacknowledgementrequired: Bool
+    public let readiness: [String: AnyCodable]?
+
+    public init(
+        schemaversion: String,
+        operation: AnyCodable,
+        planintegrity: String,
+        target: [String: AnyCodable],
+        actions: [[String: AnyCodable]],
+        capabilities: [[String: AnyCodable]],
+        blockers: [[String: AnyCodable]],
+        trustwarning: String? = nil,
+        riskacknowledgementrequired: Bool,
+        readiness: [String: AnyCodable]? = nil)
+    {
+        self.schemaversion = schemaversion
+        self.operation = operation
+        self.planintegrity = planintegrity
+        self.target = target
+        self.actions = actions
+        self.capabilities = capabilities
+        self.blockers = blockers
+        self.trustwarning = trustwarning
+        self.riskacknowledgementrequired = riskacknowledgementrequired
+        self.readiness = readiness
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaversion = "schemaVersion"
+        case operation
+        case planintegrity = "planIntegrity"
+        case target
+        case actions
+        case capabilities
+        case blockers
+        case trustwarning = "trustWarning"
+        case riskacknowledgementrequired = "riskAcknowledgementRequired"
+        case readiness
     }
 }
 
@@ -11252,6 +11440,122 @@ public struct ClawStatusEntry: Codable, Sendable {
     }
 }
 
+public struct ClawsAddApplyParams: Codable, Sendable {
+    public let source: [String: AnyCodable]
+    public let agentid: String?
+    public let planintegrity: String
+    public let acknowledgeclawhubrisk: Bool?
+
+    public init(
+        source: [String: AnyCodable],
+        agentid: String? = nil,
+        planintegrity: String,
+        acknowledgeclawhubrisk: Bool? = nil)
+    {
+        self.source = source
+        self.agentid = agentid
+        self.planintegrity = planintegrity
+        self.acknowledgeclawhubrisk = acknowledgeclawhubrisk
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case agentid = "agentId"
+        case planintegrity = "planIntegrity"
+        case acknowledgeclawhubrisk = "acknowledgeClawHubRisk"
+    }
+}
+
+public struct ClawsAddPlanParams: Codable, Sendable {
+    public let source: [String: AnyCodable]
+    public let agentid: String?
+
+    public init(
+        source: [String: AnyCodable],
+        agentid: String? = nil)
+    {
+        self.source = source
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case source
+        case agentid = "agentId"
+    }
+}
+
+public struct ClawsCatalogDetailParams: Codable, Sendable {
+    public let packagename: String
+    public let version: String?
+
+    public init(
+        packagename: String,
+        version: String? = nil)
+    {
+        self.packagename = packagename
+        self.version = version
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case packagename = "packageName"
+        case version
+    }
+}
+
+public struct ClawsCatalogDetailResult: Codable, Sendable {
+    public let schemaversion: String
+    public let detail: ClawCatalogDetail
+
+    public init(
+        schemaversion: String,
+        detail: ClawCatalogDetail)
+    {
+        self.schemaversion = schemaversion
+        self.detail = detail
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaversion = "schemaVersion"
+        case detail
+    }
+}
+
+public struct ClawsCatalogSearchParams: Codable, Sendable {
+    public let query: String
+    public let limit: Int?
+
+    public init(
+        query: String,
+        limit: Int? = nil)
+    {
+        self.query = query
+        self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case query
+        case limit
+    }
+}
+
+public struct ClawsCatalogSearchResult: Codable, Sendable {
+    public let schemaversion: String
+    public let entries: [ClawCatalogEntry]
+
+    public init(
+        schemaversion: String,
+        entries: [ClawCatalogEntry])
+    {
+        self.schemaversion = schemaversion
+        self.entries = entries
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaversion = "schemaVersion"
+        case entries
+    }
+}
+
 public struct ClawsDoctorParams: Codable, Sendable {}
 
 public struct ClawsDoctorResult: Codable, Sendable {
@@ -11273,6 +11577,46 @@ public struct ClawsDoctorResult: Codable, Sendable {
         case schemaversion = "schemaVersion"
         case findings
         case summary
+    }
+}
+
+public struct ClawsRemoveApplyParams: Codable, Sendable {
+    public let target: String
+    public let removeunused: Bool?
+    public let planintegrity: String
+
+    public init(
+        target: String,
+        removeunused: Bool? = nil,
+        planintegrity: String)
+    {
+        self.target = target
+        self.removeunused = removeunused
+        self.planintegrity = planintegrity
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case target
+        case removeunused = "removeUnused"
+        case planintegrity = "planIntegrity"
+    }
+}
+
+public struct ClawsRemovePlanParams: Codable, Sendable {
+    public let target: String
+    public let removeunused: Bool?
+
+    public init(
+        target: String,
+        removeunused: Bool? = nil)
+    {
+        self.target = target
+        self.removeunused = removeunused
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case target
+        case removeunused = "removeUnused"
     }
 }
 
@@ -11309,6 +11653,50 @@ public struct ClawsStatusResult: Codable, Sendable {
         case schemaversion = "schemaVersion"
         case records
         case summary
+    }
+}
+
+public struct ClawsUpdateApplyParams: Codable, Sendable {
+    public let target: String
+    public let source: [String: AnyCodable]?
+    public let planintegrity: String
+    public let acknowledgeclawhubrisk: Bool?
+
+    public init(
+        target: String,
+        source: [String: AnyCodable]? = nil,
+        planintegrity: String,
+        acknowledgeclawhubrisk: Bool? = nil)
+    {
+        self.target = target
+        self.source = source
+        self.planintegrity = planintegrity
+        self.acknowledgeclawhubrisk = acknowledgeclawhubrisk
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case target
+        case source
+        case planintegrity = "planIntegrity"
+        case acknowledgeclawhubrisk = "acknowledgeClawHubRisk"
+    }
+}
+
+public struct ClawsUpdatePlanParams: Codable, Sendable {
+    public let target: String
+    public let source: [String: AnyCodable]?
+
+    public init(
+        target: String,
+        source: [String: AnyCodable]? = nil)
+    {
+        self.target = target
+        self.source = source
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case target
+        case source
     }
 }
 

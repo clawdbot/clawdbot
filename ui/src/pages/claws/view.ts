@@ -14,6 +14,7 @@ type ClawsProps = {
   connected: boolean;
   available: boolean;
   loading: boolean;
+  busy: boolean;
   error: string | null;
   status: ClawsStatusResult | null;
   doctor: ClawsDoctorResult | null;
@@ -162,6 +163,7 @@ function renderInventory(records: readonly ClawStatusEntry[], props: ClawsProps)
               type="button"
               role="listitem"
               aria-pressed=${record.agentId === props.selectedAgentId}
+              ?disabled=${props.busy}
               @click=${() => props.onSelect(record.agentId)}
             >
               <span class="claws-inventory__main">

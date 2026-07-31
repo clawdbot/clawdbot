@@ -1414,6 +1414,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Update an installed Claw
   - H2: Remove an installed Claw
   - H2: Export an installed agent
+  - H2: Inspect Claws in the Control UI
   - H2: Command reference
   - H2: See also
 

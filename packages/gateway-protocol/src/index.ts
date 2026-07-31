@@ -36,6 +36,7 @@ export * from "./schema/sessions-suggestions.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 export * from "./validator-registry.js";
+export * from "./validator-registry-claws.js";
 export * from "./schema-export-registry.js";
 export type * from "./schema-types.js";
 

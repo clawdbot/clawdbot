@@ -35,7 +35,7 @@ const CLAWHUB_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const CLAWHUB_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const CLAWHUB_ERROR_BODY_MAX_CHARS = 400;
 
-export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin";
+export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin" | "claw";
 export type ClawHubPackageChannel = "official" | "community" | "private";
 // Keep aligned with @openclaw/plugin-package-contract ExternalPluginCompatibility.
 export type ClawHubPackageCompatibility = {
@@ -164,6 +164,14 @@ export type ClawHubPackageClawPackSummary = {
   environment?: ClawHubPackageEnvironmentSummary | null;
   runtimeBundles?: unknown[];
 };
+export type ClawHubClawManifestSummary = {
+  schemaVersion: 1;
+  agent: { id: string; name?: string; description?: string };
+  workspace: { bootstrapFiles: string[]; fileCount: number };
+  packages: { skillCount: number; pluginCount: number };
+  mcpServerCount: number;
+  cronJobCount: number;
+};
 type ClawHubPackageListItem = {
   name: string;
   displayName: string;
@@ -179,6 +187,7 @@ type ClawHubPackageListItem = {
   capabilityTags?: string[];
   executesCode?: boolean;
   verificationTier?: string | null;
+  scanStatus?: string | null;
   stats?: {
     downloads?: number;
     installs?: number;
@@ -219,6 +228,7 @@ export type ClawHubPackageDetail = {
         } | null;
         artifact?: ClawHubPackageArtifactSummary | null;
         clawpack?: ClawHubPackageClawPackSummary;
+        clawManifestSummary?: ClawHubClawManifestSummary | null;
       })
     | null;
   owner?: {
@@ -259,6 +269,7 @@ export type ClawHubPackageVersion = {
       : never;
     artifact?: ClawHubPackageArtifactSummary | null;
     clawpack?: ClawHubPackageClawPackSummary;
+    clawManifestSummary?: ClawHubClawManifestSummary | null;
   } | null;
 };
 

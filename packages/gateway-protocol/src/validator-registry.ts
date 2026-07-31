@@ -303,19 +303,11 @@ import {
   UiCommandParamsSchema,
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
-  ClawsDoctorParamsSchema,
-  ClawsDoctorResultSchema,
-  ClawsStatusParamsSchema,
-  ClawsStatusResultSchema,
 } from "./schema-modules.js";
 import type { ValidationError } from "./validation-errors.js";
 
 // Validator names mirror schemas so callers can pair them with wire contracts.
 export const validateCommandsListParams = lazyCompile(CommandsListParamsSchema);
-export const validateClawsStatusParams = lazyCompile(ClawsStatusParamsSchema);
-export const validateClawsDoctorParams = lazyCompile(ClawsDoctorParamsSchema);
-export const validateClawsStatusResult = lazyCompile(ClawsStatusResultSchema);
-export const validateClawsDoctorResult = lazyCompile(ClawsDoctorResultSchema);
 export const validateConnectParams = lazyCompile(ConnectParamsSchema);
 export const validateWorkerAdmissionHandshake = lazyCompile(WorkerAdmissionHandshakeSchema);
 export const validateWorkerConnectRequestFrame = lazyCompile(WorkerConnectRequestFrameSchema);

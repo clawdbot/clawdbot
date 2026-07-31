@@ -1,6 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  validateClawLifecycleApplyResult,
+  validateClawLifecyclePlanResult,
+  validateClawsAddPlanParams,
+  validateClawsCatalogDetailResult,
   validateClawsDoctorResult,
   validateClawsStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -13,6 +17,58 @@ afterEach(() => {
 });
 
 describe("Claw gateway projections", () => {
+  it("keeps catalog and lifecycle payloads closed against source or config leakage", () => {
+    expect(
+      validateClawsCatalogDetailResult({
+        schemaVersion: "openclaw.clawsCatalogDetail.v1",
+        detail: {
+          packageName: "financial-analyst",
+          displayName: "Financial Analyst",
+          channel: "official",
+          official: true,
+          version: "1.2.0",
+          workspaceFiles: 1,
+          skills: 1,
+          plugins: 1,
+          mcpServers: 1,
+          scheduledJobs: 1,
+          manifestPath: "/secret/claw.json",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      validateClawLifecyclePlanResult({
+        schemaVersion: "openclaw.clawsGatewayPlan.v1",
+        operation: "add",
+        planIntegrity: "sha256:preview",
+        target: { agentId: "analyst" },
+        actions: [],
+        capabilities: [],
+        blockers: [],
+        riskAcknowledgementRequired: false,
+        sourceRoot: "/secret/package",
+      }),
+    ).toBe(false);
+    expect(
+      validateClawLifecycleApplyResult({
+        schemaVersion: "openclaw.clawsGatewayApply.v1",
+        operation: "add",
+        status: "complete",
+        agentId: "analyst",
+        message: "Claw agent added.",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects retired setup answers from schema-v1 lifecycle requests", () => {
+    expect(
+      validateClawsAddPlanParams({
+        source: { packageName: "financial-analyst", version: "1.2.0" },
+        answers: { timezone: "America/Los_Angeles" },
+      }),
+    ).toBe(false);
+  });
+
   it("keeps inventory and ownership while omitting secret-bearing lifecycle fields", () => {
     const record = {
       install: {

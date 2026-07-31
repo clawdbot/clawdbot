@@ -51,6 +51,7 @@ import type {
 import * as schemaExportRegistry from "./schema-export-registry.js";
 import type * as Schema from "./schema.js";
 import { ProtocolSchemas } from "./schema/protocol-schemas.js";
+import * as clawsValidatorRegistry from "./validator-registry-claws.js";
 import * as validatorRegistry from "./validator-registry.js";
 
 /**
@@ -76,7 +77,7 @@ type ProtocolValidator = (value: unknown) => boolean;
 
 describe("protocol export registries", () => {
   it("re-exports every runtime registry symbol by identity", () => {
-    for (const registry of [schemaExportRegistry, validatorRegistry]) {
+    for (const registry of [schemaExportRegistry, validatorRegistry, clawsValidatorRegistry]) {
       for (const [name, value] of Object.entries(registry)) {
         expect((protocol as Record<string, unknown>)[name], name).toBe(value);
       }

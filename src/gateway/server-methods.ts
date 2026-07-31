@@ -525,7 +525,18 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadDoctorHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["claws.status", "claws.doctor"],
+    methods: [
+      "claws.status",
+      "claws.doctor",
+      "claws.catalog.search",
+      "claws.catalog.detail",
+      "claws.add.plan",
+      "claws.add.apply",
+      "claws.update.plan",
+      "claws.update.apply",
+      "claws.remove.plan",
+      "claws.remove.apply",
+    ],
     loadHandlers: loadClawsHandlers,
   }),
   ...createLazyCoreHandlers({
