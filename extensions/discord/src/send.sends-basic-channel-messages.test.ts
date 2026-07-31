@@ -1029,6 +1029,23 @@ describe("removeReactionDiscord", () => {
       Routes.channelMessageOwnReaction("chan1", "msg1", "%E2%9C%85"),
     );
   });
+
+  it("retries transient failures while removing an idempotent reaction", async () => {
+    const { rest, deleteMock } = makeDiscordRest();
+    deleteMock
+      .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(
+      removeReactionDiscord("chan1", "msg1", "✅", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(deleteMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("removeOwnReactionsDiscord", () => {
@@ -1056,6 +1073,27 @@ describe("removeOwnReactionsDiscord", () => {
     expect(deleteMock).toHaveBeenCalledWith(
       Routes.channelMessageOwnReaction("chan1", "msg1", "party_blob%3A123"),
     );
+  });
+
+  it("retries transient failures while listing and clearing owned reactions", async () => {
+    const { rest, getMock, deleteMock } = makeDiscordRest();
+    getMock
+      .mockRejectedValueOnce(Object.assign(new Error("service unavailable"), { status: 503 }))
+      .mockResolvedValueOnce({ reactions: [{ emoji: { name: "✅", id: null } }] });
+    deleteMock
+      .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(
+      removeOwnReactionsDiscord("chan1", "msg1", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).resolves.toEqual({ ok: true, removed: ["✅"] });
+    expect(getMock).toHaveBeenCalledTimes(2);
+    expect(deleteMock).toHaveBeenCalledTimes(2);
   });
 
   it("surfaces a failed deletion instead of reporting false success", async () => {
@@ -1110,6 +1148,38 @@ describe("fetchReactionsDiscord", () => {
         users: [{ id: "u2", username: "beta", tag: "beta" }],
       },
     ]);
+  });
+
+  it.each([
+    { operation: "message lookup", firstFailure: true, status: 503 },
+    { operation: "reaction-user lookup", firstFailure: false, status: 502 },
+  ])("retries a transient $operation failure", async ({ firstFailure, status }) => {
+    const { rest, getMock } = makeDiscordRest();
+    const transientError = Object.assign(new Error("Discord temporarily unavailable"), { status });
+    const message = { reactions: [{ count: 1, emoji: { name: "✅", id: null } }] };
+    const users = [{ id: "u1", username: "alpha" }];
+    if (firstFailure) {
+      getMock.mockRejectedValueOnce(transientError).mockResolvedValueOnce(message);
+    } else {
+      getMock.mockResolvedValueOnce(message).mockRejectedValueOnce(transientError);
+    }
+    getMock.mockResolvedValueOnce(users);
+
+    await expect(
+      fetchReactionsDiscord("chan1", "msg1", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).resolves.toEqual([
+      {
+        emoji: { id: null, name: "✅", raw: "✅" },
+        count: 1,
+        users: [{ id: "u1", username: "alpha", tag: "alpha" }],
+      },
+    ]);
+    expect(getMock).toHaveBeenCalledTimes(3);
   });
 });
 

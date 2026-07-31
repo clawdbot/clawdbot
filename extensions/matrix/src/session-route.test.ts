@@ -296,6 +296,36 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     expect(channelRoute.threadId).toBe("$RootEvent:Example.Org");
   });
 
+  it.each([
+    {
+      name: "uses the Matrix thread root when replying to a child event",
+      threadId: "$ThreadRoot:Example.Org",
+      replyToId: "$ReplyChild:Example.Org",
+      expectedThreadId: "$ThreadRoot:Example.Org",
+    },
+    {
+      name: "keeps reply-only session routing when no Matrix thread exists",
+      threadId: undefined,
+      replyToId: "$ReplyChild:Example.Org",
+      expectedThreadId: "$ReplyChild:Example.Org",
+    },
+  ])("$name", ({ threadId, replyToId, expectedThreadId }) => {
+    const route = expectRoute(
+      resolveMatrixOutboundSessionRoute({
+        cfg: {},
+        agentId: "main",
+        target: "room:!ops:example.org",
+        threadId,
+        replyToId,
+      }),
+    );
+
+    expect(route.threadId).toBe(expectedThreadId);
+    expect(route.sessionKey).toBe(
+      `agent:main:matrix:channel:!ops:example.org:thread:${expectedThreadId}`,
+    );
+  });
+
   it("does not claim room aliases as canonical inbound session ids", () => {
     const route = resolveMatrixOutboundSessionRoute({
       cfg: {},

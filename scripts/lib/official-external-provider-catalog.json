@@ -1529,6 +1529,66 @@
       }
     },
     {
+      "name": "@openclaw/vydra-provider",
+      "description": "OpenClaw Vydra media provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "vydra",
+          "label": "Vydra"
+        },
+        "providers": [
+          {
+            "id": "vydra",
+            "name": "Vydra",
+            "docs": "/providers/vydra",
+            "categories": [
+              "cloud",
+              "media"
+            ],
+            "envVars": [
+              "VYDRA_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "vydra-api-key",
+                "choiceLabel": "Vydra API key",
+                "groupId": "vydra",
+                "groupLabel": "Vydra",
+                "groupHint": "Image, video, and speech",
+                "optionKey": "vydraApiKey",
+                "cliFlag": "--vydra-api-key",
+                "cliOption": "--vydra-api-key <key>",
+                "cliDescription": "Vydra API key",
+                "onboardingScopes": [
+                  "image-generation"
+                ]
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "speechProviders": [
+            "vydra"
+          ],
+          "imageGenerationProviders": [
+            "vydra"
+          ],
+          "videoGenerationProviders": [
+            "vydra"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/vydra-provider",
+          "npmSpec": "@openclaw/vydra-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/zai-provider",
       "description": "OpenClaw Z.AI provider plugin",
       "source": "official",
@@ -1703,6 +1763,42 @@
         "install": {
           "clawhubSpec": "clawhub:@openclaw/synthetic-provider",
           "npmSpec": "@openclaw/synthetic-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/voyage-provider",
+      "description": "OpenClaw Voyage embedding provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "voyage",
+          "label": "Voyage"
+        },
+        "providers": [
+          {
+            "id": "voyage",
+            "name": "Voyage",
+            "docs": "/reference/memory-config",
+            "categories": [
+              "cloud"
+            ],
+            "envVars": [
+              "VOYAGE_API_KEY"
+            ]
+          }
+        ],
+        "contracts": {
+          "memoryEmbeddingProviders": [
+            "voyage"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/voyage-provider",
+          "npmSpec": "@openclaw/voyage-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.7.2"
         }

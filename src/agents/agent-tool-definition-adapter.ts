@@ -30,7 +30,7 @@ import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { normalizeToolName } from "./tool-policy.js";
-import { jsonResult, payloadTextResult } from "./tools/common.js";
+import { jsonResult, payloadTextResult, ToolInputError } from "./tools/common.js";
 
 type AnyAgentTool = AgentTool;
 
@@ -447,36 +447,48 @@ export function toToolDefinitions(
   });
 }
 
-/**
- * Coerce tool-call params into a plain object.
- *
- * Some providers (e.g. Gemini) stream tool-call arguments as incremental
- * string deltas.  By the time the framework invokes the tool's `execute`
- * callback the accumulated value may still be a JSON **string** rather than
- * a parsed object.  `isPlainObject()` returns `false` for strings, which
- * caused the params to be silently replaced with `{}`.
- *
- * This helper tries `JSON.parse` when the value is a string and falls back
- * to an empty object only when parsing genuinely fails.
- */
-function coerceParamsRecord(value: unknown): Record<string, unknown> {
+function coerceParamsRecord(
+  value: unknown,
+  schema: ClientToolDefinition["function"]["parameters"],
+): Record<string, unknown> {
+  let record: Record<string, unknown>;
   if (isPlainObject(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
+    record = value;
+  } else if (value === undefined || value === null) {
+    record = {};
+  } else if (typeof value === "string") {
     const trimmed = value.trim();
-    if (trimmed.length > 0) {
+    if (!trimmed) {
+      record = {};
+    } else {
+      let parsed: unknown;
       try {
-        const parsed: unknown = JSON.parse(trimmed);
-        if (isPlainObject(parsed)) {
-          return parsed;
-        }
+        parsed = JSON.parse(trimmed);
       } catch {
-        // not valid JSON – fall through to empty object
+        throw new ToolInputError("Invalid client tool arguments: expected a JSON object");
+      }
+      if (parsed === null) {
+        record = {};
+      } else if (isPlainObject(parsed)) {
+        record = parsed;
+      } else {
+        throw new ToolInputError("Invalid client tool arguments: expected a JSON object");
       }
     }
+  } else {
+    throw new ToolInputError("Invalid client tool arguments: expected a JSON object");
   }
-  return {};
+
+  const required = Array.isArray(schema?.required)
+    ? schema.required.filter((key): key is string => typeof key === "string")
+    : [];
+  const missing = required.filter((key) => !Object.hasOwn(record, key));
+  if (missing.length > 0) {
+    throw new ToolInputError(
+      `Invalid client tool arguments: missing required ${missing.join(", ")}`,
+    );
+  }
+  return record;
 }
 
 /** Convert client-hosted tools into pending session definitions. */
@@ -497,8 +509,8 @@ export function toClientToolDefinitions(
         if (onClientToolCall && typeof onClientToolCall !== "function") {
           onClientToolCall.reserve?.(toolCallId, func.name);
         }
-        const initialParamsRecord = coerceParamsRecord(params);
         try {
+          const initialParamsRecord = coerceParamsRecord(params, func.parameters);
           const outcome = await runBeforeToolCallHook({
             toolName: func.name,
             params: initialParamsRecord,
@@ -521,7 +533,7 @@ export function toClientToolDefinitions(
             throw new Error(outcome.reason);
           }
           const adjustedParams = outcome.params;
-          const paramsRecord = coerceParamsRecord(adjustedParams);
+          const paramsRecord = coerceParamsRecord(adjustedParams, func.parameters);
           // Client-hosted tools have no tool-owned finalizer, so hook reconciliation
           // produces the canonical execution shape consumed here.
           const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
@@ -551,6 +563,12 @@ export function toClientToolDefinitions(
         } catch (err) {
           if (onClientToolCall && typeof onClientToolCall !== "function") {
             onClientToolCall.discard?.(toolCallId, func.name);
+          }
+          if (err instanceof ToolInputError) {
+            return buildToolExecutionErrorResult({
+              toolName: func.name,
+              message: err.message,
+            });
           }
           throw err;
         }

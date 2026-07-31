@@ -168,6 +168,8 @@ describe("listPersistedBundledPluginLocationBridges", () => {
     ["duckduckgo", "@openclaw/duckduckgo-plugin", false],
     ["synthetic", "@openclaw/synthetic-provider", true],
     ["teams-meetings", "@openclaw/teams-meetings", true],
+    ["voyage", "@openclaw/voyage-provider", true],
+    ["vydra", "@openclaw/vydra-provider", true],
     ["zoom-meetings", "@openclaw/zoom-meetings", true],
   ] as const)(
     "externalizes the shipped bundled %s plugin using official install metadata",

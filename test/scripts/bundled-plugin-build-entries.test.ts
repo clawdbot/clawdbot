@@ -349,6 +349,14 @@ describe("bundled plugin build entries", () => {
     }
   });
 
+  it("excludes the externalized Vydra provider from bundled artifacts", () => {
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expect(artifacts).not.toContain("dist/extensions/vydra/index.js");
+    expect(artifacts).not.toContain("dist/extensions/vydra/openclaw.plugin.json");
+    expect(artifacts).not.toContain("dist/extensions/vydra/package.json");
+  });
+
   it("excludes externalized meeting plugins from bundled artifacts", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
@@ -373,6 +381,14 @@ describe("bundled plugin build entries", () => {
     expect(artifacts).not.toContain("dist/extensions/duckduckgo/index.js");
     expect(artifacts).not.toContain("dist/extensions/duckduckgo/openclaw.plugin.json");
     expect(artifacts).not.toContain("dist/extensions/duckduckgo/package.json");
+  });
+
+  it("excludes the externalized Voyage provider from bundled artifacts", () => {
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expect(artifacts).not.toContain("dist/extensions/voyage/index.js");
+    expect(artifacts).not.toContain("dist/extensions/voyage/openclaw.plugin.json");
+    expect(artifacts).not.toContain("dist/extensions/voyage/package.json");
   });
 
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {

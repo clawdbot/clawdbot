@@ -215,7 +215,12 @@ function filterSkillEntries(
     skillsLogger.debug(`Applying skill filter: ${label}`);
     const resolvedFilter = skillFilter === undefined ? undefined : normalized;
     filtered = filtered.filter((entry) =>
-      isSessionSkillEnabled(entry.skill.name, resolvedFilter, skillOverrides),
+      isSessionSkillEnabled(
+        entry.skill.name,
+        resolvedFilter,
+        skillOverrides,
+        resolveSkillKey(entry.skill, entry),
+      ),
     );
     skillsLogger.debug(
       `After skill filter: ${filtered.map((entry) => entry.skill.name).join(", ") || "(none)"}`,
@@ -1416,16 +1421,20 @@ function buildRenderedSkillsPrompt(params: {
   skills: Skill[];
   total: number;
   format: SkillsPromptFormat;
+  includeLimitNote?: boolean;
 }): string {
   // resolveCodeModeSkills in src/agents/code-mode-skills.ts parses this exact format; update both together.
   // The production-renderer parity test in src/agents/code-mode.test.ts enforces this coupling.
   const truncated = params.skills.length < params.total;
-  const limitNote = buildSkillsLimitNote({
-    truncated,
-    format: params.format,
-    included: params.skills.length,
-    total: params.total,
-  });
+  const limitNote =
+    params.includeLimitNote === false
+      ? ""
+      : buildSkillsLimitNote({
+          truncated,
+          format: params.format,
+          included: params.skills.length,
+          total: params.total,
+        });
   const catalog =
     params.format.kind === "compact"
       ? formatSkillsCompact(params.skills, {
@@ -1440,31 +1449,45 @@ function applySkillsPromptLimits(params: {
   config?: OpenClawConfig;
   agentId?: string;
   remoteNote?: string;
-}): {
-  skillsForPrompt: Skill[];
-  format: SkillsPromptFormat;
-} {
+}): string {
   const limits = resolveSkillsLimits(params.config, params.agentId);
   const total = params.skills.length;
   const byCount = params.skills.slice(0, Math.max(0, limits.maxSkillsInPrompt));
 
   let skillsForPrompt = byCount;
 
-  const fitsFull = (skills: Skill[]): boolean =>
-    buildRenderedSkillsPrompt({
-      remoteNote: params.remoteNote,
-      skills,
-      total,
-      format: { kind: "full" },
-    }).length <= limits.maxSkillsPromptChars;
+  const renderWithinLimit = (
+    skills: Skill[],
+    format: SkillsPromptFormat,
+    includeLimitNote = true,
+  ): string | undefined => {
+    // Optional context must disappear whole; clipping it could corrupt skill guidance or XML.
+    const remoteNotes = params.remoteNote ? [params.remoteNote, undefined] : [undefined];
+    for (const remoteNote of remoteNotes) {
+      const prompt = buildRenderedSkillsPrompt({
+        remoteNote,
+        skills,
+        total,
+        format,
+        includeLimitNote,
+      });
+      if (prompt.length <= limits.maxSkillsPromptChars) {
+        return prompt;
+      }
+    }
+    return undefined;
+  };
 
-  const fitsCompact = (skills: Skill[], descriptionMaxChars: number): boolean =>
-    buildRenderedSkillsPrompt({
-      remoteNote: params.remoteNote,
-      skills,
-      total,
-      format: { kind: "compact", descriptionMaxChars },
-    }).length <= limits.maxSkillsPromptChars;
+  const fitsFull = (skills: Skill[], includeLimitNote = true): boolean =>
+    renderWithinLimit(skills, { kind: "full" }, includeLimitNote) !== undefined;
+
+  const fitsCompact = (
+    skills: Skill[],
+    descriptionMaxChars: number,
+    includeLimitNote = true,
+  ): boolean =>
+    renderWithinLimit(skills, { kind: "compact", descriptionMaxChars }, includeLimitNote) !==
+    undefined;
 
   if (!fitsFull(skillsForPrompt)) {
     // Identity coverage takes priority over descriptions. Find the same largest
@@ -1484,13 +1507,39 @@ function applySkillsPromptLimits(params: {
       skillsForPrompt = skillsForPrompt.slice(0, lo);
     }
 
+    if (skillsForPrompt.length === 0 && byCount.length > 0) {
+      // Keep complete skill instructions ahead of a notice when only one can fit.
+      const fullWithoutNotice = renderWithinLimit(byCount, { kind: "full" }, false);
+      if (fullWithoutNotice !== undefined) {
+        return fullWithoutNotice;
+      }
+
+      let lo = 0;
+      let hi = byCount.length;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (fitsCompact(byCount.slice(0, mid), 0, false)) {
+          lo = mid;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      if (lo > 0) {
+        skillsForPrompt = byCount.slice(0, lo);
+      }
+    }
+
+    const includeLimitNote = fitsCompact(skillsForPrompt, 0);
     let descriptionMaxChars = 0;
-    if (skillsForPrompt.length > 0 && fitsCompact(skillsForPrompt, COMPACT_DESCRIPTION_MIN_CHARS)) {
+    if (
+      skillsForPrompt.length > 0 &&
+      fitsCompact(skillsForPrompt, COMPACT_DESCRIPTION_MIN_CHARS, includeLimitNote)
+    ) {
       let lo = COMPACT_DESCRIPTION_MIN_CHARS;
       let hi = COMPACT_DESCRIPTION_MAX_CHARS;
       while (lo < hi) {
         const mid = Math.ceil((lo + hi) / 2);
-        if (fitsCompact(skillsForPrompt, mid)) {
+        if (fitsCompact(skillsForPrompt, mid, includeLimitNote)) {
           lo = mid;
         } else {
           hi = mid - 1;
@@ -1498,10 +1547,16 @@ function applySkillsPromptLimits(params: {
       }
       descriptionMaxChars = lo;
     }
-    return { skillsForPrompt, format: { kind: "compact", descriptionMaxChars } };
+    return (
+      renderWithinLimit(
+        skillsForPrompt,
+        { kind: "compact", descriptionMaxChars },
+        includeLimitNote,
+      ) ?? ""
+    );
   }
 
-  return { skillsForPrompt, format: { kind: "full" } };
+  return renderWithinLimit(skillsForPrompt, { kind: "full" }) ?? "";
 }
 
 export function buildWorkspaceSkillSnapshot(
@@ -1596,17 +1651,11 @@ function resolveWorkspaceSkillPromptState(
   const promptSkills = compactSkillPaths(resolvedSkills).toSorted((a, b) =>
     a.name.localeCompare(b.name, "en"),
   );
-  const { skillsForPrompt, format } = applySkillsPromptLimits({
+  const prompt = applySkillsPromptLimits({
     skills: promptSkills,
     config: opts?.config,
     agentId: opts?.agentId,
     remoteNote,
-  });
-  const prompt = buildRenderedSkillsPrompt({
-    remoteNote,
-    skills: skillsForPrompt,
-    total: resolvedSkills.length,
-    format,
   });
   return { eligible, prompt, resolvedSkills };
 }

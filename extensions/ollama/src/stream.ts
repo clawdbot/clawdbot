@@ -1262,6 +1262,7 @@ function createRawOllamaStreamFn(
           let accumulatedThinking = "";
           let suppressedThinking = "";
           const accumulatedToolCalls: OllamaToolCall[] = [];
+          const streamedToolCalls: ToolCall[] = [];
           let finalResponse: OllamaChatResponse | undefined;
           let pendingFinalVisibleContent: string | undefined;
           const modelInfo = {
@@ -1291,7 +1292,22 @@ function createRawOllamaStreamFn(
             if (accumulatedVisibleContent) {
               parts.push({ type: "text", text: accumulatedVisibleContent });
             }
+            parts.push(...streamedToolCalls);
             return parts;
+          };
+
+          const ensureStreamStarted = () => {
+            if (streamStarted) {
+              return;
+            }
+            streamStarted = true;
+            const emptyPartial = buildStreamAssistantMessage({
+              model: modelInfo,
+              content: [],
+              stopReason: "stop",
+              usage: buildUsageWithNoCost({}),
+            });
+            stream.push({ type: "start", partial: emptyPartial });
           };
 
           const closeThinkingBlock = () => {
@@ -1345,16 +1361,7 @@ function createRawOllamaStreamFn(
               closeThinkingBlock();
             }
 
-            if (!streamStarted) {
-              streamStarted = true;
-              const emptyPartial = buildStreamAssistantMessage({
-                model: modelInfo,
-                content: [],
-                stopReason: "stop",
-                usage: buildUsageWithNoCost({}),
-              });
-              stream.push({ type: "start", partial: emptyPartial });
-            }
+            ensureStreamStarted();
             if (!textBlockStarted) {
               textBlockStarted = true;
               const partial = buildStreamAssistantMessage({
@@ -1392,16 +1399,7 @@ function createRawOllamaStreamFn(
             refreshTimeout?.();
             const thinkingDelta = chunk.message?.thinking ?? chunk.message?.reasoning;
             if (thinkingDelta && shouldEmitThinking) {
-              if (!streamStarted) {
-                streamStarted = true;
-                const emptyPartial = buildStreamAssistantMessage({
-                  model: modelInfo,
-                  content: [],
-                  stopReason: "stop",
-                  usage: buildUsageWithNoCost({}),
-                });
-                stream.push({ type: "start", partial: emptyPartial });
-              }
+              ensureStreamStarted();
               if (!thinkingStarted) {
                 thinkingStarted = true;
                 const partial = buildStreamAssistantMessage({
@@ -1435,10 +1433,18 @@ function createRawOllamaStreamFn(
               accumulatedRawContent += rawDelta;
               flushVisibleText(resolveVisibleContent(false));
             }
-            if (chunk.message?.tool_calls) {
+            if (chunk.message?.tool_calls?.length) {
+              // Kimi holds short visible prefixes until a terminal boundary;
+              // settle them now so later tool indices cannot overwrite text.
+              flushVisibleText(resolveVisibleContent(true));
               closeThinkingBlock();
               closeTextBlock();
-              accumulatedToolCalls.push(...chunk.message.tool_calls);
+              for (const rawToolCall of chunk.message.tool_calls) {
+                // Ollama can report a length stop in a later chunk, so no call
+                // becomes executable until its authoritative terminal arrives.
+                const id = readOllamaToolCallId(rawToolCall.id) ?? `ollama_call_${randomUUID()}`;
+                accumulatedToolCalls.push({ ...rawToolCall, id });
+              }
             }
             if (chunk.done) {
               pendingFinalVisibleContent = resolveVisibleContent(true);
@@ -1473,7 +1479,11 @@ function createRawOllamaStreamFn(
           if (accumulatedThinking) {
             finalResponse.message.thinking = accumulatedThinking;
           }
-          if (accumulatedToolCalls.length > 0) {
+          if (finalResponse.done_reason === "length") {
+            // All consumers inspect terminal content, not only lifecycle events;
+            // a token-limit stop must never retain an executable-looking call.
+            delete finalResponse.message.tool_calls;
+          } else if (accumulatedToolCalls.length > 0) {
             finalResponse.message.tool_calls = accumulatedToolCalls;
           }
 
@@ -1491,9 +1501,45 @@ function createRawOllamaStreamFn(
           closeThinkingBlock();
           closeTextBlock();
 
+          const reason = resolveOllamaStopReason(finalResponse);
+          if (reason === "toolUse") {
+            for (const completedToolCall of assistantMessage.content) {
+              if (completedToolCall.type !== "toolCall") {
+                continue;
+              }
+              ensureStreamStarted();
+              const placeholder: ToolCall = { ...completedToolCall, arguments: {} };
+              streamedToolCalls.push(placeholder);
+              const contentIndex = buildCurrentContent().length - 1;
+              const partial = () =>
+                buildStreamAssistantMessage({
+                  model: modelInfo,
+                  content: buildCurrentContent(),
+                  stopReason: "stop",
+                  usage: buildUsageWithNoCost({}),
+                });
+              stream.push({ type: "toolcall_start", contentIndex, partial: partial() });
+              // Replace the placeholder instead of mutating it: queued start
+              // snapshots must not see arguments before their delta arrives.
+              streamedToolCalls[streamedToolCalls.length - 1] = completedToolCall;
+              stream.push({
+                type: "toolcall_delta",
+                contentIndex,
+                delta: JSON.stringify(completedToolCall.arguments),
+                partial: partial(),
+              });
+              stream.push({
+                type: "toolcall_end",
+                contentIndex,
+                toolCall: completedToolCall,
+                partial: partial(),
+              });
+            }
+          }
+
           stream.push({
             type: "done",
-            reason: resolveOllamaStopReason(finalResponse),
+            reason,
             message: assistantMessage,
           });
         } finally {

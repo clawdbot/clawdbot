@@ -1551,6 +1551,43 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     bridge.close();
   });
 
+  it("discards audio closed before the first connection and reconnects fresh", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onClose = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onClose,
+    });
+
+    bridge.sendAudio(Buffer.from("queued-before-connect"));
+    bridge.close();
+    bridge.close();
+    bridge.sendAudio(Buffer.from("sent-after-close"));
+
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(onClose).not.toHaveBeenCalled();
+
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to connect");
+    }
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    expect(
+      parseSent(socket).filter((event) => event.type === "input_audio_buffer.append"),
+    ).toHaveLength(0);
+
+    bridge.close();
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledWith("completed");
+  });
+
   it("does not carry queued audio across terminal close and explicit reconnect", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({

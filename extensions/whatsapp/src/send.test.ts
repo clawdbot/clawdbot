@@ -409,7 +409,7 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenNthCalledWith(2, "+1555", "voice note", undefined, undefined);
   });
 
-  it("normalizes MIME parameters when inferring media kind", async () => {
+  it("normalizes MIME parameters before handing media to the socket transport", async () => {
     const buf = Buffer.from("image");
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: buf,
@@ -422,12 +422,7 @@ describe("web outbound", () => {
       mediaUrl: "/tmp/image.png",
     });
 
-    expect(sendMessage).toHaveBeenLastCalledWith(
-      "+1555",
-      "caption",
-      buf,
-      " Image/PNG; charset=binary ",
-    );
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "caption", buf, "image/png");
   });
 
   it("reports the accepted voice send before a caption failure", async () => {

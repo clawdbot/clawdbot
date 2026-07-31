@@ -425,12 +425,15 @@ function renderUsageMosaic(
                     : "color-mix(in srgb, var(--accent) 24%, transparent)";
                 const selected = selectedHours.includes(hour);
                 return html`
-                  <div
+                  <button
+                    type="button"
                     class="usage-hour-cell ${selected ? "selected" : ""}"
                     style="background: ${bg}; border-color: ${border};"
                     title="${title}"
+                    aria-label=${title}
+                    aria-pressed=${selected ? "true" : "false"}
                     @click=${(e: MouseEvent) => onSelectHour(hour, e.shiftKey)}
-                  ></div>
+                  ></button>
                 `;
               })}
             </div>

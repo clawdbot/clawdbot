@@ -182,6 +182,18 @@ export function watchClientDisconnect(
       abortController.abort(new ClientDisconnectError());
     }
   };
+  const stopWatchingResponseErrors = () => {
+    res.off("error", handleClose);
+    res.off("close", stopWatchingResponseErrors);
+  };
+  // Finalizers release socket watchers before res.end(); keep its error
+  // listener until close so a failed flush cannot become process-fatal.
+  res.on("error", handleClose);
+  res.once("close", stopWatchingResponseErrors);
+  if (res.destroyed || sockets.some((socket) => socket.destroyed)) {
+    handleClose();
+    return () => {};
+  }
   for (const socket of sockets) {
     socket.on("close", handleClose);
   }

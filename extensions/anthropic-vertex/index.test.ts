@@ -102,6 +102,19 @@ describe("anthropic-vertex provider plugin", () => {
     expect(result.provider.models[4]?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
   });
 
+  it.each([
+    { region: "global", baseUrl: "https://aiplatform.googleapis.com" },
+    { region: "us", baseUrl: "https://aiplatform.us.rep.googleapis.com" },
+    { region: "eu", baseUrl: "https://aiplatform.eu.rep.googleapis.com" },
+    { region: "us-east5", baseUrl: "https://us-east5-aiplatform.googleapis.com" },
+  ])("publishes the SDK endpoint for the $region location", ({ region, baseUrl }) => {
+    expect(
+      buildAnthropicVertexProvider({
+        env: { GOOGLE_CLOUD_LOCATION: region },
+      }).baseUrl,
+    ).toBe(baseUrl);
+  });
+
   it.each(["global", "us", "eu"])("publishes Opus 5 for the %s endpoint", (region) => {
     const provider = buildAnthropicVertexProvider({
       env: { GOOGLE_CLOUD_LOCATION: region },
@@ -194,7 +207,7 @@ describe("anthropic-vertex provider plugin", () => {
         name: "Claude Sonnet 5",
         api: "anthropic-messages",
         provider: "anthropic-vertex",
-        baseUrl: "https://us-aiplatform.googleapis.com",
+        baseUrl: "https://aiplatform.us.rep.googleapis.com",
         reasoning: true,
         input: ["text", "image"],
         contextWindow: 1_000_000,
@@ -235,7 +248,7 @@ describe("anthropic-vertex provider plugin", () => {
         name: "Claude Opus 5",
         api: "anthropic-messages",
         provider: "anthropic-vertex",
-        baseUrl: "https://us-aiplatform.googleapis.com",
+        baseUrl: "https://aiplatform.us.rep.googleapis.com",
         reasoning: false,
         input: ["text"],
         cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },

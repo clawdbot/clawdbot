@@ -325,9 +325,7 @@ describe("createOllamaStreamFn thinking events", () => {
     };
     expect(done.reason).toBe("length");
     expect(done.message?.stopReason).toBe("length");
-    expect(done.message?.content).toEqual([
-      expect.objectContaining({ type: "toolCall", name: "read" }),
-    ]);
+    expect(done.message?.content).toEqual([]);
   });
 
   it("uses generic stream timeout for Ollama request timeout", async () => {

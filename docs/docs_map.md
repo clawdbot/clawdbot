@@ -308,6 +308,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Guided setup
   - H3: Bot approval
   - H2: Agent tools and messaging
+  - H3: Directory and sender labels
   - H3: Route rooms to different agents
   - H2: Access control
   - H2: Manual configuration

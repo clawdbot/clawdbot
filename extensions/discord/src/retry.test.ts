@@ -1,9 +1,13 @@
 // Discord tests cover retry plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { RateLimitError } from "./internal/discord.js";
 import { createDiscordRetryRunner } from "./retry.js";
 
 const ZERO_DELAY_RETRY = { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 };
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function createRateLimitError(retryAfter = 0): RateLimitError {
   const response = new Response(null, {
@@ -138,6 +142,26 @@ describe("createDiscordRetryRunner create safety", () => {
 });
 
 describe("createDiscordRetryRunner", () => {
+  it("cancels retry backoff immediately when the request deadline aborts", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const timeout = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+    const fn = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    const runner = createDiscordRetryRunner({
+      retry: { attempts: 2, minDelayMs: 60_000, maxDelayMs: 60_000, jitter: 0 },
+      signal: controller.signal,
+    });
+    const rejection = expect(runner(fn, "request")).rejects.toBe(timeout);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(1);
+    controller.abort(timeout);
+
+    await rejection;
+    expect(fn).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("retries transient transport errors", async () => {
     const fn = vi.fn().mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValue("ok");
     const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });

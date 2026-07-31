@@ -146,7 +146,7 @@ the shared live sweep:
 | Qwen       |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                              |
 | Runway     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` runs only when the selected model is `runway/gen4_aleph`                                     |
 | Together   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
-| Vydra      |     ✓      |       ✓        |       -        | `generate`; shared `imageToVideo` skipped because bundled `veo3` is text-only and bundled `kling` requires a remote image URL           |
+| Vydra      |     ✓      |       ✓        |       -        | `generate`; shared `imageToVideo` skipped because `veo3` is text-only and `kling` requires a remote image URL                           |
 | xAI        |     ✓      |       ✓        |       ✓        | Classic supports all modes; Video 1.5 is image-to-video only; remote MP4 input keeps `videoToVideo` out of the shared sweep             |
 
 ## Tool parameters
@@ -416,7 +416,7 @@ Automatic fallback across authenticated providers is always enabled. A per-call
   </Accordion>
   <Accordion title="Vydra">
     Uses `https://www.vydra.ai/api/v1` directly to avoid auth-dropping
-    redirects. `veo3` is bundled as text-to-video only; `kling` requires
+    redirects. `veo3` is text-to-video only; `kling` requires
     a remote image URL.
   </Accordion>
   <Accordion title="xAI">

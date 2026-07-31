@@ -121,6 +121,8 @@ export function resolveMatrixOutboundSessionRoute(params: ChannelOutboundSession
     replyToId: params.replyToId,
     threadId: params.threadId,
     currentSessionKey: params.currentSessionKey,
+    // Matrix m.thread identifies the session; m.in_reply_to may name a different child event.
+    precedence: ["threadId", "replyToId", "currentSession"],
     normalizeThreadId: (threadId) => threadId,
     canRecoverCurrentThread: ({ route }) =>
       route.peer.kind !== "direct" || (params.cfg.session?.dmScope ?? "main") !== "main",

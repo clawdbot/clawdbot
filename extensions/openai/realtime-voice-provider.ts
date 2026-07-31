@@ -758,10 +758,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   close(): void {
     const connection = this.connection;
-    if (!connection || !this.lifecycle.cancel()) {
+    if (!this.lifecycle.cancel()) {
       return;
     }
     this.resetTerminalState();
+    if (!connection) {
+      return;
+    }
     const ws = this.ws;
     this.ws = null;
     ws?.close(1000, "Bridge closed");
