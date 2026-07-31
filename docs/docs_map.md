@@ -7415,15 +7415,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
-## plugins/reference/tencent.md
-
-- Route: /plugins/reference/tencent
-- Headings:
-  - H1: Tencent plugin
-  - H2: Distribution
-  - H2: Surface
-  - H2: Related docs
-
 ## plugins/reference/tlon.md
 
 - Route: /plugins/reference/tlon
