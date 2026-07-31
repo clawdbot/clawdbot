@@ -5,7 +5,7 @@ import {
   type LlamaServerFetchGuard,
 } from "./discovery.js";
 
-type RouteValue = Response | Error | (() => Response);
+type RouteValue = Response | Error | (() => Response | Promise<Response>);
 
 function createFetchGuard(routes: Record<string, RouteValue>) {
   const requests: string[] = [];
@@ -18,7 +18,7 @@ function createFetchGuard(routes: Record<string, RouteValue>) {
     if (route instanceof Error) {
       throw route;
     }
-    const response = typeof route === "function" ? route() : route;
+    const response = typeof route === "function" ? await route() : route;
     return {
       response,
       finalUrl: params.url,
@@ -129,6 +129,44 @@ describe("llama-server discovery", () => {
       "http://localhost:8080/props?model=unloaded%2Fmodel&autoload=false",
     );
     expect(requests.every((url) => !url.includes("reload=1"))).toBe(true);
+  });
+
+  it("bounds concurrent router property probes", async () => {
+    const rows = Array.from({ length: 17 }, (_, index) => ({
+      id: `loaded/model-${index}`,
+      object: "model",
+      status: { value: "loaded" },
+    }));
+    let active = 0;
+    let maximumActive = 0;
+    const routes: Record<string, RouteValue> = {
+      "http://localhost:8080/health": json({ status: "ok" }),
+      "http://localhost:8080/models": json({ data: rows }),
+    };
+    for (const row of rows) {
+      routes[`http://localhost:8080/props?model=${encodeURIComponent(row.id)}&autoload=false`] =
+        async () => {
+          active += 1;
+          maximumActive = Math.max(maximumActive, active);
+          await new Promise((resolve) => {
+            setTimeout(resolve, 5);
+          });
+          active -= 1;
+          return json({ default_generation_settings: { n_ctx: 8192 } });
+        };
+    }
+    const { guard } = createFetchGuard(routes);
+
+    const result = await discoverLlamaServer({
+      baseUrl: "http://localhost:8080",
+      fetchGuard: guard,
+      cacheTtlMs: 0,
+    });
+
+    expect(result).toMatchObject({ kind: "success", models: expect.any(Array) });
+    expect(result.kind === "success" ? result.models : []).toHaveLength(17);
+    expect(maximumActive).toBeGreaterThan(1);
+    expect(maximumActive).toBeLessThanOrEqual(8);
   });
 
   it("falls back to /v1/models for an older compatible server", async () => {

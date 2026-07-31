@@ -37,6 +37,7 @@ export type LlamaServerModelWire = {
 };
 
 export type LlamaServerPropsWire = {
+  n_ctx?: unknown;
   default_generation_settings?: {
     n_ctx?: unknown;
     params?: {
@@ -84,6 +85,7 @@ function normalizeStatus(value: unknown): LlamaServerModelStatus {
 function resolveContextWindow(props: LlamaServerPropsWire | undefined): number {
   return (
     asPositiveSafeInteger(props?.default_generation_settings?.n_ctx) ??
+    asPositiveSafeInteger(props?.n_ctx) ??
     SELF_HOSTED_DEFAULT_CONTEXT_WINDOW
   );
 }

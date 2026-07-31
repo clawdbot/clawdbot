@@ -58,6 +58,8 @@ type CachedDiscovery = {
 };
 
 const discoveryCache = new Map<string, CachedDiscovery>();
+const LLAMA_SERVER_ROUTER_PROPS_MAX_MODELS = 200;
+const LLAMA_SERVER_ROUTER_PROPS_CONCURRENCY = 8;
 
 export function clearLlamaServerDiscoveryCacheForTests(): void {
   discoveryCache.clear();
@@ -272,23 +274,47 @@ export async function discoverLlamaServer(params: {
     return { kind: "invalid-response", endpoint, path: modelsPath, error };
   }
   const routerMode = rows.some((row) => row.status !== undefined);
-  const models: LlamaServerDiscoveredModel[] = [];
-  for (const row of rows) {
-    const props = await readModelProps({
-      row,
-      routerMode,
-      origin: endpoint.origin,
-      apiKey: params.apiKey,
-      headers: params.headers,
-      timeoutMs,
-      signal: params.signal,
-      fetchGuard,
-    });
-    const model = mapLlamaServerModel(row, props);
-    if (model) {
-      models.push(model);
+  const propsByRowIndex = new Map<number, LlamaServerPropsWire>();
+  const propsRowIndexes = rows
+    .map((row, index) => (shouldReadProps(row) ? index : -1))
+    .filter((index) => index >= 0)
+    .slice(0, LLAMA_SERVER_ROUTER_PROPS_MAX_MODELS);
+  for (
+    let offset = 0;
+    offset < propsRowIndexes.length;
+    offset += LLAMA_SERVER_ROUTER_PROPS_CONCURRENCY
+  ) {
+    const results = await Promise.all(
+      propsRowIndexes
+        .slice(offset, offset + LLAMA_SERVER_ROUTER_PROPS_CONCURRENCY)
+        .map(async (index) => {
+          const row = rows[index];
+          if (!row) {
+            return undefined;
+          }
+          const props = await readModelProps({
+            row,
+            routerMode,
+            origin: endpoint.origin,
+            apiKey: params.apiKey,
+            headers: params.headers,
+            timeoutMs,
+            signal: params.signal,
+            fetchGuard,
+          });
+          return props ? ([index, props] as const) : undefined;
+        }),
+    );
+    for (const result of results) {
+      if (result) {
+        propsByRowIndex.set(...result);
+      }
     }
   }
+  const models = rows.flatMap((row, index) => {
+    const model = mapLlamaServerModel(row, propsByRowIndex.get(index));
+    return model ? [model] : [];
+  });
 
   const fetchedAt = Date.now();
   const result = { kind: "success", endpoint, health, models, fetchedAt } as const;

@@ -44,6 +44,16 @@ describe("llama-server model mapping", () => {
     });
   });
 
+  it("uses an older server's top-level runtime context limit", () => {
+    expect(
+      mapLlamaServerModel({ id: "model", object: "model" }, { n_ctx: 8192 })?.config,
+    ).toMatchObject({
+      contextWindow: 8192,
+      contextTokens: 8192,
+      maxTokens: 8192,
+    });
+  });
+
   it("defaults unknown capabilities conservatively", () => {
     expect(mapLlamaServerModel({ id: "model", object: "model" })?.config.compat).toMatchObject({
       supportsTools: false,
