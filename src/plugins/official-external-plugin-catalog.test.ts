@@ -2129,6 +2129,24 @@ describe("official external plugin catalog", () => {
     ]);
   });
 
+  it("lists ComfyUI as an official external media provider", () => {
+    const comfy = expectCatalogEntry("comfy");
+    const manifest = getOfficialExternalPluginCatalogManifest(comfy);
+
+    expect(resolveOfficialExternalPluginId(comfy)).toBe("comfy");
+    expect(resolveOfficialExternalPluginInstall(comfy)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/comfy-provider",
+      npmSpec: "@openclaw/comfy-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(manifest?.contracts).toMatchObject({
+      imageGenerationProviders: ["comfy"],
+      musicGenerationProviders: ["comfy"],
+      videoGenerationProviders: ["comfy"],
+    });
+  });
+
   it.each([
     ["teams-meetings", "@openclaw/teams-meetings", "teams_meetings", "teams"],
     ["zoom-meetings", "@openclaw/zoom-meetings", "zoom_meetings", "zoom"],

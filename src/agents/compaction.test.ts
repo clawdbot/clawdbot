@@ -8,10 +8,11 @@ import "./test-helpers/agent-session-token-mock.js";
 let estimateMessagesTokens: typeof import("./compaction-planning.js").estimateMessagesTokens;
 let buildHistoryPrunePlan: typeof import("./compaction-planning.js").buildHistoryPrunePlan;
 let buildStageSplitPlan: typeof import("./compaction-planning.js").buildStageSplitPlan;
+let buildSummaryChunks: typeof import("./compaction-planning.js").buildSummaryChunks;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ buildHistoryPrunePlan, buildStageSplitPlan, estimateMessagesTokens } =
+  ({ buildHistoryPrunePlan, buildStageSplitPlan, buildSummaryChunks, estimateMessagesTokens } =
     await import("./compaction-planning.js"));
 });
 
@@ -254,6 +255,64 @@ describe("splitMessagesByTokenShare", () => {
     expect(parts.length).toBe(2);
     expect(parts[0]?.map((m) => m.timestamp)).toEqual([1]);
     expect(parts[1]?.map((m) => m.timestamp)).toEqual([2, 3]);
+  });
+});
+
+describe("buildSummaryChunks", () => {
+  it("keeps a tool call with its result when their combined size exceeds the chunk budget", () => {
+    const messages: AgentMessage[] = [
+      makeMessage(1, 800),
+      makeAssistantToolCall(2, "call_summary", "a".repeat(1800)),
+      makeToolResult(3, "call_summary", "r".repeat(1800)),
+      makeMessage(4, 800),
+    ];
+
+    const chunks = buildSummaryChunks({ messages, maxChunkTokens: 700 });
+
+    expect(chunks.map((chunk) => chunk.map((message) => message.timestamp))).toEqual([
+      [1],
+      [2, 3],
+      [4],
+    ]);
+  });
+
+  it("keeps displaced and multiple results inside their assistant's atomic summary chunk", () => {
+    const assistant = makeAgentAssistantMessage({
+      content: [
+        { type: "toolCall", id: "call_first", name: "first", arguments: {} },
+        { type: "toolCall", id: "call_second", name: "second", arguments: {} },
+      ],
+      model: "gpt-5.4",
+      stopReason: "stop",
+      timestamp: 2,
+    });
+    const messages: AgentMessage[] = [
+      makeMessage(1, 1000),
+      assistant,
+      makeToolResult(3, "call_first", "r".repeat(1200)),
+      makeMessage(4, 500),
+      makeToolResult(5, "call_second", "r".repeat(1200)),
+      makeMessage(6, 1000),
+    ];
+
+    const chunks = buildSummaryChunks({ messages, maxChunkTokens: 500 });
+
+    expect(chunks.map((chunk) => chunk.map((message) => message.timestamp))).toEqual([
+      [1],
+      [2, 3, 4, 5],
+      [6],
+    ]);
+  });
+
+  it("does not pin later messages to aborted tool-call assistants", () => {
+    const messages: AgentMessage[] = [
+      makeAssistantToolCall(1, "call_aborted", "a".repeat(1800), "aborted"),
+      makeMessage(2, 1800),
+    ];
+
+    const chunks = buildSummaryChunks({ messages, maxChunkTokens: 700 });
+
+    expect(chunks.map((chunk) => chunk.map((message) => message.timestamp))).toEqual([[1], [2]]);
   });
 });
 

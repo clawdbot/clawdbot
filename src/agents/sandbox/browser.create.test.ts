@@ -122,6 +122,7 @@ function buildConfig(noVncEnabled: boolean): SandboxConfig {
     scope: "session",
     workspaceAccess: "none",
     workspaceRoot: "/tmp/openclaw-sandboxes",
+    dockerTmpfsSource: "default",
     docker: {
       image: "openclaw-sandbox:bookworm-slim",
       containerPrefix: "openclaw-sbx-",

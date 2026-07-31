@@ -32,6 +32,7 @@ import type {
 import {
   deriveSessionTitle,
   isFinitePositiveTimestamp,
+  isCurrentSessionChildOwner,
   shouldKeepStoreOnlyChildLink,
 } from "./session-utils-core.js";
 import { getSessionDefaults } from "./session-utils-model.js";
@@ -241,8 +242,13 @@ function filterSessionEntries(params: {
         ? filterRowContext.subagentRuns.getDisplaySubagentRun(key)
         : getSessionDisplaySubagentRunByChildSessionKey(key);
       const keepSpawned = latest
-        ? (normalizeOptionalString(latest.controllerSessionKey) ||
-            normalizeOptionalString(latest.requesterSessionKey)) === spawnedBy &&
+        ? isCurrentSessionChildOwner({
+            entry,
+            ownerSessionKey: spawnedBy,
+            controllerSessionKey:
+              normalizeOptionalString(latest.controllerSessionKey) ||
+              normalizeOptionalString(latest.requesterSessionKey),
+          }) &&
           shouldKeepSubagentRunChildLink(latest, {
             activeDescendants: filterRowContext
               ? filterRowContext.subagentRuns.countActiveDescendantRuns(key)

@@ -122,11 +122,18 @@ export function extractMentionedJids(rawMessage: proto.IMessage | undefined): st
     message.extendedTextMessage?.contextInfo?.mentionedJid,
     message.imageMessage?.contextInfo?.mentionedJid,
     message.videoMessage?.contextInfo?.mentionedJid,
+    message.ptvMessage?.contextInfo?.mentionedJid,
     message.documentMessage?.contextInfo?.mentionedJid,
     message.audioMessage?.contextInfo?.mentionedJid,
     message.stickerMessage?.contextInfo?.mentionedJid,
     message.buttonsResponseMessage?.contextInfo?.mentionedJid,
     message.listResponseMessage?.contextInfo?.mentionedJid,
+    message.templateButtonReplyMessage?.contextInfo?.mentionedJid,
+    message.interactiveResponseMessage?.contextInfo?.mentionedJid,
+    message.pollCreationMessage?.contextInfo?.mentionedJid,
+    message.pollCreationMessageV2?.contextInfo?.mentionedJid,
+    message.pollCreationMessageV3?.contextInfo?.mentionedJid,
+    message.pollCreationMessageV5?.contextInfo?.mentionedJid,
   ];
 
   const flattened = candidates.flatMap((arr) => arr ?? []).filter(Boolean);
@@ -177,6 +184,7 @@ export function extractText(rawMessage: proto.IMessage | undefined): string | un
     const caption =
       candidate.imageMessage?.caption ??
       candidate.videoMessage?.caption ??
+      candidate.ptvMessage?.caption ??
       candidate.documentMessage?.caption;
     if (caption?.trim()) {
       return caption.trim();
@@ -193,6 +201,23 @@ export function extractText(rawMessage: proto.IMessage | undefined): string | un
     ].find((value) => Boolean(value?.trim()));
     if (interactiveSelection) {
       return interactiveSelection.trim();
+    }
+    const poll =
+      candidate.pollCreationMessage ??
+      candidate.pollCreationMessageV2 ??
+      candidate.pollCreationMessageV3 ??
+      candidate.pollCreationMessageV5;
+    if (poll) {
+      const question = poll.name?.trim();
+      const options = (poll.options ?? [])
+        .map((option) => option.optionName?.trim())
+        .filter((option): option is string => Boolean(option));
+      const pollText = [question, ...options.map((option) => `- ${option}`)]
+        .filter(Boolean)
+        .join("\n");
+      if (pollText) {
+        return pollText;
+      }
     }
   }
   const contactPlaceholder =
@@ -236,7 +261,7 @@ export function extractMediaKind(
   if (message.imageMessage) {
     return "image";
   }
-  if (message.videoMessage) {
+  if (message.videoMessage || message.ptvMessage) {
     // GIF playback is a video transport detail; no downstream behavior needs a new GIF kind.
     return "video";
   }

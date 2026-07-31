@@ -87,6 +87,31 @@ describe("shell completion health mapping", () => {
     });
   });
 
+  it("reports an orphaned shell-completion marker as uninstalled", async () => {
+    const homeDir = tempDirs.make("openclaw-bash-orphaned-profile-home-");
+    const stateDir = tempDirs.make("openclaw-bash-orphaned-profile-state-");
+    setTestEnvValue("HOME", homeDir);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("SHELL", "/bin/bash");
+
+    const cachePath = path.join(stateDir, "completions", "openclaw.bash");
+    await fs.mkdir(path.dirname(cachePath), { recursive: true });
+    await fs.writeFile(cachePath, "complete -W 'status' openclaw\n", "utf-8");
+    await fs.writeFile(
+      path.join(homeDir, ".bash_profile"),
+      "# OpenClaw Completion\nexport IMPORTANT=keep\n",
+      "utf-8",
+    );
+
+    await expect(checkShellCompletionStatus("openclaw", { shell: "bash" })).resolves.toEqual({
+      shell: "bash",
+      profileInstalled: false,
+      cacheExists: true,
+      cachePath,
+      usesSlowPattern: false,
+    });
+  });
+
   it("checks an explicit shell instead of the detected environment shell", async () => {
     const homeDir = tempDirs.make("openclaw-completion-home-");
     const stateDir = tempDirs.make("openclaw-completion-state-");

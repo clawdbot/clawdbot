@@ -24,6 +24,7 @@ import type { ReplyDispatchKind } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatSlackError } from "../../errors.js";
 import { normalizeSlackOutboundText } from "../../format.js";
+import { SLACK_EDIT_TEXT_MAX_BYTES } from "../../limits.js";
 import { emitSlackMessageSentHooks } from "../../message-sent-hook.js";
 import { resolveSlackReplyRenderPlan } from "../../reply-blocks.js";
 import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
@@ -32,6 +33,7 @@ import {
   stopSlackStream,
   type SlackStreamSession,
 } from "../../streaming.js";
+import { countSlackTextUtf8Bytes } from "../../truncate.js";
 import { resolveSlackBotLoopProtection } from "./dispatch-helpers.js";
 import { createSlackProgressRuntime } from "./dispatch-progress.js";
 import { createSlackDispatchSetup } from "./dispatch-setup.js";
@@ -183,6 +185,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       replyRenderPlan.mode === "single" && replyRenderPlan.textIsSlackMrkdwn
         ? trimmedFinalText
         : normalizeSlackOutboundText((replySourceText ?? "").trim());
+    const previewFinalTextFitsEdit =
+      countSlackTextUtf8Bytes(previewFinalText) <= SLACK_EDIT_TEXT_MAX_BYTES;
     const shouldRestoreTtsSupplementTextForPreviewFallback =
       Boolean(ttsSupplement) &&
       ttsSupplement?.visibleTextAlreadyDelivered !== true &&
@@ -202,6 +206,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       previewStreamingEnabled &&
       !payload.isError &&
       !requiresSeparateFallbackDelivery &&
+      previewFinalTextFitsEdit &&
       trimmedFinalText.length > 0
     ) {
       const channelId = draftStream.channelId();
@@ -287,6 +292,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             (reply.hasMedia && !ttsSupplement) ||
             payload.isError ||
             requiresSeparateFallbackDelivery ||
+            !previewFinalTextFitsEdit ||
             (trimmedFinalText.length === 0 && !slackBlocks?.length)
           ) {
             return undefined;

@@ -2,7 +2,6 @@ import type {
   ResponseCreateParamsStreaming,
   ResponseOutputItem,
   ResponseOutputMessage,
-  ResponseReasoningItem,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 import {
@@ -33,8 +32,10 @@ import { normalizeResponsesFailedEvent } from "./openai-responses-debug.js";
 import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
 import { adaptResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import {
+  appendResponsesPendingTextDelta,
   createResponsesOutputSlotTracker,
   readResponsesOutputIndex,
+  type ResponsesStreamOutputSlot,
 } from "./openai-responses-stream-slots-internal.js";
 import {
   createResponsesTerminalController,
@@ -134,25 +135,15 @@ export async function processResponsesStream<TApi extends Api>(
     block: StreamingToolCallBlock;
     contentIndex: number;
   };
-  type ResponsesOutputSlot =
-    | {
-        type: "thinking";
-        item: ResponseReasoningItem;
-        block: ResponsesThinkingBlock;
-        contentIndex: number;
-      }
-    | {
-        type: "text";
-        item: ResponsesStreamOutputMessage;
-        block: TextContent | null;
-        contentIndex: number | undefined;
-        pendingText: string | null;
-        collapseCandidate: TextBlockReference | null;
-      }
-    | { type: "toolCall"; toolCall: StreamingToolCallState };
+  type ResponsesOutputSlot = ResponsesStreamOutputSlot<
+    ResponsesStreamOutputMessage,
+    StreamingToolCallState
+  >;
   const streamingToolCalls = createResponsesToolCallTracker<StreamingToolCallState>();
   const outputSlots = createResponsesOutputSlotTracker<ResponsesOutputSlot>();
   const reasoningBlocksById = new Map<string, ResponsesThinkingBlock>();
+  const completedOutputItemIdentities = new Set<string>();
+  const startedTextBlocksByItemId = new Map<string, TextBlockReference>();
   let terminalResponseEvent: "finalized" | "failed" | undefined;
   let lastTextBlock: TextBlockReference | null = null;
   const blocks = output.content;
@@ -170,6 +161,7 @@ export async function processResponsesStream<TApi extends Api>(
         contentIndex: blocks.length,
       } satisfies ResponsesOutputSlot;
       blocks.push(block);
+      reasoningBlocksById.set(item.id, block);
       outputSlots.register(event, slot);
       stream.push({ type: "thinking_start", contentIndex: slot.contentIndex, partial: output });
       return slot;
@@ -196,6 +188,11 @@ export async function processResponsesStream<TApi extends Api>(
       } satisfies ResponsesOutputSlot;
       if (block) {
         blocks.push(block);
+        startedTextBlocksByItemId.set(messageItem.id, {
+          block,
+          index: slot.contentIndex ?? blocks.length - 1,
+          phase: messageItem.phase ?? undefined,
+        });
       }
       outputSlots.register(event, slot);
       if (slot.contentIndex !== undefined) {
@@ -239,6 +236,11 @@ export async function processResponsesStream<TApi extends Api>(
     };
     blocks.push(slot.block);
     slot.contentIndex = blockIndex();
+    startedTextBlocksByItemId.set(slot.item.id, {
+      block: slot.block,
+      index: slot.contentIndex,
+      phase: slot.item.phase ?? undefined,
+    });
     stream.push({ type: "text_start", contentIndex: slot.contentIndex, partial: output });
     if (text) {
       stream.push({
@@ -260,25 +262,14 @@ export async function processResponsesStream<TApi extends Api>(
       }
     }
   };
-  const appendPendingMessageDelta = (
-    slot: Extract<ResponsesOutputSlot, { type: "text" }>,
-    delta: string,
-  ) => {
-    slot.pendingText = `${slot.pendingText ?? ""}${delta}`;
-    const priorText = slot.collapseCandidate?.block.text ?? "";
-    if (priorText.startsWith(slot.pendingText) || slot.pendingText.startsWith(priorText)) {
-      return;
-    }
-    // Diverged from the prior text: this is a distinct message, so open its
-    // block now and replay the withheld text as one delta.
-    materializeDeferredTextSlot(slot);
-  };
   const { finalizeResponse, recoverTerminalOutput } = createResponsesTerminalController({
     output,
     stream,
     model,
     options,
     reasoningBlocksById,
+    completedOutputItemIdentities,
+    startedTextBlocksByItemId,
     getLastTextBlock: () => lastTextBlock,
     setLastTextBlock: (block) => {
       lastTextBlock = block;
@@ -418,7 +409,7 @@ export async function processResponsesStream<TApi extends Api>(
         }
         lastPart.text += event.delta;
         if (slot.pendingText !== null) {
-          appendPendingMessageDelta(slot, event.delta);
+          appendResponsesPendingTextDelta(slot, event.delta, materializeDeferredTextSlot);
         } else if (slot.block && slot.contentIndex !== undefined) {
           slot.block.text += event.delta;
           // llm-core deliberately makes text_delta.partial optional to avoid a full snapshot per token.
@@ -441,7 +432,7 @@ export async function processResponsesStream<TApi extends Api>(
         }
         lastPart.text += event.delta;
         if (slot.pendingText !== null) {
-          appendPendingMessageDelta(slot, event.delta);
+          appendResponsesPendingTextDelta(slot, event.delta, materializeDeferredTextSlot);
         } else if (slot.block && slot.contentIndex !== undefined) {
           slot.block.text += event.delta;
           stream.push({
@@ -463,7 +454,7 @@ export async function processResponsesStream<TApi extends Api>(
         }
         lastPart.refusal += event.delta;
         if (slot.pendingText !== null) {
-          appendPendingMessageDelta(slot, event.delta);
+          appendResponsesPendingTextDelta(slot, event.delta, materializeDeferredTextSlot);
         } else if (slot.block && slot.contentIndex !== undefined) {
           slot.block.text += event.delta;
           stream.push({
@@ -532,9 +523,6 @@ export async function processResponsesStream<TApi extends Api>(
           if (item.encrypted_content && options?.reasoningReplayMetadata) {
             outputSlot.block[OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY] =
               options.reasoningReplayMetadata;
-          }
-          if (typeof item.id === "string") {
-            reasoningBlocksById.set(item.id, outputSlot.block);
           }
           stream.push({
             type: "thinking_end",
@@ -618,6 +606,8 @@ export async function processResponsesStream<TApi extends Api>(
             });
           }
           outputSlots.forget(outputSlot);
+          startedTextBlocksByItemId.delete(item.id);
+          completedOutputItemIdentities.add(`message:${item.id}`);
         } else if (item.type === "function_call") {
           const streamingToolCall = streamingToolCalls.resolve(
             event,
@@ -689,6 +679,7 @@ export async function processResponsesStream<TApi extends Api>(
             toolCall,
             partial: output,
           });
+          completedOutputItemIdentities.add(`function_call:${item.call_id}`);
         }
       } else if (event.type === "response.completed" || event.type === "response.incomplete") {
         if (streamingToolCalls.hasActive()) {

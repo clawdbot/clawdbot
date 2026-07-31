@@ -291,7 +291,6 @@ describe("qa-channel plugin", () => {
           text: "hello",
           accountId: "default",
           replyToId: "parent-1",
-          threadId: "thread-1",
         });
         const receiptPart = result.receipt.parts[0];
         expect(receiptPart?.kind).toBe("text");
@@ -312,7 +311,6 @@ describe("qa-channel plugin", () => {
           },
           accountId: "default",
           replyToId: "parent-1",
-          threadId: "thread-1",
         };
         const result =
           kind === "payload"

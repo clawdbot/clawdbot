@@ -251,6 +251,7 @@
     "!dist/extensions/cerebras/**",
     "!dist/extensions/chutes/**",
     "!dist/extensions/cohere/**",
+    "!dist/extensions/comfy/**",
     "!dist/extensions/clickclack/**",
     "!dist/extensions/cloudflare-ai-gateway/**",
     "!dist/extensions/codex/**",

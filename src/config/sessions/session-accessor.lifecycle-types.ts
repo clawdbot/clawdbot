@@ -94,14 +94,32 @@ export type DeleteSessionEntryLifecycleParams = {
   target: SessionLifecycleStoreTarget;
 };
 
-export type SessionEntryLifecycleRemoval = {
+type SessionEntryLifecycleRemovalBase = {
   sessionKey: string;
-  expectedEntry?: SessionEntry;
+  /** Doctor repair only: address a malformed persisted key without normalizing it first. */
+  exactStoredKey?: boolean;
+  /** Doctor cross-store repair only: copied/archived windows may be removed with the source node. */
+  deleteOwnedWindows?: boolean;
+  /** Doctor cross-store repair only: delivery aliases copied under the canonical destination key. */
+  deliveryCleanupKeys?: readonly string[];
   archiveRemovedTranscript?: boolean;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
   expectedUpdatedAt?: number;
 };
+
+export type SessionEntryLifecycleRemoval = SessionEntryLifecycleRemovalBase &
+  (
+    | {
+        /** Doctor repair only: compare-and-delete an entry_json blob that cannot be parsed. */
+        expectedRawEntryJson: string;
+        expectedEntry: SessionEntry;
+      }
+    | {
+        expectedRawEntryJson?: never;
+        expectedEntry?: SessionEntry;
+      }
+  );
 
 export type SessionEntryLifecycleUpsert = {
   sessionKey: string;

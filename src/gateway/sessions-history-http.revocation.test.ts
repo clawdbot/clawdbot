@@ -87,7 +87,7 @@ vi.mock("./session-utils.js", () => ({
     agentId: "main",
     store: {},
   }),
-  resolveFreshestSessionEntryFromStoreKeys: () => ({
+  resolveCanonicalSessionEntryFromStoreKeys: () => ({
     sessionId: "session-1",
     sessionFile: "/tmp/session-1.jsonl",
   }),

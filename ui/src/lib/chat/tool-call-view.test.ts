@@ -617,4 +617,23 @@ describe("resolveToolCallView", () => {
 
     expect(resolveToolCallView(source)).toBe(resolveToolCallView(source));
   });
+
+  it("keeps tool-name presentation authoritative when different calls share args", () => {
+    const args = { path: "/repo/a.ts", oldText: "before", newText: "after" };
+
+    expect(resolveToolCallView({ name: "read", args })).toMatchObject({
+      kind: "read",
+      target: "a.ts",
+    });
+    expect(resolveToolCallView({ name: "edit", args })).toMatchObject({
+      kind: "edit",
+      target: "a.ts",
+      stat: { added: 1, removed: 1 },
+    });
+    expect(resolveToolCallView({ name: "write", args })).toMatchObject({
+      kind: "write",
+      target: "a.ts",
+    });
+    expect(resolveToolCallView({ name: "READ", args }).kind).toBe("read");
+  });
 });

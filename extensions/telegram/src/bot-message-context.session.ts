@@ -33,6 +33,7 @@ import type {
   TelegramMessageContextSessionRuntimeOverrides,
   TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
+import { renderTelegramTextEntities } from "./bot/body-helpers.js";
 import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 
 type TelegramMentionFacts = NonNullable<
@@ -397,8 +398,9 @@ export async function buildTelegramInboundContextPayload(params: {
   const inboundDebounceBodySegments = hasMultiMessageDebounceBatch
     ? options?.inboundDebounceMessages?.flatMap((debouncedMessage) => {
         const debouncedMedia = resolveTelegramPrimaryMedia(debouncedMessage);
+        const textParts = getTelegramTextParts(debouncedMessage);
         const segmentBody =
-          getTelegramTextParts(debouncedMessage).text ||
+          renderTelegramTextEntities(textParts.text, textParts.entities) ||
           formatMediaPlaceholderText(debouncedMedia ? [{ kind: debouncedMedia.kind }] : []);
         if (!segmentBody) {
           return [];

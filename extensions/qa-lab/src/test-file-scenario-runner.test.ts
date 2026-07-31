@@ -121,18 +121,43 @@ async function makeTempRepo(prefix: string) {
 
 async function writeNativeVitestReport(
   command: QaScenarioCommandExecution,
-  counts: { failed?: number; passed: number },
+  counts: {
+    createRequestedTestFile?: boolean;
+    failed?: number;
+    passed: number;
+    testFilePath?: string;
+    testName?: string;
+  },
 ) {
   const reportArg = command.args.find((arg) => arg.startsWith("--outputFile.json="));
   if (!reportArg) {
     return;
   }
+  const requestedTestPath = command.args.find((arg) => arg.endsWith(".test.ts"));
+  if (requestedTestPath && counts.createRequestedTestFile !== false) {
+    const requestedTestFile = path.resolve(command.cwd, requestedTestPath);
+    await fs.mkdir(path.dirname(requestedTestFile), { recursive: true });
+    await fs.writeFile(requestedTestFile, "// native scenario fixture\n", "utf8");
+  }
+  const testNamePatternIndex = command.args.indexOf("--testNamePattern");
+  const testName =
+    counts.testName ??
+    (testNamePatternIndex < 0 ? undefined : command.args[testNamePatternIndex + 1]) ??
+    "executes the requested scenario";
   await fs.writeFile(
     reportArg.slice("--outputFile.json=".length),
     JSON.stringify({
       numFailedTests: counts.failed ?? 0,
       numPassedTests: counts.passed,
       success: (counts.failed ?? 0) === 0,
+      testResults: [
+        {
+          name: path.resolve(command.cwd, counts.testFilePath ?? requestedTestPath ?? "unknown"),
+          status: counts.passed > 0 ? "passed" : "skipped",
+          assertionResults:
+            counts.passed > 0 ? [{ fullName: testName, title: testName, status: "passed" }] : [],
+        },
+      ],
     }),
     "utf8",
   );
@@ -447,6 +472,153 @@ describe("qa test file scenario runner", () => {
       }
     },
   );
+
+  it.each([{ executionKind: "vitest" as const }, { executionKind: "playwright" as const }])(
+    "rejects a passing $executionKind report for an unrelated test file",
+    async ({ executionKind }) => {
+      const repoRoot = await makeTempRepo(`qa-${executionKind}-wrong-report-file-`);
+      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`);
+      const result = await runQaTestFileScenarios({
+        repoRoot,
+        outputDir,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        scenarios: [
+          makeTestFileScenario(
+            executionKind,
+            executionKind === "playwright"
+              ? "ui/src/e2e/chat-flow.e2e.test.ts"
+              : "extensions/qa-lab/src/coverage-report.test.ts",
+          ),
+        ],
+        runCommand: async (command) => {
+          await writeNativeVitestReport(command, {
+            passed: 1,
+            testFilePath: "extensions/qa-lab/src/unrelated.test.ts",
+          });
+          return { exitCode: 0, stdout: "unrelated test passed\n", stderr: "" };
+        },
+      });
+
+      expect(result.results[0]).toMatchObject({
+        failureMessage: expect.stringContaining("requested test file"),
+        status: "fail",
+      });
+      expect(result.evidence.entries[0]?.result.status).toBe("fail");
+    },
+  );
+
+  it.each([{ executionKind: "vitest" as const }, { executionKind: "playwright" as const }])(
+    "rejects a passing $executionKind report when the requested test file does not exist",
+    async ({ executionKind }) => {
+      const repoRoot = await makeTempRepo(`qa-${executionKind}-missing-requested-test-`);
+      const scenarioPath =
+        executionKind === "playwright"
+          ? "ui/src/e2e/chat-flow.e2e.test.ts"
+          : "extensions/qa-lab/src/coverage-report.test.ts";
+      const result = await runQaTestFileScenarios({
+        repoRoot,
+        outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`),
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        scenarios: [makeTestFileScenario(executionKind, scenarioPath)],
+        runCommand: async (command) => {
+          await writeNativeVitestReport(command, {
+            createRequestedTestFile: false,
+            passed: 1,
+          });
+          return { exitCode: 0, stdout: "missing test reportedly passed\n", stderr: "" };
+        },
+      });
+
+      expect(result.results[0]).toMatchObject({
+        failureMessage: expect.stringContaining("existing requested test file"),
+        status: "fail",
+      });
+      expect(result.evidence.entries[0]?.result.status).toBe("fail");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "authenticates requested tests when the checkout root is a symlink",
+    async () => {
+      const canonicalRoot = await fs.realpath(await makeTempRepo("qa-vitest-symlinked-checkout-"));
+      const symlinkedRoot = path.join(canonicalRoot, "checkout-alias");
+      await fs.symlink(canonicalRoot, symlinkedRoot, "dir");
+      const scenarioPath = "extensions/qa-lab/src/coverage-report.test.ts";
+      const result = await runQaTestFileScenarios({
+        repoRoot: symlinkedRoot,
+        outputDir: path.join(symlinkedRoot, ".artifacts", "qa-e2e", "scenario-vitest"),
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        scenarios: [makeTestFileScenario("vitest", scenarioPath)],
+        runCommand: async (command) => {
+          await writeNativeVitestReport(command, {
+            passed: 1,
+            testFilePath: path.join(canonicalRoot, scenarioPath),
+          });
+          return { exitCode: 0, stdout: "canonical test passed\n", stderr: "" };
+        },
+      });
+
+      expect(result.results[0]).toMatchObject({ status: "pass" });
+      expect(result.evidence.entries[0]?.result.status).toBe("pass");
+    },
+  );
+
+  it("rejects a passing Playwright report that misses the requested test name", async () => {
+    const repoRoot = await makeTempRepo("qa-playwright-wrong-report-test-");
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-playwright"),
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      scenarios: [
+        makeTestFileScenario(
+          "playwright",
+          "ui/src/e2e/chat-flow.e2e.test.ts",
+          "required visual assertion",
+        ),
+      ],
+      runCommand: async (command) => {
+        await writeNativeVitestReport(command, {
+          passed: 1,
+          testName: "unrelated visual assertion",
+        });
+        return { exitCode: 0, stdout: "unrelated assertion passed\n", stderr: "" };
+      },
+    });
+
+    expect(result.results[0]).toMatchObject({
+      failureMessage: expect.stringContaining("requested test name"),
+      status: "fail",
+    });
+    expect(result.evidence.entries[0]?.result.status).toBe("fail");
+  });
+
+  it("records invalid Playwright test-name patterns as failed scenario evidence", async () => {
+    const repoRoot = await makeTempRepo("qa-playwright-invalid-report-pattern-");
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-playwright"),
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      scenarios: [makeTestFileScenario("playwright", "ui/src/e2e/chat-flow.e2e.test.ts", "[")],
+      runCommand: async (command) => {
+        await writeNativeVitestReport(command, {
+          passed: 1,
+          testName: "executed visual assertion",
+        });
+        return { exitCode: 0, stdout: "visual assertion passed\n", stderr: "" };
+      },
+    });
+
+    expect(result.results[0]).toMatchObject({
+      failureMessage: expect.stringContaining("invalid requested test name pattern"),
+      status: "fail",
+    });
+    expect(result.evidence.entries[0]?.result.status).toBe("fail");
+  });
 
   it.each([{ executionKind: "vitest" as const }, { executionKind: "playwright" as const }])(
     "does not reuse a prior passing $executionKind report when the next child writes none",

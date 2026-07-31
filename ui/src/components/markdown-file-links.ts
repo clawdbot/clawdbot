@@ -89,6 +89,19 @@ export function markdownFileLinkFromEvent(
   return { path, line: line ? Number.parseInt(line, 10) : null };
 }
 
+export function markdownFileLinkFromKeyboardEvent(
+  event: KeyboardEvent,
+): { path: string; line: number | null } | null {
+  if (event.key !== "Enter" && event.key !== " ") {
+    return null;
+  }
+  const target = markdownFileLinkFromEvent(event);
+  if (target) {
+    event.preventDefault();
+  }
+  return target;
+}
+
 export function splitMarkdownFileLineSuffix(raw: string): { path: string; line: number | null } {
   const match = FILE_LINE_SUFFIX_RE.exec(raw);
   const line = match?.[1];

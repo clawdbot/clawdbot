@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  clearCronJobActive,
+  markCronJobActive,
+  noteActiveCronJobTriggerMutation,
+} from "../active-jobs.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { createNoopLogger } from "../service.test-harness.js";
 import type { CronJob, CronPacing } from "../types.js";
@@ -29,6 +34,90 @@ function makePacedJob(pacing: CronPacing, everyMs = 60 * 60_000): CronJob {
     state: { nextRunAtMs: STARTED_AT },
   });
 }
+
+describe("cron trigger evaluation ownership", () => {
+  it("keeps a replacement once trigger armed after an obsolete fired payload", () => {
+    const state = makeState();
+    const job = makePacedJob({ min: "15m" });
+    job.trigger = { script: "old trigger", once: true };
+    const admittedJob = structuredClone(job);
+    job.trigger = { script: "replacement trigger", once: true };
+    job.state.triggerState = { owner: "replacement" };
+    state.store = { version: 1, jobs: [job] };
+
+    applyOutcomeToStoredJob(state, {
+      jobId: job.id,
+      job: admittedJob,
+      status: "ok",
+      startedAt: STARTED_AT,
+      endedAt: ENDED_AT,
+      triggerEval: { fired: true, stateChanged: true, state: { owner: "obsolete trigger" } },
+      scriptStateChanged: true,
+      scriptState: { owner: "obsolete payload" },
+    });
+
+    expect(job.enabled).toBe(true);
+    expect(job.state.triggerState).toEqual({ owner: "replacement" });
+    expect(job.state.lastTriggerEvalAtMs).toBeUndefined();
+    expect(job.state.nextRunAtMs).toBeGreaterThan(ENDED_AT);
+  });
+
+  it("does not let an obsolete quiet evaluation replace current trigger state", () => {
+    const state = makeState();
+    const job = makePacedJob({ min: "15m" });
+    job.trigger = { script: "old trigger" };
+    const admittedJob = structuredClone(job);
+    job.trigger = { script: "replacement trigger" };
+    job.state.triggerState = { owner: "replacement" };
+    job.state.consecutiveErrors = 3;
+    job.state.scheduleErrorCount = 2;
+    state.store = { version: 1, jobs: [job] };
+
+    applyOutcomeToStoredJob(state, {
+      jobId: job.id,
+      job: admittedJob,
+      status: "ok",
+      startedAt: STARTED_AT,
+      endedAt: ENDED_AT,
+      triggerEval: { fired: false, stateChanged: true, state: { owner: "obsolete" } },
+    });
+
+    expect(job.state.triggerState).toEqual({ owner: "replacement" });
+    expect(job.state.triggerEvalCount).toBeUndefined();
+    expect(job.state.consecutiveErrors).toBe(3);
+    expect(job.state.scheduleErrorCount).toBe(2);
+    expect(job.state.nextRunAtMs).toBeGreaterThan(ENDED_AT);
+  });
+
+  it("retains trigger ownership when an edited script is restored during its active run", () => {
+    const state = makeState();
+    const job = makePacedJob({ min: "15m" });
+    job.trigger = { script: "original trigger", once: true };
+    const admittedJob = structuredClone(job);
+    job.state.triggerState = { owner: "latest edit" };
+    state.store = { version: 1, jobs: [job] };
+    const activeJobMarker = markCronJobActive(job.id);
+    noteActiveCronJobTriggerMutation(job.id);
+
+    try {
+      applyOutcomeToStoredJob(state, {
+        jobId: job.id,
+        job: admittedJob,
+        activeJobMarker,
+        status: "ok",
+        startedAt: STARTED_AT,
+        endedAt: ENDED_AT,
+        triggerEval: { fired: true, stateChanged: true, state: { owner: "obsolete" } },
+      });
+
+      expect(job.enabled).toBe(true);
+      expect(job.state.triggerState).toEqual({ owner: "latest edit" });
+      expect(job.state.lastTriggerFireAtMs).toBeUndefined();
+    } finally {
+      clearCronJobActive(job.id, activeJobMarker);
+    }
+  });
+});
 
 describe("applyJobResult dynamic cadence", () => {
   it.each([

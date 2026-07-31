@@ -2797,49 +2797,6 @@ describe("main-session-restart-recovery", () => {
     );
   });
 
-  it("retries an exact legacy row after its canonical alias is reused", async () => {
-    const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    await writeStore(sessionsDir, {
-      "agent:main:main": {
-        sessionId: "replacement-session",
-        updatedAt: Date.now(),
-      },
-      main: {
-        sessionId: "legacy-session",
-        updatedAt: Date.now() - 10_000,
-        status: "running",
-        abortedLastRun: true,
-      },
-    });
-    await writeTranscript(sessionsDir, "legacy-session", [
-      { role: "user", content: "resume the legacy row" },
-    ]);
-
-    const result = await retryRestartAbortedMainSessionRecoveryAfterOwnerRelease({
-      cfg: { agents: { entries: { main: { default: true } } } },
-      expectedSessionId: "legacy-session",
-      sessionKey: "main",
-      storePath,
-    });
-
-    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(gatewayParams()).toMatchObject({
-      expectedExistingSessionId: "legacy-session",
-      sessionKey: "agent:main:main",
-    });
-    expect(
-      sessionAccessor.loadExactSessionEntry({ sessionKey: "main", storePath })?.entry,
-    ).toMatchObject({
-      sessionId: "legacy-session",
-      abortedLastRun: false,
-    });
-    expect(
-      sessionAccessor.loadExactSessionEntry({ sessionKey: "agent:main:main", storePath })?.entry,
-    ).toMatchObject({ sessionId: "replacement-session" });
-  });
-
   it("retries a failed exact owner-release recovery with bounded backoff", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
@@ -3201,51 +3158,6 @@ describe("main-session-restart-recovery", () => {
       10_000,
     );
     expect(callGateway).not.toHaveBeenCalled();
-  });
-
-  it("targets a legacy durable row through its canonical agent session key", async () => {
-    const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    await writeStore(sessionsDir, {
-      main: {
-        sessionId: "legacy-main-session",
-        updatedAt: Date.now() - 10_000,
-        status: "running",
-        abortedLastRun: true,
-        restartRecoveryDeliveryRunId: "legacy-recovery",
-        restartRecoveryDeliverySourceRunId: "legacy-source",
-      },
-    });
-    await writeTranscript(sessionsDir, "legacy-main-session", [
-      { role: "user", content: "recover the legacy row" },
-    ]);
-
-    const result = await retryRestartAbortedMainSessionRecovery({
-      canonicalSessionKey: "agent:main:main",
-      cfg: {},
-      expectedRecoveryRunId: "legacy-recovery",
-      expectedRecoverySourceRunId: "legacy-source",
-      expectedSessionId: "legacy-main-session",
-      sessionKey: "main",
-      storePath,
-    });
-
-    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
-    expect(gatewayParams()).toMatchObject({
-      expectedExistingSessionId: "legacy-main-session",
-      idempotencyKey: "legacy-recovery",
-      internalRuntimeHandoffId: expect.any(String),
-      sessionKey: "agent:main:main",
-    });
-    // The gateway mock stops before agent admission, which promotes this alias
-    // to the canonical key before the recovered run can execute message tools.
-    expect(
-      sessionAccessor.loadExactSessionEntry({ sessionKey: "main", storePath })?.entry,
-    ).toMatchObject({
-      abortedLastRun: false,
-      restartRecoveryDeliveryRunId: "legacy-recovery",
-      restartRecoveryDeliverySourceRunId: "legacy-source",
-    });
   });
 
   it("holds lifecycle replacement behind the targeted recovery dispatch", async () => {

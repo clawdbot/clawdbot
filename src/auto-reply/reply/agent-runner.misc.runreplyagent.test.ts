@@ -181,6 +181,7 @@ vi.mock("../../cli/command-secret-gateway.js", () => ({
 // Dedicated suites cover these sidecars; misc runner cases keep them inert to avoid unrelated graphs.
 vi.mock("../../cli/command-secret-targets.js", () => ({
   getAgentRuntimeCommandSecretTargetIds: () => new Set<string>(),
+  getAgentRuntimeOptionalCommandSecretPaths: () => new Set<string>(),
   getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
 }));
 

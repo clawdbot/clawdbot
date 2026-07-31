@@ -26,27 +26,6 @@ function bedrockModel(overrides: Record<string, unknown>) {
   } as never;
 }
 
-function signedThinkingContext(modelId: string) {
-  const highSurrogate = String.fromCharCode(0xd83d);
-  return {
-    messages: [
-      {
-        role: "assistant",
-        api: "bedrock-converse-stream",
-        provider: "amazon-bedrock",
-        model: modelId,
-        content: [
-          {
-            type: "thinking",
-            thinking: `private${highSurrogate}reasoning`,
-            thinkingSignature: "sig-1",
-          },
-        ],
-      },
-    ],
-  } as never;
-}
-
 async function* streamEvents(events: unknown[]) {
   for (const event of events) {
     yield event;
@@ -225,106 +204,6 @@ describe("Bedrock tool-result replay", () => {
     });
     expect(JSON.stringify(messages)).not.toContain('"image"');
     expect(JSON.stringify(messages)).not.toContain("see attached image");
-  });
-});
-
-describe("Bedrock reasoning replay", () => {
-  it("preserves signed reasoning for Claude profile descriptors", () => {
-    const modelId =
-      "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/profile-abc";
-    const messages = testing.convertMessages(
-      signedThinkingContext(modelId),
-      bedrockModel({
-        id: modelId,
-        name: "Claude Sonnet application profile",
-      }),
-      "none",
-    );
-
-    expect(messages[0]?.content).toEqual([
-      {
-        reasoningContent: {
-          reasoningText: {
-            text: `private${String.fromCharCode(0xd83d)}reasoning`,
-            signature: "sig-1",
-          },
-        },
-      },
-    ]);
-  });
-
-  it("replays signed reasoning as plain text for non-Claude models", () => {
-    const modelId = "amazon.nova-micro-v1:0";
-    const messages = testing.convertMessages(
-      signedThinkingContext(modelId),
-      bedrockModel({ id: modelId, name: "Nova Micro" }),
-      "none",
-    );
-
-    expect(messages[0]?.content).toEqual([{ text: "privatereasoning" }]);
-  });
-
-  it("preserves signature-only Fable reasoning blocks", () => {
-    const modelId = "anthropic.claude-fable-5";
-    const messages = testing.convertMessages(
-      {
-        messages: [
-          {
-            role: "assistant",
-            api: "bedrock-converse-stream",
-            provider: "amazon-bedrock",
-            model: modelId,
-            content: [
-              {
-                type: "thinking",
-                thinking: "",
-                thinkingSignature: " sig-fable ",
-              },
-            ],
-          },
-        ],
-      } as never,
-      bedrockModel({ id: modelId, name: "Claude Fable 5" }),
-      "none",
-    );
-
-    expect(messages[0]?.content).toEqual([
-      {
-        reasoningContent: {
-          reasoningText: {
-            text: "",
-            signature: " sig-fable ",
-          },
-        },
-      },
-    ]);
-  });
-
-  it("drops synthetic reasoning placeholders from Claude replay", () => {
-    const modelId = "anthropic.claude-fable-5";
-    const messages = testing.convertMessages(
-      {
-        messages: [
-          {
-            role: "assistant",
-            api: "bedrock-converse-stream",
-            provider: "amazon-bedrock",
-            model: modelId,
-            content: [
-              {
-                type: "thinking",
-                thinking: "hidden compatibility reasoning",
-                thinkingSignature: "reasoning_content",
-              },
-            ],
-          },
-        ],
-      } as never,
-      bedrockModel({ id: modelId, name: "Claude Fable 5" }),
-      "none",
-    );
-
-    expect(messages).toEqual([]);
   });
 });
 

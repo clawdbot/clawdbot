@@ -739,6 +739,7 @@ function createOpenShellBackendSandboxConfig(): CreateSandboxBackendParams["cfg"
     scope: "session",
     workspaceAccess: "rw",
     workspaceRoot: "/tmp/openclaw-sandboxes",
+    dockerTmpfsSource: "configured",
     docker: {
       image: "openclaw-sandbox:bookworm-slim",
       containerPrefix: "openclaw-sbx-",

@@ -1,13 +1,16 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 
 export function clearSessionCollaborationForKey(
   database: OpenClawAgentDatabase,
   sessionKey: string,
+  options: { clearSuggestions?: boolean } = {},
 ): void {
   const presentTables = readSessionNodeArtifactTables(database);
   const db = getSessionKysely(database.db);
@@ -17,7 +20,7 @@ export function clearSessionCollaborationForKey(
       db.deleteFrom("session_members").where("session_key", "=", sessionKey),
     );
   }
-  if (presentTables.has("session_suggestions")) {
+  if (options.clearSuggestions !== false && presentTables.has("session_suggestions")) {
     executeSqliteQuerySync(
       database.db,
       db.deleteFrom("session_suggestions").where("session_key", "=", sessionKey),
@@ -169,6 +172,206 @@ export function rehomeLegacySessionNodeArtifacts(
         .where("session_key", "=", legacyKey),
     );
   }
+}
+
+/** Copy logical-session artifacts while doctor moves a node between agent databases. */
+export function copySessionNodeArtifactsForRepair(
+  source: OpenClawAgentDatabase,
+  destination: OpenClawAgentDatabase,
+  sourceKeys: readonly string[],
+  canonicalKey: string,
+  options: { includeMembers?: boolean } = {},
+): void {
+  const keys = [...new Set(sourceKeys)];
+  if (keys.length === 0) {
+    return;
+  }
+  const sourceDb = getSessionKysely(source.db);
+  const destinationDb = getSessionKysely(destination.db);
+  const sourceKeyReferences = new Set(keys.flatMap((key) => [key, key.trim()]));
+  const sourceTables = readSessionNodeArtifactTables(source);
+  const destinationTables = readSessionNodeArtifactTables(destination);
+  if (
+    sourceTables.has("board_tabs") &&
+    sourceTables.has("board_widgets") &&
+    destinationTables.has("board_tabs") &&
+    destinationTables.has("board_widgets")
+  ) {
+    for (const tab of executeSqliteQuerySync(
+      source.db,
+      sourceDb.selectFrom("board_tabs").selectAll().where("session_key", "in", keys),
+    ).rows) {
+      executeSqliteQuerySync(
+        destination.db,
+        destinationDb
+          .insertInto("board_tabs")
+          .values({ ...tab, session_key: canonicalKey })
+          .onConflict((conflict) =>
+            conflict
+              .columns(["session_key", "tab_id"])
+              .doUpdateSet({
+                title: tab.title,
+                position: tab.position,
+                chat_dock: tab.chat_dock,
+                created_by: tab.created_by,
+                revision: tab.revision,
+              })
+              .where("revision", "<", tab.revision),
+          ),
+      );
+    }
+    for (const widget of executeSqliteQuerySync(
+      source.db,
+      sourceDb.selectFrom("board_widgets").selectAll().where("session_key", "in", keys),
+    ).rows) {
+      executeSqliteQuerySync(
+        destination.db,
+        destinationDb
+          .insertInto("board_widgets")
+          .values({ ...widget, session_key: canonicalKey })
+          .onConflict((conflict) =>
+            conflict
+              .columns(["session_key", "name"])
+              .doUpdateSet({ ...widget, session_key: canonicalKey })
+              .where((eb) =>
+                eb.or([
+                  eb("revision", "<", widget.revision),
+                  eb.and([
+                    eb("revision", "=", widget.revision),
+                    eb("updated_at", "<", widget.updated_at),
+                  ]),
+                ]),
+              ),
+          ),
+      );
+    }
+  }
+  if (
+    options.includeMembers !== false &&
+    sourceTables.has("session_members") &&
+    destinationTables.has("session_members")
+  ) {
+    for (const member of executeSqliteQuerySync(
+      source.db,
+      sourceDb.selectFrom("session_members").selectAll().where("session_key", "in", keys),
+    ).rows) {
+      executeSqliteQuerySync(
+        destination.db,
+        destinationDb
+          .insertInto("session_members")
+          .values({ ...member, session_key: canonicalKey })
+          .onConflict((conflict) => conflict.columns(["session_key", "identity_id"]).doNothing()),
+      );
+    }
+  }
+  if (sourceTables.has("session_suggestions") && destinationTables.has("session_suggestions")) {
+    if (source.db === destination.db) {
+      executeSqliteQuerySync(
+        destination.db,
+        destinationDb
+          .updateTable("session_suggestions")
+          .set({ session_key: canonicalKey })
+          .where("session_key", "in", keys),
+      );
+    } else {
+      for (const suggestion of executeSqliteQuerySync(
+        source.db,
+        sourceDb.selectFrom("session_suggestions").selectAll().where("session_key", "in", keys),
+      ).rows) {
+        executeSqliteQuerySync(
+          destination.db,
+          destinationDb
+            .insertInto("session_suggestions")
+            .values({ ...suggestion, session_key: canonicalKey })
+            .onConflict((conflict) => conflict.column("id").doNothing()),
+        );
+      }
+    }
+  }
+  if (sourceTables.has("heartbeat_outcomes") && destinationTables.has("heartbeat_outcomes")) {
+    for (const heartbeat of executeSqliteQuerySync(
+      source.db,
+      sourceDb.selectFrom("heartbeat_outcomes").selectAll().where("session_key", "in", keys),
+    ).rows) {
+      executeSqliteQuerySync(
+        destination.db,
+        destinationDb
+          .insertInto("heartbeat_outcomes")
+          .values({
+            ...heartbeat,
+            session_key: canonicalKey,
+            run_session_key: sourceKeyReferences.has(heartbeat.run_session_key)
+              ? canonicalKey
+              : heartbeat.run_session_key,
+          })
+          .onConflict((conflict) =>
+            conflict
+              .column("session_key")
+              .doUpdateSet({
+                ...heartbeat,
+                session_key: canonicalKey,
+                run_session_key: sourceKeyReferences.has(heartbeat.run_session_key)
+                  ? canonicalKey
+                  : heartbeat.run_session_key,
+              })
+              .where((eb) =>
+                eb.or([
+                  eb("updated_at", "<", heartbeat.updated_at),
+                  eb.and([
+                    eb("updated_at", "=", heartbeat.updated_at),
+                    eb("occurred_at", "<", heartbeat.occurred_at),
+                  ]),
+                ]),
+              ),
+          ),
+      );
+    }
+  }
+}
+
+/** Membership is authorization state; canonical repair replaces it from the selected winner. */
+export function deleteSessionMembersForRepair(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+): void {
+  if (!readSessionNodeArtifactTables(database).has("session_members")) {
+    return;
+  }
+  const db = getSessionKysely(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    db.deleteFrom("session_members").where("session_key", "=", sessionKey),
+  );
+}
+
+export function deleteSessionDeliveryArtifacts(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+  additionalKeys: readonly string[] = [],
+): void {
+  const db = getSessionKysely(database.db);
+  const trimmedKey = sessionKey.trim();
+  const lookupKeys = uniqueStrings([
+    sessionKey,
+    trimmedKey,
+    normalizeStoreSessionKey(trimmedKey),
+    ...additionalKeys,
+  ]);
+  const competingIdentities = new Set(
+    executeSqliteQuerySync(
+      database.db,
+      db.selectFrom("session_nodes").select("session_key"),
+    ).rows.flatMap((row) =>
+      row.session_key === sessionKey ? [] : [normalizeStoreSessionKey(row.session_key.trim())],
+    ),
+  );
+  const sessionKeys = lookupKeys.filter(
+    (key) => key === sessionKey || !competingIdentities.has(normalizeStoreSessionKey(key.trim())),
+  );
+  executeSqliteQuerySync(
+    database.db,
+    db.deleteFrom("conversation_deliveries").where("source_session_key", "in", sessionKeys),
+  );
 }
 
 export function deleteSessionNodeArtifacts(

@@ -10,6 +10,10 @@ import { convertMessages } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import {
+  createOpenAICompletionsToolCallDeltaNormalizer,
+  finalizeOpenAICompletionsToolCalls,
+} from "../providers/openai-completions-tool-calls.js";
+import {
   isOpenAIGpt54MiniModel,
   isOpenAIGpt55Model,
   isOpenAIGpt56Model,
@@ -353,7 +357,16 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         });
         finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error) {
-        failTransportStream({ stream, output, signal: options?.signal, error });
+        failTransportStream({
+          stream,
+          output,
+          signal: options?.signal,
+          error,
+          cleanup: () => {
+            output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+            finalizeOpenAICompletionsToolCalls(output, { allowSilentToolCallPromotion: false });
+          },
+        });
       } finally {
         firstEventAbort?.dispose();
       }
@@ -408,6 +421,7 @@ async function processOpenAICompletionsStream(
   const provisionalCommentaryTags: PendingCommentaryTags = new Map();
   const toolCallBlockBytes = new WeakMap<ToolCallBlock, number>();
   const toolCallBlockIndices = new WeakMap<ToolCallBlock, number>();
+  const normalizeToolCallDeltas = createOpenAICompletionsToolCallDeltaNormalizer();
   let sawStopFinishReason = false;
   let sawNativeToolCallDelta = false;
   const blockIndex = () => output.content.length - 1;
@@ -669,132 +683,137 @@ async function processOpenAICompletionsStream(
         output.errorMessage = finishReasonResult.errorMessage;
       }
     }
-    const choiceDelta =
+    const rawChoiceDelta =
       choice.delta ??
       (choice as unknown as { message?: ChatCompletionChunk["choices"][number]["delta"] }).message;
-    if (!choiceDelta) {
+    if (!rawChoiceDelta) {
       emitReasoningUsageActivity(hasReasoningUsageActivity);
       await cooperativeScheduler.afterEvent();
       continue;
     }
-    const reasoningDeltas = getCompletionsReasoningDeltas(
-      choiceDelta as Record<string, unknown>,
-      compat.visibleReasoningDetailTypes,
-    );
-    const hasMirroredReasoning = reasoningDeltas.some((delta) => delta.kind === "thinking");
-    if (hasMirroredReasoning) {
-      reasoningTagTextPartitioner.markStrict();
-    }
-    if (choiceDelta.content) {
-      // Structured content can contain visible text and thinking blocks in the
-      // same delta, so route each extracted block through the normal stream path.
-      const contentDeltas = getCompletionsContentDeltas(choiceDelta.content);
-      for (const contentDelta of contentDeltas) {
-        if (contentDelta.kind === "text") {
-          const routedDeltas = hasMirroredReasoning
-            ? reasoningTagTextPartitioner.push(contentDelta.text)
-            : reasoningTagTextPartitioner.pushVisible(contentDelta.text);
-          for (const routedDelta of routedDeltas) {
-            appendPartitionedVisibleDelta(routedDelta);
-          }
-        } else {
-          reasoningTagTextPartitioner.markStrict();
-          appendRoutedContentDelta(contentDelta);
-        }
-      }
-    }
-    // Chat Completions can put safety/structured-output refusals in a top-level
-    // `refusal` field with content null. Surface that as visible text so the
-    // assistant turn is not empty (Responses path already routes refusal deltas).
-    const refusalText = typeof choiceDelta.refusal === "string" ? choiceDelta.refusal : "";
-    if (refusalText) {
-      const routedDeltas = hasMirroredReasoning
-        ? reasoningTagTextPartitioner.push(refusalText)
-        : reasoningTagTextPartitioner.pushVisible(refusalText);
-      for (const routedDelta of routedDeltas) {
-        appendPartitionedVisibleDelta(routedDelta);
-      }
-    }
-    for (const reasoningDelta of reasoningDeltas) {
-      if (reasoningDelta.kind === "thinking" && !emitReasoning) {
-        continue;
-      }
-      if (currentBlock?.type === "toolCall") {
-        queuePostToolCallDelta({ ...reasoningDelta });
-        continue;
-      }
-      if (reasoningDelta.kind === "text") {
-        appendTextDelta(reasoningDelta.text);
-      } else if (emitReasoning) {
-        appendThinkingDelta(reasoningDelta);
-      }
-    }
-    if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
-      sawNativeToolCallDelta = true;
-      flushReasoningTagTextPartitionerAtEnd();
-      rememberPendingCommentaryTags(
-        provisionalCommentaryTags,
-        tagPendingCommentaryText(output.content),
+    for (const normalizedDelta of normalizeToolCallDeltas(rawChoiceDelta, choice.finish_reason)) {
+      const choiceDelta = normalizedDelta.delta;
+      const reasoningDeltas = getCompletionsReasoningDeltas(
+        choiceDelta as Record<string, unknown>,
+        compat.visibleReasoningDetailTypes,
       );
-      for (const toolCall of choiceDelta.tool_calls) {
-        const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
-        let block = streamIndex !== undefined ? toolCallBlocksByIndex.get(streamIndex) : undefined;
-        if (!block && toolCall.id) {
-          block = toolCallBlocksById.get(toolCall.id);
-        }
-        if (!block) {
-          const switchingToolCall = currentBlock?.type === "toolCall";
-          if (switchingToolCall) {
-            currentBlock = null;
-            flushPendingPostToolCallDeltas();
+      const hasMirroredReasoning = reasoningDeltas.some((delta) => delta.kind === "thinking");
+      if (hasMirroredReasoning) {
+        reasoningTagTextPartitioner.markStrict();
+      }
+      if (choiceDelta.content) {
+        // Structured content can contain visible text and thinking blocks in the
+        // same delta, so route each extracted block through the normal stream path.
+        const contentDeltas = getCompletionsContentDeltas(choiceDelta.content);
+        for (const contentDelta of contentDeltas) {
+          if (contentDelta.kind === "text") {
+            const routedDeltas = hasMirroredReasoning
+              ? reasoningTagTextPartitioner.push(contentDelta.text)
+              : reasoningTagTextPartitioner.pushVisible(contentDelta.text);
+            for (const routedDelta of routedDeltas) {
+              appendPartitionedVisibleDelta(routedDelta);
+            }
+          } else {
+            reasoningTagTextPartitioner.markStrict();
+            appendRoutedContentDelta(contentDelta);
           }
-          const initialSig = extractGoogleThoughtSignature(toolCall);
-          block = {
-            type: "toolCall",
-            id: toolCall.id || "",
-            name: toolCall.function?.name || "",
-            arguments: {},
-            partialArgs: "",
-            ...(initialSig ? { thoughtSignature: initialSig } : {}),
-          };
-          output.content.push(block);
-          toolCallBlockIndices.set(block, output.content.length - 1);
-          pushStreamEvent({
-            type: "toolcall_start",
-            contentIndex: toolCallBlockIndices.get(block) ?? -1,
-            partial: output,
-          });
         }
-        if (streamIndex !== undefined && !toolCallBlocksByIndex.has(streamIndex)) {
-          toolCallBlocksByIndex.set(streamIndex, block);
+      }
+      // Chat Completions can put safety/structured-output refusals in a top-level
+      // `refusal` field with content null. Surface that as visible text so the
+      // assistant turn is not empty (Responses path already routes refusal deltas).
+      const refusalText = typeof choiceDelta.refusal === "string" ? choiceDelta.refusal : "";
+      if (refusalText) {
+        const routedDeltas = hasMirroredReasoning
+          ? reasoningTagTextPartitioner.push(refusalText)
+          : reasoningTagTextPartitioner.pushVisible(refusalText);
+        for (const routedDelta of routedDeltas) {
+          appendPartitionedVisibleDelta(routedDelta);
         }
-        if (toolCall.id) {
-          block.id = toolCall.id;
-          toolCallBlocksById.set(toolCall.id, block);
+      }
+      for (const reasoningDelta of reasoningDeltas) {
+        if (reasoningDelta.kind === "thinking" && !emitReasoning) {
+          continue;
         }
-        currentBlock = block;
-        if (toolCall.function?.name) {
-          block.name = toolCall.function.name;
+        if (currentBlock?.type === "toolCall") {
+          queuePostToolCallDelta({ ...reasoningDelta });
+          continue;
         }
-        const deltaSig = extractGoogleThoughtSignature(toolCall);
-        if (deltaSig) {
-          block.thoughtSignature = deltaSig;
+        if (reasoningDelta.kind === "text") {
+          appendTextDelta(reasoningDelta.text);
+        } else if (emitReasoning) {
+          appendThinkingDelta(reasoningDelta);
         }
-        if (toolCall.function?.arguments) {
-          const nextArgumentBytes = measureUtf8Bytes(toolCall.function.arguments);
-          const currentBlockArgBytes = toolCallBlockBytes.get(block) ?? 0;
-          if (currentBlockArgBytes + nextArgumentBytes > MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES) {
-            throw new Error("Exceeded tool-call argument buffer limit");
+      }
+      const toolCallDeltas = normalizedDelta.toolCalls;
+      if (toolCallDeltas.length > 0) {
+        sawNativeToolCallDelta = true;
+        flushReasoningTagTextPartitionerAtEnd();
+        rememberPendingCommentaryTags(
+          provisionalCommentaryTags,
+          tagPendingCommentaryText(output.content),
+        );
+        for (const toolCall of toolCallDeltas) {
+          const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
+          let block =
+            streamIndex !== undefined ? toolCallBlocksByIndex.get(streamIndex) : undefined;
+          if (!block && toolCall.id) {
+            block = toolCallBlocksById.get(toolCall.id);
           }
-          toolCallBlockBytes.set(block, currentBlockArgBytes + nextArgumentBytes);
-          block.partialArgs += toolCall.function.arguments;
-          block.arguments = parseStreamingJson(block.partialArgs);
-          pushStreamEvent({
-            type: "toolcall_delta",
-            contentIndex: toolCallBlockIndices.get(block) ?? -1,
-            delta: toolCall.function.arguments,
-            partial: output,
-          });
+          if (!block) {
+            const switchingToolCall = currentBlock?.type === "toolCall";
+            if (switchingToolCall) {
+              currentBlock = null;
+              flushPendingPostToolCallDeltas();
+            }
+            const initialSig = extractGoogleThoughtSignature(toolCall);
+            block = {
+              type: "toolCall",
+              id: toolCall.id || "",
+              name: toolCall.function?.name || "",
+              arguments: {},
+              partialArgs: "",
+              ...(initialSig ? { thoughtSignature: initialSig } : {}),
+            };
+            output.content.push(block);
+            toolCallBlockIndices.set(block, output.content.length - 1);
+            pushStreamEvent({
+              type: "toolcall_start",
+              contentIndex: toolCallBlockIndices.get(block) ?? -1,
+              partial: output,
+            });
+          }
+          if (streamIndex !== undefined && !toolCallBlocksByIndex.has(streamIndex)) {
+            toolCallBlocksByIndex.set(streamIndex, block);
+          }
+          if (toolCall.id) {
+            block.id = toolCall.id;
+            toolCallBlocksById.set(toolCall.id, block);
+          }
+          currentBlock = block;
+          if (toolCall.function?.name) {
+            block.name = toolCall.function.name;
+          }
+          const deltaSig = extractGoogleThoughtSignature(toolCall);
+          if (deltaSig) {
+            block.thoughtSignature = deltaSig;
+          }
+          if (toolCall.function?.arguments) {
+            const nextArgumentBytes = measureUtf8Bytes(toolCall.function.arguments);
+            const currentBlockArgBytes = toolCallBlockBytes.get(block) ?? 0;
+            if (currentBlockArgBytes + nextArgumentBytes > MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES) {
+              throw new Error("Exceeded tool-call argument buffer limit");
+            }
+            toolCallBlockBytes.set(block, currentBlockArgBytes + nextArgumentBytes);
+            block.partialArgs += toolCall.function.arguments;
+            block.arguments = parseStreamingJson(block.partialArgs);
+            pushStreamEvent({
+              type: "toolcall_delta",
+              contentIndex: toolCallBlockIndices.get(block) ?? -1,
+              delta: toolCall.function.arguments,
+              partial: output,
+            });
+          }
         }
       }
     }
@@ -807,14 +826,6 @@ async function processOpenAICompletionsStream(
   flushDeepSeekTextFilterAtEnd();
   currentBlock = null;
   flushPendingPostToolCallDeltas();
-  const hasToolCalls = output.content.some((block) => block.type === "toolCall");
-  const hasVisibleText = output.content.some(
-    (block) =>
-      block.type === "text" && typeof block.text === "string" && block.text.trim().length > 0,
-  );
-  if (output.stopReason === "toolUse" && !hasToolCalls) {
-    output.stopReason = "stop";
-  }
   // Promote complete silent tool-call-only responses when the stream finished
   // cleanly (reached post-loop). Two paths:
   //   sawStopFinishReason: explicit provider terminal (legacy DSML / #88791)
@@ -823,17 +834,18 @@ async function processOpenAICompletionsStream(
   //     DeepSeek V4). [DONE] tracking distinguishes clean termination from
   //     connection drops (EOF without [DONE] remains fail-closed).
   // Truncated streams throw before reaching this code.
-  if (
-    output.stopReason === "stop" &&
-    hasToolCalls &&
-    !hasVisibleText &&
-    (sawStopFinishReason || (sawNativeToolCallDelta && (options?.sawStreamDONE?.() ?? false)))
-  ) {
-    output.stopReason = "toolUse";
-  }
-  if (hasToolCalls && output.stopReason !== "toolUse") {
-    output.content = output.content.filter((block) => block.type !== "toolCall");
-  }
+  finalizeOpenAICompletionsToolCalls(output, {
+    allowSilentToolCallPromotion:
+      sawStopFinishReason || (sawNativeToolCallDelta && (options?.sawStreamDONE?.() ?? false)),
+    onConfirmedToolCall(block, contentIndex) {
+      pushStreamEvent({
+        type: "toolcall_end",
+        contentIndex,
+        toolCall: block,
+        partial: output,
+      });
+    },
+  });
   if (output.stopReason !== "toolUse") {
     clearPendingCommentaryText(provisionalCommentaryTags);
   }

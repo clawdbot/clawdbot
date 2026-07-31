@@ -2148,7 +2148,7 @@ describe("initSessionState RawBody", () => {
     const storePath = await createStorePath("openclaw-bound-admission-id-");
     const sourceSessionKey = "agent:main:slack:source";
     const sourceSessionId = "source-admission-session";
-    const boundSessionKey = "plugin-binding:codex:bound-target";
+    const boundSessionKey = "agent:main:plugin-binding:codex:bound-target";
     const boundSessionId = "bound-target-session";
     await writeSessionStoreFast(storePath, {
       [sourceSessionKey]: { sessionId: sourceSessionId, updatedAt: Date.now() },
@@ -3557,7 +3557,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
   it("preserves spawned session ownership metadata across /new and /reset", async () => {
     const storePath = await createStorePath("openclaw-reset-spawned-metadata-");
-    const sessionKey = "subagent:owned-child";
+    const sessionKey = "agent:main:subagent:owned-child";
     const existingSessionId = "existing-session-owned-child";
     const overrides = {
       spawnedBy: "agent:main:main",
@@ -4587,17 +4587,17 @@ describe("drainFormattedSystemEvents", () => {
 });
 
 describe("persistSessionUsageUpdate", () => {
+  const sessionKey = "agent:main:main";
   async function seedSessionStore(
     storePath: string,
-    sessionKey: string,
+    targetSessionKey: string,
     entry: Record<string, unknown>,
   ) {
-    await writeSessionStoreFast(storePath, { [sessionKey]: entry });
+    await writeSessionStoreFast(storePath, { [targetSessionKey]: entry });
   }
 
   it("accounts exhausted-run usage without committing its model and persists CLI binding", async () => {
     const storePath = await createStorePath("openclaw-usage-exhausted-");
-    const sessionKey = "main";
     await seedSessionStore(storePath, sessionKey, {
       sessionId: "s1",
       updatedAt: 1,
@@ -4646,7 +4646,6 @@ describe("persistSessionUsageUpdate", () => {
 
   it("accounts goal usage when fresh token snapshots are persisted", async () => {
     const storePath = await createStorePath("openclaw-usage-goal-");
-    const sessionKey = "main";
     await seedSessionStore(storePath, sessionKey, {
       sessionId: "s1",
       updatedAt: 1,
@@ -5037,7 +5036,6 @@ describe("persistSessionUsageUpdate", () => {
     expected: Partial<SessionEntry>;
   }>)("$name", async ({ seed, update, expected, name }) => {
     const storePath = await createStorePath("openclaw-usage-");
-    const sessionKey = "main";
     await seedSessionStore(storePath, sessionKey, {
       sessionId: "s1",
       updatedAt: Date.now(),
@@ -5059,7 +5057,6 @@ describe("persistSessionUsageUpdate", () => {
   });
   it("snapshots estimatedCostUsd instead of accumulating (fixes #69347)", async () => {
     const storePath = await createStorePath("openclaw-usage-cost-");
-    const sessionKey = "main";
     await seedSessionStore(storePath, sessionKey, {
       sessionId: "s1",
       updatedAt: Date.now(),
@@ -5127,8 +5124,8 @@ describe("persistSessionUsageUpdate", () => {
 
   it("preserves the displayed session model when an internal announce uses fallback", async () => {
     const storePath = await createStorePath("openclaw-usage-internal-announce-model-");
-    const sessionKey = "agent:main:telegram:group:-1003871627242:topic:6823";
-    await seedSessionStore(storePath, sessionKey, {
+    const topicSessionKey = "agent:main:telegram:group:-1003871627242:topic:6823";
+    await seedSessionStore(storePath, topicSessionKey, {
       sessionId: "s1",
       updatedAt: Date.now(),
       modelProvider: "openai",
@@ -5153,7 +5150,7 @@ describe("persistSessionUsageUpdate", () => {
 
     await persistSessionUsageUpdate({
       storePath,
-      sessionKey,
+      sessionKey: topicSessionKey,
       preserveUserFacingSessionModelState: true,
       usage: { input: 39_908, output: 122, cacheRead: 0, cacheWrite: 0 },
       lastCallUsage: { input: 39_908, output: 122, cacheRead: 0, cacheWrite: 0 },
@@ -5168,7 +5165,7 @@ describe("persistSessionUsageUpdate", () => {
     });
     await persistSessionUsageUpdate({
       storePath,
-      sessionKey,
+      sessionKey: topicSessionKey,
       preserveUserFacingSessionModelState: true,
       providerUsed: "claude-cli",
       modelUsed: "claude-sonnet-4-6",
@@ -5177,57 +5174,30 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelProvider,
-    ).toBe("openai");
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").model).toBe(
-      "gpt-5.5",
+    const storedEntry = expectDefined(
+      stored[topicSessionKey],
+      "stored[topicSessionKey] test invariant",
     );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").contextTokens,
-    ).toBe(200_000);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
-      1_234,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
-    ).toBe(56);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
-      7,
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheWrite).toBe(
-      8,
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      1_305,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").estimatedCostUsd,
-    ).toBe(0.123);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
-        "claude-cli"
-      ],
-    ).toBe("visible-cli-session");
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
-        "claude-cli"
-      ],
-    ).toEqual({
+    expect(storedEntry.modelProvider).toBe("openai");
+    expect(storedEntry.model).toBe("gpt-5.5");
+    expect(storedEntry.contextTokens).toBe(200_000);
+    expect(storedEntry.inputTokens).toBe(1_234);
+    expect(storedEntry.outputTokens).toBe(56);
+    expect(storedEntry.cacheRead).toBe(7);
+    expect(storedEntry.cacheWrite).toBe(8);
+    expect(storedEntry.totalTokens).toBe(1_305);
+    expect(storedEntry.totalTokensFresh).toBe(true);
+    expect(storedEntry.estimatedCostUsd).toBe(0.123);
+    expect(storedEntry.cliSessionIds?.["claude-cli"]).toBe("visible-cli-session");
+    expect(storedEntry.cliSessionBindings?.["claude-cli"]).toEqual({
       sessionId: "visible-cli-session",
       authProfileId: "anthropic:visible",
     });
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").claudeCliSessionId,
-    ).toBe("visible-cli-session");
+    expect(storedEntry.claudeCliSessionId).toBe("visible-cli-session");
   });
 
   it("persists zero estimatedCostUsd for free priced models", async () => {
     const storePath = await createStorePath("openclaw-usage-free-cost-");
-    const sessionKey = "main";
     await seedSessionStore(storePath, sessionKey, {
       sessionId: "s1",
       updatedAt: Date.now(),
