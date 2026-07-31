@@ -39,7 +39,7 @@ export type QaSuiteSummaryJsonParams = {
   channelDriver?: QaScorecardChannelDriver | null;
   // Driver of the transport adapter actually created, surfaced from
   // createQaSuiteTransportAdapter. Wins over the requested channelDriver so
-  // summary/evidence record the driver that ran (issue #115753).
+
   realizedDriver?: QaTransportDriver | null;
   channelDriverSelection?: QaSuiteChannelDriverSelection | null;
   scenarioIds?: readonly string[];
@@ -135,7 +135,7 @@ export async function writeQaSuiteArtifacts(params: {
   concurrency: number;
   channelDriver?: QaScorecardChannelDriver | null;
   // Driver of the transport adapter actually created; preferred over the
-  // requested channelDriver when recording execution evidence (issue #115753).
+  // requested channelDriver when recording execution evidence.
   realizedDriver?: QaTransportDriver | null;
   channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   isolatedWorkers?: boolean;

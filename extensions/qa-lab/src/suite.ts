@@ -102,7 +102,7 @@ export async function createQaSuiteTransportAdapter(params: {
     // adapter only when a channelId and matching factory are present, crabline
     // when a selection exists, otherwise the shared qa-channel transport.
     // Carrying it to artifact writers lets evidence record the driver that ran
-    // instead of the requested one (issue #115753).
+    // instead of the requested one.
     const realizedDriver: QaTransportDriver = usesLiveAdapter
       ? "live"
       : params.channelDriverSelection

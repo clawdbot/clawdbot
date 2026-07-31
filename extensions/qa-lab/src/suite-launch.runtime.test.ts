@@ -2212,7 +2212,7 @@ describe("qa suite runtime launcher", () => {
       const blocked = evidence.entries?.find((entry) => entry.test?.id === scenarioId);
       // No transport adapter was created for a credential-blocked partition, so
       // evidence must not attest a live channel executed: driver is absent and
-      // live is false, while the per-scenario status stays "blocked" (#115753).
+      // live is false, while the per-scenario status stays "blocked".
       expect(blocked).toMatchObject({
         execution: { channel: { id: "whatsapp", live: false } },
         result: { status: "blocked" },

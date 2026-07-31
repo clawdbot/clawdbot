@@ -821,7 +821,7 @@ async function runUnifiedQaSuite(params: {
                 // No transport adapter was created for a credential-blocked
                 // partition, so there is no realized driver to record. Omit
                 // the requested driver so evidence does not falsely attest a
-                // live channel executed (issue #115753); the per-scenario
+                // live channel executed; the per-scenario
                 // "blocked" status already conveys the blocked state.
                 channelDriver: undefined,
                 env: process.env,
