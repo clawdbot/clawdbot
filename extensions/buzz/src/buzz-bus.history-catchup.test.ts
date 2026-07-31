@@ -13,6 +13,8 @@ const relayMocks = vi.hoisted(() => ({
   connected: true,
   storedEvents: [] as Event[],
   historyRequests: [] as Filter[],
+  historySubscriptionCloses: 0,
+  closeHistoryPagesReason: undefined as string | undefined,
   overReturnHistoryPages: false,
   stallHistoryPages: false,
 }));
@@ -79,18 +81,26 @@ vi.mock("nostr-tools", async (importOriginal) => {
           onclose: (reason: string) => void;
         },
       ) {
+        let isHistoryPage = false;
         for (const filter of filters) {
           if (filter.kinds?.includes(9)) {
             relayMocks.historyRequests.push(filter);
+            isHistoryPage ||= filter.until !== undefined;
           }
           for (const event of selectRelayEvents(filter)) {
             handlers.onevent(event);
           }
-          if (
-            relayMocks.stallHistoryPages &&
-            filter.kinds?.includes(9) &&
-            filter.until !== undefined
-          ) {
+          if (relayMocks.closeHistoryPagesReason && isHistoryPage) {
+            queueMicrotask(() => {
+              handlers.onclose(relayMocks.closeHistoryPagesReason ?? "relay closed");
+            });
+            return {
+              id: `sub:${relayMocks.historyRequests.length}`,
+              close: vi.fn(),
+              closed: false,
+            };
+          }
+          if (relayMocks.stallHistoryPages && isHistoryPage) {
             return {
               id: `sub:${relayMocks.historyRequests.length}`,
               close: vi.fn(),
@@ -101,7 +111,11 @@ vi.mock("nostr-tools", async (importOriginal) => {
         handlers.oneose?.();
         return {
           id: `sub:${relayMocks.historyRequests.length}`,
-          close: vi.fn(),
+          close: vi.fn(() => {
+            if (isHistoryPage) {
+              relayMocks.historySubscriptionCloses += 1;
+            }
+          }),
           closed: false,
         };
       }
@@ -164,6 +178,8 @@ describe("Buzz reconnect history catch-up", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
     vi.clearAllMocks();
     relayMocks.historyRequests.length = 0;
+    relayMocks.historySubscriptionCloses = 0;
+    relayMocks.closeHistoryPagesReason = undefined;
     relayMocks.overReturnHistoryPages = false;
     relayMocks.stallHistoryPages = false;
     relayMocks.storedEvents = [
@@ -231,6 +247,7 @@ describe("Buzz reconnect history catch-up", () => {
     expect(new Set(received).size).toBe(HISTORY_LIMIT + 1);
     expect(received).toContain("offline-message-000");
     expect(received.length).toBe(HISTORY_LIMIT + 1);
+    expect(relayMocks.historySubscriptionCloses).toBe(1);
   });
 
   it("pages a backlog spanning several history windows", async () => {
@@ -306,6 +323,7 @@ describe("Buzz reconnect history catch-up", () => {
     expect(historyErrors[0]).toContain("more than the requested 100 history messages");
     expect(new Set(received).size).toBe(199);
     expect(received.length).toBe(199);
+    expect(relayMocks.historySubscriptionCloses).toBe(1);
   });
 
   it("fails the bus when a catch-up subscription never reaches EOSE", async () => {
@@ -330,10 +348,39 @@ describe("Buzz reconnect history catch-up", () => {
 
     expect(fatalErrors).toEqual([`Timed out loading Buzz room history for ${CHANNEL_ID}`]);
     expect(relayMocks.close).toHaveBeenCalled();
+    expect(relayMocks.historySubscriptionCloses).toBe(0);
   });
 
-  it("stops history catch-up when the bus closes", async () => {
+  it("fails the bus when a catch-up subscription closes unexpectedly", async () => {
+    seedOfflineBacklog(HISTORY_LIMIT + 1, (index) => BASE_TIMESTAMP + index);
+    relayMocks.closeHistoryPagesReason = "relay rejected subscription";
+    const fatalErrors: string[] = [];
+
+    const bus = await startBuzzBus({
+      accountId: ACCOUNT_ID,
+      relayUrl: "wss://buzz.example.com",
+      privateKey: PRIVATE_KEY,
+      channelIds: [CHANNEL_ID],
+      since: BASE_TIMESTAMP - 60,
+      onMessage: async () => {},
+      onFatalError: (error) => {
+        fatalErrors.push(error.message);
+      },
+    });
+    await waitForSettled(() => fatalErrors.length > 0);
+    await bus.close();
+
+    expect(fatalErrors).toEqual([
+      `Buzz room history query closed for ${CHANNEL_ID}: relay rejected subscription`,
+    ]);
+    expect(relayMocks.close).toHaveBeenCalled();
+  });
+
+  it("stops an active history query quietly when the bus closes", async () => {
     seedOfflineBacklog(250, (index) => BASE_TIMESTAMP + index);
+    relayMocks.stallHistoryPages = true;
+    const fatalErrors: string[] = [];
+    const historyErrors: string[] = [];
     const received: string[] = [];
 
     const bus = await startBuzzBus({
@@ -345,7 +392,14 @@ describe("Buzz reconnect history catch-up", () => {
       onMessage: async (message) => {
         received.push(message.text);
       },
+      onFatalError: (error) => {
+        fatalErrors.push(error.message);
+      },
+      onHistoryError: (error) => {
+        historyErrors.push(error.message);
+      },
     });
+    await waitForSettled(() => relayMocks.historyRequests.length > 1);
     await bus.close();
     const requestsAtClose = relayMocks.historyRequests.length;
     await new Promise((resolve) => {
@@ -354,5 +408,7 @@ describe("Buzz reconnect history catch-up", () => {
 
     expect(relayMocks.historyRequests.length).toBe(requestsAtClose);
     expect(received.length).toBeLessThan(250);
+    expect(fatalErrors).toEqual([]);
+    expect(historyErrors).toEqual([]);
   });
 });
