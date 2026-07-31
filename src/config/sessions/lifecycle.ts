@@ -3,7 +3,8 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
 import { loadTranscriptHeaderSync, readTranscriptStatsSync } from "./session-accessor.js";
-import { isTerminalSessionStatus, type SessionEntry, type SessionScope } from "./types.js";
+import { isTerminalSessionStatus } from "./session-entry-runtime.js";
+import type { SessionEntry, SessionScope } from "./types.js";
 
 type SessionLifecycleEntry = Pick<
   SessionEntry,

@@ -6,7 +6,7 @@ import {
 } from "../../sessions/session-state-events.js";
 import { formatTokenCount } from "../../utils/token-format.js";
 import { loadSessionEntryReadOnly, patchSessionEntry } from "./session-accessor.js";
-import { resolveFreshSessionTotalTokens } from "./types.js";
+import { resolveFreshSessionTotalTokens } from "./session-entry-runtime.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
 
 type SessionGoalSnapshot = {

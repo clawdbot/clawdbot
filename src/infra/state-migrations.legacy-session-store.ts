@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeRestartRecoveryEntryFields } from "../config/sessions/restart-recovery-state.js";
+import { normalizeSessionRuntimeModelFields } from "../config/sessions/session-entry-runtime.js";
 import {
   ensureSessionStorePromptBlobsForPersistence,
   hydrateSessionStoreSkillPromptRefs,
@@ -26,11 +27,7 @@ import {
 } from "../config/sessions/store-maintenance.js";
 import { applySessionStoreMigrations } from "../config/sessions/store-migrations.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
-import {
-  normalizeSessionRuntimeModelFields,
-  type SessionEntry,
-  type SessionOrigin,
-} from "../config/sessions/types.js";
+import type { SessionEntry, SessionOrigin } from "../config/sessions/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ChannelRouteRef } from "../plugin-sdk/channel-route.js";
 import { isPluginJsonValue, type PluginJsonValue } from "../plugins/host-hook-json.js";

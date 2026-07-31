@@ -568,17 +568,22 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
       entry,
     })),
 }));
-vi.mock("../config/sessions/types.js", () => ({
-  resolveSessionTotalTokens: vi.fn((entry?: { totalTokens?: number }) =>
-    typeof entry?.totalTokens === "number" ? entry.totalTokens : undefined,
-  ),
-  resolveFreshSessionTotalTokens: vi.fn(
-    (entry?: { totalTokens?: number; totalTokensFresh?: boolean }) =>
-      typeof entry?.totalTokens === "number" && entry?.totalTokensFresh !== false
-        ? entry.totalTokens
-        : undefined,
-  ),
-}));
+vi.mock("../config/sessions/session-entry-runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../config/sessions/session-entry-runtime.js")>();
+  return {
+    ...actual,
+    resolveSessionTotalTokens: vi.fn((entry?: { totalTokens?: number }) =>
+      typeof entry?.totalTokens === "number" ? entry.totalTokens : undefined,
+    ),
+    resolveFreshSessionTotalTokens: vi.fn(
+      (entry?: { totalTokens?: number; totalTokensFresh?: boolean }) =>
+        typeof entry?.totalTokens === "number" && entry?.totalTokensFresh !== false
+          ? entry.totalTokens
+          : undefined,
+    ),
+  };
+});
 vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: () => {
     const plugins = [
@@ -1114,6 +1119,18 @@ describe("statusCommand", () => {
       expect(payload.sessions.recent[0].percentUsed).toBeNull();
       expect(payload.sessions.recent[0].remainingTokens).toBeNull();
     });
+  });
+
+  it("mocks the extracted session runtime token resolvers", async () => {
+    const sessionRuntime = await import("../config/sessions/session-entry-runtime.js");
+    const totalTokensMock = vi.mocked(sessionRuntime.resolveSessionTotalTokens);
+    const freshTotalTokensMock = vi.mocked(sessionRuntime.resolveFreshSessionTotalTokens);
+
+    expect(vi.isMockFunction(totalTokensMock)).toBe(true);
+    expect(vi.isMockFunction(freshTotalTokensMock)).toBe(true);
+    // The real resolvers reject negative totals, so these controls prove the mock is live.
+    expect(totalTokensMock({ totalTokens: -1 })).toBe(-1);
+    expect(freshTotalTokensMock({ totalTokens: -1 })).toBe(-1);
   });
 
   it("surfaces stale usage when totalTokens is preserved but not fresh", async () => {

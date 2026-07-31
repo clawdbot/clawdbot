@@ -5,6 +5,10 @@ import type {
   SessionParentForkDecision,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
+import {
+  resolveFreshSessionTotalTokens,
+  resolveSessionTotalTokens,
+} from "./session-entry-runtime.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   isSessionTranscriptLeafControl,
@@ -13,7 +17,6 @@ import {
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
 import type { SessionEntry } from "./types.js";
-import { resolveFreshSessionTotalTokens, resolveSessionTotalTokens } from "./types.js";
 
 export type SqliteParentForkSourceTranscript = {
   appendMode?: "side";

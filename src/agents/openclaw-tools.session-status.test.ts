@@ -3,8 +3,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { mergeSessionEntry } from "../config/sessions/session-entry-runtime.js";
 import { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
-import { mergeSessionEntry, type SessionEntry } from "../config/sessions/types.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import {
   clearInternalHooks,
   registerInternalHook,
