@@ -70,12 +70,14 @@ describe("Memory plugin mutation ownership", () => {
       toggleAddon(element, "Memory wiki", true);
 
       await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
-      expect(setEnabled).toHaveBeenCalledTimes(1);
+      await waitForFast(() => expect(setEnabled).toHaveBeenCalledOnce());
       expect(setEnabled).toHaveBeenCalledWith("active-memory", false);
 
       firstMutation.resolve({});
       await waitForFast(() => expect(setEnabled).toHaveBeenCalledWith("memory-wiki", true));
     } finally {
+      firstMutation.resolve({});
+      await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
       element.remove();
     }
   });
@@ -103,13 +105,15 @@ describe("Memory plugin mutation ownership", () => {
       expect(setEnabled).not.toHaveBeenCalled();
       expect(element.textContent).not.toContain("Could not update Active memory");
     } finally {
+      pendingWrites.resolve();
+      await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
       element.remove();
     }
   });
 
   it("keeps both sibling restart notices when earlier process discovery finishes last", async () => {
     const firstProcess = createMemoryTestDeferred<{ processInstanceId: string }>();
-    const { element } = createMemoryPage({
+    const { element, runExternalMutation } = createMemoryPage({
       configObject: {},
       catalog: [
         createMemoryTestAddon("active-memory", true),
@@ -145,13 +149,15 @@ describe("Memory plugin mutation ownership", () => {
         );
       });
     } finally {
+      firstProcess.resolve({ processInstanceId: "process-a" });
+      await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
       element.remove();
     }
   });
 
   it("reloads the replacement connection after an older engine change commits", async () => {
     const pendingMutation = createMemoryTestDeferred<unknown>();
-    const { element, request, setPhase } = createMemoryPage({
+    const { element, request, runExternalMutation, setPhase } = createMemoryPage({
       configObject: {},
       listCatalog: (call) =>
         Promise.resolve({
@@ -186,6 +192,8 @@ describe("Memory plugin mutation ownership", () => {
       );
       expect(element.textContent).not.toContain("Could not change the memory engine");
     } finally {
+      pendingMutation.resolve({});
+      await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
       element.remove();
     }
   });

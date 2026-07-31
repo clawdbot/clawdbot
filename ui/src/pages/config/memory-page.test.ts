@@ -436,9 +436,9 @@ describe("MemorySettingsPage catalog state", () => {
       await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
       toggleAddon(element, "Active memory", false);
 
+      await waitForFast(() => expect(refresh).toHaveBeenCalledOnce());
+      await waitForFast(() => expect(element.textContent).toContain("config refresh failed"));
       await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(false));
-      expect(refresh).toHaveBeenCalledOnce();
-      expect(element.textContent).toContain("config refresh failed");
       expect(element.textContent).toContain("Needs attention");
       expect(element.textContent).not.toContain("Could not update Active memory");
     } finally {
