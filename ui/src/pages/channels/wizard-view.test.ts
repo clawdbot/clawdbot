@@ -69,9 +69,9 @@ describe("renderChannelWizard", () => {
       expect(input?.type).toBe(expectedType);
       expect(input?.labels).toContain(label);
       if (sensitive) {
-        expect(container.querySelector(".settings-secret__toggle")).not.toBeNull();
+        expect(container.querySelector(".oc-sensitive-toggle")).not.toBeNull();
       } else {
-        expect(container.querySelector(".settings-secret__toggle")).toBeNull();
+        expect(container.querySelector(".oc-sensitive-toggle")).toBeNull();
       }
     },
   );
@@ -118,10 +118,11 @@ describe("renderChannelWizard", () => {
 
     renderSensitiveStep(false, "");
     const hiddenInput = container.querySelector<HTMLInputElement>("#channel-wizard-text-input");
-    const toggle = container.querySelector<HTMLButtonElement>(".settings-secret__toggle");
+    const toggle = container.querySelector<HTMLButtonElement>(".oc-sensitive-toggle");
     expect(hiddenInput?.type).toBe("password");
     expect(hiddenInput?.value).toBe("");
     expect(toggle?.getAttribute("aria-label")).toBe("Reveal value");
+    expect(toggle?.dataset.sensitiveIcon).toBe("eye");
     if (hiddenInput) {
       hiddenInput.value = "new-secret";
       hiddenInput.dispatchEvent(new Event("input", { bubbles: true }));
@@ -132,11 +133,12 @@ describe("renderChannelWizard", () => {
 
     renderSensitiveStep(true, "new-secret");
     const revealedInput = container.querySelector<HTMLInputElement>("#channel-wizard-text-input");
-    const hideToggle = container.querySelector<HTMLButtonElement>(".settings-secret__toggle");
+    const hideToggle = container.querySelector<HTMLButtonElement>(".oc-sensitive-toggle");
     expect(revealedInput?.type).toBe("text");
     expect(revealedInput?.value).toBe("new-secret");
     expect(hideToggle?.getAttribute("aria-label")).toBe("Hide value");
     expect(hideToggle?.getAttribute("aria-pressed")).toBe("true");
+    expect(hideToggle?.dataset.sensitiveIcon).toBe("eye-off");
   });
 
   it("copies setup text through the plain-HTTP clipboard fallback", async () => {

@@ -156,7 +156,7 @@ describe("renderChannelWizard busy controls", () => {
     );
     const input = text.container.querySelector<HTMLInputElement>('input[name="wizard-text"]');
     const submit = text.container.querySelector<HTMLButtonElement>('button[type="submit"]');
-    const toggle = text.container.querySelector<HTMLButtonElement>(".settings-secret__toggle");
+    const toggle = text.container.querySelector<HTMLButtonElement>(".oc-sensitive-toggle");
     expect(input?.disabled).toBe(true);
     expect(input?.type).toBe("password");
     expect(input?.value).toBe("replacement");

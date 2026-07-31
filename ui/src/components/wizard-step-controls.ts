@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { WizardStep } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
+import { renderSensitiveInput } from "./sensitive-input.ts";
 import "../styles/wizard-step-controls.css";
 
 type WizardStepOption = NonNullable<WizardStep["options"]>[number];
@@ -20,6 +21,8 @@ type WizardStepControlsProps = {
   presentation?: "channels";
   answerLabel?: string;
   confirmAffirmativeLabel?: string;
+  sensitiveRevealed?: boolean;
+  onToggleSensitiveVisibility?: () => void;
 };
 
 function stepClass(props: WizardStepControlsProps, name: string): string {
@@ -174,6 +177,34 @@ function renderProgressStep(props: WizardStepControlsProps) {
 function renderTextStep(props: WizardStepControlsProps) {
   const step = props.step;
   const value = typeof props.value === "string" ? props.value : "";
+  const input =
+    step.sensitive && props.onToggleSensitiveVisibility
+      ? renderSensitiveInput({
+          id: props.inputId,
+          name: "wizard-text",
+          value,
+          revealed: props.sensitiveRevealed === true,
+          revealLabel: t("configForm.revealValue"),
+          hideLabel: t("configForm.hideValue"),
+          inputClassName: "input",
+          placeholder: step.placeholder,
+          disabled: props.busy,
+          onInput: props.onValueChange,
+          onToggle: props.onToggleSensitiveVisibility,
+        })
+      : html`<input
+          id=${props.inputId}
+          class="input"
+          name="wizard-text"
+          type=${step.sensitive ? "password" : "text"}
+          autocomplete=${step.sensitive ? "off" : "on"}
+          placeholder=${step.placeholder ?? ""}
+          .value=${value}
+          ?disabled=${props.busy}
+          @input=${(event: Event) =>
+            props.presentation !== "channels" &&
+            props.onValueChange((event.currentTarget as HTMLInputElement).value)}
+        />`;
   return html`
     <form
       class="wizard-step__form"
@@ -190,19 +221,7 @@ function renderTextStep(props: WizardStepControlsProps) {
             <label for=${props.inputId}>${step.message}</label>
           </div>`
         : nothing}
-      <input
-        id=${props.inputId}
-        class="input"
-        name="wizard-text"
-        type=${step.sensitive ? "password" : "text"}
-        autocomplete=${step.sensitive ? "off" : "on"}
-        placeholder=${step.placeholder ?? ""}
-        .value=${value}
-        ?disabled=${props.busy}
-        @input=${(event: Event) =>
-          props.presentation !== "channels" &&
-          props.onValueChange((event.currentTarget as HTMLInputElement).value)}
-      />
+      ${input}
       ${renderAnswerButton(props, t("modelSetup.wizard.submit"))}
     </form>
   `;

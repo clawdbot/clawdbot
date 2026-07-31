@@ -16,6 +16,10 @@ type ChannelWizardViewProps = {
   // Pending multiselect toggles live in page state so re-renders keep them.
   multiselectValues: readonly unknown[];
   onToggleMultiselect: (value: unknown) => void;
+  textValue: string;
+  secretVisible: boolean;
+  onTextInput: (value: string) => void;
+  onToggleSecretVisibility: () => void;
   onAnswer: (value: unknown) => void;
   onClose: () => void;
   // WhatsApp QR linking phase (wizard done + channel === whatsapp).
@@ -84,13 +88,20 @@ function renderStepBody(step: ChannelWizardStep, props: ChannelWizardViewProps) 
   }
   return renderWizardStepControls({
     step,
-    value: step.type === "multiselect" ? props.multiselectValues : step.initialValue,
+    value:
+      step.type === "multiselect"
+        ? props.multiselectValues
+        : step.type === "text"
+          ? props.textValue
+          : step.initialValue,
     busy: stepIsBusy(props),
     inputId: "channel-wizard-text-input",
     presentation: "channels",
     answerLabel: t("channels.setup.continue"),
-    onValueChange: props.onToggleMultiselect,
+    sensitiveRevealed: props.secretVisible,
+    onValueChange: step.type === "text" ? props.onTextInput : props.onToggleMultiselect,
     onAnswer: props.onAnswer,
+    onToggleSensitiveVisibility: props.onToggleSecretVisibility,
   });
 }
 
