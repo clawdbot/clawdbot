@@ -3,7 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { TUI_PTY_GAP_HISTORY_FIXTURE_SCRIPT } from "./tui-pty-gap-fixture-test-support.js";
-import { TUI_PTY_RESET_FIXTURE_SCRIPT } from "./tui-pty-reset-fixture-test-support.js";
+import { TUI_PTY_RESET_FIXTURE } from "./tui-pty-reset-fixture-test-support.js";
 import { TUI_PTY_SESSION_SUBSCRIPTION_FIXTURE_SCRIPT } from "./tui-pty-subscription-fixture-test-support.js";
 import { sleep, type PtyRun } from "./tui-pty-test-support.js";
 
@@ -33,10 +33,6 @@ export async function writeTuiPtyFixtureScript(dir: string) {
       const actionLogPath = process.env.OPENCLAW_TUI_PTY_LOG_PATH;
       const gatewayStatus = process.env.OPENCLAW_TUI_PTY_GATEWAY_STATUS ?? "fixture gateway ok";
       const startupDelayMs = Number(process.env.OPENCLAW_TUI_PTY_STARTUP_DELAY_MS ?? 0);
-      const submitBurstWindowMs = Number(
-        process.env.OPENCLAW_TUI_PTY_SUBMIT_BURST_WINDOW_MS ?? 0,
-      );
-      const ctrlCExitWindowMs = Number(process.env.OPENCLAW_TUI_PTY_CTRL_C_EXIT_WINDOW_MS ?? 0);
       const footerModel = process.env.OPENCLAW_TUI_PTY_MODEL;
       const footerThinkingLevel = process.env.OPENCLAW_TUI_PTY_THINKING_LEVEL;
       let verboseLevel = process.env.OPENCLAW_TUI_PTY_VERBOSE_LEVEL;
@@ -500,7 +496,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           return { ok: true, key, entry: { ...sessionEntry(key), sessionId: "created-session" } };
         }
 
-        ${TUI_PTY_RESET_FIXTURE_SCRIPT}
+        ${TUI_PTY_RESET_FIXTURE.methods}
 
         async getGatewayStatus() {
           record("getGatewayStatus");
@@ -586,9 +582,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           message: initialMessage,
           historyLimit: 5,
           title: "openclaw tui pty fixture",
-          submitBurstWindowMs: submitBurstWindowMs > 0 ? submitBurstWindowMs : undefined,
-          ctrlCExitWindowMs: ctrlCExitWindowMs > 0 ? ctrlCExitWindowMs : undefined,
-          onSubmitBurstCaptured: (value) => record("submitBurstCaptured", { value }),
+          ${TUI_PTY_RESET_FIXTURE.options}
         });
       }
 

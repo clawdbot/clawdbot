@@ -33,7 +33,6 @@ describe("TUI reset transition PTY", () => {
           OPENCLAW_TUI_PTY_SUBMIT_BURST_WINDOW_MS: "1000",
           OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE: "1",
           OPENCLAW_TUI_PTY_TYPE_DELAY_MS: "2",
-          OPENCLAW_TUI_PTY_CTRL_C_EXIT_WINDOW_MS: "5000",
           TERM_PROGRAM: "Apple_Terminal",
           NO_COLOR: undefined,
         },

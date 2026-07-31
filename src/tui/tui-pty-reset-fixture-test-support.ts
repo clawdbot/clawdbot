@@ -1,5 +1,6 @@
 // Generated fake-backend reset behavior for real PTY lifecycle proof.
-export const TUI_PTY_RESET_FIXTURE_SCRIPT = `
+export const TUI_PTY_RESET_FIXTURE = {
+  methods: `
   async resetSession(key: string, reason?: "new" | "reset") {
     record("resetSession", { key, reason });
     const releasePath = process.env.OPENCLAW_TUI_PTY_RESET_RELEASE_PATH;
@@ -19,4 +20,12 @@ export const TUI_PTY_RESET_FIXTURE_SCRIPT = `
     }
     return {};
   }
-`;
+`,
+  options: `
+    submitBurstWindowMs: (() => {
+      const value = Number(process.env.OPENCLAW_TUI_PTY_SUBMIT_BURST_WINDOW_MS ?? 0);
+      return value > 0 ? value : undefined;
+    })(),
+    onSubmitBurstCaptured: (value) => record("submitBurstCaptured", { value }),
+`,
+};
