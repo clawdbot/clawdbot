@@ -120,6 +120,27 @@ describe("getSoonestCooldownExpiry", () => {
     ).toBe(now + 10_000);
   });
 
+  it("ignores unrelated model-scoped model_not_found cooldowns for the requested model", () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({
+      "openai:p1": {
+        cooldownUntil: now + 60_000,
+        cooldownReason: "model_not_found",
+        cooldownModel: "gpt-5.4",
+      },
+    });
+
+    // The cooldown is scoped to a different model, so the requested model has
+    // no unusable window at all.
+    expect(
+      getSoonestCooldownExpiry(store, ["openai:p1"], { now, forModel: "gpt-5.4-mini" }),
+    ).toBeNull();
+    // The blocked model itself still reports its cooldown expiry.
+    expect(getSoonestCooldownExpiry(store, ["openai:p1"], { now, forModel: "gpt-5.4" })).toBe(
+      now + 60_000,
+    );
+  });
+
   it("still counts profile-wide disables for other models", () => {
     const now = 1_700_000_000_000;
     const store = makeStore({

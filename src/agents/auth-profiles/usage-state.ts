@@ -14,11 +14,14 @@ export function isAuthCooldownBypassedForProvider(provider: string | undefined):
 }
 
 // Per-attempt transient failures (#87462): block only the failing model so
-// fallback models on the same auth profile can still try. Other reasons (auth,
-// billing, format, server_error) remain profile-wide.
+// fallback models on the same auth profile can still try. A model_not_found
+// failure proves only that one model id is unavailable on the provider, so it
+// must not take down a healthy sibling fallback model sharing the profile
+// (#116464). Other reasons (auth, billing, format, server_error) remain
+// profile-wide.
 /** Returns true when a failure should only cool down the failing model. */
 export function isModelScopedCooldownReason(reason: AuthProfileFailureReason | undefined): boolean {
-  return reason === "rate_limit" || reason === "timeout";
+  return reason === "rate_limit" || reason === "timeout" || reason === "model_not_found";
 }
 
 /** Resolves the latest active blocked/cooldown/disabled timestamp for a profile. */

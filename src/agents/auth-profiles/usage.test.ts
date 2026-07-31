@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
-import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
+import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { resolveProfileUnusableUntil } from "./usage-state.js";
 import {
   clearAuthProfileCooldown,
@@ -296,6 +296,38 @@ describe("isProfileInCooldown", () => {
     expect(isProfileInCooldown(store, "google:default", undefined, "gemini-3.1-flash-lite")).toBe(
       true,
     );
+  });
+
+  it("returns false for a different model when cooldown is model-scoped (model_not_found) — #116464", () => {
+    const store = makeStore({
+      "github-copilot:github": {
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "model_not_found",
+        cooldownModel: "claude-sonnet-4.6",
+      },
+    });
+    // A healthy sibling model sharing the profile bypasses the cooldown
+    expect(isProfileInCooldown(store, "github-copilot:github", undefined, "gpt-4.1")).toBe(false);
+    // Same model stays blocked
+    expect(
+      isProfileInCooldown(store, "github-copilot:github", undefined, "claude-sonnet-4.6"),
+    ).toBe(true);
+    // No model specified — blocked (conservative)
+    expect(isProfileInCooldown(store, "github-copilot:github")).toBe(true);
+  });
+
+  it("returns true for all models when model_not_found cooldownModel is undefined (profile-wide)", () => {
+    const store = makeStore({
+      "github-copilot:github": {
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "model_not_found",
+        cooldownModel: undefined,
+      },
+    });
+    expect(isProfileInCooldown(store, "github-copilot:github", undefined, "gpt-4.1")).toBe(true);
+    expect(
+      isProfileInCooldown(store, "github-copilot:github", undefined, "claude-sonnet-4.6"),
+    ).toBe(true);
   });
 
   it("does not bypass model-scoped cooldown when disabledUntil is active", () => {
@@ -1606,6 +1638,7 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
     store: ReturnType<typeof makeStoreWithCopilot>;
     now: number;
     modelId?: string;
+    reason?: AuthProfileFailureReason;
   }): Promise<void> {
     vi.useFakeTimers();
     vi.setSystemTime(params.now);
@@ -1614,7 +1647,7 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
       await markAuthProfileFailure({
         store: params.store,
         profileId: "github-copilot:github",
-        reason: "rate_limit",
+        reason: params.reason ?? "rate_limit",
         modelId: params.modelId,
       });
     } finally {
@@ -1730,6 +1763,61 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
     // Even same-model auth failure should clear model scope (auth is profile-wide)
     expect(stats?.cooldownReason).toBe("auth");
     expect(stats?.cooldownModel).toBeUndefined();
+  });
+
+  it("records cooldownModel on first model_not_found failure", async () => {
+    const now = 1_000_000;
+    const store = makeStoreWithCopilot({});
+    await markFailure({ store, now, modelId: "claude-sonnet-4.6", reason: "model_not_found" });
+    const stats = store.usageStats?.["github-copilot:github"];
+    expect(stats?.cooldownReason).toBe("model_not_found");
+    expect(stats?.cooldownModel).toBe("claude-sonnet-4.6");
+  });
+
+  it("keeps model_not_found cooldown model-scoped when the same model fails again", async () => {
+    const now = 1_000_000;
+    const store = makeStoreWithCopilot({
+      "github-copilot:github": {
+        cooldownUntil: now + 30_000,
+        cooldownReason: "model_not_found",
+        cooldownModel: "claude-sonnet-4.6",
+        errorCount: 1,
+        lastFailureAt: now - 1000,
+      },
+    });
+    await markFailure({ store, now, modelId: "claude-sonnet-4.6", reason: "model_not_found" });
+    const stats = store.usageStats?.["github-copilot:github"];
+    expect(stats?.cooldownReason).toBe("model_not_found");
+    expect(stats?.cooldownModel).toBe("claude-sonnet-4.6");
+  });
+
+  it("widens model_not_found cooldown when a different model fails during active window", async () => {
+    const now = 1_000_000;
+    const store = makeStoreWithCopilot({
+      "github-copilot:github": {
+        cooldownUntil: now + 30_000,
+        cooldownReason: "model_not_found",
+        cooldownModel: "claude-sonnet-4.6",
+        errorCount: 1,
+        lastFailureAt: now - 1000,
+      },
+    });
+    await markFailure({ store, now, modelId: "gpt-4.1", reason: "model_not_found" });
+    const stats = store.usageStats?.["github-copilot:github"];
+    expect(stats?.cooldownReason).toBe("model_not_found");
+    expect(stats?.cooldownModel).toBeUndefined();
+  });
+
+  it("keeps a healthy sibling model available after a model_not_found failure on a shared profile", async () => {
+    const now = 1_000_000;
+    const store = makeStoreWithCopilot({});
+    await markFailure({ store, now, modelId: "claude-sonnet-4.6", reason: "model_not_found" });
+    // Same model stays blocked, but a sibling fallback on the same profile is
+    // still available — the reported #116464 fallback scenario.
+    expect(isProfileInCooldown(store, "github-copilot:github", now, "claude-sonnet-4.6")).toBe(
+      true,
+    );
+    expect(isProfileInCooldown(store, "github-copilot:github", now, "gpt-4.1")).toBe(false);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
