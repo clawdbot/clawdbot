@@ -169,6 +169,56 @@ describe("createTypingCallbacks", () => {
     });
   });
 
+  it("preserves the existing keepalive cadence when an active reply starts again", async () => {
+    await withFakeTimers(async () => {
+      const { start, callbacks } = createTypingHarness({ keepaliveIntervalMs: 4_000 });
+
+      await callbacks.onReplyStart();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await callbacks.onReplyStart();
+      expect(start).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(start).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it("keeps coalesced typing alive beyond 60 seconds while the same task refreshes it", async () => {
+    await withFakeTimers(async () => {
+      vi.setSystemTime(0);
+      const acceptedStarts: number[] = [];
+      const { callbacks } = createTypingHarness({
+        keepaliveIntervalMs: 4_000,
+        maxDurationMs: 0,
+        start: async () => {
+          const now = Date.now();
+          const previous = acceptedStarts.at(-1);
+          if (previous !== undefined && now - previous < 4_000) {
+            return;
+          }
+          acceptedStarts.push(now);
+        },
+      });
+
+      await callbacks.onReplyStart();
+      for (let elapsedMs = 6_000; elapsedMs <= 132_000; elapsedMs += 6_000) {
+        await vi.advanceTimersByTimeAsync(6_000);
+        await callbacks.onReplyStart();
+      }
+
+      expect(acceptedStarts.at(-1)).toBeGreaterThan(120_000);
+      for (let index = 1; index < acceptedStarts.length; index += 1) {
+        expect(acceptedStarts[index]! - acceptedStarts[index - 1]!).toBeLessThanOrEqual(4_000);
+      }
+
+      callbacks.onIdle?.();
+      const countAtTaskCompletion = acceptedStarts.length;
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(acceptedStarts).toHaveLength(countAtTaskCompletion);
+    });
+  });
+
   it("stops keepalive after consecutive start failures", async () => {
     await withFakeTimers(async () => {
       const { start, onStartError, callbacks } = createTypingHarness({
