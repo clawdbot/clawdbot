@@ -253,10 +253,7 @@ describe("node host MCP manager", () => {
     );
 
     expect(client.listTools).toHaveBeenCalledTimes(2);
-    expect(client.listTools.mock.calls.map((call) => call[0])).toEqual([
-      undefined,
-      { cursor: "" },
-    ]);
+    expect(client.listTools.mock.calls.map((call) => call[0])).toEqual([undefined, { cursor: "" }]);
     expect(manager.descriptors.map((descriptor) => descriptor.mcp?.tool)).toEqual([
       "first",
       "second",
