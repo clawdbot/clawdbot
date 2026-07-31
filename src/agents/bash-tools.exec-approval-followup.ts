@@ -96,7 +96,9 @@ function buildExecApprovalFollowupPrompt(resultText: string): string {
     "Only ask the user for help if you are actually blocked.",
     "",
     "Exact completion details:",
-    trimmed,
+    // Raw, not trimmed: trailing newlines, tabs, and indentation are part of the command
+    // output the agent has to work from.
+    trimmed ? resultText : "",
     "",
     "Continue the task if needed, then reply to the user in a helpful way.",
     "If it succeeded, share the relevant output.",
@@ -331,11 +333,14 @@ export async function sendExecApprovalFollowup(
   params: ExecApprovalFollowupParams,
 ): Promise<boolean> {
   const sessionKey = params.sessionKey?.trim();
-  const resultText = params.resultText.trim();
-  if (!resultText) {
+  // Trimmed text only classifies empty/denied results; the raw text is what reaches the
+  // agent so command whitespace survives the follow-up.
+  const trimmedResultText = params.resultText.trim();
+  if (!trimmedResultText) {
     return false;
   }
-  const isDenied = isExecDeniedResultText(resultText);
+  const resultText = params.resultText;
+  const isDenied = isExecDeniedResultText(trimmedResultText);
 
   const deliveryTarget = resolveExternalBestEffortDeliveryTarget({
     channel: params.turnSourceChannel,
