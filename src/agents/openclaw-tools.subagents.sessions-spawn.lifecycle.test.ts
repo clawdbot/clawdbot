@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -227,6 +228,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     await bundleMcpRuntimeTesting.resetSessionMcpRuntimeManager();
     restoreSessionStorePath?.();
     restoreSessionStorePath = undefined;
+    closeOpenClawAgentDatabasesForTest();
     await testState?.cleanup();
     testState = undefined;
   });

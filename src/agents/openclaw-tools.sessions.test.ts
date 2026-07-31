@@ -11,6 +11,7 @@ import {
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { createSessionVisibilityChecker } from "../plugin-sdk/session-visibility.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   createOpenClawTestState,
@@ -270,6 +271,7 @@ describe("sessions tools", () => {
   });
 
   afterEach(async () => {
+    closeOpenClawAgentDatabasesForTest();
     await sessionsListTestState?.cleanup();
     sessionsListTestState = undefined;
   });
