@@ -627,7 +627,9 @@ export function resolvePackageSetupSource(params: {
     runtimeEntryPath: normalizeOptionalString(packageManifest?.runtimeSetupEntry),
     runtimeEntryLabel: "runtime setup entry",
     pluginIdHint:
-      params.pluginIdHint ?? packageManifest?.plugin?.id ?? packageManifest?.channel?.id,
+      params.pluginIdHint ??
+      normalizeOptionalString(packageManifest?.plugin?.id) ??
+      normalizeOptionalString(packageManifest?.channel?.id),
     origin: params.origin,
     ...(params.requireBuiltRuntimeEntry !== undefined
       ? { requireBuiltRuntimeEntry: params.requireBuiltRuntimeEntry }

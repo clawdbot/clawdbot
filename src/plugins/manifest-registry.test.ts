@@ -690,6 +690,34 @@ describe("loadPluginManifestRegistry", () => {
     ]);
   });
 
+  it("keeps configured same-name default-entry manifest failures distinct by full root", () => {
+    const root = makeTempDir();
+    const candidates = ["first", "second"].map((parent) => {
+      const rootDir = path.join(root, parent, "plugin");
+      mkdirSafe(rootDir);
+      fs.writeFileSync(path.join(rootDir, "openclaw.plugin.json"), '{"id":', "utf-8");
+      writeTextFile(rootDir, "index.js", "export default {};");
+      return createPluginCandidate({
+        idHint: "index",
+        rootDir,
+        sourceName: "index.js",
+        origin: "config",
+      });
+    });
+
+    const registry = loadRegistry(candidates);
+
+    expect(registry.diagnostics).toEqual(
+      candidates.map((candidate) =>
+        expect.objectContaining({
+          level: "error",
+          pluginId: "index",
+          source: path.join(candidate.rootDir, "openclaw.plugin.json"),
+        }),
+      ),
+    );
+  });
+
   it("lets config-loaded plugins replace bundled duplicates", () => {
     const bundledDir = makeTempDir();
     const configDir = makeTempDir();

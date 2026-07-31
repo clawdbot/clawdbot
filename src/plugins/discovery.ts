@@ -5,6 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
@@ -71,6 +72,7 @@ registerPluginMetadataProcessMemoLifecycleClear(() => {
 /** One potential plugin root discovered before manifest validation and registry normalization. */
 export type PluginCandidate = {
   idHint: string;
+  diagnosticIdHint?: string;
   source: string;
   setupSource?: string;
   rootDir: string;
@@ -651,33 +653,20 @@ function deriveIdHint(params: {
   filePath: string;
   manifestId?: string;
   packageName?: string;
+  fallbackId: string;
   hasMultipleExtensions: boolean;
 }): string {
   const base = path.basename(params.filePath, path.extname(params.filePath));
-  const rawManifestId = params.manifestId?.trim();
-  if (rawManifestId) {
-    return params.hasMultipleExtensions ? `${rawManifestId}/${base}` : rawManifestId;
-  }
-  const normalizedPackageId = derivePackagePluginIdHint({ packageName: params.packageName });
-  if (!normalizedPackageId) {
-    return base;
-  }
-
-  if (!params.hasMultipleExtensions) {
-    return normalizedPackageId;
-  }
-  return `${normalizedPackageId}/${base}`;
+  // Channel ids own transport diagnostics; package candidates retain their shipped plugin identity.
+  const pluginId =
+    normalizeOptionalString(params.manifestId) ??
+    derivePackagePluginIdHint(params.packageName) ??
+    params.fallbackId;
+  return params.hasMultipleExtensions ? `${pluginId}/${base}` : pluginId;
 }
 
-function derivePackagePluginIdHint(params: {
-  manifestId?: string;
-  packageName?: string;
-}): string | undefined {
-  const rawManifestId = params.manifestId?.trim();
-  if (rawManifestId) {
-    return rawManifestId;
-  }
-  const rawPackageName = params.packageName?.trim();
+function derivePackagePluginIdHint(packageName: unknown): string | undefined {
+  const rawPackageName = normalizeOptionalString(packageName);
   if (!rawPackageName) {
     return undefined;
   }
@@ -691,7 +680,7 @@ function derivePackagePluginIdHint(params: {
       return unscoped.slice(0, -suffix.length);
     }
   }
-  return unscoped;
+  return normalizeOptionalString(unscoped);
 }
 
 function pushInvalidPackageExtensionDiagnostic(params: {
@@ -742,6 +731,7 @@ function addCandidate(params: {
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
   idHint: string;
+  diagnosticIdHint?: string;
   source: string;
   setupSource?: string;
   rootDir: string;
@@ -788,6 +778,9 @@ function addCandidate(params: {
   });
   params.candidates.push({
     idHint: params.idHint,
+    ...(params.diagnosticIdHint && params.diagnosticIdHint !== params.idHint
+      ? { diagnosticIdHint: params.diagnosticIdHint }
+      : {}),
     source: resolved,
     setupSource: params.setupSource,
     rootDir: resolvedRoot,
@@ -892,7 +885,8 @@ function addLegacyNpmDeclarationDiagnostic(params: {
 
 function shouldSkipIncompatiblePackagePluginApi(params: {
   origin: PluginOrigin;
-  manifest: PackageManifest | null;
+  packageManifest: OpenClawPackageManifest | undefined;
+  pluginId: string;
   packageDir: string;
   env: NodeJS.ProcessEnv;
   diagnostics: PluginDiagnostic[];
@@ -900,17 +894,13 @@ function shouldSkipIncompatiblePackagePluginApi(params: {
   if (params.origin === "bundled") {
     return false;
   }
-  const packageManifest = getPackageManifestMetadata(params.manifest ?? undefined);
-  const packagePluginApiRangeCheck = resolvePackagePluginApiRange(packageManifest);
+  const packagePluginApiRangeCheck = resolvePackagePluginApiRange(params.packageManifest);
   if (!packagePluginApiRangeCheck.ok) {
-    const pluginId =
-      normalizeOptionalString(packageManifest?.plugin?.id) ??
-      derivePackagePluginIdHint({ packageName: params.manifest?.name });
     params.diagnostics.push({
       level: "warn",
       source: path.join(params.packageDir, "package.json"),
       message: `invalid package plugin API metadata: ${packagePluginApiRangeCheck.error}; skipping discovery (check package.json openclaw.compat.pluginApi)`,
-      ...(pluginId ? { pluginId } : {}),
+      pluginId: params.pluginId,
     });
     return true;
   }
@@ -922,14 +912,11 @@ function shouldSkipIncompatiblePackagePluginApi(params: {
   if (satisfiesPluginApiRange(compatibilityHostVersion, packagePluginApiRange)) {
     return false;
   }
-  const pluginId =
-    normalizeOptionalString(packageManifest?.plugin?.id) ??
-    derivePackagePluginIdHint({ packageName: params.manifest?.name });
   params.diagnostics.push({
     level: "warn",
     source: path.join(params.packageDir, "package.json"),
     message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${compatibilityHostVersion}; skipping discovery (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")`,
-    ...(pluginId ? { pluginId } : {}),
+    pluginId: params.pluginId,
   });
   return true;
 }
@@ -974,10 +961,20 @@ function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolea
     packageManifestCache: params.packageManifestCache,
   });
   const packageMetadata = getPackageManifestMetadata(manifest ?? undefined);
+  // Compatibility can return early, so resolve one canonical diagnostic owner before every check.
+  const candidateManifest = resolveCandidateManifest(dir, rejectHardlinks, rootRealPath);
+  const manifestId = candidateManifest?.manifest.id;
+  const pluginIdHint =
+    normalizeOptionalString(manifestId) ??
+    normalizeOptionalString(packageMetadata?.plugin?.id) ??
+    normalizeOptionalString(packageMetadata?.channel?.id) ??
+    derivePackagePluginIdHint(manifest?.name) ??
+    path.basename(dir);
   if (
     shouldSkipIncompatiblePackagePluginApi({
       origin: params.origin,
-      manifest,
+      packageManifest: packageMetadata,
+      pluginId: pluginIdHint,
       packageDir: dir,
       env: params.env,
       diagnostics: params.diagnostics,
@@ -985,16 +982,6 @@ function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolea
   ) {
     return true;
   }
-  const candidateManifest = resolveCandidateManifest(dir, rejectHardlinks, rootRealPath);
-  const manifestId = candidateManifest?.manifest.id;
-  const explicitPluginId =
-    normalizeOptionalString(manifestId) ??
-    normalizeOptionalString(packageMetadata?.plugin?.id) ??
-    normalizeOptionalString(packageMetadata?.channel?.id);
-  const pluginIdHint = derivePackagePluginIdHint({
-    manifestId: explicitPluginId,
-    packageName: manifest?.name,
-  });
   const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
   if (
     pushInvalidPackageExtensionDiagnostic({
@@ -1024,6 +1011,7 @@ function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolea
       diagnostics: params.diagnostics,
       seen: params.seen,
       idHint,
+      diagnosticIdHint: pluginIdHint,
       source,
       ...(setupSource ? { setupSource } : {}),
       rootDir: dir,
@@ -1056,8 +1044,9 @@ function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolea
         source,
         deriveIdHint({
           filePath: source,
-          manifestId,
+          manifestId: manifestId ?? normalizeOptionalString(packageMetadata?.plugin?.id),
           packageName: manifest?.name,
+          fallbackId: path.basename(dir),
           hasMultipleExtensions: extensions.length > 1,
         }),
       );
@@ -1124,7 +1113,9 @@ function discoverInDirectory(params: {
   }
   let entries: fs.Dirent[];
   try {
-    entries = fs.readdirSync(params.dir, { withFileTypes: true });
+    entries = fs
+      .readdirSync(params.dir, { withFileTypes: true })
+      .toSorted((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
   } catch (err) {
     params.diagnostics.push({
       level: "warn",
@@ -1235,10 +1226,12 @@ function readChildDirectoryNames(dir: string | undefined): Set<string> {
   }
   try {
     return new Set(
-      fs
-        .readdirSync(dir, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => entry.name),
+      sortUniqueStrings(
+        fs
+          .readdirSync(dir, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => entry.name),
+      ),
     );
   } catch {
     return new Set();
