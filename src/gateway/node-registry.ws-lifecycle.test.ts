@@ -1,8 +1,9 @@
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocket, WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { setActiveNodeContext } from "../infra/active-node-context.js";
+import { rawDataToString } from "../infra/ws.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -15,7 +16,7 @@ function createNodeClient(socket: WebSocket): GatewayWsClient {
       minProtocol: 1,
       maxProtocol: 1,
       client: {
-        id: "openclaw-runtime-proof",
+        id: "openclaw-linux",
         version: "1.0.0",
         platform: "linux",
         mode: "node",
@@ -47,7 +48,7 @@ describe("NodeRegistry real WebSocket lifecycle", () => {
     await once(peer, "open");
     const [socket] = (await accepted) as [WebSocket];
     const frames: string[] = [];
-    peer.on("message", (data) => frames.push(data.toString()));
+    peer.on("message", (data: RawData) => frames.push(rawDataToString(data)));
     const registry = new NodeRegistry();
     registry.register(createNodeClient(socket), { pairingIdentity: "runtime-proof-pairing" });
 
