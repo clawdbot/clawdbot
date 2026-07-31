@@ -13,7 +13,10 @@ import {
   type OpenClawConfig,
   type SecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
-import { selectPreferredLocalModelId } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  type ModelProviderConfig,
+  selectPreferredLocalModelId,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { applyProviderDefaultModel } from "openclaw/plugin-sdk/provider-setup";
 import { resolveLlamaServerProviderHeaders, resolveLlamaServerRuntimeApiKey } from "./auth.js";
 import {
@@ -53,13 +56,32 @@ function describeDiscoveryFailure(
   }
 }
 
+function stripAuthorizationHeader(
+  provider: ModelProviderConfig | undefined,
+): ModelProviderConfig | undefined {
+  if (!provider?.headers) {
+    return provider;
+  }
+  const headers = Object.fromEntries(
+    Object.entries(provider.headers).filter(([name]) => name.toLowerCase() !== "authorization"),
+  );
+  return {
+    ...provider,
+    headers: Object.keys(headers).length > 0 ? headers : undefined,
+  };
+}
+
 function buildSetupResult(params: {
   config: OpenClawConfig;
   discovery: Extract<LlamaServerDiscoveryResult, { kind: "success" }>;
   modelId: string;
   credentialInput?: SecretInput;
+  useApiKey?: boolean;
 }): ProviderAuthResult {
-  const existingProvider = params.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
+  const configuredProvider = params.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
+  const existingProvider = params.useApiKey
+    ? stripAuthorizationHeader(configuredProvider)
+    : configuredProvider;
   return {
     profiles: params.credentialInput
       ? [
@@ -236,6 +258,7 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
     discovery,
     modelId,
     credentialInput,
+    useApiKey: Boolean(apiKey),
   });
 }
 
@@ -303,7 +326,10 @@ export async function configureLlamaServerNonInteractive(
   if (!validated) {
     return null;
   }
-  const existingProvider = ctx.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
+  const configuredProvider = ctx.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
+  const existingProvider = validated.resolvedApiKey
+    ? stripAuthorizationHeader(configuredProvider)
+    : configuredProvider;
   const providerConfig = buildLlamaServerProviderConfig({
     configured: {
       ...existingProvider,

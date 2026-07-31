@@ -159,7 +159,17 @@ describe("llama-server setup", () => {
       confirm: vi.fn(async () => true),
     };
     const result = await runLlamaServerSetup({
-      config: {},
+      config: {
+        models: {
+          providers: {
+            "llama-server": {
+              baseUrl: "http://localhost:8080/v1",
+              headers: { authorization: "Bearer stale-key", "X-Tenant": "one" },
+              models: [],
+            },
+          },
+        },
+      },
       env: {},
       prompter,
       runtime: runtime(),
@@ -182,6 +192,9 @@ describe("llama-server setup", () => {
     expect(discoverMock).toHaveBeenCalledWith(
       expect.objectContaining({ apiKey: "secret-key", cacheTtlMs: 0 }),
     );
+    expect(result.configPatch?.models?.providers?.[LLAMA_SERVER_PROVIDER_ID]?.headers).toEqual({
+      "X-Tenant": "one",
+    });
   });
 
   it("validates and configures non-interactively without requiring an API key", async () => {
@@ -201,6 +214,34 @@ describe("llama-server setup", () => {
     expect(configured?.agents?.defaults?.model).toEqual(
       expect.objectContaining({ primary: "llama-server/qwen/model:Q4_K_M" }),
     );
+  });
+
+  it("removes stale Authorization when non-interactive setup selects an API key", async () => {
+    discoverMock.mockResolvedValue(successfulDiscovery());
+    const ctx = nonInteractiveContext({ llamaServerApiKey: "new-key" });
+    ctx.config = {
+      models: {
+        providers: {
+          "llama-server": {
+            baseUrl: "http://localhost:8080/v1",
+            headers: { Authorization: "Bearer stale-key", "X-Tenant": "one" },
+            models: [],
+          },
+        },
+      },
+    };
+    ctx.resolveApiKey = vi.fn(async () => ({ key: "new-key", source: "flag" as const }));
+    ctx.toApiKeyCredential = vi.fn(() => ({
+      type: "api_key" as const,
+      provider: LLAMA_SERVER_PROVIDER_ID,
+      key: "new-key",
+    }));
+
+    const configured = await configureLlamaServerNonInteractive(ctx);
+
+    expect(configured?.models?.providers?.[LLAMA_SERVER_PROVIDER_ID]?.headers).toEqual({
+      "X-Tenant": "one",
+    });
   });
 
   it("rejects a requested model absent from discovery", async () => {

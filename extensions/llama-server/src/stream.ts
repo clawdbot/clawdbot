@@ -21,7 +21,7 @@ export function normalizeLlamaServerPayload(
   if (!responseFormat) {
     return payload;
   }
-  if (responseFormat.type === "json_object" || responseFormat.type === "text") {
+  if (responseFormat.type === "text") {
     return { ...payload, response_format: responseFormat };
   }
   const schema =
@@ -29,16 +29,16 @@ export function normalizeLlamaServerPayload(
       ? isRecord(responseFormat.json_schema)
         ? responseFormat.json_schema.schema
         : responseFormat.schema
-      : responseFormat;
+      : responseFormat.type === "json_object"
+        ? responseFormat.schema
+        : responseFormat;
   if (!isRecord(schema)) {
     return payload;
   }
+  const { response_format: _responseFormat, ...rest } = payload;
   return {
-    ...payload,
-    response_format: {
-      type: "json_schema",
-      schema,
-    },
+    ...rest,
+    json_schema: schema,
   };
 }
 
