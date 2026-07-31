@@ -26,7 +26,7 @@ const PROOF_CONVERSATION_ID = "1000000001";
 const PROOF_TELEGRAM_TOKEN = "123456:proof-only-not-a-real-token";
 const PROOF_ACP_AGENT = "main";
 
-export type AdapterEvent = {
+type AdapterEvent = {
   at: string;
   event: string;
   instanceId: string;
@@ -38,7 +38,7 @@ export type AdapterEvent = {
   [key: string]: unknown;
 };
 
-export type RuntimeIdentity = {
+type RuntimeIdentity = {
   instanceId: string;
   sessionId: string;
 };

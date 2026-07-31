@@ -63,6 +63,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/fixtures/ts-topology/basic/**/*.{js,mjs,cjs,ts,mts,cts}!",
   // The focused Oxlint test invokes these deliberate violations by path.
   "test/fixtures/oxlint-boundary-guards/*.ts!",
+  // The ACP reset proof spawns this adapter by path from the proof driver.
+  "test/fixtures/acp-reset-timeout-adapter.ts!",
 ] as const;
 
 const workspaces = Object.fromEntries(
