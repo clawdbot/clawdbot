@@ -125,7 +125,9 @@ import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbo
 import {
   beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery,
+  isCurrentSourceReplyActionName,
   isDeliveredCurrentSourceReply,
+  isDeliveredCurrentSourceReplyAction,
   reconcileTerminalSourceReplyDelivery,
 } from "./source-reply-mirror.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
@@ -293,26 +295,35 @@ function markDeliveredCurrentSourceReply<T extends MessageActionRunResult>(
 ): T {
   // Current-source identity comes from the authorized route and delivery receipt,
   // not the reply mode; automatic runs also use this marker to avoid false fallbacks.
-  if (result.kind !== "send") {
+  // Reply-type actions are visible source replies too: leaving them unmarked made
+  // dispatch send the no-visible-reply fallback after a delivered reply.
+  const isReplyActionResult =
+    result.kind === "action" && isCurrentSourceReplyActionName(result.action);
+  if (result.kind !== "send" && !isReplyActionResult) {
     return result;
   }
   const authorization = params.input.messageActionAuthorization;
+  if (!authorization?.toolContext) {
+    return result;
+  }
+  const mirrorParams = {
+    action: isReplyActionResult ? result.action : "send",
+    channel: params.channel,
+    actionParams: params.actionParams,
+    cfg: params.cfg,
+    accountId: params.accountId,
+    currentAccountId: authorization.requesterAccountId ?? params.input.defaultAccountId,
+    sessionKey: params.input.sessionKey,
+    sessionId: params.input.sessionId,
+    agentId: params.agentId,
+    toolContext: authorization.toolContext,
+    deliveredPayload: result.payload,
+    replyToIsExplicit: params.replyToIsExplicit,
+  };
   if (
-    !authorization?.toolContext ||
-    !isDeliveredCurrentSourceReply({
-      action: "send",
-      channel: params.channel,
-      actionParams: params.actionParams,
-      cfg: params.cfg,
-      accountId: params.accountId,
-      currentAccountId: authorization.requesterAccountId ?? params.input.defaultAccountId,
-      sessionKey: params.input.sessionKey,
-      sessionId: params.input.sessionId,
-      agentId: params.agentId,
-      toolContext: authorization.toolContext,
-      deliveredPayload: result.payload,
-      replyToIsExplicit: params.replyToIsExplicit,
-    })
+    isReplyActionResult
+      ? !isDeliveredCurrentSourceReplyAction(mirrorParams)
+      : !isDeliveredCurrentSourceReply(mirrorParams)
   ) {
     return result;
   }
@@ -1820,6 +1831,16 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     throw new Error(`Channel ${channel} is unavailable for message actions (plugin not loaded).`);
   }
 
+  // Plugin actions bypass buildSendPayloadParts, so model-authored text here
+  // never crossed the outbound text hygiene sends get: reply/edit deliveries
+  // leaked raw citation control markers to end users.
+  const rawActionMessage = params.message;
+  if (typeof rawActionMessage === "string" && rawActionMessage) {
+    params.message = stripPlainTextToolCallBlocks(
+      stripUnsupportedCitationControlMarkers(rawActionMessage),
+    );
+  }
+
   // Plugin actions bypass send/poll, so inherit thread metadata before either
   // gateway or local dispatch to keep both execution modes on the same topic.
   const targetForThreading =
@@ -1856,9 +1877,18 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
       dryRun,
     }),
   });
+  const replyToIsExplicit = Boolean(readStringParam(params, "replyTo"));
   if (gatewayPluginAction) {
     // Gateway-owned actions must execute where the live channel runtime exists.
-    return gatewayPluginAction;
+    return markDeliveredCurrentSourceReply(gatewayPluginAction, {
+      cfg,
+      actionParams: params,
+      channel,
+      accountId,
+      input,
+      agentId,
+      replyToIsExplicit,
+    });
   }
 
   const authorization = input.messageActionAuthorization;
@@ -1892,15 +1922,26 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
   if (!handled) {
     throw new Error(`Message action ${action} not supported for channel ${channel}.`);
   }
-  return {
-    kind: "action",
-    channel,
-    action,
-    handledBy: "plugin",
-    payload: extractToolPayload(handled),
-    toolResult: handled,
-    dryRun,
-  };
+  return markDeliveredCurrentSourceReply(
+    {
+      kind: "action",
+      channel,
+      action,
+      handledBy: "plugin",
+      payload: extractToolPayload(handled),
+      toolResult: handled,
+      dryRun,
+    },
+    {
+      cfg,
+      actionParams: params,
+      channel,
+      accountId,
+      input,
+      agentId,
+      replyToIsExplicit,
+    },
+  );
 }
 
 export async function runMessageAction(
