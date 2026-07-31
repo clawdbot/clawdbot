@@ -27,6 +27,7 @@ import {
   inspectPortUsage,
   killProcessTree,
   resetSchtasksBaseMocks,
+  schtasksCalls,
   schtasksResponses,
   withWindowsEnv,
   writeGatewayScript,
@@ -755,10 +756,18 @@ describe("Windows startup fallback", () => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
       await writeGatewayScript(env);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
+      let portInspections = 0;
       inspectPortUsage.mockImplementation(async (port) => {
         schtasksResponses.length = 0;
         schtasksResponses.push({ code: 1, stdout: "", stderr: "restart denied" });
-        return { port, status: "free", listeners: [], hints: [] };
+        return portInspections++ === 0
+          ? {
+              port,
+              status: "busy",
+              listeners: [{ pid: 4242, command: "node.exe" }],
+              hints: [],
+            }
+          : { port, status: "free", listeners: [], hints: [] };
       });
       addStartupFallbackMissingResponses([
         { code: 0, stdout: "", stderr: "" },
@@ -810,7 +819,9 @@ describe("Windows startup fallback", () => {
 
       await installGatewayScheduledTask(env, new PassThrough(), "19433");
 
-      expect(inspectPortUsage).toHaveBeenCalledWith(18789);
+      expect(inspectPortUsage).toHaveBeenCalledWith(18789, {
+        probeHosts: ["127.0.0.1"],
+      });
       expectGatewayTermination(4242);
       await expect(fs.access(startupEntryPath)).rejects.toThrow();
     });
@@ -1260,6 +1271,23 @@ describe("Windows startup fallback", () => {
       const startupEntryPath = await writeStartupFallbackEntry(hiddenEnv);
       await writeGatewayScript(hiddenEnv);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
+      inspectPortUsage.mockImplementation(async () =>
+        schtasksCalls.some((call) => call[0] === "/Run")
+          ? {
+              port: 18789,
+              status: "busy",
+              listeners: [
+                {
+                  pid: 4242,
+                  command: "node.exe",
+                  commandLine:
+                    '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port 18789',
+                },
+              ],
+              hints: [],
+            }
+          : { port: 18789, status: "free", listeners: [], hints: [] },
+      );
       addSuccessfulScheduledTaskRestartResponses(
         [cleanExitTaskQueryOutput()],
         cleanExitTaskQueryOutput(),
@@ -1408,7 +1436,24 @@ describe("Windows startup fallback", () => {
   it("does not fall back when a listener appears after the clean task exit", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       fastForwardTaskStartWait();
-      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockReturnValue([4242]);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
+      let portInspections = 0;
+      inspectPortUsage.mockImplementation(async (port) =>
+        portInspections++ === 0
+          ? { port, status: "free", listeners: [], hints: [] }
+          : {
+              port,
+              status: "busy",
+              listeners: [
+                {
+                  pid: 4242,
+                  command: "node.exe",
+                  commandLine: "node gateway.js --port 18789",
+                },
+              ],
+              hints: [],
+            },
+      );
       addAcceptedRunCleanExitResponses();
 
       await installGatewayScheduledTask(env);
@@ -1544,18 +1589,47 @@ describe("Windows startup fallback", () => {
     });
   });
 
-  it("reports a fallback-launched gateway as running even when schtasks still says not-yet-run", async () => {
+  it("does not attribute another gateway listener to the registered task", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       await writeGatewayScript(env);
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [
+          {
+            pid: 4242,
+            command: "node.exe",
+            commandLine:
+              '"C:\\Program Files\\nodejs\\node.exe" "C:\\other\\dist\\index.js" gateway --port 18789',
+          },
+        ],
+        hints: [],
+      });
+      spawnSync.mockImplementation((command, args) =>
+        command === getWindowsPowerShellExePath() &&
+        Array.isArray(args) &&
+        args.includes(NODE_PROCESS_QUERY)
+          ? makeSpawnSyncResult({
+              stdout: JSON.stringify([
+                {
+                  ProcessId: 4242,
+                  CommandLine:
+                    '"C:\\Program Files\\nodejs\\node.exe" "C:\\other\\dist\\index.js" gateway --port 18789',
+                },
+              ]),
+            })
+          : makeSpawnSyncResult(),
+      );
       schtasksResponses.push(
         { code: 0, stdout: "", stderr: "" },
         { code: 0, stdout: notYetRunTaskQueryOutput(), stderr: "" },
       );
 
       const runtime = await readScheduledTaskRuntime(env);
-      expect(runtime.status).toBe("running");
-      expect(runtime.pid).toBe(4242);
+      expect(runtime.status).toBe("stopped");
+      expect(runtime.pid).toBeUndefined();
       expect(runtime.state).toBe("Ready");
       expect(runtime.lastRunResult).toBe("267011");
     });

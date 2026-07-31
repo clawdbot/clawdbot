@@ -339,12 +339,14 @@ describe("bundled plugin build entries", () => {
     }
   });
 
-  it("keeps Cohere bundled through the externalization transition", () => {
+  it("excludes externalized Cohere and Meta providers from bundled artifacts", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
-    expect(artifacts).toContain("dist/extensions/cohere/index.js");
-    expect(artifacts).toContain("dist/extensions/cohere/openclaw.plugin.json");
-    expect(artifacts).toContain("dist/extensions/cohere/package.json");
+    for (const pluginId of ["cohere", "meta"]) {
+      expect(artifacts).not.toContain(`dist/extensions/${pluginId}/index.js`);
+      expect(artifacts).not.toContain(`dist/extensions/${pluginId}/openclaw.plugin.json`);
+      expect(artifacts).not.toContain(`dist/extensions/${pluginId}/package.json`);
+    }
   });
 
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {

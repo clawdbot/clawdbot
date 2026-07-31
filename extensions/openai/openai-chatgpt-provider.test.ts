@@ -85,6 +85,58 @@ describe("OpenAI provider Codex transport hooks", () => {
     });
   });
 
+  it("presents the OpenAI user code through structured device-code UI", async () => {
+    const provider = buildOpenAIProvider();
+    const deviceCodeMethod = provider.auth?.find((method) => method.id === "device-code");
+    const deviceCode = vi.fn(async () => {});
+    const note = vi.fn(async () => {});
+    const openUrl = vi.fn(async () => {});
+    loginOpenAICodexDeviceCodeMock.mockImplementationOnce(
+      async (params: {
+        onVerification: (prompt: {
+          verificationUrl: string;
+          userCode: string;
+          expiresInMs: number;
+        }) => Promise<void>;
+      }) => {
+        await params.onVerification({
+          verificationUrl: "https://auth.openai.com/codex/device",
+          userCode: "ABCD-EFGH",
+          expiresInMs: 15 * 60_000,
+        });
+        return {
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: 1_700_000_000_000,
+        };
+      },
+    );
+
+    await deviceCodeMethod?.run({
+      isRemote: true,
+      openUrl,
+      prompter: {
+        deviceCode,
+        note,
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+      runtime: { log: vi.fn(), error: vi.fn() },
+      config: {},
+      oauth: {},
+    } as never);
+
+    expect(deviceCode).toHaveBeenCalledWith({
+      title: "OpenAI Codex device code",
+      code: "ABCD-EFGH",
+      expiresInMinutes: 15,
+      message: [
+        "Open this URL in your LOCAL browser and enter the code below.",
+        "URL: https://auth.openai.com/codex/device",
+      ].join("\n"),
+    });
+    expect(note).not.toHaveBeenCalled();
+  });
+
   it("routes Codex-backed OpenAI models through the Codex Responses transport", () => {
     const provider = buildOpenAIProvider();
 
