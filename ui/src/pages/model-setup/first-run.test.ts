@@ -120,6 +120,8 @@ describe("model setup first-run redirect", () => {
       phase: "connected",
       client,
       hello: {
+        type: "hello-ok" as const,
+        protocol: 1,
         auth: { role: "operator", scopes: ["operator.admin"] },
         features: { methods: ["openclaw.setup.detect"] },
       },
@@ -167,6 +169,8 @@ describe("model setup first-run redirect", () => {
       phase: "connected",
       client,
       hello: {
+        type: "hello-ok" as const,
+        protocol: 1,
         auth: { role: "operator", scopes: ["operator.admin"] },
         features: { methods: ["openclaw.setup.detect"] },
       },
@@ -216,6 +220,8 @@ describe("model setup first-run redirect", () => {
     type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
     let listener: GatewayListener | null = null;
     const firstHello = {
+      type: "hello-ok" as const,
+      protocol: 1,
       auth: { role: "operator", scopes: ["operator.admin"] },
       features: { methods: ["openclaw.setup.detect"] },
     };
