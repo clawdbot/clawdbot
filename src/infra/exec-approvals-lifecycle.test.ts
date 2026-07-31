@@ -146,6 +146,7 @@ const mutationCases: Array<[string, string[]]> = [
     "launchctl unload ~/Library/LaunchAgents/com.openclaw.gateway.plist",
     ["launchctl", "unload", "~/Library/LaunchAgents/com.openclaw.gateway.plist"],
   ],
+  ["launchctl unload '*claw*.plist'", ["launchctl", "unload", "*claw*.plist"]],
   [
     "launchctl asuser 501 openclaw gateway restart",
     ["launchctl", "asuser", "501", "openclaw", "gateway", "restart"],
@@ -237,6 +238,14 @@ const mutationCases: Array<[string, string[]]> = [
   ],
   ["env -S 'openclaw gateway restart'", ["env", "-S", "openclaw gateway restart"]],
   ['sh -c "openclaw gateway restart"', ["sh", "-c", "openclaw gateway restart"]],
+  [
+    `cmd /c "for %X in (openclaw) do %X gateway restart"`,
+    ["cmd", "/c", "for %X in (openclaw) do %X gateway restart"],
+  ],
+  [
+    `powershell -Command '& ("open" + "claw") gateway restart'`,
+    ["powershell", "-Command", `& ("open" + "claw") gateway restart`],
+  ],
   ["sh -c 'X=1 openclaw gateway restart'", ["sh", "-c", "X=1 openclaw gateway restart"]],
   [
     "sh -c '(echo ok; openclaw gateway restart)'",

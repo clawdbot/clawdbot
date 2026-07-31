@@ -1,6 +1,9 @@
 // Resolves PowerShell Start-Process layouts that launch the OpenClaw CLI.
 import { splitShellArgs } from "../utils/shell-argv.js";
-import { isOpenClawExecutablePattern } from "./exec-approvals-lifecycle-patterns.js";
+import {
+  isOpenClawExecutablePattern,
+  matchesOpenClawProcessNamePattern,
+} from "./exec-approvals-lifecycle-patterns.js";
 import { splitLifecycleCommandText } from "./exec-approvals-lifecycle-shell.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 
@@ -95,8 +98,7 @@ function looksLikeOpenClawSelector(token: string, allowUnresolved: boolean): boo
     .replace(/\[([a-z0-9])\]/giu, "$1")
     .replace(/["']/gu, "");
   return (
-    normalized.includes("openclaw") ||
-    /opencla[?*]/u.test(normalized) ||
+    matchesOpenClawProcessNamePattern(normalized) ||
     (allowUnresolved && /\$env:[A-Za-z_][A-Za-z0-9_]*/iu.test(token))
   );
 }

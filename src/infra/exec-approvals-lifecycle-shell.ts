@@ -26,6 +26,34 @@ function unwrapCmdIfArgv(argv: readonly string[]): string[] {
   return stripBraceTokens(argv.slice(index));
 }
 
+/** Return true when a shell control construct hides a dynamic executable. */
+export function lifecycleControlArgvRequiresApproval(
+  argv: readonly string[],
+  dialect: LifecycleShellDialect,
+): boolean {
+  if (dialect !== "cmd" || (argv[0] ?? "").trim().toLowerCase() !== "for") {
+    return false;
+  }
+  const doIndex = argv.findIndex((token) => token.toLowerCase() === "do");
+  const inIndex = argv.findIndex((token) => token.toLowerCase() === "in");
+  if (doIndex === -1 || inIndex === -1) {
+    return false;
+  }
+  const variable = argv.slice(1, inIndex).find((token) => /^%%?[A-Za-z]$/u.test(token.trim()));
+  const commandArgv = stripBraceTokens(argv.slice(doIndex + 1));
+  return Boolean(variable && commandArgv[0]?.toLowerCase().includes(variable.trim().toLowerCase()));
+}
+
+/** Return true when PowerShell calculates an invocation target for a lifecycle-shaped command. */
+export function powerShellCalculatedInvocationRequiresApproval(command: string): boolean {
+  return (
+    /(?:^|[;|\n\r])\s*[&.]\s+[$(@[{\]]/u.test(command) &&
+    /\b(?:approvals|config|configure|daemon|exec-approvals|exec-policy|gateway|hooks|node|onboard|plugins|reset|setup|uninstall|update)\b/iu.test(
+      command,
+    )
+  );
+}
+
 /** Return the executable argv nested in a supported shell control construct. */
 export function unwrapLifecycleControlArgv(
   argv: readonly string[],

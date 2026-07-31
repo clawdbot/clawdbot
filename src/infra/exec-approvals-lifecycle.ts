@@ -20,6 +20,7 @@ import { resolveNodeOpenClawArgv } from "./exec-approvals-lifecycle-node.js";
 import {
   isOpenClawExecutablePattern,
   matchesOpenClawProcessPattern,
+  matchesOpenClawUnitPattern,
 } from "./exec-approvals-lifecycle-patterns.js";
 import {
   commandHasPowerShellLifecyclePipeline,
@@ -27,6 +28,8 @@ import {
 } from "./exec-approvals-lifecycle-powershell.js";
 import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-runners.js";
 import {
+  lifecycleControlArgvRequiresApproval,
+  powerShellCalculatedInvocationRequiresApproval,
   splitLifecycleInlineCommands,
   stripLifecyclePosixAssignments,
   unwrapLifecycleControlArgv,
@@ -147,7 +150,7 @@ function classifyLaunchctl(
   if (!LAUNCHCTL_MUTATIONS.has(action)) {
     return false;
   }
-  return argv.slice(actionIndex + 1).some(looksLikeOpenClaw);
+  return argv.slice(actionIndex + 1).some(matchesOpenClawUnitPattern);
 }
 
 function classifyServiceManager(argv: readonly string[]): boolean {
@@ -317,7 +320,14 @@ function classifyArgv(
   if (argv.length === 0) {
     return false;
   }
-  const controlArgv = unwrapLifecycleControlArgv(argv, shellContext ?? "posix");
+  const dialect = shellContext ?? "posix";
+  if (
+    lifecycleControlArgvRequiresApproval(argv, dialect) ||
+    (dialect === "powershell" && powerShellCalculatedInvocationRequiresApproval(raw))
+  ) {
+    return true;
+  }
+  const controlArgv = unwrapLifecycleControlArgv(argv, dialect);
   if (controlArgv) {
     return (
       controlArgv.length > 0 &&
@@ -404,6 +414,12 @@ function classifyArgv(
     const nestedEnvironment = environment
       ? { ...environment, shadowedKeys: nestedShadowedKeys }
       : undefined;
+    if (
+      nestedShellContext === "powershell" &&
+      powerShellCalculatedInvocationRequiresApproval(inline)
+    ) {
+      return true;
+    }
     if (
       nestedShellContext === "powershell" &&
       commandHasPowerShellLifecyclePipeline(

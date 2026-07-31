@@ -104,6 +104,10 @@ describe("OpenClaw PowerShell filter pipeline approvals", () => {
       "Get-Service | ? Name -Like 'openclaw*' | Restart-Service",
       ["Get-Service", "|", "?", "Name", "-Like", "openclaw*", "|", "Restart-Service"],
     ],
+    [
+      "Get-Process | Where-Object ProcessName -Like '*claw*' | Stop-Process",
+      ["Get-Process", "|", "Where-Object", "ProcessName", "-Like", "*claw*", "|", "Stop-Process"],
+    ],
   ] as Array<[string, string[]]>)("classifies filtered mutation: %s", (command, argv) => {
     expect(requiresApproval(command, argv)).toBe(true);
   });

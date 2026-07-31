@@ -85,6 +85,28 @@ export function isOpenClawExecutablePattern(value: string | undefined): boolean 
 
 /** Return true when a process selector regex or wildcard can select OpenClaw. */
 export function matchesOpenClawProcessPattern(value: string | undefined): boolean {
+  return matchesOpenClawProcessCandidates(value, [
+    ...OPENCLAW_PROCESS_NAME_CANDIDATES,
+    "openclaw gateway",
+    "/opt/openclaw",
+    "node /opt/openclaw/openclaw.mjs gateway",
+    "node /opt/openclaw/dist/entry.js gateway",
+    "node /opt/openclaw/dist/index.js gateway",
+    String.raw`node C:\Users\Alice\AppData\Roaming\npm\node_modules\openclaw\openclaw.mjs gateway`,
+  ]);
+}
+
+const OPENCLAW_PROCESS_NAME_CANDIDATES = [
+  "openclaw",
+  "openclaw.exe",
+  "openclaw.ps1",
+  "openclaw.mjs",
+] as const;
+
+function matchesOpenClawProcessCandidates(
+  value: string | undefined,
+  candidates: readonly string[],
+): boolean {
   const pattern = (value ?? "").trim().toLowerCase().replace(/["']/gu, "");
   if (!pattern) {
     return false;
@@ -94,18 +116,6 @@ export function matchesOpenClawProcessPattern(value: string | undefined): boolea
   if (pattern.includes("openclaw") || spellsOpenClaw.test(pattern)) {
     return true;
   }
-  const candidates = [
-    "openclaw",
-    "openclaw.exe",
-    "openclaw.ps1",
-    "openclaw.mjs",
-    "openclaw gateway",
-    "/opt/openclaw",
-    "node /opt/openclaw/openclaw.mjs gateway",
-    "node /opt/openclaw/dist/entry.js gateway",
-    "node /opt/openclaw/dist/index.js gateway",
-    String.raw`node C:\Users\Alice\AppData\Roaming\npm\node_modules\openclaw\openclaw.mjs gateway`,
-  ];
   if (
     /[*?[]/u.test(pattern) &&
     candidates.some((name) => globPatternToRegExp(pattern).test(name))
@@ -120,6 +130,11 @@ export function matchesOpenClawProcessPattern(value: string | undefined): boolea
   return candidates.some((name) => testRegexWithBoundedInput(compiled.regex, name));
 }
 
+/** Return true when a PowerShell process-name selector can select OpenClaw. */
+export function matchesOpenClawProcessNamePattern(value: string | undefined): boolean {
+  return matchesOpenClawProcessCandidates(value, OPENCLAW_PROCESS_NAME_CANDIDATES);
+}
+
 /** Return true when a system service/unit glob can select an OpenClaw unit. */
 export function matchesOpenClawUnitPattern(value: string | undefined): boolean {
   const pattern = (value ?? "").trim().toLowerCase().replace(/["']/gu, "");
@@ -128,8 +143,13 @@ export function matchesOpenClawUnitPattern(value: string | undefined): boolean {
   }
   return (
     /[*?[{]/u.test(pattern) &&
-    ["openclaw-gateway.service", "openclaw.service", "com.openclaw.gateway"].some((unit) =>
-      globPatternToRegExp(pattern).test(unit),
-    )
+    [
+      "openclaw-gateway.service",
+      "openclaw.service",
+      "com.openclaw.gateway",
+      "com.openclaw.gateway.plist",
+      "~/Library/LaunchAgents/com.openclaw.gateway.plist",
+      "/Users/alice/Library/LaunchAgents/com.openclaw.gateway.plist",
+    ].some((unit) => globPatternToRegExp(pattern).test(unit))
   );
 }
