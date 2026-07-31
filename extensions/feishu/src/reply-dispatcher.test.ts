@@ -1014,6 +1014,41 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("delegates overlapping snapshots directly to the streaming session", async () => {
+    let releaseFirstUpdate!: () => void;
+    const firstUpdate = new Promise<void>((resolve) => {
+      releaseFirstUpdate = resolve;
+    });
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: { renderMode: "card", streaming: true },
+    });
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.onReplyStart?.();
+    const streamingSession = requireStreamingInstance(0);
+    streamingSession.update.mockImplementationOnce((() => firstUpdate) as () => never);
+
+    result.replyOptions.onPartialReply?.({ text: "first" });
+    await vi.waitFor(() => {
+      expect(streamingSession.update).toHaveBeenCalledTimes(1);
+    });
+    result.replyOptions.onPartialReply?.({ text: "first second" });
+    result.replyOptions.onPartialReply?.({ text: "first second latest" });
+
+    await vi.waitFor(() => {
+      expect(streamingSession.update).toHaveBeenCalledTimes(3);
+    });
+    expect(streamingUpdateTexts()).toEqual(["first", "first second", "first second latest"]);
+
+    releaseFirstUpdate();
+    await options.onIdle?.();
+  });
+
   it("appends an independent error final without replacing the assistant answer", async () => {
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),

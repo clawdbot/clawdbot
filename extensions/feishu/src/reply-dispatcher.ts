@@ -319,7 +319,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
   const closedStreamingSettlements = new Map<number, ClosedStreamingSettlement>();
   let sentIndependentBlockText = false;
-  let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
   let streamingGeneration = 0;
   let activeStreamingGeneration: number | undefined;
@@ -379,7 +378,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     const session = streaming;
     const generation = activeStreamingGeneration;
     const startPromise = streamingStartPromise;
-    partialUpdateQueue = partialUpdateQueue.then(async () => {
+    void (async () => {
       if (startPromise) {
         await startPromise;
       }
@@ -388,6 +387,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (generation !== undefined && session?.isActive()) {
         await session.update(combined);
       }
+    })().catch((error: unknown) => {
+      params.runtime.error?.(
+        `feishu[${account.accountId}]: streaming update failed: ${String(error)}`,
+      );
     });
   };
 
@@ -501,7 +504,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     streaming = null;
     streamingStartPromise = null;
     activeStreamingGeneration = undefined;
-    partialUpdateQueue = Promise.resolve();
     streamText = "";
     lastPartial = "";
     reasoningText = "";
@@ -531,7 +533,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     const streamingToClose = streaming;
     const generationToClose = activeStreamingGeneration;
     const startPromiseToClose = streamingStartPromise;
-    const updateQueueToClose = partialUpdateQueue;
     const finalizedAnswerText = streamText;
     const finalizedReasoningText = reasoningText;
     // Seal this generation before provider I/O. Deliveries arriving during close were not part
@@ -543,7 +544,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (startPromiseToClose) {
         await startPromiseToClose;
       }
-      await updateQueueToClose;
       if (streamingToClose?.isActive()) {
         statusLine = "";
         const text = buildCombinedStreamText(finalizedReasoningText, finalizedAnswerText);
@@ -691,7 +691,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (streamingStartPromise) {
         await streamingStartPromise;
       }
-      await partialUpdateQueue;
       if (streaming?.isActive()) {
         await streaming.discard();
       }

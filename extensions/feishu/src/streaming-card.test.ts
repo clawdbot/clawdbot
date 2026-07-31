@@ -40,6 +40,14 @@ type StreamingRequest = {
   res: ServerResponse;
 };
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 const serverStops: Array<() => Promise<void>> = [];
 const HERMETIC_PUBLIC_LOOKUP_ADDRESS = "93.184.216.34";
 
@@ -562,6 +570,165 @@ describe("FeishuStreamingSession", () => {
       content: "hello!",
       sequence: 2,
       uuid: "s_card_2_2",
+    });
+  });
+
+  it("coalesces a blocked update burst to the latest pending snapshot", async () => {
+    const updateBodies: string[] = [];
+    const firstUpdateResponse = createDeferred<Response>();
+    const deps = createMemoryFetch((url, body) => {
+      if (url.pathname.includes("/auth/")) {
+        return jsonResponse({
+          code: 0,
+          msg: "ok",
+          tenant_access_token: "token",
+          expire: 7200,
+        });
+      }
+      if (url.pathname.includes("/elements/content/content")) {
+        updateBodies.push(body);
+        if (updateBodies.length === 1) {
+          return firstUpdateResponse.promise;
+        }
+      }
+      return jsonResponse({ code: 0, msg: "ok" });
+    });
+    const session = new FeishuStreamingSession(
+      {} as never,
+      { appId: "app_blocked_burst", appSecret: "secret" },
+      undefined,
+      deps,
+    );
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_blocked_burst",
+        messageId: "om_blocked_burst",
+        sequence: 1,
+        currentText: "",
+        sentText: "",
+        hasNote: false,
+      },
+      lastUpdateTime: 0,
+    });
+
+    const firstText = "first snapshot with enough content";
+    const middleText = `${firstText} and a stale middle snapshot`;
+    const latestText = `${middleText} followed by the latest complete snapshot`;
+    const firstPromise = session.update(firstText);
+    await vi.waitFor(() => expect(updateBodies).toHaveLength(1));
+    const middlePromise = session.update(middleText);
+    const latestPromise = session.update(latestText);
+
+    expect(updateBodies).toHaveLength(1);
+    firstUpdateResponse.resolve(jsonResponse({ code: 0, msg: "ok" }));
+    await Promise.all([firstPromise, middlePromise, latestPromise]);
+
+    expect(updateBodies.map((body) => JSON.parse(body).content)).toEqual([firstText, latestText]);
+  });
+
+  it("waits for an in-flight update before closing with the latest text", async () => {
+    const updateBodies: string[] = [];
+    const settingsBodies: string[] = [];
+    const firstUpdateResponse = createDeferred<Response>();
+    const deps = createMemoryFetch((url, body) => {
+      if (url.pathname.includes("/auth/")) {
+        return jsonResponse({
+          code: 0,
+          msg: "ok",
+          tenant_access_token: "token",
+          expire: 7200,
+        });
+      }
+      if (url.pathname.includes("/elements/content/content")) {
+        updateBodies.push(body);
+        if (updateBodies.length === 1) {
+          return firstUpdateResponse.promise;
+        }
+      } else if (url.pathname.includes("/settings")) {
+        settingsBodies.push(body);
+      }
+      return jsonResponse({ code: 0, msg: "ok" });
+    });
+    const session = new FeishuStreamingSession(
+      {} as never,
+      { appId: "app_blocked_close", appSecret: "secret" },
+      undefined,
+      deps,
+    );
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_blocked_close",
+        messageId: "om_blocked_close",
+        sequence: 1,
+        currentText: "",
+        sentText: "",
+        hasNote: false,
+      },
+      lastUpdateTime: 0,
+    });
+
+    const updatePromise = session.update("first");
+    await vi.waitFor(() => expect(updateBodies).toHaveLength(1));
+    const closePromise = session.close("first latest before close");
+
+    expect(settingsBodies).toHaveLength(0);
+    firstUpdateResponse.resolve(jsonResponse({ code: 0, msg: "ok" }));
+    await Promise.all([updatePromise, closePromise]);
+
+    expect(updateBodies.map((body) => JSON.parse(body).content)).toEqual([
+      "first",
+      "first latest before close",
+    ]);
+    expect(settingsBodies).toHaveLength(1);
+  });
+
+  it("waits for an in-flight update before discarding the card", async () => {
+    const updateBodies: string[] = [];
+    const firstUpdateResponse = createDeferred<Response>();
+    const deleteMessage = vi.fn(async () => ({ code: 0, msg: "ok" }));
+    const deps = createMemoryFetch((url, body) => {
+      if (url.pathname.includes("/auth/")) {
+        return jsonResponse({
+          code: 0,
+          msg: "ok",
+          tenant_access_token: "token",
+          expire: 7200,
+        });
+      }
+      if (url.pathname.includes("/elements/content/content")) {
+        updateBodies.push(body);
+        return firstUpdateResponse.promise;
+      }
+      return jsonResponse({ code: 0, msg: "ok" });
+    });
+    const session = new FeishuStreamingSession(
+      { im: { message: { delete: deleteMessage } } } as never,
+      { appId: "app_blocked_discard", appSecret: "secret" },
+      undefined,
+      deps,
+    );
+    setStreamingSessionInternals(session, {
+      state: {
+        cardId: "card_blocked_discard",
+        messageId: "om_blocked_discard",
+        sequence: 1,
+        currentText: "",
+        sentText: "",
+        hasNote: false,
+      },
+      lastUpdateTime: 0,
+    });
+
+    const updatePromise = session.update("first");
+    await vi.waitFor(() => expect(updateBodies).toHaveLength(1));
+    const discardPromise = session.discard();
+
+    expect(deleteMessage).not.toHaveBeenCalled();
+    firstUpdateResponse.resolve(jsonResponse({ code: 0, msg: "ok" }));
+    await Promise.all([updatePromise, discardPromise]);
+
+    expect(deleteMessage).toHaveBeenCalledWith({
+      path: { message_id: "om_blocked_discard" },
     });
   });
 
