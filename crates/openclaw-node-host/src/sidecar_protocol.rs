@@ -220,6 +220,7 @@ pub struct AuthenticatedSidecarChannel {
     max_frame_bytes: u32,
     send_sequence: u64,
     receive_sequence: u64,
+    retired: bool,
 }
 
 impl AuthenticatedSidecarChannel {
@@ -254,7 +255,19 @@ impl AuthenticatedSidecarChannel {
             max_frame_bytes,
             send_sequence: 0,
             receive_sequence: 0,
+            retired: false,
         })
+    }
+
+    /// Permanently retire this process-session channel.
+    pub fn retire(&mut self) {
+        self.key.0.zeroize();
+        self.retired = true;
+    }
+
+    #[must_use]
+    pub const fn is_retired(&self) -> bool {
+        self.retired
     }
 
     /// Apply the negotiated frame ceiling without resetting channel sequence.
@@ -285,8 +298,12 @@ impl AuthenticatedSidecarChannel {
     /// # Errors
     ///
     /// Returns an error when serialization fails, the encoded frame exceeds
-    /// the local ceiling, or the sequence has been exhausted.
+    /// the local ceiling, the sequence has been exhausted, or the channel was
+    /// retired by an inbound or transport failure.
     pub fn seal<T: Serialize>(&mut self, payload: &T) -> Result<Vec<u8>, SidecarFrameError> {
+        if self.retired {
+            return Err(SidecarFrameError::ChannelRetired);
+        }
         let sequence = self
             .send_sequence
             .checked_add(1)
@@ -343,6 +360,18 @@ impl AuthenticatedSidecarChannel {
     /// Returns an error for authentication, session, generation, direction,
     /// sequence, version, size, framing, or payload failures.
     pub fn open<T: DeserializeOwned>(&mut self, frame: &[u8]) -> Result<T, SidecarFrameError> {
+        if self.retired {
+            return Err(SidecarFrameError::ChannelRetired);
+        }
+
+        let result = self.open_active(frame);
+        if result.is_err() {
+            self.retire();
+        }
+        result
+    }
+
+    fn open_active<T: DeserializeOwned>(&mut self, frame: &[u8]) -> Result<T, SidecarFrameError> {
         if frame.len() > self.max_frame_bytes as usize {
             return Err(SidecarFrameError::FrameTooLarge {
                 size: frame.len() as u64,
@@ -532,6 +561,8 @@ pub enum SidecarProtocolError {
 pub enum SidecarFrameError {
     #[error("sidecar frame authentication failed")]
     Authentication,
+    #[error("sidecar channel is retired")]
+    ChannelRetired,
     #[error("sidecar frame deadline exceeded")]
     Deadline,
     #[error("sidecar frame length {size} exceeds local limit {limit}")]
@@ -779,7 +810,7 @@ mod tests {
     }
 
     #[test]
-    fn authentication_failure_does_not_advance_sequence() {
+    fn authentication_failure_permanently_retires_channel() {
         let mut supervisor = channel(SidecarPeerRole::Supervisor, 7);
         let mut runtime = channel(SidecarPeerRole::Runtime, 7);
         let valid = supervisor.seal(&json!({"type":"probe"})).unwrap();
@@ -790,7 +821,15 @@ mod tests {
             runtime.open::<Value>(&tampered),
             Err(SidecarFrameError::Authentication)
         ));
-        assert!(runtime.open::<Value>(&valid).is_ok());
+        assert!(runtime.is_retired());
+        assert!(matches!(
+            runtime.open::<Value>(&valid),
+            Err(SidecarFrameError::ChannelRetired)
+        ));
+        assert!(matches!(
+            runtime.seal(&json!({"type":"status"})),
+            Err(SidecarFrameError::ChannelRetired)
+        ));
     }
 
     #[test]

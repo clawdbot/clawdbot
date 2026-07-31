@@ -59,7 +59,10 @@ A receiver verifies the frame-size ceiling and HMAC before interpreting any
 untrusted header or payload field. It then verifies version, direction,
 generation, exact next sequence, session identifier, internal lengths, and
 payload decoding. Any failure retires the channel; callers must not continue
-after a framing, authentication, replay, or generation error.
+after a framing, authentication, replay, or generation error. The Rust channel
+poisons itself on the first inbound validation failure and rejects every later
+send or receive. A transport owner calls `retire()` when length-prefix I/O or
+its surrounding IPC transport fails.
 
 A new process gets a new session identifier, key, generation, and sequence
 space. A sequence gap or replay is rejected rather than buffered. Rotate the
