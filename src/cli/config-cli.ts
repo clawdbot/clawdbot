@@ -281,7 +281,7 @@ export async function runConfigUnset(opts: {
 async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
-    writeRuntimeStdout(runtime, resolveConfigPath());
+    writeRuntimeStdout(runtime, `${resolveConfigPath()}\n`);
   } catch (err) {
     runtime.error(danger(String(err)));
     runtime.exit(1);

@@ -4212,9 +4212,9 @@ describe("config cli", () => {
       try {
         await runConfigCommand(["config", "file"]);
         const output = String(lastMockArg(mockWriteStdout));
-        expect(mockWriteStdout).toHaveBeenCalledWith(configPath);
-        expect(output).toBe(configPath);
-        expect(path.isAbsolute(output)).toBe(true);
+        expect(mockWriteStdout).toHaveBeenCalledWith(`${configPath}\n`);
+        expect(output).toBe(`${configPath}\n`);
+        expect(path.isAbsolute(output.trimEnd())).toBe(true);
         expect(output).not.toContain("$OPENCLAW_HOME");
         expect(output).not.toContain("~");
         expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
