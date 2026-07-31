@@ -1,8 +1,12 @@
+import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
@@ -14,6 +18,7 @@ import {
   markConversationDeliveryReplied,
   markConversationDeliverySent,
   markConversationDeliveryUnknown,
+  markConversationDeliveryUnknownIfPresent,
 } from "./conversation-delivery-store.js";
 import { resolveConversation } from "./conversation-registry.js";
 import {
@@ -72,6 +77,46 @@ async function withConversationStore(
 }
 
 describe("conversation delivery store", () => {
+  it("reports a missing owner without creating its agent database", async () => {
+    await withTempDir({ prefix: "openclaw-conversation-owner-missing-" }, async (stateDir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const scope = { agentId: "deleted-agent", env };
+      const databasePath = resolveOpenClawAgentSqlitePath(scope);
+
+      expect(fs.existsSync(databasePath)).toBe(false);
+      expect(markConversationDeliveryUnknownIfPresent(scope, "missing-operation")).toEqual({
+        status: "owner-missing",
+        reason: "database-missing",
+      });
+      expect(fs.existsSync(databasePath)).toBe(false);
+    });
+  });
+
+  it("reports a missing operation in an existing owner database", async () => {
+    await withConversationStore(({ scope }) => {
+      expect(markConversationDeliveryUnknownIfPresent(scope, "missing-operation")).toEqual({
+        status: "owner-missing",
+        reason: "operation-missing",
+      });
+    });
+  });
+
+  it("marks an existing operation unknown under its owner deletion fence", async () => {
+    await withConversationStore(({ scope, conversationRef }) => {
+      beginConversationDeliveryOperation(scope, {
+        operationId: "operation-existing",
+        operationKind: "send",
+        conversationRef,
+        message: "hello",
+      });
+
+      expect(markConversationDeliveryUnknownIfPresent(scope, "operation-existing")).toMatchObject({
+        status: "updated",
+        record: { operationId: "operation-existing", status: "unknown" },
+      });
+    });
+  });
+
   it("creates idempotent operations and rejects operation-id input reuse", async () => {
     await withConversationStore(({ scope, conversationRef }) => {
       const first = beginConversationDeliveryOperation(scope, {

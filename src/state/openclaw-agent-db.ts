@@ -475,6 +475,37 @@ export function runOpenClawAgentWriteTransaction<T>(
   return result;
 }
 
+export type ExistingOpenClawAgentDatabaseLeaseResult<T> =
+  | { found: true; value: T }
+  | { found: false; reason: "database-missing" };
+
+/** Hold the deletion fence while inspecting and updating one existing agent database. */
+export function withExistingOpenClawAgentDatabaseLease<T>(
+  options: OpenClawAgentDatabaseOptions,
+  operation: () => T,
+): ExistingOpenClawAgentDatabaseLeaseResult<T> {
+  const agentId = normalizeAgentId(options.agentId);
+  const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
+  if (!existsSync(pathname)) {
+    return { found: false, reason: "database-missing" };
+  }
+  // The temporary lease closes the check-to-write deletion race. The normal
+  // writer still owns schema validation, transactions, caching, and its lease.
+  const leaseId = claimOpenClawAgentDatabaseLease({
+    agentId,
+    path: pathname,
+    ...(options.env ? { env: options.env } : {}),
+  });
+  try {
+    if (!existsSync(pathname)) {
+      return { found: false, reason: "database-missing" };
+    }
+    return { found: true, value: operation() };
+  } finally {
+    releaseOpenClawAgentDatabaseLease(leaseId, options.env ? { env: options.env } : {});
+  }
+}
+
 let unregisterExitClose: (() => void) | null = null;
 
 function closeCachedOpenClawAgentDatabase(

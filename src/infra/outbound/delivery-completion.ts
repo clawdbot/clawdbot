@@ -5,6 +5,7 @@ import {
   markConversationDeliverySent,
   markConversationDeliverySuppressed,
   markConversationDeliveryUnknown,
+  markConversationDeliveryUnknownIfPresent,
   type ConversationDeliveryRecord,
 } from "../../config/sessions/conversation-delivery-store.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
@@ -77,4 +78,12 @@ export function failDurableDelivery(
   completion: DurableDeliveryCompletion,
 ): ConversationDeliveryRecord {
   return markConversationDeliveryUnknown(scopeForCompletion(completion), completion.operationId);
+}
+
+/** Retire an existing owner without materializing state that was already deleted. */
+export function failDurableDeliveryIfPresent(completion: DurableDeliveryCompletion) {
+  return markConversationDeliveryUnknownIfPresent(
+    scopeForCompletion(completion),
+    completion.operationId,
+  );
 }

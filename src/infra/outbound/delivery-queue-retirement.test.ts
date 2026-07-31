@@ -2,8 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDeliveryQueueMediaDir } from "../../config/paths.js";
+import {
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { getDeliveryQueueEntryStatus, upsertDeliveryQueueEntry } from "../delivery-queue-sqlite.js";
+import { requireNodeSqlite } from "../node-sqlite.js";
 import { pruneOrphanedDeliveryQueueMedia } from "./delivery-queue-media-spool.js";
 import { LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import { retireLegacyPendingOutboundDeliveries } from "./delivery-queue-retirement.js";
@@ -13,18 +18,11 @@ import {
   installDeliveryQueueTmpDirHooks,
 } from "./delivery-queue.test-helpers.js";
 
-const completionMocks = vi.hoisted(() => ({
-  failDurableDelivery: vi.fn(),
-}));
 const mediaMocks = vi.hoisted(() => ({
   deferCleanup: false,
   releaseSpoolArtifacts: vi.fn(),
 }));
 
-vi.mock("./delivery-completion.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("./delivery-completion.js")>();
-  return { ...original, failDurableDelivery: completionMocks.failDurableDelivery };
-});
 vi.mock("./delivery-queue-media-spool.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("./delivery-queue-media-spool.js")>();
   mediaMocks.releaseSpoolArtifacts.mockImplementation(
@@ -71,7 +69,6 @@ describe("pre-D4 outbound retirement", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
 
   beforeEach(() => {
-    completionMocks.failDurableDelivery.mockReset();
     mediaMocks.deferCleanup = false;
     mediaMocks.releaseSpoolArtifacts.mockClear();
   });
@@ -82,6 +79,10 @@ describe("pre-D4 outbound retirement", () => {
 
   it("retires pending rows without replay and scrubs payload and attempt state", async () => {
     const id = "legacy-retry-backoff";
+    const completionOwnerPath = resolveOpenClawAgentSqlitePath({
+      agentId: "main",
+      env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
+    });
     const entry = {
       ...legacyEntry(id),
       platformSendAttemptId: "provider-attempt-private",
@@ -91,6 +92,7 @@ describe("pre-D4 outbound retirement", () => {
         kind: "conversation" as const,
         agentId: "main",
         operationId: "operation-private",
+        storePath: completionOwnerPath,
       },
     };
     upsertDeliveryQueueEntry({
@@ -109,7 +111,7 @@ describe("pre-D4 outbound retirement", () => {
       mediaCleanupDeferred: 0,
     });
 
-    expect(completionMocks.failDurableDelivery).toHaveBeenCalledOnce();
+    await expect(fs.stat(completionOwnerPath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(getDeliveryQueueEntryStatus(LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toBe(
       "failed",
     );
@@ -161,14 +163,24 @@ describe("pre-D4 outbound retirement", () => {
     });
   });
 
-  it("retries completion settlement before it scrubs the completion pointer", async () => {
+  it("retries completion settlement errors, then retires a confirmed missing owner", async () => {
     const id = "legacy-completion-retry";
+    const completionAgentId = "completion-retry";
+    const completionOwnerPath = resolveOpenClawAgentSqlitePath({
+      agentId: completionAgentId,
+      env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
+    });
+    await fs.mkdir(path.dirname(completionOwnerPath), { recursive: true });
+    const database = new (requireNodeSqlite().DatabaseSync)(completionOwnerPath);
+    database.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1};`);
+    database.close();
     const entry = {
       ...legacyEntry(id),
       deliveryCompletion: {
         kind: "conversation" as const,
-        agentId: "main",
+        agentId: completionAgentId,
         operationId: "operation-retry",
+        storePath: completionOwnerPath,
       },
     };
     upsertDeliveryQueueEntry({
@@ -176,10 +188,6 @@ describe("pre-D4 outbound retirement", () => {
       entry,
       stateDir: tmpDir(),
     });
-    completionMocks.failDurableDelivery.mockImplementationOnce(() => {
-      throw new Error("agent database temporarily unavailable");
-    });
-
     await expect(
       retireLegacyPendingOutboundDeliveries({ log: createRecoveryLog(), stateDir: tmpDir() }),
     ).resolves.toEqual({
@@ -194,6 +202,7 @@ describe("pre-D4 outbound retirement", () => {
     expect(readEntryJson(LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toContain(
       "operation-retry",
     );
+    await fs.rm(completionOwnerPath, { force: true });
 
     await expect(
       retireLegacyPendingOutboundDeliveries({ log: createRecoveryLog(), stateDir: tmpDir() }),
@@ -209,6 +218,7 @@ describe("pre-D4 outbound retirement", () => {
     expect(readEntryJson(LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).not.toContain(
       "operation-retry",
     );
+    await expect(fs.stat(completionOwnerPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("leaves completed and failed legacy records untouched", async () => {

@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
+  withExistingOpenClawAgentDatabaseLease,
 } from "../../state/openclaw-agent-db.js";
 import {
   getSessionKysely,
@@ -150,7 +152,7 @@ export class ConversationDeliveryInputError extends Error {
 }
 
 function selectOperation(
-  database: ReturnType<typeof openOpenClawAgentDatabase>,
+  database: Pick<ReturnType<typeof openOpenClawAgentDatabase>, "db">,
   operationId: string,
 ): ConversationDeliveryRecord | undefined {
   const db = getSessionKysely(database.db);
@@ -371,6 +373,39 @@ export function markConversationDeliveryUnknown(
     status: "unknown",
     allowedFrom: ["created", "queued"],
   });
+}
+
+type ConversationDeliveryUnknownIfPresentResult =
+  | { status: "updated"; record: ConversationDeliveryRecord }
+  | {
+      status: "owner-missing";
+      reason: "database-missing" | "schema-missing" | "table-missing" | "operation-missing";
+    };
+
+/** Mark an existing completion unknown without creating a missing agent database. */
+export function markConversationDeliveryUnknownIfPresent(
+  scope: ConversationDeliveryStoreScope,
+  operationIdRaw: string,
+): ConversationDeliveryUnknownIfPresentResult {
+  const operationId = normalizeOperationId(operationIdRaw);
+  const databaseOptions = resolveDatabaseOptions(scope);
+  const fenced = withExistingOpenClawAgentDatabaseLease(databaseOptions, () => {
+    const existing = withOpenClawAgentDatabaseReadOnly(
+      (database) => selectOperation(database, operationId),
+      databaseOptions,
+    );
+    if (!existing.found) {
+      return { status: "owner-missing", reason: existing.reason } as const;
+    }
+    if (!existing.value) {
+      return { status: "owner-missing", reason: "operation-missing" } as const;
+    }
+    return {
+      status: "updated",
+      record: markConversationDeliveryUnknown(scope, operationId),
+    } as const;
+  });
+  return fenced.found ? fenced.value : { status: "owner-missing", reason: "database-missing" };
 }
 
 export function markConversationDeliveryReplied(

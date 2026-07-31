@@ -2735,6 +2735,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Why this refactor happened
   - H2: What shipped
   - H3: Send context
+  - H3: Outbound queue upgrade behavior
   - H3: Receive context
   - H3: Live preview
   - H3: Durable receipts

@@ -1,6 +1,6 @@
 // One-time retirement of pre-D4 pending rows. Canonical recovery reads only prepared rows.
 import { failPendingDeliveryQueueEntry } from "../delivery-queue-sqlite.js";
-import { failDurableDelivery } from "./delivery-completion.js";
+import { failDurableDeliveryIfPresent } from "./delivery-completion.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import { LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import type { RecoveryLogger } from "./delivery-queue-recovery.js";
@@ -65,9 +65,9 @@ export async function retireLegacyPendingOutboundDeliveries(params: {
     const spoolPaths = collectEntrySpoolPaths(entry.payloads ?? [], params.stateDir);
     if (entry.deliveryCompletion) {
       try {
-        // Unknown is idempotent and cannot overwrite sent/suppressed/rejected.
-        // Settle it before scrubbing the only durable completion pointer.
-        failDurableDelivery(entry.deliveryCompletion);
+        // Existing owners become unknown before their pointer is scrubbed. A
+        // confirmed missing owner is already terminal and must not be recreated.
+        failDurableDeliveryIfPresent(entry.deliveryCompletion);
       } catch {
         summary.completionUnknownFailed += 1;
         summary.skipped += 1;
