@@ -298,6 +298,7 @@ type ToolHandlerParams = Pick<
   | "onHeartbeatToolResponse"
   | "onAgentToolResult"
   | "observeToolTerminal"
+  | "trajectoryRecorder"
   | "onToolResult"
   | "config"
   | "messageChannel"

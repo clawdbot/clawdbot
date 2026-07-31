@@ -105,6 +105,7 @@ export async function runEmbeddedAttemptExecutionPhase(
       sandboxSessionKey: input.setup.sandboxSessionKey,
       builtinToolNames,
       replaySafeToolNames,
+      trajectoryRecorder: sessionRuntime.trajectoryRecorder,
     },
     lifecycle: {
       isYieldDetected: () => input.lifecycle.readYieldState().yieldDetected,
