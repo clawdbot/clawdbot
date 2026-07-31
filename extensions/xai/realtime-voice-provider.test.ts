@@ -282,6 +282,29 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     bridge.close();
   });
 
+  it("copies pending realtime audio views without retaining their backing allocation", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
+    const provider = buildXaiRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const backing = Buffer.alloc(2 * 1024 * 1024, 0x7f);
+    const view = backing.subarray(0, 1);
+
+    bridge.sendAudio(view);
+    backing[0] = 0;
+
+    const { connecting, socket } = await openRealtimeBridge(bridge);
+    await connecting;
+
+    expect(
+      parseSent(socket).filter((event) => event.type === "input_audio_buffer.append"),
+    ).toEqual([{ type: "input_audio_buffer.append", audio: "fw==" }]);
+    bridge.close();
+  });
+
   it("drops queued realtime input on close and ignores late input until reconnect", async () => {
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
     const provider = buildXaiRealtimeVoiceProvider();
