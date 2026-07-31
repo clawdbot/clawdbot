@@ -409,4 +409,34 @@ describe("status-runtime-shared", () => {
       plugins: [{ id: "telegram" }],
     });
   });
+
+  it("keeps failed deep health probes visible in nonthrowing status snapshots", async () => {
+    mocks.callGateway.mockRejectedValueOnce(new Error("gateway health probe timed out"));
+
+    await expect(
+      resolveStatusRuntimeSnapshot({
+        config: { gateway: {} },
+        sourceConfig: { gateway: {} },
+        deep: true,
+        gatewayReachable: true,
+        suppressHealthErrors: true,
+      }),
+    ).resolves.toMatchObject({
+      health: { error: "Error: gateway health probe timed out" },
+      lastHeartbeat: { ok: true },
+    });
+  });
+
+  it("does not suppress failed deep health probes for text status", async () => {
+    mocks.callGateway.mockRejectedValueOnce(new Error("gateway health probe timed out"));
+
+    await expect(
+      resolveStatusRuntimeSnapshot({
+        config: { gateway: {} },
+        sourceConfig: { gateway: {} },
+        deep: true,
+        gatewayReachable: true,
+      }),
+    ).rejects.toThrow("gateway health probe timed out");
+  });
 });
