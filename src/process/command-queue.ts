@@ -116,7 +116,73 @@ export type CommandLaneSnapshot = {
   maxConcurrent: number;
   draining: boolean;
   generation: number;
+  /** Group this lane belongs to, if any. */
+  group?: string;
+  /** Sum of active tasks across every member of the group. Always derived. */
+  groupActive?: number;
+  /** Hard aggregate cap shared by the group's members. */
+  groupBudget?: number;
+  /** Slots within the budget this lane may always claim. */
+  reservedForLane?: number;
+  /**
+   * Why this lane cannot start more work right now, or null if it can.
+   * `lane` is the lane's own maxConcurrent; the other two are group-imposed and
+   * are invisible to a lane-local view — see `noteLaneWaitIfBusy`.
+   */
+  blockedBy?: CommandLaneBlockReason;
 };
+
+/** Why a lane cannot admit, from the narrowest cause outward. */
+export type CommandLaneBlockReason = "lane" | "group-budget" | "sibling-reservation" | null;
+
+/** Declares a group's shared budget and its members' hard reservations. */
+export type CommandLaneGroupSpec = {
+  /** Hard aggregate cap across all members. */
+  budget: number;
+  members: readonly string[];
+  /** Slots a member may always claim, non-borrowable by siblings. */
+  reservations?: Readonly<Record<string, number>>;
+};
+
+type LaneGroupState = {
+  group: string;
+  budget: number;
+  members: Set<string>;
+  reservations: Map<string, number>;
+};
+
+/**
+ * Lanes that must never join a group, because a group member can be made to
+ * wait for a sibling and these lanes can be synchronously awaited by other
+ * lanes — which would turn a wait into a deadlock.
+ *
+ * Known wait edges at this base: outer `cron` -> `cron-nested`
+ * (`server-cron.ts` passes lane "cron"; `agents/lanes.ts` remaps inner work),
+ * and `session:<key>` -> global lane (embedded-agent-runner run + compaction).
+ */
+const GROUP_INELIGIBLE_LANES: ReadonlySet<string> = new Set<string>([
+  CommandLane.Cron,
+  CommandLane.Main,
+  CommandLane.Subagent,
+  CommandLane.Nested,
+]);
+
+const GROUP_INELIGIBLE_PREFIXES = ["session:", "nested:", "context-engine-turn-maintenance:"];
+
+function assertGroupEligibleLane(lane: string): void {
+  if (GROUP_INELIGIBLE_LANES.has(lane)) {
+    throw new Error(
+      `command lane "${lane}" cannot join a capacity group: it can be synchronously awaited by another lane`,
+    );
+  }
+  for (const prefix of GROUP_INELIGIBLE_PREFIXES) {
+    if (lane.startsWith(prefix)) {
+      throw new Error(
+        `command lane "${lane}" cannot join a capacity group: "${prefix}*" lanes can be synchronously awaited`,
+      );
+    }
+  }
+}
 
 type ActiveTaskWaiter = {
   activeTaskIds: Set<number>;
@@ -206,14 +272,27 @@ function getLaneDepth(state: LaneState): number {
 }
 
 function createCommandLaneSnapshot(state: LaneState): CommandLaneSnapshot {
-  return {
+  const snapshot: CommandLaneSnapshot = {
     lane: state.lane,
     queuedCount: state.queue.length,
     activeCount: state.activeTaskIds.size,
     maxConcurrent: state.maxConcurrent,
     draining: state.draining,
     generation: state.generation,
+    blockedBy: resolveLaneBlockReason(state.lane),
   };
+  const group = getLaneGroup(state.lane);
+  if (group) {
+    let groupActive = 0;
+    for (const member of group.members) {
+      groupActive += getMemberActiveCount(member);
+    }
+    snapshot.group = group.group;
+    snapshot.groupActive = groupActive;
+    snapshot.groupBudget = group.budget;
+    snapshot.reservedForLane = group.reservations.get(state.lane) ?? 0;
+  }
+  return snapshot;
 }
 
 function getLaneState(lane: string): LaneState {
@@ -457,6 +536,188 @@ async function runQueueEntryTask(
   }
 }
 
+/** Group registry, keyed by group id and by member lane name. */
+function getGroupRegistry(): {
+  groups: Map<string, LaneGroupState>;
+  groupByLane: Map<string, string>;
+} {
+  const state = getQueueState() as unknown as {
+    laneGroups?: Map<string, LaneGroupState>;
+    laneGroupByLane?: Map<string, string>;
+  };
+  // Migration: an older singleton (pre-upgrade, inherited via globalThis after
+  // a SIGUSR1 in-process restart) has neither field. Active counts are derived,
+  // so a late-initialized registry cannot desynchronize from lane state.
+  if (!state.laneGroups) {
+    state.laneGroups = new Map<string, LaneGroupState>();
+  }
+  if (!state.laneGroupByLane) {
+    state.laneGroupByLane = new Map<string, string>();
+  }
+  return { groups: state.laneGroups, groupByLane: state.laneGroupByLane };
+}
+
+function getLaneGroup(lane: string): LaneGroupState | undefined {
+  const { groups, groupByLane } = getGroupRegistry();
+  const groupId = groupByLane.get(lane);
+  return groupId ? groups.get(groupId) : undefined;
+}
+
+/**
+ * Active task count for a group member WITHOUT creating the lane. Creating it
+ * here would resurrect lanes that `retireIdleScopedCommandLane` just removed.
+ */
+function getMemberActiveCount(lane: string): number {
+  return getQueueState().lanes.get(lane)?.activeTaskIds.size ?? 0;
+}
+
+/**
+ * Why `lane` cannot admit another task, or null if it can.
+ *
+ * Group capacity is always DERIVED from members' `activeTaskIds`, never tracked
+ * in a separate counter. That is what makes timeout, abort, clear, reset and
+ * stale-generation completion release capacity for free: they all remove the
+ * task id, so the next admission decision simply sees a smaller number. The
+ * only remaining obligation is that those paths re-drain the group.
+ */
+function resolveLaneBlockReason(lane: string): CommandLaneBlockReason {
+  const state = getQueueState().lanes.get(lane);
+  if (state && state.activeTaskIds.size >= state.maxConcurrent) {
+    return "lane";
+  }
+  const group = getLaneGroup(lane);
+  if (!group) {
+    return null;
+  }
+  let groupActive = 0;
+  let siblingReserveHeld = 0;
+  for (const member of group.members) {
+    const active = getMemberActiveCount(member);
+    groupActive += active;
+    if (member !== lane) {
+      // Unused portion of a sibling's reservation. Held back even while that
+      // sibling is idle — a hard reservation that siblings can borrow is not a
+      // reservation at all.
+      siblingReserveHeld += Math.max(0, (group.reservations.get(member) ?? 0) - active);
+    }
+  }
+  if (groupActive >= group.budget) {
+    return "group-budget";
+  }
+  // Own reservation still unfilled: admit regardless of what siblings hold.
+  if (getMemberActiveCount(lane) < (group.reservations.get(lane) ?? 0)) {
+    return null;
+  }
+  // Otherwise this task would be borrowing unreserved capacity, which must not
+  // eat into what siblings are guaranteed.
+  return groupActive + siblingReserveHeld < group.budget ? null : "sibling-reservation";
+}
+
+function canAdmitInGroup(lane: string): boolean {
+  const reason = resolveLaneBlockReason(lane);
+  return reason === null || reason === "lane";
+}
+
+/**
+ * Re-drain every OTHER member of `lane`'s group. Capacity that a completion
+ * frees belongs to the group, not to the lane that freed it, so a lane-local
+ * pump would leave siblings queued behind capacity that is already available.
+ */
+function drainGroupSiblings(lane: string): void {
+  const group = getLaneGroup(lane);
+  if (!group) {
+    return;
+  }
+  for (const member of group.members) {
+    if (member === lane) {
+      continue;
+    }
+    const state = getQueueState().lanes.get(member);
+    if (state && state.queue.length > 0 && !state.draining) {
+      drainLane(member);
+    }
+  }
+}
+
+/**
+ * Define or replace a capacity group.
+ *
+ * Membership is held here, keyed by lane name, and deliberately NOT inside
+ * `LaneState`: `setCommandLaneConcurrency` must not be able to detach a lane
+ * from its group, or session suspend/resume would silently restore a member to
+ * ungoverned concurrency.
+ */
+export function setCommandLaneGroup(group: string, spec: CommandLaneGroupSpec): void {
+  const members = spec.members.map((member) => normalizeLane(member));
+  for (const member of members) {
+    assertGroupEligibleLane(member);
+  }
+  const reservations = new Map<string, number>();
+  let reservedTotal = 0;
+  for (const [rawLane, count] of Object.entries(spec.reservations ?? {})) {
+    const member = normalizeLane(rawLane);
+    if (!members.includes(member)) {
+      throw new Error(`command lane group "${group}" reserves for non-member lane "${member}"`);
+    }
+    const reserved = Math.max(0, Math.floor(count));
+    reservations.set(member, reserved);
+    reservedTotal += reserved;
+  }
+  const budget = Math.max(0, Math.floor(spec.budget));
+  if (reservedTotal > budget) {
+    // Silent starvation otherwise: reservations that cannot all be honoured
+    // would permanently withhold capacity no member is able to claim.
+    throw new Error(
+      `command lane group "${group}" reserves ${reservedTotal} slots but its budget is ${budget}`,
+    );
+  }
+  const { groups, groupByLane } = getGroupRegistry();
+  const previous = groups.get(group);
+  if (previous) {
+    for (const member of previous.members) {
+      groupByLane.delete(member);
+    }
+  }
+  groups.set(group, { group, budget, members: new Set(members), reservations });
+  for (const member of members) {
+    groupByLane.set(member, group);
+  }
+}
+
+/** Remove a group and release its members back to lane-local admission. */
+export function clearCommandLaneGroup(group: string): void {
+  const { groups, groupByLane } = getGroupRegistry();
+  const existing = groups.get(group);
+  if (!existing) {
+    return;
+  }
+  for (const member of existing.members) {
+    groupByLane.delete(member);
+  }
+  groups.delete(group);
+  for (const member of existing.members) {
+    const state = getQueueState().lanes.get(member);
+    if (state && state.queue.length > 0 && !state.draining) {
+      drainLane(member);
+    }
+  }
+}
+
+/** Drain every member of a group. Used after a configuration publish. */
+export function drainCommandLaneGroup(group: string): void {
+  const { groups } = getGroupRegistry();
+  const existing = groups.get(group);
+  if (!existing) {
+    return;
+  }
+  for (const member of existing.members) {
+    const state = getQueueState().lanes.get(member);
+    if (state && state.queue.length > 0 && !state.draining) {
+      drainLane(member);
+    }
+  }
+}
+
 function drainLane(lane: string) {
   const state = getLaneState(lane);
   if (state.draining) {
@@ -471,7 +732,11 @@ function drainLane(lane: string) {
 
   const pump = () => {
     try {
-      while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
+      while (
+        state.activeTaskIds.size < state.maxConcurrent &&
+        state.queue.length > 0 &&
+        canAdmitInGroup(lane)
+      ) {
         const entry = state.queue.shift() as QueueEntry;
         const waitedMs = Date.now() - entry.enqueuedAt;
         if (waitedMs >= entry.warnAfterMs) {
@@ -504,6 +769,8 @@ function drainLane(lane: string) {
                 `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
               );
               pump();
+              // Freed capacity belongs to the group, not to this lane.
+              drainGroupSiblings(lane);
             }
             entry.resolve(result);
           } catch (err) {
@@ -521,6 +788,9 @@ function drainLane(lane: string) {
             if (completedCurrentGeneration) {
               notifyActiveTaskWaiters();
               pump();
+              // A failed task releases group capacity exactly like a successful
+              // one; siblings must be woken on both paths.
+              drainGroupSiblings(lane);
             }
             entry.reject(err);
           }
@@ -606,14 +876,30 @@ export function getCommandLaneSnapshot(lane: string = CommandLane.Main): Command
   const resolved = normalizeLane(lane);
   const state = getQueueState().lanes.get(resolved);
   if (!state) {
-    return {
+    // The lane may not exist yet (first enqueue) or may have been retired while
+    // idle, but it can still be a configured group member — and a caller asking
+    // "can this lane start work?" needs the group answer, not a bare default.
+    const group = getLaneGroup(resolved);
+    const empty: CommandLaneSnapshot = {
       lane: resolved,
       queuedCount: 0,
       activeCount: 0,
       maxConcurrent: 1,
       draining: false,
       generation: 0,
+      blockedBy: resolveLaneBlockReason(resolved),
     };
+    if (group) {
+      let groupActive = 0;
+      for (const member of group.members) {
+        groupActive += getMemberActiveCount(member);
+      }
+      empty.group = group.group;
+      empty.groupActive = groupActive;
+      empty.groupBudget = group.budget;
+      empty.reservedForLane = group.reservations.get(resolved) ?? 0;
+    }
+    return empty;
   }
   return createCommandLaneSnapshot(state);
 }
@@ -676,6 +962,8 @@ export function resetCommandLane(lane: string = CommandLane.Main): number {
   if (state.queue.length > 0) {
     drainLane(cleaned);
   }
+  // Clearing activeTaskIds released group capacity; siblings may now admit.
+  drainGroupSiblings(cleaned);
   notifyActiveTaskWaiters();
   return released;
 }
