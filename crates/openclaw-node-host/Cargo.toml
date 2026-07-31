@@ -12,12 +12,14 @@ futures-util = "0.3.32"
 base64 = "0.22.1"
 ed25519-dalek = "3.0.0"
 getrandom = "0.4.3"
+hmac = "0.13.0"
 openclaw-gateway-client = { path = "../openclaw-gateway-client" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sha2 = "0.11.0"
 thiserror = "2.0.19"
 tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+zeroize = "1.8.2"
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "session": {
+    "id": "session-7",
+    "generation": 7,
+    "sessionKeyBase64": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo="
+  },
+  "supervisorProbe": {
+    "payload": {
+      "requestId": "abc",
+      "type": "probe"
+    },
+    "frameBase64": "T0NTQwABAAABAAAAAAAAAAcAAAAAAAAAAQAJAAAAInNlc3Npb24tN3sicmVxdWVzdElkIjoiYWJjIiwidHlwZSI6InByb2JlIn04my4v5goF1qHj7BfwsC4o3oTzJCbGaE5jWu5WdqOVlQ=="
+  }
+}
