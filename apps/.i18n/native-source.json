@@ -32051,7 +32051,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 246,
+      "line": 268,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Dashboard reconnecting",
       "surface": "apple",
@@ -32059,7 +32059,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 247,
+      "line": 269,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "The selected Gateway changed.",
       "surface": "apple",
@@ -32067,7 +32067,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 248,
+      "line": 270,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Waiting for a fresh authenticated connection.",
       "surface": "apple",
@@ -32075,7 +32075,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 404,
+      "line": 458,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Dashboard unavailable",
       "surface": "apple",
@@ -32083,7 +32083,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 406,
+      "line": 460,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Check Settings → Connection or use Debug → Reset Remote Tunnel, then try again.",
       "surface": "apple",
@@ -32091,7 +32091,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 612,
+      "line": 640,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Could Not Switch Gateway",
       "surface": "apple",
@@ -32099,7 +32099,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 640,
+      "line": 668,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Could Not Open Gateway Window",
       "surface": "apple",
@@ -32107,7 +32107,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 744,
+      "line": 775,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "\\(base)-\\(UUID().uuidString)",
       "surface": "apple",
@@ -32115,7 +32115,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 984,
+      "line": 1129,
       "path": "apps/macos/Sources/OpenClaw/DashboardManager.swift",
       "source": "Could Not Set Primary Gateway",
       "surface": "apple",
@@ -32123,7 +32123,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 903,
+      "line": 898,
       "path": "apps/macos/Sources/OpenClaw/DashboardWindowController.swift",
       "source": "[\\(host)]",
       "surface": "apple",
@@ -34939,7 +34939,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 748,
+      "line": 749,
       "path": "apps/macos/Sources/OpenClaw/Onboarding.swift",
       "source": "Finish",
       "surface": "apple",
@@ -34947,7 +34947,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 748,
+      "line": 749,
       "path": "apps/macos/Sources/OpenClaw/Onboarding.swift",
       "source": "Next",
       "surface": "apple",
@@ -36939,7 +36939,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 311,
+      "line": 312,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "OpenClaw updated",
       "surface": "apple",
@@ -36947,7 +36947,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 330,
+      "line": 331,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "Finishing your OpenClaw update",
       "surface": "apple",
@@ -36955,7 +36955,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 331,
+      "line": 332,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "Checking the Mac app and Gateway…",
       "surface": "apple",
@@ -36963,7 +36963,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 439,
+      "line": 440,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "Gateway recovery failed.",
       "surface": "apple",
@@ -36971,7 +36971,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 440,
+      "line": 441,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "The managed OpenClaw runtime could not be reinstalled.",
       "surface": "apple",
@@ -36979,7 +36979,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 447,
+      "line": 448,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "Restarting and verifying the Gateway…",
       "surface": "apple",
@@ -36987,7 +36987,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 448,
+      "line": 449,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "Verifying the Mac node runtime…",
       "surface": "apple",
@@ -36995,7 +36995,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 462,
+      "line": 463,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "Letting your agent know you’re back…",
       "surface": "apple",
@@ -37003,7 +37003,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 494,
+      "line": 495,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "Welcome back",
       "surface": "apple",
@@ -37011,7 +37011,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 496,
+      "line": 497,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "OpenClaw \\(receipt.toVersion) and its Gateway are ready.",
       "surface": "apple",
@@ -37019,7 +37019,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 497,
+      "line": 498,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "OpenClaw \\(receipt.toVersion) and its Mac node runtime are ready.",
       "surface": "apple",
@@ -37027,7 +37027,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 500,
+      "line": 501,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "Your agent could not be notified yet. OpenClaw will retry after the next app launch.",
       "surface": "apple",
@@ -37035,7 +37035,7 @@
     },
     {
       "kind": "ui-localized-call-multiline",
-      "line": 504,
+      "line": 505,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "OpenClaw could not notify your agent automatically. The app and Gateway update are complete.",
       "surface": "apple",
@@ -37043,7 +37043,7 @@
     },
     {
       "kind": "ui-localized-call-multiline",
-      "line": 510,
+      "line": 511,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "OpenClaw could not notify your agent automatically. The app and Mac node update are complete.",
       "surface": "apple",
@@ -37051,7 +37051,7 @@
     },
     {
       "kind": "ui-localized-call-multiline",
-      "line": 517,
+      "line": 518,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "OpenClaw could not confirm the agent notification. It will not retry, to avoid a duplicate welcome.",
       "surface": "apple",
@@ -37059,7 +37059,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 523,
+      "line": 524,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "The remote Gateway is older than this Mac app, so OpenClaw skipped the agent notification.",
       "surface": "apple",
@@ -37067,7 +37067,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 525,
+      "line": 526,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "The Gateway remains paused, so OpenClaw did not wake your agent.",
       "surface": "apple",
@@ -37075,7 +37075,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 553,
+      "line": 554,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "Gateway verification failed.",
       "surface": "apple",
@@ -37083,7 +37083,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 554,
+      "line": 555,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "The managed runtime does not match the updated Mac app.",
       "surface": "apple",
@@ -37091,7 +37091,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 560,
+      "line": 561,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "The Mac node did not restart.",
       "surface": "apple",
@@ -37099,7 +37099,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 566,
+      "line": 567,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "The Mac node did not become ready.",
       "surface": "apple",
@@ -37107,7 +37107,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 567,
+      "line": 568,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "The node service restarted but did not remain running.",
       "surface": "apple",
@@ -37115,7 +37115,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 578,
+      "line": 579,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "The Gateway did not start.",
       "surface": "apple",
@@ -37123,7 +37123,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 579,
+      "line": 580,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "The update is installed, but Gateway health did not become ready.",
       "surface": "apple",
@@ -37131,7 +37131,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 591,
+      "line": 592,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "The Gateway could not reconnect.",
       "surface": "apple",
@@ -37139,7 +37139,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 593,
+      "line": 594,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "OpenClaw installed the update but could not verify the Gateway connection.",
       "surface": "apple",
@@ -37147,7 +37147,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 798,
+      "line": 799,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "The Gateway could not be checked.",
       "surface": "apple",
@@ -37155,7 +37155,7 @@
     },
     {
       "kind": "ui-localized-call-multiline",
-      "line": 800,
+      "line": 801,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
       "surface": "apple",
@@ -37163,7 +37163,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 806,
+      "line": 807,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "The Mac node could not be checked.",
       "surface": "apple",
@@ -37171,7 +37171,7 @@
     },
     {
       "kind": "ui-localized-call-multiline",
-      "line": 808,
+      "line": 809,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
       "surface": "apple",
@@ -37179,7 +37179,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 819,
+      "line": 820,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "Gateway update needs help",
       "surface": "apple",
@@ -37187,7 +37187,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 876,
+      "line": 877,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "Update guide",
       "surface": "apple",
@@ -37195,7 +37195,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 877,
+      "line": 878,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "Ask Discord",
       "surface": "apple",
@@ -37203,7 +37203,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 879,
+      "line": 880,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "Retry",
       "surface": "apple",
@@ -37211,7 +37211,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 885,
+      "line": 886,
       "path": "apps/macos/Sources/OpenClaw/PostUpdate.swift",
       "source": "Continue",
       "surface": "apple",
