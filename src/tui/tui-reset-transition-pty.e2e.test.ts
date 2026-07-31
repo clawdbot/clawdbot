@@ -51,7 +51,7 @@ describe("TUI reset transition PTY", () => {
         // the transition snapshot captured when Enter arrived, not live state.
         await writeFile(resetReleasePath, "released\n", "utf8");
         await run.waitForOutput("session main (Reset session after)");
-        await run.waitForOutput("session change in progress; wait for /reset to finish");
+        await run.waitForOutput("overlap during resetnewer suffix");
 
         await run.write("\r", { delay: false });
         await waitForLogEntry(
