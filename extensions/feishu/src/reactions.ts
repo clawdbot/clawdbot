@@ -10,8 +10,6 @@ type FeishuReaction = {
   operatorId: string;
 };
 
-const MAX_FEISHU_REACTION_PAGES = 100;
-
 function resolveConfiguredFeishuClient(params: { cfg: ClawdbotConfig; accountId?: string }) {
   const account = resolveFeishuRuntimeAccount(params);
   if (!account.configured) {
@@ -100,7 +98,7 @@ export async function listReactionsFeishu(params: {
   const seenPageTokens = new Set<string>();
   let pageToken: string | undefined;
 
-  for (let page = 0; page < MAX_FEISHU_REACTION_PAGES; page += 1) {
+  while (true) {
     const response = (await client.im.messageReaction.list({
       path: { message_id: messageId },
       params:
@@ -157,6 +155,4 @@ export async function listReactionsFeishu(params: {
     seenPageTokens.add(nextPageToken);
     pageToken = nextPageToken;
   }
-
-  throw new Error("Feishu reaction pagination limit exceeded");
 }

@@ -195,20 +195,39 @@ describe("listReactionsFeishu", () => {
     ).rejects.toThrow("Feishu list reactions failed: continuation unavailable");
   });
 
-  it("bounds malformed endless reaction pagination", async () => {
+  it("drains valid reaction lists beyond 100 pages", async () => {
     let nextPage = 0;
-    listMock.mockImplementation(async () => ({
-      code: 0,
-      data: {
-        items: [],
-        has_more: true,
-        page_token: `page-${++nextPage}`,
-      },
-    }));
+    listMock.mockImplementation(async () => {
+      nextPage += 1;
+      const hasMore = nextPage < 101;
+      return {
+        code: 0,
+        data: {
+          items: hasMore
+            ? []
+            : [
+                {
+                  reaction_id: "r-last-page",
+                  reaction_type: { emoji_type: "HEART" },
+                  operator: { operator_type: "app", operator_id: "cli_main" },
+                },
+              ],
+          has_more: hasMore,
+          page_token: hasMore ? `page-${nextPage}` : undefined,
+        },
+      };
+    });
 
     await expect(
       listReactionsFeishu({ cfg: {} as ClawdbotConfig, messageId: "om_message" }),
-    ).rejects.toThrow(/pagination limit/i);
-    expect(listMock).toHaveBeenCalledTimes(100);
+    ).resolves.toEqual([
+      {
+        reactionId: "r-last-page",
+        emojiType: "HEART",
+        operatorType: "app",
+        operatorId: "cli_main",
+      },
+    ]);
+    expect(listMock).toHaveBeenCalledTimes(101);
   });
 });
