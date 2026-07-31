@@ -67,6 +67,7 @@ class ClawsPage extends OpenClawLightDomElement {
   @state() private status: ClawsStatusResult | null = null;
   @state() private doctor: ClawsDoctorResult | null = null;
   @state() private selectedAgentId: string | null = null;
+  @state() private selectedAgentExplicit = false;
   @state() private query = "";
   @state() private entries: ClawCatalogEntry[] = [];
   @state() private detail: ClawCatalogDetail | null = null;
@@ -145,6 +146,7 @@ class ClawsPage extends OpenClawLightDomElement {
     this.doctor = null;
     this.error = null;
     this.selectedAgentId = null;
+    this.selectedAgentExplicit = false;
     this.entries = [];
     this.detail = null;
     this.completion = null;
@@ -153,6 +155,25 @@ class ClawsPage extends OpenClawLightDomElement {
 
   private selectedRecord(): ClawStatusEntry | null {
     return this.status?.records.find((record) => record.agentId === this.selectedAgentId) ?? null;
+  }
+
+  private selectInstalledAgent(agentId: string | null, explicit: boolean) {
+    if (this.selectedAgentId === agentId && this.selectedAgentExplicit === explicit) {
+      return;
+    }
+    this.operationGeneration += 1;
+    this.selectedAgentId = agentId;
+    this.selectedAgentExplicit = explicit;
+    this.cancelPlan();
+  }
+
+  private updateSelectionRequired(): boolean {
+    if (!this.detail) {
+      return false;
+    }
+    const matches =
+      this.status?.records.filter((record) => record.name === this.detail?.packageName) ?? [];
+    return matches.length > 1 && !this.selectedAgentExplicit;
   }
 
   private async refresh() {
@@ -188,7 +209,7 @@ class ClawsPage extends OpenClawLightDomElement {
       this.status = statusPayload;
       this.doctor = doctorPayload;
       if (!statusPayload.records.some((record) => record.agentId === this.selectedAgentId)) {
-        this.selectedAgentId = statusPayload.records[0]?.agentId ?? null;
+        this.selectInstalledAgent(statusPayload.records[0]?.agentId ?? null, false);
       }
     } catch (error) {
       if (this.generation === generation) {
@@ -311,7 +332,12 @@ class ClawsPage extends OpenClawLightDomElement {
   private previewUpdate() {
     const detail = this.detail;
     const selected = this.selectedRecord();
-    if (!detail || !selected || selected.name !== detail.packageName) {
+    if (
+      !detail ||
+      !selected ||
+      selected.name !== detail.packageName ||
+      this.updateSelectionRequired()
+    ) {
       return;
     }
     void this.loadPlan({
@@ -368,6 +394,7 @@ class ClawsPage extends OpenClawLightDomElement {
       }
       this.completion = payload;
       this.selectedAgentId = payload.operation === "remove" ? null : payload.agentId;
+      this.selectedAgentExplicit = false;
       this.cancelPlan();
       await this.refresh();
     });
@@ -442,6 +469,7 @@ class ClawsPage extends OpenClawLightDomElement {
                 completion: this.completion,
                 removeUnused: this.removeUnused,
                 riskAcknowledged: this.riskAcknowledged,
+                updateSelectionRequired: this.updateSelectionRequired(),
                 onQueryChange: (query) => {
                   this.query = query;
                 },
@@ -468,8 +496,7 @@ class ClawsPage extends OpenClawLightDomElement {
             doctor: this.doctor,
             selectedAgentId: this.selectedAgentId,
             onSelect: (agentId) => {
-              this.selectedAgentId = agentId;
-              this.cancelPlan();
+              this.selectInstalledAgent(agentId, true);
             },
           })}
         </wa-tab-panel>

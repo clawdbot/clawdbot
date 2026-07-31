@@ -74,6 +74,7 @@ function props(overrides: Partial<ClawLifecycleViewProps> = {}): ClawLifecycleVi
     onRemoveUnusedChange: vi.fn(),
     onRiskAcknowledgedChange: vi.fn(),
     onOpenChat: vi.fn(),
+    updateSelectionRequired: false,
     ...overrides,
   };
 }
@@ -113,6 +114,32 @@ describe("renderClawLifecycle", () => {
     );
     expect(apply?.disabled).toBe(true);
     expect(container.textContent).toContain("accept this package risk");
+  });
+
+  it("renders capability changes before apply", () => {
+    const container = document.createElement("div");
+    render(
+      renderClawLifecycle(
+        props({
+          plan: {
+            ...plan,
+            riskAcknowledgementRequired: false,
+            capabilities: [
+              {
+                kind: "agent",
+                id: "analyst",
+                action: "create",
+                reason: "The new agent declares network and scheduled work capabilities.",
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Capability changes");
+    expect(container.textContent).toContain("network and scheduled work capabilities");
   });
 
   it("never offers chat for a completed removal", () => {

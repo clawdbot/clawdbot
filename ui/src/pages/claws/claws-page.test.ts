@@ -2,7 +2,10 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  ClawCatalogDetail,
   ClawCatalogEntry,
+  ClawLifecyclePlanResult,
+  ClawStatusEntry,
   ClawsCatalogSearchResult,
   ClawsDoctorResult,
   ClawsStatusResult,
@@ -31,7 +34,42 @@ type TestClawsPage = HTMLElement & {
   entries: ClawCatalogEntry[];
   operationBusy: boolean;
   mutationAvailable: boolean;
+  status: ClawsStatusResult | null;
+  detail: ClawCatalogDetail | null;
+  selectedAgentId: string | null;
+  selectedAgentExplicit: boolean;
+  plan: ClawLifecyclePlanResult | null;
+  operationGeneration: number;
+  previewUpdate: () => void;
+  selectInstalledAgent: (agentId: string | null, explicit: boolean) => void;
   searchCatalog: () => Promise<void>;
+};
+
+const installedRecord = (agentId: string): ClawStatusEntry => ({
+  agentId,
+  name: "financial-analyst",
+  version: "1.0.0",
+  sourceKind: "package",
+  status: "complete",
+  agentState: "present",
+  bootstrapState: "complete",
+  orphaned: false,
+  addedAtMs: 1,
+  updatedAtMs: 2,
+  resources: [],
+});
+
+const catalogDetail: ClawCatalogDetail = {
+  packageName: "financial-analyst",
+  displayName: "Financial Analyst",
+  version: "1.1.0",
+  channel: "community",
+  official: false,
+  workspaceFiles: 1,
+  skills: 0,
+  plugins: 0,
+  mcpServers: 0,
+  scheduledJobs: 0,
 };
 
 function deferred<T>() {
@@ -180,5 +218,73 @@ describe("ClawsPage", () => {
 
     expect(page.entries).toEqual([]);
     expect(page.operationBusy).toBe(false);
+  });
+
+  it("requires explicit agent selection before updating duplicate package installs", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "claws.status") {
+        return {
+          ...status,
+          records: [installedRecord("analyst-a"), installedRecord("analyst-b")],
+        };
+      }
+      if (method === "claws.doctor") {
+        return doctor;
+      }
+      if (method === "claws.update.plan") {
+        return {
+          schemaVersion: "openclaw.clawsGatewayPlan.v1",
+          operation: "update",
+          planIntegrity: "sha256:plan",
+          target: { agentId: "analyst-b", targetVersion: "1.1.0" },
+          actions: [],
+          capabilities: [],
+          blockers: [],
+          riskAcknowledgementRequired: false,
+        };
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const harness = createHarness({
+      methods: [
+        "claws.status",
+        "claws.doctor",
+        "claws.add.plan",
+        "claws.update.plan",
+        "claws.remove.plan",
+      ],
+      request: request as GatewayBrowserClient["request"],
+    });
+    const page = await mount(harness.context);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("claws.doctor", {}));
+    page.detail = catalogDetail;
+    page.selectedAgentId = "analyst-a";
+    page.selectedAgentExplicit = false;
+
+    page.previewUpdate();
+    expect(request).not.toHaveBeenCalledWith("claws.update.plan", expect.anything());
+
+    const generation = page.operationGeneration;
+    page.plan = {
+      schemaVersion: "openclaw.clawsGatewayPlan.v1",
+      operation: "remove",
+      planIntegrity: "sha256:old-plan",
+      target: { agentId: "analyst-a" },
+      actions: [],
+      capabilities: [],
+      blockers: [],
+      riskAcknowledgementRequired: false,
+    };
+    page.selectInstalledAgent("analyst-b", true);
+
+    expect(page.operationGeneration).toBe(generation + 1);
+    expect(page.plan).toBeNull();
+    page.previewUpdate();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("claws.update.plan", {
+        target: "analyst-b",
+        source: { packageName: "financial-analyst", version: "1.1.0" },
+      }),
+    );
   });
 });

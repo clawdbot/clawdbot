@@ -2043,6 +2043,7 @@ export const en: TranslationMap = {
       official: "Official",
       workspaceFiles: "Workspace files",
       selectMatchingAgent: "Select an installed agent from this package to preview its update.",
+      selectUpdateAgent: "Select the installed agent to update.",
     },
     actions: {
       previewAdd: "Preview add",
@@ -2062,6 +2063,7 @@ export const en: TranslationMap = {
       },
       blocked: "Blocked",
       ready: "Ready",
+      capabilities: "Capability changes",
       readiness: "This agent still has {count} local readiness requirement(s).",
       removeUnused: "Also remove managed plugins, skills, and MCP servers no longer used elsewhere",
       acknowledgeRisk: "I reviewed the ClawHub trust warning and accept this package risk",

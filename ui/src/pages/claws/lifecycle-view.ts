@@ -34,11 +34,13 @@ export type ClawLifecycleViewProps = {
   onRemoveUnusedChange: (value: boolean) => void;
   onRiskAcknowledgedChange: (value: boolean) => void;
   onOpenChat: (agentId: string) => void;
+  updateSelectionRequired: boolean;
 };
 
 function renderCatalog(props: ClawLifecycleViewProps) {
   const selectedMatchesDetail =
     props.selected && props.detail && props.selected.name === props.detail.packageName;
+  const canPreviewUpdate = selectedMatchesDetail && !props.updateSelectionRequired;
   return html`
     <section class="claws-lifecycle" aria-label=${t("clawsPage.catalog.title")}>
       <div class="claws-lifecycle__heading">
@@ -146,7 +148,7 @@ function renderCatalog(props: ClawLifecycleViewProps) {
                 <button
                   class="btn"
                   type="button"
-                  ?disabled=${props.busy || !props.lifecycleAvailable || !selectedMatchesDetail}
+                  ?disabled=${props.busy || !props.lifecycleAvailable || !canPreviewUpdate}
                   @click=${props.onPreviewUpdate}
                 >
                   ${t("clawsPage.actions.previewUpdate")}
@@ -154,6 +156,9 @@ function renderCatalog(props: ClawLifecycleViewProps) {
               </div>
               ${props.selected && !selectedMatchesDetail
                 ? html`<div class="muted">${t("clawsPage.catalog.selectMatchingAgent")}</div>`
+                : nothing}
+              ${props.updateSelectionRequired
+                ? html`<div class="muted">${t("clawsPage.catalog.selectUpdateAgent")}</div>`
                 : nothing}
             </div>
           `
@@ -207,6 +212,26 @@ function renderPlan(props: ClawLifecycleViewProps) {
           `,
         )}
       </div>
+      ${plan.capabilities.length > 0
+        ? html`
+            <div class="claws-detail__section">
+              <div class="claws-detail__heading">${t("clawsPage.plan.capabilities")}</div>
+              <div class="claws-plan__actions-list">
+                ${repeat(
+                  plan.capabilities,
+                  (capability) => `${capability.kind}:${capability.id}:${capability.action}`,
+                  (capability) => html`
+                    <div class="claws-plan-action">
+                      <span><strong>${capability.action}</strong> ${capability.kind}</span>
+                      <span class="claws-plan-action__id">${capability.id}</span>
+                      <span class="muted">${capability.reason}</span>
+                    </div>
+                  `,
+                )}
+              </div>
+            </div>
+          `
+        : nothing}
       ${plan.readiness && !plan.readiness.ready
         ? html`<div class="callout warn">
             ${t("clawsPage.plan.readiness", {
