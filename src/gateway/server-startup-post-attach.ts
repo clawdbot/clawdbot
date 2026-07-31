@@ -1,6 +1,7 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
 import pMap from "p-map";
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
@@ -12,6 +13,7 @@ import type { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
@@ -27,12 +29,14 @@ import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js"
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import { scheduleContextCachePrewarm } from "./server-startup-context-cache-prewarm.js";
+import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
 import {
   createGatewayStartupOutcomeRecorder,
   formatGatewayStartupOutcomes,
   type GatewayStartupOutcomeRecorder,
 } from "./server-startup-outcomes.js";
+import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { warmMacOSSystemCaOffMainThread } from "./system-ca-warmup.js";
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
@@ -43,13 +47,7 @@ const AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS = 0;
 const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SESSION_LOCK_CLEANUP_CONCURRENCY = 4;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
-const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
 type Awaitable<T> = T | Promise<T>;
-type GatewayStartupTrace = {
-  detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
-  mark: (name: string) => void;
-  measure: <T>(name: string, run: () => Awaitable<T>) => Promise<T>;
-};
 
 type GatewayMemoryStartupPolicy =
   | { mode: "off" }
@@ -85,15 +83,6 @@ export function stopPostReadySidecarsAfterCloseStarted(params: {
   for (const postReadySidecar of params.postReadySidecars) {
     void postReadySidecar.stop();
   }
-}
-
-/** Measure a post-attach startup step when tracing is active. */
-async function measureStartup<T>(
-  startupTrace: GatewayStartupTrace | undefined,
-  name: string,
-  run: () => Awaitable<T>,
-): Promise<T> {
-  return startupTrace ? startupTrace.measure(name, run) : await run();
 }
 
 /** Measure provider-auth warming without letting event-loop stalls hide in wall time. */
@@ -132,21 +121,7 @@ function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): bo
 }
 
 function resolveGatewayMemoryStartupPolicy(cfg: OpenClawConfig): GatewayMemoryStartupPolicy {
-  if (cfg.memory?.backend !== "qmd") {
-    return { mode: "off" };
-  }
-  const startup = cfg.memory.qmd?.update?.startup;
-  if (startup === "immediate") {
-    return { mode: "immediate" };
-  }
-  if (startup === "idle") {
-    const rawDelayMs = cfg.memory.qmd?.update?.startupDelayMs;
-    const delayMs =
-      typeof rawDelayMs === "number" && Number.isFinite(rawDelayMs) && rawDelayMs >= 0
-        ? Math.floor(rawDelayMs)
-        : QMD_STARTUP_IDLE_DELAY_MS;
-    return { mode: "idle", delayMs };
-  }
+  void cfg;
   return { mode: "off" };
 }
 
@@ -560,6 +535,7 @@ async function prewarmConfiguredPrimaryModel(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
   log: { warn: (msg: string) => void };
+  startupTrace?: GatewayStartupTrace;
 }): Promise<void> {
   await publishConfiguredModelRuntimeSnapshots(params);
 }
@@ -568,12 +544,42 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
   log: { warn: (msg: string) => void };
+  startupTrace?: GatewayStartupTrace;
 }): Promise<void> {
   const { refreshPreparedModelRuntimeSnapshots } =
     await import("../agents/prepared-model-runtime.js");
   await refreshPreparedModelRuntimeSnapshots(params.cfg, {
     gatewayLifecycle: true,
+    catalogMode: "static",
     ...(params.workspaceDir ? { defaultWorkspaceDir: params.workspaceDir } : {}),
+    ...(params.startupTrace
+      ? {
+          onBuildStats: (stats) =>
+            params.startupTrace?.detail("sidecars.model-runtime-build", [
+              ["agentCount", stats.agentCount],
+              ["workspaceGroupCount", stats.workspaceGroupCount],
+              ["configuredFactsGroupCount", stats.configuredFactsGroupCount],
+              ["catalogSourceCount", stats.catalogSourceCount],
+              ["credentialGroupCount", stats.credentialGroupCount],
+              ["catalogGroupCount", stats.catalogGroupCount],
+              ["runtimeRegistryCount", stats.runtimeRegistryCount],
+              ["configuredRuntimeModelCount", stats.configuredRuntimeModelCount],
+              ["generatedCatalogPluginCount", stats.generatedCatalogPluginCount],
+              ["generatedCatalogReadCount", stats.generatedCatalogReadCount],
+              ["workspaceFactsMs", stats.workspaceFactsMs],
+              ["runtimePluginMs", stats.runtimePluginMs],
+              ["pluginMetadataMs", stats.pluginMetadataMs],
+              ["staticProviderCatalogMs", stats.staticProviderCatalogMs],
+              ["ambientCredentialsMs", stats.ambientCredentialsMs],
+              ["agentFactsMs", stats.agentFactsMs],
+              ["configuredProjectionMs", stats.configuredProjectionMs],
+              ["catalogSourceMs", stats.catalogSourceMs],
+              ["registryMs", stats.registryMs],
+              ["sourceConcurrencyLimitCount", stats.sourceConcurrencyLimit],
+              ["fullCatalogConcurrencyLimitCount", stats.fullCatalogConcurrencyLimit],
+            ]),
+        }
+      : {}),
   });
 }
 
@@ -582,6 +588,7 @@ async function publishStartupModelRuntime(
     cfg: OpenClawConfig;
     workspaceDir?: string;
     log: { warn: (msg: string) => void };
+    startupTrace?: GatewayStartupTrace;
   },
   prewarm: typeof prewarmConfiguredPrimaryModel = prewarmConfiguredPrimaryModel,
 ): Promise<void> {
@@ -651,14 +658,15 @@ export async function startGatewaySidecars(params: {
   const skipChannels =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
-  // Agent RPC remains available when transports are disabled. Publish its mandatory lifecycle
-  // owner before accepting work so request paths can only observe pending or ready snapshots.
+  // Agent RPC remains available when transports are disabled. Publish configured/static facts before
+  // accepting work; live provider catalogs stay advisory and never enter the Gateway lifecycle.
   await measureStartup(params.startupTrace, "sidecars.model-runtime", () =>
     publishStartupModelRuntime(
       {
         cfg: params.cfg,
         workspaceDir: params.defaultWorkspaceDir,
         log: params.log,
+        startupTrace: params.startupTrace,
       },
       params.prewarmPrimaryModel,
     ),
@@ -1025,6 +1033,8 @@ export async function startGatewayPostAttachRuntime(
     };
     gatewayPluginConfigAtStart: OpenClawConfig;
     activationSourceConfig: OpenClawConfig;
+    pluginManifestRecords: readonly PluginManifestRecord[];
+    ambientEnvTriggers?: AmbientEnvTriggerPolicy;
     pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
     defaultWorkspaceDir: string;
     deps: CliDeps;
@@ -1122,6 +1132,9 @@ export async function startGatewayPostAttachRuntime(
     runtimeDeps.logGatewayStartup({
       cfg: params.cfgAtStart,
       activationSourceConfig: params.activationSourceConfig,
+      env: process.env,
+      manifestRecords: params.pluginManifestRecords,
+      ...(params.ambientEnvTriggers ? { ambientEnvTriggers: params.ambientEnvTriggers } : {}),
       bindHost: params.bindHost,
       bindHosts: params.bindHosts,
       port: params.port,
@@ -1229,13 +1242,22 @@ export async function startGatewayPostAttachRuntime(
             loaderStatsAfter.sourceTransformFallbacks - loaderStatsBefore.sourceTransformFallbacks,
           ],
         ]);
+        let mainSessionRecoverySidecar: GatewayPostReadySidecarHandle | undefined;
         try {
-          const { scheduleRestartAbortedMainSessionRecovery } =
-            await loadMainSessionRestartRecoveryModule();
-          scheduleRestartAbortedMainSessionRecovery({
-            cfg: params.cfgAtStart,
-            gatewayRuntime: params.recoveryRuntime,
-          });
+          if (params.isClosing?.() !== true) {
+            const { scheduleRestartAbortedMainSessionRecovery } =
+              await loadMainSessionRestartRecoveryModule();
+            // Closing can begin while the runtime module is loading; a late owner
+            // would miss lifetime registration and race the replacement gateway.
+            if (params.isClosing?.() !== true) {
+              mainSessionRecoverySidecar = scheduleRestartAbortedMainSessionRecovery({
+                cfg: params.cfgAtStart,
+                delayMs: 0,
+                shouldContinue: () => params.isClosing?.() !== true,
+                gatewayRuntime: params.recoveryRuntime,
+              });
+            }
+          }
         } catch (err) {
           params.log.warn(`main-session restart recovery failed to schedule: ${String(err)}`);
         }
@@ -1254,7 +1276,11 @@ export async function startGatewayPostAttachRuntime(
           reportPluginServices(result.pluginServices);
         }
         const postReadySidecars = [...result.postReadySidecars];
-        const gatewayLifetimeSidecars = [scheduleContextCachePrewarm(params)];
+        const gatewayLifetimeSidecars = [
+          scheduleContextCachePrewarm(params),
+          scheduleGatewayHandlerPrewarm(params),
+          ...(mainSessionRecoverySidecar ? [mainSessionRecoverySidecar] : []),
+        ];
         if (workerEnvironmentSidecar) {
           gatewayLifetimeSidecars.push(workerEnvironmentSidecar);
         }

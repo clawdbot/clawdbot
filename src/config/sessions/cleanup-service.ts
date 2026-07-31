@@ -27,7 +27,6 @@ import {
   inspectSqliteSessionHistoryDiskBudget,
 } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { cloneSessionStoreRecord } from "./store-cache.js";
 import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
@@ -241,6 +240,10 @@ function retireMainScopeDirectSessionEntries(params: {
 }): number {
   let retired = 0;
   for (const [key, entry] of Object.entries(params.store)) {
+    // Scope repair cannot retire a user-shelved archive; deletion stays explicit.
+    if (entry.archivedAt !== undefined) {
+      continue;
+    }
     if (
       isMainScopeStaleDirectSessionKey({
         cfg: params.cfg,
@@ -280,13 +283,21 @@ function pruneMissingTranscriptEntries(params: {
 }): number {
   let removed = 0;
   for (const [key, entry] of Object.entries(params.store)) {
-    // `--fix-missing` is explicit repair for ordinary rows, but it cannot
-    // release a harness ownership lock. Header-only supervised transcripts are
-    // valid while their first native turn is still pending.
-    if (entry?.modelSelectionLocked === true && shouldPreserveMaintenanceEntry({ key, entry })) {
+    // `--fix-missing` cannot release harness ownership or delete a user-shelved archive.
+    if (
+      (entry?.modelSelectionLocked === true || entry?.archivedAt !== undefined) &&
+      shouldPreserveMaintenanceEntry({ key, entry })
+    ) {
       continue;
     }
-    if (parseAgentSessionKey(key) && entry.sessionId === key && !entry.sessionFile) {
+    const legacySessionFile = (entry as { sessionFile?: unknown }).sessionFile;
+    // Explicitly pending sessions and their shipped pre-flag shape may not have a first turn yet.
+    if (
+      parseAgentSessionKey(key) &&
+      (entry.initializationPending === true ||
+        (entry.sessionId === key &&
+          (typeof legacySessionFile !== "string" || !legacySessionFile.trim())))
+    ) {
       continue;
     }
     if (!entry?.sessionId) {
@@ -349,7 +360,7 @@ async function previewStoreCleanup(params: {
     createIfMissing: !params.dryRun,
   });
   // Preview always mutates a clone so dry-run output can report exact counts without touching disk.
-  const previewStore = cloneSessionStoreRecord(beforeStore);
+  const previewStore = structuredClone(beforeStore);
   const staleKeys = new Set<string>();
   const cappedKeys = new Set<string>();
   const missingKeys = new Set<string>();
@@ -541,7 +552,7 @@ export async function runSessionsCleanup(params: {
           onPruned: (sessionKey, entry) => {
             missingRemovals.push({
               sessionKey,
-              expectedEntry: cloneSessionStoreRecord({ entry }).entry,
+              expectedEntry: structuredClone(entry),
             });
           },
         });
@@ -555,7 +566,7 @@ export async function runSessionsCleanup(params: {
           onRetired: (sessionKey, entry) => {
             dmScopeRetiredRemovals.push({
               sessionKey,
-              expectedEntry: cloneSessionStoreRecord({ entry }).entry,
+              expectedEntry: structuredClone(entry),
               archiveRemovedTranscript: true,
             });
           },
@@ -569,12 +580,10 @@ export async function runSessionsCleanup(params: {
         storePath: target.storePath,
         removals,
         activeSessionKey: opts.activeKey,
-        preserveActiveWork: true,
         maintenanceOverride: {
           ...maintenance,
           mode,
         },
-        restrictArchivedTranscriptsToStoreDir: true,
       });
       const postApplyStore = loadCleanupSessionStore(target, { createIfMissing: true });
       const appliedUnreferencedArtifacts =

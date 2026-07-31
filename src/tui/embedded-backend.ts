@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -76,6 +77,7 @@ import {
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
+  loadSessionEntryReadOnly,
   migrateAndPruneGatewaySessionStoreKey,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
@@ -89,7 +91,7 @@ import {
   setEmbeddedPluginApprovalBroker,
 } from "../infra/embedded-plugin-approval-broker.js";
 import { logInfo, logWarn } from "../logger.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { agentSessionKeysMatchByRequestKey, normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import {
@@ -110,10 +112,11 @@ import type {
   TuiSessionList,
   TuiSessionCreateOptions,
 } from "./tui-backend.js";
+import { formatTuiErrorMessage } from "./tui-formatters.js";
 
 type LocalRunState = {
   sessionKey: string;
-  agentId?: string;
+  agentId: string;
   controller: AbortController;
   buffer: string;
   lastBroadcastText?: string;
@@ -168,7 +171,7 @@ const embeddedSessionStartupMigrationLog = {
 function hasProviderWildcardModelAllowlist(cfg: OpenClawConfig) {
   const modelMaps = [
     cfg.agents?.defaults?.models,
-    ...(cfg.agents?.list?.map((agent) => agent?.models) ?? []),
+    ...listAgentEntries(cfg).map((agent) => agent.models),
   ];
   return modelMaps.some((models) =>
     Object.keys(models ?? {}).some((key) => key.trim().endsWith("/*")),
@@ -201,7 +204,7 @@ function ensureEmbeddedHistoryRuntimePluginsLoaded(params: {
     });
     return { status: "warmed" };
   } catch (err) {
-    return { status: "failed", error: String(err) };
+    return { status: "failed", error: formatTuiErrorMessage(err) };
   }
 }
 
@@ -450,9 +453,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const runId = opts.runId ?? randomUUID();
     const question = resolveBtwQuestion(opts.message);
     const isQueueCommand = resolveTextCommand(opts.message)?.command.key === "queue";
+    const agentId = resolveSessionAgentId({
+      sessionKey: opts.sessionKey,
+      config: getRuntimeConfig(),
+      agentId: opts.agentId,
+    });
     const runScope = {
       sessionKey: opts.sessionKey,
-      agentId: opts.agentId,
+      agentId,
     };
     const abortableSessionRun = this.hasAbortableSessionRun(runScope);
     const stopCommand = abortableSessionRun && isChatStopCommandText(opts.message);
@@ -509,7 +517,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const queuedRunReadiness = createQueuedRunReadiness();
     this.runs.set(runId, {
       sessionKey: opts.sessionKey,
-      agentId: opts.agentId,
+      agentId,
       controller,
       buffer: "",
       isBtw: Boolean(question),
@@ -599,9 +607,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
     await this.ready;
     const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-    const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(
+    const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntryReadOnly(
       opts.sessionKey,
-      loadOptions,
+      { ...loadOptions, includeStoreChildEntries: true },
     );
     const sessionId = entry?.sessionId;
     const sessionAgentId = resolveSessionAgentId({
@@ -654,6 +662,22 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
     const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
     const messages = bounded.messages;
+    const newestInFlightRun = [...this.runs.entries()].findLast(
+      ([, run]) =>
+        !run.isBtw &&
+        !run.finalSent &&
+        agentSessionKeysMatchByRequestKey(run.sessionKey, opts.sessionKey) &&
+        normalizeAgentId(run.agentId) === normalizeAgentId(sessionAgentId),
+    );
+    const inFlightRun = newestInFlightRun
+      ? {
+          runId: newestInFlightRun[0],
+          text: projectLiveAssistantBufferedText(
+            normalizeLiveAssistantBufferedText(newestInFlightRun[1].buffer).trim(),
+            { suppressLeadFragments: true },
+          ).text.trim(),
+        }
+      : undefined;
 
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
@@ -688,6 +712,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       fastMode: entry?.fastMode,
       verboseLevel: sessionInfo.verboseLevel,
       runtimePluginsPrewarm,
+      ...(inFlightRun ? { inFlightRun } : {}),
     };
   }
 
@@ -696,6 +721,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const cfg = getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
       agentId: opts?.agentId,
+      projection: "list",
     });
     return (await listSessionsFromStoreAsync({
       cfg,
@@ -758,7 +784,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       ok: true as const,
       path: target.storePath,
       key: target.canonicalKey ?? opts.key,
-      entry: applied.entry,
+      entry: applied.entry as unknown as Record<string, unknown>,
       resolved: {
         modelProvider: resolved.provider,
         model: resolved.model,
@@ -768,6 +794,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async resetSession(key: string, reason?: "new" | "reset", opts?: { agentId?: string }) {
     await this.ready;
+    if (loadSessionEntryReadOnly(key, opts).entry?.incognito === true) {
+      throw new Error("Incognito sessions cannot reset in place.");
+    }
     const result = await performGatewaySessionReset({
       key,
       ...(opts?.agentId ? { agentId: opts.agentId } : {}),
@@ -776,6 +805,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
     if (!result.ok) {
       throw new Error(result.error.message);
+    }
+    if ("incognitoDeleted" in result) {
+      return { ok: true as const, key: result.key, deleted: true as const };
     }
     return { ok: true as const, key: result.key, entry: result.entry, resolved: result.resolved };
   }
@@ -786,6 +818,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const result = await createGatewaySession({
       cfg,
       ...opts,
+      creation: { via: "operator", actor: { type: "human" } },
       emitCommandHooks: Boolean(opts.parentSessionKey),
       commandSource: "tui:embedded",
       loadGatewayModelCatalog: () => loadEmbeddedTuiModelCatalog(cfg),
@@ -1205,6 +1238,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
+      agentId: run.agentId,
       state: "delta",
       ...deltaPayload,
       message: {
@@ -1236,6 +1270,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
+      agentId: run.agentId,
       state: "final",
       ...(stopReason ? { stopReason } : {}),
       ...(shouldIncludeMessage
@@ -1266,6 +1301,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
+      agentId: run.agentId,
       state: "aborted",
       ...(diagnostic ? { errorMessage: diagnostic } : {}),
     });
@@ -1286,6 +1322,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
+      agentId: run.agentId,
       state: "error",
       ...(errorMessage ? { errorMessage } : {}),
     });
@@ -1300,6 +1337,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.emit("chat", {
       runId,
       sessionKey: run.sessionKey,
+      agentId: run.agentId,
       state: "delta",
       deltaText: "",
       message: {
@@ -1328,6 +1366,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     this.emit("agent", {
       runId: evt.runId,
+      sessionKey: run.sessionKey,
+      agentId: run.agentId,
       stream: evt.stream,
       data: evt.data,
     });
@@ -1460,6 +1500,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           kind: "btw",
           runId: params.runId,
           sessionKey: result.sessionKey,
+          agentId: run.agentId,
           question: run.question,
           text: result.text,
           ...(result.isError ? { isError: true } : {}),
@@ -1509,6 +1550,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
             kind: "btw",
             runId: params.runId,
             sessionKey: run.sessionKey,
+            agentId: run.agentId,
             question: run.question,
             text,
           });
@@ -1518,9 +1560,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
       }
 
       if (!run.finalSent) {
-        const normalizedText = payloadText(result?.payloads);
-        if (normalizedText && !run.buffer) {
-          run.buffer = normalizedText;
+        const finalText = payloadText(result?.payloads);
+        // A completed response is authoritative; keep the stream only when it has no final text.
+        if (finalText) {
+          run.buffer = finalText;
         }
         const stopReason =
           run.lifecycleStopReason ??

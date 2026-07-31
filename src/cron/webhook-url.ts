@@ -9,7 +9,14 @@ export function normalizeHttpWebhookUrl(value: unknown): string | null {
   if (!trimmed) {
     return null;
   }
-  if (!isHttpUrl(trimmed)) {
+  try {
+    const parsed = new URL(trimmed);
+    // Fetch rejects URL userinfo before dispatch. Fail at the shared boundary so
+    // validation and doctor migration do not preserve a target that cannot deliver.
+    if (!isHttpUrl(parsed) || parsed.username || parsed.password) {
+      return null;
+    }
+  } catch {
     return null;
   }
   return trimmed;

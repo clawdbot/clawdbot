@@ -83,4 +83,50 @@ describe("searchVisibleSessionTranscripts", () => {
       expect.objectContaining({ sessionKeys: [lastSession.key] }),
     );
   });
+
+  it.each([
+    {
+      label: "a later session page cannot be loaded",
+      page: null,
+      error: /load.*session|session.*load/i,
+    },
+    {
+      label: "a later session page does not advance its cursor",
+      page: {
+        ts: 1,
+        path: "",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+        hasMore: true,
+        nextOffset: 1,
+      } satisfies SessionsListResult,
+      error: /session.*advance|pagination.*advance/i,
+    },
+  ])("fails transcript search when $label", async ({ page, error }) => {
+    const request = vi.fn(async (_method: string, _params: unknown) => ({ results: [] }));
+    const listSessions = vi.fn().mockResolvedValueOnce(page);
+
+    await expect(
+      searchVisibleSessionTranscripts({
+        client: { request } as unknown as GatewayBrowserClient,
+        query: "needle",
+        result: {
+          ts: 1,
+          path: "",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [{ key: "agent:main:session-0", kind: "direct", updatedAt: 1 }],
+          hasMore: true,
+          nextOffset: 1,
+        } satisfies SessionsListResult,
+        listSessions,
+        listOptions: { agentId: "main" },
+        resolveAgentId: () => "main",
+      }),
+    ).rejects.toThrow(error);
+
+    expect(listSessions).toHaveBeenCalledWith({ agentId: "main", limit: 200, offset: 1 });
+    expect(request).not.toHaveBeenCalled();
+  });
 });

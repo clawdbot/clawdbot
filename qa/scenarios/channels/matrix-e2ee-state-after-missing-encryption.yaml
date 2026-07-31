@@ -4,9 +4,8 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.access-and-identity
+      - matrix.legacy-state
   execution:
-    profiles: { "matrix:all": 66, "matrix:e2ee-deep": 0 }
     kind: flow
     channel: matrix
     timeoutMs: 150000

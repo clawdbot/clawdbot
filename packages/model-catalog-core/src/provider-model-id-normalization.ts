@@ -136,8 +136,9 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
   }
   if (normalizedProvider === "anthropic") {
     const anthropicAliases: Record<string, string> = {
+      "opus-5": "claude-opus-5",
+      opus: "claude-opus-5",
       "opus-4.8": "claude-opus-4-8",
-      opus: "claude-opus-4-8",
       "opus-4.6": "claude-opus-4-6",
       "sonnet-5": "claude-sonnet-5",
       sonnet: "claude-sonnet-5",

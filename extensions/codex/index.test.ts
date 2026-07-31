@@ -75,6 +75,54 @@ describe("codex plugin", () => {
     expect(openSyncKeyedStore).not.toHaveBeenCalled();
   });
 
+  it("proactively monitors an explicitly configured remote websocket app-server", () => {
+    const registerService = vi.fn();
+
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {
+          appServer: {
+            transport: "websocket",
+            url: "ws://127.0.0.1:39175",
+          },
+        },
+        runtime: createCodexTestRuntime(),
+        registerService,
+      }),
+    );
+
+    expect(registerService).toHaveBeenCalledOnce();
+    expect(mockCallArg(registerService)).toMatchObject({
+      id: "codex-app-server-connection-health",
+      start: expect.any(Function),
+      stop: expect.any(Function),
+    });
+  });
+
+  it("does not start remote connection monitoring for local Codex transports", () => {
+    for (const appServer of [undefined, { transport: "stdio" }, { transport: "unix" }]) {
+      const registerService = vi.fn();
+
+      plugin.register(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: {},
+          pluginConfig: appServer ? { appServer } : {},
+          runtime: createCodexTestRuntime(),
+          registerService,
+        }),
+      );
+
+      expect(registerService).not.toHaveBeenCalled();
+    }
+  });
+
   it("registers the agent harness, native thread tool, and hosted web search", () => {
     const registerAgentHarness = vi.fn();
     const registerCommand = vi.fn();
@@ -125,6 +173,7 @@ describe("codex plugin", () => {
     });
     expect(typeof agentHarnessRegistration.dispose).toBe("function");
     expect(typeof agentHarnessRegistration.fetchUsageSnapshot).toBe("function");
+    expect(typeof agentHarnessRegistration.loadMcpToolCatalog).toBe("function");
     expect(mediaProviderRegistration?.id).toBe("codex");
     expect(mediaProviderRegistration?.capabilities).toEqual(["image"]);
     expect(mediaProviderRegistration?.defaultModels).toEqual({ image: "gpt-5.6-sol" });
@@ -254,6 +303,93 @@ describe("codex plugin", () => {
     ]);
     expect(registration?.[0]({ senderIsOwner: false })).toEqual([]);
     expect(registration?.[0]({})).toEqual([]);
+  });
+
+  it.each([
+    ["supervision is absent", undefined],
+    ["supervision is disabled", { enabled: false }],
+    ["supervision is enabled", { enabled: true }],
+  ] as const)(
+    "keeps live user-home appServer config for an auto-enabled Codex entry when %s",
+    (_label, supervision) => {
+      const registerTool = vi.fn();
+      plugin.register(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: {},
+          pluginConfig: {},
+          // No explicit plugins.entries.codex.enabled: core auto-enables the
+          // plugin from this config block, so the harness must keep honoring it.
+          runtime: createCodexTestRuntime(() => ({
+            plugins: {
+              entries: {
+                codex: {
+                  config: {
+                    appServer: { homeScope: "user" },
+                    ...(supervision ? { supervision } : {}),
+                  },
+                },
+              },
+            },
+          })),
+          registerAgentHarness: vi.fn(),
+          registerCommand: vi.fn(),
+          registerMediaUnderstandingProvider: vi.fn(),
+          registerMigrationProvider: vi.fn(),
+          registerProvider: vi.fn(),
+          registerTool,
+          on: vi.fn(),
+        }),
+      );
+
+      const registration = registerTool.mock.calls.find(
+        ([, options]) => options?.name === "codex_threads",
+      ) as
+        | [(context: { senderIsOwner?: boolean }) => { name: string } | null, { name: string }]
+        | undefined;
+      // codex_threads exists only while user-home scope or supervision is live,
+      // so it proves the plugin config survived the enable-state resolution.
+      expect(registration?.[0]({ senderIsOwner: true })?.name).toBe("codex_threads");
+    },
+  );
+
+  it("drops live plugin config when the Codex entry is explicitly disabled", () => {
+    const registerTool = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: createCodexTestRuntime(() => ({
+          plugins: {
+            entries: {
+              codex: {
+                enabled: false,
+                config: { appServer: { homeScope: "user" } },
+              },
+            },
+          },
+        })),
+        registerAgentHarness: vi.fn(),
+        registerCommand: vi.fn(),
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        registerTool,
+        on: vi.fn(),
+      }),
+    );
+
+    const registration = registerTool.mock.calls.find(
+      ([, options]) => options?.name === "codex_threads",
+    ) as
+      | [(context: { senderIsOwner?: boolean }) => { name: string } | null, { name: string }]
+      | undefined;
+    expect(registration?.[0]({ senderIsOwner: true })).toBeNull();
   });
 
   it("activates from live supervision config through a normalized Codex entry id", () => {
@@ -525,6 +661,30 @@ describe("codex plugin", () => {
       { agentId: "worker", sessionId: "parent-1" },
     );
     await expect(bindingStore.read(parent)).resolves.toMatchObject({ threadId: "thread-parent" });
+
+    // In-place reset cleanup is awaited before the replacement starts. Its
+    // delayed session_end event must not retire that same-id replacement.
+    const inPlace = sessionBindingIdentity({
+      agentId: "worker",
+      sessionId: "in-place-1",
+      sessionKey: "agent:worker:in-place",
+    });
+    await bindingStore.mutate(inPlace, {
+      kind: "set",
+      binding: { threadId: "thread-in-place-replacement", cwd: "/repo" },
+    });
+    await sessionEnd(
+      {
+        sessionId: "in-place-1",
+        sessionKey: "agent:worker:in-place",
+        reason: "reset",
+        nextSessionId: "in-place-1",
+      },
+      { agentId: "worker", sessionId: "in-place-1" },
+    );
+    await expect(bindingStore.read(inPlace)).resolves.toMatchObject({
+      threadId: "thread-in-place-replacement",
+    });
 
     // A same-key replacement that still names the successor id (physical rollover)
     // has no distinct nextSessionKey, so it retires as before.

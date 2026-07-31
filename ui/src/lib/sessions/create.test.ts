@@ -18,12 +18,14 @@ describe("requestSessionCreate", () => {
       request: vi.fn(async () => ({
         key: " agent:main:dashboard:new ",
         runStarted: true,
+        runId: "initial-send-id",
+        messageSeq: 7,
       })),
     };
 
     await expect(requestSessionCreate(client as never, { message: "hello" })).resolves.toEqual({
       key: "agent:main:dashboard:new",
-      initialRun: { status: "started" },
+      initialRun: { status: "started", messageId: "initial-send-id", messageSeq: 7 },
     });
   });
 

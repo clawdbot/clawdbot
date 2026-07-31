@@ -601,6 +601,51 @@ describe("listThinkingLevels", () => {
     ).toBe(true);
   });
 
+  it("uses advanced catalog efforts and derives OpenClaw Ultra from Max", () => {
+    const catalog = [
+      {
+        provider: "myazure",
+        id: "gpt-5.6-sol",
+        name: "GPT 5.6 Sol via Azure",
+        api: "openai-responses",
+        reasoning: true,
+        compat: {
+          supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+        },
+      },
+    ];
+
+    expect(listThinkingLevels("myazure", "gpt-5.6-sol", catalog, "openclaw")).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
+    expect(
+      isThinkingLevelSupported({
+        provider: "myazure",
+        model: "gpt-5.6-sol",
+        level: "max",
+        catalog,
+        agentRuntime: "openclaw",
+      }),
+    ).toBe(true);
+    expect(
+      isThinkingLevelSupported({
+        provider: "myazure",
+        model: "gpt-5.6-sol",
+        level: "ultra",
+        catalog,
+        agentRuntime: "openclaw",
+      }),
+    ).toBe(true);
+    expect(listThinkingLevels("myazure", "gpt-5.6-sol", catalog, "codex")).not.toContain("ultra");
+  });
+
   it("does not let catalog xhigh compat override binary thinking providers", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
       levels: [

@@ -26,22 +26,47 @@ private actor UnreadMutationRecorder {
     }
 }
 
+private actor UnreadPatchGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+
+    func wait() async {
+        guard !self.released else { return }
+        await withCheckedContinuation { continuation in
+            if self.released {
+                continuation.resume()
+            } else {
+                self.continuation = continuation
+            }
+        }
+    }
+
+    func release() {
+        self.released = true
+        self.continuation?.resume()
+        self.continuation = nil
+    }
+}
+
 private final class UnreadTestTransport: @unchecked Sendable, OpenClawChatTransport {
     private let state: UnreadTestTransportState
     private let sessions: [OpenClawChatSessionEntry]
     private let respectsListLimit: Bool
     private let patchDelay: Duration?
+    private let patchGate: UnreadPatchGate?
 
     init(
         sessions: [OpenClawChatSessionEntry],
         historyFailures: Int = 0,
         patchFailures: Int = 0,
         respectsListLimit: Bool = false,
-        patchDelay: Duration? = nil)
+        patchDelay: Duration? = nil,
+        patchGate: UnreadPatchGate? = nil)
     {
         self.sessions = sessions
         self.respectsListLimit = respectsListLimit
         self.patchDelay = patchDelay
+        self.patchGate = patchGate
         self.state = UnreadTestTransportState(
             historyFailures: historyFailures,
             patchFailures: patchFailures)
@@ -99,7 +124,9 @@ private final class UnreadTestTransport: @unchecked Sendable, OpenClawChatTransp
     {
         guard let unread else { return }
         await self.state.recordUnreadPatchStart()
-        if let patchDelay {
+        if let patchGate {
+            await patchGate.wait()
+        } else if let patchDelay {
             try await Task.sleep(for: patchDelay)
         }
         await self.state.recordUnreadPatch(key: key, unread: unread)
@@ -459,12 +486,13 @@ struct ChatViewModelUnreadTests {
     }
 
     @Test func `pending explicit unread overlays stale list until fresh observation`() async throws {
+        let patchGate = UnreadPatchGate()
         let transport = UnreadTestTransport(
             sessions: [
                 self.entry(key: "a", unread: false),
                 self.entry(key: "b", unread: false),
             ],
-            patchDelay: .milliseconds(200))
+            patchGate: patchGate)
         let viewModel = self.viewModel(sessionKey: "b", transport: transport)
         viewModel.refreshSessions()
         try await self.waitUntil { viewModel.sessions.count == 2 }
@@ -477,6 +505,7 @@ struct ChatViewModelUnreadTests {
         #expect(viewModel.sessions.first(where: { $0.key == "a" })?.unread == true)
         #expect(viewModel.unreadPatchGuard.localUnreadOverride(key: "a") == true)
 
+        await patchGate.release()
         await transport.setSessions([
             self.entry(key: "a", unread: true),
             self.entry(key: "b", unread: false),

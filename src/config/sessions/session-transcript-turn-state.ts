@@ -24,12 +24,9 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
       selected.entry.lifecycleRevision === expected.expectedLifecycleRevision) &&
     (expectedState === undefined ||
       (selected.entry.abortedLastRun === expectedState.abortedLastRun &&
-        (expectedState.mainRestartRecoveryCycleId === undefined ||
-          selected.entry.mainRestartRecovery?.cycleId ===
-            expectedState.mainRestartRecoveryCycleId) &&
-        (expectedState.mainRestartRecoveryRevision === undefined ||
-          selected.entry.mainRestartRecovery?.revision ===
-            expectedState.mainRestartRecoveryRevision) &&
+        selected.entry.mainRestartRecovery?.cycleId === expectedState.mainRestartRecoveryCycleId &&
+        selected.entry.mainRestartRecovery?.revision ===
+          expectedState.mainRestartRecoveryRevision &&
         selected.entry.restartRecoveryBeforeAgentReplyState ===
           expectedState.restartRecoveryBeforeAgentReplyState &&
         selected.entry.restartRecoveryDeliveryReceiptState ===
@@ -56,8 +53,7 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
           selected.entry.restartRecoveryTerminalRunIds,
           expectedState.restartRecoveryTerminalRunIds,
         ) &&
-        selected.entry.status === expectedState.status &&
-        selected.entry.updatedAt === expectedState.updatedAt)),
+        selected.entry.status === expectedState.status)),
   );
 }
 
@@ -84,9 +80,6 @@ export function buildExpectedTranscriptTurnSessionPatch(params: {
   return {
     ...(acceptedMessage ? params.sessionLifecyclePatch : undefined),
     ...(acceptedMessage && restartRecoveryTerminalRunIds ? { restartRecoveryTerminalRunIds } : {}),
-    ...(params.currentEntry.sessionFile === params.sessionFile
-      ? {}
-      : { sessionFile: params.sessionFile }),
     ...(touchUpdatedAt > 0
       ? {
           updatedAt: Math.max(

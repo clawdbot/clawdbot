@@ -23,6 +23,8 @@ type SubagentRunParams = {
   lane?: string;
   lightContext?: boolean;
   deliver?: boolean;
+  /** Deliver the completion to the authenticated requester of the current hook invocation. */
+  completionDelivery?: "current-requester";
   idempotencyKey?: string;
   cwd?: string;
 };
@@ -78,6 +80,8 @@ type RuntimeNodeListResult = {
     connected?: boolean;
     caps?: string[];
     commands?: string[];
+    /** True only for the node host installed alongside this Gateway. */
+    gatewayLocal?: boolean;
     /** Advertised commands currently permitted by Gateway node-command policy. */
     invocableCommands?: string[];
     nodePluginTools?: NodePluginToolDescriptor[];
@@ -90,6 +94,8 @@ type RuntimeNodeInvokeParams = {
   params?: unknown;
   timeoutMs?: number;
   idempotencyKey?: string;
+  /** Cancel the invocation and any work already dispatched to a first-party node. */
+  signal?: AbortSignal;
   /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
   scopes?: OperatorScope[];
 };

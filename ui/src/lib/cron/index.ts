@@ -39,9 +39,9 @@ export type CronFormState = {
   clearAgent: boolean;
   enabled: boolean;
   deleteAfterRun: boolean;
-  // on-exit jobs are read-only because the form cannot edit a watched command.
+  // Process-backed schedules are read-only because the form cannot edit their commands.
   // Preserve their schedule verbatim on save instead of rebuilding it.
-  scheduleKind: "at" | "every" | "cron" | "on-exit";
+  scheduleKind: "at" | "every" | "cron" | "on-exit" | "stream";
   scheduleAt: string;
   everyAmount: string;
   everyUnit: "seconds" | "minutes" | "hours" | "days";
@@ -52,7 +52,9 @@ export type CronFormState = {
   staggerUnit: "seconds" | "minutes";
   sessionTarget: "main" | "isolated" | "current" | `session:${string}`;
   wakeMode: "next-heartbeat" | "now";
-  payloadKind: "systemEvent" | "agentTurn";
+  // "heartbeat" is system-owned and always payloadLocked; the form only
+  // displays it, never submits it.
+  payloadKind: "systemEvent" | "agentTurn" | "command" | "script" | "heartbeat";
   payloadLocked: boolean;
   payloadText: string;
   payloadModel: string;
@@ -89,6 +91,12 @@ function isCronPayload(value: unknown): value is CronPayload {
   }
   if (value.kind === "command") {
     return Array.isArray(value.argv) && value.argv.every((arg) => typeof arg === "string");
+  }
+  if (value.kind === "script") {
+    return typeof value.script === "string";
+  }
+  if (value.kind === "heartbeat") {
+    return true;
   }
   return false;
 }
@@ -158,7 +166,7 @@ export type CronFieldKey =
 
 export type CronFieldErrors = Partial<Record<CronFieldKey, string>>;
 
-export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron" | "on-exit";
+export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron" | "on-exit" | "stream";
 export type CronJobsLastStatusFilter = "all" | CronRunStatus | "unknown";
 type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
@@ -320,8 +328,8 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
   if (!form.payloadLocked && form.payloadKind === "agentTurn") {
     const timeoutRaw = form.timeoutSeconds.trim();
     if (timeoutRaw) {
-      const timeout = toNumber(timeoutRaw, 0);
-      if (timeout <= 0) {
+      const timeout = toNumber(timeoutRaw, Number.NaN);
+      if (!Number.isFinite(timeout) || timeout < 0) {
         errors.timeoutSeconds = "cron.errors.timeoutInvalid";
       }
     }
@@ -555,6 +563,7 @@ export async function loadCronJobsPage(
     const res = await state.client.request<CronJobsListResult>("cron.list", {
       ...(state.cronAgentId ? { agentId: state.cronAgentId } : {}),
       includeDisabled: state.cronJobsEnabledFilter === "all",
+      includeDeliveryPreviews: false,
       limit: state.cronJobsLimit,
       offset,
       query: state.cronJobsQuery.trim() || undefined,
@@ -654,7 +663,8 @@ function resolveCronJobScheduleKind(job: CronJob): string | null {
     scheduleKind === "at" ||
     scheduleKind === "every" ||
     scheduleKind === "cron" ||
-    scheduleKind === "on-exit"
+    scheduleKind === "on-exit" ||
+    scheduleKind === "stream"
   ) {
     return scheduleKind;
   }
@@ -673,7 +683,7 @@ function clearCronRunsPage(state: CronState) {
 }
 
 function resetCronFormToDefaults(state: CronState) {
-  state.cronForm = { ...DEFAULT_CRON_FORM };
+  state.cronForm = { ...DEFAULT_CRON_FORM, agentId: state.cronAgentId ?? "" };
   // A fresh form starts visually clean; validation re-arms on the first change
   // or submit so required-field errors do not greet the user immediately.
   state.cronFieldErrors = {};
@@ -744,10 +754,14 @@ function parseStaggerSchedule(
   };
 }
 
+function isReadOnlyCronPayload(payload: CronPayload | null): boolean {
+  return payload?.kind === "command" || payload?.kind === "script" || payload?.kind === "heartbeat";
+}
+
 function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   const failureAlert = job.failureAlert;
   const payload = getCronJobPayload(job);
-  const payloadLocked = payload?.kind === "command";
+  const payloadLocked = isReadOnlyCronPayload(payload);
   const next: CronFormState = {
     ...prev,
     name: job.name,
@@ -768,10 +782,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     staggerUnit: "seconds",
     sessionTarget: job.sessionTarget,
     wakeMode: job.wakeMode,
-    payloadKind:
-      payload?.kind === "systemEvent" || payload?.kind === "agentTurn"
-        ? payload.kind
-        : DEFAULT_CRON_FORM.payloadKind,
+    payloadKind: payload?.kind ?? DEFAULT_CRON_FORM.payloadKind,
     payloadLocked,
     payloadText:
       payload?.kind === "systemEvent"
@@ -780,7 +791,9 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
           ? payload.message
           : payload?.kind === "command"
             ? payload.argv.join(" ")
-            : "",
+            : payload?.kind === "script"
+              ? payload.script
+              : "",
     payloadModel: payload?.kind === "agentTurn" ? (payload.model ?? "") : "",
     payloadThinking: payload?.kind === "agentTurn" ? (payload.thinking ?? "") : "",
     payloadLightContext: payload?.kind === "agentTurn" ? payload.lightContext === true : false,
@@ -836,7 +849,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     next.staggerAmount = staggerFields.staggerAmount;
     next.staggerUnit = staggerFields.staggerUnit;
   }
-  // Other schedule kinds (e.g. on-exit) are shown read-only in the list and have no
+  // Process-backed schedule kinds are shown read-only in the list and have no
   // editable schedule form fields; leave the cron/at/every fields at their defaults.
 
   return normalizeCronFormState(next);
@@ -884,6 +897,9 @@ function buildCronPayload(form: CronFormState) {
     }
     return { kind: "systemEvent" as const, text };
   }
+  if (form.payloadKind !== "agentTurn") {
+    throw new Error(`Cron ${form.payloadKind} payloads are read-only in Control UI.`);
+  }
   const message = form.payloadText.trim();
   if (!message) {
     throw new Error(t("cron.errors.agentMessageRequiredShort"));
@@ -904,9 +920,12 @@ function buildCronPayload(form: CronFormState) {
   if (thinking) {
     payload.thinking = thinking;
   }
-  const timeoutSeconds = toNumber(form.timeoutSeconds, 0);
-  if (timeoutSeconds > 0) {
-    payload.timeoutSeconds = timeoutSeconds;
+  const timeoutRaw = form.timeoutSeconds.trim();
+  if (timeoutRaw) {
+    const timeoutSeconds = toNumber(timeoutRaw, Number.NaN);
+    if (Number.isFinite(timeoutSeconds) && timeoutSeconds >= 0) {
+      payload.timeoutSeconds = timeoutSeconds;
+    }
   }
   if (form.payloadLightContext) {
     payload.lightContext = true;
@@ -997,16 +1016,17 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       ? state.cronJobs.find((job) => job.id === state.cronEditingJobId)
       : undefined;
     const editingPayload = editingJob ? getCronJobPayload(editingJob) : null;
-    // Preserve on-exit only while the edit form still points at on-exit; if the
+    // Preserve a process-backed schedule while the form still points at it; if the
     // user selects an editable schedule kind, the update must apply it.
     const preserveSchedule = Boolean(
       state.cronEditingJobId &&
-      (editingJob?.schedule as { kind?: string } | undefined)?.kind === "on-exit" &&
-      form.scheduleKind === "on-exit",
+      ((editingJob?.schedule as { kind?: string } | undefined)?.kind === "on-exit" ||
+        (editingJob?.schedule as { kind?: string } | undefined)?.kind === "stream") &&
+      form.scheduleKind === editingJob?.schedule.kind,
     );
     const schedule = preserveSchedule ? undefined : buildCronSchedule(form);
     const preserveLockedPayload = Boolean(
-      state.cronEditingJobId && form.payloadLocked && editingPayload?.kind === "command",
+      state.cronEditingJobId && form.payloadLocked && isReadOnlyCronPayload(editingPayload),
     );
     const payload = preserveLockedPayload ? undefined : buildCronPayload(form);
     if (
@@ -1171,12 +1191,55 @@ export async function removeCronJob(state: CronState, job: CronJob) {
   });
 }
 
+type CronRunsRequestIdentity = {
+  client: GatewayBrowserClient;
+  agentId: string | null;
+  scope: CronRunScope;
+  jobId: string | null;
+  limit: number;
+  offset: number;
+  statuses: CronRunsStatusValue[];
+  status: CronRunsStatusFilter;
+  deliveryStatuses: CronDeliveryStatus[];
+  query: string;
+  sortDir: CronSortDir;
+  append: boolean;
+};
+
+// The same state owns overview, per-job, filtered, and paginated requests.
+// Only its latest exact request may replace the history, error, or load state.
+const activeCronRunsRequests = new WeakMap<CronState, CronRunsRequestIdentity>();
+
+function ownsCronRunsRequest(state: CronState, request: CronRunsRequestIdentity): boolean {
+  return (
+    activeCronRunsRequests.get(state) === request &&
+    state.connected &&
+    state.client === request.client &&
+    state.cronAgentId === request.agentId &&
+    state.cronRunsScope === request.scope &&
+    (request.scope !== "job" || state.cronRunsJobId === request.jobId) &&
+    state.cronRunsLimit === request.limit &&
+    state.cronRunsStatusFilter === request.status &&
+    state.cronRunsQuery.trim() === request.query &&
+    state.cronRunsSortDir === request.sortDir &&
+    state.cronRunsStatuses.length === request.statuses.length &&
+    state.cronRunsStatuses.every((status, index) => status === request.statuses[index]) &&
+    state.cronRunsDeliveryStatuses.length === request.deliveryStatuses.length &&
+    state.cronRunsDeliveryStatuses.every(
+      (status, index) => status === request.deliveryStatuses[index],
+    ) &&
+    (!request.append ||
+      Math.max(0, state.cronRunsNextOffset ?? state.cronRuns.length) === request.offset)
+  );
+}
+
 export async function loadCronRuns(
   state: CronState,
   jobId: string | null,
   opts?: { append?: boolean },
 ): Promise<CronRunsLoadStatus> {
-  if (!state.client || !state.connected) {
+  const client = state.client;
+  if (!client || !state.connected) {
     return "skipped";
   }
   const scope = state.cronRunsScope;
@@ -1189,37 +1252,40 @@ export async function loadCronRuns(
   if (append && !state.cronRunsHasMore) {
     return "skipped";
   }
+  const request: CronRunsRequestIdentity = {
+    client,
+    agentId: state.cronAgentId,
+    scope,
+    jobId: scope === "job" ? activeJobId : null,
+    limit: state.cronRunsLimit,
+    offset: append ? Math.max(0, state.cronRunsNextOffset ?? state.cronRuns.length) : 0,
+    statuses: [...state.cronRunsStatuses],
+    status: state.cronRunsStatusFilter,
+    deliveryStatuses: [...state.cronRunsDeliveryStatuses],
+    query: state.cronRunsQuery.trim(),
+    sortDir: state.cronRunsSortDir,
+    append,
+  };
+  activeCronRunsRequests.set(state, request);
+  state.cronRunsLoadingMore = append;
   try {
-    if (append) {
-      state.cronRunsLoadingMore = true;
-    }
-    const offset = append ? Math.max(0, state.cronRunsNextOffset ?? state.cronRuns.length) : 0;
-    const res = await state.client.request<CronRunsResult>("cron.runs", {
-      ...(state.cronAgentId ? { agentId: state.cronAgentId } : {}),
-      scope,
-      id: scope === "job" ? (activeJobId ?? undefined) : undefined,
-      limit: state.cronRunsLimit,
-      offset,
-      statuses: state.cronRunsStatuses.length > 0 ? state.cronRunsStatuses : undefined,
-      status: state.cronRunsStatusFilter,
-      deliveryStatuses:
-        state.cronRunsDeliveryStatuses.length > 0 ? state.cronRunsDeliveryStatuses : undefined,
-      query: state.cronRunsQuery.trim() || undefined,
-      sortDir: state.cronRunsSortDir,
+    const res = await client.request<CronRunsResult>("cron.runs", {
+      ...(request.agentId ? { agentId: request.agentId } : {}),
+      scope: request.scope,
+      id: request.jobId ?? undefined,
+      limit: request.limit,
+      offset: request.offset,
+      statuses: request.statuses.length > 0 ? request.statuses : undefined,
+      status: request.status,
+      deliveryStatuses: request.deliveryStatuses.length > 0 ? request.deliveryStatuses : undefined,
+      query: request.query || undefined,
+      sortDir: request.sortDir,
     });
-    // A slower response for a previously selected job (or one arriving after
-    // the pane switched back to all-scope) must not overwrite the current run
-    // pane; callers claim cronRunsJobId/scope before awaiting.
-    const staleJobResponse =
-      scope === "job" && (state.cronRunsScope !== "job" || state.cronRunsJobId !== activeJobId);
-    if (staleJobResponse) {
+    if (!ownsCronRunsRequest(state, request)) {
       return "skipped";
     }
     const entries = Array.isArray(res.entries) ? res.entries : [];
-    state.cronRuns =
-      append && (scope === "all" || state.cronRunsJobId === activeJobId)
-        ? [...state.cronRuns, ...entries]
-        : entries;
+    state.cronRuns = append ? [...state.cronRuns, ...entries] : entries;
     const meta = normalizeCronPageMeta({
       totalRaw: res.total,
       offsetRaw: res.offset,
@@ -1232,10 +1298,13 @@ export async function loadCronRuns(
     state.cronRunsNextOffset = meta.nextOffset;
     return "ok";
   } catch (err) {
+    if (!ownsCronRunsRequest(state, request)) {
+      return "skipped";
+    }
     state.cronError = String(err);
     return "error";
   } finally {
-    if (append) {
+    if (append && activeCronRunsRequests.get(state) === request) {
       state.cronRunsLoadingMore = false;
     }
   }

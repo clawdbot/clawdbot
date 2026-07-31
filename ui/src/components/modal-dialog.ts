@@ -14,6 +14,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
   @query("wa-dialog") private webAwesomeDialog?: WaDialog;
 
   private returnFocus: HTMLElement | null = null;
+  private returnFocusOverride: HTMLElement | null | undefined;
   private syncGeneration = 0;
   private suppressNextCancel = false;
 
@@ -29,6 +30,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     }
 
     wa-dialog::part(dialog) {
+      max-width: var(--openclaw-modal-max-width, calc(100vw - 48px));
       max-height: var(--openclaw-modal-max-height, calc(100dvh - 48px));
       padding: 0;
       border: 0;
@@ -62,6 +64,30 @@ export class OpenClawModalDialog extends OpenClawLitElement {
       border-radius: 0;
     }
 
+    :host(.nav-drawer) wa-dialog {
+      --width: min(86vw, 320px);
+    }
+
+    :host(.nav-drawer) wa-dialog::part(dialog) {
+      max-width: min(86vw, 320px);
+      margin: 0 auto 0 0;
+    }
+
+    :host(.nav-drawer) wa-dialog::part(body) {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    ::slotted(.shell-nav-modal__content) {
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      height: 100%;
+      min-height: 0;
+      min-width: 0;
+    }
+
     @media (max-width: 640px) {
       wa-dialog {
         --width: calc(100vw - 24px);
@@ -91,8 +117,10 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     if (webAwesomeDialog) {
       webAwesomeDialog.open = false;
     }
-    const returnFocus = this.returnFocus;
+    const returnFocus =
+      this.returnFocusOverride === undefined ? this.returnFocus : this.returnFocusOverride;
     this.returnFocus = null;
+    this.returnFocusOverride = undefined;
     if (returnFocus?.isConnected) {
       returnFocus.focus({ preventScroll: true });
     }
@@ -168,25 +196,64 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     }
   }
 
-  private handleAfterShow = () => {
+  private handleAfterShow = (event?: Event) => {
+    if (event && event.target !== event.currentTarget) {
+      return;
+    }
     if (!this.isConnected) {
+      return;
+    }
+    // Both the scheduled show hook and wa-after-show land here, and the second
+    // arrives after the open animation. If focus already moved to a slotted
+    // field (user click, autofill, e2e input), refocusing the autofocus target
+    // would steal it mid-typing; `this` means focus sits on dialog chrome.
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== this && this.contains(active)) {
       return;
     }
     const autofocusTarget = this.querySelector<HTMLElement>("[autofocus]");
     autofocusTarget?.focus({ preventScroll: true });
   };
 
-  private handleShow = () => {
+  private handleShow = (event: Event) => {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
     // Web Awesome cannot see autofocus targets through this adapter's slot.
     queueMicrotask(() => requestAnimationFrame(() => this.handleAfterShow()));
   };
 
-  private handleAfterHide = () => {
+  private handleAfterHide = (event: Event) => {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+    const returnFocus = this.returnFocusOverride;
+    const originalReturnFocus = this.returnFocus;
+    this.returnFocusOverride = undefined;
     this.open = false;
     this.returnFocus = null;
+    if (returnFocus === undefined) {
+      return;
+    }
+    // Web Awesome queues its original-trigger restoration immediately before
+    // wa-after-hide; apply the owner's restoration or suppression after it.
+    setTimeout(() => {
+      if (returnFocus === null) {
+        if (originalReturnFocus && document.activeElement === originalReturnFocus) {
+          originalReturnFocus.blur();
+        }
+      } else if (returnFocus.isConnected) {
+        returnFocus.focus({ preventScroll: true });
+      }
+    }, 0);
   };
 
   private handleHide = (event: Event) => {
+    // Nested overlay lifecycle events bubble through the slot; only the
+    // dialog's own hide may dismiss or steal focus from its owner.
+    if (event.target !== event.currentTarget) {
+      return;
+    }
     if (this.suppressNextCancel) {
       this.suppressNextCancel = false;
       return;
@@ -204,6 +271,10 @@ export class OpenClawModalDialog extends OpenClawLitElement {
 
   show() {
     this.open = true;
+  }
+
+  setReturnFocusTarget(target: HTMLElement | null) {
+    this.returnFocusOverride = target;
   }
 
   hide() {

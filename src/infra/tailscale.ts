@@ -11,7 +11,12 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { logVerbose } from "../globals.js";
 import { runExec } from "../process/exec.js";
+import { isVitestRuntimeEnv } from "./env.js";
 import { toErrorObject } from "./errors.js";
+import { retryAsync } from "./retry.js";
+
+const TAILSCALE_STATUS_ATTEMPTS = 3;
+const TAILSCALE_STATUS_RETRY_DELAY_MS = 500;
 
 function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   const trimmed = stdout.trim();
@@ -21,6 +26,45 @@ function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
     return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
   }
   return JSON.parse(trimmed) as Record<string, unknown>;
+}
+
+function tailnetHostnameFromStatus(parsed: Record<string, unknown>): string {
+  const self =
+    typeof parsed.Self === "object" && parsed.Self !== null
+      ? (parsed.Self as Record<string, unknown>)
+      : undefined;
+  const dns = typeof self?.DNSName === "string" ? self.DNSName : undefined;
+  const ips = Array.isArray(self?.TailscaleIPs)
+    ? ((parsed.Self as { TailscaleIPs?: string[] }).TailscaleIPs ?? [])
+    : [];
+  if (dns && dns.length > 0) {
+    return dns.replace(/\.$/, "");
+  }
+  const [firstIp] = ips;
+  if (firstIp !== undefined) {
+    return firstIp;
+  }
+  throw new Error("Could not determine Tailscale DNS or IP");
+}
+
+function isTransientTailscaleStatusError(error: unknown): boolean {
+  const record = readRecord(error);
+  const detail = [
+    error instanceof Error ? error.message : undefined,
+    typeof record?.stderr === "string" ? record.stderr : undefined,
+    typeof record?.stdout === "string" ? record.stdout : undefined,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join("\n")
+    .toLowerCase();
+
+  return (
+    record?.timedOut === true ||
+    detail.includes("failed to connect to local tailscale daemon") ||
+    detail.includes("failed to connect to local tailscale service") ||
+    detail.includes("connection refused") ||
+    detail.includes("503 service unavailable")
+  );
 }
 
 /**
@@ -121,23 +165,7 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
         timeoutMs: 5000,
         maxBuffer: 400_000,
       });
-      const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
-      const self =
-        typeof parsed.Self === "object" && parsed.Self !== null
-          ? (parsed.Self as Record<string, unknown>)
-          : undefined;
-      const dns = typeof self?.DNSName === "string" ? self.DNSName : undefined;
-      const ips = Array.isArray(self?.TailscaleIPs)
-        ? ((parsed.Self as { TailscaleIPs?: string[] }).TailscaleIPs ?? [])
-        : [];
-      if (dns && dns.length > 0) {
-        return dns.replace(/\.$/, "");
-      }
-      const [firstIp] = ips;
-      if (firstIp !== undefined) {
-        return firstIp;
-      }
-      throw new Error("Could not determine Tailscale DNS or IP");
+      return tailnetHostnameFromStatus(stdout ? parsePossiblyNoisyJsonObject(stdout) : {});
     } catch (err) {
       lastError = err;
     }
@@ -156,14 +184,11 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
 let cachedTailscaleBinary: string | null = null;
 
 function getTestTailscaleBinaryOverride(env: NodeJS.ProcessEnv = process.env): string | null {
-  const forcedBinary = env.OPENCLAW_TEST_TAILSCALE_BINARY?.trim();
-  if (!forcedBinary) {
+  if (!isVitestRuntimeEnv(env)) {
     return null;
   }
-  if (env.VITEST || env.NODE_ENV === "test") {
-    return forcedBinary;
-  }
-  return null;
+  const forcedBinary = env.OPENCLAW_TEST_TAILSCALE_BINARY?.trim();
+  return forcedBinary || null;
 }
 
 async function getTailscaleBinary(): Promise<string> {
@@ -177,6 +202,33 @@ async function getTailscaleBinary(): Promise<string> {
   }
   cachedTailscaleBinary = await findTailscaleBinary();
   return cachedTailscaleBinary ?? "tailscale";
+}
+
+/** Resolve the hostname after Serve startup, while the local daemon may still be settling. */
+export async function getTailnetHostnameAfterServe(
+  exec: typeof runExec = runExec,
+): Promise<string> {
+  const candidate = await getTailscaleBinary();
+  const parsed = await retryAsync(
+    async () => {
+      const { stdout } = await exec(candidate, ["status", "--json"], {
+        timeoutMs: 5000,
+        maxBuffer: 400_000,
+        // Hostname discovery is best-effort. Avoid scary command-failure logs while the
+        // local daemon settles after Serve configuration.
+        logOutput: false,
+      });
+      return stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+    },
+    {
+      attempts: TAILSCALE_STATUS_ATTEMPTS,
+      minDelayMs: TAILSCALE_STATUS_RETRY_DELAY_MS,
+      maxDelayMs: TAILSCALE_STATUS_RETRY_DELAY_MS,
+      jitter: 0,
+      shouldRetry: isTransientTailscaleStatusError,
+    },
+  );
+  return tailnetHostnameFromStatus(parsed);
 }
 
 type ExecErrorDetails = {

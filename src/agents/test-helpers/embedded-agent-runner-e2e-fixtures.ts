@@ -39,6 +39,9 @@ export async function cleanupEmbeddedAgentRunnerTestWorkspace(
 
 export function createEmbeddedAgentRunnerOpenAiConfig(modelIds: string[]): OpenClawConfig {
   return {
+    agents: {
+      list: [{ id: "main" }, { id: "test" }, { id: "embedded-agent" }],
+    },
     models: {
       providers: {
         openai: {
@@ -109,14 +112,7 @@ export function makeEmbeddedRunnerAttempt(
   const messagingToolSentTargets = overrides.messagingToolSentTargets ?? [];
   const successfulCronAdds = overrides.successfulCronAdds;
   return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
-    promptError: null,
-    promptErrorSource: null,
+    terminal: { kind: "ok" },
     sessionIdUsed: "session:test",
     systemPromptReport: undefined,
     messagesSnapshot: [],

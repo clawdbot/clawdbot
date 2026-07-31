@@ -142,9 +142,11 @@ export function writeDone(res: ServerResponse) {
   res.write("data: [DONE]\n\n");
 }
 
+export const SSE_CONTENT_TYPE = "text/event-stream; charset=utf-8";
+
 export function setSseHeaders(res: ServerResponse) {
   res.statusCode = 200;
-  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Content-Type", SSE_CONTENT_TYPE);
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();

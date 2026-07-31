@@ -1,8 +1,10 @@
+import { CompactionError } from "../../packages/agent-core/src/harness/types.js";
 /**
  * Summarization and fallback helpers for transcript compaction.
  */
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
 import { isAbortError } from "../infra/abort-signal.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -22,7 +24,7 @@ import {
 } from "./compaction-planning.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
-import type { AgentMessage } from "./runtime/index.js";
+import type { AgentMessage, StreamFn, ThinkingLevel } from "./runtime/index.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { generateSummary as agentGenerateSummary } from "./sessions/index.js";
 
@@ -45,9 +47,6 @@ type CompactionSummaryResult =
   | { kind: "generic-fallback"; text: string };
 
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
-const MAX_CONSECUTIVE_GENERIC_FALLBACKS = 2;
-const CIRCUIT_OPEN_ERROR =
-  "Compaction staged summarization stopped after repeated generic fallbacks";
 const MERGE_SUMMARIES_INSTRUCTIONS = [
   "Merge these partial summaries into a single cohesive summary.",
   "",
@@ -68,33 +67,9 @@ const IDENTIFIER_PRESERVATION_INSTRUCTIONS =
 
 /** Optional instruction policy for preserving identifiers during compaction. */
 export type CompactionSummarizationInstructions = {
-  identifierPolicy?: AgentCompactionIdentifierPolicy;
+  identifierPolicy?: AgentCompactionIdentifierPolicy | "custom";
   identifierInstructions?: string;
 };
-
-type GenerateSummaryCompat = {
-  (
-    currentMessages: AgentMessage[],
-    model: NonNullable<ExtensionContext["model"]>,
-    reserveTokens: number,
-    apiKey: string,
-    signal?: AbortSignal,
-    customInstructions?: string,
-    previousSummary?: string,
-  ): Promise<string>;
-  (
-    currentMessages: AgentMessage[],
-    model: NonNullable<ExtensionContext["model"]>,
-    reserveTokens: number,
-    apiKey: string,
-    headers: Record<string, string> | undefined,
-    signal?: AbortSignal,
-    customInstructions?: string,
-    previousSummary?: string,
-  ): Promise<string>;
-};
-
-const generateSummaryCompat = agentGenerateSummary as unknown as GenerateSummaryCompat;
 
 function resolveIdentifierPreservationInstructions(
   instructions?: CompactionSummarizationInstructions,
@@ -140,6 +115,8 @@ async function summarizeChunks(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
+  thinkingLevel?: ThinkingLevel;
+  streamFn?: StreamFn;
 }): Promise<string> {
   if (params.messages.length === 0) {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
@@ -169,6 +146,8 @@ async function summarizeChunks(params: {
             params.signal,
             effectiveInstructions,
             summary,
+            params.thinkingLevel,
+            params.streamFn,
           ),
         {
           attempts: 3,
@@ -176,6 +155,9 @@ async function summarizeChunks(params: {
           maxDelayMs: 5000,
           jitter: 0.2,
           label: "compaction/generateSummary",
+          // Backoff must honor caller cancellation; otherwise an abort during
+          // the sleep would stall compaction until the full delay elapses.
+          sleep: (ms) => sleepWithAbort(ms, params.signal),
           shouldRetry: (err) => {
             // Stop retrying when the caller explicitly cancelled.
             if (params.signal.aborted) {
@@ -237,27 +219,20 @@ function generateSummary(
   signal: AbortSignal,
   customInstructions?: string,
   previousSummary?: string,
+  thinkingLevel?: ThinkingLevel,
+  streamFn?: StreamFn,
 ): Promise<string> {
-  if (agentGenerateSummary.length >= 8) {
-    return generateSummaryCompat(
-      currentMessages,
-      model,
-      reserveTokens,
-      apiKey,
-      headers,
-      signal,
-      customInstructions,
-      previousSummary,
-    );
-  }
-  return generateSummaryCompat(
+  return agentGenerateSummary(
     currentMessages,
     model,
     reserveTokens,
     apiKey,
+    headers,
     signal,
     customInstructions,
     previousSummary,
+    thinkingLevel,
+    streamFn,
   );
 }
 
@@ -277,6 +252,8 @@ async function summarizeWithFallbackResult(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
+  thinkingLevel?: ThinkingLevel;
+  streamFn?: StreamFn;
 }): Promise<CompactionSummaryResult> {
   const { messages, contextWindow } = params;
 
@@ -289,14 +266,16 @@ async function summarizeWithFallbackResult(params: {
 
   // Try full summarization first
   let partialSummaryFallback: string | undefined;
+  let lastError: unknown;
   try {
     return { kind: "summary", text: await summarizeChunks(params) };
-  } catch (fullError) {
+  } catch (err) {
+    lastError = err;
     if (params.signal.aborted) {
-      throw fullError;
+      throw lastError;
     }
-    log.warn(`Full summarization failed: ${formatErrorMessage(fullError)}`);
-    partialSummaryFallback = (fullError as PartialSummaryError).partialSummary;
+    log.warn(`Full summarization failed: ${formatErrorMessage(lastError)}`);
+    partialSummaryFallback = (lastError as PartialSummaryError).partialSummary;
   }
 
   // Fallback 1: Summarize only small messages, note oversized ones.
@@ -317,14 +296,15 @@ async function summarizeWithFallbackResult(params: {
       const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
       return { kind: "summary", text: partialSummary + notes };
     } catch (partialError) {
+      lastError = partialError;
       if (params.signal.aborted) {
-        throw partialError;
+        throw lastError;
       }
-      log.warn(`Partial summarization also failed: ${formatErrorMessage(partialError)}`);
+      log.warn(`Partial summarization also failed: ${formatErrorMessage(lastError)}`);
       // Prefer the oversized retry's partial summary over the full attempt's,
       // since it covers the non-oversized transcript. Append oversized notes
       // so the model knows large content was filtered.
-      const retryPartial = (partialError as PartialSummaryError).partialSummary;
+      const retryPartial = (lastError as PartialSummaryError).partialSummary;
       if (retryPartial) {
         const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
         partialSummaryFallback = retryPartial + notes;
@@ -332,16 +312,20 @@ async function summarizeWithFallbackResult(params: {
     }
   }
 
-  // Final fallback: use best available partial summary, otherwise generic note
+  // Final fallback: use best available partial summary, otherwise throw error
   if (partialSummaryFallback) {
     return { kind: "summary", text: partialSummaryFallback };
   }
-  return {
-    kind: "generic-fallback",
-    text:
-      `Context contained ${messages.length} messages (${oversizedNotes.length} oversized). ` +
-      `Summary unavailable due to size limits.`,
-  };
+
+  // All summarization attempts failed — throw error so caller knows compaction
+  // did not succeed. This prevents silent infinite retry loops where "Compaction
+  // complete" is reported but no tokens are reclaimed.
+  throw new CompactionError(
+    "summarization_failed",
+    `All summarization attempts failed for ${messages.length} messages. ` +
+      `Last error: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+    lastError instanceof Error ? lastError : undefined,
+  );
 }
 
 async function summarizeWithFallback(
@@ -390,6 +374,8 @@ export async function summarizeInStages(params: {
   previousSummary?: string;
   parts?: number;
   minMessagesForSplit?: number;
+  thinkingLevel?: ThinkingLevel;
+  streamFn?: StreamFn;
 }): Promise<CompactionSummaryResult> {
   const { messages } = params;
   if (messages.length === 0) {
@@ -412,35 +398,28 @@ export async function summarizeInStages(params: {
   }
 
   const partialSummaries: string[] = [];
-  let consecutiveGenericFallbacks = 0;
-  // Caller-owned leading context lives in the oldest split. Only losing that
-  // split requires restoration; later fallback placeholders remain in the merge.
-  let oldestChunkDegraded = false;
   for (const [index, chunk] of plan.chunks.entries()) {
-    const result = await summarizeWithFallbackResult({
-      ...params,
-      messages: chunk,
-      previousSummary: undefined,
-    });
-    consecutiveGenericFallbacks =
-      result.kind === "generic-fallback" ? consecutiveGenericFallbacks + 1 : 0;
-    if (index === 0) {
-      oldestChunkDegraded = result.kind === "generic-fallback";
-    }
-
-    // Keep one placeholder to mark the missing split, but stop before repeated
-    // placeholders trigger more split requests or a doomed merge request.
-    if (consecutiveGenericFallbacks >= MAX_CONSECUTIVE_GENERIC_FALLBACKS) {
-      log.warn("compaction staged summarization stopped after repeated generic fallbacks", {
-        attemptedSplits: index + 1,
-        consecutiveGenericFallbacks,
-        totalSplits: plan.chunks.length,
+    try {
+      const result = await summarizeWithFallbackResult({
+        ...params,
+        messages: chunk,
+        previousSummary: undefined,
       });
-      // The remaining chunks were never attempted. Abort the whole compaction
-      // so the caller keeps the source transcript instead of committing a gap.
-      throw new Error(CIRCUIT_OPEN_ERROR);
+      partialSummaries.push(result.text);
+    } catch (err) {
+      // A chunk summarization failed — fail the whole stages compaction.
+      // This prevents silent infinite retry loops where compaction reports
+      // success but no tokens are reclaimed.
+      if (err instanceof CompactionError) {
+        throw err;
+      }
+      // Wrap non-CompactionError failures for consistent error handling
+      throw new CompactionError(
+        "summarization_failed",
+        `Chunk ${index + 1} summarization failed: ${err instanceof Error ? err.message : String(err)}`,
+        err instanceof Error ? err : undefined,
+      );
     }
-    partialSummaries.push(result.text);
   }
 
   if (partialSummaries.length === 1) {
@@ -448,10 +427,7 @@ export async function summarizeInStages(params: {
     if (summary === undefined) {
       throw new Error("Compaction summary plan produced no summary");
     }
-    return {
-      kind: oldestChunkDegraded ? "generic-fallback" : "summary",
-      text: summary,
-    };
+    return { kind: "summary", text: summary };
   }
 
   // Capture once so timestamps are strictly monotonic across
@@ -490,9 +466,7 @@ export async function summarizeInStages(params: {
     messages: summaryMessages,
     customInstructions: mergeInstructions,
   });
-  return oldestChunkDegraded && mergedResult.kind === "summary"
-    ? { kind: "generic-fallback", text: mergedResult.text }
-    : mergedResult;
+  return mergedResult;
 }
 
 /** Resolves a positive context-window token count from model metadata. */

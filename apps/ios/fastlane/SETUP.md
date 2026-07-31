@@ -88,14 +88,14 @@ fastlane ios auth_check
 App Store Connect API auth is required when:
 
 - uploading to App Store Connect
-- auto-resolving the next build number from App Store Connect
+- planning the App Store revision and next build from App Store Connect
 
 If you pass `--build-number` to `pnpm ios:release:archive`, the local archive path does not need App Store Connect API auth.
 
 Archive locally without upload:
 
 ```bash
-pnpm ios:release:archive -- --version 2026.6.11 --build-number 3
+pnpm ios:release:archive -- --version 2026.7.2 --revision 1 --build-number 3
 ```
 
 Generate deterministic App Store screenshots:
@@ -109,7 +109,10 @@ The screenshot lane runs the app with `--openclaw-screenshot-mode`, which enters
 Upload to App Store Connect:
 
 ```bash
-pnpm ios:release:upload -- --version 2026.6.11
+pnpm ios:release:plan -- --json
+pnpm ios:release:cut
+# Review and commit apps/ios/CHANGELOG.md.
+pnpm ios:release:upload
 ```
 
 Direct Fastlane upload is disabled. Use the package script so the release
@@ -135,16 +138,17 @@ cd apps/ios
 fastlane ios auth_check
 ```
 
-4. If you are starting a brand-new production release train, validate iOS release notes for the release version:
+4. Plan and cut the exact encoded-version changelog section:
 
 ```bash
-pnpm ios:version:check -- --version 2026.6.11
+pnpm ios:release:plan -- --json
+pnpm ios:release:cut
 ```
 
-5. Upload:
+5. Review and commit `apps/ios/CHANGELOG.md`, then upload:
 
 ```bash
-pnpm ios:release:upload -- --version 2026.6.11 --build-number 3
+pnpm ios:release:upload
 ```
 
 Quick verification after upload:
@@ -156,18 +160,18 @@ Quick verification after upload:
 
 Versioning rules:
 
-- App Store release uploads require an explicit `--version`
-- local defaults derive from root `package.json`
+- App Store release uploads derive the gateway from root `package.json` and revision/build state from App Store Connect
+- explicit `--version`, `--revision`, and `--build-number` values are checked overrides
 - `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source
-- Supported iOS release versions use CalVer: `YYYY.M.D`
-- Fastlane uses the explicit release version for App Store upload
-- Fastlane sets `CFBundleShortVersionString` to the release version, for example `2026.4.10`
-- Fastlane resolves `CFBundleVersion` as the next integer App Store Connect build number for that short version
-- Run `pnpm ios:version:check -- --version <release-version>` after changing `apps/ios/CHANGELOG.md`
+- Gateway versions use CalVer: `YYYY.M.D`
+- Fastlane appends one unpadded revision digit: gateway `YYYY.M.D`, revision `R`, becomes `YYYY.M.DR`
+- Gateway `2026.7.2`, revision `1` sets `CFBundleShortVersionString` to `2026.7.21`
+- Fastlane resolves `CFBundleVersion` from the maximum awaiting, processing, failed, or complete build-upload record plus one
+- Run `pnpm ios:release:cut` after changing `## Unreleased`, then review and commit the exact encoded heading
 - `pnpm ios:version:check` validates that release notes can be generated from the iOS changelog
 - The release flow regenerates `apps/ios/OpenClaw.xcodeproj` from `apps/ios/project.yml` before archiving
 - Local App Store signing uses a temporary generated xcconfig with profile names from `apps/ios/Config/AppStoreSigning.json` and leaves local development signing overrides untouched
 - App Store release uses `OpenClawPushMode=appStore`, which derives the canonical production hosted relay, production APNs, production relay profile, and `appleStrict` proof. The release lane rejects custom production relay URL overrides.
 - The exported IPA is validated before upload by inspecting its push mode, signed entitlements, and embedded App Store profile.
-- `pnpm ios:release:upload` generates and uploads screenshots, release notes, and the App Review PDF attachment before archiving, then uploads the IPA without submitting it for App Review or uploading the App Store Connect `Notes` field
+- `pnpm ios:release:upload` generates and uploads screenshots, release notes, and the App Review PDF attachment before uploading the IPA, waits for build processing, and does not submit for App Review or upload the App Store Connect `Notes` field
 - See `apps/ios/VERSIONING.md` for the detailed workflow

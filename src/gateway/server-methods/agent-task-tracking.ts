@@ -8,6 +8,7 @@ import { isTimeoutError } from "../../agents/failover-error.js";
 import { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAbortError } from "../../infra/abort-signal.js";
+import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
@@ -16,7 +17,6 @@ import {
 } from "../../sessions/session-key-utils.js";
 import { finalizeTaskRunByRunId } from "../../tasks/detached-task-runtime.js";
 import type { TaskStatus } from "../../tasks/task-registry.types.js";
-import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
@@ -158,7 +158,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
   runId: string;
   childSessionKey: string;
   task: string;
-  requesterOrigin?: DeliveryContext;
+  requester?: PluginSubagentRequesterContext;
   pluginId?: string;
 }): Promise<void> {
   const childSessionKey = params.childSessionKey.trim();
@@ -169,18 +169,19 @@ export async function registerPluginSubagentRunFromGateway(params: {
     cfg: params.cfg,
     agentId: resolveAgentIdFromSessionKey(childSessionKey),
   });
+  const requesterSessionKey = params.requester?.sessionKey ?? ownerSessionKey;
   const { registerSubagentRun } = await import("../../agents/subagent-registry.js");
   registerSubagentRun({
     runId: params.runId,
     childSessionKey,
     controllerSessionKey: ownerSessionKey,
-    requesterSessionKey: ownerSessionKey,
-    requesterOrigin: params.requesterOrigin,
-    requesterDisplayKey: "main",
+    requesterSessionKey,
+    requesterOrigin: params.requester?.origin,
+    requesterDisplayKey: params.requester ? requesterSessionKey : "main",
     task: params.task,
     cleanup: "keep",
     ...(params.pluginId ? { label: `plugin:${params.pluginId}` } : {}),
-    expectsCompletionMessage: false,
+    expectsCompletionMessage: params.requester !== undefined,
     spawnMode: "run",
   });
 }

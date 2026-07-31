@@ -85,6 +85,20 @@ function createPluginManagedHookReport(): HookStatusReport {
   };
 }
 
+function createEventlessHookReport(): HookStatusReport {
+  return {
+    ...report,
+    hooks: [
+      {
+        ...expectDefined(report.hooks[0], "report.hooks[0] test invariant"),
+        events: [],
+        loadable: false,
+        blockedReason: "no events defined",
+      },
+    ],
+  };
+}
+
 describe("hooks cli formatting", () => {
   it("labels hooks list output", () => {
     const output = formatHooksList(report, {});
@@ -95,6 +109,33 @@ describe("hooks cli formatting", () => {
   it("labels hooks status output", () => {
     const output = formatHooksCheck(report, {});
     expect(output).toContain("Hooks Status");
+  });
+
+  it("classifies eventless hooks as not ready in human check output", () => {
+    const output = formatHooksCheck(createEventlessHookReport(), {});
+
+    expect(output).toContain("Ready: 0");
+    expect(output).toContain("Not ready: 1");
+    expect(output).toContain("session-memory - no events defined");
+  });
+
+  it("classifies eventless hooks as not eligible in JSON check output", () => {
+    const output = JSON.parse(formatHooksCheck(createEventlessHookReport(), { json: true }));
+
+    expect(output).toMatchObject({
+      total: 1,
+      eligible: 0,
+      notEligible: 1,
+      hooks: {
+        eligible: [],
+        notEligible: [
+          {
+            name: "session-memory",
+            blockedReason: "no events defined",
+          },
+        ],
+      },
+    });
   });
 
   it("labels plugin-managed hooks with plugin id", () => {

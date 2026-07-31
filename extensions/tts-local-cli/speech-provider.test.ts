@@ -1,5 +1,5 @@
 // Tts Local Cli tests cover speech provider plugin behavior.
-import { mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -369,54 +369,4 @@ mkdirSync(process.argv[outIndex + 1]);
       expect(Buffer.from(preview).toString()).toBe(preview);
     },
   );
-
-  it("can synthesize through a real local CLI fixture and ffmpeg", async () => {
-    if (process.env.OPENCLAW_LIVE_TEST !== "1") {
-      return;
-    }
-    const fixture = createCliFixture();
-    const rawFfmpeg = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
-      "openclaw/plugin-sdk/media-runtime",
-    );
-    runFfmpegMock.mockImplementation(async (args) => {
-      await rawFfmpeg.runFfmpeg(args);
-    });
-    try {
-      const wavPath = path.join(fixture.dir, "source.wav");
-      await rawFfmpeg.runFfmpeg([
-        "-y",
-        "-f",
-        "lavfi",
-        "-i",
-        "sine=frequency=660:duration=0.1",
-        "-c:a",
-        "pcm_s16le",
-        wavPath,
-      ]);
-      writeFileSync(
-        fixture.script,
-        `
-import { copyFileSync } from "node:fs";
-const outIndex = process.argv.indexOf("--out");
-copyFileSync(${JSON.stringify(wavPath)}, process.argv[outIndex + 1]);
-`,
-      );
-
-      const result = await synthesize({
-        providerConfig: baseProviderConfig(fixture.script, {
-          args: [fixture.script, "--out", "{{OutputPath}}"],
-          outputFormat: "wav",
-        }),
-        target: "voice-note",
-      });
-
-      expect(result.outputFormat).toBe("opus");
-      expect(result.fileExtension).toBe(".ogg");
-      expect(result.voiceCompatible).toBe(true);
-      expect(result.audioBuffer.byteLength).toBeGreaterThan(0);
-      expect(readFileSync(wavPath).byteLength).toBeGreaterThan(0);
-    } finally {
-      rmSync(fixture.dir, { recursive: true, force: true });
-    }
-  });
 });

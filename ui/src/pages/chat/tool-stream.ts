@@ -1,11 +1,13 @@
 // Control UI module implements app tool stream behavior.
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
-import type { ChatStreamSegment } from "../../lib/chat/chat-types.ts";
+import type { ChatQueueItem, ChatStreamSegment } from "../../lib/chat/chat-types.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import type { ChatRunStartupState } from "./chat-run-startup.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -55,8 +57,10 @@ type ToolStreamHost = {
   agentsList?: { defaultId?: string | null } | null;
   hello?: { snapshot?: unknown } | null;
   chatRunId: string | null;
+  chatRunUsageById?: Map<string, number>;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatRunStartup?: ChatRunStartupState | null;
   chatStreamSegments: ChatStreamSegment[];
   toolStreamById: Map<string, ToolStreamEntry>;
   toolStreamOrder: string[];
@@ -363,6 +367,45 @@ export type WaitingApprovalStatus = {
   runId: string;
 };
 
+export function resolveActiveRunOutputTokens(params: {
+  localRunId?: string | null;
+  activeRunIds?: readonly string[];
+  usageByRun?: ReadonlyMap<string, number>;
+}): number | null {
+  const localUsage = params.localRunId ? params.usageByRun?.get(params.localRunId) : undefined;
+  if (localUsage !== undefined) {
+    return localUsage;
+  }
+  for (const runId of params.activeRunIds ?? []) {
+    const usage = params.usageByRun?.get(runId);
+    if (usage !== undefined) {
+      return usage;
+    }
+  }
+  return null;
+}
+
+export function resolveChatProjectionRunId(params: {
+  localRunId?: string | null;
+  activeRunIds?: readonly string[];
+  queue?: readonly ChatQueueItem[];
+}): string | null {
+  if (params.localRunId) {
+    return params.localRunId;
+  }
+  const activeRunIds = new Set(params.activeRunIds ?? []);
+  // A session row can lag local completion. Restore its run identity only when
+  // the durable outbox independently proves that the same send is reconnecting.
+  return (
+    params.queue?.find(
+      (item) =>
+        item.sendState === "waiting-reconnect" &&
+        typeof item.sendRunId === "string" &&
+        activeRunIds.has(item.sendRunId),
+    )?.sendRunId ?? null
+  );
+}
+
 type WaitingApprovalSnapshotHost = Pick<
   ToolStreamHost,
   | "sessionKey"
@@ -616,6 +659,34 @@ function resolveAcceptedSession(
   return { accepted: true, sessionKey };
 }
 
+function handleUsageEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  if (payload.stream !== "usage") {
+    return false;
+  }
+  const sessionKey = toTrimmedString(payload.sessionKey);
+  if (sessionKey) {
+    if (!uiSessionEventMatches(host, sessionKey, toTrimmedString(payload.agentId))) {
+      return true;
+    }
+  } else if (!host.chatRunId || payload.runId !== host.chatRunId) {
+    return true;
+  }
+  const rawOutputTokens = payload.data?.outputTokens;
+  if (typeof rawOutputTokens !== "number" || !Number.isFinite(rawOutputTokens)) {
+    return true;
+  }
+  const outputTokens = Math.floor(rawOutputTokens);
+  if (outputTokens < 0) {
+    return true;
+  }
+  const current = host.chatRunUsageById?.get(payload.runId);
+  if (current !== undefined && outputTokens <= current) {
+    return true;
+  }
+  host.chatRunUsageById = new Map(host.chatRunUsageById).set(payload.runId, outputTokens);
+  return true;
+}
+
 function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventPayload) {
   const data = payload.data ?? {};
   const phase = payload.stream === "fallback" ? "fallback" : toTrimmedString(data.phase);
@@ -744,6 +815,11 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
   if (!progress) {
     return false;
   }
+  // Preambles belong to the visible run; a sibling run must never replace,
+  // clear, or persist its commentary into this transcript.
+  if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
+    return true;
+  }
   if (progress.itemId && !progress.text.trim()) {
     host.chatStreamSegments = host.chatStreamSegments.filter(
       (segment) => segment.itemId !== progress.itemId,
@@ -759,7 +835,7 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
       return true;
     }
     host.chatStreamSegments = host.chatStreamSegments.map((segment, index) =>
-      index === existingIndex ? { ...segment, text: progress.text } : segment,
+      index === existingIndex ? { ...segment, text: progress.text, runId: payload.runId } : segment,
     );
     return true;
   }
@@ -772,6 +848,7 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
     {
       text: progress.text,
       ts: Date.now(),
+      runId: payload.runId,
       ...(progress.itemId ? { itemId: progress.itemId } : {}),
     },
   ];
@@ -844,9 +921,9 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
-  // Filter by session only. Don't check chatRunId because the client sets it
-  // to a client-generated UUID (via generateUUID in sendChatMessage), while
-  // agent events arrive with the server's engine runId.
+  // Filter the shared activity stream by session first. Chat-linked events use
+  // the client run id, but spawned and session-replayed events may not own the
+  // active chat run; individual run-owned projections apply their own match.
   const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
   if (sessionKey && !uiSessionEventMatches(host, sessionKey, toTrimmedString(payload.agentId))) {
     return;
@@ -858,6 +935,10 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     }
   }
 
+  if (handleUsageEvent(host, payload)) {
+    return;
+  }
+
   // Handle compaction events
   if (payload.stream === "compaction") {
     handleCompactionEvent(host as CompactionHost, payload);
@@ -865,6 +946,15 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (payload.stream === "lifecycle") {
+    const phase = payload.data?.phase;
+    if (
+      (phase === "start" || phase === "end" || phase === "error") &&
+      host.chatRunUsageById?.has(payload.runId)
+    ) {
+      const usageByRun = new Map(host.chatRunUsageById);
+      usageByRun.delete(payload.runId);
+      host.chatRunUsageById = usageByRun;
+    }
     if (handleLifecycleApprovalEvent(host, payload)) {
       return;
     }
@@ -898,6 +988,9 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
   const name = typeof data.name === "string" ? data.name : "tool";
   const phase = typeof data.phase === "string" ? data.phase : "";
+  if (phase === "start" && payload.runId === host.chatRunId) {
+    host.chatRunStartup = { state: "activity", runId: payload.runId };
+  }
   const args = phase === "start" ? data.args : undefined;
   const output =
     phase === "update"
@@ -913,7 +1006,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   const now = Date.now();
-  let entry = host.toolStreamById.get(toolCallId);
+  const toolStreamIdentity = buildToolStreamIdentity(payload.runId, toolCallId);
+  let entry = host.toolStreamById.get(toolStreamIdentity);
   if (!entry) {
     // Commit any in-progress streaming text as a segment so it renders
     // above the tool card instead of below it.
@@ -925,7 +1019,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     ) {
       host.chatStreamSegments = [
         ...host.chatStreamSegments,
-        { text: host.chatStream, ts: now, toolCallId },
+        { text: host.chatStream, ts: now, runId: payload.runId, toolCallId },
       ];
       host.chatStream = null;
       host.chatStreamStartedAt = null;
@@ -944,8 +1038,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       receivedAt: now,
       message: {},
     };
-    host.toolStreamById.set(toolCallId, entry);
-    host.toolStreamOrder.push(toolCallId);
+    host.toolStreamById.set(toolStreamIdentity, entry);
+    host.toolStreamOrder.push(toolStreamIdentity);
   } else {
     entry.name = name;
     if (args !== undefined) {

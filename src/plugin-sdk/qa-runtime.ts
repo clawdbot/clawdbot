@@ -13,6 +13,8 @@ import type { QaRunnerCliRegistration } from "./qa-runner-runtime.js";
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
 import { normalizeStringEntries } from "./string-coerce-runtime.js";
 
+export { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
+
 type QaRuntimeSurface = {
   defaultQaRuntimeModelForMode: (
     mode: string,
@@ -22,6 +24,7 @@ type QaRuntimeSurface = {
     },
   ) => string;
   startQaLiveLaneGateway: (...args: unknown[]) => Promise<unknown>;
+  runLiveTransportQaSuiteCommand: (params: LiveTransportQaSuiteCommandOptions) => Promise<unknown>;
 };
 
 function isMissingQaRuntimeError(error: unknown) {
@@ -69,9 +72,30 @@ export type LiveTransportQaCommandOptions = {
   scenarioIds?: string[];
   listScenarios?: boolean;
   sutAccountId?: string;
+  credentialFile?: string;
   credentialSource?: string;
   credentialRole?: string;
 };
+
+export type LiveTransportQaSuiteCommandOptions = {
+  channelId: string;
+  credentialMode?: "env-only" | "shared-lease";
+  defaultProviderMode: string;
+  envCredentialReason?: string;
+  laneLabel?: string;
+  options: LiveTransportQaCommandOptions;
+  selectScenarioIds: (params: {
+    profile?: string;
+    primaryModel: string;
+    providerMode: string;
+    scenarioIds?: readonly string[];
+  }) => string[];
+};
+
+/** Run a plugin-owned transport adapter through QA Lab's shared suite host. */
+export async function runLiveTransportQaSuiteCommand(params: LiveTransportQaSuiteCommandOptions) {
+  return await loadQaRuntimeModule().runLiveTransportQaSuiteCommand(params);
+}
 
 type LiveTransportQaCommanderOptions = {
   repoRoot?: string;
@@ -86,6 +110,7 @@ type LiveTransportQaCommanderOptions = {
   failFast?: boolean;
   profile?: string;
   sutAccount?: string;
+  credentialFile?: string;
   credentialSource?: string;
   credentialRole?: string;
 };
@@ -102,6 +127,7 @@ export type LiveTransportQaCredentialCliOptions = {
 /** Declarative command metadata and runner used to install a live-transport QA CLI. */
 export type LiveTransportQaCliRegistrationOptions = {
   commandName: string;
+  credentialFileHelp?: string;
   credentialOptions?: LiveTransportQaCredentialCliOptions;
   defaultProviderMode: string;
   description: string;
@@ -147,6 +173,7 @@ function mapLiveTransportQaCommanderOptions(
     scenarioIds: opts.scenario,
     listScenarios: opts.listScenarios,
     sutAccountId: opts.sutAccount,
+    credentialFile: opts.credentialFile,
     credentialSource: opts.credentialSource,
     credentialRole: opts.credentialRole,
   };
@@ -174,6 +201,10 @@ function registerLiveTransportQaCli(
   }
 
   command.option("--sut-account <id>", params.sutAccountHelp, "sut");
+
+  if (params.credentialFileHelp) {
+    command.option("--credential-file <path>", params.credentialFileHelp);
+  }
 
   if (params.listScenariosHelp) {
     command.option("--list-scenarios", params.listScenariosHelp, false);
@@ -219,21 +250,6 @@ export function createLiveTransportQaCliRegistration(
   };
 }
 
-/** One top-level check row in a rendered QA markdown report. */
-export type QaReportCheck = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  details?: string;
-};
-
-/** One scenario section in a rendered QA markdown report. */
-export type QaReportScenario = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  details?: string;
-  steps?: QaReportCheck[];
-};
-
 /** Docker command runner abstraction used by QA Docker helpers and tests. */
 export type QaDockerRunCommand = (
   command: string,
@@ -253,95 +269,6 @@ export type QaDockerFetchLike = (
 
 const DEFAULT_QA_DOCKER_COMMAND_TIMEOUT_MS = 120_000;
 const DEFAULT_QA_DOCKER_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
-
-function pushQaReportDetailsBlock(lines: string[], label: string, details: string, indent = "") {
-  if (!details.includes("\n")) {
-    lines.push(`${indent}- ${label}: ${details}`);
-    return;
-  }
-  lines.push(`${indent}- ${label}:`);
-  lines.push("", "```text", details, "```");
-}
-
-/** Render checks, scenarios, timeline, and notes into the standard QA markdown report format. */
-export function renderQaMarkdownReport(params: {
-  title: string;
-  startedAt: Date;
-  finishedAt: Date;
-  checks?: QaReportCheck[];
-  scenarios?: QaReportScenario[];
-  timeline?: string[];
-  notes?: string[];
-}) {
-  const checks = params.checks ?? [];
-  const scenarios = params.scenarios ?? [];
-  const passCount =
-    checks.filter((check) => check.status === "pass").length +
-    scenarios.filter((scenario) => scenario.status === "pass").length;
-  const failCount =
-    checks.filter((check) => check.status === "fail").length +
-    scenarios.filter((scenario) => scenario.status === "fail").length;
-
-  const lines = [
-    `# ${params.title}`,
-    "",
-    `- Started: ${params.startedAt.toISOString()}`,
-    `- Finished: ${params.finishedAt.toISOString()}`,
-    `- Duration ms: ${params.finishedAt.getTime() - params.startedAt.getTime()}`,
-    `- Passed: ${passCount}`,
-    `- Failed: ${failCount}`,
-    "",
-  ];
-
-  if (checks.length > 0) {
-    lines.push("## Checks", "");
-    for (const check of checks) {
-      lines.push(`- [${check.status === "pass" ? "x" : " "}] ${check.name}`);
-      if (check.details) {
-        pushQaReportDetailsBlock(lines, "Details", check.details, "  ");
-      }
-    }
-  }
-
-  if (scenarios.length > 0) {
-    lines.push("", "## Scenarios", "");
-    for (const scenario of scenarios) {
-      lines.push(`### ${scenario.name}`);
-      lines.push("");
-      lines.push(`- Status: ${scenario.status}`);
-      if (scenario.details) {
-        pushQaReportDetailsBlock(lines, "Details", scenario.details);
-      }
-      if (scenario.steps?.length) {
-        lines.push("- Steps:");
-        for (const step of scenario.steps) {
-          lines.push(`  - [${step.status === "pass" ? "x" : " "}] ${step.name}`);
-          if (step.details) {
-            pushQaReportDetailsBlock(lines, "Details", step.details, "    ");
-          }
-        }
-      }
-      lines.push("");
-    }
-  }
-
-  if (params.timeline && params.timeline.length > 0) {
-    lines.push("## Timeline", "");
-    for (const item of params.timeline) {
-      lines.push(`- ${item}`);
-    }
-  }
-
-  if (params.notes && params.notes.length > 0) {
-    lines.push("", "## Notes", "");
-    for (const note of params.notes) {
-      lines.push(`- ${note}`);
-    }
-  }
-
-  lines.push("");
-  return lines.join("\n");
-}
 
 /** Append a formatted live-lane issue while preserving the caller-owned issue list. */
 export function appendQaLiveLaneIssue(issues: string[], label: string, error: unknown) {

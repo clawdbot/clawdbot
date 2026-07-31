@@ -18,6 +18,11 @@ import {
 
 let lastActiveRecallCacheSweepAt = 0;
 const activeRecallCache = new Map<string, CachedActiveRecallResult>();
+type ActiveRecallRunEntry = {
+  promise: Promise<ActiveRecallResult>;
+  timeoutCleanup?: Promise<void>;
+};
+const activeRecallRuns = new Map<string, ActiveRecallRunEntry>();
 const timeoutCircuitBreaker = new Map<string, CircuitBreakerEntry>();
 
 function buildCircuitBreakerKey(agentId: string, provider?: string, model?: string): string {
@@ -55,22 +60,74 @@ function scheduleMemorySearchCleanupAfterTimeout(
   api: OpenClawPluginApi,
   logPrefix: string,
   agentId: string,
-): void {
-  const cfg = resolveActiveMemoryCleanupConfig(api);
-  setTimeout(() => {
-    void closeActiveMemorySearchManager({ cfg: cfg ?? api.config, agentId })
-      .then(() => {
-        api.logger.debug?.(`${logPrefix} released memory search managers after timeout`);
-      })
-      .catch((error: unknown) => {
-        const message = toSingleLineLogValue(
-          error instanceof Error ? error.message : String(error),
-        );
-        api.logger.warn?.(
-          `${logPrefix} failed to release memory search managers after timeout: ${message}`,
-        );
-      });
-  }, 0);
+): Promise<void> {
+  return new Promise((resolve) => {
+    const cfg = resolveActiveMemoryCleanupConfig(api);
+    setTimeout(() => {
+      void closeActiveMemorySearchManager({ cfg: cfg ?? api.config, agentId })
+        .then(() => {
+          api.logger.debug?.(`${logPrefix} released memory search managers after timeout`);
+        })
+        .catch((error: unknown) => {
+          const message = toSingleLineLogValue(
+            error instanceof Error ? error.message : String(error),
+          );
+          api.logger.warn?.(
+            `${logPrefix} failed to release memory search managers after timeout: ${message}`,
+          );
+        })
+        .finally(resolve);
+    }, 0);
+  });
+}
+
+async function resolveActiveRecallForRun(
+  runId: string,
+  start: (onTimeoutCleanup: (cleanup: Promise<void>) => void) => Promise<ActiveRecallResult>,
+): Promise<ActiveRecallResult> {
+  const existing = activeRecallRuns.get(runId);
+  if (existing?.timeoutCleanup) {
+    // A replacement must not reuse managers while the timed-out recall or its
+    // cleanup is still settling; concurrent callers then join the replacement.
+    await Promise.allSettled([existing.promise, existing.timeoutCleanup]);
+    if (activeRecallRuns.get(runId) === existing) {
+      activeRecallRuns.delete(runId);
+    }
+    return await resolveActiveRecallForRun(runId, start);
+  }
+  if (existing) {
+    return await existing.promise;
+  }
+
+  const entry: ActiveRecallRunEntry = {
+    promise: Promise.resolve().then(() =>
+      start((cleanup) => {
+        entry.timeoutCleanup = cleanup;
+        void Promise.allSettled([entry.promise, cleanup]).then(() => {
+          if (activeRecallRuns.get(runId) === entry) {
+            activeRecallRuns.delete(runId);
+          }
+        });
+      }),
+    ),
+  };
+  activeRecallRuns.set(runId, entry);
+  void entry.promise.catch(() => {
+    // Failures before timeout cleanup starts must not poison this run;
+    // timeout-backed entries stay registered until manager cleanup settles.
+    if (!entry.timeoutCleanup && activeRecallRuns.get(runId) === entry) {
+      activeRecallRuns.delete(runId);
+    }
+  });
+  // Fulfilled results remain stable through agent_end, including `failed`;
+  // rerunning them would recreate the redundant same-turn recalls this registry prevents.
+  return await entry.promise;
+}
+
+function forgetActiveRecallRun(runId: string | undefined): void {
+  if (runId) {
+    activeRecallRuns.delete(runId);
+  }
 }
 
 function buildCacheKey(params: {
@@ -172,6 +229,7 @@ function shouldCacheResult(result: ActiveRecallResult): boolean {
 
 function resetActiveRecallStateForTests(): void {
   activeRecallCache.clear();
+  activeRecallRuns.clear();
   timeoutCircuitBreaker.clear();
   lastActiveRecallCacheSweepAt = 0;
 }
@@ -186,9 +244,11 @@ export {
   getCachedResult,
   getCircuitBreakerEntry,
   isCircuitBreakerOpen,
+  forgetActiveRecallRun,
   recordCircuitBreakerTimeout,
   resetActiveRecallStateForTests,
   resetCircuitBreaker,
+  resolveActiveRecallForRun,
   scheduleMemorySearchCleanupAfterTimeout,
   setCachedResult,
   shouldCacheResult,

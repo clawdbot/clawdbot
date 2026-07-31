@@ -104,7 +104,8 @@ describe("web monitor inbox", () => {
     });
 
     expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(onMessage.mock.calls[0]?.[0]?.payload.body).toBe("<media:image>");
+    expect(onMessage.mock.calls[0]?.[0]?.payload.body).toBe("");
+    expect(onMessage.mock.calls[0]?.[0]?.payload.media?.kind).toBe("image");
     expect(sock.readMessages).toHaveBeenCalledWith([
       {
         remoteJid: "888@s.whatsapp.net",
@@ -137,7 +138,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("resolves onClose when the socket closes", async () => {
+  it("socket session resolves onClose when the socket closes", async () => {
     const listener = await openMonitor(vi.fn());
     const sock = getSock();
     const reasonPromise = listener.onClose;
@@ -153,7 +154,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("detaches inbound listeners and ends the socket on close()", async () => {
+  it("socket session detaches inbound listeners and ends the socket on close()", async () => {
     const listener = await openMonitor(vi.fn());
     const sock = getSock();
 

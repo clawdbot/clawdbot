@@ -118,33 +118,28 @@ describe("plugin-sdk qa-runtime", () => {
     expect(module.isQaRuntimeAvailable()).toBe(false);
   });
 
-  it("renders shared QA markdown reports with multiline details", async () => {
+  it("runs a plugin-owned transport through the private QA suite host", async () => {
+    const runLiveTransportQaSuiteCommand = vi.fn(async () => {});
+    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+      runLiveTransportQaSuiteCommand,
+    });
     const module = await import("./qa-runtime.js");
+    const options = { providerMode: "mock-openai" };
+    const selectScenarioIds = vi.fn(() => ["channel-canary"]);
 
-    const report = module.renderQaMarkdownReport({
-      title: "QA Report",
-      startedAt: new Date("2026-01-01T00:00:00.000Z"),
-      finishedAt: new Date("2026-01-01T00:00:02.000Z"),
-      checks: [{ name: "preflight", status: "pass" }],
-      scenarios: [
-        {
-          name: "transport reply",
-          status: "fail",
-          details: "line one\nline two",
-          steps: [{ name: "send", status: "pass", details: "ok" }],
-        },
-      ],
-      timeline: ["sent request"],
-      notes: ["kept artifacts"],
+    await module.runLiveTransportQaSuiteCommand({
+      channelId: "buzz",
+      defaultProviderMode: "mock-openai",
+      options,
+      selectScenarioIds,
     });
 
-    expect(report).toContain("# QA Report");
-    expect(report).toContain("- Duration ms: 2000");
-    expect(report).toContain("- Passed: 1");
-    expect(report).toContain("- Failed: 1");
-    expect(report).toContain("```text\nline one\nline two\n```");
-    expect(report).toContain("- [x] send");
-    expect(report).toContain("## Timeline");
+    expect(runLiveTransportQaSuiteCommand).toHaveBeenCalledWith({
+      channelId: "buzz",
+      defaultProviderMode: "mock-openai",
+      options,
+      selectScenarioIds,
+    });
   });
 
   it("registers shared live transport QA CLI options", async () => {
@@ -155,6 +150,7 @@ describe("plugin-sdk qa-runtime", () => {
     module
       .createLiveTransportQaCliRegistration({
         commandName: "telegram",
+        credentialFileHelp: "Private JSON credential file",
         credentialOptions: {
           sourceDescription: "Credential source for Telegram QA",
           roleDescription: "Credential role for Telegram QA",
@@ -201,6 +197,8 @@ describe("plugin-sdk qa-runtime", () => {
       "--fail-fast",
       "--sut-account",
       "sut-2",
+      "--credential-file",
+      "/secure/telegram-qa.json",
       "--credential-source",
       "convex",
       "--credential-role",
@@ -220,6 +218,7 @@ describe("plugin-sdk qa-runtime", () => {
       scenarioIds: ["alpha", "beta"],
       listScenarios: true,
       sutAccountId: "sut-2",
+      credentialFile: "/secure/telegram-qa.json",
       credentialSource: "convex",
       credentialRole: "maintainer",
     });

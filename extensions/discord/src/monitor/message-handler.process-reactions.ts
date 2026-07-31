@@ -7,9 +7,8 @@ import {
   shouldAckReaction as shouldAckReactionGate,
   type StatusReactionController,
 } from "openclaw/plugin-sdk/channel-feedback";
-import { logVerbose, sleep } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createDiscordRestClient } from "../client.js";
-import { removeReactionDiscord } from "../send.js";
 import { resolveDiscordTargetChannelId } from "../send.shared.js";
 import { resolveDiscordChannelId } from "../targets.js";
 import {
@@ -50,7 +49,6 @@ export function createDiscordMessageReactionRuntime(params: {
     isGuildMessage,
     isDirectMessage,
     isGroupDm,
-    shouldRequireMention,
     canDetectMention,
     effectiveWasMentioned,
     shouldBypassMention,
@@ -60,7 +58,6 @@ export function createDiscordMessageReactionRuntime(params: {
     channel: "discord",
     accountId,
   });
-  const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const shouldSendAckReaction = Boolean(
     ackReaction &&
     shouldAckReactionGate({
@@ -69,7 +66,6 @@ export function createDiscordMessageReactionRuntime(params: {
       isDirect: isDirectMessage,
       isGroup: isGuildMessage || isGroupDm,
       isMentionableGroup: isGuildMessage,
-      requireMention: shouldRequireMention,
       canDetectMention,
       effectiveWasMentioned,
       shouldBypassMention,
@@ -101,7 +97,7 @@ export function createDiscordMessageReactionRuntime(params: {
     enabled: statusReactionsEnabled,
     adapter: discordAdapter,
     initialEmoji: ackReaction,
-    emojis: cfg.messages?.statusReactions?.emojis,
+    emojis: undefined,
     timing: statusReactionTiming,
     onError: (err) => {
       logAckFailure({
@@ -185,7 +181,7 @@ export function createDiscordMessageReactionRuntime(params: {
         reactionContext: ackReactionContext,
       }),
       initialEmoji: emoji,
-      emojis: cfg.messages?.statusReactions?.emojis,
+      emojis: undefined,
       timing: statusReactionTiming,
       onError: (err) => {
         logAckFailure({
@@ -226,11 +222,7 @@ export function createDiscordMessageReactionRuntime(params: {
   }) => {
     if (statusReactionsActive) {
       if (result.dispatchAborted) {
-        if (removeAckAfterReply) {
-          void statusReactions.clear();
-        } else {
-          void statusReactions.restoreInitial();
-        }
+        void statusReactions.restoreInitial();
         return;
       }
       if (result.dispatchError || result.finalDeliveryFailed) {
@@ -238,34 +230,7 @@ export function createDiscordMessageReactionRuntime(params: {
       } else {
         await statusReactions.setDone();
       }
-      if (removeAckAfterReply) {
-        void (async () => {
-          await sleep(
-            result.dispatchError || result.finalDeliveryFailed
-              ? statusReactionTiming.errorHoldMs
-              : statusReactionTiming.doneHoldMs,
-          );
-          await statusReactions.clear();
-        })();
-      } else {
-        void statusReactions.restoreInitial();
-      }
-      return;
-    }
-    if (shouldSendAckReaction && ackReaction && removeAckAfterReply) {
-      void removeReactionDiscord(
-        messageChannelId,
-        message.id,
-        ackReaction,
-        ackReactionContext,
-      ).catch((err: unknown) => {
-        logAckFailure({
-          log: logVerbose,
-          channel: "discord",
-          target: `${messageChannelId}/${message.id}`,
-          error: err,
-        });
-      });
+      void statusReactions.restoreInitial();
     }
   };
 

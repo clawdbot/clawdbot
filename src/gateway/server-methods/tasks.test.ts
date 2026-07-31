@@ -14,6 +14,7 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
   getTaskById,
+  listTaskRecordPage,
   markTaskTerminalById,
   recordTaskProgressByRunId,
 } from "../../tasks/runtime-internal.js";
@@ -163,7 +164,7 @@ describe("tasks gateway handlers", () => {
     const { calls, payload } = await runTaskHandler("tasks.list", {
       status: "running",
       agentId: "main",
-      sessionKey: "agent:main:main",
+      sessionKey: "main",
     });
 
     expect(calls[0]?.[0]).toBe(true);
@@ -179,6 +180,13 @@ describe("tasks gateway handlers", () => {
     expect(listedTask?.sessionKey).toBe("agent:main:main");
     expect(listedTask?.childSessionKey).toBe("agent:worker:subagent:child");
     expect(listedTask?.runId).toBe("run-running");
+
+    const canonical = await runTaskHandler("tasks.list", {
+      status: "running",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    });
+    expect(canonical.payload?.tasks?.map((task) => task.taskId)).toEqual([running.taskId]);
   });
 
   it("orders the ledger by last activity, not creation time", async () => {
@@ -250,6 +258,83 @@ describe("tasks gateway handlers", () => {
     const page3 = await runTaskHandler("tasks.list", { limit: 2, cursor: "4" });
     expect(page3.payload?.tasks?.map((task) => task.id)).toEqual(expectedIds.slice(4));
     expect(page3.payload?.nextCursor).toBeUndefined();
+  });
+
+  it("uses task id as the stable activity-order tie break", async () => {
+    const sharedActivityAt = 5_000;
+    const laterId = createSnapshotTask({
+      taskId: "task-z",
+      runId: "run-z",
+      lastEventAt: sharedActivityAt,
+    });
+    const earlierId = createSnapshotTask({
+      taskId: "task-a",
+      runId: "run-a",
+      lastEventAt: sharedActivityAt,
+    });
+    saveTaskRegistryStateToSqlite({
+      tasks: new Map([
+        [laterId.taskId, laterId],
+        [earlierId.taskId, earlierId],
+      ]),
+      deliveryStates: new Map(),
+    });
+    reloadTaskRegistryFromStore();
+
+    const { payload } = await runTaskHandler("tasks.list", {});
+
+    expect(payload?.tasks?.map((task) => task.taskId)).toEqual(["task-a", "task-z"]);
+  });
+
+  it("clones only the requested task page", async () => {
+    for (let index = 0; index < 6; index++) {
+      createTaskRecord({
+        runtime: "cli",
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        task: `Task ${index}`,
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        detail: { index },
+      });
+    }
+    const cloneSpy = vi.spyOn(globalThis, "structuredClone");
+    try {
+      const { payload } = await runTaskHandler("tasks.list", { limit: 2 });
+
+      expect(payload?.tasks).toHaveLength(2);
+      expect(payload?.nextCursor).toBe("2");
+      expect(cloneSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      cloneSpy.mockRestore();
+    }
+  });
+
+  it("returns page records isolated from the registry", () => {
+    const created = createTaskRecord({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      task: "Isolated task",
+      status: "running",
+      deliveryStatus: "pending",
+      detail: { nested: { value: "original" } },
+    });
+
+    const page = listTaskRecordPage({ offset: 0, limit: 1 });
+    const detail = page.tasks[0]?.detail as { nested: { value: string } } | undefined;
+    expect(detail).toBeDefined();
+    if (detail) {
+      detail.nested.value = "mutated";
+    }
+
+    const current = expectDefined(
+      getTaskById(created.taskId),
+      "page mutation must not change the registry record",
+    );
+    expect((current.detail as { nested: { value: string } }).nested.value).toBe("original");
   });
 
   it("treats explicit task agentId as authoritative over the session-key fallback", async () => {

@@ -1,143 +1,210 @@
-// Ollama setup failed-response body release regression tests.
+import { once } from "node:events";
+import { createServer } from "node:http";
+import type { Socket } from "node:net";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
-import { jsonResponse, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { checkOllamaCloudAuth, promptAndConfigureOllama } from "./setup.js";
+import { pullOllamaModel } from "./setup-pull.js";
+import { checkOllamaCloudAuth } from "./setup.js";
 
-const upsertAuthProfileWithLock = vi.hoisted(() => vi.fn(async () => {}));
-
-const fetchWithSsrFGuardMock = vi.hoisted(() =>
-  vi.fn(async (params: { url: string; init?: RequestInit; signal?: AbortSignal }) => ({
-    response: await globalThis.fetch(params.url, {
-      ...params.init,
-      ...(params.signal ? { signal: params.signal } : {}),
-    }),
-    finalUrl: params.url,
-    release: async () => {},
-  })),
-);
-
-vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>();
-  return {
-    ...actual,
-    upsertAuthProfileWithLock,
-  };
-});
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
   return {
     ...actual,
-    fetchWithSsrFGuard: (...args: Parameters<typeof actual.fetchWithSsrFGuard>) =>
-      fetchWithSsrFGuardMock(...args),
+    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
   };
 });
 
-function responseWithCancelSpy(status: number) {
-  const cancel = vi.fn();
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(new TextEncoder().encode('{"error":"boom"}\n'));
-      // Body stays open until cancelled, like a slow or stalled peer.
+      controller.enqueue(new TextEncoder().encode(text));
     },
-    cancel(reason) {
-      cancel(reason);
+    cancel() {
+      canceled = true;
     },
   });
-  return { response: new Response(body, { status }), cancel };
+  return {
+    response: new Response(body, init),
+    wasCanceled: () => canceled,
+  };
 }
 
-describe("failed response body release", () => {
+function createPullPrompter(): WizardPrompter {
+  return {
+    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+  } as unknown as WizardPrompter;
+}
+
+async function waitForSocketClose(closed: Promise<void> | undefined): Promise<void> {
+  if (!closed) {
+    throw new Error("Ollama test server did not receive a request");
+  }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      closed,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error("Ollama response socket was not closed"));
+        }, 2_000);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+describe("Ollama setup response cleanup", () => {
   afterEach(() => {
-    fetchWithSsrFGuardMock.mockClear();
-    vi.unstubAllGlobals();
+    fetchWithSsrFGuardMock.mockReset();
   });
 
-  it("cancels the /api/me body when the auth probe is not OK", async () => {
-    const { response, cancel } = responseWithCancelSpy(500);
+  it.each([200, 503])("cancels the /api/me body for HTTP %s", async (status) => {
+    const tracked = cancelTrackedResponse('{"status":"unused"}\n', { status });
+    const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response,
+      response: tracked.response,
       finalUrl: "https://ollama.com/api/me",
-      release: async () => {},
+      release,
     });
 
-    await expect(checkOllamaCloudAuth("https://ollama.com")).resolves.toEqual({
-      signedIn: false,
-    });
-    expect(cancel).toHaveBeenCalled();
+    await checkOllamaCloudAuth("https://ollama.com");
+
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
   });
 
-  it("cancels the /api/me body after a successful auth probe", async () => {
-    const { response, cancel } = responseWithCancelSpy(200);
+  it.each([
+    {
+      name: "non-OK /api/pull response",
+      response: () => cancelTrackedResponse("ollama unavailable", { status: 503 }),
+    },
+    {
+      name: "streamed /api/pull error",
+      response: () => cancelTrackedResponse('{"error":"disk full"}\n', { status: 200 }),
+    },
+  ])("cancels a $name body before returning", async ({ response: createResponse }) => {
+    const tracked = createResponse();
+    const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response,
-      finalUrl: "https://ollama.com/api/me",
-      release: async () => {},
+      response: tracked.response,
+      finalUrl: "http://127.0.0.1:11434/api/pull",
+      release,
     });
 
-    await expect(checkOllamaCloudAuth("https://ollama.com")).resolves.toEqual({
-      signedIn: true,
-    });
-    expect(cancel).toHaveBeenCalled();
+    await expect(
+      pullOllamaModel("http://127.0.0.1:11434", "gemma4:e2b", createPullPrompter()),
+    ).resolves.toBe(false);
+
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
   });
 
-  it("cancels the /api/pull error body", async () => {
-    const { response, cancel } = responseWithCancelSpy(500);
-    const progress = { update: vi.fn(), stop: vi.fn() };
-    const prompter = {
-      select: vi.fn().mockResolvedValueOnce("local-only"),
-      text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-      confirm: vi.fn().mockResolvedValueOnce(true),
-      progress: vi.fn(() => progress),
-      note: vi.fn(async () => undefined),
-    } as unknown as WizardPrompter;
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      const url = requestUrl(input);
-      if (url.endsWith("/api/tags")) {
-        return jsonResponse({ models: [{ name: "llama3:8b" }] });
+  it.each([
+    {
+      name: "successful auth probe",
+      path: "/api/me",
+      status: 200,
+      body: '{"status":"unused"}\n',
+      run: async (baseUrl: string) => {
+        await checkOllamaCloudAuth(baseUrl);
+      },
+    },
+    {
+      name: "failed auth probe",
+      path: "/api/me",
+      status: 503,
+      body: "ollama unavailable",
+      run: async (baseUrl: string) => {
+        await checkOllamaCloudAuth(baseUrl);
+      },
+    },
+    {
+      name: "failed pull response",
+      path: "/api/pull",
+      status: 503,
+      body: "ollama unavailable",
+      run: async (baseUrl: string) => {
+        await pullOllamaModel(baseUrl, "gemma4:e2b", createPullPrompter());
+      },
+    },
+    {
+      name: "streamed pull error",
+      path: "/api/pull",
+      status: 200,
+      body: '{"error":"disk full"}\n',
+      run: async (baseUrl: string) => {
+        await pullOllamaModel(baseUrl, "gemma4:e2b", createPullPrompter());
+      },
+    },
+  ])("closes the real socket after a $name", async ({ path, status, body, run }) => {
+    const sockets = new Set<Socket>();
+    let requestSocketClosed: Promise<void> | undefined;
+    const server = createServer((request, response) => {
+      if (request.url !== path) {
+        response.writeHead(404);
+        response.end();
+        return;
       }
-      if (url.endsWith("/api/show")) {
-        return jsonResponse({ capabilities: ["generate"] });
-      }
-      if (url.endsWith("/api/pull")) {
-        return response;
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
+      requestSocketClosed = new Promise<void>((resolve) => {
+        request.socket.once("close", () => resolve());
+      });
+      response.writeHead(status, { "content-type": "application/json" });
+      response.write(body);
     });
-    vi.stubGlobal("fetch", fetchMock);
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+    });
 
-    await expect(promptAndConfigureOllama({ cfg: {}, prompter })).rejects.toThrow(
-      /Failed to download/,
+    fetchWithSsrFGuardMock.mockImplementation(
+      async (params: { url: string; init?: RequestInit; signal?: AbortSignal }) => ({
+        response: await globalThis.fetch(params.url, {
+          ...params.init,
+          ...(params.signal ? { signal: params.signal } : {}),
+        }),
+        finalUrl: params.url,
+        release: async () => {},
+      }),
     );
-    expect(cancel).toHaveBeenCalled();
-  });
 
-  it("cancels the /api/show error body during the tools scan", async () => {
-    const { response, cancel } = responseWithCancelSpy(500);
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      const url = requestUrl(input);
-      if (url.endsWith("/api/tags")) {
-        return jsonResponse({ models: [{ name: "llama3:8b" }] });
+    const listening = once(server, "listening");
+    try {
+      server.listen(0, "127.0.0.1");
+      await listening;
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Ollama test server did not expose a TCP address");
       }
-      if (url.endsWith("/api/show")) {
-        return response;
-      }
-      if (url.endsWith("/api/me")) {
-        return jsonResponse({});
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const prompter = {
-      text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-      select: vi.fn().mockResolvedValueOnce("local-only"),
-      confirm: vi.fn().mockResolvedValueOnce(false),
-      note: vi.fn(async () => undefined),
-    } as unknown as WizardPrompter;
 
-    // The tools scan fails open per model; the error body must still be released.
-    await promptAndConfigureOllama({ cfg: {}, prompter });
-    expect(cancel).toHaveBeenCalled();
+      await run(`http://127.0.0.1:${address.port}`);
+      await waitForSocketClose(requestSocketClosed);
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      if (server.listening) {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (error) {
+              reject(error);
+              return;
+            }
+            resolve();
+          });
+        });
+      }
+    }
   });
 });

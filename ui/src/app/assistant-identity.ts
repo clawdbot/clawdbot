@@ -13,6 +13,16 @@ type PersistedLocalAssistantIdentities = {
   agentId?: unknown;
 };
 
+type AssistantIdentityCacheEntry =
+  | { kind: "result"; result: AssistantIdentity | null; cachedAt: number }
+  | { kind: "pending"; pending: Promise<AssistantIdentity | null> };
+
+const ASSISTANT_IDENTITY_CACHE_TTL_MS = 60_000;
+const assistantIdentityCache = new WeakMap<
+  GatewayBrowserClient,
+  Map<string, AssistantIdentityCacheEntry>
+>();
+
 function parseLocalAssistantAvatarMap(raw: string): {
   avatars: Record<string, string>;
   legacyAvatar: string | null;
@@ -69,26 +79,66 @@ export function loadLocalAssistantIdentity(opts?: {
   }
 }
 
-export async function fetchAssistantIdentity(
-  client: GatewayBrowserClient,
-  sessionKey?: string,
-): Promise<AssistantIdentity | null> {
-  const result = await client.request<Partial<AssistantIdentity>>(
-    "agent.identity.get",
-    sessionKey?.trim() ? { sessionKey: sessionKey.trim() } : {},
-  );
-  if (!result) {
-    return null;
+export function invalidateAssistantIdentityCache(client: GatewayBrowserClient | null): void {
+  if (client) {
+    assistantIdentityCache.delete(client);
   }
-  const identity = normalizeAssistantIdentity(result);
-  const localAvatar = loadLocalAssistantIdentity({ agentId: identity.agentId }).avatar;
-  return localAvatar
-    ? {
-        ...identity,
-        avatar: localAvatar,
-        avatarSource: localAvatar,
-        avatarStatus: "data",
-        avatarReason: null,
+}
+
+export function fetchAssistantIdentity(
+  client: GatewayBrowserClient,
+  agentId: string,
+): Promise<AssistantIdentity | null> {
+  let cache = assistantIdentityCache.get(client);
+  if (!cache) {
+    cache = new Map();
+    assistantIdentityCache.set(client, cache);
+  }
+  const key = agentId.trim();
+  const cached = cache.get(key);
+  if (cached?.kind === "result" && Date.now() - cached.cachedAt < ASSISTANT_IDENTITY_CACHE_TTL_MS) {
+    return Promise.resolve(cached.result);
+  }
+  if (cached?.kind === "result") {
+    cache.delete(key);
+  }
+  if (cached?.kind === "pending") {
+    return cached.pending;
+  }
+  const pending = client
+    .request<Partial<AssistantIdentity> | null>("agent.identity.get", { agentId: key })
+    .then((result) => {
+      if (!result) {
+        return null;
       }
-    : identity;
+      const identity = normalizeAssistantIdentity(result);
+      const localAvatar = loadLocalAssistantIdentity({ agentId: identity.agentId }).avatar;
+      return localAvatar
+        ? {
+            ...identity,
+            avatar: localAvatar,
+            avatarSource: localAvatar,
+            avatarStatus: "data" as const,
+            avatarReason: null,
+          }
+        : identity;
+    })
+    .then(
+      (result) => {
+        const current = cache.get(key);
+        if (current?.kind === "pending" && current.pending === pending) {
+          cache.set(key, { kind: "result", result, cachedAt: Date.now() });
+        }
+        return result;
+      },
+      (error: unknown) => {
+        const current = cache.get(key);
+        if (current?.kind === "pending" && current.pending === pending) {
+          cache.delete(key);
+        }
+        throw error;
+      },
+    );
+  cache.set(key, { kind: "pending", pending });
+  return pending;
 }

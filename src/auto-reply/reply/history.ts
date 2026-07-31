@@ -1,8 +1,8 @@
 /** Pending chat-history windows and prompt context builders for auto-reply turns. */
 import type { HistoryEntry, HistoryMediaEntry } from "./history.types.js";
-import { CURRENT_MESSAGE_MARKER } from "./mentions.js";
 
 export const HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]";
+export const CURRENT_MESSAGE_MARKER = "[Current message - respond to this]";
 export const DEFAULT_GROUP_HISTORY_LIMIT = 50;
 
 /** Maximum number of group history keys to retain (LRU eviction when exceeded). */
@@ -73,12 +73,6 @@ function recordChannelHistoryEntry<T extends HistoryEntry>(params: {
   evictOldHistoryKeys(historyMap);
   return history;
 }
-
-/**
- * @deprecated Plugin message-turn code should use `createChannelHistoryWindow(...).record(...)`.
- * This helper remains for core internals and older plugin compatibility.
- */
-export const recordPendingHistoryEntry = recordChannelHistoryEntry;
 
 export function recordChannelHistoryEntryIfEnabled<T extends HistoryEntry>(params: {
   historyMap: Map<string, T[]>;
@@ -342,11 +336,6 @@ function clearChannelHistory(params: {
 }): void {
   params.historyMap.set(params.historyKey, []);
 }
-
-/**
- * @deprecated Plugin message-turn code should use `createChannelHistoryWindow(...).clear(...)`.
- */
-export const clearHistoryEntries = clearChannelHistory;
 
 export function clearChannelHistoryIfEnabled(params: {
   historyMap: Map<string, HistoryEntry[]>;

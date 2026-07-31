@@ -451,6 +451,7 @@ class GatewayBootstrapAuthTest {
 
       assertEquals("ab".repeat(32), prefs.loadGatewayTlsFingerprint(endpoint.stableId))
       assertEquals("setup-bootstrap-token", waitForDesiredBootstrapToken(runtime, "nodeSession"))
+      assertEquals("ab".repeat(32), runtime.gatewayControlPage.value?.tlsFingerprintSha256)
       assertNull(desiredBootstrapToken(runtime, "operatorSession"))
     }
 
@@ -734,6 +735,32 @@ class GatewayBootstrapAuthTest {
       )
     assertTrue(locationOptions.commands.contains(OpenClawCameraCommand.Snap.rawValue))
     assertTrue(locationOptions.commands.contains(OpenClawLocationCommand.Get.rawValue))
+  }
+
+  @Test
+  fun permissionSurfaceReconnectsOnlyAfterAndroidAuthorityChanges() {
+    val app: android.app.Application = RuntimeEnvironment.getApplication()
+    shadowOf(app).denyPermissions(Manifest.permission.CAMERA)
+    val (runtime, prefs) = createNeutralizedRuntime()
+    armSavedActiveManualGateway(prefs)
+    writeField(
+      runtime,
+      "connectedEndpoint",
+      GatewayEndpoint.manual(host = "127.0.0.1", port = 18789),
+    )
+
+    runtime.refreshNodePermissionSurface()
+    assertNull(desiredConnection(runtime, "nodeSession"))
+
+    shadowOf(app).grantPermissions(Manifest.permission.CAMERA)
+    runtime.refreshNodePermissionSurface()
+
+    val options =
+      readField<GatewayConnectOptions>(
+        waitForDesiredConnection(runtime, "nodeSession"),
+        "options",
+      )
+    assertTrue(options.permissions.getValue("camera"))
   }
 
   @Test

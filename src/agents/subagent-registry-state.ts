@@ -1,13 +1,18 @@
+import { isVitestRuntimeEnv } from "../infra/env.js";
 /**
  * Subagent registry state persistence bridge.
  *
  * Merges process-local active runs with persisted SQLite state for cross-process readers.
  */
 import {
+  loadSubagentRunsForChildSessionFromSqlite,
+  loadSubagentRunsForControllerFromSqlite,
   loadSubagentRegistryFromSqlite,
+  loadSubagentSessionListRunsFromSqlite,
+  saveSubagentRegistryChangesToSqlite,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry.store.sqlite.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const SUBAGENT_RUNS_READ_CACHE_TTL_MS = 500;
 
@@ -15,6 +20,13 @@ let persistedSubagentRunsReadCache:
   | {
       loadedAtMs: number;
       runs: Map<string, SubagentRunRecord>;
+    }
+  | undefined;
+
+let persistedSubagentSessionListRunsReadCache:
+  | {
+      loadedAtMs: number;
+      runs: Map<string, SubagentRunReadRecord>;
     }
   | undefined;
 
@@ -46,50 +58,210 @@ function cloneSubagentRunsSnapshot(
   return new Map([...runs.entries()].map(([runId, entry]) => [runId, structuredClone(entry)]));
 }
 
+function projectSubagentRunForSessionList(entry: SubagentRunRecord): SubagentRunReadRecord {
+  return {
+    runId: entry.runId,
+    childSessionKey: entry.childSessionKey,
+    ...(entry.controllerSessionKey ? { controllerSessionKey: entry.controllerSessionKey } : {}),
+    requesterSessionKey: entry.requesterSessionKey,
+    ...(entry.model ? { model: entry.model } : {}),
+    ...(entry.generation !== undefined ? { generation: entry.generation } : {}),
+    createdAt: entry.createdAt,
+    ...(entry.startedAt !== undefined ? { startedAt: entry.startedAt } : {}),
+    ...(entry.sessionStartedAt !== undefined ? { sessionStartedAt: entry.sessionStartedAt } : {}),
+    ...(entry.accumulatedRuntimeMs !== undefined
+      ? { accumulatedRuntimeMs: entry.accumulatedRuntimeMs }
+      : {}),
+    ...(entry.endedAt !== undefined ? { endedAt: entry.endedAt } : {}),
+    ...(entry.runTimeoutSeconds !== undefined
+      ? { runTimeoutSeconds: entry.runTimeoutSeconds }
+      : {}),
+    ...(entry.endedReason ? { endedReason: entry.endedReason } : {}),
+    ...(entry.outcome ? { outcome: { status: entry.outcome.status } } : {}),
+    ...(entry.cleanupCompletedAt !== undefined
+      ? { cleanupCompletedAt: entry.cleanupCompletedAt }
+      : {}),
+    ...(entry.delivery
+      ? {
+          delivery: {
+            status: entry.delivery.status,
+            ...(entry.delivery.suspendedAt !== undefined
+              ? { suspendedAt: entry.delivery.suspendedAt }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function projectSubagentRunsForSessionList(
+  runs: Map<string, SubagentRunRecord>,
+): Map<string, SubagentRunReadRecord> {
+  return new Map(
+    [...runs.entries()].map(([runId, entry]) => [runId, projectSubagentRunForSessionList(entry)]),
+  );
+}
+
 function rememberPersistedSubagentRunsSnapshot(runs: Map<string, SubagentRunRecord>): void {
+  const loadedAtMs = Date.now();
   persistedSubagentRunsReadCache = {
-    loadedAtMs: Date.now(),
+    loadedAtMs,
     runs: cloneSubagentRunsSnapshot(runs),
   };
+  persistedSubagentSessionListRunsReadCache = {
+    loadedAtMs,
+    runs: projectSubagentRunsForSessionList(runs),
+  };
+}
+
+function rememberPersistedSubagentRunChanges(
+  runs: Map<string, SubagentRunRecord>,
+  changedRunIds: readonly string[],
+): void {
+  const loadedAtMs = Date.now();
+  if (!persistedSubagentRunsReadCache) {
+    persistedSubagentRunsReadCache = {
+      loadedAtMs,
+      runs: cloneSubagentRunsSnapshot(runs),
+    };
+  } else {
+    for (const runId of new Set(changedRunIds)) {
+      const entry = runs.get(runId);
+      if (entry) {
+        persistedSubagentRunsReadCache.runs.set(runId, structuredClone(entry));
+      } else {
+        persistedSubagentRunsReadCache.runs.delete(runId);
+      }
+    }
+    persistedSubagentRunsReadCache.loadedAtMs = loadedAtMs;
+  }
+
+  if (!persistedSubagentSessionListRunsReadCache) {
+    persistedSubagentSessionListRunsReadCache = {
+      loadedAtMs,
+      runs: projectSubagentRunsForSessionList(runs),
+    };
+    return;
+  }
+  for (const runId of new Set(changedRunIds)) {
+    const entry = runs.get(runId);
+    if (entry) {
+      persistedSubagentSessionListRunsReadCache.runs.set(
+        runId,
+        projectSubagentRunForSessionList(entry),
+      );
+    } else {
+      persistedSubagentSessionListRunsReadCache.runs.delete(runId);
+    }
+  }
+  persistedSubagentSessionListRunsReadCache.loadedAtMs = loadedAtMs;
+}
+
+function shouldReadPersistedSubagentRuns(): boolean {
+  return !isVitestRuntimeEnv() || process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE === "1";
+}
+
+function getFreshPersistedSubagentRunsSnapshot(
+  nowMs: number,
+): Map<string, SubagentRunRecord> | null {
+  const cached = persistedSubagentRunsReadCache;
+  return cached &&
+    nowMs >= cached.loadedAtMs &&
+    nowMs - cached.loadedAtMs < SUBAGENT_RUNS_READ_CACHE_TTL_MS
+    ? cached.runs
+    : null;
 }
 
 function loadPersistedSubagentRunsForRead(): Map<string, SubagentRunRecord> {
   const nowMs = Date.now();
-  if (
-    persistedSubagentRunsReadCache &&
-    nowMs >= persistedSubagentRunsReadCache.loadedAtMs &&
-    nowMs - persistedSubagentRunsReadCache.loadedAtMs < SUBAGENT_RUNS_READ_CACHE_TTL_MS
-  ) {
-    return persistedSubagentRunsReadCache.runs;
+  const cached = getFreshPersistedSubagentRunsSnapshot(nowMs);
+  if (cached) {
+    return cached;
   }
 
   const runs = loadSubagentRegistryFromSqlite();
-  persistedSubagentRunsReadCache = {
+  rememberPersistedSubagentRunsSnapshot(runs);
+  return persistedSubagentRunsReadCache?.runs ?? runs;
+}
+
+function loadPersistedSubagentSessionListRunsForRead(): Map<string, SubagentRunReadRecord> {
+  const nowMs = Date.now();
+  const cached = persistedSubagentSessionListRunsReadCache;
+  if (
+    cached &&
+    nowMs >= cached.loadedAtMs &&
+    nowMs - cached.loadedAtMs < SUBAGENT_RUNS_READ_CACHE_TTL_MS
+  ) {
+    return cached.runs;
+  }
+
+  const runs = loadSubagentSessionListRunsFromSqlite();
+  persistedSubagentSessionListRunsReadCache = {
     loadedAtMs: nowMs,
     runs,
   };
   return runs;
 }
 
-export function clearSubagentRunsReadCacheForTest(): void {
-  persistedSubagentRunsReadCache = undefined;
+function loadPersistedSubagentRunsForScopedRead(params: {
+  load: () => SubagentRunRecord[];
+  matches: (entry: SubagentRunRecord) => boolean;
+}): Map<string, SubagentRunRecord> {
+  // A fresh broad snapshot represents same-process writes, including the
+  // existing best-effort persistence-failure behavior. Otherwise query the index directly.
+  const cached = getFreshPersistedSubagentRunsSnapshot(Date.now());
+  const entries = cached ? [...cached.values()].filter(params.matches) : params.load();
+  return new Map(entries.map((entry) => [entry.runId, entry]));
 }
 
-export function persistSubagentRunsToDisk(runs: Map<string, SubagentRunRecord>) {
+function resolvesToControllerSessionKey(
+  entry: SubagentRunRecord,
+  controllerSessionKey: string,
+): boolean {
+  return (entry.controllerSessionKey?.trim() || entry.requesterSessionKey) === controllerSessionKey;
+}
+
+export function clearSubagentRunsReadCacheForTest(): void {
+  persistedSubagentRunsReadCache = undefined;
+  persistedSubagentSessionListRunsReadCache = undefined;
+}
+
+export function persistSubagentRunsToDisk(
+  runs: Map<string, SubagentRunRecord>,
+  // Undefined replaces the complete snapshot; an array applies exact row mutations.
+  changedRunIds?: readonly string[],
+) {
   try {
-    saveSubagentRegistryToSqlite(runs);
+    if (changedRunIds) {
+      saveSubagentRegistryChangesToSqlite(runs, changedRunIds);
+    } else {
+      saveSubagentRegistryToSqlite(runs);
+    }
   } catch {
     // ignore persistence failures
   } finally {
     // In-process readers must observe the authoritative memory snapshot before the wake.
-    rememberPersistedSubagentRunsSnapshot(runs);
+    if (changedRunIds) {
+      rememberPersistedSubagentRunChanges(runs, changedRunIds);
+    } else {
+      rememberPersistedSubagentRunsSnapshot(runs);
+    }
     emitSubagentRegistryPersisted();
   }
 }
 
-export function persistSubagentRunsToDiskOrThrow(runs: Map<string, SubagentRunRecord>) {
-  saveSubagentRegistryToSqlite(runs);
-  rememberPersistedSubagentRunsSnapshot(runs);
+export function persistSubagentRunsToDiskOrThrow(
+  runs: Map<string, SubagentRunRecord>,
+  // Undefined replaces the complete snapshot; an array applies exact row mutations.
+  changedRunIds?: readonly string[],
+) {
+  if (changedRunIds) {
+    saveSubagentRegistryChangesToSqlite(runs, changedRunIds);
+    rememberPersistedSubagentRunChanges(runs, changedRunIds);
+  } else {
+    saveSubagentRegistryToSqlite(runs);
+    rememberPersistedSubagentRunsSnapshot(runs);
+  }
   emitSubagentRegistryPersisted();
 }
 
@@ -119,10 +291,7 @@ export function getSubagentRunsSnapshotForRead(
   inMemoryRuns: Map<string, SubagentRunRecord>,
 ): Map<string, SubagentRunRecord> {
   const merged = new Map<string, SubagentRunRecord>();
-  const shouldReadPersisted =
-    process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE === "1" ||
-    !(process.env.VITEST || process.env.NODE_ENV === "test");
-  if (shouldReadPersisted) {
+  if (shouldReadPersistedSubagentRuns()) {
     try {
       // Persisted state lets other worker processes observe active runs.
       // Cache this hot cross-process snapshot briefly; writes refresh the local
@@ -136,6 +305,89 @@ export function getSubagentRunsSnapshotForRead(
   }
   for (const [runId, entry] of inMemoryRuns.entries()) {
     merged.set(runId, entry);
+  }
+  return merged;
+}
+
+export function getSubagentSessionListRunsSnapshotForRead(
+  inMemoryRuns: Map<string, SubagentRunRecord>,
+): Map<string, SubagentRunReadRecord> {
+  const merged = new Map<string, SubagentRunReadRecord>();
+  if (shouldReadPersistedSubagentRuns()) {
+    try {
+      for (const [runId, entry] of loadPersistedSubagentSessionListRunsForRead()) {
+        merged.set(runId, entry);
+      }
+    } catch {
+      // Ignore disk read failures and fall back to local memory.
+    }
+  }
+  for (const [runId, entry] of inMemoryRuns) {
+    merged.set(runId, projectSubagentRunForSessionList(entry));
+  }
+  return merged;
+}
+
+export function getSubagentRunsSnapshotForController(
+  inMemoryRuns: Map<string, SubagentRunRecord>,
+  controllerSessionKey: string,
+): Map<string, SubagentRunRecord> {
+  const key = controllerSessionKey.trim();
+  const merged = new Map<string, SubagentRunRecord>();
+  if (!key) {
+    return merged;
+  }
+  if (shouldReadPersistedSubagentRuns()) {
+    try {
+      for (const [runId, entry] of loadPersistedSubagentRunsForScopedRead({
+        load: () => loadSubagentRunsForControllerFromSqlite(key),
+        matches: (candidate) => resolvesToControllerSessionKey(candidate, key),
+      })) {
+        merged.set(runId, structuredClone(entry));
+      }
+    } catch {
+      // Ignore disk read failures and fall back to local memory.
+    }
+  }
+  for (const [runId, entry] of inMemoryRuns) {
+    if (resolvesToControllerSessionKey(entry, key)) {
+      merged.set(runId, entry);
+    } else {
+      // Live memory is authoritative even when a run moved out of this persisted scope.
+      merged.delete(runId);
+    }
+  }
+  return merged;
+}
+
+export function getSubagentRunsSnapshotForChildSession(
+  inMemoryRuns: Map<string, SubagentRunRecord>,
+  childSessionKey: string,
+): Map<string, SubagentRunRecord> {
+  const key = childSessionKey.trim();
+  const merged = new Map<string, SubagentRunRecord>();
+  if (!key) {
+    return merged;
+  }
+  if (shouldReadPersistedSubagentRuns()) {
+    try {
+      for (const [runId, entry] of loadPersistedSubagentRunsForScopedRead({
+        load: () => loadSubagentRunsForChildSessionFromSqlite(key),
+        matches: (candidate) => candidate.childSessionKey === key,
+      })) {
+        merged.set(runId, structuredClone(entry));
+      }
+    } catch {
+      // Ignore disk read failures and fall back to local memory.
+    }
+  }
+  for (const [runId, entry] of inMemoryRuns) {
+    if (entry.childSessionKey === key) {
+      merged.set(runId, entry);
+    } else {
+      // Match full-snapshot overlay semantics for runs that changed child association.
+      merged.delete(runId);
+    }
   }
   return merged;
 }

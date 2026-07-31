@@ -49,9 +49,9 @@ const allowedRawFetchCallsites = new Set([
   bundledPluginCallsite("qa-lab", "src/suite.ts", 330),
   bundledPluginCallsite("qa-lab", "src/suite.ts", 341),
   // The QA dashboard calls its same-origin local API from the browser, where server SSRF helpers do not run.
-  bundledPluginCallsite("qa-lab", "web/src/http.ts", 8),
-  bundledPluginCallsite("qa-lab", "web/src/http.ts", 16),
-  bundledPluginCallsite("qa-lab", "web/src/http.ts", 27),
+  bundledPluginCallsite("qa-lab", "web/src/http.ts", 24),
+  bundledPluginCallsite("qa-lab", "web/src/http.ts", 32),
+  bundledPluginCallsite("qa-lab", "web/src/http.ts", 43),
   bundledPluginCallsite("qqbot", "src/engine/api/api-client.ts", 124),
   bundledPluginCallsite("qqbot", "src/engine/api/media-chunked.ts", 554),
   bundledPluginCallsite("qqbot", "src/engine/api/token.ts", 211),

@@ -16,6 +16,7 @@ import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
@@ -60,7 +61,8 @@ function normalizeBedrockResolvedModel({ modelId, model }: ProviderNormalizeReso
   const reasoning =
     model.reasoning ||
     resolveClaudeFable5ModelIdentity({ id: modelId, params: model.params }) !== undefined ||
-    resolveClaudeMythos5ModelIdentity({ id: modelId, params: model.params }) !== undefined;
+    resolveClaudeMythos5ModelIdentity({ id: modelId, params: model.params }) !== undefined ||
+    resolveClaudeOpus5ModelIdentity({ id: modelId, params: model.params }) !== undefined;
   const current = model.thinkingLevelMap;
   const currentEfforts = current as Record<string, string | null | undefined> | undefined;
   if (
@@ -549,6 +551,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       const currentGuardrail = currentPluginConfig?.guardrail;
       const modelRef = { id: modelId, params: model?.params };
       const fable5 = resolveClaudeFable5ModelIdentity(modelRef) !== undefined;
+      const opus5 = resolveClaudeOpus5ModelIdentity(modelRef) !== undefined;
       const sonnet5 = resolveClaudeSonnet5ModelIdentity(modelRef) !== undefined;
       const canonicalModelId = resolveClaudeModelIdentity(modelRef);
       const opus47OrNewer =
@@ -570,8 +573,8 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         api.logger.warn(message),
       );
       if (serviceTier && wrapped) {
-        if ((fable5 || sonnet5) && serviceTier !== "default") {
-          const modelLabel = fable5 ? "Fable 5" : "Sonnet 5";
+        if ((fable5 || opus5 || sonnet5) && serviceTier !== "default") {
+          const modelLabel = fable5 ? "Fable 5" : opus5 ? "Opus 5" : "Sonnet 5";
           api.logger.warn(
             `ignoring unsupported ${modelLabel} Bedrock service tier: ${serviceTier}`,
           );

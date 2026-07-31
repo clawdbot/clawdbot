@@ -119,6 +119,13 @@ function createSessionVisibilityAppConfig(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function createAgentSessionVisibilityAppConfig(): OpenClawConfig {
+  return {
+    agents: { list: [{ id: "main", default: true }, { id: "secondary" }] },
+    tools: { sessions: { visibility: "agent" } },
+  } as OpenClawConfig;
+}
+
 function mockSessionTranscriptStore() {
   loadCombinedSessionStoreForGatewayMock.mockReturnValue({
     storePath: "(test)",
@@ -1148,6 +1155,101 @@ describe("searchMemoryWiki", () => {
     ]);
   });
 
+  it("keeps same-agent owner-qualified live orphan session hits", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: { search: { backend: "shared", corpus: "memory" } },
+    });
+    const manager = createMemoryManager({
+      searchResults: [
+        {
+          path: "sessions/secondary/live-orphan.jsonl",
+          startLine: 1,
+          endLine: 2,
+          score: 30,
+          snippet: "same-agent orphan",
+          source: "sessions",
+        },
+      ],
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const results = await searchMemoryWiki({
+      config,
+      appConfig: createAgentSessionVisibilityAppConfig(),
+      agentId: "secondary",
+      query: "orphan",
+    });
+
+    expect(results.map((result) => result.path)).toEqual(["sessions/secondary/live-orphan.jsonl"]);
+  });
+
+  it("drops cross-agent and ownerless QMD live orphan session hits", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: { search: { backend: "shared", corpus: "memory" } },
+    });
+    const manager = createMemoryManager({
+      searchResults: [
+        {
+          path: "sessions/other/live-orphan.jsonl",
+          startLine: 1,
+          endLine: 2,
+          score: 30,
+          snippet: "cross-agent orphan",
+          source: "sessions",
+        },
+        {
+          path: "qmd/sessions-secondary/ownerless-orphan.md",
+          startLine: 1,
+          endLine: 2,
+          score: 20,
+          snippet: "ownerless qmd orphan",
+          source: "sessions",
+        },
+      ],
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const results = await searchMemoryWiki({
+      config,
+      appConfig: createAppConfig(),
+      agentId: "secondary",
+      query: "orphan",
+    });
+
+    expect(results).toStrictEqual([]);
+  });
+
+  it("does not treat an orphan filename as proven self-session lineage", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: { search: { backend: "shared", corpus: "memory" } },
+    });
+    const manager = createMemoryManager({
+      searchResults: [
+        {
+          path: "sessions/main/main.jsonl",
+          startLine: 1,
+          endLine: 2,
+          score: 30,
+          snippet: "unproven self orphan",
+          source: "sessions",
+        },
+      ],
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const results = await searchMemoryWiki({
+      config,
+      appConfig: createSessionVisibilityAppConfig(),
+      agentSessionKey: "agent:main:main",
+      query: "orphan",
+    });
+
+    expect(results).toStrictEqual([]);
+  });
+
   it("discovers pages in nested subdirectories", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,
@@ -1671,6 +1773,31 @@ describe("getMemoryWikiPage", () => {
     expect(manager.readFile).not.toHaveBeenCalled();
   });
 
+  it("does not read ownerless QMD live orphan session paths", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: { search: { backend: "shared", corpus: "memory" } },
+    });
+    const manager = createMemoryManager({
+      readResult: {
+        path: "qmd/sessions-main/ownerless-orphan.md",
+        text: "ownerless orphan transcript",
+      },
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const result = await getMemoryWikiPage({
+      config,
+      appConfig: createSessionVisibilityAppConfig(),
+      agentSessionKey: "agent:main:main",
+      sandboxed: true,
+      lookup: "qmd/sessions-main/ownerless-orphan.md",
+    });
+
+    expect(result).toBeNull();
+    expect(manager.readFile).not.toHaveBeenCalled();
+  });
+
   it("permits session memory reads inside the caller visibility policy", async () => {
     const { config } = await createQueryVault({
       initialize: true,
@@ -1828,6 +1955,179 @@ describe("getMemoryWikiPage", () => {
     expect(result?.corpus).toBe("memory");
     expect(result?.content).toBe("forced memory read");
     expect(manager.readFile).toHaveBeenCalled();
+  });
+});
+
+describe("wiki corpus bridge page agent scoping", () => {
+  async function writeBridgePage(params: {
+    rootDir: string;
+    slug: string;
+    title: string;
+    agentIds: string[];
+    marker: string;
+  }) {
+    await fs.writeFile(
+      path.join(params.rootDir, "sources", `${params.slug}.md`),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: `source.${params.slug}`,
+          title: params.title,
+          sourceType: "memory-bridge",
+          sourcePath: `/tmp/workspace/${params.slug}.md`,
+          bridgeRelativePath: `${params.slug}.md`,
+          bridgeWorkspaceDir: "/tmp/workspace",
+          bridgeAgentIds: params.agentIds,
+        },
+        body: `# ${params.title}\n\n${params.marker}\n`,
+      }),
+      "utf8",
+    );
+  }
+
+  async function createBridgeVisibilityVault() {
+    const vault = await createQueryVault({
+      initialize: true,
+      config: { vault: { scope: "global" } },
+    });
+    await writeBridgePage({
+      rootDir: vault.rootDir,
+      slug: "main-daily-note",
+      title: "Main Daily Note",
+      agentIds: ["Main"],
+      marker: "wikiscope marker main",
+    });
+    await writeBridgePage({
+      rootDir: vault.rootDir,
+      slug: "secondary-daily-note",
+      title: "Secondary Daily Note",
+      agentIds: ["secondary"],
+      marker: "wikiscope marker secondary",
+    });
+    await writeBridgePage({
+      rootDir: vault.rootDir,
+      slug: "unowned-daily-note",
+      title: "Unowned Daily Note",
+      agentIds: [],
+      marker: "wikiscope marker unowned",
+    });
+    await fs.writeFile(
+      path.join(vault.rootDir, "sources", "shared-note.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.shared-note", title: "Shared Note" },
+        body: "# Shared Note\n\nwikiscope marker shared\n",
+      }),
+      "utf8",
+    );
+    return vault;
+  }
+
+  it("limits sandboxed bridge reads to pages owned by the caller", async () => {
+    const { config } = await createBridgeVisibilityVault();
+    const caller = {
+      config,
+      appConfig: createAgentSessionVisibilityAppConfig(),
+      agentId: "main",
+      sandboxed: true,
+    };
+
+    const owned = await getMemoryWikiPage({
+      ...caller,
+      lookup: "main-daily-note",
+    });
+    const shared = await getMemoryWikiPage({
+      ...caller,
+      lookup: "shared-note",
+    });
+    const foreign = await getMemoryWikiPage({
+      ...caller,
+      lookup: "secondary-daily-note",
+    });
+    const unowned = await getMemoryWikiPage({
+      ...caller,
+      lookup: "unowned-daily-note",
+    });
+
+    expect(owned?.content).toContain("wikiscope marker main");
+    expect(shared?.content).toContain("wikiscope marker shared");
+    expect(foreign).toBeNull();
+    expect(unowned).toBeNull();
+  });
+
+  it("preserves global bridge reads for non-sandboxed callers", async () => {
+    const { config } = await createBridgeVisibilityVault();
+    const caller = {
+      config,
+      appConfig: createAgentSessionVisibilityAppConfig(),
+      agentId: "main",
+      agentSessionKey: "agent:main:thread",
+      sandboxed: false,
+    };
+    const page = await getMemoryWikiPage({
+      ...caller,
+      lookup: "secondary-daily-note",
+    });
+    const results = await searchMemoryWiki({
+      ...caller,
+      query: "wikiscope marker secondary",
+    });
+
+    expect(page?.content).toContain("wikiscope marker secondary");
+    expect(collectWikiResultPaths(results)).toContain("sources/secondary-daily-note.md");
+  });
+
+  it("resolves sandboxed ownership from the session key and fails closed without it", async () => {
+    const { config } = await createBridgeVisibilityVault();
+    const denied = await getMemoryWikiPage({
+      config,
+      appConfig: createAgentSessionVisibilityAppConfig(),
+      agentSessionKey: "agent:main:child-session",
+      sandboxed: true,
+      lookup: "secondary-daily-note",
+    });
+    const allowed = await getMemoryWikiPage({
+      config,
+      appConfig: createAgentSessionVisibilityAppConfig(),
+      agentSessionKey: "agent:secondary:child-session",
+      sandboxed: true,
+      lookup: "secondary-daily-note",
+    });
+    const unresolved = await getMemoryWikiPage({
+      config,
+      sandboxed: true,
+      lookup: "secondary-daily-note",
+    });
+
+    expect(denied).toBeNull();
+    expect(allowed?.content).toContain("wikiscope marker secondary");
+    expect(unresolved).toBeNull();
+  });
+
+  it("filters cross-agent bridge pages out of wiki search results", async () => {
+    const { config } = await createBridgeVisibilityVault();
+    const scoped = await searchMemoryWiki({
+      config,
+      appConfig: createAgentSessionVisibilityAppConfig(),
+      agentId: "main",
+      agentSessionKey: "agent:main:child-session",
+      sandboxed: true,
+      query: "wikiscope marker",
+    });
+    const unscoped = await searchMemoryWiki({
+      config,
+      query: "wikiscope marker",
+    });
+
+    expect(collectWikiResultPaths(scoped).toSorted()).toEqual([
+      "sources/main-daily-note.md",
+      "sources/shared-note.md",
+    ]);
+    expect(collectWikiResultPaths(unscoped).toSorted()).toEqual([
+      "sources/main-daily-note.md",
+      "sources/secondary-daily-note.md",
+      "sources/shared-note.md",
+      "sources/unowned-daily-note.md",
+    ]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

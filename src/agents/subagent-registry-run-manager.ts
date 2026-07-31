@@ -6,6 +6,7 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
+import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import {
@@ -42,7 +43,7 @@ import {
 } from "./subagent-registry-completion.js";
 import {
   persistSubagentSessionTiming,
-  resolveArchiveAfterMs,
+  resolveSubagentArchiveAtMs,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type {
@@ -64,7 +65,7 @@ import { updateSwarmCollectorCompletion } from "./swarm-collector.js";
 import { isSwarmRunQueued, removeQueuedSwarmRun } from "./swarm-scheduler.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
-const RECOVERABLE_WAIT_RETRY_DELAY_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 25 : 5_000;
+const RECOVERABLE_WAIT_RETRY_DELAY_MS = isFastTestRuntimeEnv() ? 25 : 5_000;
 const WAIT_TIMEOUT_DEADLINE_SKEW_MS = 250;
 
 function shouldDeleteAttachments(entry: SubagentRunRecord) {
@@ -240,8 +241,8 @@ export type RegisterSubagentRunParams = {
 export function createSubagentRunManager(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
-  persist(): void;
-  persistOrThrow(): void;
+  persist(...runIds: string[]): void;
+  persistOrThrow(...runIds: string[]): void;
   callGateway: typeof callGateway;
   getRuntimeConfig: typeof getRuntimeConfig;
   ensureListener(): void;
@@ -383,7 +384,7 @@ export function createSubagentRunManager(params: {
             endedAt: wait.endedAt,
           })
         ) {
-          params.persist();
+          params.persist(entry.runId);
         }
         return;
       }
@@ -477,7 +478,7 @@ export function createSubagentRunManager(params: {
           if (typeof entry.sessionStartedAt !== "number") {
             entry.sessionStartedAt = observedStartedAt;
           }
-          params.persist();
+          params.persist(entry.runId);
         }
         scheduleWaitRetry(
           entry,
@@ -570,7 +571,7 @@ export function createSubagentRunManager(params: {
       return true;
     }
     entry.suppressAnnounceReason = "steer-restart";
-    params.persist();
+    params.persist(entry.runId);
     return true;
   };
 
@@ -621,7 +622,7 @@ export function createSubagentRunManager(params: {
       }
     }
     entry.suppressAnnounceReason = undefined;
-    params.persist();
+    params.persist(entry.runId);
     // If the interrupted run already finished while suppression was active, retry
     // cleanup now so completion output is not lost when restart dispatch fails.
     params.resumedRuns.delete(key);
@@ -658,14 +659,14 @@ export function createSubagentRunManager(params: {
       source.childSessionKey,
     );
     const cfg = params.getRuntimeConfig();
-    const archiveAfterMs = resolveArchiveAfterMs(cfg);
     const spawnMode = source.spawnMode === "session" ? "session" : "run";
-    const archiveAtMs =
-      spawnMode === "session" || source.cleanup === "keep"
-        ? undefined
-        : archiveAfterMs
-          ? now + archiveAfterMs
-          : undefined;
+    const archiveAtMs = resolveSubagentArchiveAtMs({
+      cfg,
+      now,
+      spawnMode,
+      cleanup: source.cleanup,
+      collect: source.collect,
+    });
     const runTimeoutSeconds = replaceParams.runTimeoutSeconds ?? source.runTimeoutSeconds ?? 0;
     const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const preserveFrozenResultFallback = replaceParams.preserveFrozenResultFallback === true;
@@ -743,9 +744,14 @@ export function createSubagentRunManager(params: {
       params.runs.delete(previousRunId);
     }
     params.runs.set(nextRunId, next);
-    markOlderKillReconciliationsSuperseded(next);
+    const killReconciliationSnapshots = markOlderKillReconciliationsSuperseded(next);
+    const changedRunIds = [
+      previousRunId,
+      nextRunId,
+      ...[...killReconciliationSnapshots.keys()].map((entry) => entry.runId),
+    ];
     try {
-      params.persistOrThrow();
+      params.persistOrThrow(...changedRunIds);
     } catch (error) {
       // The gateway has already started nextRunId. Keep its in-memory owner
       // authoritative and retry best-effort persistence; rolling back here
@@ -755,7 +761,7 @@ export function createSubagentRunManager(params: {
         previousRunId,
         nextRunId,
       });
-      params.persist();
+      params.persist(...changedRunIds);
     }
     if (previousRunId !== nextRunId) {
       params.clearPendingLifecycleError(previousRunId);
@@ -789,14 +795,14 @@ export function createSubagentRunManager(params: {
     const now = Date.now();
     const generation = nextSubagentRunGeneration(params.runs.values(), childSessionKey);
     const cfg = params.getRuntimeConfig();
-    const archiveAfterMs = resolveArchiveAfterMs(cfg);
     const spawnMode = registerParams.spawnMode === "session" ? "session" : "run";
-    const archiveAtMs =
-      spawnMode === "session" || registerParams.cleanup === "keep"
-        ? undefined
-        : archiveAfterMs
-          ? now + archiveAfterMs
-          : undefined;
+    const archiveAtMs = resolveSubagentArchiveAtMs({
+      cfg,
+      now,
+      spawnMode,
+      cleanup: registerParams.cleanup,
+      collect: registerParams.collect,
+    });
     const runTimeoutSeconds = registerParams.runTimeoutSeconds ?? 0;
     const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const requesterOrigin = normalizeDeliveryContext(registerParams.requesterOrigin);
@@ -865,7 +871,10 @@ export function createSubagentRunManager(params: {
     params.runs.set(runId, entry);
     const killReconciliationSnapshots = markOlderKillReconciliationsSuperseded(entry);
     try {
-      params.persistOrThrow();
+      params.persistOrThrow(
+        runId,
+        ...[...killReconciliationSnapshots.keys()].map((candidate) => candidate.runId),
+      );
     } catch (error) {
       params.runs.delete(runId);
       restoreKillReconciliationSnapshots(killReconciliationSnapshots);
@@ -877,7 +886,9 @@ export function createSubagentRunManager(params: {
         sourceId: runId,
         ownerKey: requesterSessionKey,
         scopeKind: "session",
-        requesterOrigin,
+        // Detached task runtimes are plugin-replaceable. Isolate their input so
+        // mutation cannot change the already-persisted registry record.
+        requesterOrigin: requesterOrigin ? structuredClone(requesterOrigin) : undefined,
         childSessionKey,
         runId,
         label: registerParams.label,
@@ -906,7 +917,6 @@ export function createSubagentRunManager(params: {
       });
     }
     params.ensureListener();
-    params.persist();
     // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
     params.startSweeper();
     // Wait for subagent completion via gateway RPC (cross-process).
@@ -921,11 +931,26 @@ export function createSubagentRunManager(params: {
     const entry =
       params.runs.get(key) ??
       [...params.runs.values()].find((candidate) => candidate.swarmRunId === key);
+    const lifecycleStarted =
+      entry?.execution?.status === "running" &&
+      typeof entry.execution.startedAt === "number" &&
+      entry.swarmLaunchPending === true;
+    const provisionalTerminalBeforeAcceptance =
+      entry?.swarmLaunchPending === true &&
+      typeof entry.endedAt === "number" &&
+      entry.collectorCompletion === undefined;
+    if (provisionalTerminalBeforeAcceptance) {
+      // Cancellation won before Gateway acceptance. The caller must abort the
+      // newly accepted run before freezing completion or releasing the FIFO slot.
+      return false;
+    }
+    // Completion clears swarmLaunchPending, but queuedLaunch remains until the
+    // delayed acceptance response remaps the durable terminal row.
+    const terminalBeforeAcceptance =
+      entry?.collectorCompletion !== undefined && entry.queuedLaunch !== undefined;
     if (
       !entry ||
-      entry.execution?.status !== "queued" ||
-      typeof entry.endedAt === "number" ||
-      entry.collectorCompletion
+      (!terminalBeforeAcceptance && entry.execution?.status !== "queued" && !lifecycleStarted)
     ) {
       return false;
     }
@@ -934,7 +959,7 @@ export function createSubagentRunManager(params: {
     if (conflicting && conflicting !== entry) {
       throw new Error(`collector gateway run id already exists: ${nextRunId}`);
     }
-    const startedAt = Date.now();
+    const acceptedAt = Date.now();
     const previousRunId = entry.runId;
     const previousStartedAt = entry.startedAt;
     const previousSessionStartedAt = entry.sessionStartedAt;
@@ -950,21 +975,57 @@ export function createSubagentRunManager(params: {
       entry.runId = nextRunId;
       params.runs.set(nextRunId, entry);
     }
-    entry.startedAt = startedAt;
-    entry.sessionStartedAt ??= startedAt;
-    entry.execution = { ...entry.execution, status: "running", startedAt };
+    if (terminalBeforeAcceptance) {
+      entry.swarmLaunchPending = false;
+      entry.queuedLaunch = undefined;
+      try {
+        params.persistOrThrow(previousRunId, nextRunId);
+        return true;
+      } catch (error) {
+        if (previousRunId !== nextRunId) {
+          params.runs.delete(nextRunId);
+          entry.runId = previousRunId;
+          params.runs.set(previousRunId, entry);
+        }
+        entry.queuedLaunch = previousQueuedLaunch;
+        entry.swarmRunId = previousSwarmRunId;
+        entry.schedulerSlotId = previousSchedulerSlotId;
+        entry.swarmLaunchPending = previousSwarmLaunchPending;
+        throw error;
+      }
+    }
+    // Gateway acceptance only proves admission. Preserve a lifecycle start that
+    // raced ahead of this response; otherwise leave the run clock unset until
+    // preparation and lane dequeue emit the canonical start event.
+    const lifecycleStartedAt =
+      entry.execution?.status === "running" ? entry.execution.startedAt : undefined;
+    if (typeof lifecycleStartedAt === "number") {
+      entry.startedAt = lifecycleStartedAt;
+      entry.sessionStartedAt ??= lifecycleStartedAt;
+      entry.execution = {
+        ...entry.execution,
+        status: "running",
+        acceptedAt,
+        startedAt: lifecycleStartedAt,
+      };
+    } else {
+      delete entry.startedAt;
+      delete entry.sessionStartedAt;
+      entry.execution = { ...entry.execution, status: "running", acceptedAt };
+      delete entry.execution.startedAt;
+    }
     entry.swarmLaunchPending = false;
     entry.queuedLaunch = undefined;
     let persistedRunning = false;
     try {
-      params.persistOrThrow();
+      params.persistOrThrow(previousRunId, nextRunId);
       persistedRunning = true;
       startTaskRunByRunId({
         runId: entry.taskRunId ?? entry.runId,
         runtime: "subagent",
         sessionKey: entry.childSessionKey,
-        startedAt,
-        lastEventAt: startedAt,
+        startedAt: acceptedAt,
+        lastEventAt: acceptedAt,
       });
     } catch (error) {
       if (previousRunId !== nextRunId) {
@@ -981,7 +1042,7 @@ export function createSubagentRunManager(params: {
       entry.swarmLaunchPending = previousSwarmLaunchPending;
       if (persistedRunning) {
         try {
-          params.persistOrThrow();
+          params.persistOrThrow(previousRunId, nextRunId);
         } catch (rollbackError) {
           // The failure callback terminalizes this in-memory queued row next.
           log.warn("failed to persist collector start rollback", {
@@ -1018,9 +1079,9 @@ export function createSubagentRunManager(params: {
     entry.queuedLaunch = undefined;
     entry.collectorLaunchCleanupPending = true;
     entry.completion = { required: false, resultText: error, capturedAt: endedAt };
-    updateSwarmCollectorCompletion(entry);
+    updateSwarmCollectorCompletion(entry, params.getRuntimeConfig());
     try {
-      params.persistOrThrow();
+      params.persistOrThrow(entry.runId);
     } catch (persistError) {
       const target = entry as unknown as Record<string, unknown>;
       for (const property of Object.keys(target)) {
@@ -1079,9 +1140,9 @@ export function createSubagentRunManager(params: {
       resultText: entry.outcome?.status === "error" ? (entry.outcome.error ?? error) : error,
       capturedAt: entry.endedAt,
     };
-    updateSwarmCollectorCompletion(entry);
+    updateSwarmCollectorCompletion(entry, params.getRuntimeConfig());
     try {
-      params.persistOrThrow();
+      params.persistOrThrow(entry.runId);
     } catch (persistError) {
       const target = entry as unknown as Record<string, unknown>;
       for (const property of Object.keys(target)) {
@@ -1109,7 +1170,7 @@ export function createSubagentRunManager(params: {
     }
     const didDelete = params.runs.delete(runId);
     if (didDelete) {
-      params.persist();
+      params.persist(runId);
     }
     if (params.runs.size === 0) {
       params.stopSweeper();
@@ -1237,7 +1298,7 @@ export function createSubagentRunManager(params: {
         supersededAt: existingKillReconciliation?.supersededAt,
       };
       if (wasQueuedCollector && !collectorLaunchInFlight) {
-        updateSwarmCollectorCompletion(entry);
+        updateSwarmCollectorCompletion(entry, params.getRuntimeConfig());
       }
       pendingTaskFinalizations.push({ entry, endedAt: taskEndedAt });
       if (!entriesByChildSessionKey.has(entry.childSessionKey)) {
@@ -1249,7 +1310,7 @@ export function createSubagentRunManager(params: {
       try {
         // The registry tombstone is the recovery source for the provisional
         // task marker. It must commit first so the sweeper can always finish it.
-        params.persistOrThrow();
+        params.persistOrThrow(...[...entrySnapshots.keys()].map((entry) => entry.runId));
       } catch (error) {
         for (const [entry, snapshot] of entrySnapshots) {
           const target = entry as unknown as Record<string, unknown>;

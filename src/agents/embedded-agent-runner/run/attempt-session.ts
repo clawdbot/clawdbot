@@ -12,11 +12,8 @@ import {
 } from "../../agent-settings.js";
 import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import {
-  createAgentSession,
-  type AgentSession,
-  type CreateAgentSessionOptions,
-} from "../../sessions/index.js";
+import type { AgentSession, CreateAgentSessionOptions } from "../../sessions/index.js";
+import { createAgentSessionForEmbeddedRunner } from "../../sessions/sdk.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { resolveToolSearchCatalogTool } from "../../tool-search.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
@@ -26,6 +23,7 @@ import { applySystemPromptToSession } from "../system-prompt.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import type { AttemptContextEngine } from "./attempt.context-engine-helpers.js";
 import type { EmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
+import { installCodeModeRepairHook } from "./code-mode-repair.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import { notifyToolActivity } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -82,6 +80,9 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     provider: attempt.provider,
     modelId: attempt.modelId,
     model: attempt.model,
+    agentId: input.sessionAgentId,
+    sessionId: attempt.sessionId,
+    sessionKey: attempt.sessionKey ?? attempt.sandboxSessionKey,
     runId: attempt.runId,
   });
   const resourceLoader = createEmbeddedAgentResourceLoader({
@@ -109,7 +110,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   });
   const { allCustomTools, sessionToolAllowlist, ...clientToolRuntime } = preparedClientTools;
 
-  const createdSession = await createAgentSession({
+  const sessionOptions: CreateAgentSessionOptions = {
     cwd: input.effectiveCwd,
     agentDir: input.agentDir,
     authStorage: attempt.authStorage,
@@ -161,6 +162,10 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
       : undefined,
     withSessionWriteLock: (operation) =>
       input.sessionLockController.withSessionWriteLock(operation),
+  };
+  const createdSession = await createAgentSessionForEmbeddedRunner(sessionOptions, {
+    // Without a resolved model budget, the outer loop cannot own bounded recovery.
+    contextOverflowRecoveryOwner: attempt.contextTokenBudget === undefined ? "session" : "caller",
   });
   const activeSession = createdSession.session;
   if (!activeSession) {
@@ -184,6 +189,9 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     onDeliveredSourceReply: markSourceReplyDelivered,
   });
+  if (input.clientToolPreparation.codeModeControlsEnabledForRun) {
+    installCodeModeRepairHook({ agent: activeSession.agent });
+  }
   input.markStage("agent-session");
 
   return {
