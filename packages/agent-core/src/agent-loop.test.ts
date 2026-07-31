@@ -1905,7 +1905,10 @@ describe("agentLoop tool termination", () => {
         execute: async () => {
           executed.push("tool_b");
           controller.abort(new Error("user stopped"));
-          return { content: [{ type: "text", text: "tool_b result" }], details: { name: "tool_b" } };
+          return {
+            content: [{ type: "text", text: "tool_b result" }],
+            details: { name: "tool_b" },
+          };
         },
       },
       makeTool("tool_c", executed),
@@ -1917,7 +1920,9 @@ describe("agentLoop tool termination", () => {
       [{ role: "user", content: "test", timestamp: 1 }],
       { systemPrompt: "", messages: [], tools },
       { ...config, toolExecution: "sequential" },
-      (event) => { events.push(event); },
+      (event) => {
+        events.push(event);
+      },
       controller.signal,
       streamFn,
     );
@@ -1937,6 +1942,30 @@ describe("agentLoop tool termination", () => {
     expect(remainingCalls.map((c) => c.name)).toEqual(["tool_a", "tool_b"]);
 
     expect(messages.at(-2)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+
+    // Boundary proof: the turn_end event consumer (persistence / session writer)
+    // must observe the cleaned context, not the pre-repair state. Before the fix
+    // orphaned tool_c was still present in the emitted message because cleanup ran
+    // after emit. Now stripOrphanedToolCalls runs first.
+    // There are two turn_end events: the tool-use turn then the aborted turn.
+    // We assert the first one — the tool-use turn — because that is the one
+    // persistence consumers snapshot.
+    const toolUseTurnEnd = events.find(
+      (e) =>
+        e.type === "turn_end" &&
+        Array.isArray((e as { message: AgentMessage }).message?.content) &&
+        (
+          (e as { message: AgentMessage }).message as { content: Array<{ type: string }> }
+        ).content.some((c) => c.type === "toolCall"),
+    );
+    expect(toolUseTurnEnd).toBeDefined();
+    const emittedCalls = (
+      (toolUseTurnEnd as { message: AgentMessage }).message as {
+        content: Array<{ type: string; name?: string }>;
+      }
+    ).content.filter((c) => c.type === "toolCall");
+    expect(emittedCalls).toHaveLength(2);
+    expect(emittedCalls.map((c) => c.name)).toEqual(["tool_a", "tool_b"]);
   });
 });
 
