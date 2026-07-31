@@ -406,9 +406,7 @@ describeControlUiE2e("Control UI profile page mocked Gateway E2E", () => {
       expect(await refresh.ariaSnapshot()).toContain('button "Refreshing…" [disabled]');
 
       await refresh.evaluate((element) => {
-        (element as HTMLButtonElement).dispatchEvent(
-          new MouseEvent("click", { bubbles: true }),
-        );
+        (element as HTMLButtonElement).dispatchEvent(new MouseEvent("click", { bubbles: true }));
       });
       await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(2);
 
