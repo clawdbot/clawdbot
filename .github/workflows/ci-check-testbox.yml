@@ -205,4 +205,4 @@ jobs:
           # run-testbox has no post hook. Close only Testbox client sockets so
           # Blacksmith's runner teardown does not wait for its 290-second grace.
           timeout --signal=KILL 5s sudo ss -K state established \
-            "( dport = :${runner_ssh_port} )" || true
+            "( sport = :${runner_ssh_port} )" || true

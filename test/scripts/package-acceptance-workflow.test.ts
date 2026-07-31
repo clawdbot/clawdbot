@@ -2417,7 +2417,7 @@ describe("package artifact reuse", () => {
     expect(runTestboxStep.if).toBe("github.event_name == 'workflow_dispatch' && !cancelled()");
     expect(closeTestboxSshStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
     expect(closeTestboxSshStep.run).toContain(
-      'ss -K state established \\\n  "( dport = :${runner_ssh_port} )"',
+      'ss -K state established \\\n  "( sport = :${runner_ssh_port} )"',
     );
     expect(checkTestboxSteps.indexOf(closeTestboxSshStep)).toBe(
       checkTestboxSteps.indexOf(runTestboxStep) + 1,
