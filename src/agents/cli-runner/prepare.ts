@@ -733,7 +733,6 @@ export async function prepareCliRunContext(
       return undefined;
     }
     const hookRunner = getGlobalHookRunner();
-    const promptBuildToolPolicyActive = hookRunner?.hasHooks("before_prompt_build") === true;
     try {
       return await resolvePromptBuildHookResult({
         config: params.config ?? getRuntimeConfig(),
@@ -752,15 +751,8 @@ export async function prepareCliRunContext(
         },
         hookRunner,
         bootstrapContextRunKind: params.bootstrapContextRunKind,
-        failClosedBeforePromptBuild: promptBuildToolPolicyActive,
       });
     } catch (error) {
-      if (promptBuildToolPolicyActive) {
-        throw new Error(
-          `CLI before_prompt_build hook failed before tool restrictions could be resolved: ${String(error)}`,
-          { cause: error },
-        );
-      }
       cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
       return undefined;
     }

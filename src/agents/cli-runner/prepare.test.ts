@@ -2006,7 +2006,7 @@ describe("prepareCliRunContext", () => {
     expect(promptContext?.senderId).toBe("user-789");
   });
 
-  it("fails closed when prompt-build hooks fail", async () => {
+  it("preserves the base prompt when prompt-build hooks fail", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
       runBeforePromptBuild: vi.fn(async () => {
@@ -2015,9 +2015,12 @@ describe("prepareCliRunContext", () => {
     };
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
-    await expect(fixture.prepare({})).rejects.toThrow(
-      "CLI before_prompt_build hook failed before tool restrictions could be resolved",
-    );
+    const context = await fixture.prepare({});
+
+    expect(context.params.prompt).toBe("latest ask");
+    expect(context.systemPrompt).toContain("You are a personal assistant running inside OpenClaw.");
+    expect(context.systemPrompt).toContain("Current model identity: test-cli/test-model.");
+    expect(context.systemPrompt).not.toContain("hook exploded");
     expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
   });
 
