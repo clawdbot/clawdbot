@@ -30,6 +30,7 @@ import {
 } from "./realtime-quicksilver-sideband.js";
 import {
   boundOpenAIQuicksilverContextItems,
+  boundOpenAIQuicksilverDelegationResult,
   buildOpenAIQuicksilverSession,
   chunkOpenAIQuicksilverAppendText,
   createOpenAIQuicksilverCall,
@@ -295,7 +296,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       if (signal.aborted) {
         return;
       }
-      finalText = result.text;
+      finalText = boundOpenAIQuicksilverDelegationResult(result.text);
     } catch (error) {
       if (signal.aborted) {
         return;

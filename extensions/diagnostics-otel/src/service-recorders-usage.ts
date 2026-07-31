@@ -283,7 +283,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
     }
     const traceContext = internalOrTrustedTraceContext(evt, metadata);
     if (trackedSpan && traceContext?.spanId) {
-      completeTrackedLifecycleSpan(traceContext.spanId, trackedSpan, evt.ts);
+      completeTrackedLifecycleSpan(traceContext, trackedSpan, evt.ts);
       return;
     }
     span.end(evt.ts);

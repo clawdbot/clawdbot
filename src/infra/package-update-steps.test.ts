@@ -393,6 +393,63 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
+  it.each([
+    { installSpec: "openclaw@^2.0.0", installedVersion: "2.4.1" },
+    { installSpec: "openclaw@nightly", installedVersion: "3.0.0-beta.2" },
+  ])(
+    "accepts concrete version $installedVersion staged from $installSpec",
+    async ({ installSpec, installedVersion }) => {
+      await withTempDir({ prefix: "openclaw-package-update-moving-spec-" }, async (base) => {
+        const prefix = path.join(base, "prefix");
+        const globalRoot = path.join(prefix, "lib", "node_modules");
+        const packageRoot = path.join(globalRoot, "openclaw");
+        await writePackageRoot(packageRoot, "1.0.0");
+        const postVerifyStep = vi.fn(async () => null);
+
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: createNpmTarget(globalRoot),
+          installSpec,
+          packageName: "openclaw",
+          packageRoot,
+          runCommand: createRootRunner(globalRoot),
+          runStep: async ({ name, argv, cwd }) => {
+            if (name !== "global update") {
+              throw new Error(`unexpected step ${name}`);
+            }
+            const stagePrefix = argv[argv.indexOf("--prefix") + 1];
+            if (!stagePrefix) {
+              throw new Error("missing staged prefix");
+            }
+            await writePackageRoot(
+              path.join(stagePrefix, "lib", "node_modules", "openclaw"),
+              installedVersion,
+            );
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
+          },
+          timeoutMs: 1000,
+          postVerifyStep,
+        });
+
+        expect(result.failedStep).toBeNull();
+        expect(result.afterVersion).toBe(installedVersion);
+        expect(result.steps.map((step) => step.name)).toEqual([
+          "global update",
+          "global install swap",
+        ]);
+        expect(postVerifyStep).toHaveBeenCalledWith(packageRoot);
+        await expect(
+          fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+        ).resolves.toContain(`"version":"${installedVersion}"`);
+      });
+    },
+  );
+
   it("packs npm GitHub specs before installing into the staged prefix", async () => {
     await withTempDir({ prefix: "openclaw-package-update-npm-pack-" }, async (base) => {
       const prefix = path.join(base, "prefix");

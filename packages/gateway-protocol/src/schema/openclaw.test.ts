@@ -121,6 +121,16 @@ describe("OpenClaw setup detection protocol", () => {
         },
       ],
       authOptions: [],
+      prepareOptions: [
+        {
+          id: "lmstudio",
+          brandId: "lmstudio",
+          label: "LM Studio",
+          hint: "Local/self-hosted LM Studio server",
+          icon: "https://cdn.simpleicons.org/lmstudio",
+          website: "https://lmstudio.ai/download",
+        },
+      ],
       recommendedInstalls: [
         {
           id: "ollama",
@@ -146,6 +156,7 @@ describe("OpenClaw setup detection protocol", () => {
         manualProviders: result.manualProviders.map(
           ({ brandId: _brandId, groupLabel: _groupLabel, ...provider }) => provider,
         ),
+        prepareOptions: result.prepareOptions.map(({ brandId: _brandId, ...option }) => option),
         recommendedInstalls: result.recommendedInstalls.map(
           ({ brandId: _brandId, ...install }) => install,
         ),
@@ -155,6 +166,7 @@ describe("OpenClaw setup detection protocol", () => {
       Value.Check(SystemAgentSetupDetectResultSchema, {
         ...result,
         recommendedInstalls: undefined,
+        prepareOptions: undefined,
       }),
     ).toBe(true);
     expect(

@@ -43,6 +43,10 @@ function readPositiveNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+function readOutputGeneration(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
 function copyCommand(command: string[] | undefined): string[] | undefined {
   return command && command.length > 0 ? [...command] : undefined;
 }
@@ -205,11 +209,35 @@ function buildForwardParams(
       }
       forwarded.bridgeId = bridgeId;
       forwarded.base64 = base64;
+      const outputGeneration = readOutputGeneration(params.outputGeneration);
+      if (params.outputGeneration !== undefined && outputGeneration === undefined) {
+        return {
+          approved: false,
+          result: denied(options, "outputGeneration must be a non-negative safe integer"),
+        };
+      }
+      if (outputGeneration !== undefined) {
+        forwarded.outputGeneration = outputGeneration;
+      }
       return approved(forwarded);
     }
     case "clearAudio": {
       const bridgeId = readString(params.bridgeId);
-      return bridgeId ? approved({ action, bridgeId }) : denyMissing(options, action, "bridgeId");
+      if (!bridgeId) {
+        return denyMissing(options, action, "bridgeId");
+      }
+      const outputGeneration = readOutputGeneration(params.outputGeneration);
+      if (params.outputGeneration !== undefined && outputGeneration === undefined) {
+        return {
+          approved: false,
+          result: denied(options, "outputGeneration must be a non-negative safe integer"),
+        };
+      }
+      return approved({
+        action,
+        bridgeId,
+        ...(outputGeneration !== undefined ? { outputGeneration } : {}),
+      });
     }
     case "stop": {
       const bridgeId = readString(params.bridgeId);

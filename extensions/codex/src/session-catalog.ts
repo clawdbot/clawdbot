@@ -627,6 +627,7 @@ async function listCodexSessionCatalog(params: {
     nodes = (await (params.listNodes?.() ?? params.runtime.nodes.list())).nodes
       .filter(
         (node) =>
+          node.gatewayLocal !== true &&
           node.commands?.includes(CODEX_APP_SERVER_THREADS_LIST_COMMAND) &&
           (!requestedHostIds || requestedHostIds.has(`node:${node.nodeId}`)),
       )

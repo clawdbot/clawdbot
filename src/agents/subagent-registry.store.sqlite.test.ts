@@ -1,4 +1,4 @@
-// Subagent registry SQLite store tests cover canonical whole-snapshot persistence.
+// Subagent registry SQLite store tests cover canonical snapshot and exact-row persistence.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +14,8 @@ import {
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForControllerFromSqlite,
   loadSubagentRegistryFromSqlite,
+  loadSubagentSessionListRunsFromSqlite,
+  saveSubagentRegistryChangesToSqlite,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -152,6 +154,97 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
+  it("loads a canonical lightweight session-list projection", async () => {
+    await withTempStateEnv(async () => {
+      const run = createRun({
+        model: "openai/gpt-5.6",
+        generation: 3,
+        sessionStartedAt: 105,
+        accumulatedRuntimeMs: 90,
+        runTimeoutSeconds: 7_200,
+        endedReason: "subagent-error",
+        cleanupCompletedAt: 300,
+        outcome: { status: "error", error: "full payload detail" },
+        delivery: {
+          status: "suspended",
+          suspendedAt: 275,
+          suspendedReason: "retry-limit",
+        },
+        task: "x".repeat(8_192),
+      });
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+
+      expect(loadSubagentSessionListRunsFromSqlite().get(run.runId)).toEqual({
+        runId: run.runId,
+        childSessionKey: run.childSessionKey,
+        requesterSessionKey: run.requesterSessionKey,
+        model: "openai/gpt-5.6",
+        generation: 3,
+        createdAt: 100,
+        startedAt: 110,
+        sessionStartedAt: 105,
+        accumulatedRuntimeMs: 90,
+        endedAt: 250,
+        runTimeoutSeconds: 7_200,
+        endedReason: "subagent-error",
+        outcome: { status: "error" },
+        cleanupCompletedAt: 300,
+        delivery: { status: "suspended", suspendedAt: 275 },
+      });
+    });
+  });
+
+  it("writes only named registry mutations", async () => {
+    await withTempStateEnv(async () => {
+      const first = createRun({ runId: "run-one", childSessionKey: "agent:main:subagent:one" });
+      const removed = createRun({ runId: "run-two", childSessionKey: "agent:main:subagent:two" });
+      const untouched = createRun({
+        runId: "run-three",
+        childSessionKey: "agent:main:subagent:three",
+      });
+      const runs = new Map([first, removed, untouched].map((run) => [run.runId, run] as const));
+      saveSubagentRegistryToSqlite(runs);
+
+      const { db } = openOpenClawStateDatabase();
+      db.exec(`
+        CREATE TEMP TABLE subagent_run_write_audit (
+          action TEXT NOT NULL,
+          run_id TEXT NOT NULL
+        );
+        CREATE TEMP TRIGGER subagent_run_audit_insert
+        AFTER INSERT ON subagent_runs
+        BEGIN
+          INSERT INTO subagent_run_write_audit VALUES ('insert', NEW.run_id);
+        END;
+        CREATE TEMP TRIGGER subagent_run_audit_update
+        AFTER UPDATE ON subagent_runs
+        BEGIN
+          INSERT INTO subagent_run_write_audit VALUES ('update', NEW.run_id);
+        END;
+        CREATE TEMP TRIGGER subagent_run_audit_delete
+        AFTER DELETE ON subagent_runs
+        BEGIN
+          INSERT INTO subagent_run_write_audit VALUES ('delete', OLD.run_id);
+        END;
+      `);
+
+      first.task = "updated task";
+      runs.delete(removed.runId);
+      saveSubagentRegistryChangesToSqlite(runs, [first.runId, removed.runId]);
+
+      expect(
+        db.prepare("SELECT action, run_id FROM subagent_run_write_audit ORDER BY rowid").all(),
+      ).toEqual([
+        { action: "update", run_id: first.runId },
+        { action: "delete", run_id: removed.runId },
+      ]);
+      expect([...loadSubagentRegistryFromSqlite().entries()]).toMatchObject([
+        [first.runId, { task: "updated task" }],
+        [untouched.runId, { task: untouched.task }],
+      ]);
+    });
+  });
+
   it("rejects writes outside the canonical nested state", async () => {
     await withTempStateEnv(async () => {
       const missingState = createRun({ execution: undefined });
@@ -263,6 +356,7 @@ describe("subagent registry sqlite store", () => {
       );
 
       expect(loadSubagentRegistryFromSqlite()).toEqual(new Map());
+      expect(loadSubagentSessionListRunsFromSqlite()).toEqual(new Map());
 
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
       db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?").run(
@@ -270,6 +364,7 @@ describe("subagent registry sqlite store", () => {
         run.runId,
       );
       expect(loadSubagentRegistryFromSqlite()).toEqual(new Map());
+      expect(loadSubagentSessionListRunsFromSqlite()).toEqual(new Map());
     });
   });
 

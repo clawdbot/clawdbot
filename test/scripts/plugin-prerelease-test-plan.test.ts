@@ -671,12 +671,32 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "${{ inputs.release_profile != 'beta' && 240 || 60 }}",
     );
     const fullReleaseSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
+    expect(fullReleaseWorkflow.on.workflow_dispatch.inputs.fail_fast).toEqual({
+      description:
+        "Cancel each child workflow after its first failed job; false collects independent failures to completion",
+      required: false,
+      default: false,
+      type: "boolean",
+    });
     expect(
       fullReleaseSource.match(/has failed child jobs before the workflow completed/gu)?.length,
     ).toBeGreaterThanOrEqual(3);
+    expect(fullReleaseSource.match(/if \[\[ "\$FAIL_FAST" != "true" \]\]; then/gu)?.length).toBe(4);
+    expect(fullReleaseSource).toContain('-f fail_fast="$FAIL_FAST"');
     expect(fullReleaseSource).toContain(
       "npm-telegram-beta-e2e.yml has failed child jobs before the workflow completed; cancelling the remaining run.",
     );
+    expect(releaseChecksWorkflow.on.workflow_dispatch.inputs.fail_fast).toEqual({
+      description: "Stop the Matrix QA lane after its first failed check or scenario",
+      required: false,
+      default: false,
+      type: "boolean",
+    });
+    expect(releaseChecksWorkflow.jobs.qa_live_release_checks.with.fail_fast).toBe(
+      "${{ fromJSON(needs.resolve_target.outputs.fail_fast) }}",
+    );
+    const qaLiveSource = readFileSync(".github/workflows/qa-live-transports-convex.yml", "utf8");
+    expect(qaLiveSource).toContain('if [[ "$FAIL_FAST" == "true" ]]');
   });
 
   it("allows Unreleased notes only for current-tree release checks", () => {

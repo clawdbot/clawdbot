@@ -671,6 +671,8 @@ export function createAgentEventHandler({
       (typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined);
     const isControlUiVisible =
       evt.controlUiVisible ?? currentRunContext?.isControlUiVisible ?? true;
+    const projectSessionLifecycle =
+      evt.projectSessionLifecycle ?? currentRunContext?.projectSessionLifecycle ?? true;
     const sessionKey =
       chatLink?.sessionKey ?? eventSessionKey ?? resolveSessionKeyForRun(evt.runId);
     const restartRecoverySessionKey = eventSessionKey ?? sessionKey;
@@ -798,7 +800,7 @@ export function createAgentEventHandler({
 
     if (sessionKey) {
       clearTrackedActiveRun?.({ runId: evt.runId, clientRunId, sessionKey });
-      if (!suppressRestartRecoveryProjection) {
+      if (!suppressRestartRecoveryProjection && projectSessionLifecycle) {
         const persistence = persistGatewaySessionLifecycleEvent({
           sessionKey,
           agentId: sessionAgentId,
@@ -1310,6 +1312,8 @@ export function createAgentEventHandler({
     const runContext = getAgentRunContext(evt.runId);
     const activeLifecycleGeneration = resolveActiveLifecycleGenerationForRun(evt.runId);
     const isControlUiVisible = evt.controlUiVisible ?? runContext?.isControlUiVisible ?? true;
+    const projectSessionLifecycle =
+      evt.projectSessionLifecycle ?? runContext?.projectSessionLifecycle ?? true;
     const isHeartbeat = runContext?.isHeartbeat;
     const sessionKey =
       chatLink?.sessionKey ?? eventSessionKey ?? resolveSessionKeyForRun(evt.runId);
@@ -1647,7 +1651,7 @@ export function createAgentEventHandler({
       return;
     }
 
-    if (sessionKey && lifecyclePhase === "start") {
+    if (projectSessionLifecycle && sessionKey && lifecyclePhase === "start") {
       void persistGatewaySessionLifecycleEvent({
         sessionKey,
         agentId: sessionAgentId,

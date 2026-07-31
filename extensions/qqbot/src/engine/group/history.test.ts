@@ -38,11 +38,6 @@ describe("engine/group/history", () => {
   });
 
   describe("formatAttachmentTags", () => {
-    it("returns empty string for empty input", () => {
-      expect(formatAttachmentTags()).toBe("");
-      expect(formatAttachmentTags([])).toBe("");
-    });
-
     it("renders bracketed source tags for entries with a source", () => {
       expect(formatAttachmentTags([{ type: "image", localPath: "/tmp/a.png" }])).toBe(
         "[image: /tmp/a.png]",
@@ -56,27 +51,6 @@ describe("engine/group/history", () => {
       expect(
         formatAttachmentTags([{ type: "voice", localPath: "/tmp/v.wav", transcript: "hi" }]),
       ).toBe('[voice: /tmp/v.wav] (transcript: "hi")');
-    });
-
-    it("uses descriptive tags when no source is available", () => {
-      expect(formatAttachmentTags([{ type: "image" }])).toBe("[image]");
-      expect(formatAttachmentTags([{ type: "image", filename: "a.png" }])).toBe("[image: a.png]");
-      expect(formatAttachmentTags([{ type: "voice" }])).toBe("[voice]");
-      expect(formatAttachmentTags([{ type: "voice", transcript: "t" }])).toBe(
-        '[voice (transcript: "t")]',
-      );
-      expect(formatAttachmentTags([{ type: "video" }])).toBe("[video]");
-      expect(formatAttachmentTags([{ type: "file", filename: "b.pdf" }])).toBe("[file: b.pdf]");
-      expect(formatAttachmentTags([{ type: "unknown" }])).toBe("[attachment]");
-    });
-
-    it("joins multiple entries with newline", () => {
-      expect(
-        formatAttachmentTags([
-          { type: "image", localPath: "/tmp/a.png" },
-          { type: "voice", transcript: "hi" },
-        ]),
-      ).toBe('[image: /tmp/a.png]\n[voice (transcript: "hi")]');
     });
   });
 

@@ -20,6 +20,11 @@ const mainRosterConfig = (): OpenClawConfig => ({
 const loadConfigMock = vi.fn(mainRosterConfig);
 const logHooksInfoMock = vi.fn();
 const logHooksWarnMock = vi.fn();
+const validateExplicitMessageAccountSelectionMock = vi.fn(
+  ({ accountId }: { accountId?: unknown }) => accountId as string | undefined,
+);
+const resolveOutboundChannelPluginMock = vi.fn(() => ({ id: "telegram" }));
+const resolveChannelDefaultAccountIdMock = vi.fn(() => "default");
 
 vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: enqueueSystemEventMock,
@@ -29,6 +34,15 @@ vi.mock("../../infra/heartbeat-wake.js", () => ({
 }));
 vi.mock("../../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
+}));
+vi.mock("../../infra/outbound/message-account-selection.js", () => ({
+  validateExplicitMessageAccountSelection: validateExplicitMessageAccountSelectionMock,
+}));
+vi.mock("../../infra/outbound/channel-resolution.js", () => ({
+  resolveOutboundChannelPlugin: resolveOutboundChannelPluginMock,
+}));
+vi.mock("../../channels/plugins/helpers.js", () => ({
+  resolveChannelDefaultAccountId: resolveChannelDefaultAccountIdMock,
 }));
 vi.mock("../../config/sessions.js", () => ({
   resolveMainSessionKeyFromConfig: resolveMainSessionKeyMock,
@@ -158,6 +172,11 @@ describe("dispatchAgentHook trust handling", () => {
     resetGatewayWorkAdmission();
     vi.clearAllMocks();
     loadConfigMock.mockImplementation(mainRosterConfig);
+    validateExplicitMessageAccountSelectionMock.mockImplementation(
+      ({ accountId }: { accountId?: unknown }) => accountId as string | undefined,
+    );
+    resolveOutboundChannelPluginMock.mockReturnValue({ id: "telegram" });
+    resolveChannelDefaultAccountIdMock.mockReturnValue("default");
     capturedDispatchAgentHook = undefined;
     createGatewayHooksRequestHandler(buildMinimalParams());
   });
@@ -194,6 +213,93 @@ describe("dispatchAgentHook trust handling", () => {
       job: { delivery },
     });
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("rejects an invalid explicit delivery account before the agent runner", async () => {
+    validateExplicitMessageAccountSelectionMock.mockImplementationOnce(() => {
+      throw new Error('Unknown account "missing" for channel telegram.');
+    });
+
+    const result = await dispatchAgentHook({
+      ...buildAgentPayload("Invalid account"),
+      deliver: true,
+      channel: "telegram",
+      to: "123456",
+      accountId: "missing",
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "123456",
+        accountId: "missing",
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      statusCode: 400,
+      error: 'Unknown account "missing" for channel telegram.',
+      runId: expect.any(String),
+    });
+    expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
+  });
+
+  it("binds omitted delivery accounts to the channel default", async () => {
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "ok",
+      summary: "done",
+      delivered: true,
+    });
+
+    const result = await dispatchAgentHook({
+      ...buildAgentPayload("Default account"),
+      deliver: true,
+      channel: "telegram",
+      to: "123456",
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "123456",
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        job: expect.objectContaining({
+          delivery: expect.objectContaining({ accountId: "default" }),
+        }),
+      }),
+    );
+  });
+
+  it("revalidates an explicit delivery account against queued-run config", async () => {
+    validateExplicitMessageAccountSelectionMock
+      .mockImplementationOnce(({ accountId }: { accountId?: unknown }) => accountId as string)
+      .mockImplementationOnce(() => {
+        throw new Error('Unknown account "removed" for channel telegram.');
+      });
+
+    const result = await dispatchAgentHook({
+      ...buildAgentPayload("Removed account"),
+      deliver: true,
+      channel: "telegram",
+      to: "123456",
+      accountId: "removed",
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "123456",
+        accountId: "removed",
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      statusCode: 400,
+      error: 'Unknown account "removed" for channel telegram.',
+      runId: expect.any(String),
+    });
+    expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
   });
 
   it("retains detached agent work after the hook request releases admission", async () => {
@@ -507,7 +613,7 @@ describe("dispatchAgentHook trust handling", () => {
 
   it("prefers cron diagnostics for returned hook errors", async () => {
     const diagnosticSummary =
-      "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.modelPolicy.allow: anthropic/claude-sonnet-4-6";
+      "automation model override 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.modelPolicy.allow: anthropic/claude-sonnet-4-6";
     runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
       status: "error",
       summary: "generic failure",

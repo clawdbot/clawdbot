@@ -26,6 +26,7 @@ import {
 import {
   attachModelProviderRequestTransport,
   getModelProviderRequestTransport,
+  inheritModelProviderMetadataOwners,
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
@@ -89,9 +90,12 @@ export function configureAiTransportRuntimeHost(): void {
       return Boolean(request?.proxy || request?.tls || getModelProviderLocalService(model));
     },
     inheritManagedTransport: (source, target) =>
-      attachModelProviderLocalService(
-        attachModelProviderRequestTransport(target, getModelProviderRequestTransport(source)),
-        getModelProviderLocalService(source),
+      inheritModelProviderMetadataOwners(
+        source,
+        attachModelProviderLocalService(
+          attachModelProviderRequestTransport(target, getModelProviderRequestTransport(source)),
+          getModelProviderLocalService(source),
+        ),
       ),
     transformTransportMessages,
     registerCustomApi: ensureCustomApiRegistered,

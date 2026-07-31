@@ -11,6 +11,7 @@ import {
   allReleasePathLanes,
   mainLanes,
   normalizeReleaseProfile,
+  publicInstallerLanes,
   releasePathChunkLanes,
   tailLanes,
 } from "./docker-e2e-scenarios.mjs";
@@ -528,7 +529,12 @@ export function lanesNeedOpenClawPackage(poolLanes) {
 export function findLaneByName(name) {
   return dedupeLanes(
     expandUpgradeSurvivorBaselineLanes(
-      [...allReleasePathLanes({ includeOpenWebUI: true }), ...mainLanes, ...tailLanes],
+      [
+        ...allReleasePathLanes({ includeOpenWebUI: true }),
+        ...publicInstallerLanes,
+        ...mainLanes,
+        ...tailLanes,
+      ],
       process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
       undefined,
       process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
@@ -624,6 +630,7 @@ export function resolveDockerE2ePlan(options) {
       includeOpenWebUI: options.includeOpenWebUI,
       releaseProfile: "full",
     }),
+    ...publicInstallerLanes,
     ...retriedMainLanes,
     ...retriedTailLanes,
   ]);

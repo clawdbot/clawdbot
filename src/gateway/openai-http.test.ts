@@ -102,6 +102,17 @@ async function postChatCompletions(port: number, body: unknown, headers?: Record
   return res;
 }
 
+async function postRawChatCompletions(port: number, body: string) {
+  return await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-openclaw-scopes": "operator.write",
+    },
+    body,
+  });
+}
+
 function createOpenAiChatClient(port: number): OpenAI {
   return new OpenAI({
     apiKey: "test",
@@ -1511,60 +1522,132 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
   });
 
-  it("forwards inbound max_completion_tokens and max_tokens into streamParams", async () => {
+  it("validates and forwards max_completion_tokens and max_tokens into streamParams", async () => {
     const port = enabledPort;
-    const mockAgentOnce = (payloads: Array<{ text: string }>) => {
+    const mockAgentOnce = () => {
       agentCommand.mockClear();
-      agentCommand.mockResolvedValueOnce({ payloads } as never);
+      agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
     };
-    const getFirstAgentMaxTokens = () => firstAgentCommandOptions()?.streamParams?.maxTokens;
+    const getRecordedAgentMaxTokens = () => firstAgentCommandOptions()?.streamParams?.maxTokens;
 
-    {
-      mockAgentOnce([{ text: "hello" }]);
+    const validCases: Array<{
+      name: string;
+      body: Record<string, unknown>;
+      expected: number | undefined;
+    }> = [
+      { name: "current field", body: { max_completion_tokens: 256 }, expected: 256 },
+      { name: "legacy field", body: { max_tokens: 128 }, expected: 128 },
+      {
+        name: "current field precedence",
+        body: { max_completion_tokens: 64, max_tokens: 999 },
+        expected: 64,
+      },
+      {
+        name: "null current field leaves legacy active",
+        body: { max_completion_tokens: null, max_tokens: 32 },
+        expected: 32,
+      },
+      {
+        name: "null legacy field leaves current active",
+        body: { max_completion_tokens: 16, max_tokens: null },
+        expected: 16,
+      },
+      {
+        name: "largest safe integer",
+        body: { max_completion_tokens: Number.MAX_SAFE_INTEGER },
+        expected: Number.MAX_SAFE_INTEGER,
+      },
+      { name: "omitted fields", body: {}, expected: undefined },
+    ];
+
+    for (const testCase of validCases) {
+      mockAgentOnce();
       const res = await postChatCompletions(port, {
         model: "openclaw",
-        max_completion_tokens: 256,
+        ...testCase.body,
         messages: [{ role: "user", content: "hi" }],
       });
       expect(res.status).toBe(200);
-      expect(getFirstAgentMaxTokens()).toBe(256);
+      expect(agentCommand, testCase.name).toHaveBeenCalledTimes(1);
+      expect(getRecordedAgentMaxTokens(), testCase.name).toBe(testCase.expected);
       await res.text();
     }
 
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        max_tokens: 128,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getFirstAgentMaxTokens()).toBe(128);
-      await res.text();
+    mockAgentOnce();
+    const client = createOpenAiChatClient(port);
+    await client.chat.completions.create({
+      model: "openclaw",
+      max_completion_tokens: null,
+      max_tokens: null,
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(agentCommand, "SDK null fields").toHaveBeenCalledTimes(1);
+    expect(getRecordedAgentMaxTokens(), "SDK null fields").toBeUndefined();
+  });
+
+  it("rejects malformed token caps before agent dispatch", async () => {
+    const port = enabledPort;
+    const invalidValues: Array<{ name: string; value: unknown }> = [
+      { name: "string", value: "32" },
+      { name: "object", value: {} },
+      { name: "array", value: [32] },
+      { name: "zero", value: 0 },
+      { name: "negative", value: -1 },
+      { name: "fractional", value: 1.5 },
+      { name: "unsafe integer", value: Number.MAX_SAFE_INTEGER + 1 },
+    ];
+
+    for (const field of ["max_completion_tokens", "max_tokens"] as const) {
+      for (const testCase of invalidValues) {
+        agentCommand.mockClear();
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          [field]: testCase.value,
+          messages: [{ role: "user", content: "hi" }],
+        });
+        expect(res.status, `${field}: ${testCase.name}`).toBe(400);
+        const json = (await res.json()) as { error?: { type?: string; message?: string } };
+        expect(json.error?.type).toBe("invalid_request_error");
+        expect(json.error?.message).toContain(field);
+        expect(agentCommand, `${field}: ${testCase.name}`).toHaveBeenCalledTimes(0);
+      }
+
+      agentCommand.mockClear();
+      const res = await postRawChatCompletions(
+        port,
+        `{"model":"openclaw","messages":[{"role":"user","content":"hi"}],"${field}":1e309}`,
+      );
+      expect(res.status, `${field}: non-finite raw number`).toBe(400);
+      const json = (await res.json()) as { error?: { type?: string; message?: string } };
+      expect(json.error?.type).toBe("invalid_request_error");
+      expect(json.error?.message).toContain(field);
+      expect(agentCommand, `${field}: non-finite raw number`).toHaveBeenCalledTimes(0);
     }
 
-    {
-      mockAgentOnce([{ text: "hello" }]);
+    const shadowedCases = [
+      {
+        name: "malformed current field with valid legacy field",
+        body: { max_completion_tokens: "64", max_tokens: 32 },
+        field: "max_completion_tokens",
+      },
+      {
+        name: "malformed legacy field with valid current field",
+        body: { max_completion_tokens: 64, max_tokens: "32" },
+        field: "max_tokens",
+      },
+    ];
+    for (const testCase of shadowedCases) {
+      agentCommand.mockClear();
       const res = await postChatCompletions(port, {
         model: "openclaw",
-        max_completion_tokens: 64,
-        max_tokens: 999,
+        ...testCase.body,
         messages: [{ role: "user", content: "hi" }],
       });
-      expect(res.status).toBe(200);
-      expect(getFirstAgentMaxTokens()).toBe(64);
-      await res.text();
-    }
-
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getFirstAgentMaxTokens()).toBeUndefined();
-      await res.text();
+      expect(res.status, testCase.name).toBe(400);
+      const json = (await res.json()) as { error?: { type?: string; message?: string } };
+      expect(json.error?.type).toBe("invalid_request_error");
+      expect(json.error?.message).toContain(testCase.field);
+      expect(agentCommand, testCase.name).toHaveBeenCalledTimes(0);
     }
   });
 
