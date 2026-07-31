@@ -64,6 +64,18 @@ Treat every English edit as a new source revision:
 
 Keeping the same key does not make an older translation current.
 
+## Use catalog automation
+
+When `localization/catalogs.json` owns the surface:
+
+1. Run `pnpm localization:catalogs:detect` locally; detection is credential-free.
+2. Mark the PR ready only after its reviewed English and source catalog are stable.
+3. For a same-repository PR targeting the default branch, the scoped CI gate blocks stale or missing generated targets. A maintainer can dispatch `Localization Catalog Refresh` with the PR number to generate all stale locales and commit one validated batch back to the unchanged head branch.
+4. For a fork PR, CI reports drift without requiring secrets or write access. After merge, the trusted main-branch workflow reconciles the same registry-owned targets in one generated follow-up PR with auto-merge disabled.
+5. Review and merge the generated catalog changes through the original surface owner boundary.
+
+Never put provider credentials in a pull request job. The trusted workflow owns generation; the ordinary CI gate only validates registry, source revision, keys, placeholders, protected literals, and generated artifacts.
+
 ## Add a locale
 
 Update `OPENCLAW_LOCALES`, `OPENCLAW_LOCALE_REGISTRY`, aliases, fallback, direction, the registry revision digest, and focused registry tests. Then enroll the locale only in surfaces that own a catalog and can prove fallback. Registry membership does not claim product-wide translation coverage.

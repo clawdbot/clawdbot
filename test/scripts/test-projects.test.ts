@@ -504,11 +504,6 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
-        "test/scripts/ci-workflow-guards.test.ts",
-      ],
-    });
-  });
-
   it("keeps generated locale publisher and inventory edits on workflow guards", () => {
     for (const actionPath of [
       ".github/actions/create-generated-pr-tokens/action.yml",
