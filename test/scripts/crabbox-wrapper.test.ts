@@ -1145,6 +1145,32 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).not.toContain("route workload=");
   });
 
+  it.each([
+    {
+      name: "explicit",
+      args: ["run", "--provider", "blacksmith-testbox", "--workload", "untrusted", "--", "echo ok"],
+      env: {},
+    },
+    {
+      name: "environment",
+      args: ["run", "--workload", "untrusted", "--", "echo ok"],
+      env: { CRABBOX_PROVIDER: "blacksmith-testbox" },
+    },
+  ])("rejects $name providers outside the workload eligibility policy", ({ args, env }) => {
+    const result = runWrapper("provider: aws, azure, blacksmith-testbox, or daytona\n", args, {
+      env: {
+        OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0",
+        ...env,
+      },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "provider=blacksmith-testbox is not eligible for workload=untrusted; allowed=azure,aws",
+    );
+  });
+
   it("requires broker auth for explicit providers inside workload routing", () => {
     const result = runWrapper(
       "provider: aws, azure, blacksmith-testbox, or daytona\n",

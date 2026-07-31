@@ -793,13 +793,42 @@ function selectedProvider(commandArgs, advertisedProviders = [], versionText = "
       error: "Crabbox workload=windows requires target=windows",
     };
   }
+  const configured = canonicalProviderName(configProvider());
+  const chain = workload
+    ? crabboxProviderChain({
+        workload,
+        configuredProvider: configured,
+        target: targetContext.target,
+        advertisedProviders: advertisedProviders.map(canonicalProviderName),
+      })
+    : [];
   const explicitProvider = commandProvider(commandArgs);
   if (explicitProvider) {
-    return { provider: explicitProvider, source: "explicit", workload: "", chain: [] };
+    const canonicalExplicitProvider = canonicalProviderName(explicitProvider);
+    if (workload && !chain.includes(canonicalExplicitProvider)) {
+      return {
+        provider: "",
+        source: "explicit",
+        workload,
+        chain,
+        error: `provider=${canonicalExplicitProvider} is not eligible for workload=${workload}; allowed=${chain.join(",") || "none"}`,
+      };
+    }
+    return { provider: explicitProvider, source: "explicit", workload, chain };
   }
   const environmentProvider = envProvider();
   if (environmentProvider) {
-    return { provider: environmentProvider, source: "environment", workload: "", chain: [] };
+    const canonicalEnvironmentProvider = canonicalProviderName(environmentProvider);
+    if (workload && !chain.includes(canonicalEnvironmentProvider)) {
+      return {
+        provider: "",
+        source: "environment",
+        workload,
+        chain,
+        error: `provider=${canonicalEnvironmentProvider} is not eligible for workload=${workload}; allowed=${chain.join(",") || "none"}`,
+      };
+    }
+    return { provider: environmentProvider, source: "environment", workload, chain };
   }
   if (workload && hasOption(commandArgs, "--id")) {
     return {
@@ -811,7 +840,6 @@ function selectedProvider(commandArgs, advertisedProviders = [], versionText = "
         "reusing a workload-routed lease with --id requires --provider (or CRABBOX_PROVIDER) from the originating route",
     };
   }
-  const configured = canonicalProviderName(configProvider());
   if (!workload && shouldPreferAzureForWindows(commandArgs, advertisedProviders)) {
     return { provider: "azure", source: "windows-default", workload: "", chain: [] };
   }
@@ -819,12 +847,6 @@ function selectedProvider(commandArgs, advertisedProviders = [], versionText = "
     return { provider: configured, source: "config", workload: "", chain: [] };
   }
 
-  const chain = crabboxProviderChain({
-    workload,
-    configuredProvider: configured,
-    target: targetContext.target,
-    advertisedProviders: advertisedProviders.map(canonicalProviderName),
-  });
   const readiness = new Map();
   let selectedProviderName = "";
   for (const candidate of chain) {
