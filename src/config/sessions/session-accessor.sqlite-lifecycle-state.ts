@@ -321,8 +321,8 @@ export async function projectSqliteSessionEntryLifecycleMutation(
   const projectedRemovals: SqliteProjectedLifecycleMutation["removals"] = [];
   for (const removal of params.removals) {
     const sessionKey = removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim();
-    let entry = sessionKey ? store[sessionKey] : undefined;
-    if (sessionKey && removal.expectedRawEntryJson !== undefined) {
+    let entry = removal.exactStoredKey || sessionKey ? store[sessionKey] : undefined;
+    if (removal.expectedRawEntryJson !== undefined) {
       const currentRawEntryJson = readExactSessionEntryJsonForCanonicalRepair(database, sessionKey);
       if (currentRawEntryJson !== removal.expectedRawEntryJson) {
         throw new Error(

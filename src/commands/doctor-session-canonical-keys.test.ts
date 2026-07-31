@@ -181,6 +181,56 @@ describe("doctor canonical session-key repair", () => {
     });
   });
 
+  it("moves an empty stored key to the owning agent main key", async () => {
+    await withStateDirEnv("openclaw-doctor-canonical-empty-key-", async ({ stateDir }) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
+      const storePath = resolveStorePath(storeTemplate, { agentId: "main", env });
+      const cfg = {
+        agents: { list: [{ id: "main", default: true }] },
+        session: { store: storeTemplate },
+      } as OpenClawConfig;
+      insertLegacySession({
+        agentId: "main",
+        entry: { sessionId: "empty-key-session", updatedAt: 10 },
+        env,
+        eventText: "empty key history",
+        sessionKey: "",
+        storePath,
+      });
+
+      expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
+        foundGroups: 1,
+        removedRows: 1,
+        repairedGroups: 1,
+      });
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "main",
+          env,
+          sessionKey: "agent:main:main",
+          storePath,
+        })?.entry.sessionId,
+      ).toBe("empty-key-session");
+      expect(
+        loadExactSessionEntryReadOnly({ agentId: "main", env, sessionKey: "", storePath }),
+      ).toBeUndefined();
+      await expect(
+        loadTranscriptEvents({
+          agentId: "main",
+          env,
+          sessionId: "empty-key-session",
+          sessionKey: "agent:main:main",
+          storePath,
+        }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          message: expect.objectContaining({ content: "empty key history" }),
+        }),
+      ]);
+    });
+  });
+
   it("rehomes matching in-store transcript generations under the canonical key", async () => {
     await withStateDirEnv("openclaw-doctor-canonical-rehome-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };

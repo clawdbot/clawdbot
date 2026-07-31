@@ -4,8 +4,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import {
+  applySessionEntryLifecycleMutation,
   loadExactSessionEntryReadOnly,
   loadTranscriptEvents,
+  replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -27,12 +29,28 @@ describe("doctor canonical session-key retention repair", () => {
         session: { mainKey: "shared", store: storeTemplate },
       } as OpenClawConfig;
 
+      replaceSessionEntrySync(
+        {
+          agentId: "main",
+          env,
+          sessionKey: "agent:main:shared",
+          storePath: mainStore,
+        },
+        { sessionId: "retained-destination", updatedAt: 5 },
+      );
+      await applySessionEntryLifecycleMutation({
+        agentId: "main",
+        removals: [{ sessionKey: "agent:main:shared" }],
+        skipMaintenance: true,
+        storePath: mainStore,
+      });
+
       insertLegacySession({
         agentId: "ops",
         entry: { sessionId: "winner", updatedAt: 20 },
         env,
         eventText: "winner history",
-        sessionKey: "agent:main:main",
+        sessionKey: "agent:main:main ",
         storePath: opsStore,
       });
       insertLegacySession({
@@ -40,7 +58,7 @@ describe("doctor canonical session-key retention repair", () => {
         entry: { sessionId: "loser", updatedAt: 10 },
         env,
         eventText: "loser history",
-        sessionKey: "agent:main:main ",
+        sessionKey: "agent:main:main",
         storePath: opsStore,
       });
 
@@ -50,7 +68,7 @@ describe("doctor canonical session-key retention repair", () => {
         foundGroups: 1,
         removedRows: 2,
         repairedGroups: 1,
-        scannedStores: 1,
+        scannedStores: 2,
       });
       expect(
         loadExactSessionEntryReadOnly({
@@ -64,7 +82,7 @@ describe("doctor canonical session-key retention repair", () => {
         loadExactSessionEntryReadOnly({
           agentId: "ops",
           env,
-          sessionKey: "agent:main:main",
+          sessionKey: "agent:main:main ",
           storePath: opsStore,
         }),
       ).toBeUndefined();
@@ -72,7 +90,7 @@ describe("doctor canonical session-key retention repair", () => {
         loadExactSessionEntryReadOnly({
           agentId: "ops",
           env,
-          sessionKey: "agent:main:main ",
+          sessionKey: "agent:main:main",
           storePath: opsStore,
         }),
       ).toBeUndefined();

@@ -66,6 +66,19 @@ export function readExactSessionEntryRowForCanonicalRepair(
   if (!row) {
     return undefined;
   }
+  if (row.entry_json === "{}") {
+    const retainedWindow = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_windows")
+        .select("session_id")
+        .where("session_id", "=", row.current_session_id)
+        .where("session_key", "=", row.session_key),
+    );
+    if (retainedWindow) {
+      return undefined;
+    }
+  }
   const parsedEntry = parseSqliteSessionEntryJson(row);
   if (!parsedEntry && !options.allowMalformedRowRepair) {
     throw canonicalSessionKeyMigrationRequiredError(
@@ -115,11 +128,9 @@ export function listSqliteSessionGenerationIdsForCanonicalRepair(params: {
 }): string[] {
   const source = resolveSqliteStoreScope(params.storePath, { agentId: params.agentId });
   const database = openOpenClawAgentDatabase(toDatabaseOptions(source));
-  return readSqliteSessionGenerationIdsForKeys(
-    database,
-    resolveSqliteCanonicalRepairLookupKeys(params.canonicalKey, params.sourceKeys),
-    { exactStoredKeys: true },
-  );
+  return readSqliteSessionGenerationIdsForKeys(database, uniqueStrings(params.sourceKeys), {
+    exactStoredKeys: true,
+  });
 }
 
 /** Doctor-only same-store rewrite for delivery attribution owned by removed aliases. */
@@ -310,7 +321,7 @@ function copySqliteSessionOwnedStateForRepair(params: {
   if (storedSourceKeys.length === 0) {
     return;
   }
-  const sourceKeys = resolveSqliteCanonicalRepairLookupKeys(params.canonicalKey, storedSourceKeys);
+  const sourceKeys = storedSourceKeys;
   const sourceDb = getSessionKysely(params.source.db);
   const destinationDb = getSessionKysely(params.destination.db);
   const entrySessionIds = uniqueStrings(

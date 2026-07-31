@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -104,7 +105,9 @@ function collectCanonicalSessionCandidates(
         sessionKey,
       });
       return {
-        canonicalKey: resolveDeliveryProvenCanonicalSessionKey(storedKey, entry),
+        canonicalKey: storedKey
+          ? resolveDeliveryProvenCanonicalSessionKey(storedKey, entry)
+          : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: target.agentId }),
         entry,
         rawEntryJson,
         sessionKey,
