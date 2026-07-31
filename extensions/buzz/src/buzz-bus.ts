@@ -303,9 +303,9 @@ export async function startBuzzBus(options: {
             since: sessionStartedAt,
             messageSince: options.since ?? sessionStartedAt,
             messageLimit: resolveBuzzRoomHistoryLimit(activeChannelIds.length),
-            waitForDispatchCapacity: (slots) => dispatchQueue.waitForCapacity(slots),
+            reserveDispatchCapacity: (slots) => dispatchQueue.reserveCapacity(slots),
             onHistoryError: options.onHistoryError,
-            onMessageEvent: (event, isMember) => {
+            onMessageEvent: (event, isMember, reservation) => {
               if (signal.aborted || event.pubkey === publicKey) {
                 return;
               }
@@ -315,19 +315,28 @@ export async function startBuzzBus(options: {
               }
               // Admit only room members to bounded workers; claim replay dedupe inside
               // each worker so queued history cannot create unbounded in-flight state.
-              const admission = dispatchQueue.enqueue(async () => {
+              const admission = (reservation ?? dispatchQueue).enqueue(async () => {
                 await replayGuard.processGuarded(event, async () => {
                   await options.onMessage(message, bus, signal);
                 });
               });
-              if (admission === "overflow") {
-                void dispatchQueue.close();
-                reportFatalError(
+              if (admission !== "overflow") {
+                return;
+              }
+              if (reservation) {
+                options.onHistoryError?.(
                   new Error(
-                    `Buzz inbound replay exceeded the ${BUZZ_REPLAY_DISPATCH_MAX_PENDING}-message pending limit`,
+                    `Buzz room ${message.channelId} returned more history than the ${BUZZ_REPLAY_DISPATCH_MAX_PENDING}-message pending limit allows`,
                   ),
                 );
+                return;
               }
+              void dispatchQueue.close();
+              reportFatalError(
+                new Error(
+                  `Buzz inbound replay exceeded the ${BUZZ_REPLAY_DISPATCH_MAX_PENDING}-message pending limit`,
+                ),
+              );
             },
             onFatalError: reportFatalError,
             onMembershipsChanged: (memberships) => {

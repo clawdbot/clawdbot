@@ -2,6 +2,7 @@ import type { Event, Relay } from "nostr-tools";
 import { catchUpBuzzRoomHistory } from "./history-catchup.js";
 import { BUZZ_INBOUND_MESSAGE_KINDS, isBuzzInboundMessageKind } from "./message-event.js";
 import { openBuzzRelaySubscription } from "./relay-subscription.js";
+import type { BuzzReplayDispatchReservation } from "./replay-dispatch.js";
 import { queryBuzzRoomMemberships } from "./room-membership-query.js";
 import {
   BUZZ_ROOM_SYSTEM_KIND,
@@ -55,10 +56,11 @@ export async function createBuzzRoomMembershipTracker(params: {
   since: number;
   messageSince: number;
   messageLimit: number;
-  waitForDispatchCapacity: (slots: number) => Promise<boolean>;
+  reserveDispatchCapacity: (slots: number) => Promise<BuzzReplayDispatchReservation | undefined>;
   onMessageEvent: (
     event: Event,
     isMember: (channelId: string, publicKey: string) => boolean,
+    reservation?: BuzzReplayDispatchReservation,
   ) => void;
   onFatalError?: (error: Error) => void;
   onHistoryError?: (error: Error) => void;
@@ -252,9 +254,9 @@ export async function createBuzzRoomMembershipTracker(params: {
     }
     return refreshMembershipOnce(channelId);
   };
-  const handleRoomEvent = (event: Event) => {
+  const handleRoomEvent = (event: Event, reservation?: BuzzReplayDispatchReservation) => {
     if (isBuzzInboundMessageKind(event.kind)) {
-      params.onMessageEvent(event, isMember);
+      params.onMessageEvent(event, isMember, reservation);
       return;
     }
     void handleSystemEvent(event)?.catch(reportSystemEventError);
@@ -370,7 +372,7 @@ export async function createBuzzRoomMembershipTracker(params: {
             since: params.messageSince,
             until: page.oldest,
             limit: params.messageLimit,
-            waitForCapacity: params.waitForDispatchCapacity,
+            reserveCapacity: params.reserveDispatchCapacity,
             onEvent: handleRoomEvent,
             signal: params.signal,
           });

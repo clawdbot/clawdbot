@@ -1,6 +1,7 @@
 import type { Event, Relay } from "nostr-tools";
 import { BUZZ_INBOUND_MESSAGE_KINDS } from "./message-event.js";
 import { openBuzzRelaySubscription } from "./relay-subscription.js";
+import type { BuzzReplayDispatchReservation } from "./replay-dispatch.js";
 
 const HISTORY_PAGE_TIMEOUT_MS = 10_000;
 const HISTORY_PAGE_COMPLETE_REASON = "buzz room history page loaded";
@@ -98,29 +99,37 @@ export async function catchUpBuzzRoomHistory(params: {
   since: number;
   until: number;
   limit: number;
-  waitForCapacity: (slots: number) => Promise<boolean>;
-  onEvent: (event: Event) => void;
+  reserveCapacity: (slots: number) => Promise<BuzzReplayDispatchReservation | undefined>;
+  onEvent: (event: Event, reservation: BuzzReplayDispatchReservation) => void;
   signal?: AbortSignal;
 }): Promise<BuzzRoomHistoryCatchUp> {
   let until = params.until;
   while (!params.signal?.aborted) {
-    if (!(await params.waitForCapacity(params.limit))) {
+    const reservation = await params.reserveCapacity(params.limit);
+    if (!reservation) {
       return "aborted";
     }
-    const events = await queryBuzzRoomHistoryPage({
-      relay: params.relay,
-      channelId: params.channelId,
-      since: params.since,
-      until,
-      limit: params.limit,
-      signal: params.signal,
-    });
-    if (events.length === 0) {
-      return "complete";
+    let events: Event[];
+    try {
+      events = await queryBuzzRoomHistoryPage({
+        relay: params.relay,
+        channelId: params.channelId,
+        since: params.since,
+        until,
+        limit: params.limit,
+        signal: params.signal,
+      });
+      if (events.length === 0) {
+        return "complete";
+      }
+      for (const event of events) {
+        params.onEvent(event, reservation);
+      }
+    } finally {
+      reservation.release();
     }
     let oldest = until;
     for (const event of events) {
-      params.onEvent(event);
       oldest = Math.min(oldest, event.created_at);
     }
     if (events.length < params.limit) {
