@@ -1,15 +1,13 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function createTempHome(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mcp-probe-process-"));
-  tempDirs.push(dir);
-  return dir;
+  return tempDirs.make("openclaw-mcp-probe-process-");
 }
 
 async function writeConfig(home: string, servers: Record<string, unknown>): Promise<string> {
@@ -102,12 +100,6 @@ function runProbe(home: string, args: string[]) {
 }
 
 describe("mcp probe process exit", () => {
-  afterEach(async () => {
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
-  });
-
   it("prints named JSON diagnostics before exiting nonzero", async () => {
     const home = await createTempHome();
     const configPath = await writeConfig(home, {
