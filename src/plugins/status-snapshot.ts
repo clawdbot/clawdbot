@@ -9,7 +9,10 @@ import {
 } from "./plugin-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
-import { buildPluginDependencyStatus } from "./status-dependencies-core.js";
+import {
+  buildPluginDependencyStatus,
+  projectPluginDependencyHealth,
+} from "./status-dependencies-core.js";
 import type { PluginLogger } from "./types.js";
 
 /** Control-plane plugin status shape used by `openclaw plugins status` style surfaces. */
@@ -150,7 +153,7 @@ export function buildPluginRegistrySnapshotReport(
     workspaceDir: params?.workspaceDir,
   });
   const manifestByPluginId = metadataSnapshot.byPluginId;
-  return {
+  return projectPluginDependencyHealth({
     workspaceDir: params?.workspaceDir,
     ...createEmptyPluginRegistry(),
     plugins: result.snapshot.plugins.map((plugin) =>
@@ -159,5 +162,5 @@ export function buildPluginRegistrySnapshotReport(
     diagnostics: [...result.snapshot.diagnostics],
     registrySource: result.source,
     registryDiagnostics: result.diagnostics,
-  };
+  });
 }

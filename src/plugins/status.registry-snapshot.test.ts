@@ -207,6 +207,18 @@ describe("buildPluginRegistrySnapshotReport", () => {
     });
 
     const plugin = requirePlugin(report.plugins, "dependency-demo");
+    expectFields(plugin, {
+      status: "error",
+      error:
+        'Plugin "dependency-demo" cannot load because required dependencies are missing: missing-required. Install the plugin dependencies or reinstall/update the plugin, then restart the Gateway.',
+    });
+    expect(report.diagnostics).toContainEqual({
+      level: "error",
+      pluginId: "dependency-demo",
+      source: fs.realpathSync(fixture.runtimeSource),
+      message:
+        'Plugin "dependency-demo" cannot load because required dependencies are missing: missing-required. Install the plugin dependencies or reinstall/update the plugin, then restart the Gateway.',
+    });
     const dependencyStatus = requireRecord(plugin.dependencyStatus);
     expectFields(dependencyStatus, {
       hasDependencies: true,
@@ -238,6 +250,61 @@ describe("buildPluginRegistrySnapshotReport", () => {
       installed: false,
       optional: true,
     });
+    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+  });
+
+  it("honors npm optional dependency precedence without reporting a false required failure", () => {
+    const fixture = createColdPluginFixture({
+      rootDir: makeTempDir(),
+      pluginId: "optional-dependency-demo",
+      packageJson: {
+        dependencies: { "optional-runtime": "1.0.0" },
+        optionalDependencies: { "optional-runtime": "2.0.0" },
+      },
+    });
+
+    const report = buildPluginRegistrySnapshotReport({
+      config: createColdPluginConfig(fixture.rootDir, fixture.pluginId),
+    });
+    const plugin = requirePlugin(report.plugins, fixture.pluginId);
+
+    expectFields(plugin, { status: "loaded" });
+    expectFields(requireRecord(plugin.dependencyStatus), {
+      requiredInstalled: true,
+      optionalInstalled: false,
+      missing: [],
+      missingOptional: ["optional-runtime"],
+      dependencies: [],
+    });
+    expect(report.diagnostics).not.toContainEqual(
+      expect.objectContaining({ pluginId: fixture.pluginId, level: "error" }),
+    );
+    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+  });
+
+  it("keeps disabled plugins with missing required dependencies diagnostic-free", () => {
+    const fixture = createColdPluginFixture({
+      rootDir: makeTempDir(),
+      pluginId: "disabled-dependency-demo",
+      packageJson: { dependencies: { "missing-required": "1.0.0" } },
+    });
+
+    const report = buildPluginRegistrySnapshotReport({
+      config: {
+        plugins: {
+          load: { paths: [fixture.rootDir] },
+          entries: { [fixture.pluginId]: { enabled: false } },
+        },
+      },
+    });
+    const plugin = requirePlugin(report.plugins, fixture.pluginId);
+
+    expectFields(plugin, { enabled: false, status: "disabled" });
+    expect(plugin.error).toBeUndefined();
+    expect(requireRecord(plugin.dependencyStatus).missing).toEqual(["missing-required"]);
+    expect(report.diagnostics).not.toContainEqual(
+      expect.objectContaining({ pluginId: fixture.pluginId, level: "error" }),
+    );
     expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
   });
 

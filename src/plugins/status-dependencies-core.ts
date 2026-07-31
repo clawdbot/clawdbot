@@ -1,6 +1,7 @@
 // Collects core dependency status for plugin diagnostics.
 import fs from "node:fs";
 import path from "node:path";
+import type { PluginRegistry } from "./registry-types.js";
 
 /** Dependency name-to-version map from a plugin package manifest. */
 export type PluginDependencySpecMap = Record<string, string>;
@@ -49,9 +50,14 @@ export function normalizePluginDependencySpecs(params: {
   dependencies: PluginDependencySpecMap;
   optionalDependencies: PluginDependencySpecMap;
 } {
+  const dependencies = normalizeDependencyMap(params.dependencies);
+  const optionalDependencies = normalizeDependencyMap(params.optionalDependencies);
+  for (const name of Object.keys(optionalDependencies)) {
+    delete dependencies[name];
+  }
   return {
-    dependencies: normalizeDependencyMap(params.dependencies),
-    optionalDependencies: normalizeDependencyMap(params.optionalDependencies),
+    dependencies,
+    optionalDependencies,
   };
 }
 
@@ -141,4 +147,24 @@ export function buildPluginDependencyStatus(params: {
     dependencies,
     optionalDependencies,
   };
+}
+
+/** Projects missing required dependencies consistently across cold plugin status surfaces. */
+export function projectPluginDependencyHealth<T extends PluginRegistry>(registry: T): T {
+  const diagnostics = [...registry.diagnostics];
+  const plugins = registry.plugins.map((plugin) => {
+    const status = plugin.dependencyStatus;
+    if (!plugin.enabled || plugin.status === "error" || status?.requiredInstalled !== false) {
+      return plugin;
+    }
+    const message =
+      `Plugin "${plugin.id}" cannot load because required dependencies are missing: ` +
+      `${status.missing.join(", ")}. Install the plugin dependencies or reinstall/update the ` +
+      "plugin, then restart the Gateway.";
+    if (!diagnostics.some((entry) => entry.level === "error" && entry.pluginId === plugin.id)) {
+      diagnostics.push({ level: "error", pluginId: plugin.id, source: plugin.source, message });
+    }
+    return { ...plugin, status: "error" as const, error: message };
+  });
+  return { ...registry, plugins, diagnostics };
 }
