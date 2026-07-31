@@ -31,6 +31,8 @@ export type ChatGptImportRunRecord = {
   skippedCount: number;
   createdPaths: ChatGptImportRunEntry[];
   updatedPaths: ChatGptImportRunEntry[];
+  rollbackStartedAt?: string;
+  rollbackTargetsFinalizedAt?: string;
   rolledBackAt?: string;
 };
 
@@ -196,6 +198,15 @@ function normalizeMemoryWikiImportRunRecord(raw: unknown): ChatGptImportRunRecor
     typeof record.rolledBackAt === "string" && record.rolledBackAt.trim()
       ? record.rolledBackAt.trim()
       : undefined;
+  const rollbackStartedAt =
+    typeof record.rollbackStartedAt === "string" && record.rollbackStartedAt.trim()
+      ? record.rollbackStartedAt.trim()
+      : undefined;
+  const rollbackTargetsFinalizedAt =
+    typeof record.rollbackTargetsFinalizedAt === "string" &&
+    record.rollbackTargetsFinalizedAt.trim()
+      ? record.rollbackTargetsFinalizedAt.trim()
+      : undefined;
   return {
     version: 1,
     runId,
@@ -209,6 +220,8 @@ function normalizeMemoryWikiImportRunRecord(raw: unknown): ChatGptImportRunRecor
     skippedCount: asNonNegativeInteger(record.skippedCount),
     createdPaths: normalizeImportRunEntries(record.createdPaths),
     updatedPaths: normalizeImportRunEntries(record.updatedPaths),
+    ...(rollbackStartedAt ? { rollbackStartedAt } : {}),
+    ...(rollbackTargetsFinalizedAt ? { rollbackTargetsFinalizedAt } : {}),
     ...(rolledBackAt ? { rolledBackAt } : {}),
   };
 }
@@ -298,6 +311,10 @@ function composeImportRunRecord(
     skippedCount: meta.skippedCount,
     createdPaths,
     updatedPaths,
+    ...(meta.rollbackStartedAt ? { rollbackStartedAt: meta.rollbackStartedAt } : {}),
+    ...(meta.rollbackTargetsFinalizedAt
+      ? { rollbackTargetsFinalizedAt: meta.rollbackTargetsFinalizedAt }
+      : {}),
     ...(meta.rolledBackAt ? { rolledBackAt: meta.rolledBackAt } : {}),
   };
 }
@@ -319,6 +336,10 @@ function toMetaRecord(
     createdCount: record.createdCount,
     updatedCount: record.updatedCount,
     skippedCount: record.skippedCount,
+    ...(record.rollbackStartedAt ? { rollbackStartedAt: record.rollbackStartedAt } : {}),
+    ...(record.rollbackTargetsFinalizedAt
+      ? { rollbackTargetsFinalizedAt: record.rollbackTargetsFinalizedAt }
+      : {}),
     ...(record.rolledBackAt ? { rolledBackAt: record.rolledBackAt } : {}),
   };
 }
@@ -426,7 +447,7 @@ export function createMemoryWikiImportRunStateStore(
         await store.register(key, pathRecord);
       }
       // Path rows carry rollback recovery evidence. Commit the meta row last
-      // so rolledBackAt can never become visible ahead of those durable facts.
+      // so phase fences and rolledBackAt never become visible ahead of it.
       await store.register(
         resolveStateEntryKey(vaultRootKey, record.runId),
         toMetaRecord(vaultRootKey, record),

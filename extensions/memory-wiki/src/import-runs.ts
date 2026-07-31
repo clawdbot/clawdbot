@@ -16,7 +16,9 @@ type MemoryWikiImportRunSummary = {
   createdCount: number;
   updatedCount: number;
   skippedCount: number;
-  status: "applied" | "rolled_back";
+  status: "applied" | "rolling_back" | "rolled_back";
+  rollbackStartedAt?: string;
+  rollbackTargetsFinalizedAt?: string;
   rolledBackAt?: string;
   pagePaths: string[];
   samplePaths: string[];
@@ -33,6 +35,7 @@ function toImportRunSummary(record: ChatGptImportRunRecord): MemoryWikiImportRun
   const createdPaths = record.createdPaths.map((entry) => entry.path);
   const updatedPaths = record.updatedPaths.map((entry) => entry.path);
   const pagePaths = uniqueStrings([...createdPaths, ...updatedPaths]);
+  const rollingBack = Boolean(record.rollbackStartedAt || record.rollbackTargetsFinalizedAt);
 
   return {
     runId: record.runId,
@@ -44,7 +47,11 @@ function toImportRunSummary(record: ChatGptImportRunRecord): MemoryWikiImportRun
     createdCount: record.createdCount,
     updatedCount: record.updatedCount,
     skippedCount: record.skippedCount,
-    status: record.rolledBackAt ? "rolled_back" : "applied",
+    status: record.rolledBackAt ? "rolled_back" : rollingBack ? "rolling_back" : "applied",
+    ...(record.rollbackStartedAt ? { rollbackStartedAt: record.rollbackStartedAt } : {}),
+    ...(record.rollbackTargetsFinalizedAt
+      ? { rollbackTargetsFinalizedAt: record.rollbackTargetsFinalizedAt }
+      : {}),
     ...(record.rolledBackAt ? { rolledBackAt: record.rolledBackAt } : {}),
     pagePaths,
     samplePaths: pagePaths.slice(0, 5),
@@ -63,7 +70,7 @@ export async function listMemoryWikiImportRuns(
   return {
     runs: runs.slice(0, limit),
     totalRuns: runs.length,
-    activeRuns: runs.filter((entry) => entry.status === "applied").length,
+    activeRuns: runs.filter((entry) => entry.status !== "rolled_back").length,
     rolledBackRuns: runs.filter((entry) => entry.status === "rolled_back").length,
   };
 }
