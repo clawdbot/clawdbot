@@ -11,6 +11,7 @@ import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-ru
 import {
   splitLifecycleCommandText,
   splitLifecycleInlineCommands,
+  unwrapLifecycleControlArgv,
 } from "./exec-approvals-lifecycle-shell.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 
@@ -358,6 +359,18 @@ function parsePowerShellAlias(
   return { name, value };
 }
 
+function unwrapPowerShellInvocationArgv(argv: readonly string[]): readonly string[] {
+  let invocation = argv;
+  for (let depth = 0; depth < 8; depth += 1) {
+    const unwrapped = unwrapLifecycleControlArgv(invocation, "powershell");
+    if (unwrapped === null) {
+      return invocation;
+    }
+    invocation = unwrapped;
+  }
+  return [];
+}
+
 function isDynamicPowerShellAliasReference(value: string | undefined): boolean {
   const normalized = (value ?? "").trim();
   return /^[$@([\]{}]/u.test(normalized) || normalized.includes("$(");
@@ -504,8 +517,13 @@ export function powerShellAliasLifecycleInvocationRequiresApproval(
     if (!parsed?.length) {
       continue;
     }
-    const expanded = expandArgv?.(parsed) ?? { argv: parsed, unresolved: false };
-    const rawAlias = parsePowerShellAlias(parsed);
+    const rawInvocation = unwrapPowerShellInvocationArgv(parsed);
+    const expandedResult = expandArgv?.(parsed) ?? { argv: parsed, unresolved: false };
+    const expanded = {
+      ...expandedResult,
+      argv: unwrapPowerShellInvocationArgv(expandedResult.argv),
+    };
+    const rawAlias = parsePowerShellAlias(rawInvocation);
     if (rawAlias) {
       const resolvedAlias = parsePowerShellAlias(expanded.argv);
       const rawName = normalizeExecutableToken(rawAlias.name ?? "");
@@ -532,7 +550,7 @@ export function powerShellAliasLifecycleInvocationRequiresApproval(
       }
       continue;
     }
-    const invocation = ["&", "."].includes(parsed[0] ?? "") ? parsed.slice(1) : parsed;
+    const invocation = rawInvocation;
     const aliasName = normalizeExecutableToken(invocation[0] ?? "");
     const lifecycleInvocation = classifyOpenClawArgv(["openclaw", ...invocation.slice(1)]);
     const aliasTarget = resolvePowerShellAliasTarget(aliasName, aliasTargets);

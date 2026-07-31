@@ -539,6 +539,45 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
       "alias oc='openclaw'; oc gateway restart",
       ["alias", "oc=openclaw", ";", "oc", "gateway", "restart"],
     ],
+    [
+      "if hash -p /usr/local/bin/openclaw oc; then :; fi; oc gateway restart",
+      [
+        "if",
+        "hash",
+        "-p",
+        "/usr/local/bin/openclaw",
+        "oc",
+        ";",
+        "then",
+        ":",
+        ";",
+        "fi",
+        ";",
+        "oc",
+        "gateway",
+        "restart",
+      ],
+    ],
+    [
+      "if builtin hash -p /usr/local/bin/openclaw oc; then :; fi; oc gateway restart",
+      [
+        "if",
+        "builtin",
+        "hash",
+        "-p",
+        "/usr/local/bin/openclaw",
+        "oc",
+        ";",
+        "then",
+        ":",
+        ";",
+        "fi",
+        ";",
+        "oc",
+        "gateway",
+        "restart",
+      ],
+    ],
   ] as Array<[string, string[]]>)("tracks POSIX command bindings: %s", (command, argv) => {
     expect(requiresApproval(command, argv)).toBe(true);
   });
@@ -624,6 +663,14 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
     const substitution = `sh -c 'f(){ echo "$(openclaw gateway restart)"; }'`;
     expect(
       requiresApproval(substitution, ["sh", "-c", `f(){ echo "$(openclaw gateway restart)"; }`]),
+    ).toBe(false);
+    const dormantBinding = "sh -c 'f(){ hash -p /usr/local/bin/openclaw oc; }; oc gateway restart'";
+    expect(
+      requiresApproval(dormantBinding, [
+        "sh",
+        "-c",
+        "f(){ hash -p /usr/local/bin/openclaw oc; }; oc gateway restart",
+      ]),
     ).toBe(false);
   });
 

@@ -279,6 +279,8 @@ describe("OpenClaw PowerShell lifecycle edges", () => {
   it.each([
     ["Set-Alias nx npx; nx openclaw gateway restart", ["nx", "openclaw", "gateway", "restart"]],
     ["Set-Alias zap Stop-Process; zap -Name OpenClaw", ["zap", "-Name", "OpenClaw"]],
+    ["& Set-Alias oc openclaw; oc gateway restart", ["oc", "gateway", "restart"]],
+    ["if ($true) { Set-Alias oc openclaw }; oc gateway restart", ["oc", "gateway", "restart"]],
     [
       "Set-Alias sp Start-Process; sp openclaw -ArgumentList gateway,restart",
       ["sp", "openclaw", "-ArgumentList", "gateway,restart"],

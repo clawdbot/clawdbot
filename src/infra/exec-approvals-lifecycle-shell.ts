@@ -131,6 +131,33 @@ function resolvePosixBindingArgv(
   return null;
 }
 
+function unwrapPosixBindingPrefixArgv(argv: string[]): string[] {
+  let current = stripLifecyclePosixAssignments(argv) ?? argv;
+  for (let depth = 0; depth < 8; depth += 1) {
+    const prefix = (current[0] ?? "").trim().toLowerCase();
+    if (!["builtin", "command"].includes(prefix)) {
+      return current;
+    }
+    let executableIndex = 1;
+    for (; executableIndex < current.length; executableIndex += 1) {
+      const option = (current[executableIndex] ?? "").trim().toLowerCase();
+      if (option === "--") {
+        executableIndex += 1;
+        break;
+      }
+      if (prefix === "command" && option === "-p") {
+        continue;
+      }
+      if (option.startsWith("-")) {
+        return [];
+      }
+      break;
+    }
+    current = current.slice(executableIndex);
+  }
+  return [];
+}
+
 /** Track POSIX alias and Bash hash bindings across compound command fragments. */
 export function posixCommandBindingRequiresApproval(
   command: string,
@@ -141,11 +168,13 @@ export function posixCommandBindingRequiresApproval(
   const unresolvedAliases = new Set<string>();
   const unresolvedHashes = new Set<string>();
   for (const fragment of splitLifecycleCommandText(
-    command,
+    lifecycleExecutableCommandText(command, "posix"),
     new Set([";", "|", "&", "\n", "\r"]),
     "posix",
   )) {
-    const argv = splitShellArgs(fragment.trim().replace(/^[({\s]+|[)}\s]+$/gu, ""));
+    const argv = unwrapPosixBindingPrefixArgv(
+      splitShellArgs(normalizeCompoundFragment(fragment, "posix")) ?? [],
+    );
     if (!argv?.length) {
       continue;
     }
