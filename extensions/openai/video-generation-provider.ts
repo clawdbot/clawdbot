@@ -64,6 +64,12 @@ type OpenAIVideoResponse = {
   } | null;
 };
 
+function readOpenAIVideoFailureMessage(payload: OpenAIVideoResponse): string | undefined {
+  return payload.status === "failed"
+    ? (normalizeOptionalString(payload.error?.message) ?? "OpenAI video generation failed")
+    : undefined;
+}
+
 function toBlobBytes(buffer: Buffer): ArrayBuffer {
   const arrayBuffer = new ArrayBuffer(buffer.byteLength);
   new Uint8Array(arrayBuffer).set(buffer);
@@ -168,10 +174,7 @@ async function pollOpenAIVideo(
     dispatcherPolicy: params.dispatcherPolicy,
     auditContext: "openai-video-status",
     isComplete: (payload) => payload.status === "completed",
-    getFailureMessage: (payload) =>
-      payload.status === "failed"
-        ? normalizeOptionalString(payload.error?.message) || "OpenAI video generation failed"
-        : undefined,
+    getFailureMessage: readOpenAIVideoFailureMessage,
   });
 }
 
@@ -386,7 +389,6 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
           : await (() => {
               const form = new FormData();
               form.set("prompt", req.prompt);
-              form.set("model", model);
               form.set("video", referenceAsset.file);
               const multipartHeaders = new Headers(headers);
               multipartHeaders.delete("Content-Type");
@@ -432,22 +434,29 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
           response,
           "OpenAI video generation failed",
         );
+        const failureMessage = readOpenAIVideoFailureMessage(submitted);
+        if (failureMessage) {
+          throw new Error(failureMessage);
+        }
         const videoId = normalizeOptionalString(submitted.id);
         if (!videoId) {
           throw new Error("OpenAI video generation response missing video id");
         }
-        const completed = await pollOpenAIVideo({
-          videoId,
-          headers,
-          timeoutMs: resolveProviderOperationTimeoutMs({
-            deadline,
-            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-          }),
-          baseUrl,
-          fetchFn,
-          allowPrivateNetwork,
-          dispatcherPolicy,
-        });
+        const completed =
+          submitted.status === "completed"
+            ? submitted
+            : await pollOpenAIVideo({
+                videoId,
+                headers,
+                timeoutMs: resolveProviderOperationTimeoutMs({
+                  deadline,
+                  defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+                }),
+                baseUrl,
+                fetchFn,
+                allowPrivateNetwork,
+                dispatcherPolicy,
+              });
         const video = await downloadOpenAIVideo({
           videoId,
           headers,

@@ -234,6 +234,67 @@ describe("openai video generation provider", () => {
     expect(result.metadata?.status).toBe("completed");
   });
 
+  it.each(["vid_failed", undefined])(
+    "surfaces an immediately failed OpenAI submission before polling or validating id (%s)",
+    async (videoId) => {
+      const release = vi.fn(async () => {});
+      postJsonRequestMock.mockResolvedValue({
+        response: streamedJsonResponse({
+          ...(videoId ? { id: videoId } : {}),
+          status: "failed",
+          error: { message: "OpenAI video generation was rejected" },
+        }),
+        release,
+      });
+
+      await expect(
+        buildOpenAIVideoGenerationProvider().generateVideo({
+          provider: "openai",
+          model: "sora-2",
+          prompt: "A scene that cannot be generated",
+          cfg: {},
+        }),
+      ).rejects.toThrow("OpenAI video generation was rejected");
+
+      expect(pollProviderOperationJsonMock).not.toHaveBeenCalled();
+      expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("downloads an immediately completed OpenAI submission without polling it again", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({
+        id: "vid_completed",
+        model: "sora-2",
+        status: "completed",
+        seconds: "4",
+        size: "720x1280",
+      }),
+      release,
+    });
+    fetchWithTimeoutMock.mockResolvedValueOnce({
+      headers: new Headers({ "content-type": "video/mp4" }),
+      arrayBuffer: async () => Buffer.from("completed-video"),
+    });
+
+    const result = await buildOpenAIVideoGenerationProvider().generateVideo({
+      provider: "openai",
+      model: "sora-2",
+      prompt: "A scene already generated",
+      cfg: {},
+    });
+
+    expect(pollProviderOperationJsonMock).not.toHaveBeenCalled();
+    expect(fetchWithTimeoutMock).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      model: "sora-2",
+      metadata: { seconds: "4", size: "720x1280", status: "completed", videoId: "vid_completed" },
+    });
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("rejects generated video downloads that exceed the configured media cap", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: streamedJsonResponse({
@@ -586,12 +647,61 @@ describe("openai video generation provider", () => {
     expect(createRequest.body).toBeInstanceOf(FormData);
     const form = createRequest.body as FormData;
     expect(form.get("prompt")).toBe("Remix this clip");
-    expect(form.get("model")).toBe("sora-2");
+    expect(form.get("model")).toBeNull();
     expect(form.get("video")).toBeInstanceOf(File);
     expect(form.get("input_reference")).toBeNull();
     expect(createRequest.timeoutMs).toBe(120000);
     expect(createRequest.fetchFn).toBe(fetch);
     expect(createRequest.allowPrivateNetwork).toBe(false);
+  });
+
+  it("surfaces an immediately failed OpenAI video edit without polling it", async () => {
+    const release = vi.fn(async () => {});
+    postMultipartRequestMock.mockResolvedValueOnce({
+      response: streamedJsonResponse({
+        id: "vid_edit_failed",
+        status: "failed",
+        error: { message: "OpenAI video edit was rejected" },
+      }),
+      release,
+    });
+
+    await expect(
+      buildOpenAIVideoGenerationProvider().generateVideo({
+        provider: "openai",
+        model: "sora-2",
+        prompt: "Remix this clip",
+        cfg: {},
+        inputVideos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+      }),
+    ).rejects.toThrow("OpenAI video edit was rejected");
+
+    expect(pollProviderOperationJsonMock).not.toHaveBeenCalled();
+    expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("downloads an immediately completed OpenAI video edit without polling it again", async () => {
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(
+        streamedJsonResponse({ id: "vid_edit_completed", model: "sora-2", status: "completed" }),
+      )
+      .mockResolvedValueOnce({
+        headers: new Headers({ "content-type": "video/mp4" }),
+        arrayBuffer: async () => Buffer.from("completed-edit"),
+      });
+
+    const result = await buildOpenAIVideoGenerationProvider().generateVideo({
+      provider: "openai",
+      model: "sora-2",
+      prompt: "Remix this clip",
+      cfg: {},
+      inputVideos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+    });
+
+    expect(pollProviderOperationJsonMock).not.toHaveBeenCalled();
+    expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(2);
+    expect(result.metadata).toMatchObject({ status: "completed", videoId: "vid_edit_completed" });
   });
 
   it("honors configured request allowPrivateNetwork for multipart video uploads", async () => {
