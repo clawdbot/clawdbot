@@ -91,7 +91,10 @@ import { createOpenClawTools, filterToolsByClientCaps } from "./openclaw-tools.j
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import type { SandboxContext } from "./sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
-import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
+import {
+  resolveReadOnlyWorkspaceSkillMounts,
+  type ReadOnlyWorkspaceSkillMount,
+} from "./sandbox/workspace-mounts.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import { createCodingTools, createReadTool } from "./sessions/index.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
@@ -131,6 +134,7 @@ type GuardContainerMount = {
 
 function readOnlySandboxReadMounts(
   sandbox: SandboxContext | null | undefined,
+  readOnlyWorkspaceSkillMounts: readonly ReadOnlyWorkspaceSkillMount[],
 ): GuardContainerMount[] | undefined {
   if (!sandbox) {
     return undefined;
@@ -144,13 +148,7 @@ function readOnlySandboxReadMounts(
   }
   if (sandbox.workspaceAccess === "rw") {
     mounts.push(
-      ...resolveReadOnlyWorkspaceSkillMounts({
-        workspaceDir: sandbox.workspaceDir,
-        agentWorkspaceDir: sandbox.agentWorkspaceDir,
-        skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
-        workdir: sandbox.containerWorkdir,
-        workspaceAccess: sandbox.workspaceAccess,
-      }).map((mount) => ({
+      ...readOnlyWorkspaceSkillMounts.map((mount) => ({
         containerRoot: mount.containerPath,
         hostRoot: mount.hostPath,
       })),
@@ -637,6 +635,18 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const includePluginTools = toolConstructionPlan.includePluginTools;
   const workspaceOnly = fsPolicy.workspaceOnly;
   const skillReadRoots = sandboxRoot ? undefined : resolveSkillReadRoots(options?.skillsSnapshot);
+  const needsReadOnlyWorkspaceSkillMounts =
+    includeShellTools || (includeBaseCodingTools && workspaceOnly);
+  const readOnlyWorkspaceSkillMounts =
+    sandbox && needsReadOnlyWorkspaceSkillMounts
+      ? resolveReadOnlyWorkspaceSkillMounts({
+          workspaceDir: sandbox.workspaceDir,
+          agentWorkspaceDir: sandbox.agentWorkspaceDir,
+          skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
+          workdir: sandbox.containerWorkdir,
+          workspaceAccess: sandbox.workspaceAccess,
+        })
+      : [];
   const applyPatchConfig = execConfig.applyPatch;
   // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
   // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
@@ -668,7 +678,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
           });
           const guarded = workspaceOnly
             ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
-                additionalContainerMounts: readOnlySandboxReadMounts(sandbox),
+                additionalContainerMounts: readOnlySandboxReadMounts(
+                  sandbox,
+                  readOnlyWorkspaceSkillMounts,
+                ),
                 containerWorkdir: sandbox.containerWorkdir,
               })
             : sandboxed;
@@ -789,6 +802,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
                 sandbox.backend,
               ),
               workdirRoots: sandbox.backend?.workdirRoots,
+              readOnlyWorkspaceSkillMounts,
               env: sandbox.backend?.env ?? sandbox.docker.env,
               buildExecSpec: sandbox.backend?.buildExecSpec.bind(sandbox.backend),
               finalizeExec: sandbox.backend?.finalizeExec?.bind(sandbox.backend),

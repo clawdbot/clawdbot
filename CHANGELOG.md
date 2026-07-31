@@ -58,6 +58,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Buzz plugin packaging:** keep the live QA runner on the shipped QA runner SDK surface and remove the obsolete package shrinkwrap so standalone npm and ClawHub package builds use current host exports and dependency resolutions. Thanks @shakkernerd.
 - **Control UI sharing connection isolation:** discard stale visibility and membership mutation results after switching gateways or accounts so previous-connection refreshes and errors cannot update the replacement connection. Fixes #116800. Thanks @shakkernerd.
 - **Control UI session refreshes:** preserve explicitly queued list filters and background hydration across later Gateway event invalidation, while keeping append pagination followed by a canonical refresh. Fixes #116697. Thanks @shakkernerd.
 - **Gateway device clock skew:** sign device proofs with the Gateway-issued challenge timestamp across TypeScript, Control UI, browser extension, Android, Apple, Linux, and watchOS clients so incorrect local clocks no longer block authentication, while retaining no-challenge compatibility for pre-challenge Control UI servers and older watch-node HTTP endpoints and keeping nonce binding and freshness checks enforced. Fixes #103455.

@@ -222,16 +222,10 @@ export function buildChangedCheckCrabboxArgs(argv = [], options = {}) {
   return [
     "scripts/crabbox-wrapper.mjs",
     "run",
-    "--provider",
-    "blacksmith-testbox",
-    "--blacksmith-org",
-    "openclaw",
-    "--blacksmith-workflow",
-    ".github/workflows/ci-check-testbox.yml",
-    "--blacksmith-job",
-    "check",
-    "--blacksmith-ref",
-    "main",
+    "--workload",
+    "ci-fast",
+    // Keep workload-routed calls provider-neutral. Blacksmith reads its workflow
+    // defaults from .crabbox.yaml; cloud fallbacks must not receive its flags.
     "--idle-timeout",
     "90m",
     "--ttl",
@@ -392,7 +386,7 @@ export function delegationFailedBeforeRunning(output) {
 }
 
 async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
-  console.error("[check:changed] delegating to Blacksmith Testbox via the Node wrapper.");
+  console.error("[check:changed] delegating through Crabbox workload routing.");
   let tail = "";
   const exitCode = await runManagedCommand({
     bin: "node",

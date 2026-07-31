@@ -2383,7 +2383,11 @@ describe("package artifact reuse", () => {
   it("finalizes dispatched Testbox delegation even when setup or the remote command fails", () => {
     const workflow = readFileSync(CI_CHECK_TESTBOX_WORKFLOW, "utf8");
     const checkTestboxJob = workflowJob(CI_CHECK_TESTBOX_WORKFLOW, "check");
+    const setupNodeStep = workflowStep(checkTestboxJob, "Setup Node environment");
     const runTestboxStep = workflowStep(checkTestboxJob, "Run Testbox");
+    const closeTestboxSshStep = workflowStep(checkTestboxJob, "Close Testbox SSH sessions");
+    const setupNodeWith = setupNodeStep.with ?? {};
+    const checkTestboxSteps = checkTestboxJob.steps ?? [];
     const runArmTestboxStep = workflowStep(
       workflowJob(CI_CHECK_ARM_TESTBOX_WORKFLOW, "check-arm"),
       "Run Testbox",
@@ -2397,14 +2401,30 @@ describe("package artifact reuse", () => {
       "Run Testbox",
     );
 
-    expect(workflow).toContain('PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"');
+    expect(workflow).not.toContain('PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"');
     expect(workflow).not.toContain("PNPM_CONFIG_MODULES_DIR");
     expect(workflow).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
+    expect(setupNodeWith["sticky-disk"]).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}",
+    );
+    expect(setupNodeWith["use-actions-cache"]).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && 'false' || 'true' }}",
+    );
     expect(checkTestboxJob["timeout-minutes"]).toBe(
       "${{ fromJSON(inputs.timeout_minutes || '120') }}",
     );
     expect(runTestboxStep.uses).toContain("useblacksmith/run-testbox@");
     expect(runTestboxStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
+    expect(closeTestboxSshStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
+    expect(closeTestboxSshStep.run).toContain(
+      `sudo sshd -T 2>/dev/null | awk '$1 == "port" { print $2; exit }'`,
+    );
+    expect(closeTestboxSshStep.run).toContain(
+      'ss -K state established \\\n  "( sport = :${runner_ssh_local_port} )"',
+    );
+    expect(checkTestboxSteps.indexOf(closeTestboxSshStep)).toBe(
+      checkTestboxSteps.indexOf(runTestboxStep) + 1,
+    );
     expect(runArmTestboxStep.if).toBe("always()");
     expect(runBuildArtifactsTestboxStep.if).toBe("always()");
     expect(runWindowsTestboxStep.if).toBe("always()");

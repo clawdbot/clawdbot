@@ -2065,6 +2065,70 @@ describe("official external plugin catalog", () => {
     expect(manifest?.contracts?.speechProviders).toEqual(["volcengine"]);
   });
 
+  it("lists Xiaomi's model, speech, and usage surfaces as one official external provider", () => {
+    const xiaomi = expectCatalogEntry("xiaomi");
+    const manifest = getOfficialExternalPluginCatalogManifest(xiaomi);
+
+    expect(resolveOfficialExternalPluginId(xiaomi)).toBe("xiaomi");
+    expect(getOfficialExternalPluginCatalogEntry("xiaomi-token-plan")).toBe(xiaomi);
+    expect(resolveOfficialExternalPluginInstall(xiaomi)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/xiaomi-provider",
+      npmSpec: "@openclaw/xiaomi-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(manifest?.providers?.map((provider) => provider.id)).toEqual([
+      "xiaomi",
+      "xiaomi-token-plan",
+    ]);
+    expect(manifest?.providers?.[0]?.authChoices?.map((choice) => choice.choiceId)).toEqual([
+      "xiaomi-api-key",
+    ]);
+    expect(manifest?.providers?.[1]?.authChoices?.map((choice) => choice.choiceId)).toEqual([
+      "xiaomi-token-plan-ams",
+      "xiaomi-token-plan-cn",
+      "xiaomi-token-plan-sgp",
+    ]);
+    expect(manifest?.contracts).toMatchObject({
+      speechProviders: ["xiaomi"],
+      usageProviders: ["xiaomi", "xiaomi-token-plan"],
+    });
+    expect(manifest?.providerEndpoints).toEqual([
+      {
+        endpointClass: "xiaomi-native",
+        hosts: [
+          "api.xiaomimimo.com",
+          "token-plan-ams.xiaomimimo.com",
+          "token-plan-cn.xiaomimimo.com",
+          "token-plan-sgp.xiaomimimo.com",
+        ],
+      },
+    ]);
+  });
+
+  it("lists BytePlus and its paired plan route as an official external provider", () => {
+    const byteplus = expectCatalogEntry("byteplus");
+    const manifest = getOfficialExternalPluginCatalogManifest(byteplus);
+
+    expect(getOfficialExternalPluginCatalogEntry("byteplus-plan")).toBe(byteplus);
+    expect(resolveOfficialExternalPluginInstall(byteplus)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/byteplus-provider",
+      npmSpec: "@openclaw/byteplus-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(manifest?.contracts?.videoGenerationProviders).toEqual(["byteplus"]);
+    expect(manifest?.providers?.[0]?.aliases).toEqual(["byteplus-plan"]);
+    expect(
+      resolveOfficialExternalProviderPluginIds({
+        providerIds: new Set(["byteplus-plan"]),
+      }),
+    ).toEqual(["byteplus"]);
+    expect(resolveOfficialExternalProviderPluginIdsForEnv({ BYTEPLUS_API_KEY: "key" })).toEqual([
+      "byteplus",
+    ]);
+  });
+
   it.each([
     ["teams-meetings", "@openclaw/teams-meetings", "teams_meetings", "teams"],
     ["zoom-meetings", "@openclaw/zoom-meetings", "zoom_meetings", "zoom"],
@@ -2117,9 +2181,9 @@ describe("official external plugin catalog", () => {
     expect(
       resolveOfficialExternalProviderContractPluginIds({
         contract: "speechProviders",
-        providerIds: new Set(["gradium", "inworld"]),
+        providerIds: new Set(["gradium", "inworld", "xiaomi"]),
       }),
-    ).toEqual(["gradium", "inworld"]);
+    ).toEqual(["gradium", "inworld", "xiaomi"]);
     expect(
       resolveOfficialExternalProviderContractPluginIds({
         contract: "webFetchProviders",
@@ -2188,6 +2252,8 @@ describe("official external plugin catalog", () => {
         VENICE_API_KEY: "venice-key",
         AI_GATEWAY_API_KEY: "gateway-key",
         VOYAGE_API_KEY: "voyage-key",
+        XIAOMI_API_KEY: "xiaomi-key",
+        XIAOMI_TOKEN_PLAN_API_KEY: "xiaomi-token-plan-key",
         ZAI_API_KEY: "zai-key",
       }),
     ).toEqual([
@@ -2211,6 +2277,7 @@ describe("official external plugin catalog", () => {
       "venice",
       "vercel-ai-gateway",
       "voyage",
+      "xiaomi",
       "zai",
     ]);
     expect(resolveOfficialExternalProviderPluginIdsForEnv({ GROQ_API_KEY: " " })).toEqual([]);

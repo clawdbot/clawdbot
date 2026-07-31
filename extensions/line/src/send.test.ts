@@ -149,8 +149,8 @@ describe("LINE send helpers", () => {
       hostname: "example.com",
       addresses: ["93.184.216.34"],
     });
-    pushMessageMock.mockResolvedValue({});
-    replyMessageMock.mockResolvedValue({});
+    pushMessageMock.mockResolvedValue({ sentMessages: [{ id: "push" }] });
+    replyMessageMock.mockResolvedValue({ sentMessages: [{ id: "reply" }] });
     showLoadingAnimationMock.mockResolvedValue({});
   });
 
@@ -445,6 +445,24 @@ describe("LINE send helpers", () => {
     });
   });
 
+  it("preserves every provider message id returned by a LINE push", async () => {
+    pushMessageMock.mockResolvedValueOnce({
+      sentMessages: [{ id: "613452345678901234" }, { id: "613452345678901235" }],
+    });
+
+    const result = await sendModule.pushMessagesLine(
+      "line:user:U123",
+      [
+        { type: "text", text: "first" },
+        { type: "text", text: "second" },
+      ],
+      { cfg: LINE_TEST_CFG },
+    );
+
+    expect(result.messageId).toBe("613452345678901234");
+    expect(result.receipt.platformMessageIds).toEqual(["613452345678901234", "613452345678901235"]);
+  });
+
   it("replies when reply token is provided", async () => {
     const result = await sendModule.sendMessageLine("line:group:C1", "Hello", {
       cfg: LINE_TEST_CFG,
@@ -505,6 +523,76 @@ describe("LINE send helpers", () => {
       },
     });
   });
+
+  it("preserves every provider message id returned by a LINE reply", async () => {
+    replyMessageMock.mockResolvedValueOnce({
+      sentMessages: [{ id: "713452345678901234" }, { id: "713452345678901235" }],
+    });
+
+    const result = await sendModule.sendMessageLine("line:group:C1", "Hello", {
+      cfg: LINE_TEST_CFG,
+      replyToken: "reply-token",
+      mediaUrl: "https://example.com/media.jpg",
+    });
+
+    expect(result.messageId).toBe("713452345678901234");
+    expect(result.receipt.platformMessageIds).toEqual(["713452345678901234", "713452345678901235"]);
+  });
+
+  it.each([
+    {
+      label: "push",
+      send: () => sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
+      provider: pushMessageMock,
+    },
+    {
+      label: "reply",
+      send: () =>
+        sendModule.sendMessageLine("U123", "Hello", {
+          cfg: LINE_TEST_CFG,
+          replyToken: "reply-token",
+        }),
+      provider: replyMessageMock,
+    },
+  ])(
+    "rejects a $label response that omits its provider message ids",
+    async ({ send, provider }) => {
+      provider.mockResolvedValueOnce({ sentMessages: [] });
+
+      await expect(send()).rejects.toThrow(/sent message id/i);
+      expect(recordChannelActivityMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      label: "push",
+      send: () =>
+        sendModule.pushMessagesLine("U123", [{ type: "text", text: "Hello" }], {
+          cfg: LINE_TEST_CFG,
+        }),
+      provider: pushMessageMock,
+    },
+    {
+      label: "reply",
+      send: () =>
+        sendModule.sendMessageLine("U123", "Hello", {
+          cfg: LINE_TEST_CFG,
+          replyToken: "reply-token",
+        }),
+      provider: replyMessageMock,
+    },
+  ])(
+    "rejects a partially invalid $label provider receipt without recording delivery",
+    async ({ send, provider }) => {
+      provider.mockResolvedValueOnce({
+        sentMessages: [{ id: "line-provider-delivered" }, { id: "   " }],
+      });
+
+      await expect(send()).rejects.toThrow(/sent message id/i);
+      expect(recordChannelActivityMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves literal internal-looking text in low-level sends", async () => {
     const text = "⚠️ 🛠️ `search repos (agent)` failed";

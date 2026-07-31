@@ -6,6 +6,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { isWellFormedApprovalId } from "../../packages/gateway-protocol/src/schema/approval-id.js";
 
+const PRESENTATION_FALLBACK_CONTINUATION = Symbol.for(
+  "openclaw.presentation.fallback-continuation",
+);
+
 export type InteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
 
 /** Visual tone for a portable message presentation. */
@@ -1103,7 +1107,16 @@ export function renderMessagePresentationFallbackText(params: {
   }
   for (const block of presentation.blocks) {
     if (block.type === "text" || block.type === "context") {
-      lines.push(block.text);
+      // Generated continuation blocks are bounded native fragments, not new paragraphs.
+      if (
+        Object.getOwnPropertyDescriptor(block, PRESENTATION_FALLBACK_CONTINUATION)?.value ===
+          true &&
+        lines.length
+      ) {
+        lines[lines.length - 1] += block.text;
+      } else {
+        lines.push(block.text);
+      }
       continue;
     }
     if (block.type === "buttons") {

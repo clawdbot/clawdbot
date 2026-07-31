@@ -165,12 +165,14 @@ describe("listPersistedBundledPluginLocationBridges", () => {
   });
 
   it.each([
+    ["byteplus", "@openclaw/byteplus-provider", true],
     ["duckduckgo", "@openclaw/duckduckgo-plugin", false],
     ["synthetic", "@openclaw/synthetic-provider", true],
     ["teams-meetings", "@openclaw/teams-meetings", true],
     ["volcengine", "@openclaw/volcengine-provider", true],
     ["voyage", "@openclaw/voyage-provider", true],
     ["vydra", "@openclaw/vydra-provider", true],
+    ["xiaomi", "@openclaw/xiaomi-provider", true],
     ["zoom-meetings", "@openclaw/zoom-meetings", true],
   ] as const)(
     "externalizes the shipped bundled %s plugin using official install metadata",

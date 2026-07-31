@@ -1,13 +1,13 @@
 import { Command } from "commander";
-import type { LiveTransportQaSuiteCommandOptions } from "openclaw/plugin-sdk/qa-runtime";
+import type { LiveTransportQaSuiteCommandOptions } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runLiveTransportQaSuiteCommand = vi.hoisted(() =>
   vi.fn<(params: LiveTransportQaSuiteCommandOptions) => Promise<void>>(async () => {}),
 );
 
-vi.mock("openclaw/plugin-sdk/qa-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/qa-runtime")>()),
+vi.mock("openclaw/plugin-sdk/qa-runner-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/qa-runner-runtime")>()),
   runLiveTransportQaSuiteCommand,
 }));
 
