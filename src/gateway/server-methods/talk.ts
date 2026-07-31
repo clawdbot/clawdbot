@@ -338,6 +338,9 @@ function buildTalkCatalog(config: OpenClawConfig) {
         if (provider.defaultModel) {
           entry.defaultModel = provider.defaultModel;
         }
+        if (provider.models?.length) {
+          entry.models = [...provider.models];
+        }
         if (provider.aliases?.length) {
           entry.aliases = [...provider.aliases];
         }

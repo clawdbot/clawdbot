@@ -338,6 +338,7 @@ describe("talk.catalog handler", () => {
         label: "OpenAI Realtime Transcription",
         aliases: ["openai-realtime"],
         defaultModel: "gpt-4o-transcribe",
+        models: ["gpt-4o-transcribe", "gpt-4o-mini-transcribe"],
         resolveConfig: vi.fn(({ rawConfig }) => rawConfig),
         isConfigured: vi.fn(({ providerConfig }) => providerConfig.apiKey === "stt-key"),
       } as never,
@@ -456,6 +457,7 @@ describe("talk.catalog handler", () => {
               transports: ["gateway-relay"],
               brains: ["none"],
               defaultModel: "gpt-4o-transcribe",
+              models: ["gpt-4o-transcribe", "gpt-4o-mini-transcribe"],
             },
             {
               id: "deepgram",
@@ -567,6 +569,46 @@ describe("talk.catalog handler", () => {
         surface: "browser-session",
       }),
     );
+  });
+
+  it("forwards transcription provider models into the catalog", async () => {
+    mocks.listRealtimeTranscriptionProviders.mockReturnValue([
+      {
+        id: "deepgram",
+        label: "Deepgram Realtime Transcription",
+        defaultModel: "nova-3",
+        models: ["nova-3", "nova-3-medical", "enhanced"],
+        resolveConfig: vi.fn(({ rawConfig }: { rawConfig: Record<string, unknown> }) => rawConfig),
+        isConfigured: vi.fn(() => true),
+      } as never,
+    ]);
+    const respond = vi.fn();
+
+    await callTalkHandler("talk.catalog", {
+      params: {},
+      client: { connect: { scopes: ["operator.read"] } },
+      respond,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              transcription: {
+                provider: "deepgram",
+                providers: { deepgram: { apiKey: "dg-key" } },
+              },
+            },
+            plugins: { entries: {} },
+          }) as OpenClawConfig,
+      },
+    });
+
+    const catalog = expectRespondOk(respond) as {
+      transcription: { providers: Array<Record<string, unknown>> };
+    };
+    expect(catalog.transcription.providers[0]).toMatchObject({
+      defaultModel: "nova-3",
+      models: ["nova-3", "nova-3-medical", "enhanced"],
+    });
   });
 
   it("uses the bridge surface for gateway-relay catalog resolution", async () => {
