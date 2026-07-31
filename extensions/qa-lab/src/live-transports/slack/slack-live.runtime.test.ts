@@ -166,13 +166,17 @@ describe("Slack live QA runtime helpers", () => {
     ).toEqual(["slack-mpim-app-mention-dedupe"]);
   });
 
-  it("enables group DMs for the MPIM app-mention scenario", () => {
+  it("enables group DMs and threaded replies for the MPIM app-mention scenario", () => {
+    const scenario = testing.findScenario(["slack-mpim-app-mention-dedupe"])[0];
+    if (!scenario) {
+      throw new Error("missing Slack MPIM app-mention scenario");
+    }
     const cfg = testing.buildSlackQaConfig(
       {},
       {
         channelId: "C123456789",
         driverBotUserId: "U999999999",
-        overrides: { groupDmEnabled: true },
+        overrides: scenario.configOverrides,
         sutAccountId: "sut",
         sutAppToken: "xapp-sut",
         sutBotToken: "xoxb-sut",
@@ -183,6 +187,7 @@ describe("Slack live QA runtime helpers", () => {
       enabled: true,
       groupEnabled: true,
     });
+    expect(cfg.channels?.slack?.accounts?.sut?.replyToMode).toBe("all");
   });
 
   it("surfaces MPIM cleanup failures and retains ownership for a retry", async () => {
@@ -225,6 +230,144 @@ describe("Slack live QA runtime helpers", () => {
     expect(close).toHaveBeenNthCalledWith(1, { channel: "C_MPIM" });
     expect(close).toHaveBeenNthCalledWith(2, { channel: "C_MPIM" });
     expect(close).toHaveBeenNthCalledWith(3, { channel: "C_MPIM" });
+  });
+
+  it("keeps the MPIM recall turn in the native thread", async () => {
+    const run = testing.findScenario(["slack-mpim-app-mention-dedupe"])[0]?.buildRun("U_SUT");
+    if (
+      !run ||
+      run.kind === "approval" ||
+      run.kind === "codex-approval" ||
+      run.kind === "direct-transport" ||
+      !run.afterReply
+    ) {
+      throw new Error("expected Slack MPIM message scenario with a recall turn");
+    }
+    const seedMarker = /SLACK_QA_MPIM_SEED_[A-Z0-9]+/u.exec(run.input)?.[0];
+    if (!seedMarker) {
+      throw new Error("missing Slack MPIM seed marker");
+    }
+    expect(run.input).toContain(
+      `Reply with only a marker in this exact format: ${seedMarker}_BOT_<NONCE>.`,
+    );
+    expect(run.input).toContain("Replace <NONCE> with 8 to 32 new uppercase letters or digits.");
+    const botReplyMarker = `${seedMarker}_BOT_TESTNONCE`;
+    const recallMarker = seedMarker.replace("SEED", "RECALL");
+    const expectedRecallMarker = `${recallMarker}_TESTNONCE`;
+    const postMessage = vi.fn(async (_request: { text?: string }) => ({
+      channel: "C_MPIM",
+      ts: "2.000000",
+    }));
+    const history = vi.fn(async () => ({ messages: [] }));
+    const replies = vi.fn(async () => ({
+      messages: [
+        {
+          bot_id: "B_SUT",
+          text: expectedRecallMarker,
+          thread_ts: "1.000000",
+          ts: "3.000000",
+          user: "U_SUT",
+        },
+      ],
+    }));
+
+    await expect(
+      run.afterReply(
+        {
+          text: botReplyMarker,
+          thread_ts: "1.000000",
+          ts: "1.500000",
+          user: "U_SUT",
+        },
+        {
+          channelId: "C_MPIM",
+          driverClient: { chat: { postMessage } },
+          sentTs: "1.000000",
+          sutIdentity: { botId: "B_SUT", userId: "U_SUT" },
+          sutReadClient: { conversations: { history, replies } },
+        } as never,
+      ),
+    ).resolves.toContain("recovered the prior bot reply");
+
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "C_MPIM",
+        thread_ts: "1.000000",
+      }),
+    );
+    const recallText = postMessage.mock.calls[0]?.[0]?.text;
+    expect(recallText).toContain(`previous reply beginning with ${seedMarker}_BOT_`);
+    expect(recallText).toContain(`exact format: ${recallMarker}_<NONCE>`);
+    expect(recallText).not.toContain(botReplyMarker);
+    expect(recallText).not.toContain("TESTNONCE");
+  });
+
+  it("rejects an MPIM seed reply without text before sending the recall turn", async () => {
+    const run = testing.findScenario(["slack-mpim-app-mention-dedupe"])[0]?.buildRun("U_SUT");
+    if (
+      !run ||
+      run.kind === "approval" ||
+      run.kind === "codex-approval" ||
+      run.kind === "direct-transport" ||
+      !run.afterReply
+    ) {
+      throw new Error("expected Slack MPIM message scenario with a recall turn");
+    }
+    const postMessage = vi.fn();
+
+    await expect(
+      run.afterReply(
+        {
+          thread_ts: "1.000000",
+          ts: "1.500000",
+          user: "U_SUT",
+        },
+        {
+          channelId: "C_MPIM",
+          driverClient: { chat: { postMessage } },
+          sentTs: "1.000000",
+          sutIdentity: { botId: "B_SUT", userId: "U_SUT" },
+          sutReadClient: { conversations: {} },
+        } as never,
+      ),
+    ).rejects.toThrow("MPIM seed reply did not contain the provider-generated bot nonce");
+    expect(postMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects an MPIM seed reply outside the native thread", async () => {
+    const run = testing.findScenario(["slack-mpim-app-mention-dedupe"])[0]?.buildRun("U_SUT");
+    if (
+      !run ||
+      run.kind === "approval" ||
+      run.kind === "codex-approval" ||
+      run.kind === "direct-transport" ||
+      !run.afterReply
+    ) {
+      throw new Error("expected Slack MPIM message scenario with a recall turn");
+    }
+    const seedMarker = /SLACK_QA_MPIM_SEED_[A-Z0-9]+/u.exec(run.input)?.[0];
+    if (!seedMarker) {
+      throw new Error("missing Slack MPIM seed marker");
+    }
+    const postMessage = vi.fn();
+
+    await expect(
+      run.afterReply(
+        {
+          text: `${seedMarker}_BOT_TESTNONCE`,
+          ts: "1.500000",
+          user: "U_SUT",
+        },
+        {
+          channelId: "C_MPIM",
+          driverClient: { chat: { postMessage } },
+          sentTs: "1.000000",
+          sutIdentity: { botId: "B_SUT", userId: "U_SUT" },
+          sutReadClient: { conversations: {} },
+        } as never,
+      ),
+    ).rejects.toThrow("MPIM seed reply escaped the native Slack thread");
+    expect(postMessage).not.toHaveBeenCalled();
   });
 
   it("selects native scenarios by explicit id", () => {
