@@ -4,13 +4,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { consumePendingToolMediaIntoReply } from "../../agents/embedded-agent-subscribe.handlers.messages.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { createManagedOutgoingImageBlocks } from "../managed-image-attachments.js";
+import { createManagedOutgoingMediaBlocks as createManagedOutgoingImageBlocks } from "../managed-image-attachments.js";
+import { buildAssistantDisplayContentFromReplyPayloads } from "./chat-assistant-content.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
 
 const PNG_BYTES = Buffer.from(
@@ -215,6 +217,159 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(payload?.trustedLocalMedia).toBe(true);
     expect(payload?.audioAsVoice).toBe(true);
     await expectOutboundMediaMissing(stateDir);
+  });
+
+  it.each([
+    {
+      kind: "audio" as const,
+      fileName: "generated-theme.mp3",
+      bytes: Buffer.from([0xff, 0xfb, 0x90, 0x00]),
+      mimeType: "audio/mpeg",
+    },
+    {
+      kind: "video" as const,
+      fileName: "generated-clip.mp4",
+      bytes: Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]),
+      mimeType: "video/mp4",
+    },
+  ])(
+    "projects generated $kind into a managed history block",
+    async ({ kind, fileName, bytes, mimeType }) => {
+      const { workspaceDir } = createMediaTestContext({ allowRead: true });
+      const sourcePath = path.join(workspaceDir, fileName);
+      await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+      await fs.writeFile(sourcePath, bytes);
+
+      const content = await buildAssistantDisplayContentFromReplyPayloads({
+        sessionKey: TEST_SESSION_KEY,
+        agentId: "main",
+        payloads: [
+          {
+            text: "Generated media",
+            mediaUrls: [sourcePath],
+            attachments: [{ type: kind, path: sourcePath, name: fileName, durationMs: 1_500 }],
+            trustedLocalMedia: true,
+          },
+        ],
+        managedMediaLocalRoots: [workspaceDir],
+      });
+
+      expect(content).toEqual([
+        { type: "text", text: "Generated media" },
+        expect.objectContaining({
+          type: kind,
+          artifactId: expect.stringMatching(/^artifact_managed_media_/u),
+          fileName,
+          mimeType,
+          durationMs: 1_500,
+        }),
+      ]);
+      expect(JSON.stringify(content)).not.toContain(sourcePath);
+    },
+  );
+
+  it("keeps attachment metadata aligned while deduplicating generated media", async () => {
+    const { workspaceDir } = createMediaTestContext({ allowRead: true });
+    const firstPath = path.join(workspaceDir, "first.mp3");
+    const secondPath = path.join(workspaceDir, "second.mp3");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(firstPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    await fs.writeFile(secondPath, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
+
+    const content = await buildAssistantDisplayContentFromReplyPayloads({
+      sessionKey: TEST_SESSION_KEY,
+      agentId: "main",
+      payloads: [
+        {
+          mediaUrl: secondPath,
+          mediaUrls: [firstPath, firstPath],
+          attachments: [
+            { type: "audio", path: firstPath, name: "first.mp3", durationMs: 1_000 },
+            { type: "audio", path: firstPath, name: "wrong.mp3", durationMs: 9_999 },
+            { type: "audio", name: "second.mp3", durationMs: 2_000 },
+          ],
+          trustedLocalMedia: true,
+        },
+      ],
+      managedMediaLocalRoots: [workspaceDir],
+    });
+
+    expect(content).toEqual([
+      expect.objectContaining({ type: "audio", fileName: "first.mp3", durationMs: 1_000 }),
+      expect.objectContaining({ type: "audio", fileName: "second.mp3", durationMs: 2_000 }),
+    ]);
+  });
+
+  it("keeps normalized MEDIA directive URLs when projecting history", async () => {
+    const { workspaceDir } = createMediaTestContext({ allowRead: true });
+    const audioPath = path.join(workspaceDir, "directive.mp3");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+
+    const content = await buildAssistantDisplayContentFromReplyPayloads({
+      sessionKey: TEST_SESSION_KEY,
+      agentId: "main",
+      payloads: [{ text: `MEDIA:${audioPath}`, trustedLocalMedia: true }],
+      managedMediaLocalRoots: [workspaceDir],
+    });
+
+    expect(content).toEqual([expect.objectContaining({ type: "audio", mimeType: "audio/mpeg" })]);
+  });
+
+  it("splits a mixed pending batch so only trusted local media reaches managed history", async () => {
+    const { workspaceDir } = createMediaTestContext({ allowRead: true });
+    const trustedPath = path.join(workspaceDir, "trusted.mp3");
+    const untrustedPath = path.join(workspaceDir, "untrusted.mp3");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(trustedPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    await fs.writeFile(untrustedPath, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
+    const payload = consumePendingToolMediaIntoReply(
+      {
+        pendingToolMediaUrls: [trustedPath, untrustedPath],
+        pendingToolMediaTrustByUrl: new Map([
+          [trustedPath, true],
+          [untrustedPath, false],
+        ]),
+        pendingToolAudioAsVoice: false,
+      },
+      {},
+    );
+
+    const content = await buildAssistantDisplayContentFromReplyPayloads({
+      sessionKey: TEST_SESSION_KEY,
+      agentId: "main",
+      payloads: [payload],
+      managedMediaLocalRoots: [workspaceDir],
+    });
+
+    expect(content).toEqual([expect.objectContaining({ type: "audio", mimeType: "audio/mpeg" })]);
+  });
+
+  it("preserves media order across interleaved trust classes", async () => {
+    const { workspaceDir } = createMediaTestContext({ allowRead: true });
+    const firstPath = path.join(workspaceDir, "first.mp3");
+    const thirdPath = path.join(workspaceDir, "third.mp3");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(firstPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    await fs.writeFile(thirdPath, Buffer.from([0xff, 0xfb, 0x90, 0x01]));
+
+    const content = await buildAssistantDisplayContentFromReplyPayloads({
+      sessionKey: TEST_SESSION_KEY,
+      agentId: "main",
+      payloads: [
+        {
+          mediaUrls: [firstPath, dataImageUrl(), thirdPath],
+          attachments: [
+            { type: "audio", path: firstPath, trustedLocalMedia: true },
+            { type: "image" },
+            { type: "audio", path: thirdPath, trustedLocalMedia: true },
+          ],
+        },
+      ],
+      managedMediaLocalRoots: [workspaceDir],
+    });
+
+    expect(content?.map((block) => block.type)).toEqual(["audio", "image", "audio"]);
   });
 
   it("does not preserve untrusted local audio paths before display normalization", async () => {

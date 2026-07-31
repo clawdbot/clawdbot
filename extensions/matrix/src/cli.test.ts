@@ -36,10 +36,12 @@ const consoleLogMock = vi.fn();
 const consoleErrorMock = vi.fn();
 const stdoutWriteMock = vi.fn();
 
-function mockRecoveryKeyStdin(value: string): void {
+function mockRecoveryKeyStdin(...values: string[]): void {
   vi.spyOn(process.stdin, Symbol.asyncIterator).mockReturnValue(
     (async function* (): AsyncGenerator<Buffer, undefined, unknown> {
-      yield Buffer.from(value);
+      for (const value of values) {
+        yield Buffer.from(value);
+      }
       return undefined;
     })(),
   );
@@ -837,6 +839,33 @@ describe("matrix CLI verification commands", () => {
     expectRecordFields(mockCallArg(restoreMatrixRoomKeyBackupMock), {
       recoveryKey: "stdin-recovery-key",
     });
+  });
+
+  it("rejects oversized recovery key stdin before backup restore", async () => {
+    mockRecoveryKeyStdin("x".repeat(1024 * 1024), "x");
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "verify", "backup", "restore", "--recovery-key-stdin"], {
+      from: "user",
+    });
+
+    expect(process.exitCode).toBe(1);
+    expect(consoleErrorMock).toHaveBeenCalledWith(
+      "Backup restore failed: Matrix recovery key stdin exceeds 1048576 bytes.",
+    );
+    expect(restoreMatrixRoomKeyBackupMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves a multibyte recovery key at the stdin byte limit", async () => {
+    const recoveryKey = "é".repeat((1024 * 1024) / 2);
+    mockRecoveryKeyStdin(recoveryKey);
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "verify", "backup", "restore", "--recovery-key-stdin"], {
+      from: "user",
+    });
+
+    expectRecordFields(mockCallArg(restoreMatrixRoomKeyBackupMock), { recoveryKey });
   });
 
   it("sets non-zero exit code for backup reset failures in JSON mode", async () => {

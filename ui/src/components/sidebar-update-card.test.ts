@@ -66,12 +66,31 @@ describe("SidebarUpdateCard", () => {
 
     const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
     expect(element.querySelector(".sidebar-update-card")?.getAttribute("role")).toBe("status");
-    expect(action?.textContent).toContain("Update Gateway");
-    expect(action?.textContent).toContain("v2.0.0");
+    expect(element.querySelector(".sidebar-update-card__text")?.textContent).toBe(
+      "Update Gateway · v2.0.0",
+    );
+    expect(element.querySelector(".sidebar-update-card__copy")).toBeNull();
+    expect(element.querySelector(".sidebar-update-card__subtitle")).toBeNull();
+    expect(element.querySelector(".sidebar-update-card__arrow")).toBeNull();
     action?.click();
 
     expect(onUpdate).toHaveBeenCalledOnce();
   });
+
+  it.each(["2026.7.2", "2026.7.2-beta.5"])(
+    "identifies a beta update when its available version is %s",
+    async (latestVersion) => {
+      const element = await mount({
+        currentVersion: "2026.7.1-2",
+        latestVersion,
+        channel: "beta",
+      });
+
+      expect(element.querySelector(".sidebar-update-card__text")?.textContent).toBe(
+        `Update Gateway · v${latestVersion} (beta)`,
+      );
+    },
+  );
 
   it.each([null, { currentVersion: "2.0.0", latestVersion: "2.0.0", channel: "stable" }] as const)(
     "renders nothing when no newer update is available",

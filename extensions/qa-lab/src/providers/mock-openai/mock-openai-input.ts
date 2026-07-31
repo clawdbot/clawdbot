@@ -1,11 +1,9 @@
 // QA Lab mock provider input and tool-output extraction.
-import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   type ResponsesInputItem,
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
   QA_WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER_RE,
-  QA_WHATSAPP_PENDING_HISTORY_STRUCTURED_LABEL,
   QA_WHATSAPP_BROADCAST_PROMPT_RE,
   QA_WHATSAPP_RUNTIME_AGENT_RE,
   QA_WHATSAPP_ACTIVATION_ALWAYS_MARKER_RE,
@@ -26,6 +24,21 @@ export function extractLastUserText(input: ResponsesInputItem[]) {
   return "";
 }
 
+export function extractLastMatchingUserTurn(input: ResponsesInputItem[], pattern: RegExp) {
+  const matcher = new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ""));
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    const item = input[index];
+    if (item?.role !== "user" || !Array.isArray(item.content)) {
+      continue;
+    }
+    const text = extractInputText(item.content);
+    if (text && !isInternalRuntimeContextCarrierText(text) && matcher.test(text)) {
+      return { index, text };
+    }
+  }
+  return null;
+}
+
 function findLastUserIndex(input: ResponsesInputItem[]) {
   return input.findLastIndex(
     (item) =>
@@ -43,7 +56,7 @@ function isInternalRuntimeContextCarrierText(text: string) {
   );
 }
 
-function isToolOutputContinuationText(text: string) {
+function isContinuationUserText(text: string) {
   const trimmed = text.trim();
   if (!trimmed) {
     return false;
@@ -102,15 +115,19 @@ function stringifyFunctionCallOutput(output: unknown): string {
   return "";
 }
 
+function isResponsesToolCallOutput(item: ResponsesInputItem) {
+  return item.type === "function_call_output" || item.type === "custom_tool_call_output";
+}
+
 function extractFunctionCallOutputText(item: ResponsesInputItem) {
-  if (item.type !== "function_call_output") {
+  if (!isResponsesToolCallOutput(item)) {
     return "";
   }
   return stringifyFunctionCallOutput(item.output);
 }
 
 function extractFunctionCallOutputCallId(item: ResponsesInputItem) {
-  if (item.type !== "function_call_output") {
+  if (!isResponsesToolCallOutput(item)) {
     return "";
   }
   const record = item as {
@@ -126,7 +143,7 @@ function extractFunctionCallOutputCallId(item: ResponsesInputItem) {
 }
 
 function functionCallOutputIsStructuredError(item: ResponsesInputItem) {
-  if (item.type !== "function_call_output") {
+  if (!isResponsesToolCallOutput(item)) {
     return false;
   }
   return item.is_error === true || item.isError === true;
@@ -150,7 +167,7 @@ export function extractToolOutput(input: ResponsesInputItem[]) {
         .filter(Boolean);
       if (
         laterUserTexts.length > 0 &&
-        laterUserTexts.every((text) => isToolOutputContinuationText(text))
+        laterUserTexts.every((text) => isContinuationUserText(text))
       ) {
         return output;
       }
@@ -178,7 +195,7 @@ export function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
         .filter(Boolean);
       if (
         laterUserTexts.length > 0 &&
-        laterUserTexts.every((text) => isToolOutputContinuationText(text))
+        laterUserTexts.every((text) => isContinuationUserText(text))
       ) {
         return functionCallOutputIsStructuredError(candidateItem);
       }
@@ -205,7 +222,7 @@ export function extractToolOutputCallId(input: ResponsesInputItem[]) {
         .filter(Boolean);
       if (
         laterUserTexts.length > 0 &&
-        laterUserTexts.every((text) => isToolOutputContinuationText(text))
+        laterUserTexts.every((text) => isContinuationUserText(text))
       ) {
         return extractFunctionCallOutputCallId(candidateItem);
       }
@@ -274,27 +291,6 @@ export function extractAllUserTexts(input: ResponsesInputItem[]) {
   return texts;
 }
 
-export function extractSystemInputText(input: ResponsesInputItem[]) {
-  const texts: string[] = [];
-  for (const item of input) {
-    if (item.role !== "system") {
-      continue;
-    }
-    if (typeof item.content === "string" && item.content.trim()) {
-      texts.push(item.content.trim());
-      continue;
-    }
-    if (!Array.isArray(item.content)) {
-      continue;
-    }
-    const text = extractInputText(item.content);
-    if (text) {
-      texts.push(text);
-    }
-  }
-  return texts.join("\n");
-}
-
 export function extractAllInputTexts(input: ResponsesInputItem[]) {
   const texts: string[] = [];
   for (const item of input) {
@@ -329,14 +325,15 @@ export function extractAllRequestTexts(input: ResponsesInputItem[], body: Record
   return texts.join("\n");
 }
 
-export function buildWhatsAppPendingHistoryReply(allInputText: string) {
-  const triggerMatch = QA_WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER_RE.exec(allInputText);
+export function buildWhatsAppPendingHistoryReply(prompt: string, input: ResponsesInputItem[]) {
+  const triggerMatch = QA_WHATSAPP_PENDING_HISTORY_TRIGGER_MARKER_RE.exec(prompt);
   if (!triggerMatch?.[1]) {
     return undefined;
   }
   const suffix = triggerMatch[1];
-  const beforeTrigger = allInputText.slice(0, triggerMatch.index);
-  const priorGroupContext = extractStructuredWhatsAppPendingHistoryContext(beforeTrigger);
+  // Pending history is injected as an internal runtime carrier, separate from the current prompt.
+  // Restricting proof to those carriers prevents current-message marker text from satisfying QA.
+  const priorGroupContext = extractWhatsAppPendingHistoryRuntimeContext(input);
   const quietMarkerPattern = new RegExp(`\\bWHATSAPP_QA_PENDING_HISTORY_QUIET_${suffix}\\b`, "u");
   const contextSentinelPattern = new RegExp(
     `\\bWHATSAPP_QA_PENDING_HISTORY_CONTEXT_ONLY_${suffix}\\b`,
@@ -351,12 +348,13 @@ export function buildWhatsAppPendingHistoryReply(allInputText: string) {
   return `WHATSAPP_QA_PENDING_HISTORY_OK_${suffix}`;
 }
 
-function extractStructuredWhatsAppPendingHistoryContext(beforeTrigger: string) {
-  const blockRe = new RegExp(
-    `${escapeRegExp(QA_WHATSAPP_PENDING_HISTORY_STRUCTURED_LABEL)}\\n((?:(?!\\n\\n)[\\s\\S])+)\\n\\n`,
-    "gu",
-  );
-  return Array.from(beforeTrigger.matchAll(blockRe), (match) => match[1]?.trim())
+function extractWhatsAppPendingHistoryRuntimeContext(input: ResponsesInputItem[]) {
+  return input
+    .filter((item) => item.role === "user" && Array.isArray(item.content))
+    .map((item) => {
+      const text = extractInputText(item.content as unknown[]);
+      return isInternalRuntimeContextCarrierText(text) ? text : undefined;
+    })
     .filter((block): block is string => Boolean(block))
     .join("\n");
 }

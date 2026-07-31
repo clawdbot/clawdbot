@@ -7,6 +7,7 @@ let findLatestIMessageEntryForChat: ReplyCacheModule["findLatestIMessageEntryFor
 let isIMessageCurrentMessageInChat: ReplyCacheModule["isIMessageCurrentMessageInChat"];
 let isKnownFromMeIMessageMessageId: ReplyCacheModule["isKnownFromMeIMessageMessageId"];
 let rememberIMessageReplyCache: ReplyCacheModule["rememberIMessageReplyCache"];
+let resolveIMessageCachedResourceBinding: ReplyCacheModule["resolveIMessageCachedResourceBinding"];
 let resolveIMessageMessageId: ReplyCacheModule["resolveIMessageMessageId"];
 
 async function loadReplyCache(options?: { preservePersistentState?: boolean }): Promise<void> {
@@ -15,6 +16,7 @@ async function loadReplyCache(options?: { preservePersistentState?: boolean }): 
     isIMessageCurrentMessageInChat,
     isKnownFromMeIMessageMessageId,
     rememberIMessageReplyCache,
+    resolveIMessageCachedResourceBinding,
     resolveIMessageMessageId,
   } = await loadFreshIMessageReplyCacheForTest(options));
 }
@@ -78,7 +80,16 @@ describe("imessage short message id resolution", () => {
         requireKnownShortId: true,
         chatContext: { chatGuid: "iMessage;+;other" },
       }),
-    ).toThrow("belongs to a different chat");
+    ).toThrow("MessageSidFull from another chat is rejected");
+  });
+
+  it("recommends the full id when a short id has expired in the current chat", () => {
+    expect(() =>
+      resolveIMessageMessageId("9999", {
+        requireKnownShortId: true,
+        chatContext: { chatGuid: "iMessage;+;chat0000" },
+      }),
+    ).toThrow("is no longer available. Use MessageSidFull");
   });
 
   it("guards full guid reuse across chats when cached", () => {
@@ -393,6 +404,55 @@ describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
 });
 
 describe("current-message chat binding", () => {
+  it("preserves concrete service identity while allowing trusted any aliases", () => {
+    rememberIMessageReplyCache({
+      accountId: "work",
+      messageId: "sms-guid",
+      chatGuid: "SMS;-;+12069106512",
+      chatIdentifier: "+12069106512",
+      timestamp: Date.now(),
+    });
+    rememberIMessageReplyCache({
+      accountId: "work",
+      messageId: "any-guid",
+      chatGuid: "any;-;+12069106512",
+      chatIdentifier: "+12069106512",
+      timestamp: Date.now(),
+    });
+
+    expect(
+      resolveIMessageCachedResourceBinding("sms-guid", {
+        accountId: "work",
+        chatIdentifier: "iMessage;-;+12069106512",
+      }),
+    ).toBe("mismatch");
+    expect(
+      resolveIMessageCachedResourceBinding("any-guid", {
+        accountId: "work",
+        chatIdentifier: "iMessage;-;+12069106512",
+      }),
+    ).toBe("match");
+  });
+
+  it("treats expired entries as unknown before account or chat mismatches", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-08T00:00:00Z"));
+    rememberIMessageReplyCache({
+      accountId: "work",
+      messageId: "expired-guid",
+      chatId: 42,
+      timestamp: Date.now(),
+    });
+    vi.setSystemTime(new Date("2026-05-08T07:00:00Z"));
+
+    expect(
+      resolveIMessageCachedResourceBinding("expired-guid", {
+        accountId: "other",
+        chatId: 99,
+      }),
+    ).toBe("unknown");
+  });
+
   it.each([{ chatGuid: "any;-;+12069106512" }, { chatIdentifier: "+12069106512" }, { chatId: 42 }])(
     "matches a trusted current message through $chatGuid$chatIdentifier$chatId",
     (chatContext) => {

@@ -11,6 +11,7 @@ import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.uppercaseFirstGraphemeOrNull
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -85,7 +86,7 @@ internal fun ProvidersModelsScreen(
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-              ProviderHeaderIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back"), onClick = onBack)
+              ProviderHeaderIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back"), outlined = true, onClick = onBack)
             }
             Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
               Text(text = nativeString("Providers & Models"), style = ClawTheme.type.display.copy(fontSize = 14.8.sp, lineHeight = 18.sp), color = ClawTheme.colors.text, maxLines = 1)
@@ -417,7 +418,7 @@ private fun providerInitials(value: String): String =
     .split(' ', '-', '_')
     .filter { it.isNotBlank() }
     .take(2)
-    .mapNotNull { it.firstOrNull()?.uppercaseChar()?.toString() }
+    .mapNotNull { it.uppercaseFirstGraphemeOrNull() }
     .joinToString("")
     .ifBlank { "AI" }
 

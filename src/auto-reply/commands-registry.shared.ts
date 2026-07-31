@@ -251,6 +251,23 @@ export function buildBuiltinChatCommands(
       ],
     }),
     defineChatCommand({
+      key: "loop",
+      nativeName: "loop",
+      description: "Loop a prompt: /loop [interval] <prompt> | /loop status | /loop stop [name]",
+      textAlias: "/loop",
+      category: "tools",
+      tier: "standard",
+      args: [
+        {
+          name: "spec",
+          description: "[interval] prompt, or status/stop",
+          type: "string",
+          required: false,
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "status",
       nativeName: "status",
       description: "Show current status.",
@@ -302,7 +319,7 @@ export function buildBuiltinChatCommands(
     defineChatCommand({
       key: "login",
       nativeName: "login",
-      nativeProviders: ["telegram"],
+      nativeProviders: ["discord", "slack", "telegram"],
       description: "Pair Codex login.",
       textAlias: "/login",
       category: "management",

@@ -7,10 +7,10 @@ import {
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import {
-  legacyOAuthSidecarInternalTestUtils,
   legacyOAuthSidecarTestUtils,
   loadLegacyOAuthSidecarMaterial,
 } from "./legacy-oauth-sidecar.js";
+import { legacyOAuthSidecarInternalTestUtils } from "./legacy-oauth-sidecar.test-support.js";
 
 const states: OpenClawTestState[] = [];
 

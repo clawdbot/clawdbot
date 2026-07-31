@@ -135,7 +135,13 @@ export function cancelActiveCronTaskRun(params: {
   return true;
 }
 
-export function resetActiveCronTaskRunsForTests(): void {
+function resetActiveCronTaskRunsForTests(): void {
   retireActiveCronTaskRunTracking();
   suspensionVisibleCronTaskRuns.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.activeCronTaskRunTestApi")] = {
+    resetActiveCronTaskRunsForTests,
+  };
 }

@@ -6,6 +6,9 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { setTelegramRuntime } from "./runtime.js";
+import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
+import type { TelegramRuntime } from "./runtime.types.js";
 import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 import {
   TELEGRAM_UPDATE_OFFSET_MAX_ENTRIES,
@@ -13,7 +16,6 @@ import {
   deleteTelegramUpdateOffset,
   listTelegramLegacyUpdateOffsetEntries,
   readTelegramUpdateOffset,
-  setTelegramUpdateOffsetStoreForTest,
   shouldReplaceTelegramUpdateOffsetEntry,
   writeTelegramUpdateOffset,
 } from "./update-offset-store.js";
@@ -25,17 +27,28 @@ type TelegramUpdateOffsetState = Awaited<
 describe("deleteTelegramUpdateOffset", () => {
   let updateOffsetStore: PluginStateKeyedStore<TelegramUpdateOffsetState>;
 
+  function installStore(store: PluginStateKeyedStore<TelegramUpdateOffsetState>): void {
+    updateOffsetStore = store;
+    setTelegramRuntime({
+      state: {
+        openKeyedStore: (() => updateOffsetStore) as TelegramRuntime["state"]["openKeyedStore"],
+      },
+      channel: {},
+    } as TelegramRuntime);
+  }
+
   beforeEach(async () => {
-    updateOffsetStore = createPluginStateKeyedStoreForTests<TelegramUpdateOffsetState>("telegram", {
-      namespace: TELEGRAM_UPDATE_OFFSET_NAMESPACE,
-      maxEntries: TELEGRAM_UPDATE_OFFSET_MAX_ENTRIES,
-    });
+    installStore(
+      createPluginStateKeyedStoreForTests<TelegramUpdateOffsetState>("telegram", {
+        namespace: TELEGRAM_UPDATE_OFFSET_NAMESPACE,
+        maxEntries: TELEGRAM_UPDATE_OFFSET_MAX_ENTRIES,
+      }),
+    );
     await updateOffsetStore.clear();
-    setTelegramUpdateOffsetStoreForTest(updateOffsetStore);
   });
 
   afterEach(() => {
-    setTelegramUpdateOffsetStoreForTest(undefined);
+    clearTelegramRuntimeForTest();
     resetPluginStateStoreForTests();
   });
 
@@ -70,7 +83,7 @@ describe("deleteTelegramUpdateOffset", () => {
 
   it("surfaces plugin-state write failures", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async () => {
-      setTelegramUpdateOffsetStoreForTest({
+      installStore({
         ...createPluginStateKeyedStoreForTests<TelegramUpdateOffsetState>("telegram", {
           namespace: TELEGRAM_UPDATE_OFFSET_NAMESPACE,
           maxEntries: TELEGRAM_UPDATE_OFFSET_MAX_ENTRIES,
@@ -168,7 +181,7 @@ describe("deleteTelegramUpdateOffset", () => {
 
   it("returns null when the plugin-state read fails", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async () => {
-      setTelegramUpdateOffsetStoreForTest({
+      installStore({
         ...createPluginStateKeyedStoreForTests<TelegramUpdateOffsetState>("telegram", {
           namespace: TELEGRAM_UPDATE_OFFSET_NAMESPACE,
           maxEntries: TELEGRAM_UPDATE_OFFSET_MAX_ENTRIES,

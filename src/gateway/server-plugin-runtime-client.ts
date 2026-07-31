@@ -8,18 +8,25 @@ import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { normalizeToolName } from "../agents/tool-policy.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
+import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 
 export function createSyntheticPluginRuntimeClient(params?: {
   allowModelOverride?: boolean;
   agentRunTracking?: "plugin_subagent";
   cronRunContinuation?: boolean;
+  internalDeliveryMediaUrls?: string[];
+  internalDeliverySuppressText?: boolean;
   pluginRuntimeOwnerId?: string;
+  pluginSubagentRequester?: PluginSubagentRequesterContext;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
+  delegatedToolPolicyHandoff?: boolean;
+  sessionCreation?: TrustedSessionCreation;
   scopes?: string[];
-}): GatewayRequestOptions["client"] {
+}): NonNullable<GatewayRequestOptions["client"]> {
   const pluginRuntimeOwnerId =
     typeof params?.pluginRuntimeOwnerId === "string" && params.pluginRuntimeOwnerId.trim()
       ? params.pluginRuntimeOwnerId.trim()
@@ -38,13 +45,27 @@ export function createSyntheticPluginRuntimeClient(params?: {
       scopes: params?.scopes ?? [WRITE_SCOPE],
     },
     internal: {
+      syntheticClient: true,
+      ...(params?.sessionCreation ? { sessionCreation: params.sessionCreation } : {}),
       allowModelOverride: params?.allowModelOverride === true,
       ...(params?.agentRunTracking ? { agentRunTracking: params.agentRunTracking } : {}),
       ...(params?.cronRunContinuation === true ? { cronRunContinuation: true } : {}),
+      ...(params?.internalDeliveryMediaUrls
+        ? { internalDeliveryMediaUrls: [...params.internalDeliveryMediaUrls] }
+        : {}),
+      ...(params?.internalDeliverySuppressText === true
+        ? { internalDeliverySuppressText: true }
+        : {}),
       ...(params?.scopes?.includes(APPROVALS_SCOPE) ? { approvalRuntime: true } : {}),
       ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
+      ...(params?.pluginSubagentRequester
+        ? { pluginSubagentRequester: params.pluginSubagentRequester }
+        : {}),
       ...(params?.runtimePluginToolGrant
         ? { runtimePluginToolGrant: params.runtimePluginToolGrant }
+        : {}),
+      ...(params?.delegatedToolPolicyHandoff === true
+        ? { delegatedToolPolicyHandoff: true as const }
         : {}),
     },
   };

@@ -31,11 +31,7 @@ function shouldCopyBundledPluginMetadata(id, env, buildablePluginDirs) {
   return env.OPENCLAW_BUILD_PRIVATE_QA === "1";
 }
 
-/**
- * Rewrites package extension entries for bundled metadata output.
- * @internal Directly tested script implementation detail.
- */
-export function rewritePackageExtensions(entries) {
+function rewritePackageExtensions(entries) {
   if (!Array.isArray(entries)) {
     return undefined;
   }

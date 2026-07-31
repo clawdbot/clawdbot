@@ -54,6 +54,28 @@ describe("buildTelegramPresentationButtons", () => {
     ]);
   });
 
+  it("encodes question buttons by record id and option index", () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    expect(
+      buildTelegramPresentationButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: ["Staging", "Production"].map((label) => ({
+              label,
+              action: { type: "question" as const, questionId, optionValue: label },
+            })),
+          },
+        ],
+      }),
+    ).toEqual([
+      [
+        { text: "Staging", callback_data: `tgq1:${questionId}:0`, style: undefined },
+        { text: "Production", callback_data: `tgq1:${questionId}:1`, style: undefined },
+      ],
+    ]);
+  });
+
   it("drops presentation buttons whose callback payload exceeds Telegram limits", () => {
     expect(
       buildTelegramPresentationButtons({
@@ -147,6 +169,35 @@ describe("buildTelegramPresentationButtons", () => {
       }),
     ).toEqual([[{ text: "Plugin", callback_data: callbackData, style: undefined }]]);
     expect(parseTelegramApprovalCallbackData(callbackData)).toBeNull();
+    expect(parseTelegramOpaqueCallbackData(callbackData)).toBe(value);
+  });
+
+  it("keeps transport-private question callback prefixes opaque for legacy values", () => {
+    const value = "tgq1:ask_0123456789abcdef0123456789abcdef:0";
+    const callbackData = buildTelegramOpaqueCallbackData(value);
+
+    expect(
+      buildTelegramPresentationButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Plugin", value }],
+          },
+        ],
+      }),
+    ).toEqual([[{ text: "Plugin", callback_data: callbackData, style: undefined }]]);
+    expect(parseTelegramOpaqueCallbackData(callbackData)).toBe(value);
+  });
+
+  it("keeps trimmed transport-private question prefixes opaque", () => {
+    const value = " tgq1:ask_0123456789abcdef0123456789abcdef:0 ";
+    const callbackData = buildTelegramOpaqueCallbackData(value);
+
+    expect(
+      buildTelegramPresentationButtons({
+        blocks: [{ type: "buttons", buttons: [{ label: "Plugin", value }] }],
+      }),
+    ).toEqual([[{ text: "Plugin", callback_data: callbackData, style: undefined }]]);
     expect(parseTelegramOpaqueCallbackData(callbackData)).toBe(value);
   });
 
@@ -357,22 +408,25 @@ describe("buildTelegramPresentationButtons", () => {
 
   it("renders typed and legacy URL and Web App actions natively", () => {
     expect(
-      buildTelegramPresentationButtons({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              { label: "Typed URL", action: { type: "url", url: "https://example.com/typed" } },
-              {
-                label: "Typed App",
-                action: { type: "web-app", url: "https://example.com/app" },
-              },
-              { label: "Legacy URL", url: "https://example.com/legacy" },
-              { label: "Legacy App", webApp: { url: "https://example.com/legacy-app" } },
-            ],
-          },
-        ],
-      }),
+      buildTelegramPresentationButtons(
+        {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Typed URL", action: { type: "url", url: "https://example.com/typed" } },
+                {
+                  label: "Typed App",
+                  action: { type: "web-app", url: "https://example.com/app" },
+                },
+                { label: "Legacy URL", url: "https://example.com/legacy" },
+                { label: "Legacy App", webApp: { url: "https://example.com/legacy-app" } },
+              ],
+            },
+          ],
+        },
+        { allowWebAppButtons: true },
+      ),
     ).toEqual([
       [
         { text: "Typed URL", url: "https://example.com/typed", style: undefined },
@@ -391,6 +445,39 @@ describe("buildTelegramPresentationButtons", () => {
         },
       ],
     ]);
+  });
+
+  it("skips Web App actions unless a direct target was confirmed", () => {
+    expect(
+      buildTelegramPresentationButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "App", action: { type: "web-app", url: "https://example.com/app" } },
+            ],
+          },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("skips hosted widget actions without a Telegram web app URL", () => {
+    expect(
+      buildTelegramPresentationButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Hosted widget",
+                action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
+              },
+            ],
+          },
+        ],
+      }),
+    ).toBeUndefined();
   });
 
   it("lets canonical typed actions override deprecated button fields", () => {

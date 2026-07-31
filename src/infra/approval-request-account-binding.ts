@@ -1,11 +1,15 @@
 // Matches approval requests against channel account and session bindings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../utils/delivery-context.shared.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
@@ -38,7 +42,7 @@ export function resolvePersistedApprovalRequestSessionEntry(params: {
   const parsed = parseAgentSessionKey(sessionKey);
   const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
-  const entry = loadSessionEntry({
+  const entry = loadSessionEntryReadOnly({
     storePath,
     sessionKey,
     clone: false,
@@ -58,8 +62,10 @@ function resolvePersistedApprovalRequestSessionBinding(params: {
     return null;
   }
   const { entry } = persisted;
-  const channel = normalizeOptionalChannel(entry.origin?.provider ?? entry.lastChannel);
-  const accountId = normalizeOptionalAccountId(entry.origin?.accountId ?? entry.lastAccountId);
+  const origin = sessionDeliveryOrigin(entry);
+  const context = deliveryContextFromSession(entry);
+  const channel = normalizeOptionalChannel(context?.channel ?? origin?.provider);
+  const accountId = normalizeOptionalAccountId(context?.accountId ?? origin?.accountId);
   return channel || accountId ? { channel, accountId } : null;
 }
 

@@ -22,6 +22,7 @@ describe("live vitest config", () => {
     expect(liveConfig.test?.include).toEqual([
       "src/**/*.live.test.ts",
       "test/**/*.live.test.ts",
+      "packages/*/src/**/*.live.test.ts",
       BUNDLED_PLUGIN_LIVE_TEST_GLOB,
     ]);
     expect(normalizeConfigPaths(liveConfig.test?.setupFiles)).toEqual([

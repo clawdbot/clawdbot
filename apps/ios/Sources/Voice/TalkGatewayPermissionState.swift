@@ -5,7 +5,7 @@ enum TalkGatewayPermissionState: Equatable {
     case ready
     case missingScope(String)
     case requestingUpgrade
-    case upgradeRequested(requestId: String?)
+    case upgradeRequested
     case requestFailed(String)
     case apiKeyMissing
     case loadFailed(String)
@@ -47,19 +47,5 @@ enum TalkGatewayPermissionState: Equatable {
         default:
             false
         }
-    }
-
-    var failureMessage: String? {
-        if case let .requestFailed(message) = self {
-            return message
-        }
-        return nil
-    }
-
-    var requestId: String? {
-        if case let .upgradeRequested(requestId) = self {
-            return requestId
-        }
-        return nil
     }
 }

@@ -1,5 +1,5 @@
 // Skill refresh state types describe change notifications emitted by runtime reloads.
-export type SkillsChangeEvent = {
+type SkillsChangeEvent = {
   workspaceDir?: string;
   reason: "watch" | "watch-targets" | "manual" | "remote-node" | "config-change" | "workshop";
   changedPath?: string;

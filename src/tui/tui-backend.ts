@@ -133,6 +133,7 @@ export type TuiAgentsList = {
   scope: SessionScope;
   agents: Array<{
     id: string;
+    kind?: "agent" | "system";
     name?: string;
   }>;
 };
@@ -168,6 +169,7 @@ export type TuiSessionCreateOptions = {
   key: string;
   agentId?: string;
   parentSessionKey?: string;
+  succeedsParent?: boolean;
 };
 
 /** Minimal backend interface shared by Gateway and embedded local TUI modes. */
@@ -179,6 +181,7 @@ export type TuiBackend = {
   };
   onEvent?: (evt: TuiEvent) => void;
   onConnected?: () => void;
+  onConnectError?: (error: Error) => void;
   onDisconnected?: (reason: string) => void;
   onGap?: (info: { expected: number; received: number }) => void;
   start: () => void;

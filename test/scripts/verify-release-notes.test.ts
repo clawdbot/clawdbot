@@ -15,6 +15,7 @@ import {
   defaultGithubSnapshotPath,
   githubApiWithSnapshot,
   highlightCountError,
+  isEligibleHandle,
   persistGithubSnapshot,
   pullRequestTitleFromCommitSubject,
   releaseNoteReferences,
@@ -48,6 +49,13 @@ function git(cwd: string, args: string[]): string {
 }
 
 describe("release-note verification", () => {
+  it("excludes maintainer and automation identities from contributor credit", () => {
+    expect(isEligibleHandle("human-contributor")).toBe(true);
+    expect(isEligibleHandle("steipete")).toBe(false);
+    expect(isEligibleHandle("steipete-oai")).toBe(false);
+    expect(isEligibleHandle("hugin-bot")).toBe(false);
+  });
+
   it("accepts only canonical commit PR suffixes", () => {
     expect(pullRequestTitleFromCommitSubject("Fix status (#102147)", 102147)).toBe("Fix status");
     expect(pullRequestTitleFromCommitSubject("Fix status(#102147)", 102147)).toBeUndefined();
@@ -653,6 +661,30 @@ describe("release-note verification", () => {
         seededPullRequests: new Set([97118]),
       }),
     ).toEqual([]);
+  });
+
+  it("allows shipped PR references only in generated record metadata", () => {
+    const nodes = new Map([
+      [97118, { __typename: "PullRequest" }],
+      [102000, { __typename: "PullRequest" }],
+    ]);
+    const params = {
+      noteReferences: [],
+      recordedReferences: [97118, 102000],
+      excludedRecordedReferences: new Set([97118]),
+      sourcePullRequests: new Set([102000]),
+      sourceReferences: [102000],
+      seededPullRequests: new Set<number>(),
+      nodes,
+    };
+
+    expect(contaminatingPullRequestReferences(params)).toEqual([]);
+    expect(
+      contaminatingPullRequestReferences({
+        ...params,
+        noteReferences: [97118],
+      }),
+    ).toEqual([97118]);
   });
 
   it("ignores the stale generated record while rewriting it", () => {

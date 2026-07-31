@@ -5,6 +5,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
   clampPositiveTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
@@ -152,7 +153,11 @@ function isLoopbackProviderBaseUrl(value: string): boolean {
     return false;
   }
   const hostname = new URL(normalized).hostname.toLowerCase();
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+  return (
+    hostname === "localhost" ||
+    hostname === "[::1]" ||
+    (isCanonicalDottedDecimalIPv4(hostname) && isLoopbackIpAddress(hostname))
+  );
 }
 
 function isConfiguredProviderBaseUrl(targetBaseUrl: string, configuredBaseUrl?: string): boolean {
@@ -427,7 +432,9 @@ async function startAndWaitForLocalService(params: {
   const child = managed.process;
   diagnostics.pid = child.pid;
   managed.lastExit = undefined;
-  const captureStdout = (chunk: Buffer | string) => {
+  child.stdout?.setEncoding("utf8");
+  child.stderr?.setEncoding("utf8");
+  const captureStdout = (chunk: string) => {
     diagnostics.stdoutTail = appendLocalServiceOutputTail(
       diagnostics.stdoutTail,
       chunk,
@@ -437,7 +444,7 @@ async function startAndWaitForLocalService(params: {
       healthHeaders,
     );
   };
-  const captureStderr = (chunk: Buffer | string) => {
+  const captureStderr = (chunk: string) => {
     diagnostics.stderrTail = appendLocalServiceOutputTail(
       diagnostics.stderrTail,
       chunk,

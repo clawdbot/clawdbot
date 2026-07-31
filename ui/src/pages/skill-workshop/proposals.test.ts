@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover skill workshop controller behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -6,6 +7,7 @@ import {
   createSkillWorkshopState,
   loadSkillWorkshopProposals,
   requestSkillWorkshopRevision,
+  runSkillWorkshopEvaluation,
   runSkillWorkshopLifecycleAction,
   selectSkillWorkshopProposal,
   type SkillWorkshopContext,
@@ -15,6 +17,8 @@ import {
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
 
 const ISO_NOW = "2026-06-16T12:00:00.000Z";
+const DRAFT_HASH = "a".repeat(64);
+const REVISION_HASH = "b".repeat(64);
 
 function createFixture(
   overrides: Partial<SkillWorkshopState> = {},
@@ -28,8 +32,9 @@ function createFixture(
   const request = vi.fn<TestRequest>();
   const snapshot: ApplicationGatewaySnapshot = {
     client: { request } as unknown as ApplicationGatewaySnapshot["client"],
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: "research",
     sessionKey: "global",
@@ -93,11 +98,13 @@ function inspectResult(status: SkillWorkshopProposal["status"] = "pending") {
       createdAt: ISO_NOW,
       updatedAt: ISO_NOW,
       proposedVersion: "v1",
+      draftHash: DRAFT_HASH,
       target: {
         skillName: "Inbox Cleaner",
         skillKey: "inbox-cleaner",
       },
     },
+    revisionHash: REVISION_HASH,
     content: "Review unread mail and archive low-priority threads.",
     supportFiles: [],
   };
@@ -112,6 +119,7 @@ function proposal(overrides: Partial<SkillWorkshopProposal> = {}): SkillWorkshop
     body: "Review unread mail.",
     status: "pending",
     version: 1,
+    revisionHash: REVISION_HASH,
     createdAt: Date.parse(ISO_NOW),
     updatedAt: Date.parse(ISO_NOW),
     recencyGroup: "today",
@@ -226,6 +234,157 @@ describe("Skill Workshop proposal RPCs", () => {
     },
   );
 
+  it("evaluates the freshly inspected revision and merges the attributed result", async () => {
+    const evaluation = {
+      id: "evaluation-1",
+      proposedVersion: "v1",
+      revisionHash: REVISION_HASH,
+      trigger: "manual",
+      startedAt: ISO_NOW,
+      completedAt: ISO_NOW,
+      outcomes: [
+        {
+          pluginId: "quality-plugin",
+          pluginVersion: "1.2.3",
+          evaluatorId: "quality",
+          status: "completed",
+          result: {
+            summary: "One blocking issue.",
+            decision: "block",
+            decisionReason: "The draft needs a rollback step.",
+          },
+        },
+      ],
+    } as const;
+    const baseInspect = inspectResult();
+    const evaluatedInspect = {
+      ...baseInspect,
+      record: { ...baseInspect.record, evaluation },
+    };
+    const evaluateResult = {
+      record: evaluatedInspect.record,
+      evaluation,
+    };
+    let inspectCalls = 0;
+    const { state, context, request } = createFixture({
+      skillWorkshopAgentId: "research",
+      skillWorkshopProposals: [proposal({ revisionHash: "c".repeat(64) })],
+      skillWorkshopSelectedKey: "proposal-1",
+    });
+    request.mockImplementation(async (method: string) => {
+      if (method === "skills.proposals.inspect") {
+        inspectCalls += 1;
+        return inspectCalls === 1 ? inspectResult() : evaluatedInspect;
+      }
+      if (method === "skills.proposals.evaluate") {
+        return evaluateResult;
+      }
+      return {};
+    });
+
+    try {
+      await expect(runSkillWorkshopEvaluation(state, context, "proposal-1")).resolves.toBe(true);
+    } finally {
+      clearNoticeTimer(state);
+    }
+
+    expect(request).toHaveBeenNthCalledWith(1, "skills.proposals.inspect", {
+      agentId: "research",
+      proposalId: "proposal-1",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "skills.proposals.evaluate", {
+      agentId: "research",
+      proposalId: "proposal-1",
+      expectedRevisionHash: REVISION_HASH,
+    });
+    expect(request).toHaveBeenNthCalledWith(3, "skills.proposals.inspect", {
+      agentId: "research",
+      proposalId: "proposal-1",
+    });
+    expect(state.skillWorkshopProposals[0]?.evaluation?.outcomes[0]).toMatchObject({
+      pluginId: "quality-plugin",
+      evaluatorId: "quality",
+      status: "completed",
+      result: { decision: "block" },
+    });
+  });
+
+  it("drops an inspected evaluation that belongs to a different revision", async () => {
+    const baseInspect = inspectResult();
+    const { state, context, request } = createFixture({
+      skillWorkshopProposals: [proposal({ body: "" })],
+    });
+    request.mockResolvedValue({
+      ...baseInspect,
+      record: {
+        ...baseInspect.record,
+        evaluation: {
+          id: "evaluation-stale",
+          proposedVersion: "v0",
+          revisionHash: "c".repeat(64),
+          trigger: "manual",
+          startedAt: ISO_NOW,
+          completedAt: ISO_NOW,
+          outcomes: [],
+        },
+      },
+    });
+
+    await selectSkillWorkshopProposal(state, context, "proposal-1");
+
+    expect(state.skillWorkshopProposals[0]?.revisionHash).toBe(REVISION_HASH);
+    expect(state.skillWorkshopProposals[0]?.evaluation).toBeUndefined();
+  });
+
+  it("rejects an evaluation response for a different revision", async () => {
+    const baseInspect = inspectResult();
+    const mismatchedEvaluation = {
+      id: "evaluation-stale",
+      proposedVersion: "v0",
+      revisionHash: "c".repeat(64),
+      trigger: "manual",
+      startedAt: ISO_NOW,
+      completedAt: ISO_NOW,
+      outcomes: [],
+    } as const;
+    const { state, context, request } = createFixture({
+      skillWorkshopAgentId: "research",
+      skillWorkshopProposals: [proposal()],
+    });
+    request.mockImplementation(async (method: string) =>
+      method === "skills.proposals.inspect"
+        ? baseInspect
+        : {
+            record: { ...baseInspect.record, evaluation: mismatchedEvaluation },
+            evaluation: mismatchedEvaluation,
+          },
+    );
+
+    await expect(runSkillWorkshopEvaluation(state, context, "proposal-1")).resolves.toBe(false);
+
+    expect(state.skillWorkshopError).toBe("The proposal revision changed during evaluation.");
+    expect(state.skillWorkshopProposals[0]?.evaluation).toBeUndefined();
+  });
+
+  it("loads legacy inspect responses but refuses revision-sensitive evaluation", async () => {
+    const { revisionHash: _revisionHash, ...legacyInspect } = inspectResult();
+    const { state, context, request } = createFixture({
+      skillWorkshopAgentId: "research",
+      skillWorkshopProposals: [proposal()],
+    });
+    request.mockResolvedValue(legacyInspect);
+
+    await expect(runSkillWorkshopEvaluation(state, context, "proposal-1")).resolves.toBe(false);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith("skills.proposals.inspect", {
+      agentId: "research",
+      proposalId: "proposal-1",
+    });
+    expect(state.skillWorkshopError).toBe("The current proposal revision could not be identified.");
+    expect(state.skillWorkshopProposals[0]?.revisionHash).toBeNull();
+  });
+
   it("reloads proposals when the selected session changes agent scope", async () => {
     const { state, context, request } = createFixture(
       {
@@ -316,7 +475,11 @@ describe("Skill Workshop proposal RPCs", () => {
     });
     const sendRevisionRequest = vi.fn(async () => {});
 
-    await requestSkillWorkshopRevision(state, context, "proposal-1", sendRevisionRequest);
+    try {
+      await requestSkillWorkshopRevision(state, context, "proposal-1", sendRevisionRequest);
+    } finally {
+      clearNoticeTimer(state);
+    }
 
     expect(sendRevisionRequest).toHaveBeenCalledWith(
       "Tighten the trigger.",

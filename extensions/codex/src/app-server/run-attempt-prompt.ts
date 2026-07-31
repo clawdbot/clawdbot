@@ -33,6 +33,10 @@ import {
   codexLegacyDynamicToolsFingerprint,
 } from "./thread-lifecycle.js";
 
+function isRestrictivePromptToolsAllow(toolsAllow: string[] | undefined): boolean {
+  return toolsAllow !== undefined && !toolsAllow.some((name) => name.trim() === "*");
+}
+
 export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const {
     runtime,
@@ -65,6 +69,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     appServer,
     contextSessionKey,
     effectiveWorkspace,
+    sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
   const applyFreshThreadContinuityProjection = () => {
@@ -96,6 +101,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           .filter(isNonEmptyString),
       ),
       citationsMode: params.config?.memory?.citations,
+      sandboxed: sandbox?.enabled === true,
       modelId: effectiveRuntimeModelId,
       contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
       providerId: effectiveRuntimeProviderId,
@@ -172,17 +178,21 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     }
   }
   const codexModelInputHistoryMessages: typeof historyState.messages = [];
-  const buildPromptFromCurrentInputs = () =>
-    resolveAgentHarnessBeforePromptBuildResult({
+  const buildPromptFromCurrentInputs = async () => {
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
       prompt: prependCurrentInboundContext(promptState.promptText, params.currentInboundContext),
       developerInstructions: promptState.developerInstructions,
-      messages: codexModelInputHistoryMessages,
+      messages: structuredClone(historyState.messages),
       ctx: hookContext,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
-      ...("beforeAgentStartResult" in params
-        ? { beforeAgentStartResult: params.beforeAgentStartResult }
-        : {}),
     });
+    if (isRestrictivePromptToolsAllow(result.toolsAllow)) {
+      throw new Error(
+        "Codex app-server cannot enforce before_prompt_build toolsAllow; use the embedded or Copilot runtime for turn-scoped tool policy.",
+      );
+    }
+    return result;
+  };
   const resolveShiftedPromptInputRange = (
     prompt: string,
     promptInputRange: { start: number; end: number } | undefined,
@@ -291,8 +301,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
         skillsCollaborationInstructions,
         memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
-        heartbeatCollaborationInstructions:
-          workspaceBootstrapContext.heartbeatCollaborationInstructions,
       }).settings.developer_instructions ?? undefined,
     );
   const rebuildCodexPromptBuildFromCurrentProjection = async () => {

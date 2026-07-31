@@ -6,6 +6,7 @@ import type {
   SessionsCatalogReadResult,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -21,6 +22,8 @@ const MAX_CLI_OUTPUT_BYTES = 32 * 1024 * 1024;
 const MAX_TRANSCRIPT_ITEM_BYTES = 512 * 1024;
 const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 const CLI_TIMEOUT_MS = 30_000;
+const OPENCODE_QUERY_CACHE_TTL_MS = 32_000;
+const OPENCODE_QUERY_CACHE_MAX_ENTRIES = 32;
 const SESSION_ID_PATTERN = /^(?!-)[A-Za-z0-9._:-]{1,256}$/u;
 const SAFE_ENV_KEYS = [
   "APPDATA",
@@ -45,6 +48,34 @@ const SAFE_ENV_KEYS = [
   "XDG_STATE_HOME",
 ] as const;
 
+type OpenCodeQueryCacheEntry = {
+  expiresAt: number;
+  result: Promise<unknown>;
+  resolved?: true;
+};
+
+type OpenCodeQueryCacheOptions = {
+  configIdentity?: object;
+  forceRefresh?: boolean;
+};
+
+const openCodeConfigIdentities = new WeakMap<object, number>();
+// Query results are valid for one immutable OpenClaw config identity, CLI environment, and SQL text.
+// Config/env changes or 32s expiry invalidate them; failures are removed so recovery retries at once.
+// The bounded map prevents pagination variants from growing while avoiding a subprocess every poll.
+const openCodeQueryCache = new Map<string, OpenCodeQueryCacheEntry>();
+let nextOpenCodeConfigIdentity = 1;
+
+function openCodeQueryCacheKey(query: string, configIdentity: object): string {
+  let identity = openCodeConfigIdentities.get(configIdentity);
+  if (identity === undefined) {
+    identity = nextOpenCodeConfigIdentity++;
+    openCodeConfigIdentities.set(configIdentity, identity);
+  }
+  const environment = SAFE_ENV_KEYS.map((key) => `${key}=${process.env[key] ?? ""}`).join("\0");
+  return `${String(identity)}\0${environment}\0${query}`;
+}
+
 export type OpenCodeSessionPage = {
   sessions: SessionCatalogSession[];
   nextCursor?: string;
@@ -62,7 +93,7 @@ type OpenCodeReadParams = {
   cursor?: string;
 };
 
-export function optionalOpenCodeString(value: unknown, maxLength: number): string | undefined {
+function optionalOpenCodeString(value: unknown, maxLength: number): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -84,22 +115,49 @@ function encodeCursor(offset: number): string {
   return Buffer.from(JSON.stringify({ offset }), "utf8").toString("base64url");
 }
 
-function decodeCursor(value: unknown): number {
+function optionalRawCursor(value: unknown): string | undefined {
   if (value === undefined) {
-    return 0;
+    return undefined;
   }
-  const cursor = optionalOpenCodeString(value, MAX_CURSOR_LENGTH);
-  if (!cursor) {
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_CURSOR_LENGTH) {
     throw new Error("cursor is invalid");
   }
+  return value;
+}
+
+function decodeCursor(value: unknown): number {
+  const cursor = optionalRawCursor(value);
+  if (cursor === undefined) {
+    return 0;
+  }
   try {
-    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as unknown;
-    if (!isRecord(parsed) || !Number.isInteger(parsed.offset) || Number(parsed.offset) < 0) {
+    const bytes = Buffer.from(cursor, "base64url");
+    if (bytes.toString("base64url") !== cursor) {
+      throw new Error("non-canonical base64url");
+    }
+    const parsed = JSON.parse(bytes.toString("utf8")) as unknown;
+    if (!isRecord(parsed) || !Number.isSafeInteger(parsed.offset) || Number(parsed.offset) < 0) {
       throw new Error("invalid offset");
     }
-    return Number(parsed.offset);
+    const offset = Number(parsed.offset);
+    if (encodeCursor(offset) !== cursor) {
+      throw new Error("non-canonical cursor payload");
+    }
+    return offset;
   } catch (error) {
     throw new Error("cursor is invalid", { cause: error });
+  }
+}
+
+export function isExactOpenCodeSessionCursor(value: unknown): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+  try {
+    decodeCursor(value);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -172,10 +230,7 @@ function parseListParams(
   if (value.searchTerm !== undefined && !searchTerm) {
     throw new Error("searchTerm is invalid");
   }
-  const cursor = optionalOpenCodeString(value.cursor, MAX_CURSOR_LENGTH);
-  if (value.cursor !== undefined && !cursor) {
-    throw new Error("cursor is invalid");
-  }
+  const cursor = optionalRawCursor(value.cursor);
   return {
     limit: boundedLimit(value.limit),
     ...(searchTerm ? { searchTerm } : {}),
@@ -197,10 +252,7 @@ function parseReadParams(
   if (!threadId || !SESSION_ID_PATTERN.test(threadId)) {
     throw new Error("threadId is invalid");
   }
-  const cursor = optionalOpenCodeString(value.cursor, MAX_CURSOR_LENGTH);
-  if (value.cursor !== undefined && !cursor) {
-    throw new Error("cursor is invalid");
-  }
+  const cursor = optionalRawCursor(value.cursor);
   return {
     threadId,
     limit: boundedLimit(value.limit),
@@ -244,6 +296,12 @@ async function runOpenCode(args: string[]): Promise<string> {
   let overflow = false;
   const timeout = setTimeout(() => child.kill("SIGKILL"), CLI_TIMEOUT_MS);
   timeout.unref?.();
+  let outputError: Error | undefined;
+  const failFromOutputError = (source: "stdout" | "stderr", error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    outputError ??= new Error(`OpenCode ${source} stream failed: ${message}`, { cause: error });
+    child.kill("SIGKILL");
+  };
   const collect = (target: Buffer[], chunk: Buffer) => {
     bytes += chunk.length;
     if (bytes > MAX_CLI_OUTPUT_BYTES) {
@@ -253,6 +311,8 @@ async function runOpenCode(args: string[]): Promise<string> {
     }
     target.push(chunk);
   };
+  child.stdout.once("error", (error) => failFromOutputError("stdout", error));
+  child.stderr.once("error", (error) => failFromOutputError("stderr", error));
   child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
   child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
   const exitCode = await new Promise<number | null>((resolve, reject) => {
@@ -262,11 +322,67 @@ async function runOpenCode(args: string[]): Promise<string> {
   if (overflow) {
     throw new Error("OpenCode session output exceeded the safety limit");
   }
+  if (outputError) {
+    throw outputError;
+  }
   if (exitCode !== 0) {
     const detail = Buffer.concat(stderr).toString("utf8").trim();
     throw new Error(detail || `OpenCode exited with code ${String(exitCode)}`);
   }
   return Buffer.concat(stdout).toString("utf8");
+}
+
+export async function queryOpenCodeDatabase(query: string): Promise<unknown> {
+  const output = await runOpenCode(["--pure", "db", query, "--format", "json"]);
+  return output.trim() ? (JSON.parse(output) as unknown) : [];
+}
+
+async function queryCachedOpenCodeSessions(
+  query: string,
+  options: OpenCodeQueryCacheOptions,
+): Promise<unknown> {
+  const key = openCodeQueryCacheKey(query, options.configIdentity ?? process.env);
+  const cached = openCodeQueryCache.get(key);
+  if (options.forceRefresh !== true && cached && cached.expiresAt > Date.now()) {
+    openCodeQueryCache.delete(key);
+    openCodeQueryCache.set(key, cached);
+    return await cached.result;
+  }
+  if (cached) {
+    openCodeQueryCache.delete(key);
+  }
+  const result = queryOpenCodeDatabase(query);
+  const entry: OpenCodeQueryCacheEntry = {
+    expiresAt: Date.now() + OPENCODE_QUERY_CACHE_TTL_MS,
+    result,
+  };
+  openCodeQueryCache.set(key, entry);
+  while (openCodeQueryCache.size > OPENCODE_QUERY_CACHE_MAX_ENTRIES) {
+    const oldest = openCodeQueryCache.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    openCodeQueryCache.delete(oldest.value);
+  }
+  try {
+    const value = await result;
+    entry.resolved = true;
+    return value;
+  } catch (error) {
+    if (openCodeQueryCache.get(key) === entry) {
+      if (cached?.resolved) {
+        openCodeQueryCache.set(key, cached);
+      } else {
+        openCodeQueryCache.delete(key);
+      }
+    }
+    throw error;
+  }
+}
+
+export async function exportOpenCodeSession(threadId: string): Promise<unknown> {
+  const output = await runOpenCode(["--pure", "export", threadId]);
+  return JSON.parse(output) as unknown;
 }
 
 function parseOpenCodeSession(value: unknown): SessionCatalogSession | undefined {
@@ -293,12 +409,15 @@ function parseOpenCodeSession(value: unknown): SessionCatalogSession | undefined
     source: "opencode-cli",
     modelProvider: "opencode",
     archived: false,
-    canContinue: false,
+    canContinue: true,
     canArchive: false,
   };
 }
 
-export async function listLocalOpenCodeSessionPage(value?: unknown): Promise<OpenCodeSessionPage> {
+export async function listLocalOpenCodeSessionPage(
+  value?: unknown,
+  options: OpenCodeQueryCacheOptions = {},
+): Promise<OpenCodeSessionPage> {
   const params = parseListParams(value);
   const offset = decodeCursor(params.cursor);
   const requestedCount = params.searchTerm
@@ -310,8 +429,7 @@ export async function listLocalOpenCodeSessionPage(value?: unknown): Promise<Ope
     "WHERE parent_id IS NULL AND time_archived IS NULL",
     `ORDER BY time_updated DESC, id DESC LIMIT ${String(requestedCount)}`,
   ].join(" ");
-  const output = await runOpenCode(["--pure", "db", query, "--format", "json"]);
-  const parsed = output.trim() ? (JSON.parse(output) as unknown) : [];
+  const parsed = await queryCachedOpenCodeSessions(query, options);
   if (!Array.isArray(parsed) || parsed.length > MAX_CLI_LIST_SESSIONS) {
     throw new Error("OpenCode returned an invalid session list");
   }
@@ -341,7 +459,7 @@ export async function listLocalOpenCodeSessionPage(value?: unknown): Promise<Ope
 function jsonText(value: unknown, maxLength = 20_000): string | undefined {
   try {
     const text = JSON.stringify(value);
-    return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
+    return text.length > maxLength ? `${truncateUtf16Safe(text, maxLength)}…` : text;
   } catch {
     return undefined;
   }
@@ -445,8 +563,7 @@ export async function readLocalOpenCodeTranscriptPage(
 ): Promise<SessionsCatalogReadResult> {
   const params = parseReadParams(value);
   const offset = decodeCursor(params.cursor);
-  const output = await runOpenCode(["--pure", "export", params.threadId]);
-  const items = openCodeTranscriptItems(JSON.parse(output) as unknown);
+  const items = openCodeTranscriptItems(await exportOpenCodeSession(params.threadId));
   const page = transcriptPage(items, params.limit, offset);
   return {
     hostId: LOCAL_HOST_ID,

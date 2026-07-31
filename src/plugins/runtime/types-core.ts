@@ -1,4 +1,5 @@
 // Core runtime types define system, config, and task helper contracts for plugins.
+import type { CreateChannelIngressDrainOptions } from "../../channels/message/ingress-drain.js";
 import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.js";
 import type { ConfigMutationBase } from "../../config/mutation-types.js";
 import type { SessionPluginJsonValue } from "../../config/sessions/types.js";
@@ -7,6 +8,7 @@ import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
 import type {
   ListSpeechVoices,
+  PrepareTtsRequest,
   TextToSpeech,
   TextToSpeechStream,
   TextToSpeechTelephony,
@@ -71,7 +73,9 @@ type RuntimeSessionStoreReadParams = {
   readConsistency?: "latest";
   storePath?: string;
 };
-type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">>;
+type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
+  readOnly?: boolean;
+};
 type RuntimeSessionStoreEntrySummary = {
   sessionKey: string;
   entry: RuntimeSessionEntry;
@@ -109,6 +113,17 @@ type RuntimeCreateSessionEntryBaseParams = {
         pluginExtensions?: RuntimeSessionPluginExtensions;
         /** Registry-injected owner; plugin callers cannot select another owner. */
         pluginOwnerId?: string;
+      }
+    | {
+        acpBackendId: string;
+        acpSessionBinding: {
+          acpAgentId: string;
+          agentSessionId: string;
+        };
+        modelSelectionLocked?: true;
+        pluginExtensions?: RuntimeSessionPluginExtensions;
+        /** Registry-injected owner; plugin callers cannot select another owner. */
+        pluginOwnerId?: string;
       };
 };
 type RuntimeCreateSessionEntryParams = RuntimeCreateSessionEntryBaseParams &
@@ -129,7 +144,7 @@ type RuntimeCreateSessionEntryParams = RuntimeCreateSessionEntryBaseParams &
   );
 type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
   fallbackEntry?: RuntimeSessionEntry;
-  maintenanceConfig?: import("../../config/sessions/store.js").ResolvedSessionMaintenanceConfigInput;
+  maintenanceConfig?: import("../../config/sessions/store-maintenance.js").ResolvedSessionMaintenanceConfigInput;
   preserveActivity?: boolean;
   replaceEntry?: boolean;
   update: (
@@ -189,7 +204,7 @@ export type RunHeartbeatOnceOptions = {
   heartbeat?: { target?: string };
 };
 
-export type LlmCompleteMessage = {
+type LlmCompleteMessage = {
   role: "system" | "user" | "assistant";
   content: string;
 };
@@ -209,12 +224,15 @@ export type LlmCompleteUsage = {
   costUsd?: number;
 };
 
-export type LlmCompleteParams = {
-  messages: LlmCompleteMessage[];
+type LlmCompleteCommonParams = {
   /** Model ref (e.g. "anthropic/claude-sonnet-4-6"); defaults to the target agent's configured model. */
   model?: string;
+  /** Advisory output limit; runtime owners without an equivalent control may ignore it. */
   maxTokens?: number;
+  /** Advisory sampling hint; runtime owners without an equivalent control may ignore it. */
   temperature?: number;
+  /** Requested reasoning effort; the host normalizes it for the selected model. */
+  reasoning?: import("../../auto-reply/thinking.js").ThinkLevel;
   systemPrompt?: string;
   signal?: AbortSignal;
   /** Human-readable reason for audit/debug output. */
@@ -223,12 +241,52 @@ export type LlmCompleteParams = {
   agentId?: string;
 };
 
+type LlmDirectCompleteParams = LlmCompleteCommonParams & {
+  messages: LlmCompleteMessage[];
+  execution?: undefined;
+};
+
+export type LlmIsolatedAgentRuntimeCompleteParams = LlmCompleteCommonParams & {
+  /** Isolated runtimes currently accept one fresh user prompt, not a replayed chat history. */
+  messages: [{ role: "user"; content: string }];
+  execution: {
+    /** Fresh, literal-zero-tool completion through the configured agent runtime. */
+    mode: "isolated-agent-runtime";
+    /** Exact credential owner. Requires host-granted plugin policy. */
+    authProfileId?: string;
+    timeoutMs?: number;
+  };
+};
+
+export type LlmCompleteParams = LlmDirectCompleteParams | LlmIsolatedAgentRuntimeCompleteParams;
+
+export type LlmCompleteErrorCode =
+  | "LLM_COMPLETION_NOT_AUTHORIZED"
+  | "LLM_ISOLATED_INPUT_REJECTED"
+  | "LLM_ISOLATED_UNSUPPORTED"
+  | "LLM_RUNTIME_UNAVAILABLE"
+  | "LLM_COMPLETION_ABORTED"
+  | "LLM_COMPLETION_TIMEOUT"
+  | "LLM_COMPLETION_OUTPUT_REJECTED"
+  | "LLM_COMPLETION_FAILED";
+
+type LlmCompleteExecution =
+  | {
+      mode: "direct-provider";
+      owner: { kind: "provider"; id: string };
+    }
+  | {
+      mode: "isolated-agent-runtime";
+      owner: { kind: "cli" | "harness"; id: string };
+    };
+
 export type LlmCompleteResult = {
   text: string;
   provider: string;
   model: string;
   agentId: string;
   usage: LlmCompleteUsage;
+  execution: LlmCompleteExecution;
   audit: {
     caller: LlmCompleteCaller;
     purpose?: string;
@@ -260,23 +318,6 @@ export type PluginRuntimeCore = {
     replaceConfigFile: (
       params: RuntimeReplaceConfigFileParams,
     ) => Promise<RuntimeConfigReplaceResult>;
-    /**
-     * @deprecated Use current(), or pass the already loaded config through the
-     * call path. Runtime code must not reload config on demand. Bundled
-     * plugins and repo code are blocked from using this by the
-     * deprecated-internal-config-api architecture guard.
-     */
-    loadConfig: () => import("../../config/types.openclaw.js").OpenClawConfig;
-    /**
-     * @deprecated Use mutateConfigFile() or replaceConfigFile() with an
-     * explicit afterWrite intent so restart behavior stays under host control.
-     * Bundled plugins and repo code are blocked from using this by the
-     * deprecated-internal-config-api architecture guard.
-     */
-    writeConfigFile: (
-      cfg: import("../../config/types.openclaw.js").OpenClawConfig,
-      options?: RuntimeWriteConfigOptions & { afterWrite?: RuntimeConfigAfterWrite },
-    ) => Promise<void>;
   };
   agent: {
     defaults: {
@@ -302,6 +343,12 @@ export type PluginRuntimeCore = {
     /** @deprecated Use runEmbeddedAgent. */
     runEmbeddedPiAgent: RuntimeRunEmbeddedAgent;
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
+    /**
+     * Shares the embedded runner's CLI-backend dispatch eligibility (route,
+     * registered backend, stored credential mode) so opted-in callers can
+     * budget timeouts for the run that will actually execute.
+     */
+    resolveCliBackendDispatchEligibility: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibility;
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
@@ -352,6 +399,7 @@ export type PluginRuntimeCore = {
     resizeToJpeg: typeof import("../../media/media-services.js").resizeToJpeg;
   };
   tts: {
+    prepareTtsRequest: PrepareTtsRequest;
     textToSpeech: TextToSpeech;
     textToSpeechStream: TextToSpeechStream;
     textToSpeechTelephony: TextToSpeechTelephony;
@@ -397,9 +445,6 @@ export type PluginRuntimeCore = {
       params: import("../../web-search/runtime-types.js").RunWebSearchParams,
     ) => Promise<import("../../web-search/runtime-types.js").RunWebSearchResult>;
   };
-  stt: {
-    transcribeAudioFile: MediaUnderstandingRuntime["transcribeAudioFile"];
-  };
   events: {
     onAgentEvent: typeof import("../../infra/agent-events.js").onAgentEvent;
     onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
@@ -413,12 +458,16 @@ export type PluginRuntimeCore = {
   };
   state: {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
+    openBlobStore: <TMetadata>(
+      options: import("../../plugin-state/plugin-blob-store.types.js").OpenBlobStoreOptions,
+    ) => import("../../plugin-state/plugin-blob-store.types.js").PluginBlobStore<TMetadata>;
     openKeyedStore: <T>(
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T>;
     openSyncKeyedStore: <T>(
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateSyncKeyedStore<T>;
+    withLease: import("../../plugin-state/plugin-state-lease.types.js").PluginStateLeaseRunner;
     openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
       options?: Omit<CreateChannelIngressQueueOptions, "channelId">,
     ) => import("../../channels/message/ingress-queue.js").ChannelIngressQueue<
@@ -426,16 +475,26 @@ export type PluginRuntimeCore = {
       TMetadata,
       TCompletedMetadata
     >;
+    openChannelIngressDrain: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
+      options: Omit<
+        CreateChannelIngressDrainOptions<TPayload, TMetadata, TCompletedMetadata>,
+        "queue"
+      > & {
+        queue?: import("../../channels/message/ingress-queue.js").ChannelIngressQueue<
+          TPayload,
+          TMetadata,
+          TCompletedMetadata
+        >;
+        accountId?: string;
+        stateDir?: string;
+      },
+    ) => import("../../channels/message/ingress-drain.js").ChannelIngressDrain;
   };
   tasks: {
     runs: PluginRuntimeTaskRuns;
     flows: PluginRuntimeTaskFlows;
     managedFlows: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
-    /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
-    flow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   };
-  /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
-  taskFlow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   llm: {
     complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
     acquireLocalService: (

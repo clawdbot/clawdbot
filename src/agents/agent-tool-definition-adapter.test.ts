@@ -17,7 +17,7 @@ import {
   toToolDefinitions,
 } from "./agent-tool-definition-adapter.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
-import { createExecTool } from "./bash-tools.exec.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];

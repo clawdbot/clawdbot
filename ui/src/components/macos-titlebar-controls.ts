@@ -42,7 +42,7 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
           onClick: () => globalThis.history.forward(),
           className: "macos-titlebar-controls__forward",
         })}
-        ${this.navCollapsed && !this.historyOnly
+        ${!this.historyOnly
           ? html`
               ${this.renderButton({
                 label: t("chat.openCommandPalette"),
@@ -51,12 +51,16 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
                 onClick: this.onOpenPalette,
                 className: "macos-titlebar-controls__search",
               })}
-              ${this.renderButton({
-                label: t("chat.runControls.newSession"),
-                icon: icons.plus,
-                onClick: this.onOpenNewSession,
-                className: "macos-titlebar-controls__new-session",
-              })}
+              ${this.navCollapsed
+                ? this.renderButton({
+                    // While the sidebar rail is collapsed, this mirrors the native
+                    // ⌘N item and stays deliberately free of connection state.
+                    label: t("chat.runControls.newSession"),
+                    icon: icons.plus,
+                    onClick: this.onOpenNewSession,
+                    className: "macos-titlebar-controls__new-session",
+                  })
+                : nothing}
             `
           : nothing}
       </nav>

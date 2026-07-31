@@ -7,11 +7,12 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { resetModelCatalogCacheForTest as resetGatewayModelCatalogCacheForTest } from "./server-model-catalog.js";
+import { resetPreparedModelCatalogForTest } from "./server-model-catalog.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   connectOk,
@@ -91,6 +92,7 @@ type ModelCatalogRpcEntry = {
   contextWindow?: number;
   input?: string[];
   reasoning?: boolean;
+  agentRuntime?: GatewayAgentRuntime;
 };
 
 type AgentCatalogFixtureEntry = {
@@ -141,6 +143,7 @@ const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
     id: "gpt-test-a",
     name: "A-Model",
     provider: "openai",
+    agentRuntime: { id: "openclaw", source: "implicit" },
     available: false,
     contextWindow: 8000,
   },
@@ -148,6 +151,7 @@ const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
     id: "gpt-test-z",
     name: "gpt-test-z",
     provider: "openai",
+    agentRuntime: { id: "openclaw", source: "implicit" },
     available: false,
   },
 ];
@@ -184,6 +188,7 @@ const configuredProviderModelConfig = (params: ConfiguredProviderModelFixture) =
       models: {
         [`${params.provider}/${params.modelId}`]: { alias: params.alias },
       },
+      modelPolicy: { allow: [`${params.provider}/${params.modelId}`] },
     },
   },
   models: {
@@ -229,7 +234,17 @@ describe("gateway server models + voicewake", () => {
   const setAgentCatalog = async (entries: AgentCatalogFixtureEntry[]) => {
     agentDiscoveryMock.enabled = true;
     agentDiscoveryMock.models = entries;
-    await resetGatewayModelCatalogCacheForTest();
+    await resetPreparedModelCatalogForTest();
+    const [
+      { refreshPreparedModelRuntimeSnapshots },
+      { clearRuntimeConfigSnapshot: clearIoRuntimeConfigSnapshot, getRuntimeConfig },
+    ] = await Promise.all([
+      import("../agents/prepared-model-runtime.js"),
+      import("../config/io.js"),
+    ]);
+    clearIoRuntimeConfigSnapshot();
+    const publishedConfig = getRuntimeConfig();
+    await refreshPreparedModelRuntimeSnapshots(publishedConfig, { gatewayLifecycle: true });
   };
 
   const seedAgentModelCatalog = async () => {
@@ -288,6 +303,7 @@ describe("gateway server models + voicewake", () => {
           defaults: {
             model: { primary: options.primary },
             models: options.models,
+            modelPolicy: { allow: Object.keys(options.models) },
           },
         },
       },
@@ -571,7 +587,7 @@ describe("gateway server models + voicewake", () => {
       async () => {
         await setAgentCatalog(remoteUnauthModels());
         const res = await listModels();
-        expect(res.ok).toBe(true);
+        expect(res.ok, JSON.stringify(res)).toBe(true);
         expectSingleModel(res.payload?.models ?? [], {
           id: "MiniMax-M2.7-highspeed",
           name: "MiniMax M2.7 Highspeed",
@@ -581,7 +597,7 @@ describe("gateway server models + voicewake", () => {
     );
   });
 
-  test("models.list configured view does not run runtime discovery without a read-only catalog", async () => {
+  test("models.list configured view reuses the prepared generation", async () => {
     await withEnvAsync(
       {
         ANTHROPIC_API_KEY: undefined,
@@ -631,7 +647,7 @@ describe("gateway server models + voicewake", () => {
     );
   });
 
-  test("models.list configured view still prefers agents.defaults.models allowlist", async () => {
+  test("models.list configured view prefers the explicit model policy", async () => {
     await withModelsConfig(
       {
         agents: {
@@ -640,6 +656,7 @@ describe("gateway server models + voicewake", () => {
             models: {
               "openai/gpt-test-z": {},
             },
+            modelPolicy: { allow: ["openai/gpt-test-z"] },
           },
         },
         models: {
@@ -657,6 +674,7 @@ describe("gateway server models + voicewake", () => {
             id: "gpt-test-z",
             name: "gpt-test-z",
             provider: "openai",
+            agentRuntime: { id: "openclaw", source: "implicit" },
             available: false,
           },
         ]);
@@ -664,7 +682,7 @@ describe("gateway server models + voicewake", () => {
     );
   });
 
-  test("models.list all view bypasses agents.defaults.models allowlist", async () => {
+  test("models.list all view bypasses the explicit model policy", async () => {
     await withModelsConfig(
       {
         agents: {
@@ -673,6 +691,7 @@ describe("gateway server models + voicewake", () => {
             models: {
               "openai/gpt-test-z": {},
             },
+            modelPolicy: { allow: ["openai/gpt-test-z"] },
           },
         },
       },
@@ -695,14 +714,16 @@ describe("gateway server models + voicewake", () => {
       expected: [
         {
           id: "claude-test-a",
-          name: "claude-test-a",
+          name: "A-Model",
           provider: "anthropic",
           available: false,
+          contextWindow: 200_000,
         },
         {
           id: "gpt-test-z",
           name: "gpt-test-z",
           provider: "openai",
+          agentRuntime: { id: "openclaw", source: "implicit" },
           available: false,
         },
       ],
@@ -720,6 +741,7 @@ describe("gateway server models + voicewake", () => {
           id: "not-in-catalog",
           name: "not-in-catalog",
           provider: "openai",
+          agentRuntime: { id: "openclaw", source: "implicit" },
           available: false,
         },
       ],

@@ -9,7 +9,6 @@ const hoisted = vi.hoisted(() => ({
   releaseHeldLockForAbort: vi.fn(async () => undefined),
   releaseLeasedSteering: vi.fn(),
   stripSessionsYieldArtifacts: vi.fn(),
-  waitForSessionEvents: vi.fn(async () => undefined),
   waitForSessionsYieldAbortSettle: vi.fn(async () => undefined),
   withOwnedSessionWriteLock: vi.fn(async (operation: () => unknown) => await operation()),
 }));
@@ -38,7 +37,6 @@ function createInput(overrides: Partial<PromptErrorInput> = {}): PromptErrorInpu
     releaseLeasedSteering: hoisted.releaseLeasedSteering,
     sessionLockController: {
       releaseHeldLockForAbort: hoisted.releaseHeldLockForAbort,
-      waitForSessionEvents: hoisted.waitForSessionEvents,
     },
     withOwnedSessionWriteLock: hoisted.withOwnedSessionWriteLock,
     yieldAbortSettled: null,
@@ -63,7 +61,6 @@ describe("handleEmbeddedAttemptPromptError", () => {
     });
 
     expect(hoisted.releaseLeasedSteering).toHaveBeenCalledWith(error);
-    expect(hoisted.waitForSessionEvents).not.toHaveBeenCalled();
   });
 
   it("routes mid-turn prechecks under the owned session lock", async () => {
@@ -80,7 +77,6 @@ describe("handleEmbeddedAttemptPromptError", () => {
 
     await expect(handleEmbeddedAttemptPromptError(createInput({ error }))).resolves.toEqual({});
 
-    expect(hoisted.waitForSessionEvents).toHaveBeenCalledOnce();
     expect(hoisted.withOwnedSessionWriteLock).toHaveBeenCalledOnce();
     expect(hoisted.handleMidTurnPrecheckRequest).toHaveBeenCalledWith(request);
   });
@@ -105,7 +101,6 @@ describe("handleEmbeddedAttemptPromptError", () => {
       sessionId: "session-1",
     });
     expect(hoisted.releaseHeldLockForAbort).toHaveBeenCalledOnce();
-    expect(hoisted.waitForSessionEvents).toHaveBeenCalledWith(input.activeSession);
     expect(hoisted.stripSessionsYieldArtifacts).toHaveBeenCalledWith(input.activeSession);
     expect(hoisted.persistSessionsYieldContextMessage).toHaveBeenCalledWith(
       input.activeSession,

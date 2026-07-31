@@ -23,16 +23,6 @@ function extractCaptures(text: string, pattern: RegExp) {
   return Array.from(text.matchAll(globalPattern), (match) => match[1]?.trim()).filter(Boolean);
 }
 
-export function extractLastMatchingUserText(texts: string[], pattern: RegExp) {
-  for (let index = texts.length - 1; index >= 0; index -= 1) {
-    const text = texts[index] ?? "";
-    if (pattern.test(text)) {
-      return text;
-    }
-  }
-  return "";
-}
-
 export function extractExactReplyDirective(text: string) {
   const backtickedMatch = extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i);
   if (backtickedMatch) {
@@ -78,16 +68,66 @@ export function extractWhatsAppStickerMarkerDirective(text: string) {
   return extractLastCapture(text, /WhatsApp sticker marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
 }
 
+const QA_TIMESTAMPED_MESSAGE_PREFIX_RE =
+  /^\[[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?(?: [^\]\r\n]+)?\]\s*/u;
+const QA_WHATSAPP_ENVELOPE_PREFIX_RE = /^\[WhatsApp(?: [^\]\r\n]+)?\]\s*/iu;
+const QA_WHATSAPP_SENDER_PREFIX_RE = /^(?:\(self\)|[^:\r\n]+):\s*/u;
+
+function hasWhatsAppStructuredMessageBody(prompt: string, bodyPattern: RegExp) {
+  return prompt.split(/\r?\n/u).some((rawLine) => {
+    const line = rawLine.trim();
+    if (!line) {
+      return false;
+    }
+
+    const timestampedBody = line.replace(QA_TIMESTAMPED_MESSAGE_PREFIX_RE, "");
+    const envelopeBody = timestampedBody.replace(QA_WHATSAPP_ENVELOPE_PREFIX_RE, "");
+    if (bodyPattern.test(envelopeBody)) {
+      return true;
+    }
+    // Sender attribution is structural only inside a WhatsApp envelope. Treating every colon as
+    // attribution would misclassify ordinary timestamped prose such as "Contact note: <contact>".
+    if (envelopeBody === timestampedBody) {
+      return false;
+    }
+    return bodyPattern.test(envelopeBody.replace(QA_WHATSAPP_SENDER_PREFIX_RE, ""));
+  });
+}
+
 export function shouldUseWhatsAppLocationMarker(prompt: string) {
-  return /(?:^|[\n:]\s*)📍\s*37\.774900,\s*-122\.419400\b/u.test(prompt.trim());
+  return hasWhatsAppStructuredMessageBody(prompt, /^📍\s*37\.774900,\s*-122\.419400\b/u);
 }
 
 export function shouldUseWhatsAppContactMarker(prompt: string) {
-  return /(?:^|[\n:]\s*)<contacts?(?::|>)/iu.test(prompt.trim());
+  return hasWhatsAppStructuredMessageBody(prompt, /^<contacts?(?::|>)/iu);
 }
 
 export function shouldUseWhatsAppStickerMarker(prompt: string) {
-  return /(?:^|[\n:]\s*)<media:sticker>(?:\s|$)/iu.test(prompt.trim());
+  const label = "WhatsApp media:";
+  let searchFrom = 0;
+  for (;;) {
+    const labelIndex = prompt.indexOf(label, searchFrom);
+    if (labelIndex < 0) {
+      return false;
+    }
+    const fenceStart = prompt.indexOf("```json", labelIndex + label.length);
+    const fenceEnd = fenceStart >= 0 ? prompt.indexOf("```", fenceStart + 7) : -1;
+    if (fenceStart >= 0 && fenceEnd >= 0) {
+      try {
+        const value = JSON.parse(prompt.slice(fenceStart + 7, fenceEnd)) as {
+          payload?: { kind?: unknown };
+        };
+        if (value.payload?.kind === "sticker") {
+          return true;
+        }
+      } catch {
+        // Ignore malformed metadata and continue to the next matching block.
+      }
+      searchFrom = fenceEnd + 3;
+      continue;
+    }
+    searchFrom = labelIndex + label.length;
+  }
 }
 
 function extractLabeledMarkerDirective(text: string, label: string) {
@@ -154,6 +194,18 @@ export function hasToolDefinition(body: Record<string, unknown>, name: string) {
   const tools = Array.isArray(body.tools) ? body.tools : [];
   const dynamicTools = Array.isArray(body.dynamicTools) ? body.dynamicTools : [];
   return [...tools, ...dynamicTools].some((tool) => toolDefinitionMentionsName(tool, name));
+}
+
+export function hasDeclaredCustomTool(body: Record<string, unknown>, name: string) {
+  const tools = Array.isArray(body.tools) ? body.tools : [];
+  return tools.some(
+    (tool) =>
+      tool !== null &&
+      typeof tool === "object" &&
+      !Array.isArray(tool) &&
+      (tool as Record<string, unknown>).type === "custom" &&
+      (tool as Record<string, unknown>).name === name,
+  );
 }
 
 function toolDefinitionMentionsName(value: unknown, name: string, depth = 0): boolean {

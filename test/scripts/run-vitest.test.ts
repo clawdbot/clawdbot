@@ -279,7 +279,7 @@ describe("scripts/run-vitest", () => {
     ]);
   });
 
-  it("delegates bare explicit directories and globs to the project router", () => {
+  it("delegates bare explicit directories, globs, and extensionless prefixes", () => {
     expect(resolveTestProjectsDelegationArgs(["test/scripts"])).toEqual(["test/scripts"]);
     expect(
       resolveTestProjectsDelegationArgs(["run", "test/scripts", "--reporter=verbose"]),
@@ -290,6 +290,8 @@ describe("scripts/run-vitest", () => {
     expect(resolveTestProjectsDelegationArgs(["src/agents/**/*.ts"])).toBeNull();
     expect(resolveTestProjectsDelegationArgs(["src/**/*.test.ts"])).toBeNull();
     expect(resolveTestProjectsDelegationArgs(["./src"])).toBeNull();
+    const prefix = "extensions/telegram/src/format";
+    expect(resolveTestProjectsDelegationArgs([prefix])).toEqual([prefix]);
   });
 
   it("delegates mixed filters when an explicit file target is present", () => {
@@ -490,6 +492,30 @@ describe("scripts/run-vitest", () => {
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0",
       PATH: "/usr/bin",
     });
+  });
+
+  it("disables an inherited Node compile cache for every Vitest child", () => {
+    expect(
+      resolveRunVitestSpawnEnv(
+        {
+          NODE_COMPILE_CACHE: "/tmp/node-compile",
+          NODE_COMPILE_CACHE_PORTABLE: "1",
+          PATH: "/usr/bin",
+        },
+        ["run"],
+      ),
+    ).toEqual({
+      NODE_DISABLE_COMPILE_CACHE: "1",
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
+      PATH: "/usr/bin",
+    });
+    expect(
+      resolveRunVitestSpawnEnv({ NODE_COMPILE_CACHE: "/tmp/node-compile", PATH: "/usr/bin" }, [
+        "run",
+        "--coverage=false",
+      ]),
+    ).toMatchObject({ NODE_DISABLE_COMPILE_CACHE: "1" });
   });
 
   it("uses a longer default stall watchdog for broad e2e and project shard configs", () => {
@@ -1016,7 +1042,7 @@ async function waitFor(condition: () => boolean, timeoutMs = 3_000) {
     if (Date.now() - startedAt > timeoutMs) {
       throw new Error("timed out waiting for condition");
     }
-    await delay(25);
+    await delay(5);
   }
 }
 
@@ -1025,7 +1051,7 @@ async function waitForClose(child: ReturnType<typeof spawn>, timeoutMs = 5_000) 
     new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
       child.once("close", (code, signal) => resolve({ code, signal }));
     }),
-    delay(timeoutMs).then(() => {
+    delay(timeoutMs, undefined, { ref: false }).then(() => {
       throw new Error("timed out waiting for child close");
     }),
   ]);

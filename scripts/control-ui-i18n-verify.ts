@@ -13,35 +13,6 @@ export type CatalogFallbackBaseline = {
   version: number;
 };
 
-function fallbackPairs(baseline: CatalogFallbackBaseline): Set<string> {
-  return new Set(
-    Object.entries(baseline.fallbacks).flatMap(([key, locales]) =>
-      locales.map((locale) => `${key}\u0000${locale}`),
-    ),
-  );
-}
-
-export function assertScopedCatalogFallbackUpdate(
-  current: CatalogFallbackBaseline,
-  next: CatalogFallbackBaseline,
-  resolvedLocale: string,
-) {
-  if (current.version !== next.version || current.sourceHash !== next.sourceHash) {
-    throw new Error("scoped locale sync cannot update a stale catalog fallback baseline");
-  }
-  const currentPairs = fallbackPairs(current);
-  const nextPairs = fallbackPairs(next);
-  const added = [...nextPairs].filter((pair) => !currentPairs.has(pair));
-  const unrelatedRemovals = [...currentPairs].filter(
-    (pair) => !nextPairs.has(pair) && !pair.endsWith(`\u0000${resolvedLocale}`),
-  );
-  if (added.length > 0 || unrelatedRemovals.length > 0) {
-    throw new Error(
-      `scoped locale sync for ${resolvedLocale} found unrelated catalog fallback drift; run pnpm ui:i18n:baseline first`,
-    );
-  }
-}
-
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
@@ -55,6 +26,13 @@ function compareStringArrays(left: readonly string[], right: readonly string[]):
 
 function toRepoPath(filePath: string): string {
   return path.relative(ROOT, filePath).split(path.sep).join("/");
+}
+
+export function formatControlUiCatalogFallbackDriftError(): string {
+  return [
+    "control-ui catalog fallback baseline drift detected.",
+    "Run `pnpm ui:i18n:sync` (included in `pnpm release:prep`) and commit the generated locale artifacts.",
+  ].join("\n");
 }
 
 async function importLocaleModule<T>(filePath: string): Promise<T> {
@@ -153,7 +131,11 @@ export function analyzeControlUiCatalogs(
   return { errors, fallbacks };
 }
 
-async function buildCatalogFallbackBaseline(): Promise<CatalogFallbackBaseline> {
+async function buildCatalogFallbackBaseline(
+  options: {
+    allowCatalogDrift?: boolean;
+  } = {},
+): Promise<CatalogFallbackBaseline> {
   const sourceRaw = await readFile(SOURCE_LOCALE_PATH, "utf8");
   const sourceMap = await loadLocaleMap(SOURCE_LOCALE_PATH, "en");
   if (!sourceMap) {
@@ -171,7 +153,7 @@ async function buildCatalogFallbackBaseline(): Promise<CatalogFallbackBaseline> 
   }
 
   const analysis = analyzeControlUiCatalogs(sourceFlat, localeFlats);
-  if (analysis.errors.length > 0) {
+  if (analysis.errors.length > 0 && !options.allowCatalogDrift) {
     throw new Error(
       [
         "control-ui catalog verification failed.",
@@ -182,6 +164,11 @@ async function buildCatalogFallbackBaseline(): Promise<CatalogFallbackBaseline> 
         .join("\n"),
     );
   }
+  if (analysis.errors.length > 0) {
+    process.stdout.write(
+      `control-ui-i18n: catalog: tolerated_errors=${analysis.errors.length} during scoped sync\n`,
+    );
+  }
 
   return {
     fallbacks: analysis.fallbacks,
@@ -190,40 +177,7 @@ async function buildCatalogFallbackBaseline(): Promise<CatalogFallbackBaseline> 
   };
 }
 
-export async function syncControlUiCatalogFallbackBaseline(options: {
-  checkOnly: boolean;
-  resolvedLocale?: string;
-  write: boolean;
-}) {
-  const baseline = await buildCatalogFallbackBaseline();
-  const expected = `${JSON.stringify(baseline, null, 2)}\n`;
-  const current = existsSync(FALLBACK_BASELINE_PATH)
-    ? await readFile(FALLBACK_BASELINE_PATH, "utf8")
-    : "";
-  if (!options.checkOnly && options.write && current !== expected) {
-    if (options.resolvedLocale) {
-      let currentBaseline: CatalogFallbackBaseline;
-      try {
-        currentBaseline = JSON.parse(current) as CatalogFallbackBaseline;
-        assertScopedCatalogFallbackUpdate(currentBaseline, baseline, options.resolvedLocale);
-      } catch (error) {
-        throw new Error(
-          `cannot refresh catalog fallback metadata after scoped locale sync: ${error instanceof Error ? error.message : String(error)}`,
-          { cause: error },
-        );
-      }
-    }
-    await mkdir(I18N_ASSETS_DIR, { recursive: true });
-    await writeFile(FALLBACK_BASELINE_PATH, expected, "utf8");
-  }
-  if (options.checkOnly && current !== expected) {
-    throw new Error(
-      [
-        "control-ui catalog fallback baseline drift detected.",
-        `Run \`pnpm ui:i18n:baseline\` and commit ${toRepoPath(FALLBACK_BASELINE_PATH)}.`,
-      ].join("\n"),
-    );
-  }
+function printCatalogFallbackSummary(baseline: CatalogFallbackBaseline) {
   const fallbackPairCount = Object.values(baseline.fallbacks).reduce(
     (total, locales) => total + locales.length,
     0,
@@ -231,6 +185,37 @@ export async function syncControlUiCatalogFallbackBaseline(options: {
   process.stdout.write(
     `control-ui-i18n: catalog: fallback_keys=${Object.keys(baseline.fallbacks).length} fallback_pairs=${fallbackPairCount}\n`,
   );
+}
+
+async function verifyControlUiSourceCatalogShape() {
+  const sourceMap = await loadLocaleMap(SOURCE_LOCALE_PATH, "en");
+  if (!sourceMap) {
+    throw new Error("ui/src/i18n/locales/en.ts does not export en");
+  }
+  const sourceFlat = flattenControlUiCatalog(sourceMap, "en");
+  process.stdout.write(`control-ui-i18n: source: keys=${sourceFlat.size}\n`);
+}
+
+export async function syncControlUiCatalogFallbackBaseline(options: {
+  allowCatalogDrift?: boolean;
+  checkOnly: boolean;
+  write: boolean;
+}) {
+  const baseline = await buildCatalogFallbackBaseline({
+    allowCatalogDrift: options.allowCatalogDrift,
+  });
+  const expected = `${JSON.stringify(baseline, null, 2)}\n`;
+  const current = existsSync(FALLBACK_BASELINE_PATH)
+    ? await readFile(FALLBACK_BASELINE_PATH, "utf8")
+    : "";
+  if (!options.checkOnly && options.write && current !== expected) {
+    await mkdir(I18N_ASSETS_DIR, { recursive: true });
+    await writeFile(FALLBACK_BASELINE_PATH, expected, "utf8");
+  }
+  if (options.checkOnly && current !== expected) {
+    throw new Error(formatControlUiCatalogFallbackDriftError());
+  }
+  printCatalogFallbackSummary(baseline);
 }
 
 export async function verifyRuntimeLocaleConfig() {
@@ -262,10 +247,21 @@ export async function verifyRuntimeLocaleConfig() {
   }
 }
 
-export async function verifyControlUiCatalogs(options: { checkOnly: boolean; write: boolean }) {
+export async function verifyControlUiGeneratedCatalogs(options: {
+  checkOnly: boolean;
+  write: boolean;
+}) {
   await verifyRuntimeLocaleConfig();
   await syncControlUiRawCopyBaseline(options);
   await syncControlUiCatalogFallbackBaseline(options);
+}
+
+async function verifyControlUiContributorCatalogs(options: { checkOnly: boolean; write: boolean }) {
+  await verifyRuntimeLocaleConfig();
+  await syncControlUiRawCopyBaseline(options);
+  // Foreign catalogs may be stale after an English rename, deletion, or
+  // placeholder change. The post-merge locale workflow owns that repair.
+  await verifyControlUiSourceCatalogShape();
 }
 
 function usage(): never {
@@ -278,7 +274,7 @@ async function main() {
   if ((command !== "verify" && command !== "baseline") || rest.length > 0) {
     usage();
   }
-  await verifyControlUiCatalogs({
+  await verifyControlUiContributorCatalogs({
     checkOnly: command === "verify",
     write: command === "baseline",
   });

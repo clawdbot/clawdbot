@@ -17,6 +17,7 @@ const LEGACY_WHATSAPP_HEALTH_SCRIPT_RE =
   /(?:^|\s)(?:"[^"]*ensure-whatsapp\.sh"|'[^']*ensure-whatsapp\.sh'|[^\s#;|&]*ensure-whatsapp\.sh)\b/u;
 const CRON_MODEL_OVERRIDE_EXAMPLE_LIMIT = 3;
 const CRON_DELIVERY_TARGET_ADVISORY_EXAMPLE_LIMIT = 3;
+const CRONTAB_READ_TIMEOUT_MS = 5_000;
 
 function pluralize(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -107,7 +108,7 @@ export function noteCronModelOverrides(params: {
   }
 
   const lines = [
-    `Cron model overrides detected at ${shortenHomePath(params.storePath)}.`,
+    `Automation model overrides detected at ${shortenHomePath(params.storePath)}.`,
     `- ${pluralize(overrideCount, "job")} set \`payload.model\` and will not inherit \`agents.defaults.model\`${defaultModel ? ` (${defaultModel})` : ""}`,
     `- Provider namespaces: ${formatSortedCounts(providerCounts)}`,
   ];
@@ -118,7 +119,7 @@ export function noteCronModelOverrides(params: {
     lines.push(`- Examples: ${mismatchExamples.join(", ")}`);
   }
   lines.push(
-    `Review with ${formatCliCommand("openclaw cron list")} and ${formatCliCommand("openclaw cron show <job-id>")}; remove \`payload.model\` from jobs that should inherit the default.`,
+    `Review with ${formatCliCommand("openclaw automations list")} and ${formatCliCommand("openclaw automations show <job-id>")}; remove \`payload.model\` from jobs that should inherit the default.`,
   );
 
   note(lines.join("\n"), "Cron");
@@ -205,11 +206,11 @@ function collectCronDeliveryTargetAdvisory(params: {
   }
 
   return [
-    `Cron delivery targets unavailable channels at ${shortenHomePath(params.storePath)}.`,
+    `Automation delivery targets unavailable channels at ${shortenHomePath(params.storePath)}.`,
     `- ${pluralize(unavailableCount, "job")} ${unavailableCount === 1 ? "announces" : "announce"} to a channel whose plugin is not active; the next scheduled run will fail to deliver`,
     `- Channels: ${formatSortedCounts(channelCounts)}`,
     `- Examples: ${examples.join(", ")}`,
-    `Reactivate the channel plugin or update the job's \`delivery.channel\` after reviewing with ${formatCliCommand("openclaw cron list")} and ${formatCliCommand("openclaw cron show <job-id>")}.`,
+    `Reactivate the channel plugin or update the job's \`delivery.channel\` after reviewing with ${formatCliCommand("openclaw automations list")} and ${formatCliCommand("openclaw automations show <job-id>")}.`,
   ].join("\n");
 }
 
@@ -242,7 +243,10 @@ export function noteCronDeliveryTargetAdvisory(params: {
 }
 
 async function readUserCrontab(): Promise<{ stdout: string; stderr?: string }> {
-  const result = await runExec("crontab", ["-l"], { logOutput: false });
+  const result = await runExec("crontab", ["-l"], {
+    logOutput: false,
+    timeoutMs: CRONTAB_READ_TIMEOUT_MS,
+  });
   return {
     stdout: result.stdout,
     stderr: result.stderr,

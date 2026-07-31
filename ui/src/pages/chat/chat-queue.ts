@@ -1,5 +1,6 @@
 // Control UI page module owns Chat queue storage and queue item cleanup.
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import {
   scopedAgentIdForSession,
   visibleSessionMatches,
@@ -305,6 +306,7 @@ export function enqueueChatMessage(
   attachments?: ChatAttachment[],
   refreshSessions?: boolean,
   localCommand?: { args: string; name: string },
+  sender?: SenderIdentity,
 ): ChatQueueItem | null {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
@@ -321,6 +323,7 @@ export function enqueueChatMessage(
     localCommandName: localCommand?.name,
     sessionKey: host.sessionKey,
     agentId: scopedAgentIdForSession(host, host.sessionKey),
+    ...(sender ? { sender } : {}),
   };
   host.chatQueue = [...host.chatQueue, item];
   return item;
@@ -331,12 +334,15 @@ export function enqueuePendingRunMessage(
   text: string,
   pendingRunId: string,
   attachments?: ChatAttachment[],
+  sender?: SenderIdentity,
 ) {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
   if (!trimmed && !hasAttachments) {
     return;
   }
+  // Local commands join an existing run without a wire chat.send, so this is
+  // intentionally a non-SteeredChip pending row with no fake sendRunId.
   host.chatQueue = [
     ...host.chatQueue,
     {
@@ -346,6 +352,7 @@ export function enqueuePendingRunMessage(
       kind: "steered",
       attachments: hasAttachments ? cloneChatAttachmentsMetadata(attachments ?? []) : undefined,
       pendingRunId,
+      ...(sender ? { sender } : {}),
     },
   ];
 }

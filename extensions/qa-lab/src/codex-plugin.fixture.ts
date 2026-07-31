@@ -44,12 +44,6 @@ type CodexPluginPackageJson = {
   };
 };
 
-type CodexPluginInstallGateResult = {
-  text: string;
-  inputTokens: number;
-  responseCount: number;
-};
-
 function codexPluginDir(agentDir: string) {
   return path.join(agentDir, "plugins", CODEX_PLUGIN_ID);
 }
@@ -249,43 +243,5 @@ export function evaluateCodexPluginLifecycle(params: {
     selectedAuthProfileId,
     tokenRoute,
     removedRuntimePins,
-  };
-}
-
-export function createCodexPluginInstallGate() {
-  const events: string[] = [];
-  let installed = false;
-  let resolveInstall: (() => void) | undefined;
-  const installedPromise = new Promise<void>((resolve) => {
-    resolveInstall = resolve;
-  });
-
-  return {
-    events,
-    markInstalled() {
-      if (installed) {
-        return;
-      }
-      installed = true;
-      events.push("codex-plugin:installed");
-      resolveInstall?.();
-    },
-    async runFirstTurnAfterInstall(params: {
-      inputTokens: number;
-      run: () => string | Promise<string>;
-    }): Promise<CodexPluginInstallGateResult> {
-      if (!installed) {
-        events.push("agent-turn:waiting-for-codex-plugin");
-        await installedPromise;
-      }
-      events.push("agent-turn:started");
-      const text = await params.run();
-      events.push("agent-turn:completed");
-      return {
-        text,
-        inputTokens: params.inputTokens,
-        responseCount: 1,
-      };
-    },
   };
 }

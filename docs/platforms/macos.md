@@ -11,6 +11,13 @@ The macOS app is the OpenClaw **menu bar companion**: native tray UI, macOS
 permission prompts, notifications, WebChat, voice input, Canvas, and
 Mac-hosted node tools such as `system.run`.
 
+Use **Quick Chat** for a Spotlight-style main-session composer without opening a full window. Press Option-Space (⌥Space) by default, choose it from the menu bar menu, or record another shortcut in **Settings → General**.
+
+The full native chat accepts image attachments through its picker, paste, and
+drag and drop. Assistant-generated images render inline through short-lived
+Gateway artifact URLs and open in a larger preview; iOS and macOS share the same
+bounded image model and renderer.
+
 Only need the CLI and Gateway? Start with [Getting started](/start/getting-started).
 
 ## Download
@@ -73,7 +80,7 @@ stay on stable app builds.
 
 ## Open dashboard links
 
-In the macOS app's embedded dashboard, clicking an external web link opens it in a resizable browser sidebar. Each link opens in its own tab; clicking the same link again reuses its existing tab. Drag tabs to reorder them, close them with the tab close button or a middle-click, and right-click a tab for **Open in Default Browser**, **Copy Link**, **Reload**, **Close Tab**, and **Close Other Tabs**. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the sidebar's own back/forward controls navigate the active tab's history. The sidebar also has reload, open-in-default-browser, and close controls, and it remembers its width.
+In the macOS app's embedded dashboard, clicking an external web link opens it in a resizable browser sidebar at half the window width while keeping the dashboard navigation visible. Drag the divider to choose another width; the app remembers it. Each link opens in its own tab, the tab strip appears when multiple pages are open, and clicking the same link again reuses its existing tab. Drag tabs to reorder them, close them with the tab close button or a middle-click, and right-click a tab for **Open in Default Browser**, **Copy Link**, **Reload**, **Close Tab**, and **Close Other Tabs**. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the sidebar's own back/forward controls navigate the active tab's history. The sidebar also has reload, open-in-default-browser, and close controls.
 
 The titlebar controls follow the app sidebar: while it is expanded, back/forward sit at its right edge next to the sidebar toggle; while it is collapsed, they make way for a search button (opens the command palette) and a new-session button.
 
@@ -98,7 +105,7 @@ See [Gateway on macOS](/platforms/mac/bundled-gateway) for manual recovery.
 
 ## What the app owns
 
-- Menu bar status, notifications, health, and WebChat.
+- Menu bar status, notifications, health, WebChat, and the floating Quick Chat bar.
 - macOS permission prompts for screen, microphone, speech, automation, and accessibility.
 - One Mac node that combines native Canvas, camera/screen capture, notifications,
   location, and computer control with the CLI node host's system, browser,
@@ -107,6 +114,9 @@ See [Gateway on macOS](/platforms/mac/bundled-gateway) for manual recovery.
 - App-context execution for approved shell commands, preserving the app's macOS
   permission attribution while the CLI runtime owns shared node policy.
 - Remote-mode SSH tunnels or direct Gateway connections.
+
+In the embedded Control UI, **Settings → Notifications** shows the app's native
+notification permission instead of browser push because the app delivers notifications natively.
 
 The app does **not** replace the Gateway or general CLI docs. Gateway
 configuration, providers, plugins, channels, tools, and security live in their

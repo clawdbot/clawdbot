@@ -195,7 +195,6 @@ final class PostUpdateModel {
         case verifying
         case notifying
         case complete
-        case external
         case failed
     }
 
@@ -207,18 +206,25 @@ final class PostUpdateModel {
     var isWorking: Bool {
         switch self.phase {
         case .checking, .updating, .verifying, .notifying: true
-        case .complete, .external, .failed: false
+        case .complete, .failed: false
         }
     }
 
     var mood: OpenClawMascotMood {
         switch self.phase {
-        case .checking, .updating, .verifying, .notifying: .thinking
+        case .checking, .updating, .verifying, .notifying: .working
         case .complete: .celebrating
-        case .external: .attentive
         case .failed: .sad
         }
     }
+}
+
+enum PostUpdateGatewayAction: Equatable {
+    case none
+    case ownershipFailure
+    case repair
+    case update
+    case install
 }
 
 struct PostUpdateSessionsResponse: Decodable {
@@ -267,7 +273,6 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
             allowsUpdateWorkflow: !CLIInstallBuild.isDebug)
         else { return false }
         self.receipt = receipt
-        self.show()
         self.run()
         return true
     }
@@ -337,11 +342,12 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
     private func finishUpdate(receipt: PostAppUpdateReceipt) async {
         let connectionMode = AppStateStore.shared.connectionMode
         guard CLIInstallPrompter.shouldManageCLI(connectionMode: connectionMode) else {
-            self.finishExternal(String(
-                localized: "The Mac app is updated. Gateway setup is not configured on this Mac."))
+            self.finishSilently()
             return
         }
 
+        // Resume a definitely uncommitted notification before the Gateway action
+        // gate; a ready runtime must not discard it as an app-only receipt.
         if Self.isNotificationOnlyRetry(receipt) {
             await self.finishNotification(receipt: receipt, connectionMode: connectionMode)
             return
@@ -359,25 +365,17 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         switch connectionMode {
         case .local:
             guard let programArguments = GatewayLaunchAgentManager.launchdProgramArguments() else {
-                self.fail(
-                    message: String(localized: "The Gateway could not be checked."),
-                    details: String(
-                        localized: """
-                        OpenClaw could not read the Gateway service ownership record. \
-                        Retry after checking the Gateway LaunchAgent.
-                        """))
+                self.finishAfterOwnershipCheckFailure(
+                    connectionMode: connectionMode,
+                    receipt: receipt)
                 return
             }
             runtimeProgramArguments = programArguments
         case .remote:
             guard let programArguments = NodeServiceManager.launchdProgramArguments() else {
-                self.fail(
-                    message: String(localized: "The Mac node could not be checked."),
-                    details: String(
-                        localized: """
-                        OpenClaw could not read the node service ownership record. \
-                        Retry after checking the node LaunchAgent.
-                        """))
+                self.finishAfterOwnershipCheckFailure(
+                    connectionMode: connectionMode,
+                    receipt: receipt)
                 return
             }
             runtimeProgramArguments = programArguments
@@ -392,31 +390,36 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
             launchAgentWriteDisabled: GatewayLaunchAgentManager.isLaunchAgentWriteDisabled())
         let restartGateway = connectionMode == .local && !AppStateStore.shared.isPaused
 
-        switch managedStatus {
-        case .ready where ownsManagedRuntime:
-            if receipt.gatewayUpdateIncomplete {
-                self.model.phase = .updating
-                let outcome = await CLIInstaller.updateManaged(
-                    targetVersion: receipt.toVersion,
-                    restartGateway: restartGateway,
-                    repair: true)
-                { [weak self] message in
-                    self?.model.message = message
-                }
-                guard self.consume(outcome) else { return }
-                self.setGatewayUpdateIncomplete(false, receipt: receipt)
+        // App-only relaunches stay invisible. The window belongs only to
+        // confirmed managed Gateway work and its recovery path.
+        switch Self.gatewayAction(
+            status: managedStatus,
+            ownsManagedRuntime: ownsManagedRuntime,
+            gatewayUpdateIncomplete: receipt.gatewayUpdateIncomplete)
+        {
+        case .none:
+            self.finishSilently()
+            return
+        case .ownershipFailure:
+            self.finishAfterOwnershipCheckFailure(
+                connectionMode: connectionMode,
+                receipt: receipt)
+            return
+        case .repair:
+            self.model.phase = .updating
+            self.show()
+            let outcome = await CLIInstaller.updateManaged(
+                targetVersion: receipt.toVersion,
+                restartGateway: restartGateway,
+                repair: true)
+            { [weak self] message in
+                self?.model.message = message
             }
-        case let .incompatible(_, found, required) where ownsManagedRuntime:
-            guard CLIInstallPrompter.isManagedUpgrade(found: found, required: required) else {
-                self.finishExternal(String(
-                    localized: """
-                    The Mac app is updated. Gateway \(found) is newer than app \(required), \
-                    so OpenClaw left it unchanged.
-                    """))
-                return
-            }
+            guard self.consume(outcome) else { return }
+        case .update:
             self.setGatewayUpdateIncomplete(true, receipt: receipt)
             self.model.phase = .updating
+            self.show()
             let outcome = await CLIInstaller.updateManaged(
                 targetVersion: receipt.toVersion,
                 restartGateway: restartGateway)
@@ -424,11 +427,10 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
                 self?.model.message = message
             }
             guard self.consume(outcome) else { return }
-            self.setGatewayUpdateIncomplete(false, receipt: receipt)
-        case .missing where ownsManagedRuntime,
-             .unusable where ownsManagedRuntime:
+        case .install:
             self.setGatewayUpdateIncomplete(true, receipt: receipt)
             self.model.phase = .updating
+            self.show()
             let installed = await CLIInstaller.install(target: .exact(receipt.toVersion)) { [weak self] message in
                 self?.model.message = message
             }
@@ -438,14 +440,6 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
                     details: String(localized: "The managed OpenClaw runtime could not be reinstalled."))
                 return
             }
-            self.setGatewayUpdateIncomplete(false, receipt: receipt)
-        default:
-            self.finishExternal(String(
-                localized: """
-                The Mac app is updated. This Gateway is managed separately, \
-                so OpenClaw left it unchanged.
-                """))
-            return
         }
 
         self.model.phase = .verifying
@@ -453,6 +447,9 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
             ? String(localized: "Restarting and verifying the Gateway…")
             : String(localized: "Verifying the Mac node runtime…")
         guard await self.verifyRuntime(connectionMode: connectionMode) else { return }
+        // Verification owns the persistence boundary: clearing earlier would
+        // turn a failed health check into a silent app-only completion on retry.
+        self.setGatewayUpdateIncomplete(false, receipt: receipt)
 
         await self.finishNotification(receipt: receipt, connectionMode: connectionMode)
     }
@@ -690,6 +687,32 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
             !receipt.gatewayUpdateIncomplete
     }
 
+    static func gatewayAction(
+        status: CLIInstaller.Status,
+        ownsManagedRuntime: Bool,
+        gatewayUpdateIncomplete: Bool) -> PostUpdateGatewayAction
+    {
+        if gatewayUpdateIncomplete, !ownsManagedRuntime {
+            return .ownershipFailure
+        }
+        guard ownsManagedRuntime else { return .none }
+        return switch status {
+        case .ready:
+            gatewayUpdateIncomplete ? .repair : .none
+        case let .incompatible(_, found, required):
+            CLIInstallPrompter.isManagedUpgrade(found: found, required: required) ? .update : .none
+        case .missing, .unusable:
+            .install
+        }
+    }
+
+    static func shouldPresentOwnershipFailure(
+        connectionMode: AppState.ConnectionMode,
+        gatewayUpdateIncomplete: Bool) -> Bool
+    {
+        gatewayUpdateIncomplete && connectionMode != .unconfigured
+    }
+
     static func remoteNotificationBlocker(
         gatewayVersion: String?,
         appVersion: String) -> PostUpdateNotificationOutcome?
@@ -748,12 +771,47 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         }
     }
 
-    private func finishExternal(_ message: String) {
+    private func finishSilently() {
         PostAppUpdateReceiptStore.clear()
-        self.model.phase = .external
-        self.model.title = String(localized: "Mac app updated")
-        self.model.message = message
-        self.model.details = nil
+        self.receipt = nil
+        self.close()
+    }
+
+    private func finishAfterOwnershipCheckFailure(
+        connectionMode: AppState.ConnectionMode,
+        receipt: PostAppUpdateReceipt)
+    {
+        guard Self.shouldPresentOwnershipFailure(
+            connectionMode: connectionMode,
+            gatewayUpdateIncomplete: receipt.gatewayUpdateIncomplete)
+        else {
+            self.finishSilently()
+            return
+        }
+
+        // An incomplete receipt proves app-owned Gateway work already began.
+        // Keep it retryable when the service record is temporarily unreadable.
+        self.show()
+        switch connectionMode {
+        case .local:
+            self.fail(
+                message: String(localized: "The Gateway could not be checked."),
+                details: String(
+                    localized: """
+                    OpenClaw could not read the Gateway service ownership record. \
+                    Retry after checking the Gateway LaunchAgent.
+                    """))
+        case .remote:
+            self.fail(
+                message: String(localized: "The Mac node could not be checked."),
+                details: String(
+                    localized: """
+                    OpenClaw could not read the node service ownership record. \
+                    Retry after checking the node LaunchAgent.
+                    """))
+        case .unconfigured:
+            self.finishSilently()
+        }
     }
 
     private func fail(message: String, details: String?) {
@@ -821,11 +879,8 @@ private struct PostUpdateView: View {
                 Button("Retry") { PostUpdateController.shared.retry() }
                     .buttonStyle(.borderedProminent)
             }
-        case .complete, .external:
+        case .complete:
             HStack {
-                if self.model.phase == .external {
-                    Button("Update guide") { PostUpdateController.shared.openUpdateGuide() }
-                }
                 Spacer()
                 Button("Continue") { PostUpdateController.shared.close() }
                     .buttonStyle(.borderedProminent)

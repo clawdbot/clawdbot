@@ -1,16 +1,15 @@
+import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
 import { deriveDurableFinalDeliveryRequirements } from "openclaw/plugin-sdk/channel-outbound";
 /**
  * Converts authorized ClickClack messages into OpenClaw agent/model replies and
  * routes resulting outbound text back to ClickClack.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { resolveClickClackInboundAccess, type ClickClackInboundAccess } from "./access.js";
 import { createClickClackActivityPublisher, type ClickClackActivityPublisher } from "./activity.js";
 import { createClickClackClient } from "./http-client.js";
 import { sendClickClackText } from "./outbound.js";
 import { getClickClackRuntime } from "./runtime.js";
-import { buildClickClackTarget } from "./target.js";
 import type {
   ClickClackMessage,
   ClickClackMessageProvenance,
@@ -33,59 +32,6 @@ function hasClickClackReplyMedia(payload: {
 
 function resolveClickClackAgentRunId(messageId: string): string | undefined {
   return CLICKCLACK_MESSAGE_ID_PATTERN.test(messageId) ? `${CHANNEL_ID}:${messageId}` : undefined;
-}
-
-function resolveAccountAgentRoute(params: {
-  cfg: OpenClawConfig;
-  account: ResolvedClickClackAccount;
-  target: string;
-  isDirect: boolean;
-}) {
-  const runtime = getClickClackRuntime();
-  const route = runtime.channel.routing.resolveAgentRoute({
-    cfg: params.cfg,
-    channel: CHANNEL_ID,
-    accountId: params.account.accountId,
-    peer: {
-      kind: params.isDirect ? "direct" : "channel",
-      id: params.target,
-    },
-  });
-  const agentId = normalizeAgentId(params.account.agentId ?? route.agentId);
-  if (agentId === route.agentId) {
-    return route;
-  }
-  const peer = {
-    kind: params.isDirect ? ("direct" as const) : ("channel" as const),
-    id: params.target,
-  };
-  const dmScope = params.cfg.session?.dmScope ?? "main";
-  // Account-level agent ownership changes only the agent prefix. Preserve the
-  // resolved session policy so outbound recipient routing reaches this key.
-  const sessionKey = runtime.channel.routing.buildAgentSessionKey({
-    agentId,
-    mainKey: params.cfg.session?.mainKey,
-    channel: CHANNEL_ID,
-    accountId: params.account.accountId,
-    peer,
-    dmScope,
-    identityLinks: params.cfg.session?.identityLinks,
-  });
-  const mainSessionKey = runtime.channel.routing.buildAgentSessionKey({
-    agentId,
-    mainKey: params.cfg.session?.mainKey,
-    channel: CHANNEL_ID,
-    accountId: params.account.accountId,
-    dmScope: "main",
-  });
-  return {
-    ...route,
-    agentId,
-    dmScope,
-    sessionKey,
-    mainSessionKey,
-    lastRoutePolicy: sessionKey === mainSessionKey ? "main" : "session",
-  };
 }
 
 async function dispatchModelReply(params: {
@@ -150,19 +96,12 @@ export async function handleClickClackInbound(params: {
   if (!access.shouldDispatch) {
     return;
   }
-  const isDirect = Boolean(message.direct_conversation_id);
-  const target = buildClickClackTarget(
-    isDirect
-      ? { chatType: "direct", kind: "dm", id: message.author_id }
-      : { chatType: "group", kind: "channel", id: message.channel_id ?? "" },
-  );
-  const route = resolveAccountAgentRoute({
-    cfg: params.config as OpenClawConfig,
-    account: params.account,
-    target,
-    isDirect,
-  });
-  if (params.account.replyMode === "model") {
+  const conversationId = message.channel_id || message.direct_conversation_id;
+  if (!conversationId) {
+    return;
+  }
+  const { discussionRoute, isDirect, route, target } = access.preparedRoute;
+  if (params.account.replyMode === "model" && !discussionRoute) {
     await dispatchModelReply({
       account: params.account,
       cfg: params.config as OpenClawConfig,
@@ -184,7 +123,7 @@ export async function handleClickClackInbound(params: {
   if (params.account.agentActivity && (message.channel_id || message.direct_conversation_id)) {
     activity = createClickClackActivityPublisher({
       client: createClickClackClient({
-        baseUrl: params.account.baseUrl,
+        baseUrl: params.account.apiEndpoint,
         token: params.account.token,
         correlationId: params.correlationId,
       }),
@@ -200,52 +139,54 @@ export async function handleClickClackInbound(params: {
     });
   }
   const senderName = message.author?.display_name || message.author_id;
-  const previousTimestamp = runtime.channel.session.readSessionUpdatedAt({
-    storePath: runtime.channel.session.resolveStorePath(params.config.session?.store, {
-      agentId: route.agentId,
-    }),
-    sessionKey: route.sessionKey,
-  });
   // Preserve both normalized channel fields and ClickClack-native ids so reply
   // routing, session recovery, and command authorization see the same message.
-  const body = runtime.channel.reply.formatAgentEnvelope({
+  const body = createChannelInboundEnvelopeBuilder({
+    cfg: params.config as OpenClawConfig,
+    route,
+  })({
     channel: "ClickClack",
     from: senderName,
     timestamp: new Date(message.created_at),
-    previousTimestamp,
-    envelope: runtime.channel.reply.resolveEnvelopeFormatOptions(params.config as OpenClawConfig),
     body: message.body,
   });
-  const storePath = runtime.channel.session.resolveStorePath(params.config.session?.store, {
-    agentId: route.agentId,
-  });
-  const ctxPayload = runtime.channel.reply.finalizeInboundContext({
-    Body: body,
-    BodyForAgent: message.body,
-    RawBody: message.body,
-    CommandBody: message.body,
-    From: target,
-    To: target,
-    SessionKey: route.sessionKey,
-    AccountId: route.accountId ?? params.account.accountId,
-    ChatType: isDirect ? "direct" : "group",
-    WasMentioned: isDirect ? undefined : true,
-    ConversationLabel: isDirect ? senderName : message.channel_id,
-    GroupChannel: message.channel_id,
-    NativeChannelId: message.channel_id || message.direct_conversation_id,
-    MessageThreadId: message.parent_message_id ? message.thread_root_id : undefined,
-    ThreadParentId: message.parent_message_id ? message.thread_root_id : undefined,
-    SenderName: senderName,
-    SenderId: message.author_id,
-    Provider: CHANNEL_ID,
-    Surface: CHANNEL_ID,
-    MessageSid: message.id,
-    MessageSidFull: message.id,
-    ReplyToId: message.id,
-    Timestamp: message.created_at,
-    OriginatingChannel: CHANNEL_ID,
-    OriginatingTo: target,
-    CommandAuthorized: access.commandAuthorized,
+  const ctxPayload = runtime.channel.inbound.buildContext({
+    channel: CHANNEL_ID,
+    accountId: route.accountId ?? params.account.accountId,
+    messageId: message.id,
+    messageIdFull: message.id,
+    timestamp: new Date(message.created_at).getTime(),
+    from: target,
+    sender: { id: message.author_id, name: senderName },
+    conversation: {
+      kind: isDirect ? "direct" : "group",
+      id: conversationId,
+      label: isDirect ? senderName : message.channel_id,
+      threadId: message.parent_message_id ? message.thread_root_id : undefined,
+      nativeChannelId: conversationId,
+    },
+    route: {
+      agentId: route.agentId,
+      dmScope: route.dmScope,
+      accountId: route.accountId,
+      routeSessionKey: route.sessionKey,
+    },
+    reply: {
+      to: target,
+      originatingTo: target,
+      replyToId: message.id,
+      messageThreadId: message.parent_message_id ? message.thread_root_id : undefined,
+      threadParentId: message.parent_message_id ? message.thread_root_id : undefined,
+    },
+    message: { body, bodyForAgent: message.body, rawBody: message.body, commandBody: message.body },
+    access: {
+      commands: { authorized: access.commandAuthorized },
+      mentions: access.mentionFacts,
+    },
+    extra: {
+      GroupChannel: message.channel_id,
+      ...(discussionRoute ? { GroupSystemPrompt: discussionRoute.systemPrompt } : {}),
+    },
   });
   const runId = resolveClickClackAgentRunId(message.id);
   const activityReplyOptions = activity
@@ -266,17 +207,12 @@ export async function handleClickClackInbound(params: {
         allowProgressCallbacksWhenSourceDeliverySuppressed: true,
       }
     : undefined;
-  const dispatchPromise = runtime.channel.inbound.dispatchReply({
+  const dispatchPromise = runtime.channel.inbound.dispatch({
     cfg: params.config as OpenClawConfig,
     channel: CHANNEL_ID,
     accountId: params.account.accountId,
-    agentId: route.agentId,
-    routeSessionKey: route.sessionKey,
-    storePath,
+    route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
     ctxPayload,
-    recordInboundSession: runtime.channel.session.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher:
-      runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
     toolsAllow: params.account.toolsAllow,
     // Provenance stamping shares the agentActivity opt-in: with the flag off
     // the extension's wire payloads stay byte-identical to pre-activity

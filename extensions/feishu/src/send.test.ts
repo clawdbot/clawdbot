@@ -8,6 +8,7 @@ const {
   mockClientList,
   mockClientPatch,
   mockCreateFeishuClient,
+  mockLogVerbose,
   mockResolveMarkdownTableMode,
   mockResolveFeishuAccount,
   mockRuntimeConvertMarkdownTables,
@@ -18,6 +19,7 @@ const {
   mockClientList: vi.fn(),
   mockClientPatch: vi.fn(),
   mockCreateFeishuClient: vi.fn(),
+  mockLogVerbose: vi.fn(),
   mockResolveMarkdownTableMode: vi.fn(() => "preserve"),
   mockResolveFeishuAccount: vi.fn(),
   mockRuntimeConvertMarkdownTables: vi.fn((text: string) => text),
@@ -27,6 +29,14 @@ const {
 vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
   resolveMarkdownTableMode: mockResolveMarkdownTableMode,
 }));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    logVerbose: mockLogVerbose,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-chunking")>();
@@ -79,6 +89,7 @@ describe("getMessageFeishu", () => {
 
   afterAll(() => {
     vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/runtime-env");
     vi.doUnmock("openclaw/plugin-sdk/text-chunking");
     vi.doUnmock("./client.js");
     vi.doUnmock("./accounts.js");
@@ -692,6 +703,40 @@ describe("getMessageFeishu", () => {
         createTime: undefined,
       },
     ]);
+  });
+
+  it("logs a safe diagnostic (not raw content) when message content is not valid JSON", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        message_id: "om_bad_json",
+        chat_id: "oc_test",
+        chat_type: "group",
+        msg_type: "text",
+        body: {
+          content: "{bad json}",
+        },
+        sender: {
+          id: "ou_1",
+          sender_type: "user",
+        },
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_bad_json",
+    });
+
+    expect(mockLogVerbose).toHaveBeenCalledWith(
+      expect.stringContaining("feishu message content parse failed for text message"),
+    );
+    expect(mockLogVerbose.mock.calls.flat().map(String).join("\n")).not.toContain("{bad json}");
+    expect(result).toMatchObject({
+      messageId: "om_bad_json",
+      contentType: "text",
+      content: "{bad json}",
+    });
   });
 });
 

@@ -39,10 +39,9 @@ class CronJobNavigationTest {
           .firstOrNull { it.isClickable },
       ) { "Cron fixture row must expose a click action" }
     assertTrue("Cron fixture row must expose a click action", cronJobRow.isClickable)
-    assertFalse(device.hasObject(By.text("Inspect scheduled gateway work.")))
+    assertFalse(device.hasObject(By.text("Run Now")))
     cronJobRow.click()
 
-    assertNotNull(device.wait(Until.findObject(By.text("Inspect scheduled gateway work.")), waitTimeoutMs))
     assertNotNull(findTextAfterScrolling("Run Now"))
     assertNotNull(findTextAfterScrolling("Recent Runs"))
     assertNotNull(findTextAfterScrolling("Release checklist ready", exact = false))

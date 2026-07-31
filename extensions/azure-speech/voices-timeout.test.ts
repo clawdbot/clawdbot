@@ -34,40 +34,51 @@ describe("listAzureSpeechVoices timeout", () => {
     vi.unstubAllGlobals();
   });
 
-  it("aborts a hanging voice list request within the configured timeout", async () => {
-    let requestCount = 0;
-    const server = createServer((_req, _res) => {
-      requestCount += 1;
-    });
+  it(
+    "aborts a hanging voice list request within the configured timeout",
+    { timeout: 2_000 },
+    async () => {
+      let requestCount = 0;
+      const server = createServer((_req, _res) => {
+        requestCount += 1;
+      });
 
-    const port = await listenLocal(server);
+      const port = await listenLocal(server);
 
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-        return await originalFetch(`http://127.0.0.1:${port}/cognitiveservices/voices/list`, init);
-      }) as unknown as typeof globalThis.fetch,
-    );
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+          return await originalFetch(
+            `http://127.0.0.1:${port}/cognitiveservices/voices/list`,
+            init,
+          );
+        }) as unknown as typeof globalThis.fetch,
+      );
 
-    const startedAt = Date.now();
+      const startedAt = Date.now();
+      let watchdog: ReturnType<typeof setTimeout> | undefined;
 
-    try {
-      await expect(
-        Promise.race([
-          listAzureSpeechVoices({
-            apiKey: "not-a-real",
-            baseUrl: "https://custom.example.com",
-            timeoutMs: 250,
-          }),
-          new Promise<never>((_, reject) => {
-            setTimeout(() => reject(new Error("voices list did not time out")), 2_000);
-          }),
-        ]),
-      ).rejects.toThrow(/aborted|timeout|timed out/i);
-      expect(Date.now() - startedAt).toBeLessThan(2_000);
-      expect(requestCount).toBe(1);
-    } finally {
-      await closeServer(server);
-    }
-  });
+      try {
+        await expect(
+          Promise.race([
+            listAzureSpeechVoices({
+              apiKey: "not-a-real",
+              baseUrl: "https://custom.example.com",
+              timeoutMs: 100,
+            }),
+            new Promise<never>((_, reject) => {
+              watchdog = setTimeout(() => reject(new Error("voices list did not time out")), 1_000);
+            }),
+          ]),
+        ).rejects.toThrow(/aborted|timeout|timed out/i);
+        expect(Date.now() - startedAt).toBeLessThan(1_000);
+        expect(requestCount).toBe(1);
+      } finally {
+        if (watchdog) {
+          clearTimeout(watchdog);
+        }
+        await closeServer(server);
+      }
+    },
+  );
 });

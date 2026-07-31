@@ -2,13 +2,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
-import type { ensureNodeHostConfig } from "./config.js";
+import type { configureNodeHost } from "./config.js";
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 import { runNodeHost } from "./runner.js";
 
 const mocks = vi.hoisted(() => ({
   capturedGatewayClientOptions: [] as GatewayClientOptions[],
-  capturedSavedGatewayConfigs: [] as Array<{ contextPath?: string }>,
+  capturedConfiguredGatewayConfigs: [] as Array<{ contextPath?: string }>,
   capturedGatewayClients: [] as Array<{
     request: ReturnType<typeof vi.fn>;
     stop: ReturnType<typeof vi.fn>;
@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   }>,
   mcpConfiguredServerCount: 0,
   mcpDescriptors: [] as Array<Record<string, unknown>>,
+  nodePluginTools: [] as Array<Record<string, unknown>>,
   nodeSkillDescriptors: [] as Array<Record<string, unknown>>,
   runtimeSteps: [] as string[],
   useFakeRuntime: false,
@@ -26,15 +27,15 @@ const mocks = vi.hoisted(() => ({
   normalizedPath: null as string | null,
   resolvedExecutables: new Map<string, string>(),
   closeMcpManager: vi.fn(async () => undefined),
-  ensureNodeHostConfig: vi.fn(async () => ({
-    version: 1,
-    nodeId: "node-test",
-  })),
-  saveNodeHostConfig: vi.fn(async (cfg: { gateway?: { contextPath?: string } }) => {
-    if (cfg?.gateway) {
-      mocks.capturedSavedGatewayConfigs.push(cfg.gateway);
-    }
-    return undefined;
+  runStartupMigrations: vi.fn(async () => undefined),
+  configureNodeHost: vi.fn(async (params: Parameters<typeof configureNodeHost>[0]) => {
+    mocks.capturedConfiguredGatewayConfigs.push(params.gateway);
+    return {
+      version: 1 as const,
+      nodeId: params.nodeId?.trim() || "node-test",
+      displayName: params.displayName?.trim() || params.fallbackDisplayName,
+      gateway: params.gateway,
+    };
   }),
   getRuntimeConfig: vi.fn(() => ({
     gateway: {
@@ -107,8 +108,7 @@ vi.mock("../infra/path-env.js", () => ({
 }));
 
 vi.mock("./config.js", () => ({
-  ensureNodeHostConfig: mocks.ensureNodeHostConfig,
-  saveNodeHostConfig: mocks.saveNodeHostConfig,
+  configureNodeHost: mocks.configureNodeHost,
 }));
 
 vi.mock("./plugin-node-host.js", () => ({
@@ -118,15 +118,7 @@ vi.mock("./plugin-node-host.js", () => ({
     return {
       commands: [...mocks.nodeHostCommands],
       caps: [...mocks.nodeHostCaps],
-      nodePluginTools: [
-        {
-          pluginId: "test-plugin",
-          name: "remote_echo",
-          description: "Echo from node host",
-          command: "test.echo",
-          parameters: { type: "object", properties: {} },
-        },
-      ],
+      nodePluginTools: [...mocks.nodePluginTools],
     };
   }),
   watchRegisteredNodeHostCommandAvailability: vi.fn((_context: unknown, onChange: () => void) => {
@@ -152,6 +144,10 @@ vi.mock("./mcp.js", () => ({
 
 vi.mock("./skills.js", () => ({
   scanNodeHostedSkills: vi.fn(() => mocks.nodeSkillDescriptors),
+}));
+
+vi.mock("./startup-state-migrations.js", () => ({
+  runStartupMigrations: mocks.runStartupMigrations,
 }));
 
 vi.mock("./runtime.js", async (importOriginal) => {
@@ -181,9 +177,19 @@ function lastCapturedOptions(): GatewayClientOptions | undefined {
 describe("runNodeHost", () => {
   beforeEach(() => {
     mocks.capturedGatewayClientOptions.length = 0;
+    mocks.capturedConfiguredGatewayConfigs.length = 0;
     mocks.capturedGatewayClients.length = 0;
     mocks.mcpConfiguredServerCount = 0;
     mocks.mcpDescriptors = [];
+    mocks.nodePluginTools = [
+      {
+        pluginId: "test-plugin",
+        name: "remote_echo",
+        description: "Echo from node host",
+        command: "test.echo",
+        parameters: { type: "object", properties: {} },
+      },
+    ];
     mocks.nodeSkillDescriptors = [];
     mocks.runtimeSteps = [];
     mocks.useFakeRuntime = false;
@@ -197,6 +203,17 @@ describe("runNodeHost", () => {
     mocks.getRuntimeConfig.mockReturnValue({
       gateway: { handshakeTimeoutMs: 1_000 },
     });
+  });
+
+  it("runs startup state migrations before constructing node-host state", async () => {
+    await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
+      "event loop readiness timeout",
+    );
+
+    expect(mocks.runStartupMigrations).toHaveBeenCalledTimes(1);
+    expect(mocks.runStartupMigrations.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.configureNodeHost.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
   });
 
   it.each([
@@ -245,16 +262,21 @@ describe("runNodeHost", () => {
     expect(mocks.activeRuntime.cancelAll).toHaveBeenCalledOnce();
   });
 
-  it("passes the resolved Gateway URL to the Gateway client", async () => {
+  it.each([
+    ["127.0.0.1", "ws://127.0.0.1:18789"],
+    ["gateway.local", "ws://gateway.local:18789"],
+    ["::1", "ws://[::1]:18789"],
+    ["[::1]", "ws://[::1]:18789"],
+  ])("passes Gateway host %s as URL %s", async (gatewayHost, expectedUrl) => {
     await expect(
       runNodeHost({
-        gatewayHost: "127.0.0.1",
+        gatewayHost,
         gatewayPort: 18789,
       }),
     ).rejects.toThrow("event loop readiness timeout");
 
     expect(mocks.capturedGatewayClientOptions).toHaveLength(1);
-    expect(mocks.capturedGatewayClientOptions[0]?.url).toBe("ws://127.0.0.1:18789");
+    expect(mocks.capturedGatewayClientOptions[0]?.url).toBe(expectedUrl);
     expect(mocks.capturedGatewayClients[0]?.request).not.toHaveBeenCalled();
   });
 
@@ -281,8 +303,7 @@ describe("runNodeHost", () => {
         },
       },
       env: process.env,
-      localTokenPrecedence: "env-first",
-      localPasswordPrecedence: "env-first",
+      localPrecedence: "env-first",
       remoteTokenPrecedence: "env-first",
       remotePasswordPrecedence: "env-first",
     });
@@ -487,6 +508,44 @@ describe("runNodeHost", () => {
         },
       ],
     });
+  });
+
+  it("clears gateway plugin tools when the final node-hosted tool disappears", async () => {
+    mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
+      ready: true,
+      aborted: false,
+      elapsedMs: 0,
+    });
+    const processOnceSpy = vi.spyOn(process, "once");
+    const previousExitCode = process.exitCode;
+    try {
+      const running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 });
+      await vi.waitFor(() => expect(mocks.availabilityChanged).toBeDefined());
+      const client = mocks.capturedGatewayClients[0];
+      lastCapturedOptions()?.onHelloOk?.({
+        protocol: 1,
+        features: { methods: [], events: [] },
+      } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+      expect(client?.request).toHaveBeenCalledWith("node.pluginTools.update", {
+        tools: [expect.objectContaining({ name: "remote_echo" })],
+      });
+
+      mocks.nodePluginTools = [];
+      mocks.availabilityChanged?.();
+
+      expect(client?.request).toHaveBeenLastCalledWith("node.pluginTools.update", { tools: [] });
+      const onSigterm = processOnceSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
+      onSigterm?.("SIGTERM");
+      await running;
+    } finally {
+      for (const [event, listener] of processOnceSpy.mock.calls) {
+        if ((event === "SIGINT" || event === "SIGTERM") && typeof listener === "function") {
+          process.off(event, listener);
+        }
+      }
+      process.exitCode = previousExitCode;
+      processOnceSpy.mockRestore();
+    }
   });
 
   it("publishes node-hosted skills after gateway hello succeeds", async () => {
@@ -710,7 +769,7 @@ describe("runNodeHost", () => {
     expect(lastCapturedOptions()?.url).toBe("ws://127.0.0.1:18789");
   });
 
-  it("saves the gateway config with contextPath to node.json", async () => {
+  it("configures the SQLite gateway snapshot with contextPath", async () => {
     await expect(
       runNodeHost({
         gatewayHost: "127.0.0.1",
@@ -719,18 +778,12 @@ describe("runNodeHost", () => {
       }),
     ).rejects.toThrow("event loop readiness timeout");
 
-    const lastSaved =
-      mocks.capturedSavedGatewayConfigs[mocks.capturedSavedGatewayConfigs.length - 1];
-    expect(lastSaved?.contextPath).toBe("/gws");
+    const lastConfigured =
+      mocks.capturedConfiguredGatewayConfigs[mocks.capturedConfiguredGatewayConfigs.length - 1];
+    expect(lastConfigured?.contextPath).toBe("/gws");
   });
 
-  it("clears saved contextPath when opts do not pass one (retarget scenario)", async () => {
-    mocks.ensureNodeHostConfig.mockResolvedValueOnce({
-      version: 1,
-      nodeId: "node-test",
-      gateway: { contextPath: "/old-path" },
-    } as Awaited<ReturnType<typeof ensureNodeHostConfig>>);
-
+  it("clears configured contextPath when opts do not pass one (retarget scenario)", async () => {
     await expect(
       runNodeHost({
         gatewayHost: "192.168.1.1",
@@ -738,19 +791,13 @@ describe("runNodeHost", () => {
       }),
     ).rejects.toThrow("event loop readiness timeout");
 
-    const lastSaved =
-      mocks.capturedSavedGatewayConfigs[mocks.capturedSavedGatewayConfigs.length - 1];
-    expect(lastSaved?.contextPath).toBeUndefined();
+    const lastConfigured =
+      mocks.capturedConfiguredGatewayConfigs[mocks.capturedConfiguredGatewayConfigs.length - 1];
+    expect(lastConfigured?.contextPath).toBeUndefined();
     expect(lastCapturedOptions()?.url).toBe("ws://192.168.1.1:9999");
   });
 
-  it("clears saved contextPath when explicitly passed as empty string", async () => {
-    mocks.ensureNodeHostConfig.mockResolvedValueOnce({
-      version: 1,
-      nodeId: "node-test",
-      gateway: { contextPath: "/old-path" },
-    } as Awaited<ReturnType<typeof ensureNodeHostConfig>>);
-
+  it("clears configured contextPath when explicitly passed as empty string", async () => {
     await expect(
       runNodeHost({
         gatewayHost: "127.0.0.1",
@@ -759,9 +806,9 @@ describe("runNodeHost", () => {
       }),
     ).rejects.toThrow("event loop readiness timeout");
 
-    const lastSaved =
-      mocks.capturedSavedGatewayConfigs[mocks.capturedSavedGatewayConfigs.length - 1];
-    expect(lastSaved?.contextPath || undefined).toBeUndefined();
+    const lastConfigured =
+      mocks.capturedConfiguredGatewayConfigs[mocks.capturedConfiguredGatewayConfigs.length - 1];
+    expect(lastConfigured?.contextPath || undefined).toBeUndefined();
     expect(lastCapturedOptions()?.url).toBe("ws://127.0.0.1:18789");
   });
 });

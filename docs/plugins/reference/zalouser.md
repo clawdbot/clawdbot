@@ -16,7 +16,7 @@ OpenClaw Zalo Personal Account plugin via native zca-js integration.
 
 ## Surface
 
-channels: zalouser; contracts: tools
+channels: `zalouser`; contracts: `tools`
 
 ## Related docs
 

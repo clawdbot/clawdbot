@@ -23,6 +23,10 @@ export function parseRepoLocation(location: string): {
   file: string;
   line: string;
 };
+export function filterIgnoredFindings(
+  findings: PeripheryFinding[],
+  repoRoot?: string,
+): PeripheryFinding[];
 export function escapeCommandData(value: unknown): string;
 export function escapeCommandProperty(value: unknown): string;
 export function formatAnnotation(finding: PeripheryFinding): string;

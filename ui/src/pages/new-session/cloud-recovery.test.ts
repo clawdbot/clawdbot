@@ -65,6 +65,7 @@ describe("cloud session recovery", () => {
         key: recovery.sessionKey,
         agentId: "cloud",
         message: "" as const,
+        thinkingLevel: "high",
         worktree: true as const,
       },
     };

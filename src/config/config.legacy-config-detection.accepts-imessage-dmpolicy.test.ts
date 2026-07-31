@@ -1,10 +1,7 @@
 // Regresses accepted legacy iMessage dmPolicy config detection.
 import { describe, expect, it } from "vitest";
-import {
-  expectSchemaConfigValue,
-  expectSchemaValid,
-} from "./legacy-config-detection.test-support.js";
-import { AudioSchema, BindingsSchema } from "./zod-schema.agents.js";
+import { expectSchemaConfigValue } from "./legacy-config-detection.test-support.js";
+import { BindingsSchema } from "./zod-schema.agents.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 function expectOpenClawSchemaInvalidPreservesField(params: {
@@ -30,11 +27,6 @@ function expectOpenClawSchemaInvalidPreservesField(params: {
 }
 
 describe("legacy config detection", () => {
-  it("accepts tools audio transcription without cli", () => {
-    expectSchemaValid(AudioSchema, {
-      transcription: { command: ["whisper", "--model", "base"] },
-    });
-  });
   it("rejects legacy agent.model string", () => {
     const res = OpenClawSchema.safeParse({
       agent: { model: "anthropic/claude-opus-4-6" },

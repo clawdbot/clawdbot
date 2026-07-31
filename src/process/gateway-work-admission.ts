@@ -9,8 +9,8 @@ type AdmissionCloseReason = "restart-signal fence" | "restart drain" | "suspend 
 type AdmissionReopenReason = "restart-signal fence" | "suspend phase";
 
 export class GatewayDrainingError extends Error {
-  constructor() {
-    super("Gateway is draining; new tasks are not accepted");
+  constructor(message = "Gateway is draining; new tasks are not accepted") {
+    super(message);
     this.name = "GatewayDrainingError";
   }
 }
@@ -302,7 +302,7 @@ export async function runWithGatewayIndependentRootWorkAdmission<T>(
 ): Promise<T> {
   while (true) {
     if (GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
-      throw new Error("gateway is draining for restart");
+      throw new GatewayDrainingError("gateway is draining for restart");
     }
     const admission = tryBeginGatewayIndependentRootWorkAdmission();
     if (admission) {
@@ -343,6 +343,11 @@ export function retainGatewayRootWorkAdmissionContinuation(): (() => void) | nul
   }
   current.references += 1;
   return createGatewayRootWorkRelease(current);
+}
+
+/** Starts process-lifetime work without inheriting the request root that created it. */
+export function runOutsideGatewayRootWorkAdmission<T>(run: () => T): T {
+  return GATEWAY_WORK_ADMISSION_STATE.currentRootWork.exit(run);
 }
 
 /** Active root requests/ticks, optionally excluding the caller running prepare. */

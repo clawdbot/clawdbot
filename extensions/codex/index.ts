@@ -1,6 +1,6 @@
 /**
- * Bundled Codex plugin entry: app-server harness, model provider, media
- * understanding, migration provider, CLI-session commands, and binding hooks.
+ * Bundled Codex plugin entry: app-server harness, media understanding,
+ * migration provider, CLI-session commands, and binding hooks.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
@@ -10,11 +10,12 @@ import {
   resolveLivePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { registerCodexCliMetadata } from "./cli-metadata.js";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { buildCodexProvider } from "./provider.js";
 import { readCodexPluginConfig } from "./src/app-server/config.js";
+import { createCodexAppServerConnectionHealthService } from "./src/app-server/connection-health.js";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
@@ -56,8 +57,7 @@ const ENDED_SESSION_REASONS: ReadonlySet<string> = new Set([
 export default definePluginEntry({
   id: "codex",
   name: "Codex",
-  description:
-    "Codex app-server harness, Codex-managed GPT catalog, and native session supervision.",
+  description: "Codex app-server harness and native session supervision.",
   register(api) {
     const resolveCurrentConfig = () =>
       api.runtime.config?.current ? (api.runtime.config.current() as OpenClawConfig) : undefined;
@@ -78,7 +78,12 @@ export default definePluginEntry({
         origin: "bundled",
         config: normalizePluginsConfig(liveConfig.plugins),
         rootConfig: liveConfig,
-        enabledByDefault: readCodexPluginConfig(livePluginConfig).supervision?.enabled === true,
+        // Core auto-enables this bundled plugin whenever the operator declares a
+        // codex config block, so a live block is the plugin-side default. Gating
+        // on a feature flag (supervision) here would silently drop unrelated
+        // harness settings such as appServer.homeScope; feature gates belong in
+        // the feature's own surface (see requireSupervisionEnabled).
+        enabledByDefault: livePluginConfig !== undefined,
       }).enabled;
       if (!enabled) {
         return undefined;
@@ -86,13 +91,36 @@ export default definePluginEntry({
       return livePluginConfig;
     };
     const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
-    const bindingStore = createLazyCodexAppServerBindingStore(
-      api.runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>({
+    const appServerConfig = readCodexPluginConfig(resolveCurrentPluginConfig()).appServer;
+    if (appServerConfig?.transport === "websocket") {
+      api.registerService(
+        createCodexAppServerConnectionHealthService({
+          getPluginConfig: resolveCurrentPluginConfig,
+          getRuntimeConfig: resolveCurrentConfig,
+        }),
+      );
+    }
+    let bindingStateStore: PluginStateSyncKeyedStore<StoredCodexAppServerBinding> | undefined;
+    const openBindingStateStore = () =>
+      (bindingStateStore ??= api.runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>({
         namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
         maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
         overflowPolicy: "reject-new",
-      }),
-    );
+      }));
+    // The base registration runtime deliberately rejects state access. Open the
+    // store only when a proxied runtime performs the first binding operation.
+    const lazyBindingStateStore: Pick<
+      PluginStateSyncKeyedStore<StoredCodexAppServerBinding>,
+      "entries" | "lookup" | "update"
+    > = {
+      entries: () => openBindingStateStore().entries(),
+      lookup: (key) => openBindingStateStore().lookup(key),
+      get update() {
+        const store = openBindingStateStore();
+        return store.update?.bind(store);
+      },
+    };
+    const bindingStore = createLazyCodexAppServerBindingStore(lazyBindingStateStore);
     registerCodexCliMetadata(api);
     const sessionCatalogControl = createCodexSessionCatalogControl({
       getPluginConfig: resolveCurrentPluginConfig,
@@ -137,11 +165,12 @@ export default definePluginEntry({
     api.registerAgentHarness(
       createCodexAppServerAgentHarness({
         bindingStore,
+        sessionCatalogControl,
         resolveConfig: resolveCurrentConfig,
         resolvePluginConfig: resolveCurrentPluginConfig,
+        runtime: api.runtime,
       }),
     );
-    api.registerProvider(buildCodexProvider({ pluginConfig: api.pluginConfig }));
     api.registerMediaUnderstandingProvider(
       buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
     );
@@ -280,6 +309,25 @@ export default definePluginEntry({
         return;
       }
       const sessionKey = event.sessionKey ?? ctx.sessionKey;
+      // A cross-key handoff (dashboard "New Chat", a fork) fires session_end on
+      // the parent only to start an INDEPENDENT child session under a different
+      // key; that child owns its own Codex thread binding (a Codex fork is a new
+      // thread, not a transfer of the parent's). Retiring the parent's still-live
+      // binding here would strand it, so skip when the successor provably lives
+      // under a different session key. The only cross-key emitter (gateway child
+      // creation) keeps the parent row live; same-key rollovers omit or repeat
+      // the key and still retire, as do unknown-current-key ends (no provable
+      // handoff) and later idle/daily/deleted ends. See #106778.
+      const endedSessionKey = sessionKey?.trim();
+      const nextSessionKey = event.nextSessionKey?.trim();
+      if (endedSessionKey && nextSessionKey && nextSessionKey !== endedSessionKey) {
+        return;
+      }
+      // Reset hooks already clear in-place lifecycle state before the next turn.
+      // A delayed session_end must not retire a replacement that reuses the id.
+      if (event.nextSessionId?.trim() === event.sessionId.trim()) {
+        return;
+      }
       const config = resolveCurrentConfig();
       const { sessionBindingIdentity } = await import("./src/app-server/session-binding.js");
       await bindingStore.retireSessionGeneration(

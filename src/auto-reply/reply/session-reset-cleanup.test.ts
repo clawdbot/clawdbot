@@ -10,11 +10,8 @@ import {
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
-import {
-  createReplyOperation,
-  replyRunRegistry,
-  testing as replyRunTesting,
-} from "./reply-run-registry.js";
+import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 
 afterEach(() => {

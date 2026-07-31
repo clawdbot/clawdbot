@@ -1,9 +1,16 @@
 const TELEGRAM_HTML_ENTITY_PATTERN = /&(#[xX][0-9A-Fa-f]+|#\d+|amp|lt|gt|quot|apos);/g;
-const TELEGRAM_RICH_BLOCK_HTML_TAGS = new Set([
+
+// Structural tags that force a line boundary when projecting HTML to plain text
+// (assistant transcript protection). Block-counting helpers for rich HTML are gone.
+const TELEGRAM_LINE_BREAK_STRUCTURAL_TAGS = new Set([
   "aside",
   "audio",
   "blockquote",
+  "caption",
+  "col",
+  "colgroup",
   "details",
+  "figcaption",
   "figure",
   "footer",
   "h1",
@@ -18,7 +25,13 @@ const TELEGRAM_RICH_BLOCK_HTML_TAGS = new Set([
   "ol",
   "p",
   "pre",
+  "summary",
   "table",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
   "tg-collage",
   "tg-map",
   "tg-math-block",
@@ -28,31 +41,11 @@ const TELEGRAM_RICH_BLOCK_HTML_TAGS = new Set([
   "video",
 ]);
 
-// Includes table/figure/details children omitted from the block-counting set.
-const TELEGRAM_RICH_LINE_BREAK_STRUCTURAL_TAGS: ReadonlySet<string> = new Set([
-  ...TELEGRAM_RICH_BLOCK_HTML_TAGS,
-  "caption",
-  "col",
-  "colgroup",
-  "figcaption",
-  "summary",
-  "tbody",
-  "td",
-  "tfoot",
-  "th",
-  "thead",
-]);
-
-function isNamedAnchor(rawTag: string, tagName: string): boolean {
-  return tagName === "a" && /\sname="[^"]+"/i.test(rawTag);
-}
-
-export function isTelegramRichBlockHtmlTag(rawTag: string, tagName: string): boolean {
-  return TELEGRAM_RICH_BLOCK_HTML_TAGS.has(tagName) || isNamedAnchor(rawTag, tagName);
-}
-
 export function isTelegramRichLineBreakStructuralTag(rawTag: string, tagName: string): boolean {
-  return TELEGRAM_RICH_LINE_BREAK_STRUCTURAL_TAGS.has(tagName) || isNamedAnchor(rawTag, tagName);
+  return (
+    TELEGRAM_LINE_BREAK_STRUCTURAL_TAGS.has(tagName) ||
+    (tagName === "a" && /\sname="[^"]+"/i.test(rawTag))
+  );
 }
 
 function isValidTelegramHtmlEntityCodePoint(codePoint: number): boolean {

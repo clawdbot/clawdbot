@@ -1,0 +1,21 @@
+title: Slack MPIM app mention dispatches once
+scenario:
+  id: slack-mpim-app-mention-dedupe
+  surface: channels
+  coverage:
+    primary:
+      - slack.socket
+      - slack.mpim
+      - slack.delivery-dedupe
+  execution:
+    kind: flow
+    channel: slack
+    timeoutMs: 180000
+    retryCount: 0
+    suiteIsolation: isolated
+flow:
+  module: ./live-transports/slack/scenario-runtime.js
+  call: runSlackScenario
+  args:
+    - { expr: slackScenarioContext }
+    - { moduleExport: slackQaMpimAppMentionDedupeScenario }

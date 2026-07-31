@@ -7,6 +7,10 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import {
+  CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS,
+  CONTROL_PLANE_RATE_LIMIT_WINDOW_MS,
+} from "./control-plane-rate-limit.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
@@ -96,7 +100,7 @@ describe("gateway control-plane write rate limit", () => {
     ];
   }
 
-  it("allows 3 control-plane writes and blocks the 4th in the same minute", async () => {
+  it("allows the configured control-plane write budget and blocks the next request", async () => {
     const handlerCalls = vi.fn();
     const handler: GatewayRequestHandler = (opts) => {
       handlerCalls(opts);
@@ -106,12 +110,12 @@ describe("gateway control-plane write rate limit", () => {
     const context = buildContext(logWarn);
     const client = buildClient();
 
-    await runRequest({ method: "config.patch", context, client, handler });
-    await runRequest({ method: "config.patch", context, client, handler });
-    await runRequest({ method: "config.patch", context, client, handler });
+    for (let attempt = 0; attempt < CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS; attempt += 1) {
+      await runRequest({ method: "config.patch", context, client, handler });
+    }
     const blocked = await runRequest({ method: "config.patch", context, client, handler });
 
-    expect(handlerCalls).toHaveBeenCalledTimes(3);
+    expect(handlerCalls).toHaveBeenCalledTimes(CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS);
     const blockedCall = respondCall(blocked);
     const error = blockedCall[2];
     expect(blockedCall[0]).toBe(false);
@@ -161,9 +165,9 @@ describe("gateway control-plane write rate limit", () => {
     const context = buildContext();
     const client = buildClient();
 
-    await runRequest({ method: "update.run", context, client, handler });
-    await runRequest({ method: "update.run", context, client, handler });
-    await runRequest({ method: "update.run", context, client, handler });
+    for (let attempt = 0; attempt < CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS; attempt += 1) {
+      await runRequest({ method: "update.run", context, client, handler });
+    }
 
     const blocked = await runRequest({ method: "update.run", context, client, handler });
     const blockedCall = respondCall(blocked);
@@ -171,11 +175,11 @@ describe("gateway control-plane write rate limit", () => {
     expect(blockedCall[1]).toBeUndefined();
     expect(blockedCall[2]?.code).toBe("UNAVAILABLE");
 
-    vi.advanceTimersByTime(60_001);
+    vi.advanceTimersByTime(CONTROL_PLANE_RATE_LIMIT_WINDOW_MS + 1);
 
     const allowed = await runRequest({ method: "update.run", context, client, handler });
     expect(allowed).toHaveBeenCalledWith(true, undefined, undefined);
-    expect(handlerCalls).toHaveBeenCalledTimes(4);
+    expect(handlerCalls).toHaveBeenCalledTimes(CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS + 1);
   });
 
   it("does not consume the write budget for requests refused during suspension", async () => {
@@ -214,9 +218,9 @@ describe("gateway control-plane write rate limit", () => {
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension?.commit()).toBe(true);
 
-    await runRequest({ method: "gateway.suspend.prepare", context, client, handler });
-    await runRequest({ method: "gateway.suspend.prepare", context, client, handler });
-    await runRequest({ method: "gateway.suspend.prepare", context, client, handler });
+    for (let attempt = 0; attempt < CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS; attempt += 1) {
+      await runRequest({ method: "gateway.suspend.prepare", context, client, handler });
+    }
     const blocked = await runRequest({
       method: "gateway.suspend.prepare",
       context,
@@ -224,7 +228,7 @@ describe("gateway control-plane write rate limit", () => {
       handler,
     });
 
-    expect(handlerCalls).toHaveBeenCalledTimes(3);
+    expect(handlerCalls).toHaveBeenCalledTimes(CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS);
     expect(respondCall(blocked)[2]).toMatchObject({ code: "UNAVAILABLE", retryable: true });
     expect(suspension?.release()).toBe(true);
   });

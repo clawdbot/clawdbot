@@ -1,25 +1,24 @@
 // Doctor scanner and repair for plugin/channel config that references missing plugins.
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import { CHANNEL_IDS } from "../../../channels/ids.js";
-import { shouldSuppressMissingCodexPluginDiagnostics } from "../../../config/codex-plugin-diagnostics.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
+import {
+  listOfficialExternalPluginCatalogEntries,
+  resolveOfficialExternalPluginId,
+} from "../../../plugins/official-external-plugin-catalog.js";
 import { defaultSlotIdForKey, type PluginSlotKey } from "../../../plugins/slots.js";
+import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import { asObjectRecord } from "./object.js";
+import {
+  filterRepairableStalePluginHits,
+  type StalePluginSurface,
+} from "./stale-plugin-repair-preservation.js";
 
 const CHANNEL_CONFIG_META_KEYS = new Set(["defaults", "modelByChannel"]);
-
-type StalePluginSurface =
-  | "allow"
-  | "deny"
-  | "entries"
-  | "slot"
-  | "channel"
-  | "heartbeat"
-  | "modelByChannel";
 
 type StalePluginConfigHit = {
   pluginId: string;
@@ -30,6 +29,7 @@ type StalePluginConfigHit = {
 
 type StalePluginRegistryState = {
   knownIds: Set<string>;
+  officialIds: Set<string>;
   knownChannelIds: Set<string>;
   missingInstalledIds: Set<string>;
   hasDiscoveryErrors: boolean;
@@ -40,13 +40,20 @@ function collectPluginRegistryState(
   env?: NodeJS.ProcessEnv,
 ): StalePluginRegistryState {
   const environment = env ?? process.env;
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
+  const workspaceDir = defaultAgentId ? resolveAgentWorkspaceDir(cfg, defaultAgentId) : undefined;
   const registry = loadManifestMetadataSnapshot({
     config: cfg,
     workspaceDir: workspaceDir ?? undefined,
     env: environment,
   }).manifestRegistry;
   const knownIds = new Set(registry.plugins.map((plugin) => plugin.id));
+  // Official catalog config remains valid even when its package is not installed yet.
+  const officialIds = new Set(
+    listOfficialExternalPluginCatalogEntries()
+      .map((entry) => normalizePluginId(resolveOfficialExternalPluginId(entry) ?? ""))
+      .filter(Boolean),
+  );
   const installedIds = new Set<string>();
   for (const pluginId of Object.keys(cfg.plugins?.installs ?? {})) {
     const normalized = normalizePluginId(pluginId);
@@ -77,6 +84,7 @@ function collectPluginRegistryState(
   }
   return {
     knownIds,
+    officialIds,
     knownChannelIds,
     missingInstalledIds: new Set([...installedIds].filter((pluginId) => !knownIds.has(pluginId))),
     hasDiscoveryErrors: registry.diagnostics.some((diag) => diag.level === "error"),
@@ -103,20 +111,15 @@ export function scanStalePluginConfig(
     return [];
   }
   const environment = env ?? process.env;
-  return scanStalePluginConfigWithState(
-    cfg,
-    collectPluginRegistryState(cfg, environment),
-    environment,
-  );
+  return scanStalePluginConfigWithState(cfg, collectPluginRegistryState(cfg, environment));
 }
 
 function scanStalePluginConfigWithState(
   cfg: OpenClawConfig,
   registryState: StalePluginRegistryState,
-  env: NodeJS.ProcessEnv,
 ): StalePluginConfigHit[] {
   const plugins = asObjectRecord(cfg.plugins);
-  const { knownIds } = registryState;
+  const { knownIds, officialIds } = registryState;
   const hits: StalePluginConfigHit[] = [];
   const staleEvidenceIds = new Set(registryState.missingInstalledIds);
 
@@ -127,7 +130,12 @@ function scanStalePluginConfigWithState(
         continue;
       }
       const pluginId = normalizePluginId(rawPluginId);
-      if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
+      if (
+        !pluginId ||
+        knownIds.has(pluginId) ||
+        officialIds.has(pluginId) ||
+        registryState.knownChannelIds.has(pluginId)
+      ) {
         continue;
       }
       hits.push({ pluginId: rawPluginId, pathLabel: `plugins.${surface}`, surface });
@@ -139,10 +147,12 @@ function scanStalePluginConfigWithState(
   if (entries) {
     for (const rawPluginId of Object.keys(entries)) {
       const pluginId = normalizePluginId(rawPluginId);
-      if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
-        continue;
-      }
-      if (pluginId === "codex" && shouldSuppressMissingCodexPluginDiagnostics(cfg, env)) {
+      if (
+        !pluginId ||
+        knownIds.has(pluginId) ||
+        officialIds.has(pluginId) ||
+        registryState.knownChannelIds.has(pluginId)
+      ) {
         continue;
       }
       hits.push({
@@ -246,15 +256,15 @@ function collectDependentChannelConfigHits(
       surface: "heartbeat",
     });
   }
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const [index, agent] of agents.entries()) {
-    const target = agent?.heartbeat?.target;
+  for (const { agent, path } of listMutableCodexRouteAgentEntries(cfg)) {
+    const heartbeat = asObjectRecord(agent.heartbeat);
+    const target = heartbeat?.target;
     if (typeof target !== "string" || !staleChannelIds.has(normalizePluginId(target))) {
       continue;
     }
     hits.push({
       pluginId: target,
-      pathLabel: `agents.list.${index}.heartbeat.target`,
+      pathLabel: `${path}.heartbeat.target`,
       surface: "heartbeat",
     });
   }
@@ -307,14 +317,16 @@ export function collectStalePluginConfigWarnings(params: {
   hits: StalePluginConfigHit[];
   doctorFixCommand: string;
   autoRepairBlocked?: boolean;
+  surfacePreservePluginIds?: Partial<Record<StalePluginSurface, Iterable<string>>>;
 }): string[] {
-  if (params.hits.length === 0) {
+  const hits = filterRepairableStalePluginHits(params);
+  if (hits.length === 0) {
     return [];
   }
   const policyPluginIds = [
-    ...new Set(params.hits.filter(isPolicySurfaceHit).map((hit) => hit.pluginId)),
+    ...new Set(hits.filter(isPolicySurfaceHit).map((hit) => hit.pluginId)),
   ].toSorted((a, b) => a.localeCompare(b));
-  const lines = params.hits
+  const lines = hits
     .map((hit) => formatStalePluginHitWarning(hit))
     .filter((line): line is string => line !== null);
   if (policyPluginIds.length > 0) {
@@ -338,7 +350,10 @@ export function collectStalePluginConfigWarnings(params: {
 export function maybeRepairStalePluginConfig(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
-  params?: { preservePluginIds?: Iterable<string> },
+  params?: {
+    preservePluginIds?: Iterable<string>;
+    surfacePreservePluginIds?: Partial<Record<StalePluginSurface, Iterable<string>>>;
+  },
 ): {
   config: OpenClawConfig;
   changes: string[];
@@ -352,14 +367,11 @@ export function maybeRepairStalePluginConfig(
     return { config: cfg, changes: [] };
   }
 
-  const preservePluginIds = new Set(
-    [...(params?.preservePluginIds ?? [])]
-      .map((pluginId) => normalizePluginId(pluginId))
-      .filter((pluginId): pluginId is string => Boolean(pluginId)),
-  );
-  const hits = scanStalePluginConfigWithState(cfg, registryState, environment).filter(
-    (hit) => !preservePluginIds.has(normalizePluginId(hit.pluginId)),
-  );
+  const hits = filterRepairableStalePluginHits({
+    hits: scanStalePluginConfigWithState(cfg, registryState),
+    preservePluginIds: params?.preservePluginIds,
+    surfacePreservePluginIds: params?.surfacePreservePluginIds,
+  });
   if (hits.length === 0) {
     return { config: cfg, changes: [] };
   }
@@ -499,9 +511,8 @@ function removeDanglingChannelReferences(config: OpenClawConfig, channelIds: rea
   ) {
     delete defaultsHeartbeat.target;
   }
-  const agents = Array.isArray(config.agents?.list) ? config.agents.list : [];
-  for (const agent of agents) {
-    const heartbeat = agent.heartbeat;
+  for (const { agent } of listMutableCodexRouteAgentEntries(config)) {
+    const heartbeat = asObjectRecord(agent.heartbeat);
     if (
       heartbeat &&
       typeof heartbeat.target === "string" &&

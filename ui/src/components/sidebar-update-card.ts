@@ -107,6 +107,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       : this.nativeUpdateAvailable
         ? t("chat.sidebar.updateMacAndGateway")
         : t("chat.sidebar.updateGateway");
+    const betaChannelSuffix = update.channel === "beta" ? " (beta)" : "";
     return html`
       <div class="sidebar-update-card" role="status" aria-live="polite">
         <button
@@ -120,11 +121,9 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
           }}
         >
           <span class="sidebar-update-card__icon" aria-hidden="true">${icons.download}</span>
-          <span class="sidebar-update-card__copy">
-            <span class="sidebar-update-card__title">${title}</span>
-            <span class="sidebar-update-card__subtitle">v${update.latestVersion}</span>
-          </span>
-          <span class="sidebar-update-card__arrow" aria-hidden="true">${icons.chevronRight}</span>
+          <span class="sidebar-update-card__text"
+            >${title} · v${update.latestVersion}${betaChannelSuffix}</span
+          >
         </button>
         <button
           class="sidebar-update-card__dismiss"

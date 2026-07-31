@@ -2,7 +2,7 @@
  * Deliberately free of agent/runtime imports so history reads stay dependency-light;
  * the event->entry write codec lives in task-run-event-codec.ts. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { CRON_JOB_EXECUTION_TIMEOUT_ERROR } from "./execution-error-constants.js";
+import { isCronTimeoutErrorText } from "./execution-error-constants.js";
 import { normalizeCronRunDiagnostics } from "./run-diagnostics-normalize.js";
 
 type FailoverReason = import("../agents/embedded-agent-helpers/types.js").FailoverReason;
@@ -170,6 +170,7 @@ export function cronRunLogEntryToTaskDetail(
   options: {
     storeKey: string;
     triggerEval?: { fired: boolean; stateChanged: boolean; state?: unknown };
+    scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
   },
 ): JsonValue {
   const detail = toJsonValue({
@@ -196,6 +197,11 @@ export function cronRunLogEntryToTaskDetail(
       options.triggerEval?.fired === true && options.triggerEval.stateChanged
         ? options.triggerEval.state
         : undefined,
+    scriptStateChanged: options.scriptResult?.scriptStateChanged === true ? true : undefined,
+    scriptState:
+      options.scriptResult?.scriptStateChanged === true
+        ? options.scriptResult.scriptState
+        : undefined,
     model: entry.model,
     provider: entry.provider,
     usage: entry.usage,
@@ -208,6 +214,13 @@ export function cronTaskRecordStoreKey(task: TaskRecord): string | undefined {
   return isJsonObject(task.detail) && typeof task.detail.storeKey === "string"
     ? task.detail.storeKey
     : undefined;
+}
+
+/** Keeps history projection, recovery, and retention on one task-row timestamp. */
+export function resolveCronTaskRecordTimestamp(
+  task: Pick<TaskRecord, "endedAt" | "lastEventAt" | "createdAt">,
+): number {
+  return task.endedAt ?? task.lastEventAt ?? task.createdAt;
 }
 
 /** Reads internal trigger recovery data without adding it to run-history responses. */
@@ -226,6 +239,19 @@ export function cronTaskRecordToTriggerEval(
   };
 }
 
+/** Reads internal payload-script recovery data without exposing it in run history. */
+export function cronTaskRecordToScriptRunResult(
+  task: TaskRecord,
+): { scriptStateChanged: true; scriptState?: JsonValue } | undefined {
+  if (!isJsonObject(task.detail) || task.detail.scriptStateChanged !== true) {
+    return undefined;
+  }
+  return {
+    scriptStateChanged: true,
+    ...(Object.hasOwn(task.detail, "scriptState") ? { scriptState: task.detail.scriptState } : {}),
+  };
+}
+
 /** Maps the cron outcome vocabulary onto generic task terminal states. */
 export function cronRunStatusToTaskStatus(
   entry: CronRunLogEntry,
@@ -233,7 +259,7 @@ export function cronRunStatusToTaskStatus(
   if (entry.status === "ok" || entry.status === "skipped") {
     return "succeeded";
   }
-  return entry.error === CRON_JOB_EXECUTION_TIMEOUT_ERROR ? "timed_out" : "failed";
+  return isCronTimeoutErrorText(entry.error) ? "timed_out" : "failed";
 }
 
 /** Reconstructs the unchanged CronRunLogEntry wire shape from a cron task row. */
@@ -250,7 +276,7 @@ export function cronTaskRecordToRunLogEntry(task: TaskRecord): CronRunLogEntry |
   const entry = parseCronRunLogEntryObject(
     {
       ...wireDetail,
-      ts: task.endedAt ?? task.lastEventAt ?? task.createdAt,
+      ts: resolveCronTaskRecordTimestamp(task),
       jobId: task.sourceId,
       action: "finished",
       status: isCronRunStatus(task.detail.status) ? task.detail.status : undefined,

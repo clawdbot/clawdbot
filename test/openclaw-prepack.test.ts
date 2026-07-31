@@ -83,6 +83,8 @@ describe("collectSourcePackWorkspaceDependencyErrors", () => {
     expect(existsSync(path.join(extractDir, "package", "node_modules", "@openclaw", "ai"))).toBe(
       false,
     );
+    expect(existsSync(path.join(extractDir, "package", "npm-shrinkwrap.json"))).toBe(false);
+    expect(existsSync(path.join(extractDir, "package", "package-lock.json"))).toBe(false);
     expect(collectSourcePackWorkspaceDependencyErrors(rootPackageJson, {})).toEqual([
       "plain root packing cannot safely resolve @openclaw/ai from workspace:*: pnpm rewrites the workspace dependency to an exact version without bundling the package",
       "use `node scripts/package-openclaw-for-docker.mjs --allow-unreleased-changelog` for a self-contained source package; official npm release automation prepares and publishes @openclaw/ai separately",
@@ -92,6 +94,34 @@ describe("collectSourcePackWorkspaceDependencyErrors", () => {
         OPENCLAW_PREPACK_PREPARED: "1",
       }),
     ).toEqual([]);
+    expect(
+      collectSourcePackWorkspaceDependencyErrors(rootPackageJson, {
+        npm_command: "pack",
+        OCM_INTERNAL_NPM_BIN: path.join(rootDir, "scripts", "ocm-npm-workspace-deps.mjs"),
+        OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS: aiDir,
+      }),
+    ).toEqual([]);
+    expect(
+      collectSourcePackWorkspaceDependencyErrors(rootPackageJson, {
+        npm_command: "pack",
+        OCM_INTERNAL_NPM_BIN: path.join(rootDir, "scripts", "ocm-npm-workspace-deps.mjs"),
+        OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS: rootDir,
+      }),
+    ).toHaveLength(2);
+    expect(
+      collectSourcePackWorkspaceDependencyErrors(rootPackageJson, {
+        npm_command: "pack",
+        OCM_INTERNAL_NPM_BIN: path.join(rootDir, "scripts", "other-npm-wrapper.mjs"),
+        OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS: aiDir,
+      }),
+    ).toHaveLength(2);
+    expect(
+      collectSourcePackWorkspaceDependencyErrors(rootPackageJson, {
+        npm_command: "publish",
+        OCM_INTERNAL_NPM_BIN: path.join(rootDir, "scripts", "ocm-npm-workspace-deps.mjs"),
+        OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS: aiDir,
+      }),
+    ).toHaveLength(2);
   });
 });
 

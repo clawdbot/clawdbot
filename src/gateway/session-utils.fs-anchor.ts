@@ -19,7 +19,7 @@ type ReadSessionMessagesAroundIdResult = ReadRecentSessionMessagesResult & {
   offset: number;
 };
 
-export function resolveSessionMessageAnchorBounds(
+function resolveSessionMessageAnchorBounds(
   records: readonly { id?: string }[],
   messageId: string,
   maxMessages: number,

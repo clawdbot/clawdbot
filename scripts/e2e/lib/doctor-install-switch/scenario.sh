@@ -55,11 +55,29 @@ git_cli="$git_root/openclaw.mjs"
 
 package_version="$(node -p "require(\"$npm_root/package.json\").version")"
 update_doctor_env="OPENCLAW_UPDATE_IN_PROGRESS=1"
-update_doctor_env+=" OPENCLAW_DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS=1"
 update_doctor_env+=" OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=1"
 update_doctor_env+=" OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART=1"
 update_doctor_env+=" OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR=1"
 update_doctor_env+=" OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION=0"
+
+use_default_service_identity() {
+  local account_home
+  account_home="$(node -p 'require("node:os").userInfo().homedir')"
+
+  # Service mutation is intentionally restricted to the OS account home. Keep
+  # these disposable-container flows isolated without pretending a temp HOME owns it.
+  rm -rf \
+    "$account_home/.openclaw" \
+    "$account_home/.config/systemd/user/openclaw-gateway.service" \
+    "$account_home/.config/fish" \
+    "$account_home/.config/powershell" \
+    "$account_home/.local/bin/openclaw-wrapper" \
+    "$account_home/openclaw-wrapper-argv.log"
+  export HOME="$account_home"
+  export USERPROFILE="$account_home"
+  unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH
+}
+
 is_legacy_package_acceptance_compat() {
   [ "$(node scripts/e2e/lib/package-compat.mjs "$1")" = "1" ]
 }
@@ -140,6 +158,7 @@ run_flow() {
 
   echo "== Flow: $name =="
   openclaw_test_state_create "switch-${name}" empty
+  use_default_service_identity
   export USER="testuser"
 
   if ! openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$install_cmd" >"$install_log" 2>&1; then
@@ -162,7 +181,6 @@ run_flow() {
   fi
 
   assert_entrypoint "$unit_path" "$doctor_expected"
-  assert_no_env_key "$unit_path" "OPENCLAW_DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS"
 }
 
 run_flow \
@@ -239,7 +257,6 @@ run_cross_state_approval_flow() {
   test "$(plugin_binding_approval_count "$state_database")" = "0"
 
   if ! openclaw_e2e_maybe_timeout "$command_timeout" env \
-    -u OPENCLAW_DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS \
     -u OPENCLAW_UPDATE_IN_PROGRESS \
     OPENCLAW_STATE_DIR="$custom_state_dir" \
     OPENCLAW_CONFIG_PATH="$custom_state_dir/openclaw.json" \
@@ -248,12 +265,12 @@ run_cross_state_approval_flow() {
     exit 1
   fi
 
-  test ! -e "$exec_source"
-  test ! -e "$plugin_source"
-  test "$(sha256sum "$exec_source.migrated" | awk '{print $1}')" = "$exec_source_hash"
-  test "$(sha256sum "$plugin_source.migrated" | awk '{print $1}')" = "$plugin_source_hash"
-  test -e "$custom_state_dir/exec-approvals.json"
-  test "$(plugin_binding_approval_count "$state_database")" = "1"
+  test "$(sha256sum "$exec_source" | awk '{print $1}')" = "$exec_source_hash"
+  test "$(sha256sum "$plugin_source" | awk '{print $1}')" = "$plugin_source_hash"
+  test ! -e "$exec_source.migrated"
+  test ! -e "$plugin_source.migrated"
+  test ! -e "$custom_state_dir/exec-approvals.json"
+  test "$(plugin_binding_approval_count "$state_database")" = "0"
 }
 
 run_cross_state_approval_flow
@@ -266,6 +283,7 @@ run_proxy_env_flow() {
 
   echo "== Flow: $name =="
   openclaw_test_state_create "switch-${name}" empty
+  use_default_service_identity
   export USER="testuser"
 
   unit_path="$HOME/.config/systemd/user/openclaw-gateway.service"
@@ -287,7 +305,6 @@ run_proxy_env_flow() {
   } >>"$unit_path"
   if ! openclaw_e2e_maybe_timeout "$command_timeout" env \
     OPENCLAW_UPDATE_IN_PROGRESS=1 \
-    OPENCLAW_DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS=1 \
     OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=1 \
     OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART=1 \
     OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR=1 \
@@ -298,7 +315,6 @@ run_proxy_env_flow() {
   fi
   assert_no_env_key "$unit_path" "HTTP_PROXY"
   assert_no_env_key "$unit_path" "HTTPS_PROXY"
-  assert_no_env_key "$unit_path" "OPENCLAW_DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS"
 }
 
 run_proxy_env_flow
@@ -314,6 +330,7 @@ run_wrapper_flow() {
 
   echo "== Flow: $name =="
   openclaw_test_state_create "switch-${name}" empty
+  use_default_service_identity
   export USER="testuser"
   mkdir -p "$HOME/.local/bin"
   local wrapper="$HOME/.local/bin/openclaw-wrapper"

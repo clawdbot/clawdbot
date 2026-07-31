@@ -15,6 +15,7 @@ import {
   getDockerScript,
   installFsBridgeTestHarness,
   mockedExecDockerRaw,
+  mockedOpenRootFile,
   withTempDir,
 } from "./fs-bridge.test-helpers.js";
 
@@ -82,7 +83,84 @@ describe("sandbox fs bridge anchored ops", () => {
     });
   });
 
+  it.each([
+    { name: "empty files", contents: "", maxBytes: 0 },
+    { name: "files at the exact limit", contents: "hello", maxBytes: 5 },
+    {
+      name: "files spanning bounded read chunks",
+      contents: "x".repeat(64 * 1024 + 1),
+      maxBytes: 64 * 1024 + 1,
+    },
+  ])("reads $name through one pinned descriptor", async (testCase) => {
+    await withTempDir("openclaw-fs-bridge-bounded-read-", async (stateDir) => {
+      const { bridge } = await createSeededSandboxFsBridge(stateDir, {
+        rootContents: testCase.contents,
+      });
+
+      await expect(
+        bridge.readFile({ filePath: "from.txt", maxBytes: testCase.maxBytes }),
+      ).resolves.toEqual(Buffer.from(testCase.contents));
+      expect(mockedOpenRootFile).toHaveBeenCalledTimes(1);
+      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    { name: "oversized files", maxBytes: 4, error: /exceeds 4 bytes/ },
+    { name: "negative limits", maxBytes: -1, error: /non-negative safe integer/ },
+    { name: "unsafe limits", maxBytes: Number.NaN, error: /non-negative safe integer/ },
+  ])("rejects $name without an unbounded read", async (testCase) => {
+    await withTempDir("openclaw-fs-bridge-bounded-reject-", async (stateDir) => {
+      const { bridge } = await createSeededSandboxFsBridge(stateDir, {
+        rootContents: "hello",
+      });
+
+      await expect(
+        bridge.readFile({ filePath: "from.txt", maxBytes: testCase.maxBytes }),
+      ).rejects.toThrow(testCase.error);
+      expect(mockedOpenRootFile).toHaveBeenCalledTimes(1);
+      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects files that grow after the sandbox descriptor is opened", async () => {
+    await withTempDir("openclaw-fs-bridge-bounded-growth-", async (stateDir) => {
+      const { bridge, workspaceDir } = await createSeededSandboxFsBridge(stateDir, {
+        rootContents: "hello",
+      });
+      const openRootFile = mockedOpenRootFile.getMockImplementation();
+      if (!openRootFile) {
+        throw new Error("expected the real sandbox root-file opener");
+      }
+      mockedOpenRootFile.mockImplementationOnce(async (params) => {
+        const opened = await openRootFile(params);
+        if (opened.ok) {
+          await fs.appendFile(path.join(workspaceDir, "from.txt"), "!");
+        }
+        return opened;
+      });
+
+      await expect(bridge.readFile({ filePath: "from.txt", maxBytes: 5 })).rejects.toThrow(
+        /exceeds 5 bytes/,
+      );
+      expect(mockedOpenRootFile).toHaveBeenCalledTimes(1);
+      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+    });
+  });
+
   const pinnedCases = [
+    {
+      name: "exclusive create pins canonical parent + basename",
+      invoke: (bridge: ReturnType<typeof createSandboxFsBridge>) => {
+        const createFileExclusive = bridge.createFileExclusive?.bind(bridge);
+        if (!createFileExclusive) {
+          throw new Error("expected exclusive-create capability");
+        }
+        return createFileExclusive({ filePath: "nested/new.txt", data: "created" });
+      },
+      expectedArgs: ["create", "/workspace", "nested", "new.txt", "1"],
+      forbiddenArgs: ["/workspace/nested/new.txt"],
+    },
     {
       name: "write pins canonical parent + basename",
       invoke: (bridge: ReturnType<typeof createSandboxFsBridge>) =>
@@ -220,6 +298,77 @@ describe("sandbox fs bridge anchored ops", () => {
       expect(getDockerArg(args, 1)).toBe("/workspace/nested");
       expect(getDockerArg(args, 2)).toBe("file.txt");
       expect(args).not.toContain("/workspace/nested/file.txt");
+    });
+  });
+
+  it("runs stat under the C locale so missing-file errors return null", async () => {
+    await withTempDir("openclaw-fs-bridge-stat-missing-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      mockedExecDockerRaw.mockImplementation(async (args) => {
+        const script = getDockerScript(args);
+        if (script.includes('readlink -f -- "$cursor"')) {
+          return dockerExecResult(`${getDockerArg(args, 1)}\n`);
+        }
+        if (script.includes('stat -c "%F|%s|%y"')) {
+          const stderr = script.includes('LC_ALL=C stat -c "%F|%s|%y"')
+            ? "stat: cannot stat 'note.txt': No such file or directory\n"
+            : "stat: der Aufruf von statx für 'note.txt' ist nicht möglich: Datei oder Verzeichnis nicht gefunden\n";
+          return {
+            stdout: Buffer.alloc(0),
+            stderr: Buffer.from(stderr),
+            code: 1,
+          };
+        }
+        return dockerExecResult("");
+      });
+
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      await expect(bridge.stat({ filePath: "note.txt" })).resolves.toBeNull();
+
+      const statCall = requireDockerCall(
+        findCallByScriptFragment('stat -c "%F|%s|%y" -- "$2"'),
+        "stat",
+      );
+      expect(getDockerScript(statCall[0])).toContain('LC_ALL=C stat -c "%F|%s|%y" -- "$2"');
+    });
+  });
+
+  it("keeps non-missing stat failures as errors", async () => {
+    await withTempDir("openclaw-fs-bridge-stat-error-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      mockedExecDockerRaw.mockImplementation(async (args) => {
+        const script = getDockerScript(args);
+        if (script.includes('readlink -f -- "$cursor"')) {
+          return dockerExecResult(`${getDockerArg(args, 1)}\n`);
+        }
+        if (script.includes('stat -c "%F|%s|%y"')) {
+          return {
+            stdout: Buffer.alloc(0),
+            stderr: Buffer.from("stat: cannot stat 'note.txt': Permission denied\n"),
+            code: 1,
+          };
+        }
+        return dockerExecResult("");
+      });
+
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      await expect(bridge.stat({ filePath: "note.txt" })).rejects.toThrow("Permission denied");
     });
   });
 

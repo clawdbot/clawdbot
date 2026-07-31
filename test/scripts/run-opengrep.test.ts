@@ -113,7 +113,7 @@ describe("run-opengrep.sh", () => {
     );
     expect(sarif.version).toBe("2.1.0");
     expect(sarif.runs[0].tool.driver.name).toBe("Opengrep OSS");
-    expect(sarif.runs[0].tool.driver.semanticVersion).toBe("1.22.0");
+    expect(sarif.runs[0].tool.driver.semanticVersion).toBe("1.25.0");
     expect(sarif.runs[0].results).toEqual([]);
     expect(fs.existsSync(argsPath)).toBe(false);
   });

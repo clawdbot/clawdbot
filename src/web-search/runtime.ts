@@ -4,12 +4,6 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  hasWebProviderEntryCredential,
-  providerRequiresCredential,
-  readWebProviderEnvValue,
-  resolveWebProviderConfig,
-} from "../../packages/web-content-core/src/provider-runtime-shared.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import {
@@ -28,6 +22,12 @@ import {
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
+import {
+  hasWebProviderEntryCredential,
+  providerRequiresCredential,
+  readWebProviderEnvValue,
+  resolveWebProviderConfig,
+} from "../web/provider-runtime-shared.js";
 import { executeWebSearchCandidates } from "./runtime-execution.js";
 import type {
   ResolveWebSearchDefinitionParams,
@@ -77,7 +77,6 @@ function hasEntryCredential(
     | "envVars"
     | "getConfiguredCredentialValue"
     | "getConfiguredCredentialFallback"
-    | "getCredentialValue"
     | "requiresCredential"
   >,
   config: OpenClawConfig | undefined,
@@ -112,7 +111,6 @@ function hasImplicitProviderSelectionSignal(
     | "envVars"
     | "getConfiguredCredentialValue"
     | "getConfiguredCredentialFallback"
-    | "getCredentialValue"
     | "requiresCredential"
   >,
   config: OpenClawConfig | undefined,
@@ -404,6 +402,16 @@ function resolveWebSearchCandidates(
     ...fallbackProviders.filter((entry) => !preferredIds.includes(entry.id)),
   ];
   return orderedProviders;
+}
+
+/** Reports whether web_search can use the prepared selection or resolve an agent-scoped provider. */
+export function hasUsableWebSearchProvider(options?: ResolveWebSearchDefinitionParams): boolean {
+  // Prepared metadata owns config/secret selection. Candidate resolution remains necessary for
+  // credentials scoped to the active agent, such as provider auth profiles.
+  if (normalizeOptionalLowercaseString(options?.runtimeWebSearch?.selectedProvider)) {
+    return true;
+  }
+  return resolveWebSearchCandidates(options).length > 0;
 }
 
 function hasExplicitWebSearchSelection(params: {

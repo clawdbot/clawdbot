@@ -22,10 +22,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  createManagedTaskFlow as createManagedTaskFlowOrNull,
-  resetTaskFlowRegistryForTests,
-} from "./task-flow-registry.js";
+import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
@@ -34,9 +31,7 @@ import {
   getTaskById,
   listFreshTasksForOwnerKey,
   markTaskTerminalById,
-  maybeDeliverTaskStateChangeUpdate,
   reloadTaskRegistryFromStore,
-  resetTaskRegistryForTests,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
 import {
@@ -56,6 +51,11 @@ import {
   parseTaskScopeKind,
   parseTaskStatus,
 } from "./task-registry.types.js";
+import {
+  maybeDeliverTaskStateChangeUpdate,
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+} from "./task-runtime.test-helpers.js";
 
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 

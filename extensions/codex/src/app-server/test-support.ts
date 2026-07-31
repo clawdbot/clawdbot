@@ -6,11 +6,77 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
+import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerClientFactory, CodexAppServerClientOptions } from "./shared-client.js";
+
+/** Minimal deterministic host terminal observer for Codex harness tests. */
+export function createCodexTestToolTerminalObserver(): NonNullable<
+  EmbeddedRunAttemptParams["observeToolTerminal"]
+> {
+  const unresolved = new Map<
+    string,
+    NonNullable<
+      ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>["lastToolError"]
+    >
+  >();
+  let nonMutatingFailure: ReturnType<
+    NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>
+  >["lastToolError"];
+
+  return (observation) => {
+    const record =
+      typeof observation.arguments === "object" && observation.arguments !== null
+        ? (observation.arguments as Record<string, unknown>)
+        : {};
+    const action = typeof record.action === "string" ? record.action : undefined;
+    const to = typeof record.to === "string" ? record.to : undefined;
+    const mutation = observation.nativeMutation ?? {
+      mutatingAction: observation.toolName === "message" && action === "send",
+      replaySafe: !(observation.toolName === "message" && action === "send"),
+      actionFingerprint:
+        observation.toolName === "message" && action === "send"
+          ? [`tool=${observation.toolName}`, `action=${action}`, ...(to ? [`to=${to}`] : [])].join(
+              "|",
+            )
+          : undefined,
+    };
+    const key = mutation.actionFingerprint ?? `${observation.toolName}:${observation.meta ?? ""}`;
+    const executionStarted = observation.executionStarted !== false;
+    if (observation.outcome === "failure") {
+      const mutatingAction = executionStarted && mutation.mutatingAction;
+      const failure = {
+        toolName: observation.toolName,
+        ...(observation.meta ? { meta: observation.meta } : {}),
+        ...observation.failure,
+        mutatingAction,
+        ...(mutatingAction && mutation.actionFingerprint
+          ? { actionFingerprint: mutation.actionFingerprint }
+          : {}),
+      };
+      if (mutatingAction) {
+        unresolved.set(key, failure);
+        nonMutatingFailure = undefined;
+      } else if (unresolved.size === 0) {
+        nonMutatingFailure = failure;
+      }
+    } else if (unresolved.size === 0) {
+      nonMutatingFailure = undefined;
+    } else if (mutation.mutatingAction) {
+      unresolved.delete(key);
+    }
+    const lastToolError = [...unresolved.values()].at(-1) ?? nonMutatingFailure;
+    return {
+      ...(lastToolError ? { lastToolError } : {}),
+      executionStarted,
+      ...(Object.keys(record).length > 0 ? { executedArguments: record } : {}),
+      sideEffectEvidence: executionStarted && !mutation.replaySafe,
+    };
+  };
+}
 
 /** Creates temp directories that are removed by the supplied test cleanup hook. */
 export function useAutoCleanupTempDirTracker(registerCleanup: (cleanup: () => void) => unknown) {

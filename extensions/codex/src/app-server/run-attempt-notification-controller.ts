@@ -10,6 +10,7 @@ import {
   readCodexNotificationItem,
   readRawResponseToolCallId,
 } from "./attempt-notifications.js";
+import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
 import type { CodexServerNotification } from "./protocol.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
@@ -58,7 +59,6 @@ export function createCodexAttemptNotificationController(
       notification,
       threadId: resourceState.thread.threadId,
       turnId: notificationTurnId,
-      currentPromptTexts: [turnState.codexTurnPromptText],
     });
   const handleNotification = async (notification: CodexServerNotification) => {
     const projector = projectorRef.current;
@@ -87,6 +87,15 @@ export function createCodexAttemptNotificationController(
       onReportExecutionNotification: reportExecutionNotification,
     });
     state.turnCrossedToolHandoff = notificationState.turnCrossedToolHandoff;
+    if (notificationState.isCurrentTurnNotification && notification.method === "item/completed") {
+      const item = readCodexNotificationItem(notification.params);
+      if (item?.type === "userMessage" && typeof item.clientId === "string") {
+        steeringQueue?.confirmConsumed(item.clientId);
+      }
+    }
+    if (notificationState.isTurnAbortMarker) {
+      state.sawCodexInterruptMarker = true;
+    }
     const hookNotification = readCodexFinalizationHookNotification(
       notification,
       resourceState.thread.threadId,
@@ -181,7 +190,10 @@ export function createCodexAttemptNotificationController(
         }
       }
       if (notificationState.isTurnTerminal) {
-        if (notificationState.isTurnAbortMarker) {
+        const completedTurn = readCodexTurnCompletedNotification(notification.params)?.turn;
+        // App-server collapses abort reasons; interrupted plus this marker is the
+        // only user-interrupt discriminator until Codex exposes abortReason.
+        if (completedTurn?.status === "interrupted" && state.sawCodexInterruptMarker) {
           projector.markAborted();
         }
         if (!state.timedOut && !runAbortController.signal.aborted) {

@@ -13,6 +13,7 @@ import {
   type PluginManifestToolOwnerRecord,
 } from "../plugins/manifest-command-aliases.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { isSimpleCommandHelpInvocation } from "./argv.js";
 import {
   resolveCliCommandPathPolicy,
   resolveCliNetworkProxyPolicy,
@@ -103,12 +104,7 @@ export function shouldUseSetupOnboardConfigureHelpFastPath(
   if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") {
     return false;
   }
-  const invocation = resolveCliArgvInvocation(argv);
-  return (
-    invocation.commandPath.length === 1 &&
-    SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS.has(invocation.commandPath[0] ?? "") &&
-    invocation.hasHelpOrVersion
-  );
+  return isSimpleCommandHelpInvocation(argv, SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS);
 }
 
 export function shouldHandleBareRoot(argv: string[]): boolean {

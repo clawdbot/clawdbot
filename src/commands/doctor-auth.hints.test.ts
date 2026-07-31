@@ -3,9 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   collectAuthProfileHealthFindings,
-  legacyCodexProviderOverrideToHealthFinding,
   noteLegacyCodexProviderOverride,
 } from "./doctor-auth.js";
+import { legacyCodexProviderOverrideToHealthFinding } from "./doctor-auth.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),

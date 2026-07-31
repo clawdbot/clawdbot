@@ -30,8 +30,14 @@ describe("type suppression inventory", () => {
     const fixtureRoot = createFixture({
       "src/example.ts": `
         const prose = "as any and @ts-expect-error";
+        const interpolated = \`value: \${value}\`;
         const first = value as any;
         const second = <any>value;
+        const third = value as /* preserved trivia */ any;
+        const fourth = </* preserved trivia */ any>value;
+        const fifth = value as // preserved line trivia
+          any;
+        const typeOnly: any = value;
         // @ts-expect-error invalid contract fixture
         consume({ invalid: true });
       `,
@@ -44,11 +50,11 @@ describe("type suppression inventory", () => {
     });
 
     expect(report.summary).toMatchObject({
-      findingCount: 3,
+      findingCount: 6,
       kindCounts: {
-        "as-any": 1,
+        "as-any": 3,
         "expect-error": 1,
-        "type-assertion-any": 1,
+        "type-assertion-any": 2,
       },
       scannedFileCount: 2,
       touchedFileCount: 1,
@@ -70,6 +76,8 @@ describe("type suppression inventory", () => {
       "src/infra/kysely-sync.types.test.ts:55:@ts-expect-error Kysely checks where-reference string literals.",
       "src/infra/kysely-sync.types.test.ts:58:@ts-expect-error Kysely checks grouped column string literals.",
       "src/infra/kysely-sync.types.test.ts:61:@ts-expect-error Kysely checks order references and selected aliases.",
+      "src/plugin-sdk/plugin-entry.reply-trigger.test.ts:8:@ts-expect-error Trigger eligibility is only supported for before_agent_reply.",
+      "src/plugin-sdk/plugin-entry.reply-trigger.test.ts:10:@ts-expect-error An empty trigger list cannot prove that a hook is inactive.",
     ]);
   });
 });

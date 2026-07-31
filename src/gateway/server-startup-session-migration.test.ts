@@ -11,6 +11,9 @@ type ResolveStoreTargets = NonNullable<
 >;
 type SweepStoreTemps = NonNullable<StartupMigrationDeps["sweepOrphanSessionStoreTemps"]>;
 type RunDoctorSessionSqlite = NonNullable<StartupMigrationDeps["runDoctorSessionSqlite"]>;
+type ReconcileSessionTranscriptIndexes = NonNullable<
+  StartupMigrationDeps["reconcileSessionTranscriptIndexes"]
+>;
 
 function makeLog() {
   return {
@@ -31,6 +34,9 @@ function makeDeps(
   migrate: MigrateSessionKeys,
   removedFiles = 0,
   runDoctorSessionSqlite: RunDoctorSessionSqlite = makeSessionSqliteImport(),
+  reconcileSessionTranscriptIndexes: ReconcileSessionTranscriptIndexes = vi
+    .fn<ReconcileSessionTranscriptIndexes>()
+    .mockResolvedValue({ reconciledSessions: 0 }),
 ) {
   return {
     migrateOrphanedSessionKeys: migrate,
@@ -43,6 +49,7 @@ function makeDeps(
       .mockResolvedValueOnce(removedFiles)
       .mockResolvedValue(0),
     runDoctorSessionSqlite,
+    reconcileSessionTranscriptIndexes,
   };
 }
 
@@ -199,6 +206,31 @@ describe("runStartupSessionMigration", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  it("reconciles configured agent transcript projections before startup completes", async () => {
+    const log = makeLog();
+    const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({ changes: [], warnings: [] });
+    const reconcile = vi
+      .fn<ReconcileSessionTranscriptIndexes>()
+      .mockResolvedValueOnce({ reconciledSessions: 2 })
+      .mockResolvedValueOnce({ reconciledSessions: 1 });
+    const cfg = {
+      agents: { defaults: {}, list: [{ id: "main" }, { id: "ops" }] },
+      session: {},
+    } as Parameters<typeof runStartupSessionMigration>[0]["cfg"];
+
+    await runStartupSessionMigration({
+      cfg,
+      log,
+      deps: makeDeps(migrate, 0, makeSessionSqliteImport(), reconcile),
+    });
+
+    expect(reconcile).toHaveBeenNthCalledWith(1, { agentId: "main" });
+    expect(reconcile).toHaveBeenNthCalledWith(2, { agentId: "ops" });
+    expect(log.info).toHaveBeenCalledWith(
+      "session: rebuilt 3 transcript projection(s) before serving history",
+    );
+  });
+
   it("warns without blocking when hot legacy session SQLite import reports legacy file issues", async () => {
     const log = makeLog();
     const migrate = vi.fn<MigrateSessionKeys>().mockResolvedValue({ changes: [], warnings: [] });
@@ -211,6 +243,11 @@ describe("runStartupSessionMigration", () => {
           importedEntries: 0,
           importedTranscriptEvents: 0,
           issues: [
+            {
+              code: "entry_invalid",
+              message: "Session entry is missing a valid sessionId.",
+              sessionKey: "agent:main:cron:legacy-stub",
+            },
             {
               code: "transcript_malformed",
               message: "/tmp/bad.jsonl: SyntaxError",
@@ -232,7 +269,7 @@ describe("runStartupSessionMigration", () => {
         archivedUnreferencedJsonlFiles: 0,
         importedEntries: 0,
         importedTranscriptEvents: 0,
-        issues: 1,
+        issues: 2,
         legacyEntries: 1,
         sqliteEntries: 0,
         targets: 1,
@@ -248,9 +285,9 @@ describe("runStartupSessionMigration", () => {
       deps: makeDeps(migrate, 0, runDoctorSessionSqlite),
     });
 
-    expect(firstLogMessage(log.warn, "malformed transcript warning")).toContain(
-      "session SQLite migration warnings",
-    );
+    const warning = firstLogMessage(log.warn, "legacy file warnings");
+    expect(warning).toContain("session SQLite migration warnings");
+    expect(warning).toContain("[entry_invalid] agent:main:cron:legacy-stub");
   });
 
   it("classifies corrupt SQLite startup failures with recovery guidance", async () => {

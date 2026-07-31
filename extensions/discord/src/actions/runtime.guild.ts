@@ -12,31 +12,7 @@ import {
   type DiscordActionConfig,
   type OpenClawConfig,
 } from "../runtime-api.js";
-import {
-  addRoleDiscord,
-  canManageGuildRoleDiscord,
-  canManageGuildMemberRoleDiscord,
-  createChannelDiscord,
-  createScheduledEventDiscord,
-  deleteChannelDiscord,
-  editChannelDiscord,
-  fetchChannelInfoDiscord,
-  fetchMemberInfoDiscord,
-  hasAnyChannelPermissionDiscord,
-  hasAnyGuildPermissionDiscord,
-  fetchRoleInfoDiscord,
-  fetchVoiceStatusDiscord,
-  listGuildChannelsDiscord,
-  listGuildEmojisDiscord,
-  listScheduledEventsDiscord,
-  moveChannelDiscord,
-  removeChannelPermissionDiscord,
-  removeRoleDiscord,
-  setChannelPermissionDiscord,
-  uploadEmojiDiscord,
-  uploadStickerDiscord,
-  resolveEventCoverImage,
-} from "../send.js";
+import { discordGuildActionRuntime } from "./runtime-deps.js";
 import {
   createDiscordMessagingActionContext,
   type DiscordMessagingActionOptions,
@@ -47,32 +23,6 @@ import {
   readDiscordChannelEditParams,
   readDiscordChannelMoveParams,
 } from "./runtime.shared.js";
-
-export const discordGuildActionRuntime = {
-  addRoleDiscord,
-  canManageGuildRoleDiscord,
-  canManageGuildMemberRoleDiscord,
-  createChannelDiscord,
-  createScheduledEventDiscord,
-  resolveEventCoverImage,
-  deleteChannelDiscord,
-  editChannelDiscord,
-  fetchChannelInfoDiscord,
-  fetchMemberInfoDiscord,
-  hasAnyChannelPermissionDiscord,
-  hasAnyGuildPermissionDiscord,
-  fetchRoleInfoDiscord,
-  fetchVoiceStatusDiscord,
-  listGuildChannelsDiscord,
-  listGuildEmojisDiscord,
-  listScheduledEventsDiscord,
-  moveChannelDiscord,
-  removeChannelPermissionDiscord,
-  removeRoleDiscord,
-  setChannelPermissionDiscord,
-  uploadEmojiDiscord,
-  uploadStickerDiscord,
-};
 
 type DiscordRoleMutationOpts = { cfg: OpenClawConfig; accountId?: string };
 type DiscordRoleMutation = (
@@ -735,4 +685,3 @@ export async function handleDiscordGuildAction(
       throw new Error(`Unknown action: ${action}`);
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

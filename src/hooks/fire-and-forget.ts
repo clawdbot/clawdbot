@@ -23,7 +23,7 @@ type FireAndForgetHookState = {
 };
 
 /** Queue limits for bounded fire-and-forget hook execution. */
-export type FireAndForgetBoundedHookOptions = {
+type FireAndForgetBoundedHookOptions = {
   maxConcurrency?: number;
   maxQueue?: number;
   timeoutMs?: number;

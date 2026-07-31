@@ -3,12 +3,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { listRegisteredPluginAgentPromptGuidance } from "./command-registry-state.js";
+import { getPluginCommandSpecs, listProviderPluginCommandSpecs } from "./command-specs.js";
 import {
-  testing,
   clearPluginCommands,
   executePluginCommand,
-  getPluginCommandSpecs,
-  listProviderPluginCommandSpecs,
   listPluginCommands,
   matchPluginCommand,
   registerPluginCommand,
@@ -71,12 +69,6 @@ function registerVoiceCommandForTest(
   return registerPluginCommand("demo-plugin", createVoiceCommand(overrides));
 }
 
-function resolveBindingConversationFromCommand(
-  params: Parameters<typeof testing.resolveBindingConversationFromCommand>[0],
-) {
-  return testing.resolveBindingConversationFromCommand(params);
-}
-
 function expectCommandMatch(
   commandBody: string,
   params: { name: string; pluginId: string; args: string },
@@ -130,13 +122,6 @@ function expectUnsupportedBindingApiResult(result: { text?: string }) {
       detached: { removed: false },
     }),
   );
-}
-
-function expectBindingConversationCase(
-  params: Parameters<typeof resolveBindingConversationFromCommand>[0],
-  expected: ReturnType<typeof resolveBindingConversationFromCommand>,
-) {
-  expect(resolveBindingConversationFromCommand(params)).toEqual(expected);
 }
 
 beforeEach(() => {
@@ -421,6 +406,31 @@ describe("registerPluginCommand", () => {
     expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Use /demo_cmd for demo routing."]);
   });
 
+  it.each([
+    ["zeta-plugin", "alpha-plugin"],
+    ["alpha-plugin", "zeta-plugin"],
+  ])("keeps prompt guidance stable for plugin discovery order %j", (...pluginIds) => {
+    for (const pluginId of pluginIds) {
+      const alpha = pluginId === "alpha-plugin";
+      expect(
+        registerPluginCommand(pluginId, {
+          name: alpha ? "alpha_cmd" : "zeta_cmd",
+          description: alpha ? "Alpha command" : "Zeta command",
+          agentPromptGuidance: alpha
+            ? ["Use /alpha_cmd first.", "Then finish the alpha workflow."]
+            : ["Use /zeta_cmd for zeta routing."],
+          handler: async () => ({ text: "ok" }),
+        }),
+      ).toEqual({ ok: true });
+    }
+
+    expect(listRegisteredPluginAgentPromptGuidance()).toEqual([
+      "Use /alpha_cmd first.",
+      "Then finish the alpha workflow.",
+      "Use /zeta_cmd for zeta routing.",
+    ]);
+  });
+
   it("normalizes and filters structured agent prompt guidance by surface", () => {
     const result = registerPluginCommand("demo-plugin", {
       name: "demo_cmd",
@@ -563,7 +573,6 @@ describe("registerPluginCommand", () => {
     const env = {
       ...process.env,
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
-      OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
     };
 
     expect(getPluginCommandSpecs("discord", { env })).toStrictEqual([]);
@@ -842,23 +851,23 @@ describe("registerPluginCommand", () => {
       activateGlobalSideEffects: true,
     });
     let observedOwnerStatus: boolean | undefined;
-    pluginRegistry.registerCommand(createBundledPluginRecord("phone-control"), {
-      name: "phone",
-      description: "Phone command",
+    pluginRegistry.registerCommand(createBundledPluginRecord("device-pair"), {
+      name: "pair_test",
+      description: "Pair test command",
       exposeSenderIsOwner: true,
       handler: async (ctx) => {
         observedOwnerStatus = ctx.senderIsOwner;
         return { text: "ok" };
       },
     });
-    const match = requirePluginCommandMatch("/phone");
+    const match = requirePluginCommandMatch("/pair_test");
 
     await executePluginCommand({
       command: match.command,
       channel: "telegram",
       isAuthorizedSender: true,
       senderIsOwner: true,
-      commandBody: "/phone",
+      commandBody: "/pair_test",
       config: {},
     });
 
@@ -1053,7 +1062,7 @@ describe("registerPluginCommand", () => {
       ),
     ).toEqual({ ok: true });
 
-    expect(second.getPluginCommandSpecs("telegram")).toEqual([
+    expect(getPluginCommandSpecs("telegram")).toEqual([
       {
         name: "voice",
         description: "Voice command",
@@ -1131,78 +1140,6 @@ describe("registerPluginCommand", () => {
     expect(registerPluginCommand("other-plugin", candidate)).toEqual(expected);
   });
 
-  it.each([
-    {
-      name: "resolves Discord DM command bindings with the user target prefix intact",
-      params: {
-        channel: "discord",
-        from: "discord:1177378744822943744",
-        to: "slash:1177378744822943744",
-        accountId: "default",
-      },
-      expected: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "user:1177378744822943744",
-      },
-    },
-    {
-      name: "resolves Discord guild command bindings with the channel target prefix intact",
-      params: {
-        channel: "discord",
-        from: "discord:channel:1480554272859881494",
-        accountId: "default",
-      },
-      expected: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1480554272859881494",
-      },
-    },
-    {
-      name: "resolves Discord thread command bindings with parent channel context intact",
-      params: {
-        channel: "discord",
-        from: "discord:channel:1480554272859881494",
-        accountId: "default",
-        messageThreadId: "thread-42",
-        threadParentId: "channel-parent-7",
-      },
-      expected: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1480554272859881494",
-        parentConversationId: "channel-parent-7",
-        threadId: "thread-42",
-      },
-    },
-    {
-      name: "does not resolve binding conversations for unsupported command channels",
-      params: {
-        channel: "slack",
-        from: "slack:U123",
-        to: "C456",
-        accountId: "default",
-      },
-      expected: null,
-    },
-    {
-      name: "resolves sender-keyed command bindings when only senderId is available",
-      params: {
-        channel: "signal",
-        senderId: "signal-user-42",
-        accountId: "default",
-      },
-      expected: {
-        channel: "signal",
-        accountId: "default",
-        conversationId: "dm:signal-user-42",
-      },
-    },
-  ] as const)("$name", ({ params, expected }) => {
-    expectBindingConversationCase(params, expected);
-  });
-
   it("does not expose binding APIs to plugin commands on unsupported channels", async () => {
     const handler = async (ctx: {
       requestConversationBinding: (params: { summary: string }) => Promise<unknown>;
@@ -1253,6 +1190,49 @@ describe("registerPluginCommand", () => {
     });
 
     expectUnsupportedBindingApiResult(result);
+  });
+
+  it("uses the stable originating target for plugin conversation commands", async () => {
+    const resolveCommandConversation = vi.fn(() => null);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack", label: "Slack" }),
+            bindings: { resolveCommandConversation },
+          },
+        },
+      ]),
+    );
+    const handler = vi.fn(async () => ({ text: "ok" }));
+
+    await executePluginCommand({
+      command: {
+        name: "control",
+        description: "Control a binding",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "slack",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      commandBody: "/control",
+      config: {} as never,
+      from: "slack:U123",
+      to: "changed-runtime-target",
+      originatingTo: "user:U123",
+      accountId: "default",
+    });
+
+    expect(resolveCommandConversation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        originatingTo: "user:U123",
+        commandTo: "changed-runtime-target",
+      }),
+    );
   });
 
   it("passes host session identity through to the plugin command context", async () => {

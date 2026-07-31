@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
-import { listPage } from "./service/ops.js";
+import { listPage } from "./service/ops-read.js";
 import type { CronJob } from "./types.js";
 
 function createBaseJob(overrides?: Partial<CronJob>): CronJob {
@@ -55,6 +55,37 @@ describe("cron listPage sort guards", () => {
     expect(page.jobs).toHaveLength(2);
   });
 
+  it.each([
+    { sortDir: "asc" as const, scheduledIds: ["earlier", "later"] },
+    { sortDir: "desc" as const, scheduledIds: ["later", "earlier"] },
+  ])(
+    "keeps unscheduled jobs after the scheduled $sortDir page",
+    async ({ sortDir, scheduledIds }) => {
+      const jobs = [
+        createBaseJob({ id: "paused-z", enabled: false, state: {} }),
+        createBaseJob({ id: "later", state: { nextRunAtMs: 200 } }),
+        createBaseJob({ id: "paused-a", enabled: false, state: {} }),
+        createBaseJob({ id: "earlier", state: { nextRunAtMs: 100 } }),
+      ];
+      const state = createMockCronStateForJobs({ jobs });
+      const options = {
+        enabled: "all" as const,
+        sortBy: "nextRunAtMs" as const,
+        sortDir,
+        limit: 2,
+      };
+
+      const firstPage = await listPage(state, { ...options, offset: 0 });
+      const secondPage = await listPage(state, { ...options, offset: 2 });
+
+      expect(firstPage.jobs.map((job) => job.id)).toEqual(scheduledIds);
+      expect(firstPage.hasMore).toBe(true);
+      expect(secondPage.jobs.map((job) => job.id)).toEqual(["paused-a", "paused-z"]);
+      expect(secondPage.hasMore).toBe(false);
+      expect(secondPage.snapshotRevision).toBe(firstPage.snapshotRevision);
+    },
+  );
+
   it("normalizes requested agent ids before filtering", async () => {
     const jobs = [
       createBaseJob({ id: "job-main", agentId: "main", name: "main" }),
@@ -82,7 +113,23 @@ describe("cron listPage sort guards", () => {
     expect(page.jobs.map((job) => job.id)).toEqual(["job-ops", "job-unset"]);
   });
 
-  it("matches omitted job agent ids to main when no default agent is configured", async () => {
+  it("matches scoped session owners before the configured default", async () => {
+    const jobs = [
+      createBaseJob({
+        id: "job-scoped",
+        agentId: undefined,
+        sessionKey: "agent:ops:main",
+      }),
+    ];
+    const state = createMockCronStateForJobs({ jobs });
+    state.deps.defaultAgentId = "main";
+
+    const page = await listPage(state, { agentId: "ops" });
+
+    expect(page.jobs.map((job) => job.id)).toEqual(["job-scoped"]);
+  });
+
+  it("matches omitted job agent ids to the prepared main default", async () => {
     const jobs = [
       createBaseJob({ id: "job-main", agentId: "main", name: "main" }),
       createBaseJob({ id: "job-ops", agentId: "ops", name: "ops" }),

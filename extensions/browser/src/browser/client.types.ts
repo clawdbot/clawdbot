@@ -59,6 +59,24 @@ export type BrowserGraphicsDiagnostics =
       reason: string;
     };
 
+export type BrowserTabOwnership =
+  | {
+      status: "durable";
+      nativeTargetId: string;
+      profileFingerprint: string;
+      browserInstanceFingerprint: string;
+    }
+  | {
+      status: "non-durable";
+      reason:
+        | "explicit-cdp-url-required"
+        | "target-marker-not-unique"
+        | "target-marker-lookup-failed"
+        | "target-lookup-failed"
+        | "browser-identity-unavailable"
+        | "browser-identity-lookup-failed";
+    };
+
 /** Browser status response returned by the control server. */
 export type BrowserStatus = {
   enabled: boolean;
@@ -110,6 +128,28 @@ export type BrowserTab = {
   wsUrl?: string;
   type?: string;
 };
+
+/** Internal tab-open result. Browser tools must remove internal metadata before model output. */
+export type BrowserOpenResult = BrowserTab & {
+  ownership?: BrowserTabOwnership;
+  resolvedProfile?: string;
+};
+
+/** Private page capture returned to Browser extraction callers. */
+export type BrowserPageContentResult =
+  | {
+      ok: true;
+      targetId: string;
+      url: string;
+      html: string;
+    }
+  | {
+      ok: false;
+      error: "invalid_selector" | "selector_not_found";
+      message: string;
+      targetId: string;
+      url: string;
+    };
 
 /** ARIA snapshot node exposed in structured snapshot responses. */
 export type SnapshotAriaNode = {

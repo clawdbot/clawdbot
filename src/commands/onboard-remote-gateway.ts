@@ -15,6 +15,7 @@ import type {
   SetupInferenceDetection,
   SetupInferenceFailureStatus,
 } from "../system-agent/setup-inference.js";
+import { t } from "../wizard/i18n/index.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 
@@ -45,9 +46,12 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
   return {
     candidates: result.candidates.map((candidate) => ({
       kind: candidate.kind,
+      ...(candidate.brandId !== undefined ? { brandId: candidate.brandId } : {}),
       label: candidate.label,
       detail: candidate.detail,
       modelRef: candidate.modelRef,
+      ...(candidate.icon !== undefined ? { icon: candidate.icon } : {}),
+      ...(candidate.website !== undefined ? { website: candidate.website } : {}),
       // Gateway ordering is authoritative; the guided candidate shape no
       // longer permits a second client-side recommendation signal.
       recommended: false,
@@ -55,21 +59,50 @@ function toSetupInferenceDetection(result: SystemAgentSetupDetectResult): SetupI
     })),
     manualProviders: result.manualProviders.map((provider) => ({
       id: provider.id,
+      ...(provider.brandId !== undefined ? { brandId: provider.brandId } : {}),
       label: provider.label,
       ...(provider.hint !== undefined ? { hint: provider.hint } : {}),
+      ...(provider.icon !== undefined ? { icon: provider.icon } : {}),
+      ...(provider.website !== undefined ? { website: provider.website } : {}),
     })),
     authOptions: (result.authOptions ?? []).map((option) =>
       Object.assign(
         {
           id: option.id,
+          ...(option.brandId !== undefined ? { brandId: option.brandId } : {}),
           label: option.label,
           kind: option.kind,
           featured: option.featured,
         },
         option.hint !== undefined ? { hint: option.hint } : {},
         option.groupLabel !== undefined ? { groupLabel: option.groupLabel } : {},
+        option.icon !== undefined ? { icon: option.icon } : {},
+        option.website !== undefined ? { website: option.website } : {},
       ),
     ),
+    ...(result.prepareOptions !== undefined
+      ? {
+          prepareOptions: result.prepareOptions.map((option) =>
+            Object.assign(
+              {
+                id: option.id,
+                label: option.label,
+              },
+              option.brandId !== undefined ? { brandId: option.brandId } : {},
+              option.hint !== undefined ? { hint: option.hint } : {},
+              option.icon !== undefined ? { icon: option.icon } : {},
+              option.website !== undefined ? { website: option.website } : {},
+            ),
+          ),
+        }
+      : {}),
+    recommendedInstalls: result.recommendedInstalls ?? [],
+    unavailableCandidates: (result.unavailableCandidates ?? []).map((candidate) => ({
+      id: candidate.id,
+      label: candidate.label,
+      detail: candidate.detail,
+      reason: candidate.reason,
+    })),
     workspace: result.workspace,
     ...(result.configuredModel !== undefined ? { configuredModel: result.configuredModel } : {}),
     setupComplete: result.setupComplete,
@@ -238,6 +271,10 @@ export async function runRemoteGatewayInferenceOnboarding(
   await runGuidedOnboarding({}, runtime, {
     detect,
     activate,
+    // Setup applies on the remote gateway through its chat; the local
+    // custodian flow (question zero, local setup apply, local hatch) is wrong here.
+    handoffMode: "chat",
+    runSetupMemoryImportStep: async () => ({ status: "skipped", providers: [] }),
     ...(deps.createPrompter ? { createPrompter: deps.createPrompter } : {}),
     runSystemAgentChat: async () => {
       const prompter = await (deps.createPrompter?.() ??
@@ -252,6 +289,7 @@ export async function runRemoteGatewayInferenceOnboarding(
         timeoutMs: GATEWAY_SYSTEM_AGENT_CHAT_TIMEOUT_MS,
       });
 
+      let agentDraft: SystemAgentChatResult["agentDraft"];
       try {
         for (;;) {
           await prompter.note(reply.reply, "OpenClaw");
@@ -260,6 +298,7 @@ export async function runRemoteGatewayInferenceOnboarding(
             return;
           }
           if (reply.action === "open-agent") {
+            agentDraft = reply.agentDraft;
             await prompter.outro("Opening your agent…");
             break;
           }
@@ -288,6 +327,7 @@ export async function runRemoteGatewayInferenceOnboarding(
       await runTui({
         config: boundConfig,
         deliver: false,
+        ...(agentDraft === "hatch" ? { message: t("wizard.finalize.bootstrapHatchMessage") } : {}),
         boundGateway: {
           url: target.gatewayUrl,
           ...(target.token ? { token: target.token } : {}),

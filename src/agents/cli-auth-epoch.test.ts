@@ -6,17 +6,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
-  resetCliAuthEpochTestDeps,
   resolveCliAuthBindingFingerprint,
   resolveCliAuthEpoch,
   resolveCliRuntimeOwnerFingerprint,
-  setCliAuthEpochTestDeps,
 } from "./cli-auth-epoch.js";
+import {
+  resetCliAuthEpochTestDeps,
+  setCliAuthEpochTestDeps,
+} from "./cli-auth-epoch.test-support.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { resolveCliExecutableIdentity } from "./cli-executable-identity.js";
 
 describe("resolveCliAuthEpoch", () => {
   afterEach(() => {
     resetCliAuthEpochTestDeps();
+    cliBackendsTesting.resetDepsForTest();
   });
 
   function expectCliAuthEpoch(
@@ -410,6 +414,25 @@ describe("resolveCliAuthEpoch", () => {
     // and token encodings must produce the same hash so the auth-epoch does
     // not flip during a token rotation. Regression for #74312.
     expect(tokenEpoch).toBe(oauthEpoch);
+  });
+
+  it("changes the Claude CLI auth epoch when apiKeyHelper configuration changes", async () => {
+    let helperHash = "helper-hash-a";
+    setCliAuthEpochTestDeps({
+      readClaudeCliCredentialsCached: () => ({
+        type: "api_key_helper",
+        provider: "anthropic",
+        helperHash,
+      }),
+    });
+
+    const first = await resolveCliAuthEpoch({ provider: "claude-cli" });
+    helperHash = "helper-hash-b";
+    const second = await resolveCliAuthEpoch({ provider: "claude-cli" });
+
+    expectCliAuthEpoch(first);
+    expectCliAuthEpoch(second);
+    expect(second).not.toBe(first);
   });
 
   it("drops the claude cli epoch when the credential read is absent", async () => {
@@ -961,15 +984,23 @@ describe("resolveCliAuthEpoch", () => {
   });
 
   function cliConfig(command: string): OpenClawConfig {
-    return {
-      agents: {
-        defaults: {
-          cliBackends: {
-            "claude-cli": { command },
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          pluginId: "anthropic",
+          config: { command },
+          runtimeArtifact: {
+            kind: "bundled-package-tree",
+            packageName: "@fixture/claude-cli",
+            entrypoint: "command",
+            nativeExecutableNames: ["claude", "claude.exe"],
           },
         },
-      },
-    };
+      ],
+    });
+    return {};
   }
 
   function copyNativeExecutable(filePath: string, source = process.execPath): void {
