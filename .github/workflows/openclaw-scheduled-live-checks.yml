@@ -20,6 +20,9 @@ env:
 
 jobs:
   live_and_openwebui_checks:
+    # Live suites need org-only provider keys, so a nightly cron can only fail in
+    # a fork. Run it upstream only; manual dispatch stays open to forks with keys.
+    if: github.repository == 'openclaw/openclaw' || github.event_name == 'workflow_dispatch'
     permissions:
       actions: read
       contents: read

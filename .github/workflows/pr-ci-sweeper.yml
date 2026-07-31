@@ -26,6 +26,9 @@ permissions: {}
 
 jobs:
   sweep:
+    # The app token needs an org-only secret, so an hourly cron can only fail in a
+    # fork. Run it upstream only; manual dispatch stays open to forks with own app.
+    if: github.repository == 'openclaw/openclaw' || github.event_name == 'workflow_dispatch'
     permissions:
       contents: read
     runs-on: ubuntu-24.04

@@ -2814,6 +2814,22 @@ describe("ci workflow guards", () => {
     expect(buildStepCache.with["restore-keys"]).toContain("build-all-v4-");
   });
 
+  // These crons need an org-only app token or org-only provider keys, so a fork's
+  // scheduled run can only fail. The repository arm runs the cron upstream only;
+  // the dispatch arm keeps manual runs open to forks that supply own credentials.
+  it.each([
+    [".github/workflows/pr-ci-sweeper.yml", "sweep"],
+    [".github/workflows/openclaw-scheduled-live-checks.yml", "live_and_openwebui_checks"],
+  ])("limits the %s cron to upstream but keeps manual dispatch", (workflowPath, jobName) => {
+    const workflow = parse(readFileSync(workflowPath, "utf8"));
+    const guard = workflow.jobs[jobName].if;
+
+    expect(workflow.on.schedule).toBeDefined();
+    expect(workflow.on.workflow_dispatch).not.toBeUndefined();
+    expect(guard).toContain("github.repository == 'openclaw/openclaw'");
+    expect(guard).toContain("github.event_name == 'workflow_dispatch'");
+  });
+
   it("warms protected caches without main-run cancellation", () => {
     const warmerSource = readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8");
     const warmer = parse(warmerSource);
