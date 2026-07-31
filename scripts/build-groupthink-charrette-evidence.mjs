@@ -4,10 +4,10 @@ import { createHash } from "node:crypto";
 import { lstat, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { inventoryTree } from "../../../.agents/skills/cyborgclaw-groupthink-charrette/scripts/tree-integrity.mjs";
+import { inventoryTree } from "../.agents/skills/cyborgclaw-groupthink-charrette/scripts/tree-integrity.mjs";
 
-const evidenceRoot = dirname(fileURLToPath(import.meta.url));
-const repositoryRoot = resolve(evidenceRoot, "../../..");
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const evidenceRoot = join(repositoryRoot, "ops/evidence/cyborgclaw-groupthink-charrette-v1");
 const sourceRoot = join(repositoryRoot, ".agents/skills/cyborgclaw-groupthink-charrette");
 const inventoryName = "INTERNAL_SHA256SUMS.sha256";
 const sourceInventoryName = "SOURCE_TREE_INVENTORY.json";

@@ -1,0 +1,110 @@
+{
+  "schema_version": "cyborgclaw.mission-evidence-manifest.v1",
+  "mission_id": "CYBORGCLAW_GROUPTHINK_CHARRETTE_GLOBAL_SKILL_V1",
+  "recorded_at": "2026-07-31T05:13:14.000Z",
+  "terminal_verdict": "ACCEPTED_FOR_POST_COMMIT_CUSTODY_EXPORT",
+  "claim_ceiling": "Durable user-scoped skill deployment and review-ready draft PR only; no merge, release, production, follow-on production-credential, external product/runtime operation beyond authorized repository publication, or execution-authority claim.",
+  "source": {
+    "path": ".agents/skills/cyborgclaw-groupthink-charrette",
+    "version": "1.0.0",
+    "logical_tree_digest": "3c788a417c3b00586760845d60f5859599c85acc9673bc8775b0ea97a80c05aa",
+    "entry_count": 49,
+    "file_count": 40,
+    "directory_count": 9,
+    "governing_commit": "5433cf8505eefa6734a50a8bed46607801aacab2"
+  },
+  "validation": {
+    "source_tests": {
+      "passed": 161,
+      "failed": 0
+    },
+    "installed_tests": {
+      "passed": 161,
+      "failed": 0
+    },
+    "checksum_files": 39,
+    "skill_validator": "PASS",
+    "quick_validator": "PASS",
+    "openclaw_loader_tests": {
+      "passed": 3,
+      "failed": 0
+    },
+    "targeted_format": "PASS",
+    "duplicate_scan_target_coverage": "PASS",
+    "repository_wide_check": "BASELINE_NPM_SHRINKWRAP_STALE_OUTSIDE_MISSION_SCOPE",
+    "source_installed_identity": true,
+    "repeat_install_disposition": "VERIFIED_NOOP"
+  },
+  "review": {
+    "final_epistemic": {
+      "report": "reviews/11_FINAL_EPISTEMIC_REVIEW.md",
+      "sha256": "43b29bb23879aadfe153612ce009f096c8895045e0b3fcbbd08543f324fdac5a",
+      "verdict": "ACCEPTED"
+    },
+    "final_authority_security": {
+      "report": "reviews/12_FINAL_AUTHORITY_SECURITY_REVIEW.md",
+      "sha256": "0e372eecc15907ca453c2527405160c78a83ca1f1395e6a7d12987241f1ff574",
+      "verdict": "ACCEPTED"
+    },
+    "final_practicality": {
+      "report": "reviews/13_FINAL_PRACTICALITY_REVIEW.md",
+      "sha256": "ad30f66b02474e9eba8666fff541ea0f77f29e452fd7292c47f3228e48a17695",
+      "verdict": "ACCEPTED"
+    },
+    "sage_synthesis": {
+      "report": "reviews/14_SAGE_SYNTHESIS.md",
+      "sha256": "c2486c8c03b8825205a86b89a97c709de2e62a11dffb6390f56009a1b7d5592e",
+      "verdict": "ACCEPTED"
+    },
+    "prompt_architect": {
+      "report": "reviews/15_PROMPT_ARCHITECT_ACCEPTANCE.md",
+      "sha256": "504a2d86814f12749c481efcd997acaec389e7bf2963a0317b9e9097bdb8764d",
+      "verdict": "ACCEPTED"
+    },
+    "fresh_discovery": {
+      "report": "reviews/16_FRESH_CONTEXT_DISCOVERY.md",
+      "sha256": "b50c8ca84e5462b9513f2c69441285198498999d56fc48fb5c465d9a944cf5c2",
+      "verdict": "ACCEPTED"
+    }
+  },
+  "installation": {
+    "target": "/home/spryguy/.agents/skills/cyborgclaw-groupthink-charrette",
+    "receipt_id": "2d61df4d-8872-4dc2-88a0-1eb772a38ca7",
+    "receipt_sha256": "c0dbd54a6ad205e6c4f990971d84b2f9fa51bb671b7b40019843fad0d0458b11",
+    "disposition": "INSTALLED",
+    "durable": true
+  },
+  "git": {
+    "repository": "openclaw/openclaw",
+    "publication_fork": "THESPRYGUY/openclaw-CyborgClaw",
+    "branch": "agent/groupthink-charrette-global-skill-v1",
+    "canonical_base_ancestor_snapshot": "13d474134f38b36637473b736d37a3e0e4886140",
+    "live_pr_base_at_audit": "c892a712e675e3df8e490c4f5ac124ef50631691",
+    "live_base_commits_ahead": 14087,
+    "governing_source_commit": "5433cf8505eefa6734a50a8bed46607801aacab2",
+    "pull_request": {
+      "number": 116673,
+      "url": "https://github.com/openclaw/openclaw/pull/116673",
+      "state": "OPEN",
+      "draft": true,
+      "merged": false,
+      "mergeable": true,
+      "merge_state": "BEHIND",
+      "real_behavior_proof_check": "PASS"
+    },
+    "final_closeout_head": "DETACHED_POST_COMMIT_CUSTODY_REQUIRED"
+  },
+  "evidence": {
+    "source_inventory": "SOURCE_TREE_INVENTORY.json",
+    "internal_checksums": "INTERNAL_SHA256SUMS.sha256",
+    "detached_final_receipt": "POST_COMMIT_CUSTODY.json",
+    "archive_digest": "DETACHED_SIDECAR_REQUIRED"
+  },
+  "prohibited_actions_observed": {
+    "merge": false,
+    "release_or_publish": false,
+    "production_deployment_or_restart": false,
+    "production_credentials_or_access": false,
+    "external_operational_action": false
+  }
+}

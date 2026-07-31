@@ -46,8 +46,9 @@ restoration.
 - Governance-path regression: fully bound local repairs targeting root, nested,
   case-varied, and recognized-equivalent instruction files escalate and cannot
   continue autonomously
-- `pnpm exec vitest run src/agents/skills.agents-skills-directory.test.ts`: 1
-  file passed, 3/3 tests passed, 970 ms
+- Canonical-base loader test:
+  `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/skills/loading/agents-directory.test.ts`:
+  1 file passed, 3/3 tests passed, 666 ms
 - secret/local-Codex-path scan of the skill: no matches
 
 The exact 161-test run, validators, and loader test were repeated against the
@@ -67,15 +68,21 @@ frozen source on 2026-07-31 UTC. The complete TAP run ended:
 
 ## Repository-wide check
 
-`pnpm check` passed the repository format stage, then stopped in pre-existing
-core TypeScript state outside this ignored, self-contained skill. Per repository
-policy, `pnpm install` was run and the exact check was retried once; it produced
-the same diagnostics:
+After canonical-ancestor replay, `pnpm check` passed every preflight guard except
+the repository's pre-existing npm-shrinkwrap freshness guard:
 
-- unresolved `@mariozechner/pi-ai/oauth` types/imports;
-- two associated implicit-`any` diagnostics;
-- a telemetry error-shape mismatch;
-- a governor `void | false` mismatch.
+```text
+.: npm-shrinkwrap.json is stale. Run `pnpm deps:shrinkwrap:generate`.
+```
 
-No mission file touches those paths. The focused loader and all skill-specific
-checks pass; the unrelated baseline is preserved rather than modified.
+The first post-replay run also identified the evidence builder as a tracked
+source file outside duplicate-scan targets. That mission-owned issue was
+repaired by moving the builder to `scripts/`; the exact retry then reported
+duplicate-scan target coverage `ok` and only the shrinkwrap baseline above.
+
+Per repository policy, `pnpm install` was run before the exact retry.
+`package.json`, `pnpm-lock.yaml`, and `npm-shrinkwrap.json` are byte-unchanged
+from governing ancestor
+`13d474134f38b36637473b736d37a3e0e4886140`. Regenerating dependency lock
+artifacts would be unrelated scope, so the baseline is recorded rather than
+modified. The focused loader and all skill-specific checks pass.

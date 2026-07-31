@@ -1,24 +1,29 @@
 {
   "schema_version": "cyborgclaw.execution-receipt.v1",
   "mission_id": "CYBORGCLAW_GROUPTHINK_CHARRETTE_GLOBAL_SKILL_V1",
-  "recorded_at": "2026-07-31T04:04:46.000Z",
+  "recorded_at": "2026-07-31T05:13:14.000Z",
   "authority_proof": "authority_proof.json",
   "decision_packet": "decision_packet.json",
   "campaign": "CYBORGCLAW_GROUPTHINK_CHARRETTE_GLOBAL_SKILL_V1",
   "macro_objective": "production-quality governed decision charrette skill",
-  "micro_objective": "fresh independent review of repaired frozen source",
+  "micro_objective": "post-commit evidence custody and archive verification",
   "source": {
     "path": ".agents/skills/cyborgclaw-groupthink-charrette",
     "version": "1.0.0",
     "logical_tree_digest": "3c788a417c3b00586760845d60f5859599c85acc9673bc8775b0ea97a80c05aa",
-    "entry_count": 49
+    "entry_count": 49,
+    "governing_commit": "5433cf8505eefa6734a50a8bed46607801aacab2"
   },
   "validation": {
     "focused_adversarial": {
       "passed": 75,
       "failed": 0
     },
-    "complete_skill_suite": {
+    "complete_source_suite": {
+      "passed": 161,
+      "failed": 0
+    },
+    "complete_installed_suite": {
       "passed": 161,
       "failed": 0
     },
@@ -26,54 +31,88 @@
     "checksum_validator": "PASS",
     "structure_validator": "PASS",
     "format_validator": "PASS",
+    "quick_validator": "PASS",
     "openclaw_loader_tests": {
       "passed": 3,
       "failed": 0
     },
-    "repository_wide_check": "BASELINE_BLOCKED_OUTSIDE_MISSION_SCOPE"
+    "source_installed_identity": "PASS",
+    "repository_wide_check": "BASELINE_NPM_SHRINKWRAP_STALE_OUTSIDE_MISSION_SCOPE"
   },
   "repair_history": [
     {
       "finding_id": "A13",
       "finding": "proof-plan commitment equal to freeze time could reach PROCEED",
-      "disposition": "REPAIRED_AND_INDEPENDENTLY_RECHECKED",
-      "proof": "strict >= rejection in frozen validation and routing; manual-only regression; 66/66 focused and 158/158 complete"
+      "disposition": "REPAIRED_AND_INDEPENDENTLY_RECHECKED"
     },
     {
       "finding_id": "A14",
-      "finding": "runtime analysis-summary length used UTF-16 units while JSON Schema minLength used Unicode code points",
-      "disposition": "REPAIRED_AND_INDEPENDENTLY_RECHECKED",
-      "proof": "independent digest reproduction; runtime code-point checks; exact 40/80 engine/schema probe; focused schema 7/7, checksum and skill validation, and complete suite 159/159"
+      "finding": "runtime analysis-summary length used UTF-16 units while JSON Schema used Unicode code points",
+      "disposition": "REPAIRED_AND_INDEPENDENTLY_RECHECKED"
     },
     {
       "finding_id": "A15",
       "finding": "standalone schemas accepted impossible Gregorian dates rejected by the engine",
-      "disposition": "REPAIRED_AND_INDEPENDENTLY_RECHECKED",
-      "proof": "independent digest reproduction; invalid month-day and non-leap-century rejection; valid 2000/2028 leap days; schema suite 8/8 and complete suite 161/161"
+      "disposition": "REPAIRED_AND_INDEPENDENTLY_RECHECKED"
     },
     {
       "finding_id": "A16",
       "finding": "fully bound local repair could target repository-governance instruction files",
-      "disposition": "REPAIRED_AND_INDEPENDENTLY_RECHECKED",
-      "proof": "original live AGENTS.md exploit plus all listed governance basenames independently replayed; every valid probe escalates RESERVED with continuation false; complete suite 161/161"
+      "disposition": "REPAIRED_AND_INDEPENDENTLY_RECHECKED"
     }
   ],
+  "review": {
+    "final_blind_panel": "THREE_OF_THREE_ACCEPTED",
+    "sage_synthesis": "ACCEPTED",
+    "prompt_architect": "ACCEPTED",
+    "fresh_global_discovery": "ACCEPTED"
+  },
+  "installation": {
+    "target": "/home/spryguy/.agents/skills/cyborgclaw-groupthink-charrette",
+    "receipt_id": "2d61df4d-8872-4dc2-88a0-1eb772a38ca7",
+    "receipt_sha256": "c0dbd54a6ad205e6c4f990971d84b2f9fa51bb671b7b40019843fad0d0458b11",
+    "disposition": "INSTALLED",
+    "repeat_disposition": "VERIFIED_NOOP"
+  },
+  "git": {
+    "branch": "agent/groupthink-charrette-global-skill-v1",
+    "canonical_base_ancestor_snapshot": "13d474134f38b36637473b736d37a3e0e4886140",
+    "live_pr_base_at_audit": "c892a712e675e3df8e490c4f5ac124ef50631691",
+    "live_base_commits_ahead": 14087,
+    "governing_source_commit": "5433cf8505eefa6734a50a8bed46607801aacab2",
+    "known_branch_force_with_lease": {
+      "expected_old_oid": "51de777d0df27116f139d863fdc3d1a5bb3284a8",
+      "new_oid": "5433cf8505eefa6734a50a8bed46607801aacab2",
+      "unknown_remote_work_overwritten": false
+    },
+    "pull_request": {
+      "number": 116673,
+      "url": "https://github.com/openclaw/openclaw/pull/116673",
+      "state": "OPEN",
+      "draft": true,
+      "merged": false,
+      "mergeable": true,
+      "merge_state": "BEHIND",
+      "real_behavior_proof_check": "PASS"
+    }
+  },
   "owners": {
     "decision_owner": "Glen",
     "execution_owner": "Codex mission executor",
-    "proof_owner": "independent reviewers",
+    "proof_owner": "independent reviewers and validation receipts",
     "continuation_owner": "Codex within the exact operator prompt"
   },
   "authority_lease": "EXEMPT_NO_BOR_REQUIRED",
-  "prohibited_actions": {
+  "prohibited_actions_taken": {
     "merge": false,
     "production_deployment": false,
     "release_or_publish": false,
     "production_credentials": false,
     "external_operational_action": false,
-    "destructive_cross_worktree_action": false
+    "destructive_cross_worktree_action": false,
+    "force_push_over_unknown_work": false
   },
-  "current_gate": "FRESH_INDEPENDENT_REVIEW",
-  "status": "IN_PROGRESS",
-  "claim_ceiling": "No install, merge, release, production, or external operational claim until its named proof is recorded."
+  "current_gate": "POST_COMMIT_EVIDENCE_EXPORT",
+  "status": "READY_FOR_POST_COMMIT_EXPORT",
+  "claim_ceiling": "Durable user-scoped skill deployment and review-ready draft PR only; no merge, release, production, follow-on production-credential, external product/runtime operation beyond authorized repository publication, or execution-authority claim."
 }

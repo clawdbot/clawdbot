@@ -1,56 +1,74 @@
 {
   "schema_version": "cyborgclaw.decision-packet.v1",
   "mission_id": "CYBORGCLAW_GROUPTHINK_CHARRETTE_GLOBAL_SKILL_V1",
-  "recorded_at": "2026-07-31T04:04:46.000Z",
+  "recorded_at": "2026-07-31T05:13:14.000Z",
   "supersedes": {
-    "decision": "CONTINUE_TO_INDEPENDENT_REVIEW",
-    "basis_claim": "skill_tests_81_of_81_pass",
-    "reason": "the candidate was materially hardened and the test suite expanded before source freeze"
+    "decision": "CONTINUE_FROM_FROZEN_SOURCE_TO_INDEPENDENT_REVIEW",
+    "basis_claim": "frozen_source_ready_for_three_clean_reviews",
+    "reason": "all countable reviews, final synthesis, Prompt Architect acceptance, global installation, fresh discovery, source publication, and draft-PR creation are now proven"
   },
-  "decision": "CONTINUE_FROM_FROZEN_SOURCE_TO_INDEPENDENT_REVIEW",
+  "decision": "ACCEPT_CLOSEOUT_AND_CONTINUE_TO_DETACHED_EVIDENCE_EXPORT",
   "basis": [
     "environment_and_authority_verified",
     "canonical_prompt_architect_established",
     "groupthink_artifacts_reconciled",
     "source_contract_complete",
     "skill_tests_161_of_161_pass",
-    "schemas_checksums_structure_and_loader_validators_pass",
-    "unicode_engine_schema_contract_repaired_and_regression_tested",
-    "gregorian_timestamp_engine_schema_contract_repaired_and_regression_tested",
-    "repository_governance_instruction_paths_reserved_and_regression_tested",
+    "schemas_checksums_structure_format_and_loader_validators_pass",
+    "adversarial_findings_A13_through_A16_repaired_and_independently_rechecked",
+    "three_clean_context_reviews_accepted_on_exact_final_digest",
+    "sage_synthesis_accepted_with_limitations_preserved",
+    "fresh_prompt_architect_acceptance",
+    "global_install_receipt_and_exact_source_installed_identity",
+    "fresh_global_discovery_without_external_side_effects",
+    "governing_source_commit_5433cf8505eefa6734a50a8bed46607801aacab2",
+    "draft_pull_request_116673_open_and_unmerged",
+    "required_real_behavior_proof_check_passed",
     "frozen_source_inventory_3c788a417c3b00586760845d60f5859599c85acc9673bc8775b0ea97a80c05aa"
   ],
   "allowed_scope": [
-    "independent_read_only_review_of_the_frozen_source",
-    "evidence_documentation_outside_the_frozen_source",
-    "repair_only_if_a_reproducible_material_blocker_is_found"
+    "evidence_only_closeout_commit",
+    "push_closeout_commit_to_known_dedicated_branch",
+    "verify_draft_pull_request_head_and_unmerged_state",
+    "collision_safe_evidence_export",
+    "detached_post_commit_custody_receipt",
+    "archive_integrity_and_secret_scans"
   ],
   "forbidden_scope": [
-    "install_before_acceptance",
-    "source_change_without_review_restart",
+    "source_change",
+    "install_mutation",
     "merge",
-    "release",
-    "production_or_external_operational_action"
+    "release_or_publish",
+    "production_or_external_operational_action",
+    "force_push_over_unknown_work",
+    "unrelated_repository_change"
   ],
   "bdma_rights_fit": "PASS_DIRECT_OPERATOR_AUTHORITY",
   "proof_bar": [
-    "three_independent_clean_context_reviews_bound_to_the_same_source_digest",
-    "sage_synthesis_preserving_dissent",
-    "fresh_independent_prompt_architect_acceptance"
+    "evidence_only_closeout_commit",
+    "final_remote_branch_oid_equals_local_head",
+    "pull_request_open_draft_unmerged_and_headed_by_final_commit",
+    "repository_and_exported_evidence_byte_identity",
+    "internal_checksum_and_zip_integrity_pass",
+    "safe_archive_paths_and_no_symlink_entries",
+    "exact_basename_archive_sha256_sidecar"
   ],
   "stop_triggers": [
-    "reproducible_material_blocker",
     "source_digest_change",
+    "unexpected_remote_branch_oid",
+    "pull_request_not_open_draft_or_unmerged",
+    "archive_or_checksum_failure",
+    "secret_pattern_match",
     "authority_or_repository_conflict"
   ],
   "owners": {
     "decision_owner": "Glen",
     "execution_owner": "Codex mission executor",
-    "proof_owner": "independent reviewers",
+    "proof_owner": "independent reviewers and validation receipts",
     "synthesis_owner": "Sage",
     "final_acceptance_owner": "fresh Prompt Architect reviewer"
   },
-  "reversibility": "reviews are read-only; any repair is mission-scoped and requires full source re-freeze and review restart",
-  "claim_ceiling": "Frozen pre-review candidate only; no install, merge, release, production, or external operational authority is implied.",
-  "next_gate": "three_clean_context_reviews_then_sage_synthesis_then_prompt_architect_acceptance"
+  "reversibility": "the closeout commit and export are mission-scoped repository/evidence effects; the PR remains draft and unmerged",
+  "claim_ceiling": "Durable user-scoped skill deployment and review-ready draft PR only; no merge, release, production, follow-on production-credential, external product/runtime operation beyond authorized repository publication, or execution-authority claim.",
+  "next_gate": "detached_post_commit_custody_and_archive_verification"
 }

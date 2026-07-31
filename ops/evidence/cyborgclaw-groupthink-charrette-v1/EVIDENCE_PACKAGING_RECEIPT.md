@@ -3,7 +3,8 @@
 Repository package root:
 `ops/evidence/cyborgclaw-groupthink-charrette-v1`
 
-The evidence builder:
+The repository builder,
+`scripts/build-groupthink-charrette-evidence.mjs`:
 
 - refuses symlinks, non-regular files, and multiply linked files;
 - verifies the frozen source logical-tree digest before writing inventories;
@@ -24,6 +25,12 @@ The final export must additionally prove:
   detached post-commit custody receipt.
 
 The closeout commit cannot contain its own object ID. The repository evidence
-therefore records the source/evidence commit and stable draft-PR identity. The
-final branch-head OID belongs in the detached exported receipt and terminal
-report; no recursive follow-up commit is created.
+therefore records governing source commit
+`5433cf8505eefa6734a50a8bed46607801aacab2`, draft PR 116673, and the stable
+source digest. The final branch-head OID belongs in the detached exported
+receipt and terminal report; no recursive follow-up commit is created.
+
+The repository bundle's status before export is
+`ACCEPTED_FOR_POST_COMMIT_CUSTODY_EXPORT`. The detached receipt completes
+custody only after the closeout commit is pushed and the PR is re-read as open,
+draft, unmerged, and headed by that commit.
