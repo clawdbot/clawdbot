@@ -101,10 +101,10 @@ function truncateForSummary(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
   }
-  if (IMPORTANT_TOOL_RESULT_TAIL.test(sliceUtf16Safe(text, -maxChars))) {
-    const tailChars = Math.min(Math.floor(maxChars * 0.3), 600);
+  const tailChars = Math.min(Math.floor(maxChars * 0.3), 600);
+  const tail = sliceUtf16Safe(text, -tailChars);
+  if (IMPORTANT_TOOL_RESULT_TAIL.test(tail)) {
     const head = truncateUtf16Safe(text, maxChars - tailChars);
-    const tail = sliceUtf16Safe(text, -tailChars);
     const truncatedChars = text.length - head.length - tail.length;
     // Commands usually report their actual failure last; preserve that tail
     // so branch and ordinary compaction summaries can explain what failed.

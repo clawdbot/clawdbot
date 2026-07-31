@@ -80,4 +80,16 @@ describe("serializeConversation", () => {
     expect(serialized).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
     expect(serialized).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
   });
+
+  it("retains earlier diagnostics when they are outside the preserved tail", () => {
+    const output = `${"h".repeat(1500)}ERROR: earlier failure${"m".repeat(1500)}`;
+    const messages = [
+      {
+        role: "toolResult",
+        content: [{ type: "text", text: output }],
+      },
+    ] as unknown as Message[];
+
+    expect(serializeConversation(messages)).toContain("ERROR: earlier failure");
+  });
 });
