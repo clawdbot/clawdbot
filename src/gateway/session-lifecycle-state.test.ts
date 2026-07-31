@@ -397,6 +397,43 @@ describe("session lifecycle state", () => {
     expect(persisted.mainRestartRecovery).toBeUndefined();
   });
 
+  it("clears every generation of a resumed run when its current owner completes", async () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+        abortedLastRun: false,
+        restartRecoveryRuns: [
+          { runId: "recovery-run", lifecycleGeneration: "pre-restart" },
+          { runId: "recovery-run", lifecycleGeneration },
+        ],
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 5,
+          chargedAttempts: 2,
+        },
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        runId: "recovery-run",
+        lifecycleGeneration,
+        data: { phase: "end", endedAt: 1_800 },
+      },
+    );
+
+    expect(persisted).toMatchObject({
+      status: "done",
+      endedAt: 1_800,
+      abortedLastRun: false,
+    });
+    expect(persisted.restartRecoveryRuns).toBeUndefined();
+    expect(persisted.mainRestartRecovery).toBeUndefined();
+  });
+
   it("does not settle a foreground owner from a stale lifecycle generation", async () => {
     const persisted = await persistLifecycle(
       {

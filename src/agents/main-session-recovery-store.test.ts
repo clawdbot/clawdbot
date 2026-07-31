@@ -241,6 +241,35 @@ describe("main session recovery store", () => {
     expect(readStore()[legacyKey]).toMatchObject({ abortedLastRun: true });
   });
 
+  it("transfers a resumed recovery run to one durable lifecycle owner", async () => {
+    await write(
+      interruptedEntry({
+        restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-old" }],
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 2,
+          chargedAttempts: 1,
+          reservation: { runId: "recovery-1", attempt: 1, lifecycleGeneration },
+        },
+      }),
+    );
+
+    const admitted = await commitMainSessionRecovery({
+      command: {
+        kind: "admit_recovery",
+        lifecycleGeneration,
+        now: 300,
+        runId: "recovery-1",
+        sessionId: "session-1",
+      },
+      target: { sessionKey, storePath },
+    });
+
+    expect(admitted.transition).toEqual({ kind: "admitted_recovery" });
+    expect(read().restartRecoveryRuns).toEqual([{ runId: "recovery-1", lifecycleGeneration }]);
+    expect(read().abortedLastRun).toBe(false);
+  });
+
   it("rejects an observation after the session is replaced", async () => {
     await write({
       sessionId: "session-2",
