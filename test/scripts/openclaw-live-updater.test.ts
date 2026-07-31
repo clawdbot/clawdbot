@@ -20,6 +20,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import {
   acquireMaintenanceLock,
+  assertNoSystemLaunchDaemonOwnership,
   classifyActions,
   findExactMacTarget,
   inspectBuildState,
@@ -86,6 +87,7 @@ function maintainFixture(
       warnings: [],
     }),
     armEnvironmentRestore: () => ({ disarm() {} }),
+    assertNoSystemLaunchDaemonOwnership: () => {},
     prepareGatewaySuspension: () => ({
       status: "ready",
       suspensionId: "fixture-suspension",
@@ -336,6 +338,41 @@ describe("openclaw live updater", () => {
     expect(() => resolveLaunchAgentExitTimeoutSeconds(301)).toThrow(
       "ExitTimeOut=301 prevents bounded stopped proof",
     );
+  });
+
+  test("fails closed on same-label system LaunchDaemon ownership", () => {
+    const missing = { status: 113, stdout: "", stderr: "Could not find service" };
+    expect(() =>
+      assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
+        readdirSync: () => ["com.example.other.plist", "openclaw-system.plist"],
+        spawnSync: (command: string, args: string[]) => {
+          if (command === "/bin/launchctl") {
+            return missing;
+          }
+          return {
+            status: 0,
+            stdout: args.at(-1)?.endsWith("openclaw-system.plist")
+              ? "ai.openclaw.gateway\n"
+              : "com.example.other\n",
+            stderr: "",
+          };
+        },
+      }),
+    ).toThrow("openclaw-system.plist already owns the managed Gateway label");
+
+    const calls: string[] = [];
+    expect(() =>
+      assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
+        readdirSync: () => [],
+        spawnSync: (command: string, args: string[]) => {
+          calls.push([command, ...args].join(" "));
+          return calls.length === 1
+            ? missing
+            : { status: 0, stdout: "system/ai.openclaw.gateway", stderr: "" };
+        },
+      }),
+    ).toThrow("system/ai.openclaw.gateway already owns the managed Gateway label");
+    expect(calls).toHaveLength(2);
   });
 
   test("audits raw file logs when RPC log retrieval is unavailable", () => {
@@ -1778,6 +1815,156 @@ console.log(JSON.stringify(command === "health" ? {
       `/bin/launchctl bootstrap gui/${uid} ${plistPath}`,
       `/bin/launchctl unsetenv OPENCLAW_GATEWAY_STARTUP_TRACE`,
     ]);
+  });
+
+  test("restores the previous LaunchAgent after replacement readiness fails", () => {
+    const { root, mirror, seed } = makeFixture({ includeSeed: true });
+    mkdirSync(path.join(mirror, "node_modules"));
+    writeBuild(mirror);
+    writeFileSync(path.join(seed, "README.md"), "replacement failure update\n");
+    git(seed, "add", "README.md");
+    git(seed, "commit", "-m", "replacement failure update");
+    git(seed, "push");
+    const commands = fakeCommands(mirror);
+    const snapshot = path.join(root, "gateway-ancestor/dist/index.js");
+    const source = path.join(mirror, "dist/index.js");
+    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
+    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+    let deployedEntrypoint = snapshot;
+
+    const inspectGatewayDeployment = () => ({
+      configPath: path.join(root, "openclaw.json"),
+      entrypoint: deployedEntrypoint,
+      entrypointIndex: 1,
+      executable: process.execPath,
+      invocationPrefix: [deployedEntrypoint],
+      label: "ai.openclaw.gateway",
+      plistPath,
+      port: 18789,
+      runtime: process.execPath,
+    });
+
+    expect(() =>
+      maintainFixture(
+        { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+        {
+          runCommand: commands.runCommand,
+          assertNoSystemLaunchDaemonOwnership: () => {
+            commands.calls.push("assert system ownership");
+          },
+          inspectGatewayDeployment,
+          isGatewayLoaded: () => true,
+          prepareGatewayEntrypointReplacement: () => {
+            commands.calls.push("prepare replacement plist");
+            return {
+              install() {
+                commands.calls.push("install replacement plist");
+                deployedEntrypoint = source;
+              },
+              restore() {
+                commands.calls.push("restore previous plist");
+                deployedEntrypoint = snapshot;
+              },
+              discard() {},
+            };
+          },
+          proveGatewayStopped: () => {
+            commands.calls.push("prove gateway stopped");
+            return {
+              runtimeStatus: "stopped",
+              port: 18789,
+              portStatus: "free",
+              proofSource: "fixture",
+            };
+          },
+          repointGatewayDeployment: (
+            _checkout: string,
+            deployment: { entrypoint: string; invocationPrefix: string[] },
+            replaceEntrypoint: (deployment: unknown, entrypoint: string) => void,
+          ) => {
+            replaceEntrypoint(deployment, source);
+            return {
+              changed: true,
+              ...deployment,
+              entrypoint: source,
+              invocationPrefix: [source],
+              previousEntrypoint: deployment.entrypoint,
+            };
+          },
+          verifyAndAuditGateway: () => {
+            commands.calls.push("verify replacement readiness");
+            throw new Error("replacement readiness failed");
+          },
+        },
+      ),
+    ).toThrow("replacement readiness failed");
+
+    const uid = process.getuid?.() ?? 501;
+    expect(deployedEntrypoint).toBe(snapshot);
+    expect(commands.calls).toEqual([
+      "assert system ownership",
+      "prepare replacement plist",
+      `/bin/launchctl bootout gui/${uid}/ai.openclaw.gateway`,
+      "prove gateway stopped",
+      "pnpm build",
+      "assert system ownership",
+      "install replacement plist",
+      "assert system ownership",
+      `/bin/launchctl setenv OPENCLAW_GATEWAY_STARTUP_TRACE 1`,
+      `/bin/launchctl enable gui/${uid}/ai.openclaw.gateway`,
+      `/bin/launchctl bootstrap gui/${uid} ${plistPath}`,
+      `/bin/launchctl unsetenv OPENCLAW_GATEWAY_STARTUP_TRACE`,
+      "verify replacement readiness",
+      `/bin/launchctl bootout gui/${uid}/ai.openclaw.gateway`,
+      "prove gateway stopped",
+      "restore previous plist",
+      "assert system ownership",
+      `/bin/launchctl enable gui/${uid}/ai.openclaw.gateway`,
+      `/bin/launchctl bootstrap gui/${uid} ${plistPath}`,
+    ]);
+  });
+
+  test("resumes suspension when system ownership appears before bootout", () => {
+    const { root, mirror, seed } = makeFixture({ includeSeed: true });
+    mkdirSync(path.join(mirror, "node_modules"));
+    writeBuild(mirror);
+    writeFileSync(path.join(seed, "README.md"), "ownership conflict update\n");
+    git(seed, "add", "README.md");
+    git(seed, "commit", "-m", "ownership conflict update");
+    git(seed, "push");
+    const snapshot = path.join(root, "gateway-ancestor/dist/index.js");
+    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
+    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+    const resumed: string[] = [];
+
+    expect(() =>
+      maintainFixture(
+        { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+        {
+          assertNoSystemLaunchDaemonOwnership: () => {
+            throw new Error("same-label system owner");
+          },
+          inspectGatewayDeployment: () => ({
+            configPath: path.join(root, "openclaw.json"),
+            entrypoint: snapshot,
+            entrypointIndex: 1,
+            executable: process.execPath,
+            invocationPrefix: [snapshot],
+            label: "ai.openclaw.gateway",
+            plistPath,
+            port: 18789,
+            runtime: process.execPath,
+          }),
+          prepareGatewayEntrypointReplacement: () => {
+            throw new Error("replacement preparation must not run");
+          },
+          resumeGatewaySuspension: (_checkout: string, suspensionId: string) => {
+            resumed.push(suspensionId);
+          },
+        },
+      ),
+    ).toThrow("same-label system owner");
+    expect(resumed).toEqual(["fixture-suspension"]);
   });
 
   test("builds a trusted source control client while a snapshot is still running", () => {

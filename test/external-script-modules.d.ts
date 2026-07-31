@@ -210,6 +210,17 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     stateDir?: string,
   ): string | null;
   export function resolveLaunchAgentExitTimeoutSeconds(value: unknown): number;
+  export function assertNoSystemLaunchDaemonOwnership(
+    label: string,
+    dependencies?: {
+      readdirSync?: (path: string) => string[];
+      spawnSync?: (
+        command: string,
+        args: string[],
+        options?: Record<string, unknown>,
+      ) => { status: number | null; stdout?: string; stderr?: string };
+    },
+  ): void;
   export function replaceLaunchAgentProgramArgument(
     programArguments: unknown,
     index: number,

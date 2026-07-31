@@ -47,6 +47,7 @@ const GATEWAY_PROCESS_START_TIMEOUT_MS = 20_000;
 const GATEWAY_PROCESS_START_RETRY_DELAY_MS = 250;
 const GATEWAY_SUSPEND_TIMEOUT_MS = 10_000;
 const GATEWAY_STARTUP_TRACE_ENV = "OPENCLAW_GATEWAY_STARTUP_TRACE";
+const SYSTEM_LAUNCH_DAEMON_DIR = "/Library/LaunchDaemons";
 const GENERATED_LAUNCH_AGENT_ENV_WRAPPER = `#!/bin/sh
 set -eu
 env_file="$1"
@@ -770,6 +771,69 @@ export function resolveLaunchAgentExitTimeoutSeconds(value) {
   return Number.isInteger(value) && value > 0 ? value : DEFAULT_LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS;
 }
 
+function isLaunchctlServiceMissing(result) {
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  return result.status !== 0 && /could not find service|no such process|not found/iu.test(output);
+}
+
+export function assertNoSystemLaunchDaemonOwnership(label, dependencies = {}) {
+  const run = dependencies.spawnSync ?? spawnSync;
+  const readDirectory = dependencies.readdirSync ?? readdirSync;
+  const serviceTarget = `system/${label}`;
+  const inspectLoadedService = () => {
+    const result = run("/bin/launchctl", ["print", serviceTarget], { encoding: "utf8" });
+    if (result.status === 0) {
+      throw new UpdateInvariantError(
+        "gateway_system_launchdaemon_conflict",
+        `System LaunchDaemon ${serviceTarget} already owns the managed Gateway label`,
+      );
+    }
+    if (!isLaunchctlServiceMissing(result)) {
+      throw new UpdateInvariantError(
+        "gateway_system_launchdaemon_unverifiable",
+        `could not verify system LaunchDaemon ownership for ${serviceTarget}`,
+      );
+    }
+  };
+
+  inspectLoadedService();
+  let entries;
+  try {
+    entries = readDirectory(SYSTEM_LAUNCH_DAEMON_DIR);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      entries = [];
+    } else {
+      throw new UpdateInvariantError(
+        "gateway_system_launchdaemon_unverifiable",
+        `could not inspect ${SYSTEM_LAUNCH_DAEMON_DIR}: ${String(error)}`,
+      );
+    }
+  }
+  for (const entry of entries.filter((candidate) => candidate.endsWith(".plist")).toSorted()) {
+    const plistPath = path.join(SYSTEM_LAUNCH_DAEMON_DIR, entry);
+    const result = run(
+      "/usr/bin/plutil",
+      ["-extract", "Label", "raw", "-o", "-", "--", plistPath],
+      { encoding: "utf8" },
+    );
+    if (result.status !== 0) {
+      throw new UpdateInvariantError(
+        "gateway_system_launchdaemon_unverifiable",
+        `could not inspect system LaunchDaemon plist ${plistPath}`,
+      );
+    }
+    if (String(result.stdout).trim() === label) {
+      throw new UpdateInvariantError(
+        "gateway_system_launchdaemon_conflict",
+        `System LaunchDaemon plist ${plistPath} already owns the managed Gateway label`,
+      );
+    }
+  }
+  // Close the query-to-directory-snapshot race at the activation boundary.
+  inspectLoadedService();
+}
+
 function readManagedGatewayLaunchAgent(checkout) {
   if (process.platform !== "darwin" || typeof process.getuid !== "function") {
     throw new UpdateInvariantError(
@@ -915,15 +979,17 @@ export function replaceLaunchAgentProgramArgument(programArguments, index, expec
   return programArguments.with(index, replacement);
 }
 
-function prepareLaunchAgentEntrypointReplacement(deployment, entrypoint) {
+function prepareLaunchAgentEntrypointReplacement(deployment, entrypoint, options = {}) {
   const temporaryPath = `${deployment.plistPath}.openclaw-live-updater-${randomUUID()}`;
   const originalContents = readFileSync(deployment.plistPath);
   const originalDigest = createHash("sha256").update(originalContents).digest("hex");
+  const originalMode = statSync(deployment.plistPath).mode;
   writeFileSync(temporaryPath, originalContents, {
     flag: "wx",
-    mode: statSync(deployment.plistPath).mode,
+    mode: originalMode,
   });
   let installed = false;
+  let replacementDigest = null;
   try {
     const plistResult = spawnSync(
       "/usr/bin/plutil",
@@ -965,8 +1031,38 @@ function prepareLaunchAgentEntrypointReplacement(deployment, entrypoint) {
         "replacement LaunchAgent did not preserve the validated entrypoint",
       );
     }
+    replacementDigest = createHash("sha256").update(readFileSync(temporaryPath)).digest("hex");
+    const restore = () => {
+      if (!installed) {
+        return false;
+      }
+      const currentDigest = createHash("sha256")
+        .update(readFileSync(deployment.plistPath))
+        .digest("hex");
+      if (currentDigest !== replacementDigest) {
+        throw new UpdateInvariantError(
+          "gateway_repoint_restore_failed",
+          "managed Gateway LaunchAgent changed after replacement installation",
+        );
+      }
+      const rollbackPath = `${deployment.plistPath}.openclaw-live-updater-rollback-${randomUUID()}`;
+      try {
+        writeFileSync(rollbackPath, originalContents, {
+          flag: "wx",
+          mode: originalMode,
+        });
+        renameSync(rollbackPath, deployment.plistPath);
+        installed = false;
+        return true;
+      } finally {
+        rmSync(rollbackPath, { force: true });
+      }
+    };
     return {
       install() {
+        const assertOwnership =
+          options.assertNoSystemLaunchDaemonOwnership ?? assertNoSystemLaunchDaemonOwnership;
+        assertOwnership(deployment.label);
         const currentDigest = createHash("sha256")
           .update(readFileSync(deployment.plistPath))
           .digest("hex");
@@ -978,7 +1074,21 @@ function prepareLaunchAgentEntrypointReplacement(deployment, entrypoint) {
         }
         renameSync(temporaryPath, deployment.plistPath);
         installed = true;
+        try {
+          assertOwnership(deployment.label);
+        } catch (ownershipError) {
+          try {
+            restore();
+          } catch (restoreError) {
+            throw new AggregateError(
+              [ownershipError, restoreError],
+              "System LaunchDaemon ownership changed during plist publication and the previous LaunchAgent could not be restored",
+            );
+          }
+          throw ownershipError;
+        }
       },
+      restore,
       discard() {
         if (!installed) {
           rmSync(temporaryPath, { force: true });
@@ -1562,62 +1672,86 @@ function restartGateway(
     return { processStartedAt: null, restartStartedAtMs: startedAtMs };
   }
   if (bootstrap) {
-    const plistStat = lstatSync(deployment.plistPath);
-    if (!isTrustedOwnedRegularFile(plistStat)) {
-      throw new UpdateInvariantError(
-        "gateway_launchagent_failed",
-        "managed Gateway LaunchAgent ownership or permissions changed before bootstrap",
-      );
-    }
-    const domain = `gui/${process.getuid()}`;
-    const serviceTarget = `${domain}/${deployment.label}`;
-    const waitForProcess = options.waitForProcess ?? waitForManagedGatewayProcess;
-    const readLaunchdEnvironment = options.readLaunchdEnvironment ?? readLaunchdEnvironmentVariable;
-    const armEnvironmentRestore = options.armEnvironmentRestore ?? armLaunchdEnvironmentRestore;
-    const previousTraceValue = readLaunchdEnvironment(GATEWAY_STARTUP_TRACE_ENV);
-    const environmentRestore = armEnvironmentRestore(GATEWAY_STARTUP_TRACE_ENV, previousTraceValue);
-    let restartError;
-    let processStartedAt = null;
-    runCommand("/bin/launchctl", ["setenv", GATEWAY_STARTUP_TRACE_ENV, "1"], checkout);
-    try {
-      runCommand("/bin/launchctl", ["enable", serviceTarget], checkout);
-      runCommand("/bin/launchctl", ["bootstrap", domain, deployment.plistPath], checkout);
-      waitForProcess(deployment, options.sleep ?? defaultSleep);
-      processStartedAt = timestampAt(now);
-    } catch (error) {
-      restartError = error;
-    }
-    try {
-      // The booted process already inherited the trace flag. Restore launchd's
-      // previous value immediately so later starts keep the host's normal config.
-      runCommand(
-        "/bin/launchctl",
-        previousTraceValue === null
-          ? ["unsetenv", GATEWAY_STARTUP_TRACE_ENV]
-          : ["setenv", GATEWAY_STARTUP_TRACE_ENV, previousTraceValue],
-        checkout,
-      );
-    } catch (cleanupError) {
-      if (restartError) {
-        throw new AggregateError(
-          [restartError, cleanupError],
-          "Gateway restart failed and the one-shot startup trace environment could not be cleared",
-        );
-      }
-      throw cleanupError;
-    }
-    environmentRestore.disarm();
-    if (restartError) {
-      throw restartError;
-    }
-    return { processStartedAt, restartStartedAtMs: startedAtMs };
+    return {
+      ...bootstrapManagedGateway(runCommand, checkout, deployment, {
+        ...options,
+        startupTrace: true,
+      }),
+      restartStartedAtMs: startedAtMs,
+    };
   }
+  const assertOwnership =
+    options.assertNoSystemLaunchDaemonOwnership ?? assertNoSystemLaunchDaemonOwnership;
+  assertOwnership(deployment.label);
   runCommand(
     deployment.executable,
     [...deployment.invocationPrefix, "gateway", "restart"],
     path.dirname(path.dirname(deployment.entrypoint)),
   );
   return { processStartedAt: null, restartStartedAtMs: startedAtMs };
+}
+
+function bootstrapManagedGateway(runCommand, checkout, deployment, options = {}) {
+  const plistStat = lstatSync(deployment.plistPath);
+  if (!isTrustedOwnedRegularFile(plistStat)) {
+    throw new UpdateInvariantError(
+      "gateway_launchagent_failed",
+      "managed Gateway LaunchAgent ownership or permissions changed before bootstrap",
+    );
+  }
+  const assertOwnership =
+    options.assertNoSystemLaunchDaemonOwnership ?? assertNoSystemLaunchDaemonOwnership;
+  assertOwnership(deployment.label);
+  const domain = `gui/${process.getuid()}`;
+  const serviceTarget = `${domain}/${deployment.label}`;
+  const waitForProcess = options.waitForProcess ?? waitForManagedGatewayProcess;
+  const now = options.now ?? Date.now;
+  if (!options.startupTrace) {
+    runCommand("/bin/launchctl", ["enable", serviceTarget], checkout);
+    runCommand("/bin/launchctl", ["bootstrap", domain, deployment.plistPath], checkout);
+    waitForProcess(deployment, options.sleep ?? defaultSleep);
+    return { processStartedAt: timestampAt(now) };
+  }
+
+  const readLaunchdEnvironment = options.readLaunchdEnvironment ?? readLaunchdEnvironmentVariable;
+  const armEnvironmentRestore = options.armEnvironmentRestore ?? armLaunchdEnvironmentRestore;
+  const previousTraceValue = readLaunchdEnvironment(GATEWAY_STARTUP_TRACE_ENV);
+  const environmentRestore = armEnvironmentRestore(GATEWAY_STARTUP_TRACE_ENV, previousTraceValue);
+  let restartError;
+  let processStartedAt = null;
+  runCommand("/bin/launchctl", ["setenv", GATEWAY_STARTUP_TRACE_ENV, "1"], checkout);
+  try {
+    runCommand("/bin/launchctl", ["enable", serviceTarget], checkout);
+    runCommand("/bin/launchctl", ["bootstrap", domain, deployment.plistPath], checkout);
+    waitForProcess(deployment, options.sleep ?? defaultSleep);
+    processStartedAt = timestampAt(now);
+  } catch (error) {
+    restartError = error;
+  }
+  try {
+    // The booted process already inherited the trace flag. Restore launchd's
+    // previous value immediately so later starts keep the host's normal config.
+    runCommand(
+      "/bin/launchctl",
+      previousTraceValue === null
+        ? ["unsetenv", GATEWAY_STARTUP_TRACE_ENV]
+        : ["setenv", GATEWAY_STARTUP_TRACE_ENV, previousTraceValue],
+      checkout,
+    );
+  } catch (cleanupError) {
+    if (restartError) {
+      throw new AggregateError(
+        [restartError, cleanupError],
+        "Gateway restart failed and the one-shot startup trace environment could not be cleared",
+      );
+    }
+    throw cleanupError;
+  }
+  environmentRestore.disarm();
+  if (restartError) {
+    throw restartError;
+  }
+  return { processStartedAt };
 }
 
 function armLaunchdEnvironmentRestore(name, previousValue) {
@@ -1707,6 +1841,25 @@ function isManagedGatewayLoaded(deployment) {
     { encoding: "utf8" },
   );
   return result.status === 0;
+}
+
+function waitForManagedGatewayReadiness(
+  deployment,
+  probeMilestones = probeGatewayMilestones,
+  sleep = defaultSleep,
+) {
+  for (let attempt = 1; attempt <= GATEWAY_READINESS_ATTEMPTS; attempt += 1) {
+    if (probeMilestones(deployment)?.readyzReady === true) {
+      return;
+    }
+    if (attempt < GATEWAY_READINESS_ATTEMPTS) {
+      sleep(GATEWAY_READINESS_RETRY_DELAY_MS);
+    }
+  }
+  throw new UpdateInvariantError(
+    "gateway_recovery_failed",
+    "the previous managed Gateway did not become ready after rollback",
+  );
 }
 
 export function isGatewayProbeResponse(route, payload) {
@@ -2266,6 +2419,8 @@ export function maintainMain(options, dependencies = {}) {
       dependencies.repointGatewayDeployment ?? repointManagedGatewayDeployment;
     const replaceGatewayEntrypoint =
       dependencies.replaceGatewayEntrypoint ?? replaceLaunchAgentEntrypoint;
+    const assertSystemOwnership =
+      dependencies.assertNoSystemLaunchDaemonOwnership ?? assertNoSystemLaunchDaemonOwnership;
     const prepareGatewayEntrypointReplacement =
       dependencies.prepareGatewayEntrypointReplacement ??
       ((deployment, entrypoint) =>
@@ -2274,7 +2429,9 @@ export function maintainMain(options, dependencies = {}) {
               install: () => replaceGatewayEntrypoint(deployment, entrypoint),
               discard() {},
             }
-          : prepareLaunchAgentEntrypointReplacement(deployment, entrypoint));
+          : prepareLaunchAgentEntrypointReplacement(deployment, entrypoint, {
+              assertNoSystemLaunchDaemonOwnership: assertSystemOwnership,
+            }));
     const verifyGatewayRuntime = dependencies.verifyGatewayRuntime ?? verifyManagedGatewayRuntime;
     const verifyGatewayProbe = dependencies.verifyGateway ?? verifyGateway;
     const verifyGatewayAfterRestart = dependencies.verifyAndAuditGateway ?? verifyAndAuditGateway;
@@ -2356,6 +2513,7 @@ export function maintainMain(options, dependencies = {}) {
       actions.gatewayRestart = true;
       let controlBuildPrepared = false;
       let controlDependenciesInstalled = false;
+      let gatewayStoppedForMaintenance = false;
       let gatewaySuspension;
       const controlUnavailable =
         gatewayDeploymentBefore !== null && gatewayControlDeployment === null;
@@ -2446,14 +2604,17 @@ export function maintainMain(options, dependencies = {}) {
           gatewaySuspension,
         };
       }
+      gatewayStoppedForMaintenance = gatewaySuspension.status === "offline";
       if (gatewaySuspension.status === "ready") {
         // Native bootout prevents launchd from retaining old ProgramArguments
         // and avoids source launchers that can rebuild stale dist before stopping.
         try {
+          if (gatewayDeploymentBefore) {
+            assertSystemOwnership(gatewayDeploymentBefore.label);
+          }
           if (gatewayRuntimeRepointRequired) {
-            // Generate, rewrite, and lint the complete replacement while the
-            // current service is still available. Post-stop work is only the
-            // same-filesystem atomic install after native stopped proof.
+            // Complete every fallible plist rewrite and validation while the
+            // current service is available; publication is one atomic rename.
             preparedGatewayReplacement = prepareGatewayEntrypointReplacement(
               gatewayDeploymentBefore,
               path.join(update.checkout, "dist/index.js"),
@@ -2470,6 +2631,7 @@ export function maintainMain(options, dependencies = {}) {
             now,
           );
           gatewayTiming = stopped.timing;
+          gatewayStoppedForMaintenance = true;
         } catch (error) {
           try {
             resumeSuspension(
@@ -2486,74 +2648,111 @@ export function maintainMain(options, dependencies = {}) {
           throw error;
         }
       }
-      if (actions.dependencyInstall && !controlDependenciesInstalled) {
-        runCommand("pnpm", ["install", "--frozen-lockfile"], update.checkout);
-      }
-      if (actions.gatewayBuild && !controlBuildPrepared) {
-        runBuildWithPreservedMacApp(runCommand, update.checkout, sleep);
-      }
-      assertExactBuild(update.checkout, update.afterSha);
-      const restartStartedAt = now();
-      gatewayDeployment = gatewayDeploymentBefore
-        ? repointGatewayDeployment(
+      try {
+        if (actions.dependencyInstall && !controlDependenciesInstalled) {
+          runCommand("pnpm", ["install", "--frozen-lockfile"], update.checkout);
+        }
+        if (actions.gatewayBuild && !controlBuildPrepared) {
+          runBuildWithPreservedMacApp(runCommand, update.checkout, sleep);
+        }
+        assertExactBuild(update.checkout, update.afterSha);
+        const restartStartedAt = now();
+        if (gatewayDeploymentBefore) {
+          assertSystemOwnership(gatewayDeploymentBefore.label);
+        }
+        gatewayDeployment = gatewayDeploymentBefore
+          ? repointGatewayDeployment(
+              update.checkout,
+              gatewayDeploymentBefore,
+              (deployment, entrypoint) => {
+                if (preparedGatewayReplacement) {
+                  preparedGatewayReplacement.install();
+                  return;
+                }
+                replaceGatewayEntrypoint(deployment, entrypoint);
+              },
+              inspectGatewayDeployment,
+            )
+          : null;
+        gatewayTiming = {
+          bootoutStartedAt: null,
+          bootoutCompletedAt: null,
+          processExitedAt: null,
+          listenerClosedAt: null,
+          listenerReadyAt: null,
+          healthzReadyAt: null,
+          readyzReadyAt: null,
+          deepRpcReadyAt: null,
+          discordConnectedAt: null,
+          telegramConnectedAt: null,
+          ...gatewayTiming,
+        };
+        const restart = restartManagedGateway(
+          runCommand,
+          update.checkout,
+          update.afterSha,
+          restartStartedAt,
+          gatewayDeployment,
+          gatewayDeployment !== null,
+          {
+            now,
+            sleep,
+            waitForProcess: waitForGatewayProcess,
+            readLaunchdEnvironment,
+            armEnvironmentRestore,
+            assertNoSystemLaunchDaemonOwnership: assertSystemOwnership,
+          },
+        );
+        if (typeof restart?.processStartedAt === "string") {
+          recordGatewayTimestamp(gatewayTiming, "processStartedAt", restart.processStartedAt);
+        }
+        const verification = verifyGatewayAfterRestart({
+          runCommand,
+          auditGatewayLogs,
+          checkout: update.checkout,
+          expectedSha: update.afterSha,
+          deployment: gatewayDeployment,
+          sinceMs: restartStartedAt,
+          sleep,
+          timing: gatewayTiming,
+          now,
+          probeMilestones,
+        });
+        gatewayLogAudit = verification?.audit ?? verification;
+        gatewayTiming = finalizeGatewayTiming(verification?.timing ?? gatewayTiming);
+        gatewayRuntime = verifyGatewayRuntime(update.checkout, update.afterSha);
+      } catch (error) {
+        if (!gatewayStoppedForMaintenance || !gatewayDeploymentBefore) {
+          throw error;
+        }
+        try {
+          // A failed bootstrap may still have registered or started the
+          // replacement. Bootout is allowed to fail only when native proof
+          // independently confirms that no job or listener remains.
+          stopManagedGatewayAndProve(
+            runCommand,
             update.checkout,
             gatewayDeploymentBefore,
-            (deployment, entrypoint) => {
-              if (preparedGatewayReplacement) {
-                preparedGatewayReplacement.install();
-                return;
-              }
-              replaceGatewayEntrypoint(deployment, entrypoint);
-            },
-            inspectGatewayDeployment,
-          )
-        : null;
-      gatewayTiming = {
-        bootoutStartedAt: null,
-        bootoutCompletedAt: null,
-        processExitedAt: null,
-        listenerClosedAt: null,
-        listenerReadyAt: null,
-        healthzReadyAt: null,
-        readyzReadyAt: null,
-        deepRpcReadyAt: null,
-        discordConnectedAt: null,
-        telegramConnectedAt: null,
-        ...gatewayTiming,
-      };
-      const restart = restartManagedGateway(
-        runCommand,
-        update.checkout,
-        update.afterSha,
-        restartStartedAt,
-        gatewayDeployment,
-        gatewayDeployment !== null,
-        {
-          now,
-          sleep,
-          waitForProcess: waitForGatewayProcess,
-          readLaunchdEnvironment,
-          armEnvironmentRestore,
-        },
-      );
-      if (typeof restart?.processStartedAt === "string") {
-        recordGatewayTimestamp(gatewayTiming, "processStartedAt", restart.processStartedAt);
+            proveGatewayStopped,
+            sleep,
+            now,
+          );
+          preparedGatewayReplacement?.restore?.();
+          bootstrapManagedGateway(runCommand, update.checkout, gatewayDeploymentBefore, {
+            now,
+            sleep,
+            waitForProcess: waitForGatewayProcess,
+            assertNoSystemLaunchDaemonOwnership: assertSystemOwnership,
+          });
+          waitForManagedGatewayReadiness(gatewayDeploymentBefore, probeMilestones, sleep);
+        } catch (recoveryError) {
+          throw new AggregateError(
+            [error, recoveryError],
+            "Gateway replacement failed and the previous managed service could not be restored",
+          );
+        }
+        throw error;
       }
-      const verification = verifyGatewayAfterRestart({
-        runCommand,
-        auditGatewayLogs,
-        checkout: update.checkout,
-        expectedSha: update.afterSha,
-        deployment: gatewayDeployment,
-        sinceMs: restartStartedAt,
-        sleep,
-        timing: gatewayTiming,
-        now,
-        probeMilestones,
-      });
-      gatewayLogAudit = verification?.audit ?? verification;
-      gatewayTiming = finalizeGatewayTiming(verification?.timing ?? gatewayTiming);
-      gatewayRuntime = verifyGatewayRuntime(update.checkout, update.afterSha);
     } else {
       try {
         verifyGatewayProbe(runCommand, update.checkout, update.afterSha, gatewayControlDeployment);
@@ -2577,6 +2776,7 @@ export function maintainMain(options, dependencies = {}) {
             waitForProcess: waitForGatewayProcess,
             readLaunchdEnvironment,
             armEnvironmentRestore,
+            assertNoSystemLaunchDaemonOwnership: assertSystemOwnership,
           },
         );
         gatewayTiming = {
