@@ -21,6 +21,7 @@ import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
 } from "./delivery-queue.test-helpers.js";
+import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
 
@@ -134,11 +135,14 @@ describe("delivery-queue MEDIA-directive durability (end-to-end)", () => {
     const [entry] = await loadPendingDeliveries(tmpDir);
     expect(entry).toBeDefined();
     // mediaUrl and mediaUrls[0] both anchor to the one staged copy, so dedupe.
-    const spoolPaths = [...new Set(collectEntrySpoolPaths(entry?.payloads ?? [], tmpDir))];
+    const queuedPayloads = entry
+      ? acceptedPreparedOutboundEntries(entry.preparedBatch).map((prepared) => prepared.payload)
+      : [];
+    const spoolPaths = [...new Set(collectEntrySpoolPaths(queuedPayloads, tmpDir))];
     expect(spoolPaths).toHaveLength(1);
     expect(path.dirname(spoolPaths[0] ?? "")).toBe(spoolRoot);
-    // Raw pre-hook text (directive included) is preserved on the row.
-    expect(entry?.payloads[0]?.text).toBe(`caption\nMEDIA:${source}`);
+    // The canonical row preserves the post-policy caption without its directive.
+    expect(queuedPayloads[0]?.text).toBe("caption");
     // Spool bytes equal source bytes.
     expect(await fs.readFile(spoolPaths[0] ?? "")).toEqual(bytes);
 
