@@ -84,6 +84,9 @@ describe("TUI reset transition PTY", () => {
             preservedInputDelivered: true,
           }),
         );
+
+        await run.write("\u0004", { delay: false });
+        expect((await run.waitForExit()).exitCode).toBe(0);
       } finally {
         await run.dispose();
         await rm(tempDir, { recursive: true, force: true });
