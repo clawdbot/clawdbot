@@ -136,4 +136,19 @@ describe("serializeConversation", () => {
     expect(serialized).toContain("middle/trailing characters truncated");
     expect(serialized.length).toBeLessThan(2100);
   });
+
+  it("does not duplicate early errors into an overlapping diagnostic window", () => {
+    const output = `${"h".repeat(600)}ERROR: early failure${"m".repeat(1900)}`;
+    const messages = [
+      {
+        role: "toolResult",
+        content: [{ type: "text", text: output }],
+      },
+    ] as unknown as Message[];
+
+    const serialized = serializeConversation(messages);
+
+    expect(serialized.split("ERROR: early failure")).toHaveLength(2);
+    expect(serialized).toContain(`[... ${output.length - 2000} more characters truncated]`);
+  });
 });

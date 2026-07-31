@@ -119,12 +119,16 @@ function truncateForSummary(text: string, maxChars: number): string {
     if (!IMPORTANT_TOOL_RESULT_TAIL.test(displacedHead)) {
       const diagnosticOffset = text.length - diagnosticSearch.length + (diagnosticMatch.index ?? 0);
       const tailStart = Math.min(diagnosticOffset, text.length - tailChars);
-      const tail = sliceUtf16Safe(text, tailStart, tailStart + tailChars);
-      const truncatedChars = text.length - head.length - tail.length;
-      const omissionPosition = tailStart + tail.length < text.length ? "middle/trailing" : "more";
-      // Commands usually report their actual failure last; preserve that tail
-      // so branch and ordinary compaction summaries can explain what failed.
-      return `${head}\n\n[... ${truncatedChars} ${omissionPosition} characters truncated]\n\n${tail}`;
+      // An early diagnostic already lives in the retained prefix; reusing it
+      // as a tail would overlap the head and miscount omitted characters.
+      if (tailStart >= head.length) {
+        const tail = sliceUtf16Safe(text, tailStart, tailStart + tailChars);
+        const truncatedChars = text.length - head.length - tail.length;
+        const omissionPosition = tailStart + tail.length < text.length ? "middle/trailing" : "more";
+        // Commands usually report their actual failure last; preserve that tail
+        // so branch and ordinary compaction summaries can explain what failed.
+        return `${head}\n\n[... ${truncatedChars} ${omissionPosition} characters truncated]\n\n${tail}`;
+      }
     }
   }
   const sliced = truncateUtf16Safe(text, maxChars);
