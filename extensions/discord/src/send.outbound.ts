@@ -2,6 +2,7 @@
 import type { APIChannel, APIGuildForumChannel, APIGuildMediaChannel } from "discord-api-types/v10";
 import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import type { OutboundMediaAccess, PollInput } from "openclaw/plugin-sdk/media-runtime";
@@ -70,6 +71,8 @@ type DiscordSendOpts = {
 type DiscordClientRequest = ReturnType<typeof createDiscordClient>["request"];
 
 const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
+/** Discord's ChannelFlags.RequireTag is bit 4 on forum/media parent channels. */
+const DISCORD_FORUM_REQUIRE_TAG_FLAG = 1 << 4;
 
 type DiscordChannelMessageResult = DiscordReceiptResultSource;
 
@@ -206,6 +209,11 @@ export async function sendMessageDiscord(
   const channel = await resolveDiscordChannel(rest, channelId);
 
   if (isForumLikeChannel(channel)) {
+    if (((channel.flags ?? 0) & DISCORD_FORUM_REQUIRE_TAG_FLAG) !== 0) {
+      throw new Error(
+        `Discord forum channel ${channelId} requires an applied tag; use thread-create with appliedTags, then send to the created thread.`,
+      );
+    }
     const threadName = deriveForumThreadName(renderedText);
     const chunks = buildDiscordTextChunks(textWithMentions, {
       maxLinesPerMessage,
@@ -267,18 +275,20 @@ export async function sendMessageDiscord(
     const messageId = threadRes.message?.id ?? threadId;
     const resultChannelId = threadRes.message?.channel_id ?? threadId;
     const remainingChunks = chunks.slice(1);
-    await opts.onDeliveryResult?.(
-      toDiscordSendResult(
-        {
-          id: messageId,
-          channel_id: resultChannelId,
-        },
-        channelId,
-        { kind: "text", threadId },
-      ),
+    const starterResult = toDiscordSendResult(
+      {
+        id: messageId,
+        channel_id: resultChannelId,
+      },
+      channelId,
+      { kind: "text", threadId },
     );
+    const deliveredResults: DiscordSendResult[] = [starterResult];
+    await opts.onDeliveryResult?.(starterResult);
     const reportThreadResult: DiscordSendProgress = async (result, kind) => {
-      await opts.onDeliveryResult?.(toDiscordSendResult(result, threadId, { kind, threadId }));
+      const deliveredResult = toDiscordSendResult(result, threadId, { kind, threadId });
+      deliveredResults.push(deliveredResult);
+      await opts.onDeliveryResult?.(deliveredResult);
     };
 
     try {
@@ -346,14 +356,12 @@ export async function sendMessageDiscord(
       accountId: accountInfo.accountId,
       direction: "outbound",
     });
-    return toDiscordSendResult(
-      {
-        id: messageId,
-        channel_id: resultChannelId,
-      },
-      channelId,
-      { kind: opts.mediaUrl ? "media" : "text", threadId },
-    );
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: deliveredResults.map((result) => ({ channel: "discord", ...result })),
+      threadId,
+    });
+    receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
+    return { ...starterResult, receipt };
   }
 
   let result: DiscordChannelMessageResult;
