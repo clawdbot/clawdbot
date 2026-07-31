@@ -40,6 +40,7 @@ const createTypingController = (): TypingController => ({
 
 describe("maybeResolveNativeSlashCommandFastReply", () => {
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     handleCommandsMock.mockReset();
   });
 
