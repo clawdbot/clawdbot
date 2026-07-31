@@ -241,7 +241,7 @@ class ClawsPage extends OpenClawLightDomElement {
   private async runOperation(operation: (scope: OperationScope) => Promise<void>) {
     const gateway = this.gatewaySource;
     const client = this.client;
-    if (!gateway || !client || this.operationBusy) {
+    if (!gateway || !client || this.loading || this.operationBusy) {
       return;
     }
     const scope = { client, gateway, generation: this.operationGeneration };
@@ -467,7 +467,7 @@ class ClawsPage extends OpenClawLightDomElement {
                 catalogAvailable: this.catalogAvailable,
                 lifecycleAvailable: this.lifecycleAvailable,
                 mutationAvailable: this.mutationAvailable,
-                busy: this.operationBusy,
+                busy: this.loading || this.operationBusy,
                 error: this.error,
                 query: this.query,
                 entries: this.entries,
