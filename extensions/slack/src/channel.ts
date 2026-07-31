@@ -67,11 +67,7 @@ import type { SlackProbe } from "./probe.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { getOptionalSlackRuntime } from "./runtime.js";
 import { slackSecurityAdapter } from "./security.js";
-import {
-  createSlackSetupWizardProxy,
-  slackSetupAdapter,
-  slackSetupContract,
-} from "./setup-core.js";
+import { createSlackSetupWizardProxy, slackSetupContract } from "./setup-core.js";
 import {
   createSlackPluginBase,
   isSlackPluginAccountConfigured,
@@ -617,7 +613,6 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
   base: {
     ...createSlackPluginBase({
       setupWizard: createSlackSetupWizardProxy(loadSlackSetupSurfaceModule),
-      setup: slackSetupAdapter,
       setupContract: slackSetupContract,
     }),
     allowlist: {

@@ -354,7 +354,7 @@ describe("matrix directory", () => {
       },
     } as unknown as CoreConfig;
 
-    const updated = matrixPlugin.setup!.applyAccountConfig({
+    const updated = matrixPlugin.setupContract!.applyAccountConfig({
       cfg,
       accountId: "ops",
       input: {
@@ -399,7 +399,7 @@ describe("matrix directory", () => {
       },
     } as unknown as CoreConfig;
 
-    const updated = matrixPlugin.setup!.applyAccountConfig({
+    const updated = matrixPlugin.setupContract!.applyAccountConfig({
       cfg,
       accountId: "default",
       input: {
@@ -432,7 +432,7 @@ describe("matrix directory", () => {
       delete process.env[key];
     }
     try {
-      const error = matrixPlugin.setup!.validateInput?.({
+      const error = matrixPlugin.setupContract!.validateInput?.({
         cfg: {} as CoreConfig,
         accountId: "ops",
         input: { useEnv: true },
@@ -459,7 +459,7 @@ describe("matrix directory", () => {
     process.env.MATRIX_OPS_HOMESERVER = "https://ops.example.org";
     process.env.MATRIX_OPS_ACCESS_TOKEN = "ops-token";
     try {
-      const error = matrixPlugin.setup!.validateInput?.({
+      const error = matrixPlugin.setupContract!.validateInput?.({
         cfg: {} as CoreConfig,
         accountId: "ops",
         input: { useEnv: true },
@@ -507,7 +507,7 @@ describe("matrix directory", () => {
         },
       } as unknown as CoreConfig;
 
-      const updated = matrixPlugin.setup!.applyAccountConfig({
+      const updated = matrixPlugin.setupContract!.applyAccountConfig({
         cfg,
         accountId: "ops",
         input: {
@@ -543,7 +543,7 @@ describe("matrix directory", () => {
   });
 
   it("resolves account id from input name when explicit account id is missing", () => {
-    const accountId = matrixPlugin.setup!.resolveAccountId?.({
+    const accountId = matrixPlugin.setupContract!.resolveAccountId?.({
       cfg: {} as CoreConfig,
       accountId: undefined,
       input: { name: "Main Bot" },
@@ -552,7 +552,7 @@ describe("matrix directory", () => {
   });
 
   it("resolves binding account id from agent id when omitted", () => {
-    const accountId = matrixPlugin.setup!.resolveBindingAccountId?.({
+    const accountId = matrixPlugin.setupContract!.resolveBindingAccountId?.({
       cfg: {} as CoreConfig,
       agentId: "Ops",
       accountId: undefined,
@@ -574,7 +574,7 @@ describe("matrix directory", () => {
       },
     } as unknown as CoreConfig;
 
-    const updated = matrixPlugin.setup!.applyAccountConfig({
+    const updated = matrixPlugin.setupContract!.applyAccountConfig({
       cfg,
       accountId: "default",
       input: {
@@ -603,7 +603,7 @@ describe("matrix directory", () => {
       },
     } as unknown as CoreConfig;
 
-    const updated = matrixPlugin.setup!.applyAccountConfig({
+    const updated = matrixPlugin.setupContract!.applyAccountConfig({
       cfg,
       accountId: "default",
       input: {
