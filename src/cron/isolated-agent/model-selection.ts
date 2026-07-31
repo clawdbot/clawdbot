@@ -110,7 +110,7 @@ export async function resolveCronModelSelectionOwner(params: {
   return owner;
 }
 
-async function resolveCronThinkingCatalog(params: {
+export async function resolveCronThinkingCatalog(params: {
   owner: ResolvedPublishedModelCatalogOwner;
   provider: string;
   model: string;
@@ -145,11 +145,18 @@ export async function resolveCronThinkingSelection(params: {
   jobThinking?: string;
   hookThinking?: string;
   sessionThinking?: string;
-}): Promise<{ catalog: ModelCatalogEntry[]; requestedThinkLevel: ThinkLevel | undefined }> {
-  const requestedThinkLevel =
+}): Promise<{
+  catalog: ModelCatalogEntry[];
+  immutableThinkLevel: ThinkLevel | undefined;
+  loadThinkingCatalog: (provider: string, model: string) => Promise<ModelCatalogEntry[]>;
+  requestedThinkLevel: ThinkLevel | undefined;
+}> {
+  const immutableThinkLevel =
     normalizeThinkLevel(params.jobThinking) ??
     normalizeThinkLevel(params.hookThinking) ??
-    normalizeThinkLevel(params.sessionThinking) ??
+    normalizeThinkLevel(params.sessionThinking);
+  const requestedThinkLevel =
+    immutableThinkLevel ??
     resolveConfiguredThinkingDefault({
       cfg: params.cfg,
       provider: params.provider,
@@ -159,7 +166,13 @@ export async function resolveCronThinkingSelection(params: {
     requestedThinkLevel === "off"
       ? params.owner.modelCatalog.entries
       : await resolveCronThinkingCatalog(params);
-  return { catalog, requestedThinkLevel };
+  return {
+    catalog,
+    immutableThinkLevel,
+    loadThinkingCatalog: async (provider, model) =>
+      await resolveCronThinkingCatalog({ owner: params.owner, provider, model }),
+    requestedThinkLevel,
+  };
 }
 
 /** Resolves the effective model for an isolated cron run across defaults, agents, hooks, payload, and session state. */

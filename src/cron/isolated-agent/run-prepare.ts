@@ -2,7 +2,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -122,8 +121,7 @@ export type PreparedCronRunContext = {
   useSubagentFallbacks: boolean;
   inheritDefaultFallbacksForAgentStringModel: boolean;
   modelFallbacksOverride?: string[];
-  thinkLevel: import("../../auto-reply/thinking.js").ThinkLevel | undefined;
-  thinkingCatalog: ModelCatalogEntry[];
+  thinkingSelection: Awaited<ReturnType<typeof resolveCronThinkingSelection>>;
   timeoutMs: number;
   preflightDiagnostics?: CronRunDiagnostics;
   /**
@@ -254,8 +252,7 @@ export async function prepareCronRunContext(params: {
     ? `${agentSessionKey}:run:${runSessionId}`
     : agentSessionKey;
   const initialSessionEntry = cronSession.initialSessionEntry;
-  // Admission must precede async model preparation so concurrent maintenance
-  // preserves this exact session generation instead of deleting it before claim.
+  // Claim before async model prep so maintenance cannot delete this session generation.
   const sessionWorkAdmission = await beginSessionWorkAdmission({
     scope: cronSession.storePath,
     identities: [
@@ -318,8 +315,7 @@ export async function prepareCronRunContext(params: {
         });
         return;
       }
-      // Guarded replace: the updater sees the freshest persisted row (or
-      // undefined pre-creation) so cron lifecycle claims reject stale owners.
+      // Guarded replace reads the freshest row so lifecycle claims reject stale owners.
       await patchSessionEntry(
         { storePath, sessionKey, agentId },
         (_entry, context) => update(context.existingEntry),
@@ -439,8 +435,7 @@ export async function prepareCronRunContext(params: {
             .slice(selectedPreflightCandidateIndex + 1)
             .map((candidate) => `${candidate.provider}/${candidate.model}`)
         : undefined;
-    // When preflight skips the first local candidate, trim the fallback chain so
-    // execution starts at the reachable provider and only falls forward from it.
+    // When preflight skips the first local candidate, start at the reachable provider.
     if (selectedPreflightCandidate && modelFallbacksOverride) {
       if (firstUnavailablePreflight?.status === "unavailable") {
         logWarn(
@@ -725,8 +720,7 @@ export async function prepareCronRunContext(params: {
         useSubagentFallbacks,
         inheritDefaultFallbacksForAgentStringModel,
         modelFallbacksOverride,
-        thinkLevel: requestedThinkLevel,
-        thinkingCatalog: thinkingSelection.catalog,
+        thinkingSelection,
         timeoutMs,
         preflightDiagnostics,
         runTimeoutOverrideMs,
