@@ -7,7 +7,7 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { stableStringify } from "../agents/stable-stringify.js";
-import { listConfiguredMcpServers } from "../config/mcp-config.js";
+import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayCronServiceContract } from "../gateway/server-cron-contract.js";
 import { applyClawAddPlan } from "./add.js";
@@ -216,11 +216,7 @@ export function plansMatchAcrossSourceRoots(params: {
   );
 }
 
-async function addPlanContext(context: LifecycleContext, agentId?: string) {
-  const listedMcpServers = await listConfiguredMcpServers();
-  if (!listedMcpServers.ok) {
-    throw new Error("OpenClaw MCP configuration is unavailable.");
-  }
+export async function addPlanContext(context: LifecycleContext, agentId?: string) {
   const existingAgentIds = listAgentIds(context.config);
   const cronJobs = await context.cron.list({ includeDisabled: true });
   return {
@@ -229,7 +225,7 @@ async function addPlanContext(context: LifecycleContext, agentId?: string) {
     existingWorkspacePaths: existingAgentIds.map((id) =>
       resolveAgentWorkspaceDir(context.config, id),
     ),
-    existingMcpServers: listedMcpServers.mcpServers,
+    existingMcpServers: normalizeConfiguredMcpServers(context.config.mcp?.servers),
     existingCronJobIds: cronJobs.map((job) => job.id),
     packagePreflight: preflightClawPackage,
   };
@@ -277,10 +273,7 @@ async function buildUpdate(params: {
   loaded: LoadedClaw;
   context: LifecycleContext;
 }) {
-  const listedMcpServers = await listConfiguredMcpServers();
-  if (!listedMcpServers.ok) {
-    throw new Error("OpenClaw MCP configuration is unavailable.");
-  }
+  const sourceMcpServers = normalizeConfiguredMcpServers(params.context.config.mcp?.servers);
   const plan = await buildClawUpdatePlan({
     agentId: params.target,
     targetManifest: params.loaded.manifest,
@@ -292,11 +285,11 @@ async function buildUpdate(params: {
       : {}),
     targetSource: params.loaded.source,
     config: params.context.config,
-    sourceMcpServers: listedMcpServers.mcpServers,
+    sourceMcpServers,
     packagePreflight: preflightClawPackage,
     diagnostics: params.loaded.diagnostics,
   });
-  return { plan, sourceMcpServers: listedMcpServers.mcpServers };
+  return { plan, sourceMcpServers };
 }
 
 function referencedCleanup(removeUnused?: boolean): ClawReferencedCleanup {

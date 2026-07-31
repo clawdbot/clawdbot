@@ -1,6 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  addPlanContext,
   bindClawLifecycleTrust,
   canonicalizeClawSourcePlan,
   plansMatchAcrossSourceRoots,
@@ -159,5 +160,31 @@ describe("sealClawLifecyclePlan", () => {
     const serialized = JSON.stringify(result);
     expect(serialized).not.toContain("PRIVATE_MARKETS_TOKEN");
     expect(serialized).not.toContain("PRIVATE_GITHUB_TOKEN");
+  });
+
+  it("builds add planning context from the Gateway runtime MCP config", async () => {
+    const cron = {
+      list: async () => [],
+    } as Parameters<typeof addPlanContext>[0]["cron"];
+    const context = await addPlanContext({
+      config: {
+        mcp: {
+          servers: {
+            runtimeOnly: {
+              command: "node",
+              args: ["server.js"],
+            },
+          },
+        },
+      },
+      cron,
+    });
+
+    expect(context.existingMcpServers).toEqual({
+      runtimeOnly: {
+        command: "node",
+        args: ["server.js"],
+      },
+    });
   });
 });
