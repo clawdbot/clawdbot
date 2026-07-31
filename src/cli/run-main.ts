@@ -287,6 +287,20 @@ async function disposeCliAgentHarnesses(): Promise<void> {
   }
 }
 
+async function closeCliMcpLoopbackServer(): Promise<void> {
+  try {
+    const { getActiveMcpLoopbackRuntime } = await import("../gateway/mcp-http.loopback-runtime.js");
+    if (!getActiveMcpLoopbackRuntime()) {
+      return;
+    }
+    const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
+    await closeMcpLoopbackServer();
+  } catch {
+    // Best-effort teardown for short-lived CLI commands. A command result is
+    // already final, so cleanup must not replace its outcome.
+  }
+}
+
 function isUnconfiguredConfigSnapshot(
   snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "sourceConfig">,
 ): boolean {
@@ -1579,6 +1593,7 @@ async function runCliWithPreparedOutputMode(
     uninstallGatewayRunRuntimeHooks?.();
     await stopStartedProxy();
     await disposeCliAgentHarnesses();
+    await closeCliMcpLoopbackServer();
     await closeCliMemoryManagers();
     pauseNonTtyStdinForCliExit();
   }

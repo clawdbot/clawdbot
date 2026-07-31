@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
     release: vi.fn(async () => {}),
   })),
   resolveCopilotRuntimeAuth: vi.fn(),
+  resolveCopilotStarterModel: vi.fn(async () => "github-copilot/claude-sonnet-5"),
 }));
 
 function requireAuthMethod<T>(methods: readonly T[], index: number): T {
@@ -48,6 +49,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
 vi.mock("./register.runtime.js", () => ({
   DEFAULT_COPILOT_API_BASE_URL: "https://api.githubcopilot.test",
   resolveCopilotRuntimeAuth: mocks.resolveCopilotRuntimeAuth,
+  resolveCopilotStarterModel: mocks.resolveCopilotStarterModel,
   githubCopilotLoginCommand: mocks.githubCopilotLoginCommand,
   fetchCopilotUsage: vi.fn(),
 }));
@@ -414,6 +416,79 @@ describe("github-copilot plugin", () => {
     });
   });
 
+  it("publishes only picker-visible, policy-enabled tool models in the live catalog", async () => {
+    mocks.resolveCopilotRuntimeAuth.mockResolvedValueOnce({
+      apiKey: "catalog-policy-token",
+      baseUrl: "https://api.githubcopilot.policy-test",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: "eligible",
+                  name: "Eligible",
+                  model_picker_enabled: true,
+                  model_picker_category: "versatile",
+                  policy: { state: "enabled" },
+                  capabilities: {
+                    type: "chat",
+                    limits: { max_context_window_tokens: 200_000, max_output_tokens: 64_000 },
+                    supports: { streaming: true, tool_calls: true },
+                  },
+                },
+                {
+                  id: "disabled",
+                  name: "Disabled",
+                  model_picker_enabled: true,
+                  policy: { state: "disabled" },
+                  capabilities: {
+                    type: "chat",
+                    supports: { streaming: true, tool_calls: true },
+                  },
+                },
+                {
+                  id: "hidden",
+                  name: "Hidden",
+                  model_picker_enabled: false,
+                  policy: { state: "enabled" },
+                  capabilities: {
+                    type: "chat",
+                    supports: { streaming: true, tool_calls: true },
+                  },
+                },
+                {
+                  id: "chat-only",
+                  name: "Chat only",
+                  model_picker_enabled: true,
+                  policy: { state: "enabled" },
+                  capabilities: {
+                    type: "chat",
+                    supports: { streaming: false, tool_calls: false },
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+    const provider = registerProviderWithPluginConfig({});
+
+    const result = await provider.catalog.run({
+      config: {},
+      agentDir: "/tmp/agent",
+      env: { GH_TOKEN: "catalog-source-token" },
+    } as never);
+
+    expect(
+      result && "provider" in result ? result.provider.models.map((model) => model.id) : [],
+    ).toEqual(["eligible", "chat-only"]);
+  });
+
   it("dual-publishes unified live catalog rows with existing discovery semantics", async () => {
     mocks.resolveCopilotRuntimeAuth.mockResolvedValueOnce({
       apiKey: "gh_test_token",
@@ -494,8 +569,51 @@ describe("github-copilot plugin", () => {
           },
         },
       ],
-      defaultModel: "github-copilot/claude-opus-5",
+      defaultModel: "github-copilot/claude-sonnet-5",
     });
+    expect(mocks.resolveCopilotStarterModel).toHaveBeenCalledWith({
+      githubToken: "existing-token",
+      env: {},
+      githubDomain: "github.com",
+      config: {},
+    });
+  });
+
+  it("keeps valid interactive auth when live starter-model discovery is unavailable", async () => {
+    mocks.resolveCopilotStarterModel.mockRejectedValueOnce(new Error("catalog unavailable"));
+    const provider = registerProviderWithPluginConfig({});
+    const method = requireAuthMethod(provider.auth, 0);
+    const agentDir = await createAgentDir();
+    writeExistingCopilotTokenProfile(agentDir);
+
+    const result = await method.run({
+      config: {},
+      env: {},
+      agentDir,
+      workspaceDir: "/tmp/workspace",
+      prompter: {
+        confirm: vi.fn(async () => false),
+        note: vi.fn(),
+      },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      opts: {},
+      secretInputMode: "plaintext",
+      allowSecretRefPrompt: false,
+      isRemote: false,
+      openUrl: vi.fn(),
+      oauth: { createVpsAwareHandlers: vi.fn() },
+    } as never);
+
+    expect(result).toMatchObject({
+      profiles: [
+        {
+          profileId: "github-copilot:github",
+          credential: { type: "token", provider: "github-copilot", token: "existing-token" },
+        },
+      ],
+      notes: [expect.stringContaining("authentication succeeded")],
+    });
+    expect(result?.defaultModel).toBeUndefined();
   });
 
   describe("github-copilot dynamic model resolution", () => {
@@ -1248,9 +1366,9 @@ describe("github-copilot plugin", () => {
       mode: "token",
     });
     expect(result?.agents?.defaults?.model).toEqual({
-      primary: "github-copilot/claude-opus-5",
+      primary: "github-copilot/claude-sonnet-5",
     });
-    expect(result?.agents?.defaults?.models?.["github-copilot/claude-opus-5"]).toStrictEqual({});
+    expect(result?.agents?.defaults?.models?.["github-copilot/claude-sonnet-5"]).toStrictEqual({});
 
     const profile = ensureAuthProfileStore(agentDir).profiles["github-copilot:github"];
     expect(profile).toEqual({
@@ -1258,6 +1376,31 @@ describe("github-copilot plugin", () => {
       provider: "github-copilot",
       token: "ghu_test123",
     });
+  });
+
+  it("does not persist a new token when non-interactive starter-model discovery fails", async () => {
+    mocks.resolveCopilotStarterModel.mockRejectedValueOnce(new Error("no eligible models"));
+    const provider = registerProviderWithPluginConfig({});
+    const method = requireAuthMethod(provider.auth, 0);
+    const agentDir = await createAgentDir();
+
+    await expect(
+      method.runNonInteractive({
+        authChoice: "github-copilot",
+        config: {},
+        baseConfig: {},
+        opts: { githubCopilotToken: "ghu_invalid_for_catalog" },
+        runtime: { error: vi.fn(), exit: vi.fn() },
+        agentDir,
+        resolveApiKey: vi.fn(async () => ({
+          key: "ghu_invalid_for_catalog",
+          source: "flag" as const,
+        })),
+        toApiKeyCredential: vi.fn(),
+      }),
+    ).rejects.toThrow("no eligible models");
+
+    expect(ensureAuthProfileStore(agentDir).profiles["github-copilot:github"]).toBeUndefined();
   });
 
   it("persists COPILOT_GITHUB_DOMAIN during non-interactive onboarding", async () => {
@@ -1349,7 +1492,7 @@ describe("github-copilot plugin", () => {
     expect(runtime.error).not.toHaveBeenCalled();
     expect(result?.agents?.defaults?.model).toEqual({
       fallbacks: ["openai/gpt-5.4"],
-      primary: "github-copilot/claude-opus-5",
+      primary: "github-copilot/claude-sonnet-5",
     });
 
     const profile = ensureAuthProfileStore(agentDir).profiles["github-copilot:github"];
@@ -1424,6 +1567,10 @@ describe("github-copilot plugin", () => {
   });
 
   it("preserves an existing primary model during non-interactive onboarding", async () => {
+    mocks.resolveCopilotRuntimeAuth.mockResolvedValueOnce({
+      apiKey: "ghu_test",
+      baseUrl: "https://api.individual.githubcopilot.com",
+    });
     const provider = registerProviderWithPluginConfig({});
     const method = requireAuthMethod(provider.auth, 0);
     const agentDir = await createAgentDir();
@@ -1462,6 +1609,53 @@ describe("github-copilot plugin", () => {
     });
     expect(result?.agents?.defaults?.models).toEqual({
       "github-copilot/gpt-5.4": { label: "Existing" },
+    });
+    expect(mocks.resolveCopilotStarterModel).not.toHaveBeenCalled();
+    expect(mocks.resolveCopilotRuntimeAuth).toHaveBeenCalledWith({
+      githubToken: "ghu_test",
+      env: process.env,
+      githubDomain: "github.com",
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "github-copilot/gpt-5.4",
+              fallbacks: ["openai/gpt-5.4"],
+            },
+            models: {
+              "github-copilot/gpt-5.4": { label: "Existing" },
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("does not overwrite stored auth when a fresh token fails explicit-model validation", async () => {
+    mocks.resolveCopilotRuntimeAuth.mockRejectedValueOnce(new Error("invalid credential"));
+    const provider = registerProviderWithPluginConfig({});
+    const method = requireAuthMethod(provider.auth, 0);
+    const agentDir = await createAgentDir();
+    writeExistingCopilotTokenProfile(agentDir);
+
+    await expect(
+      method.runNonInteractive({
+        authChoice: "github-copilot",
+        config: { agents: { defaults: { model: { primary: "github-copilot/gpt-5.4" } } } },
+        baseConfig: {},
+        opts: { githubCopilotToken: "fresh-invalid-token" },
+        runtime: { error: vi.fn(), exit: vi.fn() },
+        agentDir,
+        resolveApiKey: vi.fn(async () => ({
+          key: "fresh-invalid-token",
+          source: "flag" as const,
+        })),
+        toApiKeyCredential: vi.fn(),
+      }),
+    ).rejects.toThrow("invalid credential");
+
+    expect(ensureAuthProfileStore(agentDir).profiles["github-copilot:github"]).toMatchObject({
+      token: "existing-token",
     });
   });
 

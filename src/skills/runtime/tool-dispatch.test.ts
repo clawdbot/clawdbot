@@ -59,7 +59,7 @@ describe("resolveSkillDispatchTools", () => {
 
     const args = hoisted.createOpenClawToolsMock.mock.calls[0]?.[0];
     expect(tools.map((tool) => tool.name)).toEqual(["read", "cron"]);
-    expect(args?.cronCreatorToolAllowlist).toEqual([{ name: "read" }, { name: "cron" }]);
+    expect(args?.cronCreatorToolAllowlist).toEqual([{ name: "read" }, { name: "automations" }]);
     expect(args?.nativeChannelId).toBe("native-room-1");
   });
 
@@ -78,7 +78,7 @@ describe("resolveSkillDispatchTools", () => {
     expect(tools.map((tool) => tool.name)).toEqual(["read", "cron", "exec"]);
     expect(args?.cronCreatorToolAllowlist).toEqual([
       { name: "read" },
-      { name: "cron" },
+      { name: "automations" },
       { name: "exec" },
     ]);
   });

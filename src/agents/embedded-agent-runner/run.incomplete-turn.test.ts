@@ -525,7 +525,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         toolName: "cron",
         argsHash: "args",
         resultHash: "result",
-        terminalPresentation: "Cron scheduler status.\nEnabled: yes",
+        terminalPresentation: "Automations scheduler status.\nEnabled: yes",
       });
       return makeAttemptResult({
         assistantTexts: [],
@@ -554,7 +554,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads).toEqual([
       {
         text:
-          "Cron scheduler status.\nEnabled: yes\n\n" +
+          "Automations scheduler status.\nEnabled: yes\n\n" +
           "⚠️ Agent couldn't generate a response. Please try again.",
         isError: true,
       },

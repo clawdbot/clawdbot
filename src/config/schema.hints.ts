@@ -31,7 +31,7 @@ const GROUP_HINTS = [
   ["messages", "Messages", 80],
   ["commands", "Commands", 85],
   ["session", "Session", 90],
-  ["cron", "Cron", 100],
+  ["cron", "Automations", 100],
   ["worktrees", "Worktrees", 105],
   ["hooks", "Hooks", 110],
   ["ui", "UI", 120],

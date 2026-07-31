@@ -1456,13 +1456,16 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
             <div class="data-table-pagination__controls">
               <select
                 class="data-table-pagination__size"
+                aria-label=${t("sessionsView.pageSize")}
                 .value=${String(props.pageSize)}
                 @change=${(e: Event) =>
                   props.onPageSizeChange(Number((e.target as HTMLSelectElement).value))}
               >
                 ${PAGE_SIZES.map(
+                  // The matching option owns initial selection because the select's value
+                  // property binds before these dynamic children exist on first render.
                   (s) =>
-                    html`<option value=${s}>
+                    html`<option value=${s} ?selected=${s === props.pageSize}>
                       ${t("sessionsView.rowsPerPage", { count: String(s) })}
                     </option>`,
                 )}

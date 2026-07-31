@@ -158,7 +158,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: bounded archive extraction and single-entry reads.
       // +1: budgeted root-bounded directory walking.
       // +1: pinned secret reads and first-writer-wins creation.
-      146,
+      // +2: restore the documented session-catalog and tool-results plugin contracts.
+      148,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -204,7 +205,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shared ingress error factory through channel-outbound and channel-message.
       // +2: shared ingress retention defaults through channel-outbound and channel-message.
       // +1: collision-safe MCP server-name assignment for native harness catalogs.
-      4774,
+      // +45: restore typed session-catalog and tool-results exports promised to plugins.
+      4819,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -242,7 +244,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: inbound media-fact metadata projection for plugin-owned channel ingestion.
       // +2: shared ingress error factory through channel-outbound and channel-message.
       // +1: collision-safe MCP server-name assignment for native harness catalogs.
-      2882,
+      // +14: restore callable session-catalog and tool-results helpers promised to plugins.
+      2896,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

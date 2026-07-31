@@ -28,6 +28,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
     telemetryExporterCounter,
     spanWithDuration,
     activeTrustedParentContext,
+    exportedInternalOrTrustedContext,
     trackTrustedSpan,
     takeTrackedTrustedSpan,
     setSpanAttrs,
@@ -208,6 +209,7 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
 
   const recordExecProcessCompleted = (
     evt: Extract<DiagnosticEventPayload, { type: "exec.process.completed" }>,
+    metadata: DiagnosticEventMetadata,
   ) => {
     const attrs: Record<string, string | number> = {
       "openclaw.exec.target": evt.target,
@@ -236,7 +238,13 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       spanAttrs["openclaw.exec.timed_out"] = evt.timedOut;
     }
 
+    // Exec events carry the innermost ambient scope rather than a child context, so
+    // the parent is looked up by the event's own span id first. For the openclaw
+    // harness that scope is the harness run (no run scope is opened -
+    // shouldEmitAgentRunDiagnostics is false there), so the parent is
+    // openclaw.harness.run; other harnesses open a run scope and parent to openclaw.run.
     const span = spanWithDuration("openclaw.exec", spanAttrs, evt.durationMs, {
+      parentContext: exportedInternalOrTrustedContext(evt, metadata),
       endTimeMs: evt.ts,
     });
     if (evt.outcome === "failed") {

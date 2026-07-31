@@ -291,6 +291,7 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
       driverUserId: params.provisioning.driver.userId,
       faultProxyObserver: params.harness.recording,
       faultProxyTargetBaseUrl: params.harness.upstreamBaseUrl,
+      installFaultRule: (rule) => params.harness.recording.installFaultRule(rule),
       observedEvents: params.observedEvents,
       observerAccessToken: params.provisioning.observer.accessToken,
       observerDeviceId: params.provisioning.observer.deviceId,

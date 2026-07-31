@@ -160,6 +160,7 @@ export type QaSuiteCommandOptions = QaScenarioRunCommandOptions & {
   runtimePair?: string;
   runtimePairLane?: string[];
   sutAccountId?: string;
+  credentialFile?: string;
   credentialSource?: string;
   credentialRole?: string;
   explicitScenarioSelection?: boolean;
@@ -1019,6 +1020,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
           adapterOptions: {
             repoRoot,
             sutAccountId: opts.sutAccountId,
+            credentialFile: opts.credentialFile,
             credentialSource: opts.credentialSource,
             credentialRole: opts.credentialRole,
             explicitScenarioSelection:

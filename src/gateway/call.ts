@@ -49,6 +49,7 @@ import {
 } from "./connection-details.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 import {
+  isGatewaySecretRefUnavailableError,
   trimToUndefined,
   type ExplicitGatewayAuth,
   type GatewayCredentialMode,
@@ -224,6 +225,14 @@ export type GatewayClientRequestErrorJson = {
   };
 };
 
+export type GatewayAuthErrorJson = {
+  ok: false;
+  error: {
+    type: "gateway_credentials_required";
+    message: string;
+  };
+};
+
 export type GatewayProbeConnectionDetails = GatewayConnectionDetails & {
   tlsFingerprint?: string;
   preauthHandshakeTimeoutMs?: number;
@@ -295,6 +304,24 @@ export function formatGatewayClientRequestErrorJson(
       ...(requestError.retryAfterMs !== undefined
         ? { retryAfterMs: requestError.retryAfterMs }
         : {}),
+    },
+  };
+}
+
+/** Preserve machine-readable output for auth failures raised before transport startup. */
+export function formatGatewayAuthErrorJson(value: unknown): GatewayAuthErrorJson | null {
+  if (
+    !isGatewayCredentialsRequiredError(value) &&
+    !isGatewayExplicitAuthRequiredError(value) &&
+    !isGatewaySecretRefUnavailableError(value)
+  ) {
+    return null;
+  }
+  return {
+    ok: false,
+    error: {
+      type: "gateway_credentials_required",
+      message: value.message,
     },
   };
 }

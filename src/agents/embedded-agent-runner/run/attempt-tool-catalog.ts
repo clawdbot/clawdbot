@@ -100,6 +100,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
     codeModeControlsEnabled: codeModeControlsEnabledForRun,
     toolSearchConfig,
     forceDirectMessageTool: preparedToolBase.forceDirectMessageTool,
+    forceCodeModeControls: attempt.forceCodeModeTools,
     sessionId: attempt.sessionId,
     sessionKey: input.sandboxSessionKey,
     agentId: input.sessionAgentId,

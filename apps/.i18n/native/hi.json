@@ -2229,6 +2229,61 @@
       "translated": "केवल विश्वसनीय निजी नेटवर्क पर उपयोग करें।"
     },
     {
+      "id": "native.android.903b94dca2caaa56",
+      "source": "Connected (node offline)",
+      "translated": "कनेक्टेड (नोड ऑफ़लाइन)"
+    },
+    {
+      "id": "native.android.cc51d76c73c98f21",
+      "source": "Connected (operator offline)",
+      "translated": "कनेक्टेड (ऑपरेटर ऑफ़लाइन)"
+    },
+    {
+      "id": "native.android.1312170581219544",
+      "source": "Ready",
+      "translated": "तैयार"
+    },
+    {
+      "id": "native.android.dfa7a374e2c6b10f",
+      "source": "Connecting...",
+      "translated": "कनेक्ट हो रहा है..."
+    },
+    {
+      "id": "native.android.530b4ba5717efdd0",
+      "source": "Pairing needed",
+      "translated": "पेयरिंग आवश्यक"
+    },
+    {
+      "id": "native.android.bd735f74888467d0",
+      "source": "Authentication needed",
+      "translated": "प्रमाणीकरण आवश्यक"
+    },
+    {
+      "id": "native.android.4d6c4830e8297779",
+      "source": "TLS timed out",
+      "translated": "TLS समय समाप्त हो गया"
+    },
+    {
+      "id": "native.android.724ae153c20bede5",
+      "source": "No TLS endpoint",
+      "translated": "कोई TLS एंडपॉइंट नहीं"
+    },
+    {
+      "id": "native.android.7220032e6ee66c7f",
+      "source": "Certificate review needed",
+      "translated": "प्रमाणपत्र समीक्षा आवश्यक"
+    },
+    {
+      "id": "native.android.e7b3a991683cfc5b",
+      "source": "Cannot reach gateway",
+      "translated": "Gateway तक नहीं पहुँच सकते"
+    },
+    {
+      "id": "native.android.b882dd8f5bb2e7a0",
+      "source": "Not connected",
+      "translated": "कनेक्टेड नहीं"
+    },
+    {
       "id": "native.android.b331b5b54e147e41",
       "source": "Setup code expired",
       "translated": "सेटअप कोड समाप्त हो गया"
@@ -3769,6 +3824,11 @@
       "translated": "इस सत्र का डैशबोर्ड खोलने के लिए अपने Gateway से कनेक्ट करें।"
     },
     {
+      "id": "native.android.a38380662bac2210",
+      "source": "Show Sidebar",
+      "translated": "साइडबार दिखाएँ"
+    },
+    {
       "id": "native.android.a5845742daecb4ba",
       "source": "Threads",
       "translated": "थ्रेड"
@@ -5069,41 +5129,6 @@
       "translated": "हमेशा"
     },
     {
-      "id": "native.android.448831898efda6c2",
-      "source": "Connecting...",
-      "translated": "कनेक्ट हो रहा है..."
-    },
-    {
-      "id": "native.android.a4f0ff7a2cc989d2",
-      "source": "Pairing needed",
-      "translated": "पेयरिंग आवश्यक है"
-    },
-    {
-      "id": "native.android.ed5aa7f6cceb466c",
-      "source": "Authentication needed",
-      "translated": "प्रमाणीकरण आवश्यक है"
-    },
-    {
-      "id": "native.android.3c96aa987f267692",
-      "source": "TLS timed out",
-      "translated": "TLS का समय समाप्त हो गया"
-    },
-    {
-      "id": "native.android.0eef5fbe3a7c83b3",
-      "source": "No TLS endpoint",
-      "translated": "कोई TLS एंडपॉइंट नहीं"
-    },
-    {
-      "id": "native.android.0273578a6d9e3a48",
-      "source": "Certificate review needed",
-      "translated": "प्रमाणपत्र की समीक्षा आवश्यक है"
-    },
-    {
-      "id": "native.android.9256c686d6616406",
-      "source": "Cannot reach gateway",
-      "translated": "Gateway तक नहीं पहुँचा जा सकता"
-    },
-    {
       "id": "native.android.2df2dec704f91977",
       "source": "About",
       "translated": "परिचय"
@@ -5934,9 +5959,9 @@
       "translated": "थ्रेड खोलें"
     },
     {
-      "id": "native.android.ede6f2717ca8e267",
-      "source": "Back",
-      "translated": "वापस"
+      "id": "native.android.3d8b4fbefc3bed01",
+      "source": "Show Sidebar",
+      "translated": "साइडबार दिखाएँ"
     },
     {
       "id": "native.android.ed7e1e2e97bfdd0a",
@@ -6407,6 +6432,96 @@
       "id": "native.android.ca180f1e4dd6f138",
       "source": "Not connected",
       "translated": "कनेक्ट नहीं है"
+    },
+    {
+      "id": "native.android.0c2501a6c5ddca09",
+      "source": "Search sessions",
+      "translated": "सत्र खोजें"
+    },
+    {
+      "id": "native.android.590e8e370944beee",
+      "source": "Clear session search",
+      "translated": "सत्र खोज साफ़ करें"
+    },
+    {
+      "id": "native.android.5409a13f0c35e1ae",
+      "source": "Working",
+      "translated": "कार्य जारी है"
+    },
+    {
+      "id": "native.android.ba8628561f3d7c81",
+      "source": "Needs attention",
+      "translated": "ध्यान आवश्यक"
+    },
+    {
+      "id": "native.android.7371ad8f117e08ff",
+      "source": "Selected",
+      "translated": "चयनित"
+    },
+    {
+      "id": "native.android.4e2f2b168d8402e5",
+      "source": "Home",
+      "translated": "होम"
+    },
+    {
+      "id": "native.android.411af820e8607155",
+      "source": "Overview",
+      "translated": "अवलोकन"
+    },
+    {
+      "id": "native.android.82ebfe54bfbfd385",
+      "source": "Usage",
+      "translated": "उपयोग"
+    },
+    {
+      "id": "native.android.24fff115bd302167",
+      "source": "Automations",
+      "translated": "स्वचालन"
+    },
+    {
+      "id": "native.android.cf5241cd358243fd",
+      "source": "Threads",
+      "translated": "थ्रेड्स"
+    },
+    {
+      "id": "native.android.aa57a340615c6acc",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.0a6327687ccfbfdb",
+      "source": "Open Settings",
+      "translated": "सेटिंग्स खोलें"
+    },
+    {
+      "id": "native.android.a52860ece0b7e03c",
+      "source": "Hide Sidebar",
+      "translated": "साइडबार छिपाएँ"
+    },
+    {
+      "id": "native.android.e2d9151fcb89115a",
+      "source": "Agents",
+      "translated": "एजेंट्स"
+    },
+    {
+      "id": "native.android.8561b4bd41836a1d",
+      "source": "More Agents",
+      "translated": "अधिक एजेंट्स"
+    },
+    {
+      "id": "native.android.a96adb01ce2f2dbe",
+      "source": "Pages",
+      "translated": "पेज"
+    },
+    {
+      "id": "native.android.a5eca2d258c332b5",
+      "source": "Recent sessions",
+      "translated": "हाल के सत्र"
+    },
+    {
+      "id": "native.android.6d00f84c795947ed",
+      "source": "No recent sessions",
+      "translated": "कोई हालिया सत्र नहीं"
     },
     {
       "id": "native.android.7c6f9feb2c16785f",
@@ -7629,6 +7744,11 @@
       "translated": "विजेट उपलब्ध नहीं है"
     },
     {
+      "id": "native.android.64997e4b7298eb49",
+      "source": "Details",
+      "translated": "विवरण"
+    },
+    {
       "id": "native.android.cd2033b0a82a72dd",
       "source": "$index.",
       "translated": "$index."
@@ -7642,6 +7762,51 @@
       "id": "native.android.bef360f847488651",
       "source": "Image unavailable",
       "translated": "छवि उपलब्ध नहीं है"
+    },
+    {
+      "id": "native.android.79f6e294d51ce785",
+      "source": "Media unavailable",
+      "translated": "मीडिया अनुपलब्ध"
+    },
+    {
+      "id": "native.android.0c040b06732ac890",
+      "source": "Audio playback is unavailable",
+      "translated": "ऑडियो प्लेबैक अनुपलब्ध है"
+    },
+    {
+      "id": "native.android.d97ffcf227dd6ec2",
+      "source": "Pause audio",
+      "translated": "ऑडियो रोकें"
+    },
+    {
+      "id": "native.android.1432c818b0debb7e",
+      "source": "Play audio",
+      "translated": "ऑडियो चलाएं"
+    },
+    {
+      "id": "native.android.66c5c40e10d36cbb",
+      "source": "Play video",
+      "translated": "वीडियो चलाएं"
+    },
+    {
+      "id": "native.android.8665d9ac83473ac9",
+      "source": "Preparing playback…",
+      "translated": "प्लेबैक तैयार हो रहा है…"
+    },
+    {
+      "id": "native.android.906333fd4cf311e0",
+      "source": "Paused for voice playback",
+      "translated": "वॉइस प्लेबैक के लिए रोका गया"
+    },
+    {
+      "id": "native.android.a14c4b937c7b0438",
+      "source": "Video",
+      "translated": "वीडियो"
+    },
+    {
+      "id": "native.android.c955f473fb3475a6",
+      "source": "Voice note",
+      "translated": "वॉइस नोट"
     },
     {
       "id": "native.android.e64a6673728dadcb",
@@ -7954,6 +8119,11 @@
       "translated": "सभी"
     },
     {
+      "id": "native.android.5771a93c0a100be9",
+      "source": "Show Sidebar",
+      "translated": "साइडबार दिखाएँ"
+    },
+    {
       "id": "native.android.4a198e67719b8e83",
       "source": "Working",
       "translated": "काम जारी है"
@@ -8252,6 +8422,11 @@
       "id": "native.android.e695e7b72d13e9e5",
       "source": "Attachment",
       "translated": "अटैचमेंट"
+    },
+    {
+      "id": "native.android.1bf18cef7a720c58",
+      "source": "Attach video",
+      "translated": "वीडियो संलग्न करें"
     },
     {
       "id": "native.android.f1d69eb66c5dfa39",
@@ -19844,6 +20019,21 @@
       "translated": "OpenClaw सक्रिय — \\(primaryName)"
     },
     {
+      "id": "native.apple.179c8c2ce733969f",
+      "source": "This configuration lives on your gateway and is managed in the Dashboard.",
+      "translated": "यह कॉन्फ़िगरेशन आपके gateway पर रहती है और Dashboard में प्रबंधित की जाती है।"
+    },
+    {
+      "id": "native.apple.d5271d97a623ac24",
+      "source": "Open in Dashboard",
+      "translated": "Dashboard में खोलें"
+    },
+    {
+      "id": "native.apple.40bf972bb1164409",
+      "source": "The legacy native pane can be re-enabled in Settings > Debug.",
+      "translated": "लीगेसी नेटिव पेन को Settings > Debug में फिर से सक्षम किया जा सकता है।"
+    },
+    {
       "id": "native.apple.5eea57b14cab3876",
       "source": "Dashboard reconnecting",
       "translated": "डैशबोर्ड पुनः कनेक्ट हो रहा है"
@@ -19967,6 +20157,21 @@
       "id": "native.apple.a1b7117088ad315f",
       "source": "\\(ProcessInfo.processInfo.processIdentifier)",
       "translated": "\\(ProcessInfo.processInfo.processIdentifier)"
+    },
+    {
+      "id": "native.apple.b6368b2fc209fa07",
+      "source": "Settings",
+      "translated": "सेटिंग्स"
+    },
+    {
+      "id": "native.apple.388a46bbd1d3df81",
+      "source": "Show native settings panes",
+      "translated": "नेटिव सेटिंग्स पेन दिखाएं"
+    },
+    {
+      "id": "native.apple.bac23cf85e38c7cc",
+      "source": "These panes are being retired in favor of the Dashboard.",
+      "translated": "इन पेन को Dashboard के पक्ष में बंद किया जा रहा है।"
     },
     {
       "id": "native.apple.6ae192c6a5942a53",
@@ -23639,6 +23844,16 @@
       "translated": "स्थिति:  \\(stateDir)"
     },
     {
+      "id": "native.apple.82152767dcda7601",
+      "source": "Legacy pane — this now lives in the Dashboard",
+      "translated": "लीगेसी पेन — यह अब Dashboard में रहता है"
+    },
+    {
+      "id": "native.apple.07f054b73f23bcb1",
+      "source": "Open in Dashboard",
+      "translated": "Dashboard में खोलें"
+    },
+    {
       "id": "native.apple.d59e05a8305df17c",
       "source": "General",
       "translated": "सामान्य"
@@ -24919,9 +25134,9 @@
       "translated": "^[\\(count) संदेश](inflect: true)"
     },
     {
-      "id": "native.apple.284b2b94c272591d",
-      "source": "Add Image",
-      "translated": "छवि जोड़ें"
+      "id": "native.apple.df155ec0b9675faf",
+      "source": "Add Attachment",
+      "translated": "अटैचमेंट जोड़ें"
     },
     {
       "id": "native.apple.1963dfa3285cb715",
@@ -25134,9 +25349,59 @@
       "translated": "आइटम"
     },
     {
+      "id": "native.apple.15a9bdea318fdc21",
+      "source": "Details",
+      "translated": "विवरण"
+    },
+    {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
       "translated": "Image"
+    },
+    {
+      "id": "native.apple.fc0c718121094798",
+      "source": "Loading audio…",
+      "translated": "ऑडियो लोड हो रहा है…"
+    },
+    {
+      "id": "native.apple.47263d32bdb27d92",
+      "source": "Preparing playback…",
+      "translated": "प्लेबैक तैयार हो रहा है…"
+    },
+    {
+      "id": "native.apple.a43c05c1f87c96ec",
+      "source": "Voice note",
+      "translated": "वॉइस नोट"
+    },
+    {
+      "id": "native.apple.4b62790fe9e79a5b",
+      "source": "Pause",
+      "translated": "रोकें"
+    },
+    {
+      "id": "native.apple.d38d34ee3f9829d8",
+      "source": "Play",
+      "translated": "चलाएँ"
+    },
+    {
+      "id": "native.apple.1591e4df0f7c1593",
+      "source": "Audio position",
+      "translated": "ऑडियो स्थिति"
+    },
+    {
+      "id": "native.apple.f679dd436bcdab82",
+      "source": "Pause Talk mode before playing this attachment.",
+      "translated": "इस अटैचमेंट को चलाने से पहले Talk मोड रोकें।"
+    },
+    {
+      "id": "native.apple.0c86d3b8ddd1667b",
+      "source": "Audio unavailable",
+      "translated": "ऑडियो अनुपलब्ध"
+    },
+    {
+      "id": "native.apple.72c0a6d39b33147f",
+      "source": "Retry",
+      "translated": "पुनः प्रयास करें"
     },
     {
       "id": "native.apple.8b0faa2f4f38e339",
@@ -25162,6 +25427,36 @@
       "id": "native.apple.2c50b099878d7c96",
       "source": "Retry",
       "translated": "फिर से प्रयास करें"
+    },
+    {
+      "id": "native.apple.1f90092d20ef6580",
+      "source": "Loading video…",
+      "translated": "वीडियो लोड हो रहा है…"
+    },
+    {
+      "id": "native.apple.51e26ae62841c35a",
+      "source": "Preparing playback…",
+      "translated": "प्लेबैक तैयार हो रहा है…"
+    },
+    {
+      "id": "native.apple.cc9b3b11a07f11c0",
+      "source": "Play video",
+      "translated": "वीडियो चलाएँ"
+    },
+    {
+      "id": "native.apple.7310d14ae833f906",
+      "source": "Pause Talk mode before playing this attachment.",
+      "translated": "इस अटैचमेंट को चलाने से पहले Talk मोड रोकें।"
+    },
+    {
+      "id": "native.apple.c6c281461cdce468",
+      "source": "Video unavailable",
+      "translated": "वीडियो अनुपलब्ध"
+    },
+    {
+      "id": "native.apple.0863fee2119140f8",
+      "source": "Retry",
+      "translated": "पुनः प्रयास करें"
     },
     {
       "id": "native.apple.14da4c958ae30949",
@@ -26084,6 +26379,16 @@
       "translated": "\\(baseName).jpg"
     },
     {
+      "id": "native.apple.d769d9386f26178e",
+      "source": "Attachment %@ exceeds the 20 MB video limit",
+      "translated": "अटैचमेंट %@ 20 MB वीडियो सीमा से अधिक है"
+    },
+    {
+      "id": "native.apple.88cfaa4909638e15",
+      "source": "Only image and video attachments are supported right now",
+      "translated": "अभी केवल इमेज और वीडियो अटैचमेंट समर्थित हैं"
+    },
+    {
       "id": "native.apple.61b7d1ecf7fdae3e",
       "source": "\\(invocation) ",
       "translated": "\\(invocation) "
@@ -26469,9 +26774,9 @@
       "translated": "कैमरा"
     },
     {
-      "id": "native.apple.333682684163ba6b",
-      "source": "Choose Image File",
-      "translated": "इमेज फ़ाइल चुनें"
+      "id": "native.apple.958a3ae7ad425e67",
+      "source": "Choose Media File",
+      "translated": "मीडिया फ़ाइल चुनें"
     },
     {
       "id": "native.apple.534246792690968d",

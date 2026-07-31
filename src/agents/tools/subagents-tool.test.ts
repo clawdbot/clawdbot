@@ -37,7 +37,9 @@ describe("subagents tool", () => {
   it("advertises the unified task ledger", () => {
     const tool = createSubagentsTool();
 
-    expect(tool.description).toBe("Background work: subagents, media gen, cron runs. list/cancel.");
+    expect(tool.description).toBe(
+      "Background work: subagents, media gen, automation runs. list/cancel.",
+    );
   });
 
   it("lists cross-runtime tasks in the caller session tree", async () => {

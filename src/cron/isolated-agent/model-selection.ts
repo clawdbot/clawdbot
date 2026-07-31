@@ -72,9 +72,9 @@ function formatCronPayloadModelRejection(params: {
     const modelRef = error.slice("model not allowed:".length).trim();
     const policy = resolveConfiguredModelPolicyAllow(params);
     const policyPath = policy.configPath ?? "agents.defaults.modelPolicy.allow";
-    return `cron payload.model '${modelOverride}' rejected by ${policyPath}: ${modelRef} is not in [${formatAllowedModelRefs(params)}]`;
+    return `automation model override '${modelOverride}' rejected by ${policyPath}: ${modelRef} is not in [${formatAllowedModelRefs(params)}]`;
   }
-  return `cron payload.model '${modelOverride}' rejected: ${error}`;
+  return `automation model override '${modelOverride}' rejected: ${error}`;
 }
 
 export async function resolveCronModelSelectionOwner(params: {

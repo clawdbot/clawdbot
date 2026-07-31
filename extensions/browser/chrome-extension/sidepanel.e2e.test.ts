@@ -13,11 +13,14 @@ import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version
 import { useAutoCleanupTempDirTracker } from "../test-support.js";
 import {
   assertCopilotStaleRunIsolation,
+  countCopilotHistoryRequests,
   copyCopilotSidepanelExtension,
   isSidePanelTarget,
   rawDataText,
-  resolveChromiumExecutable,
+  resolveChromiumExecutableOverride,
   textValue,
+  waitForContextExtensionId,
+  waitForLoadedExtensionId,
 } from "./sidepanel.e2e-support.js";
 
 declare const chrome: {
@@ -568,18 +571,18 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
   it("returns one error response when a panel's tab disappears", async () => {
     const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
     const userDataDir = tempDirs.make("openclaw-copilot-missing-tab-profile-");
-    const executablePath = await resolveChromiumExecutable();
+    const executablePath = await resolveChromiumExecutableOverride();
     const context = await chromium.launchPersistentContext(userDataDir, {
       ...(executablePath ? { executablePath } : { channel: "chromium" }),
       headless: true,
       args: [
+        "--enable-unsafe-extension-debugging",
         `--disable-extensions-except=${unpackedExtension}`,
         `--load-extension=${unpackedExtension}`,
       ],
     });
     cleanups.push(async () => await context.close());
-    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
-    const extensionId = new URL(worker.url()).hostname;
+    const extensionId = await waitForContextExtensionId(context, unpackedExtension);
     const popup = context.pages()[0] ?? (await context.newPage());
     await popup.goto(`chrome-extension://${extensionId}/popup.html`);
 
@@ -629,11 +632,12 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     cleanups.push(fixture.close);
     const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
     const userDataDir = tempDirs.make("openclaw-copilot-profile-");
-    const executablePath = await resolveChromiumExecutable();
+    const executablePath = await resolveChromiumExecutableOverride();
     const context = await chromium.launchPersistentContext(userDataDir, {
       ...(executablePath ? { executablePath } : { channel: "chromium" }),
       headless: true,
       args: [
+        "--enable-unsafe-extension-debugging",
         `--disable-extensions-except=${unpackedExtension}`,
         `--load-extension=${unpackedExtension}`,
       ],
@@ -644,10 +648,10 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
       throw new Error("Chromium browser connection unavailable");
     }
     const browserCdp = await browser.newBrowserCDPSession();
-    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
-    const extensionId = new URL(worker.url()).hostname;
+    const extensionId = await waitForLoadedExtensionId(browserCdp, unpackedExtension);
     const alphaTab = context.pages()[0] ?? (await context.newPage());
     await alphaTab.goto(`chrome-extension://${extensionId}/e2e-launcher.html`);
+    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
     await alphaTab.evaluate(
       async ({ gatewayPort, relayPort }) =>
         await chrome.runtime.sendMessage({
@@ -910,6 +914,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     ).toBe(true);
     await reopenedBetaPanel.fill("#message-input", "after reconnect marker");
     await expect.poll(async () => !(await reopenedBetaPanel.disabled("#send-button"))).toBe(true);
+    const historiesBeforeReconnectTurn = countCopilotHistoryRequests(gateway);
     await reopenedBetaPanel.click("#send-button");
     await expect.poll(() => gateway.chatSends.length, { timeout: 10_000 }).toBe(4);
     await expect
@@ -917,15 +922,16 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
         timeout: 10_000,
       })
       .toContain("Isolated reply: after reconnect marker");
+    await expect
+      .poll(() => countCopilotHistoryRequests(gateway), { timeout: 10_000 })
+      .toBeGreaterThan(historiesBeforeReconnectTurn);
 
     await reopenedBetaPanel.fill("#message-input", "panel linger marker");
     await expect.poll(async () => !(await reopenedBetaPanel.disabled("#send-button"))).toBe(true);
     await reopenedBetaPanel.click("#send-button");
     await expect.poll(() => gateway.chatSends.length, { timeout: 10_000 }).toBe(5);
     const panelRunId = textValue(gateway.chatSends[4]?.idempotencyKey);
-    const historiesBeforeNavigation = gateway.requests.filter(
-      (request) => request.method === "chat.history",
-    ).length;
+    const historiesBeforeNavigation = countCopilotHistoryRequests(gateway);
     await betaTab.goto(`${fixture.baseUrl}/beta?during-run=1`);
     await expect
       .poll(
@@ -939,9 +945,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     await new Promise((resolve) => {
       setTimeout(resolve, 250);
     });
-    expect(gateway.requests.filter((request) => request.method === "chat.history")).toHaveLength(
-      historiesBeforeNavigation,
-    );
+    expect(countCopilotHistoryRequests(gateway)).toBe(historiesBeforeNavigation);
     gateway.failNextAbort();
     await disableTabPanel(worker, betaTabId);
     await expect

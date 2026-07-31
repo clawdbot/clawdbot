@@ -275,7 +275,9 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `plugins.entries.<id>.subagent.allowModelOverride`: explicitly trust this plugin to request per-run `provider` and `model` overrides for background subagent runs.
 - `plugins.entries.<id>.subagent.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted subagent overrides. Use `"*"` only when you intentionally want to allow any model.
 - `plugins.entries.<id>.llm.allowModelOverride`: explicitly trust this plugin to request model overrides for `api.runtime.llm.complete`.
-- `plugins.entries.<id>.llm.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted plugin LLM completion overrides. Use `"*"` only when you intentionally want to allow any model.
+- `plugins.entries.<id>.llm.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted model overrides. Use `"*"` only when you intentionally want to allow any model override.
+- `plugins.entries.<id>.llm.allowedCompletionModels`: optional allowlist applied to every plugin LLM completion, including host-resolved defaults and overrides. Use `"*"` only when you intentionally want to allow any model.
+- `plugins.entries.<id>.llm.allowAuthProfileOverride`: explicitly trust this plugin to select a non-default auth profile for isolated `api.runtime.llm.complete` execution. Direct `model@profile` calls remain governed by model-override policy.
 - `plugins.entries.<id>.llm.allowAgentIdOverride`: explicitly trust this plugin to run `api.runtime.llm.complete` against a non-default agent id.
 - `plugins.entries.<id>.config`: plugin-defined config object (validated by native OpenClaw plugin schema when available).
 - Channel plugin account/runtime settings live under `channels.<id>` and should be described by the owning plugin's manifest `channelConfigs` metadata, not by a central OpenClaw option registry.
@@ -934,13 +936,13 @@ Validation and safety notes:
   - `sessionKey` from request payload is accepted only when `hooks.allowRequestSessionKey=true` (default: `false`).
   - `sessionMode` is `"isolated"` by default. `"persistent"` reuses the resolved session and requires an explicit request `sessionKey`, `hooks.allowRequestSessionKey=true`, and non-empty `hooks.allowedSessionKeyPrefixes`.
   - Direct announce delivery requires both a concrete `channel` and `to`; supplying only one fails before the run is scheduled.
-  - `accountId` selects a configured account for direct announce delivery and requires both `channel` and `to`.
+  - `accountId` selects a configured, enabled account for direct announce delivery and requires both `channel` and `to`; invalid selections return `400` before a run starts.
   - Omit both delivery fields for completion-only hooks, or set `deliver: false` to ignore supplied destination data.
   - The request waits up to 15 seconds for runner admission, not run completion. `200` means the agent runner was entered.
-  - Pre-run failures return `{ ok: false, error, runId }`: `409` for session admission conflicts, `502` for other preparation failures, and `503` when the 15-second admission deadline expires. Timed-out queued work is canceled and will not start later.
+  - Pre-run failures return `{ ok: false, error, runId }`: `400` for invalid delivery coordinates or account selection, `409` for session admission conflicts, `502` for other preparation failures, and `503` when the 15-second admission deadline expires. Timed-out queued work is canceled and will not start later.
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
   - Template-rendered mapping `sessionKey` values are treated as externally supplied and also require `hooks.allowRequestSessionKey=true`.
-  - Mapped `agent` actions use the same admission wait and `200`/`409`/`502`/`503` outcomes.
+  - Mapped `agent` actions use the same admission wait and `200`/`400`/`409`/`502`/`503` outcomes.
 
 <Accordion title="Mapping details">
 
@@ -1447,7 +1449,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 
 ---
 
-## Cron
+## Automations (`cron`)
 
 ```json5
 {
@@ -1462,11 +1464,11 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 }
 ```
 
-- `enabled`: execute stored cron jobs (default: `true`). Set `false` to pause all cron execution without deleting jobs.
-- `triggers.enabled`: also run event-driven cron triggers (default: `false`).
-- `sessionRetention`: how long to keep completed isolated cron run sessions before pruning SQLite session rows. Also controls cleanup of archived deleted cron transcripts. Default: `24h`; set `false` to disable.
+- `enabled`: execute stored automation jobs (default: `true`). Set `false` to pause all automation execution without deleting jobs.
+- `triggers.enabled`: also run event-driven automation triggers (default: `false`).
+- `sessionRetention`: how long to keep completed isolated automation run sessions before pruning SQLite session rows. Also controls cleanup of archived deleted automation transcripts. Default: `24h`; set `false` to disable.
 - Run history automatically keeps the newest 2000 terminal rows per job. Lost rows retain their 24-hour cleanup window.
-- `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
+- `webhookToken`: bearer token used for automation webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
 
 The `cron` block is strict; `cron.enabled`, `cron.triggers`, `cron.webhookToken`,
 `cron.sessionRetention`, and `cron.failureAlert` are the only accepted keys. The
@@ -1498,7 +1500,7 @@ when preserving announce delivery. `openclaw doctor --fix` strips a leftover
 destination for every job. The retired `cron.failureDestination` block is merged
 into it by [`openclaw doctor --fix`](/cli/doctor).
 
-- `enabled`: enable failure alerts for cron jobs (default: `false`).
+- `enabled`: enable failure alerts for automation jobs (default: `false`).
 - `after`: consecutive failures before an alert fires (positive integer, min: `1`; default: `2`).
 - `cooldownMs`: minimum milliseconds between repeated alerts for the same job (non-negative integer; default: `3600000`).
 - `includeSkipped`: count consecutive skipped runs toward the alert threshold (default: `false`). Skipped runs are tracked separately and do not affect execution-error backoff.
@@ -1510,7 +1512,7 @@ into it by [`openclaw doctor --fix`](/cli/doctor).
 - When neither global nor per-job failure destination is set, jobs that already deliver via `announce` fall back to that primary announce target on failure.
 - `delivery.failureDestination` is only supported for `sessionTarget="isolated"` jobs unless the job's primary `delivery.mode` is `"webhook"`.
 
-See [Cron Jobs](/automation/cron-jobs). Isolated cron executions are tracked as [background tasks](/automation/tasks).
+See [Automations](/automation/cron-jobs). Isolated automation runs are tracked as [background tasks](/automation/tasks).
 
 ## Media model template variables
 
