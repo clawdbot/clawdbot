@@ -4,15 +4,9 @@ import path from "node:path";
 import { openRootFileSync } from "../../infra/boundary-file-read.js";
 import type { ParsedSkillFrontmatter } from "../types.js";
 import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
+import { shouldRejectHardlinks } from "./nix-hardlink-policy.js";
 import { createSyntheticSourceInfo, type Skill } from "./skill-contract.js";
 import { computeSkillPromptVersion } from "./skill-version.js";
-
-const NIX_STORE_ROOT = "/nix/store";
-
-/** Returns true when a path resolves inside the immutable Nix store. */
-function isNixStorePath(resolvedPath: string): boolean {
-  return resolvedPath === NIX_STORE_ROOT || resolvedPath.startsWith(`${NIX_STORE_ROOT}/`);
-}
 
 type LoadedLocalSkill = {
   skill: Skill;
@@ -143,7 +137,8 @@ export function loadSkillsFromDirSafe(params: {
   // NixOS auto-optimise-store deduplicates identical files across the store by
   // hardlinking them. This is a standard Nix optimisation, not user mutation.
   // Rejecting hardlinks would silently drop every skill in the Nix store.
-  const rejectHardlinks = !isNixStorePath(rootRealPath);
+  // Policy: only allow hardlinks when in Nix mode AND path is under /nix/store.
+  const rejectHardlinks = shouldRejectHardlinks(rootRealPath);
 
   const rootSkill = loadSingleSkillDirectory({
     skillDir: rootDir,
@@ -194,10 +189,13 @@ export function readSkillFrontmatterSafe(params: {
   } catch {
     return null;
   }
+  // Apply the same Nix hardlink policy as loadSkillsFromDirSafe
+  const rejectHardlinks = shouldRejectHardlinks(rootRealPath);
   const raw = readSkillFileSync({
     rootRealPath,
     filePath: path.resolve(params.filePath),
     maxBytes: params.maxBytes,
+    rejectHardlinks,
   });
   if (!raw) {
     return null;

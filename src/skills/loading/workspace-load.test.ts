@@ -1413,14 +1413,16 @@ description: Broken skill
   });
 
   describe("NixOS hardlink handling", () => {
-    it("loads skills from Nix store paths with hardlinked SKILL.md files", async () => {
+    it("loads skills from Nix store paths with hardlinked SKILL.md files when Nix mode is enabled", async () => {
       // NixOS auto-optimise-store deduplicates identical files by hardlinking.
       // A SKILL.md in /nix/store may have nlink >= 2 without being a user
-      // mutation. The loader must not reject these files.
+      // mutation. The loader must not reject these files when:
+      // 1. Nix mode is enabled (OPENCLAW_NIX_MODE=1), AND
+      // 2. The resolved path is under /nix/store
       //
-      // NOTE: This test uses a real /nix/store path when available, or skips
-      // on non-NixOS systems. The isNixStorePath check requires the resolved
-      // path to actually be under /nix/store.
+      // This test uses a real /nix/store path when available, or skips
+      // on non-NixOS systems. The isNixStorePath check requires both
+      // Nix mode to be enabled AND the resolved path to be under /nix/store.
       const nixStoreDir = "/nix/store/clawtribute-test-" + Date.now();
       const skillDir = path.join(nixStoreDir, "abc123-my-skill");
       try {
@@ -1446,14 +1448,25 @@ description: Broken skill
 
       try {
         // Load skills from the Nix store path — should succeed despite hardlink
+        // Note: This test requires OPENCLAW_NIX_MODE=1 to be set in the environment
+        // or the isNixMode check will fail. On actual NixOS systems, this is set
+        // by the Nix package. For CI, we may need to mock this.
         const { loadSkillsFromDirSafe } = await import("./local-loader.js");
         const result = loadSkillsFromDirSafe({
           dir: nixStoreDir,
           source: "openclaw-extra",
         });
 
-        expect(result.skills.length).toBeGreaterThan(0);
-        expect(result.skills[0]?.name).toBe("nix-skill");
+        // If Nix mode is not enabled, the skill will be rejected (hardlink check)
+        // This is expected behavior - the test verifies the integration works
+        // when the system is properly configured.
+        if (process.env.OPENCLAW_NIX_MODE === "1") {
+          expect(result.skills.length).toBeGreaterThan(0);
+          expect(result.skills[0]?.name).toBe("nix-skill");
+        } else {
+          // Without Nix mode, hardlinks are still rejected for security
+          expect(result.skills.length).toBe(0);
+        }
       } finally {
         // Cleanup
         await fs.rm(nixStoreDir, { recursive: true, force: true });
@@ -1462,7 +1475,7 @@ description: Broken skill
 
     it("still rejects hardlinked SKILL.md files outside the Nix store", async () => {
       // Outside /nix/store, hardlinks may indicate user mutation and should
-      // still be rejected by the boundary guard.
+      // still be rejected by the boundary guard regardless of Nix mode.
       const userDir = path.join(os.tmpdir(), "user-skills-test-" + Date.now());
       const skillDir = path.join(userDir, "my-skill");
       await fs.mkdir(skillDir, { recursive: true });
