@@ -28,6 +28,7 @@ import {
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
+import { generateSecureUuid } from "../../../infra/secure-random.js";
 import type { Model } from "../../../llm/types.js";
 import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -59,7 +60,8 @@ type ModelCallDiagnosticContext = {
   suppressPluginHooks?: boolean;
 };
 
-type ModelCallTerminalObservation = {
+export type ModelCallTerminalObservation = {
+  accountingCallId: string;
   model: Model;
   outcome: "completed" | "error";
   usage?: UsageLike;
@@ -102,6 +104,7 @@ type ModelCallObservationState = {
   outputMessages?: unknown[];
   usage?: ModelCallUsage;
   rawUsage?: UsageLike;
+  accountingCallId?: string;
   model?: Model;
   onTerminal?: (event: ModelCallTerminalObservation) => void;
   contentCapture?: DiagnosticModelContentCapturePolicy;
@@ -271,11 +274,12 @@ function emitModelCallTerminalObservation(
   state: ModelCallObservationState,
   outcome: ModelCallTerminalObservation["outcome"],
 ): void {
-  if (!state.onTerminal || !state.model) {
+  if (!state.onTerminal || !state.accountingCallId || !state.model) {
     return;
   }
   try {
     state.onTerminal({
+      accountingCallId: state.accountingCallId,
       model: state.model,
       outcome,
       ...(state.rawUsage ? { usage: state.rawUsage } : {}),
@@ -917,6 +921,7 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
       suppressPluginHooks: ctx.suppressPluginHooks,
       ...(ctx.onTerminal
         ? {
+            accountingCallId: generateSecureUuid(),
             model,
             onTerminal: ctx.onTerminal,
           }

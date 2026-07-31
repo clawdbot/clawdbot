@@ -1004,10 +1004,6 @@ fallbacks, or rotate credentials.
   non-owner replies leave the alert pending. Spend from compaction or worker
   calls is held for the agent's next private owner reply. Alert delivery does
   not make another model call.
-- Delivery is best-effort. The threshold watermark advances before the owner
-  reply is sent, so failed or suppressed sends are not retried and can lose
-  that notification. Daily spend accumulation remains available across
-  restarts.
 
 Only text-model calls are included. Media generation, media understanding,
 embeddings, and web search are outside this tracker. See [API usage and

@@ -345,6 +345,12 @@ export function installEmbeddedAttemptStreamGuards(input: {
               recordConfiguredModelSpendCall({
                 cfg: attempt.config!,
                 agentId: input.sessionAgentId,
+                deliveryTarget: {
+                  sessionKey: attempt.sessionKey,
+                  channel: attempt.messageChannel ?? attempt.messageProvider,
+                  to: attempt.messageTo,
+                  chatType: attempt.chatType,
+                },
                 call: event,
               });
             } catch (error) {

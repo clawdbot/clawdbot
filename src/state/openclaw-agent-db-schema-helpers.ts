@@ -94,8 +94,8 @@ export function assertOpenClawAgentCurrentRuntimeSchema(
     options.pathname,
     AGENT_SCHEMA_WITHOUT_MODEL_SPEND_SQL,
   );
-  // This feature group is lazy for current-version databases. Once it exists,
-  // require its canonical shape so partial creation cannot hide data loss.
+  // This feature group is lazy for current-version databases. Once any table
+  // exists, require the whole group so partial creation cannot hide data loss.
   if (hasAnyCanonicalTable(database, AGENT_MODEL_SPEND_SCHEMA_SQL)) {
     repairAndAssertAgentSchemaGroup(database, options.pathname, AGENT_MODEL_SPEND_SCHEMA_SQL);
   }

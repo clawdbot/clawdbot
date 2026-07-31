@@ -10,7 +10,11 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
-import { preparePrivateOwnerModelSpendAlertBestEffort } from "../../agents/model-spend-alerts.js";
+import { preparePrivateOwnerModelSpendAlertBestEffort } from "../../agents/model-spend-alert-delivery.js";
+import {
+  markModelSpendAlertsQueued,
+  releasePreparedModelSpendAlertsBestEffort,
+} from "../../agents/model-spend-alerts.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
@@ -271,7 +275,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
 
   const outboundSession = buildOutboundSessionContext({
     cfg,
-    agentId: resolvedAgentId,
+    agentId: effectiveAgentId,
     sessionKey: params.sessionKey,
     policySessionKey: params.policySessionKey,
     conversationType: params.policyConversationType,
@@ -281,13 +285,14 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     requesterSenderUsername: params.requesterSenderUsername,
     requesterSenderE164: params.requesterSenderE164,
   });
-  // Agent-wide billing totals are private operator data. Only attempt alerts
-  // when a final reply targets a configured owner in an explicit direct chat.
+  // Agent-wide billing totals are private operator data. Leave alerts pending
+  // until a final reply targets a configured owner in an explicit direct chat.
   const spendAlert =
     params.replyKind === "final"
       ? preparePrivateOwnerModelSpendAlertBestEffort({
           cfg,
           agentId: effectiveAgentId,
+          sessionKey: params.sessionKey,
           channel: channelId,
           to,
           chatType: outboundSession?.conversationKind,
@@ -335,6 +340,14 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       : {}),
     replyToId: resolvedReplyToId,
   };
+  const spendAlertCompletion = spendAlert
+    ? {
+        kind: "model_spend_alert" as const,
+        agentId: effectiveAgentId,
+        alertIds: spendAlert.alertIds,
+        deliveryIntentId: spendAlert.deliveryIntentId,
+      }
+    : undefined;
 
   try {
     // Provider docking: this is an execution boundary (we're about to send).
@@ -363,12 +376,22 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       replyToId: resolvedReplyToId ?? null,
       threadId: resolvedThreadId,
       session: outboundSession,
+      ...(spendAlertCompletion
+        ? {
+            deliveryCompletion: spendAlertCompletion,
+            deliveryIntentId: spendAlertCompletion.deliveryIntentId,
+            // This is the fencing check before platform I/O. A stale lease must
+            // abort the queued send instead of delivering an old alert payload.
+            onDeliveryIntent: (intent) =>
+              markModelSpendAlertsQueued(spendAlertCompletion, intent.id),
+          }
+        : {}),
       signal: abortSignal,
       mirror:
         params.mirror !== false && params.sessionKey
           ? {
               sessionKey: params.sessionKey,
-              agentId: resolvedAgentId,
+              agentId: effectiveAgentId,
               text,
               mediaUrls,
               ...(params.isGroup != null ? { isGroup: params.isGroup } : {}),
@@ -420,6 +443,9 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       messageId: delivery.messageId,
     };
   } catch (err) {
+    if (spendAlertCompletion) {
+      releasePreparedModelSpendAlertsBestEffort(spendAlertCompletion);
+    }
     const message = formatErrorMessage(err);
     return {
       ok: false,

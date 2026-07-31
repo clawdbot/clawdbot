@@ -16,7 +16,6 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
-  preparePrivateOwnerModelSpendAlertBestEffort: vi.fn(),
   hookRunner: undefined as
     | {
         hasHooks: ReturnType<typeof vi.fn>;
@@ -24,11 +23,6 @@ const mocks = vi.hoisted(() => ({
         runReplyPayloadSending: ReturnType<typeof vi.fn>;
       }
     | undefined,
-}));
-
-vi.mock("../../agents/model-spend-alerts.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/model-spend-alerts.js")>()),
-  preparePrivateOwnerModelSpendAlertBestEffort: mocks.preparePrivateOwnerModelSpendAlertBestEffort,
 }));
 
 vi.mock("../../infra/outbound/deliver-runtime.js", () => ({
@@ -220,7 +214,6 @@ describe("routeReply", () => {
     );
     mocks.deliverOutboundPayloads.mockReset();
     mocks.deliverOutboundPayloads.mockResolvedValue([]);
-    mocks.preparePrivateOwnerModelSpendAlertBestEffort.mockReset();
     mocks.hookRunner = undefined;
   });
 
@@ -983,24 +976,6 @@ describe("routeReply", () => {
     expect(mirror.text).toBe("hi");
     expect(mirror.isGroup).toBe(true);
     expect(mirror.groupId).toBe("channel:C123");
-  });
-
-  it("appends best-effort spend alerts without mirroring them", async () => {
-    mocks.preparePrivateOwnerModelSpendAlertBestEffort.mockReturnValueOnce({
-      text: "Warning: deepseek reached $1.40.",
-    });
-    await routeReply({
-      payload: { text: "model reply" },
-      channel: "slack",
-      to: "U123",
-      sessionKey: "agent:main:main",
-      policyConversationType: "direct",
-      cfg: { commands: { ownerAllowFrom: ["slack:U123"] } },
-    });
-
-    expect(lastDeliveryPayload().text).toBe("model reply\n\nWarning: deepseek reached $1.40.");
-    expect(lastDelivery().mirror).toMatchObject({ text: "model reply" });
-    expect(lastDelivery()).not.toHaveProperty("deliveryCompletion");
   });
 
   it("skips mirror data when mirror is false", async () => {

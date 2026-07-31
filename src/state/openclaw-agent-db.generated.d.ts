@@ -182,15 +182,37 @@ export interface MemoryIndexState {
   revision: number;
 }
 
+export interface ModelSpendAlerts {
+  alert_id: string;
+  created_at: number;
+  day_key: string;
+  delivered_at: number | null;
+  first_threshold_microusd: number | null;
+  highest_threshold_microusd: number | null;
+  kind: string;
+  provider: string;
+  queue_id: string | null;
+  spend_microusd: Generated<number>;
+  status: Generated<string>;
+  target_session_key: string | null;
+  timezone: string;
+  updated_at: number;
+}
+
+export interface ModelSpendCalls {
+  accounting_call_id: string;
+  cost_microusd: number | null;
+  created_at: number;
+  day_key: string;
+  provider: string;
+  timezone: string;
+}
+
 export interface ModelSpendDaily {
   day_key: string;
-  last_alerted_threshold_microusd: Generated<number>;
   provider: string;
   spend_microusd: Generated<number>;
-  spend_nanousd_remainder: Generated<number>;
   timezone: string;
-  tracking_incomplete: Generated<number>;
-  tracking_incomplete_alerted: Generated<number>;
   updated_at: number;
 }
 
@@ -445,6 +467,8 @@ export interface DB {
   memory_index_meta: MemoryIndexMeta;
   memory_index_sources: MemoryIndexSources;
   memory_index_state: MemoryIndexState;
+  model_spend_alerts: ModelSpendAlerts;
+  model_spend_calls: ModelSpendCalls;
   model_spend_daily: ModelSpendDaily;
   schema_meta: SchemaMeta;
   session_conversations: SessionConversations;

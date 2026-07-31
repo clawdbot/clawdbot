@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { preparePrivateOwnerModelSpendAlertBestEffort } from "../../agents/model-spend-alerts.js";
+import { preparePrivateOwnerModelSpendAlertBestEffort } from "../../agents/model-spend-alert-delivery.js";
 import { dispatchInboundMessageWithRoutedChannelDispatcher } from "../../auto-reply/dispatch.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchFromConfigResult } from "../../auto-reply/reply/dispatch-from-config.types.js";
@@ -27,6 +27,11 @@ import {
   throwIfDurableInboundReplyDeliveryFailed,
 } from "./durable-delivery.js";
 import { runPreparedChannelTurnCore } from "./execution.js";
+import {
+  attachLegacyModelSpendAlertSettlement,
+  isExplicitlyNonVisibleChannelDelivery,
+  settleLegacyModelSpendAlertError,
+} from "./legacy-delivery-settlement.js";
 import type {
   AssembledChannelTurn,
   ChannelEventDeliveryAdapter,
@@ -126,15 +131,6 @@ function resolveAssembledReplyPipeline(
       ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
     },
   };
-}
-
-function isExplicitlyNonVisibleChannelDelivery(result: unknown): boolean {
-  return (
-    typeof result === "object" &&
-    result !== null &&
-    !Array.isArray(result) &&
-    (result as { visibleReplySent?: unknown }).visibleReplySent === false
-  );
 }
 
 function markChannelDeliveryErrorVisible(error: unknown): unknown {
@@ -529,6 +525,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
                         ? preparePrivateOwnerModelSpendAlertBestEffort({
                             cfg: params.cfg,
                             agentId: params.agentId,
+                            sessionKey: params.ctxPayload.SessionKey,
                             channel: params.channel,
                             to:
                               normalizeOptionalString(params.ctxPayload.OriginatingTo) ??
@@ -536,6 +533,13 @@ async function dispatchChannelTurnWithDeliveryOwner(
                             chatType: params.ctxPayload.ChatType,
                           })
                         : undefined;
+                    const fallbackSpendCompletion = fallbackSpendAlert
+                      ? {
+                          agentId: params.agentId,
+                          alertIds: fallbackSpendAlert.alertIds,
+                          deliveryIntentId: fallbackSpendAlert.deliveryIntentId,
+                        }
+                      : undefined;
                     let effectivePayload = fallbackSpendAlert
                       ? {
                           ...preparedPayload,
@@ -578,7 +582,16 @@ async function dispatchChannelTurnWithDeliveryOwner(
                           result = await delivery.deliver(effectivePayload, info);
                         }
                       }
+                      if (fallbackSpendCompletion) {
+                        result = attachLegacyModelSpendAlertSettlement(
+                          fallbackSpendCompletion,
+                          result,
+                        );
+                      }
                     } catch (error: unknown) {
+                      if (fallbackSpendCompletion) {
+                        settleLegacyModelSpendAlertError(fallbackSpendCompletion, error);
+                      }
                       if (delivery.observeMessageSent) {
                         await settleChannelDeliveryAttempt({
                           attempt: { payload: effectivePayload, info, error },

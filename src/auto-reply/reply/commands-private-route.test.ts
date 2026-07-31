@@ -17,7 +17,7 @@ import {
 import type { HandleCommandsParams } from "./commands-types.js";
 
 function createApprovalChannelPlugin(params: {
-  id: "discord" | "feishu" | "telegram" | "whatsapp";
+  id: "discord" | "telegram" | "whatsapp";
   targets: Array<{ to: string; threadId?: string | number | null }>;
   enabled?: boolean;
 }): ChannelPlugin {
@@ -262,31 +262,6 @@ describe("resolvePrivateCommandRouteTargets", () => {
       {
         channel: "telegram",
         to: "849985193",
-        accountId: undefined,
-        threadId: undefined,
-      },
-    ]);
-  });
-
-  it("matches typed private targets to the same native owner id", async () => {
-    registerApprovalChannelPlugins([
-      createApprovalChannelPlugin({
-        id: "feishu",
-        targets: [{ to: "user:ou_owner" }],
-      }),
-    ]);
-
-    const targets = await resolvePrivateCommandRouteTargets({
-      commandParams: buildCommandParams({
-        commands: { ownerAllowFrom: ["feishu:ou_owner"] },
-      } as OpenClawConfig),
-      request: buildApprovalRequest(),
-    });
-
-    expect(targets).toEqual([
-      {
-        channel: "feishu",
-        to: "user:ou_owner",
         accountId: undefined,
         threadId: undefined,
       },
