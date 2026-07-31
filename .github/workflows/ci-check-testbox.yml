@@ -24,7 +24,6 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"
   PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false"
 
 jobs:
@@ -99,6 +98,10 @@ jobs:
         with:
           install-bun: "false"
           install-trufflehog: "true"
+          # Real Testbox hydration reuses the protected dependency snapshot.
+          # Pull-request validation runs on GitHub-hosted runners instead.
+          sticky-disk: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name == 'workflow_dispatch' && 'false' || 'true' }}
       - name: Prepare Testbox shell
         shell: bash
         run: |
