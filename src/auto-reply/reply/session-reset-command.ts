@@ -6,7 +6,7 @@ import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { CURRENT_MESSAGE_MARKER, HISTORY_CONTEXT_MARKER } from "./history.js";
 import { stripMentions } from "./mentions.js";
 
-export type ResolvedSessionResetCommand = {
+type ResolvedSessionResetCommand = {
   matchedResetTriggerLower?: string;
   normalizedResetBody: string;
   payload?: string;
