@@ -12,7 +12,7 @@ import { resolveConfiguredRealtimeVoiceProvider } from "../talk/provider-resolve
 import type { RealtimeVoiceProviderConfig } from "../talk/provider-types.js";
 import { truncateUtf16Safe } from "../utils.js";
 import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
-import type { MeetingRealtimeEngineConfig } from "./realtime-engine.js";
+import type { MeetingRealtimeEngineConfig } from "./realtime-engine-types.js";
 
 type ResolvedRealtimeProvider = {
   provider: RealtimeVoiceProviderPlugin;

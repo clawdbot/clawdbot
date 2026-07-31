@@ -87,9 +87,10 @@ async function createEngineFixture() {
   if (!callbacks) {
     throw new Error("Expected realtime voice bridge callbacks");
   }
+  const bridgeCallbacks = callbacks;
   return {
     beginOutput,
-    callbacks,
+    callbacks: bridgeCallbacks,
     clearOutput,
     handle,
     handleBargeIn,
@@ -101,19 +102,19 @@ async function createEngineFixture() {
       pending.resolve();
     },
     announceOutputResponse(responseId: string) {
-      callbacks.onEvent?.({
+      bridgeCallbacks.onEvent?.({
         direction: "server",
         responseId,
         type: "response.created",
       });
     },
     sendOutputAudio(audio: Buffer, responseId?: string) {
-      callbacks.onEvent?.({
+      bridgeCallbacks.onEvent?.({
         direction: "server",
         ...(responseId ? { responseId } : {}),
         type: "response.audio.delta",
       });
-      callbacks.onAudio(audio);
+      bridgeCallbacks.onAudio(audio);
     },
     triggerHumanBargeIn(audio = Buffer.from([1])) {
       if (!onHumanBargeIn) {
