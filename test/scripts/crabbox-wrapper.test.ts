@@ -1176,6 +1176,47 @@ describe("scripts/crabbox-wrapper", () => {
     );
   });
 
+  it.each(["azure", "daytona"])(
+    "preserves explicit direct %s commands outside workload routing",
+    (provider) => {
+      const result = runWrapper(
+        "provider: aws, azure, blacksmith-testbox, or daytona\n",
+        ["run", "--provider", provider, "--", "echo ok"],
+        {
+          configJson: {
+            provider,
+            coordinator: "",
+            brokerMode: "",
+            brokerAuth: "missing",
+          },
+          env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0" },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(parseFakeCrabboxOutput(result).args).toContain(provider);
+    },
+  );
+
+  it("keeps Blacksmith outside managed cloud broker auth", () => {
+    const result = runWrapper(
+      "provider: aws, azure, blacksmith-testbox, or daytona\n",
+      ["run", "--provider", "blacksmith-testbox", "--", "echo ok"],
+      {
+        configJson: {
+          provider: "blacksmith-testbox",
+          coordinator: "",
+          brokerMode: "",
+          brokerAuth: "missing",
+        },
+        env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0" },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toContain("blacksmith-testbox");
+  });
+
   it("allows intentional direct Daytona debugging on older Crabbox versions", () => {
     const result = runWrapper(
       "provider: aws, azure, blacksmith-testbox, or daytona\n",

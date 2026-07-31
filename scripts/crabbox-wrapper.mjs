@@ -922,12 +922,26 @@ function shouldRequireBrokeredCloud(commandArgs, providerName) {
   }
   const canonicalProvider = canonicalProviderName(providerName);
   if (!["aws", "azure", "daytona"].includes(canonicalProvider)) {
+    // Blacksmith Testbox is provider-owned and does not use the managed
+    // coordinator auth required by brokered cloud capacity.
     return false;
   }
   if (commandArgs[0] === "run" || commandArgs[0] === "warmup") {
-    return true;
+    // Workload routing never consumes local cloud credentials. Keep the
+    // shipped direct Azure/Daytona path only for commands outside that policy.
+    return (
+      canonicalProvider === "aws" ||
+      Boolean(requestedWorkload(commandArgs)) ||
+      managedBrokerRequested()
+    );
   }
-  return commandArgs[0] === "actions" && commandArgs[1] === "hydrate";
+  return (
+    commandArgs[0] === "actions" &&
+    commandArgs[1] === "hydrate" &&
+    (canonicalProvider === "aws" ||
+      Boolean(requestedWorkload(commandArgs)) ||
+      managedBrokerRequested())
+  );
 }
 
 function directCloudOverrideEnabled(providerName) {
@@ -953,6 +967,11 @@ function managedBrokerAuthConfigured() {
   }
   managedBrokerAuthConfiguredCache = checkedOutput(binary, ["whoami"]).status === 0;
   return managedBrokerAuthConfiguredCache;
+}
+
+function managedBrokerRequested() {
+  const parsed = resolvedCrabboxConfig();
+  return Boolean(parsed?.coordinator && parsed?.brokerMode === "managed");
 }
 
 function enforceBrokeredDaytonaVersion(commandArgs, providerName, versionText) {
