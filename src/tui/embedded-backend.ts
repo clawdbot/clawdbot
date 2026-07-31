@@ -284,15 +284,11 @@ function resolveDeltaPayload(text: string, previousText: string | undefined) {
   return { deltaText: text.slice(previousText.length) };
 }
 
-function createQueuedRunReadiness() {
-  let resolve: (() => void) | undefined;
+function createQueuedRunReadiness(predecessor?: Promise<void>) {
+  let resolveReady!: () => void;
   const promise = new Promise<void>((ready) => {
-    resolve = ready;
+    resolveReady = ready;
   });
-  if (!resolve) {
-    throw new Error("Expected queue readiness resolver to be initialized");
-  }
-  const resolveReady = resolve;
   let settled = false;
   return {
     promise,
@@ -301,7 +297,8 @@ function createQueuedRunReadiness() {
         return;
       }
       settled = true;
-      resolveReady();
+      // A canceled queue slot must keep later turns behind its live predecessor.
+      void (predecessor?.then(resolveReady, resolveReady) ?? resolveReady());
     },
   };
 }
@@ -524,7 +521,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       }
     }
     const controller = new AbortController();
-    const queuedRunReadiness = createQueuedRunReadiness();
+    const queuedRunReadiness = createQueuedRunReadiness(queuedAfter?.promise);
     this.runs.set(runId, {
       sessionKey: opts.sessionKey,
       agentId,
@@ -1295,21 +1292,24 @@ export class EmbeddedTuiBackend implements TuiBackend {
       metadata.error && typeof metadata.error === "object" && "message" in metadata.error
         ? metadata.error.message
         : metadata.error;
-    const outcome = buildAgentRunTerminalOutcome({
-      status:
-        stopReason === "timeout" || metadata.status === "timeout" || metadata.timeoutPhase
-          ? "timeout"
-          : aborted ||
-              metadata.error ||
-              [metadata.status, options.phase, stopReason].includes("error")
-            ? "error"
-            : "ok",
-      error: terminalError ? formatTuiErrorMessage(terminalError) : undefined,
-      stopReason,
-      livenessState: metadata.livenessState,
-      timeoutPhase: metadata.timeoutPhase,
-      providerStarted: metadata.providerStarted,
-    });
+    const outcome =
+      "reason" in metadata
+        ? (metadata as ReturnType<typeof buildAgentRunTerminalOutcome>)
+        : buildAgentRunTerminalOutcome({
+            status:
+              stopReason === "timeout" || metadata.status === "timeout" || metadata.timeoutPhase
+                ? "timeout"
+                : aborted ||
+                    metadata.error ||
+                    [metadata.status, options.phase, stopReason].includes("error")
+                  ? "error"
+                  : "ok",
+            error: terminalError ? formatTuiErrorMessage(terminalError) : undefined,
+            stopReason,
+            livenessState: metadata.livenessState,
+            timeoutPhase: metadata.timeoutPhase,
+            providerStarted: metadata.providerStarted,
+          });
     if (outcome.reason === "completed") {
       return false;
     }

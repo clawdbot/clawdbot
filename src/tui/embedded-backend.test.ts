@@ -1464,6 +1464,67 @@ describe("EmbeddedTuiBackend", () => {
     expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps later queued turns behind the active provider when an intermediate turn is canceled", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const active = deferred<{ payloads: Array<{ text: string }>; meta: Record<string, unknown> }>();
+    let activeSignal: AbortSignal | undefined;
+    agentCommandFromIngressMock
+      .mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
+        activeSignal = opts.abortSignal;
+        return active.promise;
+      })
+      .mockResolvedValueOnce({ payloads: [{ text: "the later turn completed" }], meta: {} });
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+      cfg: { messages: { queue: { mode: "followup" } } },
+      canonicalKey: sessionKey,
+      storePath: "/tmp/openclaw-sessions.json",
+      store: {},
+      entry: { queueDebounceMs: 0 },
+    }));
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = ({ event, payload }) => events.push({ event, payload });
+    backend.start();
+
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "first",
+      runId: "queue-first",
+    });
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "second",
+      runId: "queue-second",
+    });
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "third",
+      runId: "queue-third",
+    });
+    await backend.abortChat({ sessionKey: "agent:main:main", runId: "queue-second" });
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: {
+        runId: "queue-second",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        state: "aborted",
+      },
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(activeSignal?.aborted).toBe(false);
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+
+    active.resolve({ payloads: [{ text: "the active turn completed" }], meta: {} });
+    await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2));
+    expect(agentCommandFromIngressMock.mock.calls[1]?.[0]).toMatchObject({
+      runId: "queue-third",
+      message: "third",
+    });
+  });
+
   it("steers same-session sends into the active local run", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const first = deferred<{
@@ -2123,6 +2184,39 @@ describe("EmbeddedTuiBackend", () => {
       },
     });
     expect(JSON.stringify(events)).not.toContain(secret);
+  });
+
+  it("preserves a wrapped canonical cancellation without redundant abort metadata", async () => {
+    const { AgentRunTerminalOutcomeError } =
+      await import("../agents/agent-run-terminal-outcome.js");
+    agentCommandFromIngressMock.mockRejectedValueOnce(
+      new AgentRunTerminalOutcomeError(new Error("underlying cancellation"), {
+        reason: "cancelled",
+        status: "error",
+      }),
+    );
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = ({ event, payload }) => events.push({ event, payload });
+    backend.start();
+
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "preserve the canonical cancellation",
+      runId: "wrapped-cancellation",
+    });
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: {
+        runId: "wrapped-cancellation",
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        state: "aborted",
+      },
+    });
   });
 
   it("preserves a yielded parent turn in the embedded session projection", async () => {
