@@ -37,12 +37,12 @@ export function createSlackReadClient(token: string, options: WebClientOptions =
 }
 
 export function createSlackStartupAuthClient(token: string, options: WebClientOptions = {}) {
-  // Startup identity stays degraded until restart after auth.test fails. Retry one transient
-  // transport failure before committing that state, without delaying on Slack rate limits.
+  // Startup identity stays degraded until restart after auth.test fails. Retry two transient
+  // transport failures before committing that state, without delaying on Slack rate limits.
   return createSlackWebClient(token, {
     ...options,
     rejectRateLimitedCalls: true,
-    retryConfig: { retries: 1, minTimeout: 0 },
+    retryConfig: { retries: 2, minTimeout: 0 },
     timeout: 10_000,
   });
 }

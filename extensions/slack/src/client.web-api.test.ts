@@ -188,10 +188,11 @@ afterEach(() => {
 });
 
 describe("Slack Web API routing", () => {
-  it("retries one transient startup auth failure", async () => {
+  it("retries two transient startup auth failures", async () => {
     const fetchMock = vi
       .fn()
       .mockRejectedValueOnce(new Error("request timed out"))
+      .mockRejectedValueOnce(new Error("connection reset"))
       .mockResolvedValueOnce(
         new Response(JSON.stringify({ ok: true, team_id: "TMOCK", user_id: "UMOCK" }), {
           status: 200,
@@ -206,7 +207,7 @@ describe("Slack Web API routing", () => {
       team_id: "TMOCK",
       user_id: "UMOCK",
     });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("does not retry a permanent startup auth error", async () => {
