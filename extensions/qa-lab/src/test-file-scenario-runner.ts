@@ -295,13 +295,13 @@ async function runScenarioCommandSteps(params: {
       const timeoutMs =
         params.scenario.execution.kind === "script"
           ? (params.scenario.execution.timeoutMs ?? params.commandTimeoutMs)
-          : undefined;
+          : params.commandTimeoutMs;
       const result = await params.runCommand({
         command: step.command,
         args: step.args,
         cwd: params.repoRoot,
         env: params.env,
-        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        timeoutMs,
       });
       if (result.stdout) {
         logChunks.push(result.stdout);
