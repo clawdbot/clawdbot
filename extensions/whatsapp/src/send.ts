@@ -240,7 +240,15 @@ export async function sendMessageWhatsApp(
     logger.info({ jid: redactedJid, hasMedia }, "sending message");
     if (!isWhatsAppNewsletterJid(jid)) {
       await active.assertSendReady?.(to);
-      await active.sendComposingTo(to);
+      try {
+        await active.sendComposingTo(to);
+      } catch (err) {
+        // Typing is optional; a failed chatstate update must not block the actual message.
+        logger.warn(
+          { err: String(err), jid: redactedJid },
+          "failed to send composing presence; continuing message delivery",
+        );
+      }
     }
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;

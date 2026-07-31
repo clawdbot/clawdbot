@@ -142,6 +142,40 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
   });
 
+  it.each([
+    { name: "text", mediaUrl: undefined },
+    { name: "media", mediaUrl: "/tmp/pic.jpg" },
+  ])("still sends $name when composing presence fails", async ({ mediaUrl }) => {
+    const mediaBuffer = Buffer.from("img");
+    if (mediaUrl) {
+      loadWebMediaMock.mockResolvedValueOnce({
+        buffer: mediaBuffer,
+        contentType: "image/jpeg",
+        kind: "image",
+      });
+    }
+    sendComposingTo.mockRejectedValueOnce(new Error("presence update unavailable"));
+
+    await expect(
+      sendMessageWhatsApp("+1555", "hi", {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+        ...(mediaUrl ? { mediaUrl } : {}),
+      }),
+    ).resolves.toEqual({
+      messageId: "msg123",
+      toJid: "1555@s.whatsapp.net",
+    });
+
+    expect(sendComposingTo).toHaveBeenCalledWith("+1555");
+    expect(sendMessage).toHaveBeenCalledWith(
+      "+1555",
+      "hi",
+      mediaUrl ? mediaBuffer : undefined,
+      mediaUrl ? "image/jpeg" : undefined,
+    );
+  });
+
   it("re-chunks after WhatsApp marker expansion", async () => {
     const onDeliveryResult = vi.fn();
     await sendMessageWhatsApp("+1555", Array.from({ length: 8 }, () => "`x`").join(" "), {
