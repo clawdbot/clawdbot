@@ -429,6 +429,16 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
     expect(requiresApproval(command, ["npm", "--dry-run", "install", "openclaw"])).toBe(false);
   });
 
+  it("forwards info-shaped arguments that follow a package execution target", () => {
+    const command = "npx openclaw gateway --token --help";
+    expect(requiresApproval(command, ["npx", "openclaw", "gateway", "--token", "--help"])).toBe(
+      true,
+    );
+    expect(
+      requiresApproval("npx --help openclaw gateway", ["npx", "--help", "openclaw", "gateway"]),
+    ).toBe(false);
+  });
+
   it.each([
     [
       "hash -p /usr/local/bin/openclaw oc; oc gateway restart",

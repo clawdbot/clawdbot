@@ -235,20 +235,37 @@ function hasEffectivePackageNoExecute(argv: readonly string[], start: number): b
   );
 }
 
-function hasEffectivePackageInfoOnly(argv: readonly string[], start: number): boolean {
+function hasEffectivePackageInfoOnly(
+  argv: readonly string[],
+  start: number,
+  end = argv.length,
+): boolean {
+  const optionArgv = argv.slice(start, end);
   return (
     lifecycleHasEffectiveBooleanOption(
-      argv,
-      start,
+      optionArgv,
+      0,
       PACKAGE_HELP_OPTIONS,
       PACKAGE_TARGET_OPTIONS_WITH_VALUE,
     ) ||
     lifecycleHasEffectiveBooleanOption(
-      argv,
-      start,
+      optionArgv,
+      0,
       PACKAGE_VERSION_OPTIONS,
       PACKAGE_TARGET_OPTIONS_WITH_VALUE,
     )
+  );
+}
+
+function packageRunnerHasInfoOnlyBeforeTarget(
+  argv: readonly string[],
+  start: number,
+  optionsWithValue: ReadonlySet<string> = PACKAGE_TARGET_OPTIONS_WITH_VALUE,
+): boolean {
+  return hasEffectivePackageInfoOnly(
+    argv,
+    start,
+    scanFirstPositional(argv, start, optionsWithValue),
   );
 }
 
@@ -309,10 +326,10 @@ export function resolveLifecyclePackageRunnerArgv(
         ? { kind: "approval-required" }
         : { kind: "not-runner" };
   }
-  if (hasEffectivePackageInfoOnly(argv, 1)) {
-    return { kind: "not-runner" };
-  }
   if (["bunx", "npx"].includes(executable)) {
+    if (packageRunnerHasInfoOnlyBeforeTarget(argv, 1, PACKAGE_EXEC_TARGET_OPTIONS_WITH_VALUE)) {
+      return { kind: "not-runner" };
+    }
     const inline = resolveInlineCommand(argv, 1);
     const resolved = inline ?? packageTarget(argv, 1, PACKAGE_EXEC_TARGET_OPTIONS_WITH_VALUE);
     if (resolved?.length) {
@@ -332,6 +349,9 @@ export function resolveLifecyclePackageRunnerArgv(
   const subcommandScan = scanPackageSubcommand(argv, 1);
   const subcommandIndex = subcommandScan.index;
   const subcommand = normalizedToken(argv[subcommandIndex]);
+  if (hasEffectivePackageInfoOnly(argv, 1, subcommandIndex)) {
+    return { kind: "not-runner" };
+  }
   if (subcommandScan.ambiguousOption && looksLikeUnresolvedLifecycleRunner(argv)) {
     return { kind: "approval-required" };
   }
@@ -346,11 +366,23 @@ export function resolveLifecyclePackageRunnerArgv(
     return { kind: "approval-required" };
   }
   if (executable === "bun" && ["run", "x"].includes(subcommand)) {
+    if (packageRunnerHasInfoOnlyBeforeTarget(argv, subcommandIndex + 1)) {
+      return { kind: "not-runner" };
+    }
     const resolved = packageTarget(argv, subcommandIndex + 1);
     if (resolved?.length) {
       return resolvedPackageRunnerPlan(resolved);
     }
   } else if (executable === "npm" && ["exec", "x"].includes(subcommand)) {
+    if (
+      packageRunnerHasInfoOnlyBeforeTarget(
+        argv,
+        subcommandIndex + 1,
+        PACKAGE_EXEC_TARGET_OPTIONS_WITH_VALUE,
+      )
+    ) {
+      return { kind: "not-runner" };
+    }
     const inline = resolveInlineCommand(argv, subcommandIndex + 1);
     const resolved =
       inline ?? packageTarget(argv, subcommandIndex + 1, PACKAGE_EXEC_TARGET_OPTIONS_WITH_VALUE);
@@ -358,21 +390,33 @@ export function resolveLifecyclePackageRunnerArgv(
       return resolvedPackageRunnerPlan(resolved);
     }
   } else if (executable === "npm" && ["run", "run-script", "rum", "urn"].includes(subcommand)) {
+    if (packageRunnerHasInfoOnlyBeforeTarget(argv, subcommandIndex + 1)) {
+      return { kind: "not-runner" };
+    }
     const resolved = packageTarget(argv, subcommandIndex + 1);
     if (resolved?.length) {
       return resolvedPackageRunnerPlan(resolved);
     }
   } else if (["pnpm", "yarn"].includes(executable) && subcommand === "dlx") {
+    if (packageRunnerHasInfoOnlyBeforeTarget(argv, subcommandIndex + 1)) {
+      return { kind: "not-runner" };
+    }
     const resolved = packageTarget(argv, subcommandIndex + 1);
     if (resolved?.length) {
       return resolvedPackageRunnerPlan(resolved);
     }
   } else if (["pnpm", "yarn"].includes(executable) && subcommand === "exec") {
+    if (packageRunnerHasInfoOnlyBeforeTarget(argv, subcommandIndex + 1)) {
+      return { kind: "not-runner" };
+    }
     const resolved = packageTarget(argv, subcommandIndex + 1);
     if (resolved?.length) {
       return resolvedPackageRunnerPlan(resolved);
     }
   } else if (["pnpm", "yarn"].includes(executable) && subcommand === "run") {
+    if (packageRunnerHasInfoOnlyBeforeTarget(argv, subcommandIndex + 1)) {
+      return { kind: "not-runner" };
+    }
     const resolved = packageTarget(argv, subcommandIndex + 1);
     if (resolved?.length) {
       return resolvedPackageRunnerPlan(resolved);

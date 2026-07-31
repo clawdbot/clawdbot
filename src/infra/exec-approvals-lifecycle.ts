@@ -24,6 +24,7 @@ import {
 } from "./exec-approvals-lifecycle-patterns.js";
 import {
   commandHasPowerShellLifecyclePipeline as pipelineNeedsApproval,
+  powerShellArgvUsesWhatIf,
   powerShellAliasLifecycleInvocationRequiresApproval as powerShellAliasNeedsApproval,
   resolvePowerShellStartProcessOpenClawArgv,
 } from "./exec-approvals-lifecycle-powershell.js";
@@ -217,6 +218,9 @@ function classifyProcessMutation(
   shellContext: ShellContext,
 ): boolean {
   const executable = normalizeExecutableToken(argv[0] ?? "");
+  if (shellContext === "powershell" && powerShellArgvUsesWhatIf(argv)) {
+    return false;
+  }
   if (["killall", "pkill"].includes(executable)) {
     if (hasHelpOrVersion(argv, new Set(["-l", "--list"])) || argvUsesSignalZero(argv)) {
       return false;

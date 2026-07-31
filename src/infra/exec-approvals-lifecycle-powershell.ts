@@ -153,6 +153,17 @@ function powerShellSwitchValue(token: string): boolean | null {
   return null;
 }
 
+/** Return true only when the final effective PowerShell WhatIf switch enables preview mode. */
+export function powerShellArgvUsesWhatIf(argv: readonly string[]): boolean {
+  let whatIf = false;
+  for (const token of argv.slice(1)) {
+    if (optionName(token) === "-whatif") {
+      whatIf = powerShellSwitchValue(token) === true;
+    }
+  }
+  return whatIf;
+}
+
 function looksLikeOpenClawSelector(token: string, allowUnresolved: boolean): boolean {
   const normalized = token
     .trim()
@@ -261,6 +272,9 @@ function isPowerShellIdentityFilter(argv: readonly string[]): boolean {
 }
 
 function isPowerShellPipelineMutation(argv: readonly string[]): boolean {
+  if (powerShellArgvUsesWhatIf(argv)) {
+    return false;
+  }
   const mutations = new Set([
     "kill",
     "remove-service",

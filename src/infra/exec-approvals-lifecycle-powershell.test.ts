@@ -145,6 +145,34 @@ describe("OpenClaw PowerShell lifecycle edges", () => {
     ).toBe(true);
   });
 
+  it("honors only an effective PowerShell WhatIf preview", () => {
+    expect(
+      requiresApproval("Stop-Process -Name OpenClaw -WhatIf", [
+        "Stop-Process",
+        "-Name",
+        "OpenClaw",
+        "-WhatIf",
+      ]),
+    ).toBe(false);
+    expect(
+      requiresApproval("Stop-Process -Name OpenClaw -WhatIf:$false", [
+        "Stop-Process",
+        "-Name",
+        "OpenClaw",
+        "-WhatIf:$false",
+      ]),
+    ).toBe(true);
+    expect(
+      requiresApproval("Get-Service OpenClaw | Restart-Service -WhatIf", [
+        "Get-Service",
+        "OpenClaw",
+        "|",
+        "Restart-Service",
+        "-WhatIf",
+      ]),
+    ).toBe(false);
+  });
+
   it("inspects mutations nested in pipeline script blocks", () => {
     const command = "Get-Process OpenClaw | ForEach-Object { Stop-Process -InputObject $_ }";
     expect(
