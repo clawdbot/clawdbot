@@ -197,6 +197,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         OPENCLAW_TASK_SCRIPT_NAME: "work.cmd",
         OPENCLAW_TASK_SCRIPT: "C:\\temp\\work.cmd",
         OPENCLAW_SERVICE_KIND: "node",
+        OpenClaw_Home: "C:\\temp\\case-variant",
+        openclaw_config_path: "C:\\temp\\case-variant\\openclaw.json",
         OPENAI_API_KEY: "secret",
       },
       enabled: true,
@@ -222,6 +224,20 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(env.OPENCLAW_TASK_SCRIPT_NAME).toBeUndefined();
     expect(env.OPENCLAW_TASK_SCRIPT).toBeUndefined();
     expect(env.OPENCLAW_SERVICE_KIND).toBeUndefined();
+    expect(
+      Object.keys(env).filter((key) =>
+        [
+          "OPENCLAW_HOME",
+          "OPENCLAW_PROFILE",
+          "OPENCLAW_STATE_DIR",
+          "OPENCLAW_CONFIG_PATH",
+          "OPENCLAW_WINDOWS_TASK_NAME",
+          "OPENCLAW_TASK_SCRIPT_NAME",
+          "OPENCLAW_TASK_SCRIPT",
+          "OPENCLAW_SERVICE_KIND",
+        ].includes(key.toUpperCase()),
+      ),
+    ).toEqual([]);
   });
 
   it("keeps isolated installer state when no managed service is used", () => {

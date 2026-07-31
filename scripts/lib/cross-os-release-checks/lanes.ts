@@ -397,7 +397,7 @@ export async function runInstallerFreshSuite(
   const usesManagedGateway = shouldUseManagedGatewayService();
   const useManagedGatewayAfterInstall = shouldUseManagedGatewayForInstallerRuntime();
   const manualGateway: { current: GatewayHandle | null } = { current: null };
-  let managedHostLease: ManagedGatewayInstallerHostLease | null = null;
+  const managedHostLease: { current: ManagedGatewayInstallerHostLease | null } = { current: null };
   let managedHostOwned = false;
   let managedHostEnv: NodeJS.ProcessEnv | null = null;
   let managedHostCliPath = "";
@@ -453,7 +453,7 @@ export async function runInstallerFreshSuite(
       if (!accountHome) {
         throw new Error("Managed installer service checks require the host account home.");
       }
-      managedHostLease = acquireManagedGatewayInstallerHostLease(accountHome);
+      managedHostLease.current = acquireManagedGatewayInstallerHostLease(accountHome);
       assertManagedGatewayInstallerHostAvailable({
         accountHome,
         serviceInstalled: false,
@@ -615,12 +615,13 @@ export async function runInstallerFreshSuite(
   }
 
   let managedCleanupError: Error | undefined;
-  if (managedHostLease) {
+  const acquiredManagedHostLease = managedHostLease.current;
+  if (acquiredManagedHostLease) {
     let hostCleanupError: Error | undefined;
     try {
       if (managedHostOwned && managedHostEnv && managedHostCliPath) {
         await cleanupManagedGatewayInstallerHost({
-          accountHome: managedHostLease.accountHome,
+          accountHome: acquiredManagedHostLease.accountHome,
           cliPath: managedHostCliPath,
           env: managedHostEnv,
           lane,
@@ -633,7 +634,7 @@ export async function runInstallerFreshSuite(
     }
     let leaseReleaseError: Error | undefined;
     try {
-      managedHostLease.release();
+      acquiredManagedHostLease.release();
     } catch (error) {
       leaseReleaseError = error instanceof Error ? error : new Error(formatError(error));
     }
@@ -927,21 +928,33 @@ export function resolveManagedGatewayInstallerEnv(params: {
   }
   const accountHome = params.accountHome ?? userInfo().homedir;
   const hostEnv = params.hostEnv ?? process.env;
-  return {
+  const env: NodeJS.ProcessEnv = {
     ...params.env,
     HOME: accountHome,
     USERPROFILE: accountHome,
     APPDATA: hostEnv.APPDATA,
     LOCALAPPDATA: hostEnv.LOCALAPPDATA,
-    OPENCLAW_HOME: undefined,
-    OPENCLAW_PROFILE: undefined,
-    OPENCLAW_STATE_DIR: undefined,
-    OPENCLAW_CONFIG_PATH: undefined,
-    OPENCLAW_WINDOWS_TASK_NAME: undefined,
-    OPENCLAW_TASK_SCRIPT_NAME: undefined,
-    OPENCLAW_TASK_SCRIPT: undefined,
-    OPENCLAW_SERVICE_KIND: undefined,
   };
+  const isolatedIdentityKeys = new Set(
+    [
+      "OPENCLAW_HOME",
+      "OPENCLAW_PROFILE",
+      "OPENCLAW_STATE_DIR",
+      "OPENCLAW_CONFIG_PATH",
+      "OPENCLAW_WINDOWS_TASK_NAME",
+      "OPENCLAW_TASK_SCRIPT_NAME",
+      "OPENCLAW_TASK_SCRIPT",
+      "OPENCLAW_SERVICE_KIND",
+    ].map((key) => key.toUpperCase()),
+  );
+  // Windows environment keys are case-insensitive. Remove every casing variant
+  // so the installed CLI cannot inherit the isolated lane identity.
+  for (const key of Object.keys(env)) {
+    if (isolatedIdentityKeys.has(key.toUpperCase())) {
+      delete env[key];
+    }
+  }
+  return env;
 }
 
 export function parseManagedGatewayServiceInstalled(result: CommandResult): boolean {
