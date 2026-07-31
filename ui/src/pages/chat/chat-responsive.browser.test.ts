@@ -1,5 +1,5 @@
 // Control UI tests cover chat responsive behavior.
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import {
@@ -10,6 +10,10 @@ import {
   type ControlUiMockGatewayScenario,
   type ControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
+import {
+  launchChromiumTestContext,
+  type ChromiumTestContext,
+} from "../../test-helpers/playwright-chromium.ts";
 
 const VIEWPORTS = [
   [320, 568],
@@ -41,7 +45,7 @@ const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   ? describe
   : describe.skip;
 
-let sharedBrowser: Browser | null = null;
+let sharedBrowser: ChromiumTestContext | null = null;
 let realChatServer: ControlUiE2eServer | null = null;
 
 function installResponsiveChatGateway(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
@@ -449,11 +453,13 @@ async function openFixture(width: number, height: number, opts: ChatFixtureOptio
 }
 
 async function openBrowserPage(width: number, height: number): Promise<Page> {
-  sharedBrowser ??= await chromium.launch({
+  sharedBrowser ??= await launchChromiumTestContext({
     executablePath: chromiumExecutablePath,
     headless: true,
   });
-  return await sharedBrowser.newPage({ viewport: { width, height } });
+  const page = await sharedBrowser.context.newPage();
+  await page.setViewportSize({ width, height });
+  return page;
 }
 
 async function closeBrowserPage(page: Page): Promise<void> {
@@ -543,7 +549,7 @@ async function expectNoHorizontalOverflow(page: Page) {
 
 describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   beforeAll(async () => {
-    sharedBrowser = await chromium.launch({
+    sharedBrowser = await launchChromiumTestContext({
       executablePath: chromiumExecutablePath,
       headless: true,
     });

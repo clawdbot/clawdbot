@@ -1,11 +1,15 @@
 // Control UI tests cover sessions behavior.
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import {
   canRunPlaywrightChromium,
   resolvePlaywrightChromiumExecutablePath,
 } from "../../test-helpers/control-ui-e2e.ts";
+import {
+  launchChromiumTestContext,
+  type ChromiumTestContext,
+} from "../../test-helpers/playwright-chromium.ts";
 
 const VIEWPORTS = [
   [375, 812],
@@ -238,22 +242,19 @@ async function closeFixture(fixture: BrowserFixture): Promise<void> {
 }
 
 describeBrowserLayout("sessions responsive browser layout", () => {
-  let browser: Browser;
+  let chromiumTestContext: ChromiumTestContext;
   let context: BrowserContext;
 
   beforeAll(async () => {
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
-    try {
-      context = await browser.newContext();
-    } catch (error) {
-      await browser.close().catch(() => {});
-      throw error;
-    }
+    chromiumTestContext = await launchChromiumTestContext({
+      executablePath: chromiumExecutablePath,
+      headless: true,
+    });
+    context = chromiumTestContext.context;
   });
 
   afterAll(async () => {
-    await context?.close().catch(() => {});
-    await browser?.close().catch(() => {});
+    await chromiumTestContext?.close();
   });
 
   it.each(VIEWPORTS)("keeps the session roster visible at %dx%d", async (width, height) => {
