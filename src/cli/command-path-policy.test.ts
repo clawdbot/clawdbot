@@ -220,6 +220,7 @@ describe("command-path-policy", () => {
       bypassConfigGuard: true,
       ensureCliPath: false,
       loadPlugins: "never",
+      ownsProtocolStdout: true,
       networkProxy: "bypass",
     });
     expectResolvedPolicy(["config", "set"], {

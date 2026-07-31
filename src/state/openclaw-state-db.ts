@@ -158,6 +158,41 @@ export function clearOpenClawStateDatabaseOpenFailure(pathname: string): void {
   terminalOpenLatch.clear(pathname);
 }
 
+/** Reject shared-state access after a process-local terminal failure. */
+function assertOpenClawStateDatabaseOpenAllowed(options: OpenClawStateDatabaseOptions = {}): void {
+  const pathname = resolveDatabasePath(options);
+  const terminalFailure = terminalOpenLatch.get(pathname);
+  if (terminalFailure) {
+    throw terminalFailure;
+  }
+}
+
+/** Reject a fresh shared-state open after known corruption until repair clears it. */
+export function assertOpenClawStateDatabaseFreshOpenAllowed(
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  assertOpenClawStateDatabaseOpenAllowed(options);
+  const env = options.env ?? process.env;
+  const pathname = resolveDatabasePath(options);
+  let quarantineFailure: Error | undefined;
+  try {
+    const quarantine = readOpenClawDatabaseQuarantine(pathname, { env });
+    if (quarantine) {
+      quarantineFailure = createOpenClawDatabaseVerificationError(
+        "state",
+        pathname,
+        quarantine.reason,
+      );
+    }
+  } catch {
+    // A broken quarantine store must not brick every state read.
+    // The process latch and daily verifier still cover known damage.
+  }
+  if (quarantineFailure) {
+    throw quarantineFailure;
+  }
+}
+
 type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_meta">;
 const stateDbLog = createSubsystemLogger("state/db");
 
@@ -425,26 +460,11 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
 export async function openExistingOpenClawStateDatabaseReadOnly(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<OpenClawStateDatabase | undefined> {
-  const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
   if (!existsSync(pathname)) {
     return undefined;
   }
-  const terminalFailure = terminalOpenLatch.get(pathname);
-  if (terminalFailure) {
-    throw terminalFailure;
-  }
-  try {
-    const quarantine = readOpenClawDatabaseQuarantine(pathname, { env });
-    if (quarantine) {
-      throw createOpenClawDatabaseVerificationError("state", pathname, quarantine.reason);
-    }
-  } catch (error) {
-    if (error instanceof Error && error.name === "SqliteIntegrityError") {
-      throw error;
-    }
-    // A broken quarantine store must not brick read-only diagnostics.
-  }
+  assertOpenClawStateDatabaseFreshOpenAllowed(options);
   const prepared = await prepareSqliteReadOnlyLocation(pathname);
   let db: DatabaseSync;
   try {
@@ -549,10 +569,7 @@ export function openOpenClawStateDatabase(
   const pathname = resolveDatabasePath(options);
   // Latched paths are quarantined: the recorder closed any live handle, and
   // every open fails fast here until doctor repairs the file and clears it.
-  const terminalFailure = terminalOpenLatch.get(pathname);
-  if (terminalFailure) {
-    throw terminalFailure;
-  }
+  assertOpenClawStateDatabaseOpenAllowed(options);
   const cached = cachedDatabases.get(pathname);
   if (cached?.db.isOpen) {
     return cached;
@@ -563,23 +580,7 @@ export function openOpenClawStateDatabase(
     clearNodeSqliteKyselyCacheForDatabase(cached.db);
     cachedDatabases.delete(pathname);
   }
-  let quarantineFailure: Error | undefined;
-  try {
-    const quarantine = readOpenClawDatabaseQuarantine(pathname, { env });
-    if (quarantine) {
-      quarantineFailure = createOpenClawDatabaseVerificationError(
-        "state",
-        pathname,
-        quarantine.reason,
-      );
-    }
-  } catch {
-    // A broken quarantine store must not brick every state open.
-    // The process latch and daily verifier still cover known damage.
-  }
-  if (quarantineFailure) {
-    throw quarantineFailure;
-  }
+  assertOpenClawStateDatabaseFreshOpenAllowed(options);
   ensureOpenClawStatePermissions(pathname, env);
   const db = openNodeSqliteDatabase(pathname);
   enableNodeSqliteKyselyStatementCache(db);

@@ -361,6 +361,13 @@ describe("JSON console style process output", () => {
     expect(output).not.toHaveProperty("message");
   });
 
+  it("keeps config file output as one raw path", async () => {
+    const result = await runCliProcess({ args: ["config", "file"], config: loggingConfig });
+
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe(`${result.fixture.configPath}\n`);
+  });
+
   it("keeps typed recommendation machine output as a raw array", async () => {
     const result = await runCliProcess({
       args: ["onboard", "recommendations", "--json"],
