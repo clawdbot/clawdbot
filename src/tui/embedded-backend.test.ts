@@ -2757,6 +2757,63 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
+  it("keeps the bounded post-turn timeout visible through canceled queue predecessors", async () => {
+    await withEnvAsync({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "5" }, async () => {
+      const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+      const active = deferred<{
+        payloads: Array<{ text: string }>;
+        meta: Record<string, unknown>;
+      }>();
+      agentCommandFromIngressMock.mockReturnValueOnce(active.promise);
+      loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+        cfg: { messages: { queue: { mode: "followup" } } },
+        canonicalKey: sessionKey,
+        storePath: "/tmp/openclaw-sessions.json",
+        store: {},
+        entry: { queueDebounceMs: 0 },
+      }));
+      const backend = new EmbeddedTuiBackend();
+      const events: Array<{ event: string; payload: unknown }> = [];
+      backend.onEvent = ({ event, payload }) => events.push({ event, payload });
+      backend.start();
+      await backend.sendChat({
+        sessionKey: "agent:main:main",
+        message: "first",
+        runId: "grace-first",
+      });
+      await backend.sendChat({
+        sessionKey: "agent:main:main",
+        message: "second",
+        runId: "grace-second",
+      });
+      await backend.sendChat({
+        sessionKey: "agent:main:main",
+        message: "third",
+        runId: "grace-third",
+      });
+
+      registeredListener?.({
+        runId: "grace-first",
+        stream: "lifecycle",
+        data: { phase: "finishing", stopReason: "stop" },
+      });
+      await backend.abortChat({ sessionKey: "agent:main:main", runId: "grace-second" });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+      expect(events).toContainEqual({
+        event: "chat",
+        payload: expect.objectContaining({
+          runId: "grace-third",
+          state: "error",
+          errorMessage: expect.stringContaining("timed out waiting for previous local run"),
+        }),
+      });
+      active.resolve({ payloads: [{ text: "first eventually settled" }], meta: {} });
+      await flushMicrotasks();
+    });
+  });
+
   it("fails a queued local send immediately when shutdown grace is zero", async () => {
     await withEnvAsync({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "0" }, async () => {
       const { EmbeddedTuiBackend } = await import("./embedded-backend.js");

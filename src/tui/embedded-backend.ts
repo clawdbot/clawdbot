@@ -145,6 +145,7 @@ type LocalRunState = {
     droppedCount: number;
     summaryLines: string[];
   };
+  queuedAfter?: QueuedSessionRun;
   queuedRunReady: Promise<void>;
   markQueuedRunReady: () => void;
 };
@@ -284,27 +285,12 @@ function resolveDeltaPayload(text: string, previousText: string | undefined) {
   return { deltaText: text.slice(previousText.length) };
 }
 
-function createQueuedRunReadiness(predecessor?: QueuedSessionRun) {
-  let resolveReady!: () => void;
+function createQueuedRunReadiness() {
+  let markReady!: () => void;
   const promise = new Promise<void>((ready) => {
-    resolveReady = ready;
+    markReady = ready;
   });
-  let settled = false;
-  return {
-    promise,
-    markReady: () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      // A canceled queue slot must keep later turns behind its live predecessor.
-      void (predecessor
-        ? Promise.allSettled([predecessor.run.queuedRunReady, predecessor.promise]).then(
-            resolveReady,
-          )
-        : resolveReady());
-    },
-  };
+  return { promise, markReady };
 }
 
 async function waitForLocalRunShutdown(promises: Promise<void>[]): Promise<boolean> {
@@ -334,6 +320,10 @@ async function waitForLocalRunShutdown(promises: Promise<void>[]): Promise<boole
 
 async function waitForQueuedLocalRun(previousRun: QueuedSessionRun, runId: string): Promise<void> {
   await previousRun.run.queuedRunReady;
+  if (previousRun.run.controller.signal.aborted && previousRun.run.queuedAfter) {
+    // Preserve canceled-slot ancestry and the live run's bounded maintenance wait.
+    return await waitForQueuedLocalRun(previousRun.run.queuedAfter, runId);
+  }
   if (!previousRun.run.finishing && !previousRun.run.lifecycleEnded) {
     await previousRun.promise;
     return;
@@ -525,7 +515,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       }
     }
     const controller = new AbortController();
-    const queuedRunReadiness = createQueuedRunReadiness(queuedAfter);
+    const queuedRunReadiness = createQueuedRunReadiness();
     this.runs.set(runId, {
       sessionKey: opts.sessionKey,
       agentId,
@@ -538,6 +528,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       finalSent: false,
       registered: false,
       ...(pendingQueue ? { pendingQueue } : {}),
+      ...(queuedAfter ? { queuedAfter } : {}),
       queuedRunReady: queuedRunReadiness.promise,
       markQueuedRunReady: queuedRunReadiness.markReady,
     });
@@ -1468,6 +1459,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
         }
       }
       const activeRun = this.runs.get(params.runId);
+      delete activeRun?.queuedAfter;
       let message = params.message;
       if (activeRun?.pendingQueue) {
         await waitForQueueDebounce(activeRun.pendingQueue, params.controller.signal);
