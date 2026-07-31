@@ -240,7 +240,9 @@ function isPowerShellPipelineMutation(argv: readonly string[]): boolean {
   );
 }
 
-function parsePowerShellOpenClawAlias(argv: readonly string[]): string | null {
+function parsePowerShellAlias(
+  argv: readonly string[],
+): { name: string | undefined; value: string | undefined } | null {
   if (!POWERSHELL_ALIAS_SETTERS.has(normalizeExecutableToken(argv[0] ?? ""))) {
     return null;
   }
@@ -264,12 +266,22 @@ function parsePowerShellOpenClawAlias(argv: readonly string[]): string | null {
   }
   name ??= positionals[0];
   value ??= positionals[1];
-  return name && isOpenClawExecutablePattern(value) ? normalizeExecutableToken(name) : null;
+  return { name, value };
+}
+
+function isDynamicPowerShellAliasReference(value: string | undefined): boolean {
+  const normalized = (value ?? "").trim();
+  return /^[$@([\]{}]/u.test(normalized) || normalized.includes("$(");
 }
 
 /** Return true when a PowerShell alias resolves to a lifecycle-mutating OpenClaw invocation. */
-export function powerShellAliasLifecycleInvocationRequiresApproval(command: string): boolean {
+export function powerShellAliasLifecycleInvocationRequiresApproval(
+  command: string,
+  expandArgv?: (argv: string[]) => { argv: readonly string[]; unresolved: boolean },
+): boolean {
   const openClawAliases = new Set<string>();
+  const unresolvedAliases = new Set<string>();
+  let unresolvedAliasName = false;
   for (const fragment of splitLifecycleCommandText(
     command,
     new Set([";", "|", "\n", "\r"]),
@@ -279,15 +291,40 @@ export function powerShellAliasLifecycleInvocationRequiresApproval(command: stri
     if (!parsed?.length) {
       continue;
     }
-    const alias = parsePowerShellOpenClawAlias(parsed);
-    if (alias) {
-      openClawAliases.add(alias);
+    const expanded = expandArgv?.(parsed) ?? { argv: parsed, unresolved: false };
+    const rawAlias = parsePowerShellAlias(parsed);
+    if (rawAlias) {
+      const resolvedAlias = parsePowerShellAlias(expanded.argv);
+      const rawName = normalizeExecutableToken(rawAlias.name ?? "");
+      const resolvedName = normalizeExecutableToken(resolvedAlias?.name ?? "");
+      const aliasValue = resolvedAlias?.value ?? rawAlias.value;
+      const rawNameIsDynamic = isDynamicPowerShellAliasReference(rawAlias.name);
+      const resolvedNameIsDynamic = isDynamicPowerShellAliasReference(resolvedAlias?.name);
+      const aliasName =
+        resolvedName && !resolvedNameIsDynamic ? resolvedName : rawNameIsDynamic ? "" : rawName;
+      if (!aliasName) {
+        unresolvedAliasName ||= rawNameIsDynamic;
+        continue;
+      }
+      openClawAliases.delete(aliasName);
+      unresolvedAliases.delete(aliasName);
+      if (isOpenClawExecutablePattern(aliasValue)) {
+        openClawAliases.add(aliasName);
+      } else if (
+        expanded.unresolved ||
+        (isDynamicPowerShellAliasReference(rawAlias.value) &&
+          (!resolvedAlias?.value || isDynamicPowerShellAliasReference(resolvedAlias.value)))
+      ) {
+        unresolvedAliases.add(aliasName);
+      }
       continue;
     }
     const invocation = ["&", "."].includes(parsed[0] ?? "") ? parsed.slice(1) : parsed;
+    const aliasName = normalizeExecutableToken(invocation[0] ?? "");
+    const lifecycleInvocation = classifyOpenClawArgv(["openclaw", ...invocation.slice(1)]);
     if (
-      openClawAliases.has(normalizeExecutableToken(invocation[0] ?? "")) &&
-      classifyOpenClawArgv(["openclaw", ...invocation.slice(1)])
+      lifecycleInvocation &&
+      (openClawAliases.has(aliasName) || unresolvedAliases.has(aliasName) || unresolvedAliasName)
     ) {
       return true;
     }
@@ -299,7 +336,7 @@ export function powerShellAliasLifecycleInvocationRequiresApproval(command: stri
 export function commandHasPowerShellLifecyclePipeline(
   command: string,
   allowUnresolved = false,
-  transformArgv?: (argv: string[]) => readonly string[],
+  expandArgv?: (argv: string[]) => { argv: readonly string[]; unresolved: boolean },
 ): boolean {
   const stages = splitLifecycleCommandText(command, new Set(["|"]), "powershell");
   if (stages.length < 2) {
@@ -313,7 +350,8 @@ export function commandHasPowerShellLifecyclePipeline(
     if (!parsedArgv) {
       return false;
     }
-    const argv = transformArgv?.(parsedArgv) ?? parsedArgv;
+    const expanded = expandArgv?.(parsedArgv);
+    const argv = expanded && !expanded.unresolved ? expanded.argv : parsedArgv;
     if (isPowerShellSelection(argv, allowUnresolved)) {
       processOrServiceSource = true;
       selectedOpenClaw = true;

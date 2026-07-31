@@ -2,9 +2,16 @@ import { describe, expect, it } from "vitest";
 import { extractShellSubstitutionCommands } from "./exec-approvals-lifecycle-substitutions.js";
 import { commandRequiresOpenClawLifecycleApproval } from "./exec-approvals.js";
 
-function requiresApproval(command: string, argv: string[]): boolean {
+function requiresApproval(
+  command: string,
+  argv: string[],
+  env?: NodeJS.ProcessEnv,
+  envComplete?: boolean,
+): boolean {
   return commandRequiresOpenClawLifecycleApproval({
     command,
+    env,
+    envComplete,
     platform: "win32",
     segments: [{ raw: command, argv }],
   });
@@ -120,5 +127,18 @@ describe("OpenClaw PowerShell lifecycle edges", () => {
     const command = "Set-Alias oc openclaw; oc exec-policy preset yolo";
     expect(requiresApproval(command, ["oc", "exec-policy", "preset", "yolo"])).toBe(true);
     expect(requiresApproval("Set-Alias oc openclaw; oc status", ["oc", "status"])).toBe(false);
+  });
+
+  it("resolves environment-backed PowerShell alias targets", () => {
+    const command = "Set-Alias oc $env:TOOL; oc gateway restart";
+    expect(requiresApproval(command, ["oc", "gateway", "restart"], { TOOL: "openclaw" })).toBe(
+      true,
+    );
+    expect(requiresApproval(command, ["oc", "gateway", "restart"], { TOOL: "git" })).toBe(false);
+  });
+
+  it("fails closed for unresolved PowerShell alias targets", () => {
+    const command = "Set-Alias oc $env:TOOL; oc gateway restart";
+    expect(requiresApproval(command, ["oc", "gateway", "restart"], {}, false)).toBe(true);
   });
 });

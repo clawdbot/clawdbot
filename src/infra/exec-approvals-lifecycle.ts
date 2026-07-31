@@ -416,10 +416,21 @@ function classifyArgv(
     const nestedEnvironment = environment
       ? { ...environment, shadowedKeys: nestedShadowedKeys }
       : undefined;
+    const expandNestedPowerShellArgv = environment
+      ? (pipelineArgv: string[]) =>
+          expandLifecycleEnvironmentArgv({
+            argv: pipelineArgv,
+            env: environment.env,
+            envComplete: environment.envComplete,
+            dialect: "powershell",
+            platform: environment.platform,
+            shadowedKeys: nestedShadowedKeys,
+          })
+      : undefined;
     if (
       nestedShellContext === "powershell" &&
       (powerShellCalculatedInvocationRequiresApproval(inline) ||
-        powerShellAliasLifecycleInvocationRequiresApproval(inline))
+        powerShellAliasLifecycleInvocationRequiresApproval(inline, expandNestedPowerShellArgv))
     ) {
       return true;
     }
@@ -428,19 +439,7 @@ function classifyArgv(
       commandHasPowerShellLifecyclePipeline(
         inline,
         environment ? !environment.envComplete : false,
-        environment
-          ? (pipelineArgv) => {
-              const expanded = expandLifecycleEnvironmentArgv({
-                argv: pipelineArgv,
-                env: environment.env,
-                envComplete: environment.envComplete,
-                dialect: "powershell",
-                platform: environment.platform,
-                shadowedKeys: nestedShadowedKeys,
-              });
-              return expanded.unresolved ? pipelineArgv : expanded.argv;
-            }
-          : undefined,
+        expandNestedPowerShellArgv,
       )
     ) {
       return true;
@@ -580,8 +579,8 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
     shadowedKeys,
   };
   const dialect = lifecycleCommandShellDialect(undefined, platform);
-  const transformPowerShellArgv = (argv: string[]): readonly string[] => {
-    const expanded = expandLifecycleEnvironmentArgv({
+  const expandPowerShellArgv = (argv: string[]) =>
+    expandLifecycleEnvironmentArgv({
       argv,
       env: params.env,
       envComplete,
@@ -589,13 +588,11 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
       platform,
       shadowedKeys,
     });
-    return expanded.unresolved ? argv : expanded.argv;
-  };
   const shellContext: ShellContext = platform === "win32" ? "powershell" : undefined;
   if (
     (dialect === "powershell" &&
-      powerShellAliasLifecycleInvocationRequiresApproval(params.command)) ||
-    commandHasPowerShellLifecyclePipeline(params.command, !envComplete, transformPowerShellArgv) ||
+      powerShellAliasLifecycleInvocationRequiresApproval(params.command, expandPowerShellArgv)) ||
+    commandHasPowerShellLifecyclePipeline(params.command, !envComplete, expandPowerShellArgv) ||
     commandHasLifecycleSubstitution(params.command, 0, shellContext, params.cwd, environment)
   ) {
     return true;
@@ -631,7 +628,7 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
             commandHasPowerShellLifecyclePipeline(
               segmentCommand,
               !envComplete,
-              transformPowerShellArgv,
+              expandPowerShellArgv,
             )) ||
           commandHasLifecycleSubstitution(
             segmentCommand,
