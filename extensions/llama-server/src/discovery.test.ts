@@ -169,6 +169,38 @@ describe("llama-server discovery", () => {
     expect(maximumActive).toBeLessThanOrEqual(8);
   });
 
+  it("stops scheduling router property probes after the total budget", async () => {
+    const rows = Array.from({ length: 17 }, (_, index) => ({
+      id: `loaded/model-${index}`,
+      object: "model",
+      status: { value: "loaded" },
+    }));
+    const routes: Record<string, RouteValue> = {
+      "http://localhost:8080/health": json({ status: "ok" }),
+      "http://localhost:8080/models": json({ data: rows }),
+    };
+    for (const row of rows) {
+      routes[`http://localhost:8080/props?model=${encodeURIComponent(row.id)}&autoload=false`] =
+        async () => {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 20);
+          });
+          return json({ default_generation_settings: { n_ctx: 8192 } });
+        };
+    }
+    const { guard, requests } = createFetchGuard(routes);
+
+    const result = await discoverLlamaServer({
+      baseUrl: "http://localhost:8080",
+      fetchGuard: guard,
+      cacheTtlMs: 0,
+      timeoutMs: 10,
+    });
+
+    expect(result.kind === "success" ? result.models : []).toHaveLength(17);
+    expect(requests.filter((url) => url.includes("/props?"))).toHaveLength(8);
+  });
+
   it("falls back to /v1/models for an older compatible server", async () => {
     const { guard } = createFetchGuard({
       "http://localhost:8080/health": json({ status: "ok" }),

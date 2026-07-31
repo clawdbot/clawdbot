@@ -275,6 +275,7 @@ export async function discoverLlamaServer(params: {
   }
   const routerMode = rows.some((row) => row.status !== undefined);
   const propsByRowIndex = new Map<number, LlamaServerPropsWire>();
+  const propsDeadline = Date.now() + Math.max(0, timeoutMs);
   const propsRowIndexes = rows
     .map((row, index) => (shouldReadProps(row) ? index : -1))
     .filter((index) => index >= 0)
@@ -284,6 +285,10 @@ export async function discoverLlamaServer(params: {
     offset < propsRowIndexes.length;
     offset += LLAMA_SERVER_ROUTER_PROPS_CONCURRENCY
   ) {
+    const remainingMs = propsDeadline - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
     const results = await Promise.all(
       propsRowIndexes
         .slice(offset, offset + LLAMA_SERVER_ROUTER_PROPS_CONCURRENCY)
@@ -298,7 +303,7 @@ export async function discoverLlamaServer(params: {
             origin: endpoint.origin,
             apiKey: params.apiKey,
             headers: params.headers,
-            timeoutMs,
+            timeoutMs: Math.min(timeoutMs, remainingMs),
             signal: params.signal,
             fetchGuard,
           });
