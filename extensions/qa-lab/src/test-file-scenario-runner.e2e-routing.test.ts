@@ -45,7 +45,18 @@ describe("QA native Vitest scenario routing", () => {
           }
           await fs.writeFile(
             reportArg.slice("--outputFile.json=".length),
-            JSON.stringify({ numFailedTests: 0, numPassedTests: 1, success: true }),
+            JSON.stringify({
+              numFailedTests: 0,
+              numPassedTests: 1,
+              success: true,
+              testResults: [
+                {
+                  name: path.join(repoRoot, testPath),
+                  status: "passed",
+                  assertionResults: [{ fullName: "runs paired node inference", status: "passed" }],
+                },
+              ],
+            }),
             "utf8",
           );
           return { exitCode: 0, stdout: "1 passed\n", stderr: "" };
