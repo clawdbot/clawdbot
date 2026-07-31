@@ -2667,14 +2667,25 @@ describe("package artifact reuse", () => {
       expected_sha: "${{ needs.resolve_target.outputs.revision }}",
       run_buzz: true,
     });
-    expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_buzz").if).toBe("inputs.run_buzz");
-    expect(
-      workflowStep(
-        workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_buzz"),
-        "Upload Buzz QA artifacts",
-      ).with?.name,
-    ).toBe(
+    const buzzJob = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_buzz");
+    expect(buzzJob.if).toBe("inputs.run_buzz");
+    const resolveBuzz = workflowStep(buzzJob, "Resolve Buzz QA runner");
+    expect(resolveBuzz.run).toContain('runner?.commandName === "buzz"');
+    expect(resolveBuzz.run).toContain("selected ref does not declare the Buzz QA runner");
+    expect(workflowStep(buzzJob, "Validate required Buzz QA credential env").if).toBe(
+      "steps.resolve_buzz.outputs.available == 'true'",
+    );
+    expect(workflowStep(buzzJob, "Build private QA runtime").if).toBe(
+      "steps.resolve_buzz.outputs.available == 'true'",
+    );
+    expect(workflowStep(buzzJob, "Run Buzz live lane").if).toBe(
+      "steps.resolve_buzz.outputs.available == 'true'",
+    );
+    expect(workflowStep(buzzJob, "Upload Buzz QA artifacts").with?.name).toBe(
       "${{ inputs.expected_sha != '' && format('release-qa-live-buzz-{0}-{1}', inputs.expected_sha, github.run_attempt) || format('qa-live-buzz-{0}-{1}', github.run_id, github.run_attempt) }}",
+    );
+    expect(workflowStep(buzzJob, "Upload Buzz QA artifacts").with?.path).toBe(
+      "${{ steps.resolve_buzz.outputs.output_dir }}",
     );
   });
 
