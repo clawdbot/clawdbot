@@ -136,7 +136,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
   };
 
   const releaseOutputWriteWaiters = (session: NodeBridgeSession, output?: ChildProcess): void => {
-    for (const waiter of [...session.outputWriteWaiters]) {
+    for (const waiter of session.outputWriteWaiters) {
       if (!output || waiter.output === output) {
         waiter.release();
       }
@@ -281,7 +281,6 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
         return;
       }
       let settled = false;
-      let waiter: NodeOutputWriteWaiter;
       const finish = (error?: Error) => {
         if (settled) {
           return;
@@ -294,7 +293,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
           resolve();
         }
       };
-      waiter = { output, release: () => finish() };
+      const waiter: NodeOutputWriteWaiter = { output, release: () => finish() };
       session.outputWriteWaiters.add(waiter);
       try {
         stdin.write(audio, (error) => finish(error ?? undefined));

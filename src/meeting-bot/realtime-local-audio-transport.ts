@@ -135,7 +135,6 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   const writeOutputChunk = (proc: BridgeProcess, stdin: Writable, audio: Buffer): Promise<void> =>
     new Promise<void>((resolve, reject) => {
       let settled = false;
-      let waiter: OutputWriteWaiter;
       const finish = (error?: Error) => {
         if (settled) {
           return;
@@ -148,7 +147,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
           resolve();
         }
       };
-      waiter = { proc, release: () => finish() };
+      const waiter: OutputWriteWaiter = { proc, release: () => finish() };
       outputWriteWaiters.add(waiter);
       try {
         stdin.write(audio, (error) => finish(error ?? undefined));
@@ -161,7 +160,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       }
     });
   const releaseOutputWriteWaiters = (proc?: BridgeProcess) => {
-    for (const waiter of [...outputWriteWaiters]) {
+    for (const waiter of outputWriteWaiters) {
       if (!proc || waiter.proc === proc) {
         waiter.release();
       }
