@@ -1068,3 +1068,80 @@ describe("skill workshop proposals", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("Skillfy Theme D: workshop apply fresh-agent + rollback ordering", () => {
+  async function pathExists(p: string): Promise<boolean> {
+    try {
+      await fs.access(p);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function rollbackPathFor(proposalId: string): string {
+    return path.join(stateDir, "skill-workshop", "proposals", proposalId, "rollback.json");
+  }
+
+  it("applies a proposal to a fresh agent whose workspace dir does not yet exist", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Fresh Helper",
+      description: "Applies to a brand-new agent workspace",
+      content: "# Fresh Helper\n\nBootstraps itself.\n",
+      createdBy: "skill-workshop",
+      goal: "Fresh-agent apply",
+    });
+
+    // Simulate a fresh/non-default agent: the workspace does not exist yet.
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+    expect(await pathExists(workspaceDir)).toBe(false);
+
+    const applied = await applySkillProposal({ workspaceDir, proposalId: proposal.record.id });
+
+    // The workspace was recreated and the skill written.
+    expect(await pathExists(workspaceDir)).toBe(true);
+    await expect(fs.readFile(applied.targetSkillFile, "utf8")).resolves.toContain("# Fresh Helper");
+  });
+
+  it("writes a rollback record after a successful apply", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Rollback Helper",
+      description: "Records a rollback on success",
+      content: "# Rollback Helper\n",
+      createdBy: "skill-workshop",
+      goal: "Rollback on success",
+    });
+
+    await applySkillProposal({ workspaceDir, proposalId: proposal.record.id });
+
+    expect(await pathExists(rollbackPathFor(proposal.record.id))).toBe(true);
+  });
+
+  it("does not leave an orphan rollback when the skill write fails", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Orphan Helper",
+      description: "No rollback on failed write",
+      content: "# Orphan Helper\n",
+      supportFiles: [{ path: "scripts/run.js", content: "export const run = () => 1;\n" }],
+      createdBy: "skill-workshop",
+      goal: "No orphan rollback",
+    });
+
+    // Block the support-file directory with a file so writeWorkspaceSkill fails (ENOTDIR) after the
+    // target checks pass but before the skill is fully written.
+    const skillDir = path.join(workspaceDir, "skills", "orphan-helper");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, "scripts"), "blocks-the-dir");
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).rejects.toThrow();
+    expect(await pathExists(rollbackPathFor(proposal.record.id))).toBe(false);
+  });
+});

@@ -67,6 +67,7 @@ type FileScanCacheEntry = {
   maxFileBytes: number;
   scanned: boolean;
   findings: SkillScanFinding[];
+  oversize: boolean;
 };
 
 const FILE_SCAN_CACHE = new Map<string, FileScanCacheEntry>();
@@ -86,6 +87,48 @@ const DIR_ENTRY_CACHE = new Map<string, DirEntryCacheEntry>();
 
 export function isScannable(filePath: string): boolean {
   return SCANNABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
+// A symlink in a skill source breaks scan==publish: the directory scanner records only
+// Dirent.isFile()/isDirectory() entries (isSymbolicLink() falls through), but the skill
+// publisher copies links verbatim, so a link's target is published and resolved at load
+// without ever being scanned. Callers that must guarantee coverage use this and fail closed
+// (Skillfy deep-retest: symlink scan!=publish divergence). Bounded by maxEntries so a
+// pathologically large tree cannot be walked unboundedly; a tree that large would also trip
+// the scan's own file-count cap and be refused.
+export async function sourceTreeContainsSymlink(
+  dirPath: string,
+  maxEntries = 1000,
+): Promise<boolean> {
+  let visited = 0;
+  const walk = async (dir: string): Promise<boolean> => {
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const entry of entries) {
+      if (visited >= maxEntries) {
+        return false;
+      }
+      visited += 1;
+      if (entry.isSymbolicLink()) {
+        return true;
+      }
+      // .git is always excluded by the scanner; do not descend into it here either.
+      if (entry.name === ".git") {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        if (await walk(path.join(dir, entry.name))) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+  return walk(dirPath);
 }
 
 function getCachedFileScanResult(params: {
@@ -171,13 +214,51 @@ const LINE_RULES: LineRule[] = [
     ruleId: "dynamic-code-execution",
     severity: "critical",
     message: "Dynamic code execution detected",
-    pattern: /\beval\s*\(|new\s+Function\s*\(/,
+    // Covers direct eval/Function plus obfuscated forms (Skillfy Theme C): indirect eval
+    // `(0, eval)(…)` (anchored to its call paren so docs/signatures don't trip), `eval.call/apply`,
+    // globalThis escapes, and the bare `Function(…)` constructor (lookbehind avoids `obj.Function(` /
+    // `myFunction(` member-call false positives). Widened (Skillfy deep-retest) for Reflect-based
+    // indirect eval (`Reflect.apply(eval, …)`, `Reflect.get(globalThis, "eval")`) and non-literal
+    // globalThis keys (`globalThis["ev"+"al"]`, `globalThis[varName]()`) — concatenating or
+    // variable-indexing the key only ever exists to evade the literal-key alternatives.
+    pattern:
+      /\beval\s*\(|\(\s*\w+\s*,\s*eval\s*\)\s*\(|\beval\s*\.\s*(?:call|apply)\s*\(|globalThis\s*\.\s*eval\s*\(|globalThis\s*\[\s*["']eval["']\s*\]\s*\(|new\s+Function\s*\(|(?<![\w.])Function\s*\(|globalThis\s*\.\s*Function\s*\(|globalThis\s*\[\s*["']Function["']\s*\]\s*\(|Reflect\s*\.\s*apply\s*\([^)]*\beval\b|Reflect\s*\.\s*get\s*\([^)]*,\s*["'](?:eval|Function)["']|globalThis\s*\[\s*["'][^"']*["']\s*\+|globalThis\s*\[\s*[A-Za-z_$][^[\]]*\]\s*\(/,
+  },
+  {
+    ruleId: "reverse-shell",
+    severity: "critical",
+    message: "Possible reverse shell detected",
+    // High-signal reverse-shell idioms only (Skillfy Theme C). Raw net.Socket/net.createConnection
+    // and bare `bash -i` are deliberately NOT matched — they are standard TCP-client / interactive
+    // shell APIs and would refuse benign networking skills; socket-based exfil is handled by the
+    // env-harvesting/exfil rules, and shell reverse shells carry /dev/tcp.
+    pattern:
+      /\b(?:nc|ncat|netcat)\b[^;|\n]{0,30}--?(?:exec|e|c|C)\b|\bsocat\b[^;|\n]{0,40}\bEXEC:|\/dev\/tcp\/|\/dev\/udp\//i,
   },
   {
     ruleId: "crypto-mining",
     severity: "critical",
     message: "Possible crypto-mining reference detected",
     pattern: /stratum\+tcp|stratum\+ssl|coinhive|cryptonight|xmrig/i,
+  },
+  {
+    ruleId: "vm-execution",
+    severity: "critical",
+    message: "vm module code execution detected (vm.Script / runInContext)",
+    // vm.Script + runInThisContext/runInNewContext run arbitrary code from a string and
+    // had no rule at all (Skillfy deep-retest). Scoped to the execution primitives so a
+    // bare `require("vm")` (which may import vm for a benign isContext check) is not flagged.
+    pattern: /\bvm\s*\.\s*Script\b|\.runIn(?:This|New)Context\s*\(/,
+  },
+  {
+    ruleId: "obfuscated-module-import",
+    severity: "critical",
+    message: "Concatenated module specifier — possible obfuscation of a sensitive require/import",
+    // Splitting a module name across a concatenation (`require("child_"+"process")`) only
+    // exists to defeat the dangerous-exec `/child_process/` context gate (Skillfy deep-retest).
+    // Relative-path loaders (`require("./lib/"+name)`) are excluded via the negative lookahead
+    // so dynamic plugin/path loading is not false-positived.
+    pattern: /\b(?:require|import)\s*\(\s*["'](?!\.\/|\.\.\/)[^"']*["']\s*\+/,
   },
   {
     ruleId: "suspicious-network",
@@ -188,7 +269,12 @@ const LINE_RULES: LineRule[] = [
 ];
 
 const STANDARD_PORTS = new Set([80, 443, 8080, 8443, 3000]);
-const NETWORK_SEND_CONTEXT_PATTERN = /\bfetch\s*\(|\bpost\s*\(|\.\s*post\s*\(|http\.request\s*\(/i;
+// "Send" half of the exfil/env-harvest rules (Skillfy Theme C). Scoped to clear data-sending calls
+// (incl. https/http2/XHR/sendBeacon/WebSocket) — NOT raw net sockets or dns/dgram, which are normal
+// for configurable networked skills (read host/port from env, then connect) and would false-positive
+// as credential harvesting. Socket/DNS exfil remains a known residual gap.
+const NETWORK_SEND_CONTEXT_PATTERN =
+  /\bfetch\s*\(|\bpost\s*\(|\.\s*post\s*\(|https?\.request\s*\(|http2\.request\s*\(|\bXMLHttpRequest\b|\bsendBeacon\s*\(|new\s+WebSocket\s*\(/i;
 
 const SOURCE_RULES: SourceRule[] = [
   {
@@ -215,7 +301,9 @@ const SOURCE_RULES: SourceRule[] = [
     severity: "critical",
     message:
       "Environment variable access combined with network send — possible credential harvesting",
-    pattern: /process\.env/,
+    // Bracket access process["env"] is semantically identical to process.env and was the
+    // trivial evasion (Skillfy deep-retest); treat both forms equivalently.
+    pattern: /process\s*\[\s*["']env["']\s*\]|process\.env/,
     requiresContext: NETWORK_SEND_CONTEXT_PATTERN,
     requiresContextWindowLines: 8,
   },
@@ -226,7 +314,11 @@ const SKILL_CONTENT_RULES: SourceRule[] = [
     ruleId: "prompt-injection-ignore-instructions",
     severity: "critical",
     message: "Prompt-injection wording attempts to override higher-priority instructions",
-    pattern: /ignore (all|any|previous|above|prior) instructions/i,
+    // Widened (Skillfy Theme C) beyond "ignore" to disregard/forget/override. Quantifiers are
+    // override-scoping words only (no bare articles) so benign "ignore the instructions for legacy
+    // mode" docs don't trip it.
+    pattern:
+      /(ignore|disregard|forget|override) (all|any|previous|above|prior|system|original) instructions/i,
   },
   {
     ruleId: "prompt-injection-system",
@@ -556,7 +648,10 @@ async function walkDirWithLimit(
       if (files.length >= candidateLimit) {
         break;
       }
+      // .git is always skipped (VCS metadata, never skill code). Other dot-directories
+      // (.github/scripts, .husky, …) ARE descended under includeHiddenDirectories as defense-in-depth.
       if (
+        entry.name === ".git" ||
         (!includeHiddenDirectories && entry.name.startsWith(".")) ||
         (!includeNodeModules && entry.name === "node_modules")
       ) {
@@ -712,19 +807,19 @@ async function collectScannableFiles(
 async function scanFileWithCache(params: {
   filePath: string;
   maxFileBytes: number;
-}): Promise<{ scanned: boolean; findings: SkillScanFinding[] }> {
+}): Promise<{ scanned: boolean; findings: SkillScanFinding[]; oversize: boolean }> {
   const { filePath, maxFileBytes } = params;
   let st: Awaited<ReturnType<typeof fs.stat>> | null;
   try {
     st = await fs.stat(filePath);
   } catch (err) {
     if (hasErrnoCode(err, "ENOENT")) {
-      return { scanned: false, findings: [] };
+      return { scanned: false, findings: [], oversize: false };
     }
     throw err;
   }
   if (!st?.isFile()) {
-    return { scanned: false, findings: [] };
+    return { scanned: false, findings: [], oversize: false };
   }
   const cached = getCachedFileScanResult({
     filePath,
@@ -736,6 +831,7 @@ async function scanFileWithCache(params: {
     return {
       scanned: cached.scanned,
       findings: cached.findings,
+      oversize: cached.oversize,
     };
   }
 
@@ -746,9 +842,10 @@ async function scanFileWithCache(params: {
       maxFileBytes,
       scanned: false,
       findings: [],
+      oversize: true,
     };
     setCachedFileScanResult(filePath, skippedEntry);
-    return { scanned: false, findings: [] };
+    return { scanned: false, findings: [], oversize: true };
   }
 
   let source: string;
@@ -756,7 +853,7 @@ async function scanFileWithCache(params: {
     source = await fs.readFile(filePath, "utf-8");
   } catch (err) {
     if (hasErrnoCode(err, "ENOENT")) {
-      return { scanned: false, findings: [] };
+      return { scanned: false, findings: [], oversize: false };
     }
     throw err;
   }
@@ -767,8 +864,9 @@ async function scanFileWithCache(params: {
     maxFileBytes,
     scanned: true,
     findings,
+    oversize: false,
   });
-  return { scanned: true, findings };
+  return { scanned: true, findings, oversize: false };
 }
 
 export async function scanDirectoryWithSummary(
@@ -782,12 +880,18 @@ export async function scanDirectoryWithSummary(
   let critical = 0;
   let warn = 0;
   let info = 0;
+  let truncatedByOversize = false;
 
   for (const file of files) {
     const scanResult = await scanFileWithCache({
       filePath: file,
       maxFileBytes: scanOptions.maxFileBytes,
     });
+    if (scanResult.oversize) {
+      // A scannable file exceeded the size cap and was skipped unscanned — surface it so callers
+      // know the scan was incomplete (Skillfy Theme C: closes the oversize silent-skip bypass).
+      truncatedByOversize = true;
+    }
     if (!scanResult.scanned) {
       continue;
     }
@@ -809,7 +913,7 @@ export async function scanDirectoryWithSummary(
     critical,
     warn,
     info,
-    truncated,
+    truncated: truncated || truncatedByOversize,
     findings: allFindings,
   };
 }

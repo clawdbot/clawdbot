@@ -114,6 +114,10 @@ export async function writeWorkspaceSkill(params: {
   symlinkPolicy: WorkspaceSkillSymlinkWritePolicy;
 }): Promise<void> {
   assertInsideWorkspace(params.workspaceDir, params.skillDir, "skill directory");
+  // Ensure the workspace root exists before the fs-safe root() write below — a fresh agent's
+  // workspace may not exist yet (Skillfy Theme D). Mirrors installPackageDir's recursive mkdir;
+  // a no-op when the workspace already exists.
+  await fs.mkdir(params.workspaceDir, { recursive: true });
   const supportFiles = normalizeSupportFiles(params.supportFiles ?? []);
   const previousSupportFiles = await prepareWorkspaceSkillWrite({
     mode: params.mode,

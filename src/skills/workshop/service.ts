@@ -589,11 +589,6 @@ export async function applySkillProposal(
         ? { supportFiles: targetState.previousSupportFiles }
         : {}),
     });
-    await writeSkillProposalRollback({
-      proposalId: record.id,
-      rollback,
-    });
-
     const skillContent = stripProposalFrontmatterForSkill(content);
     await writeWorkspaceSkill({
       workspaceDir: input.workspaceDir,
@@ -603,6 +598,12 @@ export async function applySkillProposal(
       supportFiles,
       mode: record.kind,
       symlinkPolicy,
+    });
+    // Write the rollback record only after the skill write succeeds, so a failed write leaves no
+    // orphan rollback for a create that never happened (Skillfy Theme D).
+    await writeSkillProposalRollback({
+      proposalId: record.id,
+      rollback,
     });
     bumpSkillsSnapshotVersion({
       workspaceDir: input.workspaceDir,

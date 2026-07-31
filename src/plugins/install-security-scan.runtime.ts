@@ -26,6 +26,7 @@ import {
 import { getGlobalHookRunner } from "./hook-runner-global.js";
 import { createBeforeInstallHookPayload } from "./install-policy-context.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
+import type { SkillScanFinding } from "../skills/security/scanner.js";
 
 type InstallScanLogger = {
   warn?: (message: string) => void;
@@ -1246,6 +1247,140 @@ export async function preflightPluginGitInstallPolicyRuntime(params: {
   });
 }
 
+// Bundled/managed OpenClaw skills ship inside the gateway image and are trusted by
+// build; they are the only sources exempt from the install content scan. Every other
+// source — local-path, git, ClawHub (including official-immutable) — is scanned,
+// because release-trust/pinning is not a content guarantee: without this, a
+// namespace-squatted ClawHub skill or a hostile git repo installs byte-for-byte
+// (Skillfy Theme A). Mirrors the openclaw branch of shouldBypassOpenClawInstallFriction.
+function isImageShippedOpenClawSource(source: InstallPolicySource | undefined): boolean {
+  return (
+    source?.authority === "openclaw" && (source.kind === "bundled" || source.kind === "managed")
+  );
+}
+
+function formatSkillScanFindingWarning(skillName: string, finding: SkillScanFinding): string {
+  return `Skill "${skillName}" content scan: ${finding.severity} [${finding.ruleId}] ${finding.message} (${path.basename(finding.file)}:${finding.line})`;
+}
+
+// Content gate run over the skill source directory before any unscanned body is written
+// to a model-visible workspace. Blocks on critical findings; fails closed (treats a
+// scanner error as security_scan_failed, which maps to the retryable "unavailable"
+// failure kind) so a scanner fault can never let a body through unscanned.
+async function scanSkillContentGate(params: {
+  sourceDir: string;
+  skillName: string;
+  logger: InstallScanLogger;
+}): Promise<InstallSecurityScanResult | undefined> {
+  try {
+    // Lazy boundary: the runtime file is itself a *.runtime.ts lazy module; keep the
+    // scanner out of the policy hot path. The `import type` above is erased at compile.
+    const { scanDirectoryWithSummary, scanSkillContent, sourceTreeContainsSymlink } =
+      await import("../skills/security/scanner.js");
+
+    // Symlink fail-closed: the directory scanner records only file/dir Dirent entries
+    // (symlinks fall through), but the skill publisher copies links verbatim, so a link's
+    // target is published and resolved at load without ever being scanned. Refuse rather
+    // than write unverified bytes (Skillfy deep-retest: scan != publish symlink divergence).
+    if (await sourceTreeContainsSymlink(params.sourceDir)) {
+      return {
+        blocked: {
+          code: "security_scan_blocked",
+          reason: `Skill "${params.skillName}" source contains a symbolic link; refusing to install (symlink targets bypass the content scan).`,
+        },
+      };
+    }
+
+    // includeHiddenDirectories closes the .hidden/evil.js bypass (Skillfy Theme C); .git is always
+    // excluded by the scanner, and node_modules/test files are still skipped by default. maxFileBytes
+    // is raised for the install path so benign generated/vendored modules are not refused outright;
+    // fail-closed still applies beyond it.
+    const summary = await scanDirectoryWithSummary(params.sourceDir, {
+      includeHiddenDirectories: true,
+      maxFileBytes: 5 * 1024 * 1024,
+    });
+
+    // SKILL.md is the skill root marker and the primary model-visible artifact, but it is not in
+    // SCANNABLE_EXTENSIONS so the directory scan never reads it. Run the prose rules
+    // (prompt-injection / secret-exfil-text / shell-pipe-to-shell) on it explicitly — mirrors
+    // workshop/service.ts apply (Skillfy deep-retest: SKILL.md never scanned at install).
+    const skillMdFindings = await readSkillRootMarkerFindings(params.sourceDir, scanSkillContent);
+
+    // The prose rules are tuned for workshop human review; at install only the high-signal
+    // injection/exfil/shell rules hard-block. The broad prompt-injection-system rule matches benign
+    // documentation that merely references the "system prompt" (Skillfy deep-retest FP on the
+    // session-logs bundled skill), so it is surfaced as a warning only, never an install block.
+    // Code findings from the directory scan always block.
+    const reviewOnlyProseRules = new Set(["prompt-injection-system"]);
+    const blockingSkillMdFindings = skillMdFindings.filter(
+      (finding) => finding.severity === "critical" && !reviewOnlyProseRules.has(finding.ruleId),
+    );
+
+    const allFindings = [...summary.findings, ...skillMdFindings];
+    for (const finding of allFindings) {
+      if (finding.severity === "critical" || finding.severity === "warn") {
+        params.logger.warn?.(formatSkillScanFindingWarning(params.skillName, finding));
+      }
+    }
+    const criticalFindings = [
+      ...summary.findings.filter((finding) => finding.severity === "critical"),
+      ...blockingSkillMdFindings,
+    ];
+    const criticalCount = criticalFindings.length;
+    if (criticalCount > 0) {
+      const evidence = criticalFindings
+        .slice(0, 5)
+        .map((finding) => `${path.basename(finding.file)}:${finding.line} [${finding.ruleId}]`)
+        .join("; ");
+      const scannedFiles = summary.scannedFiles + (skillMdFindings.length > 0 ? 1 : 0);
+      return {
+        blocked: {
+          code: "security_scan_blocked",
+          reason: `Skill "${params.skillName}" blocked by content security scan: ${criticalCount} critical finding(s) across ${scannedFiles} scanned file(s).${evidence ? ` ${evidence}` : ""}`,
+        },
+      };
+    }
+    if (summary.truncated) {
+      // Fail-closed: an incomplete scan (file-size or count cap) leaves content unverified, so
+      // refuse the install rather than write an unscannable body (Skillfy Theme C: oversize bypass).
+      return {
+        blocked: {
+          code: "security_scan_blocked",
+          reason: `Skill "${params.skillName}" content scan could not complete (file-size or count cap reached); refusing to install unscannable content.`,
+        },
+      };
+    }
+    return undefined;
+  } catch (err) {
+    return {
+      blocked: {
+        code: "security_scan_failed",
+        reason: `Skill content security scan failed for "${params.skillName}": ${formatErrorMessage(err)}`,
+      },
+    };
+  }
+}
+
+// Reads the skill root marker (SKILL.md / skill.md) and runs the prose content rules on it.
+// The directory scan never collects .md (not scannable), so prompt-injection / exfil-text /
+// shell-pipe patterns in the one file that is always rendered into the system prompt would
+// otherwise go unchecked at install. Returns [] when no marker is present.
+async function readSkillRootMarkerFindings(
+  sourceDir: string,
+  scanSkillContent: (content: string, filePath: string) => SkillScanFinding[],
+): Promise<SkillScanFinding[]> {
+  for (const candidate of ["SKILL.md", "skill.md"]) {
+    const filePath = path.join(sourceDir, candidate);
+    try {
+      const content = await fs.readFile(filePath, "utf8");
+      return scanSkillContent(content, filePath);
+    } catch {
+      // Not present at this candidate; try the next.
+    }
+  }
+  return [];
+}
+
 export async function evaluateSkillInstallPolicyRuntime(params: {
   config?: OpenClawConfig;
   installId: string;
@@ -1278,12 +1413,37 @@ export async function evaluateSkillInstallPolicyRuntime(params: {
         ...(params.installSpec ? { installSpec: params.installSpec } : {}),
       },
     });
+  // Content scan applies to every source except image-shipped bundled/managed OpenClaw
+  // skills. It runs after operator policy (an explicit operator block still wins) and,
+  // on the non-bypass path, before the before_install hook — so official ClawHub/git
+  // sources that bypass install *friction* are still content-scanned.
+  const requiresContentScan = !isImageShippedOpenClawSource(params.source);
+  const contentScan = (): Promise<InstallSecurityScanResult | undefined> =>
+    requiresContentScan
+      ? scanSkillContentGate({
+          sourceDir: params.sourceDir,
+          skillName: params.skillName,
+          logger: params.logger,
+        })
+      : Promise.resolve(undefined);
   if (shouldBypassOpenClawInstallFriction({ source: params.source })) {
-    return await runPolicy();
+    const policyResult = await runPolicy();
+    if (policyResult?.blocked) {
+      return policyResult;
+    }
+    const contentBlocked = await contentScan();
+    if (contentBlocked) {
+      return contentBlocked;
+    }
+    return undefined;
   }
   const policyResult = await runPolicy();
   if (policyResult?.blocked) {
     return policyResult;
+  }
+  const contentBlocked = await contentScan();
+  if (contentBlocked) {
+    return contentBlocked;
   }
 
   const hookResult = await runBeforeInstallHook({

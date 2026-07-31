@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readLocalSkillCardContentSync } from "../lifecycle/clawhub.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
@@ -74,6 +75,44 @@ describe("buildWorkspaceSkillStatus", () => {
         path: cardPath,
         sizeBytes: 34,
       });
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports truncated when a source exceeds the per-source skill cap", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-status-"));
+    try {
+      for (const name of ["alpha", "beta", "gamma"]) {
+        const skillDir = path.join(workspaceDir, "skills", name);
+        await fs.mkdir(skillDir, { recursive: true });
+        await fs.writeFile(
+          path.join(skillDir, "SKILL.md"),
+          `---\nname: ${name}\ndescription: ${name} skill\n---\n# ${name}\n`,
+          "utf8",
+        );
+      }
+      const report = buildWorkspaceSkillStatus(workspaceDir, {
+        config: { skills: { limits: { maxSkillsLoadedPerSource: 2 } } } as unknown as OpenClawConfig,
+      });
+      expect(report.truncated).toBe(true);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not report truncated for a small skill set", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-status-"));
+    try {
+      const skillDir = path.join(workspaceDir, "skills", "solo");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        "---\nname: solo\ndescription: only one\n---\n# solo\n",
+        "utf8",
+      );
+      const report = buildWorkspaceSkillStatus(workspaceDir);
+      expect(report.truncated ?? false).toBe(false);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

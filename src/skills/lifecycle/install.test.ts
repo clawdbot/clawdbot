@@ -255,7 +255,7 @@ describe("installSkill before_install hooks", () => {
     });
   });
 
-  it("allows dangerous-looking skill sources when no operator policy or hook blocks", async () => {
+  it("blocks dangerous skill sources via the content security scan", async () => {
     await withWorkspaceCase(async ({ workspaceDir }) => {
       await writeDangerousInstallableSkill(workspaceDir, "dangerous-skill");
 
@@ -265,8 +265,10 @@ describe("installSkill before_install hooks", () => {
         installId: "deps",
       });
 
-      expect(result.ok).toBe(true);
-      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain("content security scan");
+      // The content gate refuses the skill before any install command runs.
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
     });
   });
 

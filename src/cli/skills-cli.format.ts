@@ -39,6 +39,15 @@ function appendClawHubHint(output: string, json?: boolean): string {
   return `${output}\n\nTip: use \`openclaw skills search\`, \`openclaw skills install\`, and \`openclaw skills update\` for ClawHub-backed skills.`;
 }
 
+// Skillfy Theme F: surface a loader cap (per-source count / file-size / discovery budget) that
+// silently shrank the skill set. JSON carries the boolean; the human-readable view gets a notice.
+function truncationNotice(report: SkillStatusReport, json?: boolean): string {
+  if (json || !report.truncated) {
+    return "";
+  }
+  return `\n${theme.warn("⚠ Skills truncated: a source/file-size cap was reached — not all skills are shown.")}`;
+}
+
 function formatSkillStatus(skill: SkillStatusEntry): string {
   if (skill.disabled) {
     return theme.warn(decorativePrefix("⏸", "disabled"));
@@ -124,6 +133,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
     const jsonReport = sanitizeJsonValue({
       workspaceDir: report.workspaceDir,
       managedSkillsDir: report.managedSkillsDir,
+      truncated: report.truncated ?? false,
       skills: skills.map((s) => ({
         name: s.name,
         description: s.description,
@@ -187,7 +197,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
     }).trimEnd(),
   );
 
-  return appendClawHubHint(lines.join("\n"), opts.json);
+  return appendClawHubHint(`${lines.join("\n")}${truncationNotice(report, opts.json)}`, opts.json);
 }
 
 /** Render one skill's status, requirements, install hints, and API-key setup details. */
@@ -331,7 +341,7 @@ export function formatSkillInfo(
     );
   }
 
-  return appendClawHubHint(lines.join("\n"), opts.json);
+  return appendClawHubHint(`${lines.join("\n")}${truncationNotice(report, opts.json)}`, opts.json);
 }
 
 /** Render aggregate setup health for all discovered skills. */
@@ -367,6 +377,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
           agentFiltered: agentFiltered.length,
           notInjected: promptHidden.length,
           missingRequirements: missingReqs.length,
+          truncated: report.truncated ?? false,
         },
         eligible: eligible.map((s) => s.name),
         modelVisible: modelVisible.map((s) => s.name),
@@ -488,5 +499,5 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
     }
   }
 
-  return appendClawHubHint(lines.join("\n"), opts.json);
+  return appendClawHubHint(`${lines.join("\n")}${truncationNotice(report, opts.json)}`, opts.json);
 }

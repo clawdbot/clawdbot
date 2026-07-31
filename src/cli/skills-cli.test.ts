@@ -148,6 +148,26 @@ describe("skills-cli", () => {
     });
   });
 
+  describe("formatSkillsList truncation (Skillfy Theme F)", () => {
+    it("includes the truncated flag in JSON output", () => {
+      const report = { ...createMockReport([createMockSkill()]), truncated: true };
+      const output = formatSkillsList(report, { json: true });
+      expect(output).toContain('"truncated": true');
+    });
+
+    it("shows a truncation warning in non-JSON output", () => {
+      const report = { ...createMockReport([createMockSkill()]), truncated: true };
+      const output = formatSkillsList(report, {});
+      expect(output).toContain("Skills truncated");
+    });
+
+    it("omits the truncation warning when not truncated", () => {
+      const report = createMockReport([createMockSkill()]);
+      const output = formatSkillsList(report, {});
+      expect(output).not.toContain("Skills truncated");
+    });
+  });
+
   describe("formatSkillInfo", () => {
     it("returns not found message for unknown skill", () => {
       const report = createMockReport([]);

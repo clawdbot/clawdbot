@@ -21,7 +21,7 @@ import {
   resolveSkillConfig,
   resolveSkillsInstallPreferences,
 } from "../loading/config.js";
-import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
+import { loadWorkspaceSkillEntriesWithStatus } from "../loading/workspace.js";
 import type {
   SkillEntry,
   SkillEligibilityContext,
@@ -82,6 +82,8 @@ export type SkillStatusReport = {
   agentId?: string;
   agentSkillFilter?: string[];
   skills: SkillStatusEntry[];
+  /** True when a loader cap (per-source count, file-size, or discovery budget) shrank the set. */
+  truncated?: boolean;
 };
 
 export function resolveSkillStatusEntry(
@@ -348,14 +350,17 @@ export function buildWorkspaceSkillStatus(
   const agentSkillFilter = opts?.agentId
     ? resolveEffectiveAgentSkillFilter(opts.config, opts.agentId)
     : undefined;
-  const skillEntries =
-    opts?.entries ??
-    loadWorkspaceSkillEntries(workspaceDir, {
-      config: opts?.config,
-      managedSkillsDir,
-      bundledSkillsDir: bundledContext.dir,
-      includeArchived: true,
-    });
+  const provided = opts?.entries;
+  const loaded = provided
+    ? undefined
+    : loadWorkspaceSkillEntriesWithStatus(workspaceDir, {
+        config: opts?.config,
+        managedSkillsDir,
+        bundledSkillsDir: bundledContext.dir,
+        includeArchived: true,
+      });
+  const skillEntries = provided ?? loaded?.entries ?? [];
+  const truncated = loaded?.truncated ?? false;
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   const allowBundled = resolveBundledAllowlist(opts?.config);
   const clawhubLockRead = readClawHubSkillsLockfileStatusSync(workspaceDir);
@@ -368,6 +373,7 @@ export function buildWorkspaceSkillStatus(
     managedSkillsDir,
     agentId: opts?.agentId,
     agentSkillFilter,
+    truncated,
     skills: skillIndexEntries.map((entry) =>
       buildSkillStatus(entry, {
         config: opts?.config,

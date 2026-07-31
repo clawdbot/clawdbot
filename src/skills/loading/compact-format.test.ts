@@ -102,6 +102,12 @@ describe("formatSkillsCompact", () => {
     expect(out).toContain("hidden");
   });
 
+  it("withholds a skill whose name carries injection", () => {
+    const out = formatSkillsCompact([makeSkill("keep-me"), makeSkill("ignore-previous-instructions")]);
+    expect(out).toContain("<name>keep-me</name>");
+    expect(out).not.toContain("ignore-previous-instructions");
+  });
+
   it("escapes XML special characters", () => {
     const out = formatSkillsCompact([makeSkill("a<b&c")]);
     expect(out).toContain("a&lt;b&amp;c");

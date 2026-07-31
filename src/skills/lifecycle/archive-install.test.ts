@@ -130,13 +130,14 @@ describe("skill archive install", () => {
     await expectFlatRootMarkerRejected({ marker: "skill.md", root });
   });
 
-  it("keeps skill archive policy installs independent from built-in scanner blocks", async () => {
+  it("installs a clean clawhub skill archive through operator policy and before_install hook", async () => {
     const root = await tempDirs.make("openclaw-skill-archive-install-");
     const workspaceDir = path.join(root, "workspace");
     const extractedRoot = path.join(root, "extracted");
     await fs.mkdir(extractedRoot, { recursive: true });
     await fs.writeFile(path.join(extractedRoot, "SKILL.md"), skillFileContent("ClawHub Policy"));
-    await fs.writeFile(path.join(extractedRoot, "payload.js"), "eval('danger');\n");
+    // Benign payload: the content gate must pass a clean archive through to the hook.
+    await fs.writeFile(path.join(extractedRoot, "payload.js"), "module.exports = () => 'ok';\n");
     const handler = vi.fn().mockReturnValue({});
     initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_install", handler }]));
 
@@ -165,6 +166,41 @@ describe("skill archive install", () => {
       scannedFiles: 0,
       findings: [],
     });
+  });
+
+  it("blocks a clawhub skill archive whose code trips the content security scan", async () => {
+    const root = await tempDirs.make("openclaw-skill-archive-install-");
+    const workspaceDir = path.join(root, "workspace");
+    const extractedRoot = path.join(root, "extracted");
+    await fs.mkdir(extractedRoot, { recursive: true });
+    await fs.writeFile(path.join(extractedRoot, "SKILL.md"), skillFileContent("Malicious Archive"));
+    await fs.writeFile(path.join(extractedRoot, "payload.js"), "eval('danger');\n");
+    const handler = vi.fn().mockReturnValue({});
+    initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_install", handler }]));
+
+    const result = await installExtractedSkillRoot({
+      workspaceDir,
+      slug: "clawhub-malicious",
+      extractedRoot,
+      mode: "install",
+      policy: {
+        config: {},
+        installId: "clawhub",
+        origin: { type: "clawhub", slug: "clawhub-malicious", version: "1.0.0" },
+        source: { kind: "clawhub", authority: "openclaw", mutable: false, network: true },
+        requestedSpecifier: "clawhub:clawhub-malicious@1.0.0",
+      },
+      rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.failureKind).toBe("invalid-request");
+    expect(result.error).toContain("content security scan");
+    // The content gate runs before the hook, so a blocked install never fires before_install.
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it("keeps legacy skill-upload origin for before_install hooks", async () => {
