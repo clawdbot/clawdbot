@@ -817,6 +817,63 @@ export function isGatewayDraining(): boolean {
   return isGatewayWorkAdmissionClosed();
 }
 
+/**
+ * Apply lane concurrencies and group definitions as ONE transaction.
+ *
+ * `setCommandLaneConcurrency` drains the instant a lane goes positive, and
+ * gateway publication is sequential — so applying lanes one at a time can widen
+ * a member and let it dispatch BEFORE its group exists, admitting work above
+ * the budget the group was meant to enforce. Suppressing drains until every
+ * lane max and every group definition is installed closes that window; a single
+ * commit-time drain pass then dispatches under the final configuration.
+ *
+ * Callers must route grouped lanes through here rather than the per-lane
+ * setter, which cannot know about a group that does not exist yet.
+ */
+export function publishLaneConfiguration(config: {
+  lanes?: Readonly<Record<string, number>>;
+  groups?: Readonly<Record<string, CommandLaneGroupSpec>>;
+  /** Groups to remove as part of the same transaction. */
+  clearGroups?: readonly string[];
+}): void {
+  const touched = new Set<string>();
+  // Phase 1 — install state with dispatch suppressed. Nothing may start here.
+  for (const [rawLane, maxConcurrent] of Object.entries(config.lanes ?? {})) {
+    const lane = normalizeLane(rawLane);
+    const state = getLaneState(lane);
+    const minConcurrent = isQuietProbeLane(lane) ? 1 : 0;
+    state.maxConcurrent = Math.max(minConcurrent, Math.floor(maxConcurrent));
+    touched.add(lane);
+  }
+  for (const group of config.clearGroups ?? []) {
+    const { groups, groupByLane } = getGroupRegistry();
+    const existing = groups.get(group);
+    if (existing) {
+      for (const member of existing.members) {
+        groupByLane.delete(member);
+        touched.add(member);
+      }
+      groups.delete(group);
+    }
+  }
+  for (const [group, spec] of Object.entries(config.groups ?? {})) {
+    // Validation throws BEFORE any drain, so a rejected configuration cannot
+    // leave lanes widened and dispatching under no group at all.
+    setCommandLaneGroup(group, spec);
+    for (const member of spec.members) {
+      touched.add(normalizeLane(member));
+    }
+  }
+  // Phase 2 — commit. Group membership and budgets are now final, so every
+  // admission decision in this pass sees the configuration the caller intended.
+  for (const lane of touched) {
+    const state = getQueueState().lanes.get(lane);
+    if (state && state.maxConcurrent > 0 && state.queue.length > 0 && !state.draining) {
+      drainLane(lane);
+    }
+  }
+}
+
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
   const cleaned = normalizeLane(lane);
   const state = getLaneState(cleaned);

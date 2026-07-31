@@ -90,7 +90,19 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       return;
     }
     const snapshot = getCommandLaneSnapshot(lane);
-    if (snapshot.queuedCount > 0 || snapshot.activeCount >= snapshot.maxConcurrent) {
+    // `blockedBy` is the only signal that can see a GROUP-imposed wait. A member
+    // blocked by group budget or a sibling's reservation has
+    // `activeCount < maxConcurrent` and can have `queuedCount === 0`, so the two
+    // lane-local terms below are both false while the task genuinely cannot
+    // start. Missing that wait is not merely an observability gap: it defeats
+    // the setup-timeout suppression in cron/service/agent-watchdog.ts, which
+    // engages only while `waitingForLane` is true — so a run waiting on group
+    // capacity would take a false setup timeout.
+    if (
+      snapshot.queuedCount > 0 ||
+      snapshot.activeCount >= snapshot.maxConcurrent ||
+      snapshot.blockedBy != null
+    ) {
       params.onLaneWait({
         waitMs: 0,
         queuedAhead: snapshot.queuedCount + snapshot.activeCount,
