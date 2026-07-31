@@ -1,6 +1,5 @@
 // Discord plugin module implements outbound adapter behavior.
 import {
-  createMessageReceiptFromOutboundResults,
   type OutboundIdentity,
   resolveOutboundSendDep,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -38,6 +37,7 @@ import {
   type DiscordVoiceSendFn,
 } from "./outbound-send-context.js";
 import { resolveDiscordReplyReference } from "./reply-reference.js";
+import { createDiscordSendReceiptFromResults } from "./send.receipt.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
 const loadDiscordThreadBindings = createLazyRuntimeModule(
@@ -222,26 +222,13 @@ export const discordOutbound: ChannelOutboundAdapter = {
         if (!threadId) {
           return mediaResult;
         }
-        const captionDelivery = attachChannelToResult("discord", captionResult);
-        const mediaDelivery = attachChannelToResult("discord", mediaResult);
-        const receipt = createMessageReceiptFromOutboundResults({
-          results: [
-            captionDelivery,
-            {
-              ...mediaDelivery,
-              receipt:
-                mediaDelivery.receipt ??
-                createMessageReceiptFromOutboundResults({
-                  results: [mediaDelivery],
-                  kind: "media",
-                  threadId,
-                }),
-            },
-          ],
-          threadId,
-        });
-        receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
-        return { ...captionResult, receipt };
+        return {
+          ...captionResult,
+          receipt: createDiscordSendReceiptFromResults({
+            results: [captionResult, mediaResult],
+            threadId,
+          }),
+        };
       }
       return await send(target, ctx.text, mediaOptions);
     },

@@ -2,7 +2,6 @@
 import type { APIChannel, APIGuildForumChannel, APIGuildMediaChannel } from "discord-api-types/v10";
 import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import type { OutboundMediaAccess, PollInput } from "openclaw/plugin-sdk/media-runtime";
@@ -20,7 +19,11 @@ import {
   createReusableDiscordReplyReference,
   type DiscordReplyReference,
 } from "./reply-reference.js";
-import { createDiscordSendResult, type DiscordReceiptResultSource } from "./send.receipt.js";
+import {
+  createDiscordSendReceiptFromResults,
+  createDiscordSendResult,
+  type DiscordReceiptResultSource,
+} from "./send.receipt.js";
 import {
   buildDiscordMessageRequest,
   buildDiscordSendError,
@@ -356,12 +359,10 @@ export async function sendMessageDiscord(
       accountId: accountInfo.accountId,
       direction: "outbound",
     });
-    const receipt = createMessageReceiptFromOutboundResults({
-      results: deliveredResults.map((result) => ({ channel: "discord", ...result })),
-      threadId,
-    });
-    receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
-    return { ...starterResult, receipt };
+    return {
+      ...starterResult,
+      receipt: createDiscordSendReceiptFromResults({ results: deliveredResults, threadId }),
+    };
   }
 
   let result: DiscordChannelMessageResult;
