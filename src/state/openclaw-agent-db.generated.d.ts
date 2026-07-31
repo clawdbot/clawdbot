@@ -200,6 +200,12 @@ export interface SessionConversations {
   session_id: string;
 }
 
+export interface SessionKeyContract {
+  id: Generated<number>;
+  main_key: string;
+  updated_at: number;
+}
+
 export interface SessionMembers {
   added_at: number;
   added_by: string;
@@ -217,6 +223,7 @@ export interface SessionNodes {
   current_session_id: string;
   display_name: string | null;
   entry_json: string;
+  entry_valid: Generated<number>;
   fork_source_entry_id: string | null;
   fork_source_session_id: string | null;
   fork_source_session_key: string | null;
@@ -435,6 +442,7 @@ export interface DB {
   memory_index_state: MemoryIndexState;
   schema_meta: SchemaMeta;
   session_conversations: SessionConversations;
+  session_key_contract: SessionKeyContract;
   session_members: SessionMembers;
   session_nodes: SessionNodes;
   session_suggestions: SessionSuggestions;

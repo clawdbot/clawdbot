@@ -856,8 +856,3 @@ export type {
   SessionEntryLifecycleRemoval,
   SessionEntryLifecycleUpsert,
 };
-
-export type CanonicalizeSessionEntryAliasesResult = {
-  canonicalKey: string;
-  entry?: SessionEntry;
-};

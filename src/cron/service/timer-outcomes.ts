@@ -36,6 +36,7 @@ import {
 } from "./timer-trigger.js";
 
 type CronScheduleOwnership = "current" | "stale";
+type CronTriggerOwnership = "current" | "stale";
 
 /** Checks both the admitted schedule and edits that may have returned to its original value. */
 export function resolveCronRunScheduleOwnership(params: {
@@ -45,6 +46,19 @@ export function resolveCronRunScheduleOwnership(params: {
 }): CronScheduleOwnership {
   return params.activeJobMarker?.scheduleMutated === true ||
     !cronSchedulingInputsEqual(params.admittedJob, params.currentJob)
+    ? "stale"
+    : "current";
+}
+
+/** Keeps trigger state owned by the exact script/once definition that evaluated it. */
+export function resolveCronRunTriggerOwnership(params: {
+  admittedJob: CronJob;
+  currentJob: CronJob;
+  activeJobMarker?: CronActiveJobMarker;
+}): CronTriggerOwnership {
+  return params.activeJobMarker?.triggerMutated === true ||
+    params.admittedJob.trigger?.script !== params.currentJob.trigger?.script ||
+    params.admittedJob.trigger?.once !== params.currentJob.trigger?.once
     ? "stale"
     : "current";
 }
@@ -447,9 +461,9 @@ function applyTriggerEvaluationState(
 export function applyTriggerRunResult(
   job: CronJob,
   result: { status: CronRunStatus; endedAt: number; triggerEval?: CronTriggerEvalOutcome },
-  opts?: { scheduleOwnership?: CronScheduleOwnership },
+  opts?: { scheduleOwnership?: CronScheduleOwnership; triggerOwnership?: CronTriggerOwnership },
 ): void {
-  if (!result.triggerEval) {
+  if (!result.triggerEval || opts?.triggerOwnership === "stale") {
     return;
   }
   // Fired-run trigger state persists only on payload success: a failed or
@@ -482,8 +496,13 @@ export function applyTriggerRunResult(
 export function applyScriptRunResult(
   job: CronJob,
   result: { status: CronRunStatus; scriptStateChanged?: boolean; scriptState?: unknown },
+  opts?: { triggerOwnership?: CronTriggerOwnership },
 ): void {
-  if (result.status === "ok" && result.scriptStateChanged === true) {
+  if (
+    opts?.triggerOwnership !== "stale" &&
+    result.status === "ok" &&
+    result.scriptStateChanged === true
+  ) {
     // Trigger and payload scripts share frozen trigger.state. The payload's
     // final state wins only after trigger evaluation and payload execution succeed.
     job.state.triggerState = result.scriptState;
@@ -495,7 +514,10 @@ export function applyTriggerNoFireResult(
   state: CronServiceState,
   job: CronJob,
   result: { startedAt: number; endedAt: number; triggerEval: CronTriggerEvalOutcome },
-  opts?: { scheduleMode?: "advance" | "force-preserve" | "stale-preserve" },
+  opts?: {
+    scheduleMode?: "advance" | "force-preserve" | "stale-preserve";
+    triggerOwnership?: CronTriggerOwnership;
+  },
 ): void {
   const previousNextRunAtMs = job.state.nextRunAtMs;
   const previousPacedNextRunAtMs = job.state.pacedNextRunAtMs;
@@ -503,7 +525,7 @@ export function applyTriggerNoFireResult(
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
   job.updatedAtMs = result.endedAt;
-  if (!result.triggerEval.busy) {
+  if (!result.triggerEval.busy && opts?.triggerOwnership !== "stale") {
     // A non-firing evaluation is successful scheduler work, not a payload run;
     // reset error machinery while leaving lastRun/delivery history untouched.
     job.state.consecutiveErrors = 0;
@@ -570,6 +592,11 @@ export function applyOutcomeToStoredJob(
     currentJob: job,
     activeJobMarker: result.activeJobMarker,
   });
+  const triggerOwnership = resolveCronRunTriggerOwnership({
+    admittedJob: result.job,
+    currentJob: job,
+    activeJobMarker: result.activeJobMarker,
+  });
 
   if (result.status === "ok" && result.triggerEval && !result.triggerEval.fired) {
     // Quiet trigger ticks intentionally emit no finished event: run history,
@@ -582,7 +609,10 @@ export function applyOutcomeToStoredJob(
         endedAt: result.endedAt,
         triggerEval: result.triggerEval,
       },
-      { scheduleMode: scheduleOwnership === "stale" ? "stale-preserve" : "advance" },
+      {
+        scheduleMode: scheduleOwnership === "stale" ? "stale-preserve" : "advance",
+        triggerOwnership,
+      },
     );
     job.state.startupCatchupAtMs = undefined;
     if (scheduleOwnership === "current") {
@@ -594,8 +624,8 @@ export function applyOutcomeToStoredJob(
   }
 
   const shouldDelete = applyJobResult(state, job, result, { scheduleOwnership });
-  applyTriggerRunResult(job, result, { scheduleOwnership });
-  applyScriptRunResult(job, result);
+  applyTriggerRunResult(job, result, { scheduleOwnership, triggerOwnership });
+  applyScriptRunResult(job, result, { triggerOwnership });
   job.state.startupCatchupAtMs = undefined;
 
   emitJobFinished(state, job, result, result.startedAt);

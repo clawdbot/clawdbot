@@ -1316,6 +1316,46 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     }
   });
 
+  it("keeps generic agent turns running when an active web tool credential is unavailable", async () => {
+    const restoreDeps = setFirecrawlWebFetchTargetDeps();
+    const webPath = "plugins.entries.firecrawl.config.webFetch.apiKey";
+    try {
+      callGateway.mockResolvedValueOnce({
+        assignments: [],
+        diagnostics: [],
+        inactiveRefPaths: [webPath],
+      });
+      const result = await resolveCommandSecretRefsViaGateway({
+        config: {
+          tools: { web: { fetch: { provider: "firecrawl" } } },
+          plugins: {
+            entries: {
+              firecrawl: {
+                config: {
+                  webFetch: {
+                    apiKey: {
+                      source: "env",
+                      provider: "default",
+                      id: "missing-optional-firecrawl-ref",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        commandName: "reply",
+        targetIds: new Set([webPath]),
+        optionalActivePaths: new Set([webPath]),
+      });
+
+      expect(result.hadUnresolvedTargets).toBe(false);
+      expect(result.targetStatesByPath[webPath]).toBe("inactive_surface");
+    } finally {
+      restoreDeps();
+    }
+  });
+
   it.each([
     {
       label: "search",

@@ -195,6 +195,13 @@ describe("playback transcode policy", () => {
       expected: "native",
     },
     {
+      name: "compressed AIFF-C audio",
+      fileName: "compressed.aifc",
+      mimeType: "audio/aiff",
+      audioCodec: "adpcm_ima_qt",
+      expected: "transcode",
+    },
+    {
       name: "float PCM WAV",
       fileName: "float.wav",
       mimeType: "audio/x-wav",

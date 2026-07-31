@@ -1,6 +1,7 @@
 /** Resolves agent runtime config, including SecretRef materialization for agent command use. */
 import {
   getAgentRuntimeCommandSecretTargetIds,
+  getAgentRuntimeOptionalCommandSecretPaths,
   getScopedChannelsCommandSecretTargets,
 } from "../cli/command-secret-targets.js";
 import { getRuntimeConfig, readConfigFileSnapshotForWrite } from "../config/io.js";
@@ -64,6 +65,9 @@ export async function resolveAgentRuntimeConfig(
             targetIds: runtimeSecretTargets.targetIds,
             ...(runtimeSecretTargets.allowedPaths
               ? { allowedPaths: runtimeSecretTargets.allowedPaths }
+              : {}),
+            ...(runtimeSecretTargets.optionalActivePaths.size > 0
+              ? { optionalActivePaths: runtimeSecretTargets.optionalActivePaths }
               : {}),
             runtime,
           })
@@ -161,12 +165,17 @@ function resolveAgentRuntimeSecretTargets(params: {
   config: OpenClawConfig;
   includeChannelTargets: boolean;
   channelSecretScope?: { channel: string; accountId?: string };
-}): { targetIds: Set<string>; allowedPaths?: Set<string> } {
+}): {
+  targetIds: Set<string>;
+  allowedPaths?: Set<string>;
+  optionalActivePaths: Set<string>;
+} {
   const baseTargetIds = getAgentRuntimeCommandSecretTargetIds({
     includeChannelTargets: params.includeChannelTargets,
   });
+  const optionalActivePaths = getAgentRuntimeOptionalCommandSecretPaths(params.config);
   if (params.includeChannelTargets || !params.channelSecretScope) {
-    return { targetIds: baseTargetIds };
+    return { targetIds: baseTargetIds, optionalActivePaths };
   }
   const channelTargets = getScopedChannelsCommandSecretTargets({
     config: params.config,
@@ -179,7 +188,7 @@ function resolveAgentRuntimeSecretTargets(params: {
     targetIds.add(targetId);
   }
   if (!channelTargets.allowedPaths) {
-    return { targetIds };
+    return { targetIds, optionalActivePaths };
   }
 
   // Account scoping must not exclude the agent's model/tool secrets from the same resolution.
@@ -187,5 +196,5 @@ function resolveAgentRuntimeSecretTargets(params: {
   for (const target of discoverConfigSecretTargetsByIds(params.config, baseTargetIds)) {
     allowedPaths.add(target.path);
   }
-  return { targetIds, allowedPaths };
+  return { targetIds, allowedPaths, optionalActivePaths };
 }

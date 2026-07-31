@@ -52,6 +52,7 @@ import type {
 } from "./server-chat-state.js";
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
 import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
+import { hasSessionChangeReceivers } from "./session-change-receivers.js";
 import {
   deriveGatewaySessionLifecycleProjectionPatch,
   isRestartRecoveryLifecycleEvent,
@@ -819,7 +820,7 @@ export function createAgentEventHandler({
             return;
           }
           const sessionEventConnIds = sessionEventSubscribers.getAll();
-          if (sessionEventConnIds.size === 0) {
+          if (!hasSessionChangeReceivers(sessionEventConnIds)) {
             return;
           }
           broadcastToConnIds(
@@ -1665,7 +1666,7 @@ export function createAgentEventHandler({
         );
       });
       const sessionEventConnIds = sessionEventSubscribers.getAll();
-      if (sessionEventConnIds.size > 0) {
+      if (hasSessionChangeReceivers(sessionEventConnIds)) {
         broadcastToConnIds(
           "sessions.changed",
           {

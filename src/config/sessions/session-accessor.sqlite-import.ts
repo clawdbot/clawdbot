@@ -1,6 +1,8 @@
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
-import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { publishSqliteSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { readTranscriptEventJsonSetInTransaction } from "./session-accessor.sqlite-read.js";
 import {
   formatSqliteSessionReferenceForScope,
@@ -18,8 +20,10 @@ import type { SessionEntry } from "./types.js";
 
 /** Internal doctor/migration import target for one legacy session row. */
 type SqliteSessionImportRowsParams = {
+  allowMalformedRowRepair?: boolean;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
+  preserveExactStoredKey?: boolean;
   storePath?: string;
   sessionKey: string;
   entry: SessionEntry;
@@ -38,16 +42,28 @@ type SqliteSessionImportRowsResult = {
 export async function importSqliteSessionRows(
   params: SqliteSessionImportRowsParams,
 ): Promise<SqliteSessionImportRowsResult> {
-  const resolved = resolveSqliteScope({
+  const resolvedScope = resolveSqliteScope({
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.env ? { env: params.env } : {}),
     sessionKey: params.sessionKey,
     ...(params.storePath ? { storePath: params.storePath } : {}),
   });
+  // Doctor can stage the exact legacy key so canonical repair compares every alias candidate.
+  const resolved = params.preserveExactStoredKey
+    ? { ...resolvedScope, sessionKey: params.sessionKey }
+    : resolvedScope;
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     let transcriptEvents = 0;
     runOpenClawAgentWriteTransaction((database) => {
-      const currentEntry = readSessionEntryRow(database, resolved.sessionKey)?.entry;
+      // Doctor may have staged another legacy alias in this database already. Inspect only this
+      // exact import target; runtime-wide canonical validation runs after the import phase.
+      const currentEntry = readExactSessionEntryRowForCanonicalRepair(
+        database,
+        resolved.sessionKey,
+        {
+          allowMalformedRowRepair: params.allowMalformedRowRepair === true,
+        },
+      )?.entry;
       const preservedHarnessId =
         params.entry.agentHarnessId === undefined &&
         currentEntry?.sessionId === params.entry.sessionId &&
@@ -64,7 +80,11 @@ export async function importSqliteSessionRows(
           sessionId: params.entry.sessionId,
         }),
       };
-      writeSessionEntry(database, resolved.sessionKey, importedEntry);
+      // Doctor imports legacy aliases verbatim; canonical-key repair owns their normalization.
+      writeSessionEntry(database, resolved.sessionKey, importedEntry, {
+        allowStoredAliases: true,
+        previousEntry: currentEntry ?? null,
+      });
       if (params.readTranscriptEvents) {
         const transcriptScope = {
           ...resolved,
@@ -81,6 +101,7 @@ export async function importSqliteSessionRows(
           }
           if (
             appendTranscriptEventInTransaction(database, transcriptScope, event, {
+              allowStoredAlias: true,
               scheduleProjectionReconcile: false,
               touchMutation: false,
             })
@@ -90,6 +111,7 @@ export async function importSqliteSessionRows(
           }
         });
         reconcileSessionTranscriptIndexInTransaction(database.db, params.entry.sessionId);
+        publishSqliteSessionEntryCacheInvalidation(database);
       }
       if (params.transcriptMtimeMs !== undefined) {
         advanceTranscriptMutationAtInTransaction(
