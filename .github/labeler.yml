@@ -368,6 +368,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/llama-cpp/**"
+"extensions: llama-server":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/llama-server/**"
 "extensions: memory-core":
   - changed-files:
       - any-glob-to-any-file:

@@ -15,5 +15,5 @@ This page is generated from `extensions/*/package.json` and
 pnpm plugins:inventory:gen
 ```
 
-Use [Plugin inventory](/plugins/plugin-inventory) to browse all 146
+Use [Plugin inventory](/plugins/plugin-inventory) to browse all 147
 generated plugin reference pages by distribution, package, and description.

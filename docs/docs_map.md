@@ -6914,6 +6914,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Default text model
   - H2: Related docs
 
+## plugins/reference/llama-server.md
+
+- Route: /plugins/reference/llama-server
+- Headings:
+  - H1: Llama Server plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
 ## plugins/reference/llm-task.md
 
 - Route: /plugins/reference/llm-task
@@ -8404,6 +8413,24 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Configuration
   - H2: Image generation
   - H2: Advanced
+  - H2: Related
+
+## providers/llama-server.md
+
+- Route: /providers/llama-server
+- Headings:
+  - H2: Quick start
+  - H2: Non-interactive setup
+  - H2: Configuration
+  - H3: Runtime metadata
+  - H2: Router mode
+  - H2: Authentication and networking
+  - H2: Optional local process startup
+  - H2: Troubleshooting
+  - H3: Server is unavailable
+  - H3: Tools are disabled
+  - H3: Router discovery loaded a model
+  - H3: Authentication fails during inference
   - H2: Related
 
 ## providers/lmstudio.md

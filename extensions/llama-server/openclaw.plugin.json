@@ -1,0 +1,65 @@
+{
+  "id": "llama-server",
+  "name": "llama-server Provider",
+  "description": "Connect OpenClaw to an existing llama.cpp server over HTTP.",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["llama-server"],
+  "modelCatalog": {
+    "discovery": {
+      "llama-server": "refreshable"
+    }
+  },
+  "providerRequest": {
+    "providers": {
+      "llama-server": {
+        "family": "llama-server",
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "llama-server": {
+        "external": false
+      }
+    }
+  },
+  "nonSecretAuthMarkers": ["llama-server-local"],
+  "syntheticAuthRefs": ["llama-server"],
+  "setup": {
+    "providers": [
+      {
+        "id": "llama-server",
+        "envVars": ["LLAMA_SERVER_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "llama-server",
+      "method": "custom",
+      "choiceId": "llama-server",
+      "appGuidedDiscovery": true,
+      "appGuidedSecret": true,
+      "choiceLabel": "llama-server",
+      "choiceHint": "Existing local or private llama.cpp server",
+      "optionKey": "llamaServerApiKey",
+      "cliFlag": "--llama-server-api-key",
+      "cliOption": "--llama-server-api-key <key>",
+      "cliDescription": "llama-server API key",
+      "groupId": "llama-server",
+      "groupLabel": "llama-server",
+      "groupHint": "Self-hosted llama.cpp models"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

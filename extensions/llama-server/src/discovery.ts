@@ -1,0 +1,284 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import { buildLlamaServerAuthHeaders } from "./auth.js";
+import {
+  LLAMA_SERVER_DISCOVERY_CACHE_TTL_MS,
+  LLAMA_SERVER_DISCOVERY_TIMEOUT_MS,
+} from "./defaults.js";
+import { resolveLlamaServerEndpoint } from "./endpoint.js";
+import {
+  mapLlamaServerModel,
+  type LlamaServerDiscoveredModel,
+  type LlamaServerModelWire,
+  type LlamaServerPropsWire,
+} from "./models.js";
+
+export type LlamaServerHealth = "ready" | "loading" | "unknown";
+
+export type LlamaServerDiscoveryResult =
+  | {
+      kind: "success";
+      endpoint: ReturnType<typeof resolveLlamaServerEndpoint>;
+      health: LlamaServerHealth;
+      models: LlamaServerDiscoveredModel[];
+      fetchedAt: number;
+    }
+  | {
+      kind: "unreachable";
+      endpoint: ReturnType<typeof resolveLlamaServerEndpoint>;
+      error: unknown;
+    }
+  | {
+      kind: "http-error";
+      endpoint: ReturnType<typeof resolveLlamaServerEndpoint>;
+      status: number;
+      path: string;
+    }
+  | {
+      kind: "invalid-response";
+      endpoint: ReturnType<typeof resolveLlamaServerEndpoint>;
+      path: string;
+      error: unknown;
+    };
+
+export type LlamaServerFetchGuard = typeof fetchWithSsrFGuard;
+
+type FetchJsonResult =
+  | { kind: "response"; status: number; ok: boolean; body?: unknown }
+  | { kind: "unreachable"; error: unknown }
+  | { kind: "invalid-response"; error: unknown };
+
+type CachedDiscovery = {
+  expiresAt: number;
+  result: Extract<LlamaServerDiscoveryResult, { kind: "success" }>;
+};
+
+const discoveryCache = new Map<string, CachedDiscovery>();
+
+export function clearLlamaServerDiscoveryCacheForTests(): void {
+  discoveryCache.clear();
+}
+
+async function fetchJson(params: {
+  url: string;
+  origin: string;
+  apiKey?: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+  readBody: boolean;
+  fetchGuard: LlamaServerFetchGuard;
+}): Promise<FetchJsonResult> {
+  let guarded: Awaited<ReturnType<LlamaServerFetchGuard>>;
+  try {
+    guarded = await params.fetchGuard({
+      url: params.url,
+      init: { headers: buildLlamaServerAuthHeaders(params.apiKey) },
+      timeoutMs: params.timeoutMs,
+      signal: params.signal,
+      policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(params.origin),
+      auditContext: "llama-server-discovery",
+    });
+  } catch (error) {
+    return { kind: "unreachable", error };
+  }
+
+  try {
+    if (!params.readBody || !guarded.response.ok) {
+      return {
+        kind: "response",
+        status: guarded.response.status,
+        ok: guarded.response.ok,
+      };
+    }
+    try {
+      return {
+        kind: "response",
+        status: guarded.response.status,
+        ok: true,
+        body: await readProviderJsonResponse(guarded.response, "llama-server discovery"),
+      };
+    } catch (error) {
+      return { kind: "invalid-response", error };
+    }
+  } finally {
+    if (!guarded.response.bodyUsed) {
+      await guarded.response.body?.cancel().catch(() => undefined);
+    }
+    await guarded.release();
+  }
+}
+
+function readModelRows(body: unknown): LlamaServerModelWire[] {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new Error("llama-server model list must be an object");
+  }
+  const data = (body as { data?: unknown }).data;
+  if (!Array.isArray(data)) {
+    throw new Error("llama-server model list must contain data[]");
+  }
+  return data.filter(
+    (entry): entry is LlamaServerModelWire =>
+      Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
+  );
+}
+
+function shouldReadProps(row: LlamaServerModelWire): boolean {
+  const status = row.status?.value;
+  return status === undefined || status === "loaded" || status === "sleeping";
+}
+
+async function readModelProps(params: {
+  row: LlamaServerModelWire;
+  routerMode: boolean;
+  origin: string;
+  apiKey?: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+  fetchGuard: LlamaServerFetchGuard;
+}): Promise<LlamaServerPropsWire | undefined> {
+  if (!shouldReadProps(params.row) || typeof params.row.id !== "string") {
+    return undefined;
+  }
+  const query = params.routerMode
+    ? `?model=${encodeURIComponent(params.row.id)}&autoload=false`
+    : "";
+  const result = await fetchJson({
+    url: `${params.origin}/props${query}`,
+    origin: params.origin,
+    apiKey: params.apiKey,
+    timeoutMs: params.timeoutMs,
+    signal: params.signal,
+    readBody: true,
+    fetchGuard: params.fetchGuard,
+  });
+  return result.kind === "response" && result.ok
+    ? (result.body as LlamaServerPropsWire)
+    : undefined;
+}
+
+/** Discovers llama-server models without loading, waking, or unloading them. */
+export async function discoverLlamaServer(params: {
+  baseUrl?: string;
+  apiKey?: string;
+  timeoutMs?: number;
+  cacheTtlMs?: number;
+  signal?: AbortSignal;
+  fetchGuard?: LlamaServerFetchGuard;
+}): Promise<LlamaServerDiscoveryResult> {
+  const endpoint = resolveLlamaServerEndpoint(params.baseUrl);
+  const cacheTtlMs = Math.max(0, params.cacheTtlMs ?? LLAMA_SERVER_DISCOVERY_CACHE_TTL_MS);
+  const cached = discoveryCache.get(endpoint.origin);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.result;
+  }
+
+  const timeoutMs = params.timeoutMs ?? LLAMA_SERVER_DISCOVERY_TIMEOUT_MS;
+  const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
+  const healthResult = await fetchJson({
+    url: `${endpoint.origin}/health`,
+    origin: endpoint.origin,
+    apiKey: params.apiKey,
+    timeoutMs,
+    signal: params.signal,
+    readBody: false,
+    fetchGuard,
+  });
+  if (healthResult.kind === "unreachable") {
+    return { kind: "unreachable", endpoint, error: healthResult.error };
+  }
+  const health: LlamaServerHealth =
+    healthResult.kind === "response" && healthResult.status === 200
+      ? "ready"
+      : healthResult.kind === "response" && healthResult.status === 503
+        ? "loading"
+        : "unknown";
+  if (
+    healthResult.kind === "response" &&
+    healthResult.status !== 200 &&
+    healthResult.status !== 404 &&
+    healthResult.status !== 503
+  ) {
+    return {
+      kind: "http-error",
+      endpoint,
+      status: healthResult.status,
+      path: "/health",
+    };
+  }
+
+  let modelsPath = "/models";
+  let modelsResult = await fetchJson({
+    url: `${endpoint.origin}${modelsPath}`,
+    origin: endpoint.origin,
+    apiKey: params.apiKey,
+    timeoutMs,
+    signal: params.signal,
+    readBody: true,
+    fetchGuard,
+  });
+  if (modelsResult.kind === "response" && modelsResult.status === 404) {
+    modelsPath = "/v1/models";
+    modelsResult = await fetchJson({
+      url: `${endpoint.origin}${modelsPath}`,
+      origin: endpoint.origin,
+      apiKey: params.apiKey,
+      timeoutMs,
+      signal: params.signal,
+      readBody: true,
+      fetchGuard,
+    });
+  }
+  if (modelsResult.kind === "unreachable") {
+    return { kind: "unreachable", endpoint, error: modelsResult.error };
+  }
+  if (modelsResult.kind === "invalid-response") {
+    return {
+      kind: "invalid-response",
+      endpoint,
+      path: modelsPath,
+      error: modelsResult.error,
+    };
+  }
+  if (!modelsResult.ok) {
+    return {
+      kind: "http-error",
+      endpoint,
+      status: modelsResult.status,
+      path: modelsPath,
+    };
+  }
+
+  let rows: LlamaServerModelWire[];
+  try {
+    rows = readModelRows(modelsResult.body);
+  } catch (error) {
+    return { kind: "invalid-response", endpoint, path: modelsPath, error };
+  }
+  const routerMode = rows.some((row) => row.status !== undefined);
+  const models: LlamaServerDiscoveredModel[] = [];
+  for (const row of rows) {
+    const props = await readModelProps({
+      row,
+      routerMode,
+      origin: endpoint.origin,
+      apiKey: params.apiKey,
+      timeoutMs,
+      signal: params.signal,
+      fetchGuard,
+    });
+    const model = mapLlamaServerModel(row, props);
+    if (model) {
+      models.push(model);
+    }
+  }
+
+  const fetchedAt = Date.now();
+  const result = { kind: "success", endpoint, health, models, fetchedAt } as const;
+  if (cacheTtlMs > 0) {
+    discoveryCache.set(endpoint.origin, { result, expiresAt: fetchedAt + cacheTtlMs });
+  }
+  return result;
+}
