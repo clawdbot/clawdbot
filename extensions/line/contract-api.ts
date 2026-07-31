@@ -1,11 +1,9 @@
 // Line API module exposes the plugin public contract.
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
-import {
-  createChannelIngressQueue,
-  type PluginDoctorStateMigration,
+import type {
+  PluginDoctorChannelIngressQueueAccess,
+  PluginDoctorStateMigration,
+  PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor";
-import { listLineAccountIds } from "./src/accounts.js";
 import type { LineWebhookSpoolPayload } from "./src/webhook-spool-contract.js";
 import { countLegacySpoolRows, migrateLineLegacySpoolRows } from "./src/webhook-spool-migration.js";
 
@@ -15,18 +13,20 @@ export {
   resolveLineAccount,
 } from "./src/accounts.js";
 
-/** Pre-drain rows can outlive the account config that admitted them, so always
- *  include the default account alongside the currently configured ones. */
-function lineSpoolAccountIds(config: OpenClawConfig): string[] {
-  return Array.from(new Set([DEFAULT_ACCOUNT_ID, ...listLineAccountIds(config)]));
-}
+const LINE_CHANNEL_ID = "line";
 
-function openLineSpoolQueue(accountId: string, stateDir: string) {
-  return createChannelIngressQueue<LineWebhookSpoolPayload>({
-    channelId: "line",
-    accountId,
-    stateDir,
-  });
+/** Pre-drain rows can outlive the account config that admitted them, so account
+ *  discovery reads the durable queue itself instead of the current config. */
+function lineSpoolQueueAccess(
+  context: PluginDoctorStateMigrationContext,
+): PluginDoctorChannelIngressQueueAccess {
+  const access = context.channelIngressQueues?.find((entry) => entry.channelId === LINE_CHANNEL_ID);
+  if (!access) {
+    throw new Error(
+      "LINE pre-drain spool migration requires the doctor host's channel ingress queue access.",
+    );
+  }
+  return access;
 }
 
 /** Doctor-owned upgrade migration for pre-drain (#109655) webhook spool rows. */
@@ -35,9 +35,12 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     id: "line-pre-drain-spool-rows",
     label: "LINE pre-drain webhook spool rows",
     async detectLegacyState(params) {
+      const spool = lineSpoolQueueAccess(params.context);
       const preview: string[] = [];
-      for (const accountId of lineSpoolAccountIds(params.config)) {
-        const count = await countLegacySpoolRows(openLineSpoolQueue(accountId, params.stateDir));
+      for (const accountId of spool.listIngressQueueAccountIds()) {
+        const count = await countLegacySpoolRows(
+          spool.openIngressQueue<LineWebhookSpoolPayload>({ accountId }),
+        );
         if (count > 0) {
           preview.push(
             `- LINE pre-drain spool rows (account "${accountId}"): ${count} row(s) -> canonical ingress contract`,
@@ -47,11 +50,12 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       return preview.length > 0 ? { preview } : null;
     },
     async migrateLegacyState(params) {
+      const spool = lineSpoolQueueAccess(params.context);
       const changes: string[] = [];
       const warnings: string[] = [];
-      for (const accountId of lineSpoolAccountIds(params.config)) {
+      for (const accountId of spool.listIngressQueueAccountIds()) {
         const result = await migrateLineLegacySpoolRows(
-          openLineSpoolQueue(accountId, params.stateDir),
+          spool.openIngressQueue<LineWebhookSpoolPayload>({ accountId }),
         );
         if (
           result.migrated > 0 ||

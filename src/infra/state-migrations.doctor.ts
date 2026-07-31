@@ -5,6 +5,10 @@ import {
   discardLegacyRegistryWorktrees,
   hasLegacyRegistryWorktrees,
 } from "../agents/worktrees/registry.js";
+import {
+  createChannelIngressQueue,
+  listChannelIngressQueueAccountIds,
+} from "../channels/message/ingress-queue.js";
 import { listBundledChannelLegacyStateMigrationDetectors } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
@@ -258,7 +262,12 @@ async function collectPluginDoctorStateMigrationPlans(params: {
         env: params.env,
         stateDir: params.stateDir,
         oauthDir: params.oauthDir,
-        context: createPluginDoctorStateMigrationContext(entry.pluginId, params.env),
+        context: createPluginDoctorStateMigrationContext({
+          pluginId: entry.pluginId,
+          channelIds: entry.channelIds,
+          stateDir: params.stateDir,
+          env: params.env,
+        }),
       });
     } catch (err) {
       params.warnings?.push(`Failed detecting ${entry.migration.label}: ${String(err)}`);
@@ -267,6 +276,7 @@ async function collectPluginDoctorStateMigrationPlans(params: {
     if (detected?.preview.length) {
       plans.push({
         pluginId: entry.pluginId,
+        channelIds: entry.channelIds,
         migration: entry.migration,
         preview: detected.preview,
       });
@@ -275,10 +285,15 @@ async function collectPluginDoctorStateMigrationPlans(params: {
   return plans;
 }
 
-function createPluginDoctorStateMigrationContext(
-  pluginId: string,
-  env: NodeJS.ProcessEnv,
-): PluginDoctorStateMigrationContext {
+function createPluginDoctorStateMigrationContext(params: {
+  pluginId: string;
+  channelIds: readonly string[] | undefined;
+  stateDir: string;
+  env: NodeJS.ProcessEnv;
+}): PluginDoctorStateMigrationContext {
+  const { pluginId, stateDir, env } = params;
+  // Mocked legacy test hosts can register entries without manifest channel ids.
+  const ownedChannelIds = params.channelIds ?? [];
   return {
     getPluginStateCapacity() {
       return resolvePluginStateCapacity(pluginId, env);
@@ -295,6 +310,16 @@ function createPluginDoctorStateMigrationContext(
         env: options.env ?? env,
       });
     },
+    channelIngressQueues: ownedChannelIds.map((channelId) => ({
+      channelId,
+      openIngressQueue: <TPayload>(options?: { accountId?: string }) =>
+        createChannelIngressQueue<TPayload>({
+          channelId,
+          ...(options?.accountId === undefined ? {} : { accountId: options.accountId }),
+          stateDir,
+        }),
+      listIngressQueueAccountIds: () => listChannelIngressQueueAccountIds({ channelId, stateDir }),
+    })),
   };
 }
 
@@ -922,7 +947,12 @@ async function migratePluginDoctorStatePlans(params: {
           env: params.env,
           stateDir: params.stateDir,
           oauthDir: params.oauthDir,
-          context: createPluginDoctorStateMigrationContext(plan.pluginId, params.env),
+          context: createPluginDoctorStateMigrationContext({
+            pluginId: plan.pluginId,
+            channelIds: plan.channelIds,
+            stateDir: params.stateDir,
+            env: params.env,
+          }),
         });
         changes.push(...result.changes);
         warnings.push(...result.warnings);

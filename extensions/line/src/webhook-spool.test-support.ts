@@ -1,6 +1,5 @@
 // Line test helpers shared by the durable spool and upgrade-migration suites.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { webhook } from "@line/bot-sdk";
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
@@ -9,6 +8,7 @@ import {
   createChannelIngressQueueForTests as createChannelIngressQueue,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { expect, vi } from "vitest";
 
 export type SpoolPayload = {
@@ -18,7 +18,7 @@ export type SpoolPayload = {
 };
 
 /** Row shape written by the pre-drain (#109655) spool worker; only seeded by upgrade tests. */
-export type LegacySpoolPayload = {
+type LegacySpoolPayload = {
   version: number;
   destination: string;
   event: webhook.Event;
@@ -64,7 +64,9 @@ export async function withQueue<T>(
     legacySeed: ChannelIngressQueue<LegacySpoolPayload>,
   ) => Promise<T>,
 ): Promise<T> {
-  const createdDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-line-spool-"));
+  const createdDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-line-spool-"),
+  );
   const stateDir = await fs.realpath(createdDir);
   const queue = createChannelIngressQueue<SpoolPayload>({
     channelId: "line",

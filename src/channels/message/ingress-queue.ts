@@ -557,6 +557,26 @@ export function countFailedChannelIngressQueueEntries(
   }));
 }
 
+/** Lists account ids that hold any ingress rows for a channel, so doctor
+ *  migrations can sweep durable state whose account is gone from config. */
+export function listChannelIngressQueueAccountIds(params: {
+  channelId: string;
+  stateDir?: string;
+}): string[] {
+  const channelId = normalizePart(params.channelId, "unknown");
+  const database = openStateDatabase(params.stateDir);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    getChannelIngressKysely(database.db)
+      .selectFrom("channel_ingress_events")
+      .select("account_id")
+      .distinct()
+      .where("channel_id", "=", channelId)
+      .orderBy("account_id", "asc"),
+  ).rows;
+  return rows.map((row) => row.account_id);
+}
+
 /** Creates a durable channel/account-scoped ingress queue backed by the OpenClaw state database. */
 export function createChannelIngressQueue<
   TPayload,

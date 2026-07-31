@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests as createChannelIngressQueue,
+  listChannelIngressQueueAccountIdsForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor";
 import { afterEach, describe, expect, it } from "vitest";
@@ -14,11 +15,26 @@ import { stateMigrations } from "./contract-api.js";
 
 const migration = stateMigrations[0]!;
 
-const context: PluginDoctorStateMigrationContext = {
-  openPluginStateKeyedStore: () => {
-    throw new Error("the LINE spool migration does not use plugin keyed state");
-  },
-};
+function contextFor(stateDir: string): PluginDoctorStateMigrationContext {
+  return {
+    openPluginStateKeyedStore: () => {
+      throw new Error("the LINE spool migration does not use plugin keyed state");
+    },
+    channelIngressQueues: [
+      {
+        channelId: "line",
+        openIngressQueue: <TPayload>(options?: { accountId?: string }) =>
+          createChannelIngressQueue<TPayload>({
+            channelId: "line",
+            ...(options?.accountId === undefined ? {} : { accountId: options.accountId }),
+            stateDir,
+          }),
+        listIngressQueueAccountIds: () =>
+          listChannelIngressQueueAccountIdsForTests({ channelId: "line", stateDir }),
+      },
+    ],
+  };
+}
 
 function legacyEvent(webhookEventId: string): webhook.Event {
   const event: webhook.MessageEvent = {
@@ -56,8 +72,21 @@ function migrationParams(stateDir: string, config: OpenClawConfig) {
     env: process.env,
     stateDir,
     oauthDir: path.join(stateDir, "oauth"),
-    context,
+    context: contextFor(stateDir),
   };
+}
+
+async function seedLegacyRow(stateDir: string, accountId: string, webhookEventId: string) {
+  const legacySeed = createChannelIngressQueue<{
+    version: number;
+    destination: string;
+    event: webhook.Event;
+  }>({ channelId: "line", accountId, stateDir });
+  await legacySeed.enqueue(
+    webhookEventId,
+    { version: 1, destination: "destination-1", event: legacyEvent(webhookEventId) },
+    { laneKey: "user:user-1" },
+  );
 }
 
 describe("LINE doctor state migration", () => {
@@ -74,17 +103,8 @@ describe("LINE doctor state migration", () => {
   it("detects and migrates pre-drain rows for the default account absent from config", async () => {
     await withStateDir(async (stateDir) => {
       // Pre-drain rows outlive the account config that admitted them, so the
-      // default account is swept even when the config no longer names it.
-      const legacySeed = createChannelIngressQueue<{
-        version: number;
-        destination: string;
-        event: webhook.Event;
-      }>({ channelId: "line", accountId: "default", stateDir });
-      await legacySeed.enqueue(
-        "legacy-doctor-default",
-        { version: 1, destination: "destination-1", event: legacyEvent("legacy-doctor-default") },
-        { laneKey: "user:user-1" },
-      );
+      // sweep discovers accounts from the durable queue rather than the config.
+      await seedLegacyRow(stateDir, "default", "legacy-doctor-default");
 
       const detected = await migration.detectLegacyState(migrationParams(stateDir, {}));
       expect(detected?.preview).toEqual([
@@ -109,16 +129,7 @@ describe("LINE doctor state migration", () => {
 
   it("detects and migrates pre-drain rows for a configured account", async () => {
     await withStateDir(async (stateDir) => {
-      const legacySeed = createChannelIngressQueue<{
-        version: number;
-        destination: string;
-        event: webhook.Event;
-      }>({ channelId: "line", accountId: "work", stateDir });
-      await legacySeed.enqueue(
-        "legacy-doctor-1",
-        { version: 1, destination: "destination-1", event: legacyEvent("legacy-doctor-1") },
-        { laneKey: "user:user-1" },
-      );
+      await seedLegacyRow(stateDir, "work", "legacy-doctor-1");
       const config: OpenClawConfig = {
         channels: { line: { accounts: { work: {} } } },
       };
@@ -142,6 +153,50 @@ describe("LINE doctor state migration", () => {
       const pending = await queue.listPending({ limit: "all" });
       expect(pending.map((record) => record.id)).toEqual(["message:message-legacy-doctor-1"]);
       expect(await migration.detectLegacyState(migrationParams(stateDir, config))).toBeNull();
+    });
+  });
+
+  it("detects and migrates pre-drain rows for a named account removed from config", async () => {
+    await withStateDir(async (stateDir) => {
+      // The "retired" account no longer exists in config; only queue-account
+      // discovery can find its rows, so they must still migrate.
+      await seedLegacyRow(stateDir, "retired", "legacy-doctor-retired");
+      await seedLegacyRow(stateDir, "default", "legacy-doctor-kept");
+
+      const detected = await migration.detectLegacyState(migrationParams(stateDir, {}));
+      expect(detected?.preview).toEqual([
+        '- LINE pre-drain spool rows (account "default"): 1 row(s) -> canonical ingress contract',
+        '- LINE pre-drain spool rows (account "retired"): 1 row(s) -> canonical ingress contract',
+      ]);
+
+      const result = await migration.migrateLegacyState(migrationParams(stateDir, {}));
+      expect(result.changes).toEqual([
+        'Migrated LINE pre-drain spool rows (account "default"): 1 delivered to the canonical queue, 0 dead-lettered at the identity fence',
+        'Migrated LINE pre-drain spool rows (account "retired"): 1 delivered to the canonical queue, 0 dead-lettered at the identity fence',
+      ]);
+      expect(result.warnings).toEqual([]);
+
+      const retiredQueue = createChannelIngressQueue<{
+        version: number;
+        rawEvent: string;
+        destination: string;
+      }>({ channelId: "line", accountId: "retired", stateDir });
+      const pending = await retiredQueue.listPending({ limit: "all" });
+      expect(pending.map((record) => record.id)).toEqual(["message:message-legacy-doctor-retired"]);
+      expect(await migration.detectLegacyState(migrationParams(stateDir, {}))).toBeNull();
+    });
+  });
+
+  it("fails visibly when the doctor host lacks channel ingress queue access", async () => {
+    await withStateDir(async (stateDir) => {
+      const context: PluginDoctorStateMigrationContext = {
+        openPluginStateKeyedStore: () => {
+          throw new Error("the LINE spool migration does not use plugin keyed state");
+        },
+      };
+      await expect(
+        migration.detectLegacyState({ ...migrationParams(stateDir, {}), context }),
+      ).rejects.toThrow(/channel ingress queue access/);
     });
   });
 });

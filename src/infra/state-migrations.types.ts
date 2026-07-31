@@ -160,6 +160,7 @@ export type MigrationLogger = {
 
 export type DetectedPluginDoctorStateMigrationPlan = {
   pluginId: string;
+  channelIds: string[];
   migration: PluginDoctorStateMigration;
   preview: string[];
 };

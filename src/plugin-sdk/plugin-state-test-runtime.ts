@@ -14,7 +14,10 @@ export {
   createPluginBlobStoreForTests,
   resetPluginBlobStoreForTests,
 } from "../plugin-state/plugin-blob-store.js";
-export { createChannelIngressQueue as createChannelIngressQueueForTests } from "../channels/message/ingress-queue.js";
+export {
+  createChannelIngressQueue as createChannelIngressQueueForTests,
+  listChannelIngressQueueAccountIds as listChannelIngressQueueAccountIdsForTests,
+} from "../channels/message/ingress-queue.js";
 export { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 export type { DB as OpenClawStateKyselyDatabaseForTests } from "../state/openclaw-state-db.generated.js";
 export {
