@@ -325,6 +325,24 @@ cp["spawn"]("node", ["server.js"]);
     expectScanRule(source, { ruleId: "dangerous-exec", severity: "critical" });
   });
 
+  it("does not flag harmless child_process member aliased to exec in ESM import", () => {
+    const source = `
+import { readFile as exec } from "node:child_process";
+exec["spawn"]("/etc/passwd");
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expectRulePresence(findings, "dangerous-exec", false);
+  });
+
+  it("does not flag harmless child_process member aliased to exec in CJS destructuring", () => {
+    const source = `
+const { readFile: exec } = require("child_process");
+exec["spawn"]("/etc/passwd");
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expectRulePresence(findings, "dangerous-exec", false);
+  });
+
   it("does not flag child_process import without exec/spawn call", () => {
     const source = `
 // This module wraps child_process for safety

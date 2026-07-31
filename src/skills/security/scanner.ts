@@ -321,24 +321,31 @@ function extractChildProcessBindings(source: string): ChildProcessBindings {
   const cjsNamespaceRe =
     /\b(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
 
-  const methodBindingRe = new RegExp(
-    `\\b(${CHILD_PROCESS_METHODS.join("|")})(?:(?:\\s+as\\s+|\\s*:\\s*)(\\w+))?`,
-    "g",
-  );
+  // Only register aliases whose imported/destructured *property* is dangerous,
+  // not aliases whose local name happens to match a dangerous method name.
+  const dangerousMethodSet = new Set<string>(CHILD_PROCESS_METHODS);
 
-  for (const bindingRe of [esmNamedRe, cjsDestructRe]) {
-    let importMatch: RegExpExecArray | null;
-    while ((importMatch = bindingRe.exec(source)) !== null) {
-      const bindings = importMatch[1] ?? "";
-      methodBindingRe.lastIndex = 0;
-      let methodMatch: RegExpExecArray | null;
-      while ((methodMatch = methodBindingRe.exec(bindings)) !== null) {
-        const method = methodMatch[1];
-        if (!method) {
-          continue;
-        }
-        const alias = methodMatch[2] ?? method;
-        aliases.set(alias, method);
+  let importMatch: RegExpExecArray | null;
+  while ((importMatch = esmNamedRe.exec(source)) !== null) {
+    const bindings = importMatch[1] ?? "";
+    for (const specifier of bindings.split(",")) {
+      const parts = specifier.trim().split(/\s+as\s+/);
+      const property = parts[0]?.trim();
+      const local = parts[1]?.trim() ?? property;
+      if (property && local && dangerousMethodSet.has(property)) {
+        aliases.set(local, property);
+      }
+    }
+  }
+
+  while ((importMatch = cjsDestructRe.exec(source)) !== null) {
+    const bindings = importMatch[1] ?? "";
+    for (const specifier of bindings.split(",")) {
+      const parts = specifier.trim().split(/\s*:\s*/);
+      const property = parts[0]?.trim();
+      const local = parts[1]?.trim();
+      if (property && local && dangerousMethodSet.has(property)) {
+        aliases.set(local, property);
       }
     }
   }
