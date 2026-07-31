@@ -162,14 +162,18 @@ export function canPromptForMessageTool(params: {
   if (!params.sourceDelivery.messageTool.enabled) {
     return false;
   }
-  const normalizedToolsAllow = params.toolsAllow
-    ? expandToolGroups(params.toolsAllow).map((toolName) => normalizeToolName(toolName))
-    : undefined;
-  return (
-    params.toolsAllow === undefined ||
-    normalizedToolsAllow?.includes("*") === true ||
-    normalizedToolsAllow?.includes("message") === true
+  // The delivery contract forces the tool for message-tool-owned replies. For
+  // optional announce delivery, only assume the run-level allowlist opted in.
+  if (params.sourceDelivery.sourceReplyDeliveryMode === "message_tool_only") {
+    return true;
+  }
+  if (!params.toolsAllow) {
+    return false;
+  }
+  const normalizedToolsAllow = new Set(
+    expandToolGroups(params.toolsAllow).map((toolName) => normalizeToolName(toolName)),
   );
+  return normalizedToolsAllow.has("*") || normalizedToolsAllow.has("message");
 }
 
 export async function createCronToolsAllowPreflightDiagnostics(params: {
