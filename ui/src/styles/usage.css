@@ -1158,6 +1158,9 @@ details.usage-filter-select summary::-webkit-details-marker,
 
 .usage-hour-cell {
   min-height: 46px;
+  padding: 0;
+  cursor: pointer;
+  appearance: none;
   transition:
     transform 0.18s var(--ease-out),
     border-color 0.18s var(--ease-out),
@@ -1167,6 +1170,11 @@ details.usage-filter-select summary::-webkit-details-marker,
 .usage-hour-cell:hover {
   transform: translateY(-1px);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.usage-hour-cell:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  outline-offset: 2px;
 }
 
 .usage-hour-cell.selected {

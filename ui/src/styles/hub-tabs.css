@@ -120,11 +120,7 @@ wa-tab.hub-tab:focus-visible::part(base) {
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .content-header.sessions-hub-header {
-    display: none;
-  }
-
-  .content-header.hub-page-header:not(.sessions-hub-header) {
+  .content-header.hub-page-header {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
@@ -136,20 +132,20 @@ wa-tab.hub-tab:focus-visible::part(base) {
     max-height: none;
   }
 
-  .hub-page-header:not(.sessions-hub-header) .hub-page-header__title {
+  .hub-page-header .hub-page-header__title {
     grid-area: intro;
     justify-self: stretch;
   }
 
-  .hub-page-header:not(.sessions-hub-header) .page-title {
+  .hub-page-header .page-title {
     display: none;
   }
 
-  .hub-page-header:not(.sessions-hub-header) .hub-page-header__tabs {
+  .hub-page-header .hub-page-header__tabs {
     grid-area: tabs;
   }
 
-  .hub-page-header:not(.sessions-hub-header) .hub-page-header__actions {
+  .hub-page-header .hub-page-header__actions {
     grid-area: actions;
     justify-self: center;
   }
