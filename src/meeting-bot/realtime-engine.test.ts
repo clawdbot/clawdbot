@@ -101,16 +101,16 @@ async function createEngineFixture() {
 }
 
 describe("meeting realtime engine output ownership", () => {
-  it("serializes transport writes", async () => {
+  it("serializes transport writes and coalesces queued 20 ms frames", async () => {
     const fixture = await createEngineFixture();
     try {
-      const first = Buffer.from([1]);
-      const second = Buffer.from([2]);
-      const third = Buffer.from([3]);
+      const first = Buffer.alloc(960, 1);
+      const queued = Array.from({ length: 30 }, (_, index) => Buffer.alloc(960, index + 2));
 
       fixture.callbacks.onAudio(first);
-      fixture.callbacks.onAudio(second);
-      fixture.callbacks.onAudio(third);
+      for (const frame of queued) {
+        fixture.callbacks.onAudio(frame);
+      }
       await vi.waitFor(() => {
         expect(fixture.writeOutput).toHaveBeenCalledTimes(1);
       });
@@ -120,13 +120,13 @@ describe("meeting realtime engine output ownership", () => {
       await vi.waitFor(() => {
         expect(fixture.writeOutput).toHaveBeenCalledTimes(2);
       });
-      expect(fixture.writeOutput).toHaveBeenLastCalledWith(second);
+      expect(fixture.writeOutput).toHaveBeenLastCalledWith(Buffer.concat(queued.slice(0, 25)));
 
       fixture.releaseWrite(1);
       await vi.waitFor(() => {
         expect(fixture.writeOutput).toHaveBeenCalledTimes(3);
       });
-      expect(fixture.writeOutput).toHaveBeenLastCalledWith(third);
+      expect(fixture.writeOutput).toHaveBeenLastCalledWith(Buffer.concat(queued.slice(25)));
       fixture.releaseWrite(2);
     } finally {
       await fixture.handle.stop();
