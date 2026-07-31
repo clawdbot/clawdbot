@@ -9,6 +9,7 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
+import { createTelegramMessageContextRuntime } from "./bot-handlers.message-context.runtime.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 import type { TelegramPromptContextEntry } from "./bot-message-context.types.js";
 
@@ -98,6 +99,85 @@ describe("buildTelegramMessageContext prompt context", () => {
     });
 
     expect(ctx?.ctxPayload.ChannelStructuredContext).toEqual([telegramChatWindowContext]);
+  });
+
+  it("honors zero DM history while preserving the current reply target", async () => {
+    const cfg = {
+      agents: { defaults: {} },
+      channels: { telegram: { dmPolicy: "open", dmHistoryLimit: 0 } },
+    } as never;
+    const telegramCfg = {
+      dmPolicy: "open",
+      dmHistoryLimit: 0,
+    } as never;
+
+    const messageContextRuntime = createTelegramMessageContextRuntime({
+      cfg,
+      accountId: "default",
+      opts: {
+        token: "test-token",
+        botInfo: { id: 7, username: "bot", first_name: "Bot" },
+      } as never,
+      telegramCfg,
+      telegramDeps: {
+        resolveStorePath: () => "/tmp/openclaw-telegram-dm-history-zero-test.json",
+      } as never,
+    });
+
+    const chat = { id: 1234, type: "private", first_name: "Pat" } as const;
+
+    await messageContextRuntime.recordMessageForReplyChain({
+      chat,
+      message_id: 10,
+      date: 1_700_000_000,
+      text: "older unrelated DM",
+      from: { id: 1234, is_bot: false, first_name: "Pat" },
+    } as never);
+
+    const currentMessage = {
+      chat,
+      message_id: 12,
+      date: 1_700_000_020,
+      text: "answer this reply target",
+      from: { id: 1234, is_bot: false, first_name: "Pat" },
+      reply_to_message: {
+        chat,
+        message_id: 11,
+        date: 1_700_000_010,
+        text: "current reply target",
+        from: { id: 1234, is_bot: false, first_name: "Pat" },
+      },
+    } as never;
+
+    await messageContextRuntime.recordMessageForReplyChain(currentMessage);
+
+    const replyChainNodes = await messageContextRuntime.buildReplyChainForMessage(currentMessage);
+
+    const promptContext = await messageContextRuntime.buildPromptContextForMessage(
+      { me: { id: 7, username: "bot", first_name: "Bot" } } as never,
+      currentMessage,
+      replyChainNodes,
+      cfg,
+      telegramCfg,
+    );
+
+    expect(promptContext).toEqual([
+      expect.objectContaining({
+        label: "Conversation context",
+        source: "telegram",
+        type: "chat_window",
+        payload: expect.objectContaining({
+          messages: [
+            expect.objectContaining({
+              message_id: "11",
+              body: "current reply target",
+              is_reply_target: true,
+            }),
+          ],
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(promptContext)).not.toContain("older unrelated DM");
   });
 
   it("preserves richer chat-window fields when merging duplicate group history", async () => {

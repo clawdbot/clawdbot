@@ -155,6 +155,7 @@ export function createTelegramMessageContextRuntime({
         runtimeCfg.messages?.groupChat?.historyLimit ??
         DEFAULT_GROUP_HISTORY_LIMIT,
     );
+    const dmHistoryLimit = Math.max(0, runtimeTelegramCfg.dmHistoryLimit ?? 10);
     const messageId = typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
     const currentNode = await messageCache.get({ accountId, chatId: msg.chat.id, messageId });
     const threadId = currentNode?.threadId ? Number(currentNode.threadId) : undefined;
@@ -168,8 +169,8 @@ export function createTelegramMessageContextRuntime({
             chatId: msg.chat.id,
             ...(Number.isFinite(threadId) ? { threadId } : {}),
             replyChainNodes,
-            recentLimit: isGroup ? groupHistoryLimit : 10,
-            replyTargetWindowSize: 2,
+            recentLimit: isGroup ? groupHistoryLimit : dmHistoryLimit,
+            replyTargetWindowSize: isGroup || dmHistoryLimit > 0 ? 2 : 0,
             ...(options?.promptContextMinTimestampMs !== undefined
               ? { minTimestampMs: options.promptContextMinTimestampMs }
               : {}),
