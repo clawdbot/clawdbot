@@ -476,7 +476,23 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       candidate: cfg,
     });
 
-  noteOpencodeProviderOverrides(cfg);
+  const configuredOpencodePluginIds = [
+    cfg.models?.providers?.opencode || cfg.models?.providers?.["opencode-zen"]
+      ? "opencode"
+      : undefined,
+    cfg.models?.providers?.["opencode-go"] ? "opencode-go" : undefined,
+  ].filter((pluginId): pluginId is string => pluginId !== undefined);
+  const activeOpencodePluginIds =
+    configuredOpencodePluginIds.length > 0
+      ? (await import("../plugins/providers.js")).resolveEnabledProviderPluginIds({
+          config: cfg,
+          onlyPluginIds: configuredOpencodePluginIds,
+        })
+      : [];
+  noteOpencodeProviderOverrides(cfg, {
+    opencodePluginActive: activeOpencodePluginIds.includes("opencode"),
+    opencodeGoPluginActive: activeOpencodePluginIds.includes("opencode-go"),
+  });
   noteImplicitFallbackClobberWarnings(cfg);
   noteSandboxOriginProxyWarning(cfg);
 

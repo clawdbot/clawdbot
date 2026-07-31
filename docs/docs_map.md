@@ -8585,7 +8585,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Getting started
   - H2: Config example
-  - H2: Built-in catalog
+  - H2: Catalog
   - H2: Advanced configuration
   - H2: Related
 

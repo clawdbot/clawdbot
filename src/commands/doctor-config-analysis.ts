@@ -129,21 +129,24 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
   return { config: next, removed };
 }
 
-/** Warns when legacy OpenCode provider overrides shadow the built-in catalog. */
-export function noteOpencodeProviderOverrides(cfg: OpenClawConfig): void {
+/** Warns when legacy OpenCode overrides shadow an active plugin-provided catalog. */
+export function noteOpencodeProviderOverrides(
+  cfg: OpenClawConfig,
+  options: { opencodePluginActive?: boolean; opencodeGoPluginActive?: boolean } = {},
+): void {
   const providers = cfg.models?.providers;
   if (!providers) {
     return;
   }
 
   const overrides: string[] = [];
-  if (providers.opencode) {
+  if (options.opencodePluginActive === true && providers.opencode) {
     overrides.push("opencode");
   }
-  if (providers["opencode-zen"]) {
+  if (options.opencodePluginActive === true && providers["opencode-zen"]) {
     overrides.push("opencode-zen");
   }
-  if (providers["opencode-go"]) {
+  if (options.opencodeGoPluginActive === true && providers["opencode-go"]) {
     overrides.push("opencode-go");
   }
   if (overrides.length === 0) {
@@ -158,7 +161,7 @@ export function noteOpencodeProviderOverrides(cfg: OpenClawConfig): void {
         ? providerEntry.api
         : undefined;
     return [
-      `- models.providers.${id} is set; this overrides the built-in ${providerLabel} catalog.`,
+      `- models.providers.${id} is set; this overrides the plugin-provided ${providerLabel} catalog.`,
       api ? `- models.providers.${id}.api=${api}` : null,
     ].filter((line): line is string => Boolean(line));
   });

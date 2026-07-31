@@ -196,7 +196,7 @@ describe("doctor command", () => {
     }
   });
 
-  it("warns about opencode provider overrides", async () => {
+  it("warns about active OpenCode provider overrides", async () => {
     mockDoctorConfigSnapshot({
       config: {
         models: {

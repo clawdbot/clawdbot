@@ -349,6 +349,7 @@ describe("bundled plugin build entries", () => {
       "mistral",
       "novita",
       "opencode",
+      "opencode-go",
       "xiaomi",
     ]) {
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/index.js`);

@@ -1191,6 +1191,69 @@
       }
     },
     {
+      "name": "@openclaw/opencode-go-provider",
+      "description": "OpenClaw OpenCode Go provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "opencode-go",
+          "label": "OpenCode Go"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "opencode-native",
+            "hostSuffixes": [
+              "opencode.ai"
+            ]
+          }
+        ],
+        "providers": [
+          {
+            "id": "opencode-go",
+            "name": "OpenCode Go",
+            "docs": "/providers/opencode-go",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "OPENCODE_API_KEY",
+              "OPENCODE_ZEN_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "opencode-go",
+                "choiceLabel": "OpenCode Go catalog",
+                "groupId": "opencode",
+                "groupLabel": "OpenCode",
+                "groupHint": "Shared API key for Zen + Go catalogs",
+                "optionKey": "opencodeGoApiKey",
+                "cliFlag": "--opencode-go-api-key",
+                "cliOption": "--opencode-go-api-key <key>",
+                "cliDescription": "OpenCode API key (Go catalog)",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "mediaUnderstandingProviders": [
+            "opencode-go"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/opencode-go-provider",
+          "npmSpec": "@openclaw/opencode-go-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/pixverse-provider",
       "description": "OpenClaw PixVerse video provider plugin",
       "source": "official",

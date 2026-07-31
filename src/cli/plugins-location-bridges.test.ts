@@ -170,6 +170,7 @@ describe("listPersistedBundledPluginLocationBridges", () => {
     ["mistral", "@openclaw/mistral-provider", true],
     ["novita", "@openclaw/novita-provider", true],
     ["opencode", "@openclaw/opencode-provider", true],
+    ["opencode-go", "@openclaw/opencode-go-provider", true],
     ["synthetic", "@openclaw/synthetic-provider", true],
     ["teams-meetings", "@openclaw/teams-meetings", true],
     ["volcengine", "@openclaw/volcengine-provider", true],

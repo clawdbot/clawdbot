@@ -295,6 +295,7 @@
     "!dist/extensions/nostr/**",
     "!dist/extensions/novita/**",
     "!dist/extensions/opencode/**",
+    "!dist/extensions/opencode-go/**",
     "!dist/extensions/parallel/**",
     "!dist/extensions/perplexity/**",
     "!dist/extensions/qianfan/**",

@@ -9,15 +9,24 @@ title: "OpenCode Go"
 OpenCode Go is the Go catalog inside [OpenCode](/providers/opencode). It shares
 the `OPENCODE_API_KEY` credential with the Zen catalog, but keeps its own
 runtime provider id (`opencode-go`) so upstream per-model routing stays
-correct.
+correct. OpenClaw provides it as the official external
+`@openclaw/opencode-go-provider` plugin.
 
 | Property         | Value                                              |
 | ---------------- | -------------------------------------------------- |
 | Runtime provider | `opencode-go`                                      |
+| Plugin           | `@openclaw/opencode-go-provider`                   |
 | Auth             | `OPENCODE_API_KEY` (alias: `OPENCODE_ZEN_API_KEY`) |
 | Parent setup     | [OpenCode](/providers/opencode)                    |
 
 ## Getting started
+
+Install the official plugin and restart the Gateway:
+
+```bash
+openclaw plugins install @openclaw/opencode-go-provider
+openclaw gateway restart
+```
 
 <Tabs>
   <Tab title="Interactive">
@@ -65,10 +74,10 @@ correct.
 }
 ```
 
-## Built-in catalog
+## Catalog
 
 Run `openclaw models list --provider opencode-go` for the current model list.
-Bundled rows:
+Current rows:
 
 | Model ref                       | Name              | Context   | Max output | Image input |
 | ------------------------------- | ----------------- | --------- | ---------- | ----------- |
