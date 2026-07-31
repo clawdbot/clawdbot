@@ -1,6 +1,6 @@
 import type { Message } from "@openclaw/llm-core";
 // Agent Core helper module supports utils behavior.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../types.js";
 import type { FileOperations } from "../types.js";
 
@@ -86,6 +86,8 @@ export function formatFileOperations(readFiles: string[], modifiedFiles: string[
 }
 
 const TOOL_RESULT_MAX_CHARS = 2000;
+const IMPORTANT_TOOL_RESULT_TAIL =
+  /\b(error|exception|failed|fatal|traceback|panic|stack trace|errno|exit code|total|summary|result|complete|finished|done)\b/i;
 
 function safeJsonStringify(value: unknown): string {
   try {
@@ -98,6 +100,15 @@ function safeJsonStringify(value: unknown): string {
 function truncateForSummary(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
+  }
+  if (IMPORTANT_TOOL_RESULT_TAIL.test(sliceUtf16Safe(text, -maxChars))) {
+    const tailChars = Math.min(Math.floor(maxChars * 0.3), 600);
+    const head = truncateUtf16Safe(text, maxChars - tailChars);
+    const tail = sliceUtf16Safe(text, -tailChars);
+    const truncatedChars = text.length - head.length - tail.length;
+    // Commands usually report their actual failure last; preserve that tail
+    // so branch and ordinary compaction summaries can explain what failed.
+    return `${head}\n\n[... ${truncatedChars} more characters truncated]\n\n${tail}`;
   }
   const sliced = truncateUtf16Safe(text, maxChars);
   const truncatedChars = text.length - sliced.length;

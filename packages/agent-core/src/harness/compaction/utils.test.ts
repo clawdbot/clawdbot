@@ -47,4 +47,37 @@ describe("serializeConversation", () => {
       `[Tool result]: ${prefix}\n\n[... 6 more characters truncated]`,
     );
   });
+
+  it("preserves terminal failures when truncating long tool results", () => {
+    const output = `command started\n${"progress ".repeat(450)}\nFATAL: missing deployment token`;
+    const messages = [
+      {
+        role: "toolResult",
+        content: [{ type: "text", text: output }],
+      },
+    ] as unknown as Message[];
+
+    const serialized = serializeConversation(messages);
+
+    expect(serialized).toContain("command started");
+    expect(serialized).toContain("FATAL: missing deployment token");
+    expect(serialized).toMatch(/\[\.\.\. \d+ more characters truncated\]/);
+    expect(serialized.length).toBeLessThan(2100);
+  });
+
+  it("keeps both diagnostic truncation boundaries UTF-16 safe", () => {
+    const output = `${"h".repeat(1399)}🚀${"m".repeat(1600)}🚀\nERROR: failed safely`;
+    const messages = [
+      {
+        role: "toolResult",
+        content: [{ type: "text", text: output }],
+      },
+    ] as unknown as Message[];
+
+    const serialized = serializeConversation(messages);
+
+    expect(serialized).toContain("ERROR: failed safely");
+    expect(serialized).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(serialized).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+  });
 });

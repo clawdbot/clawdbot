@@ -104,9 +104,6 @@ export function collectEntriesForBranchSummaryFromBranches<TEntry extends Branch
 function getMessageFromEntry(entry: SessionTreeEntry): AgentMessage | undefined {
   switch (entry.type) {
     case "message":
-      if (entry.message.role === "toolResult") {
-        return undefined;
-      }
       return entry.message;
 
     case "custom_message":
@@ -240,7 +237,18 @@ export async function generateBranchSummary(
     reserveTokens = 16384,
   } = options;
   const contextWindow = model.contextWindow || 128000;
-  const tokenBudget = contextWindow - reserveTokens;
+  const maxSummaryOutputTokens = Math.min(
+    2048,
+    Math.max(1, Math.floor(contextWindow / 4)),
+    model.maxTokens > 0 ? model.maxTokens : 2048,
+  );
+  // A reservation larger than a small model's window must not become the
+  // nonpositive sentinel that makes prepareBranchEntries retain all history.
+  const effectiveReserveTokens = Math.max(
+    maxSummaryOutputTokens,
+    Math.min(reserveTokens, Math.floor(contextWindow / 2)),
+  );
+  const tokenBudget = Math.max(1, contextWindow - effectiveReserveTokens);
 
   const { messages, fileOps } = prepareBranchEntries(entries, tokenBudget);
 
@@ -267,7 +275,7 @@ export async function generateBranchSummary(
     },
   ];
   const context = { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages };
-  const streamOptions = { apiKey, headers, signal, maxTokens: 2048 };
+  const streamOptions = { apiKey, headers, signal, maxTokens: maxSummaryOutputTokens };
   const response = options.streamFn
     ? await (await options.streamFn(model, context, streamOptions)).result()
     : await resolveAgentCoreCompleteFn(options.runtime)(model, context, streamOptions);
