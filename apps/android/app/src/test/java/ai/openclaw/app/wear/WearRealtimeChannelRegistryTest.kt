@@ -842,6 +842,98 @@ class WearRealtimeChannelRegistryTest {
         scope.cancel()
       }
     }
+
+  @Test
+  fun `legacy channel replacement binds the new attempt instead of inheriting the old owner`() =
+    runBlocking {
+      val scope = kotlinx.coroutines.CoroutineScope(SupervisorJob() + Dispatchers.IO)
+      val transport = FakeChannelTransport()
+      val registry = WearRealtimeChannelRegistry(scope, transport)
+      val stoppedOwners = mutableListOf<WearRealtimeAttemptOwner>()
+      val first =
+        FakeChannel(
+          nodeId = "watch-a",
+          label = "legacy-a",
+          attemptId = "ignored-a",
+          pathOverride = WearProtocol.LEGACY_REALTIME_AUDIO_CHANNEL_PATH,
+        )
+      val second =
+        FakeChannel(
+          nodeId = "watch-a",
+          label = "legacy-b",
+          attemptId = "ignored-b",
+          pathOverride = WearProtocol.LEGACY_REALTIME_AUDIO_CHANNEL_PATH,
+        )
+
+      try {
+        registry.accept(first, appendAudio = { _, _ -> }, stopTalk = { stoppedOwners += it })
+        transport.awaitOpened(first)
+        val firstOwner =
+          checkNotNull(
+            registry.claim(
+              nodeId = "watch-a",
+              attemptId = "attempt-a",
+              attemptScopedAudio = false,
+            ),
+          ).owner
+
+        registry.accept(second, appendAudio = { _, _ -> }, stopTalk = { stoppedOwners += it })
+        transport.awaitOpened(second)
+        val secondOwner =
+          checkNotNull(
+            registry.claim(
+              nodeId = "watch-a",
+              attemptId = "attempt-b",
+              attemptScopedAudio = false,
+            ),
+          ).owner
+
+        assertEquals("attempt-b", secondOwner.attemptId)
+        assertTrue(secondOwner.channelGeneration > firstOwner.channelGeneration)
+        assertEquals(listOf(firstOwner), stoppedOwners)
+        registry.close(secondOwner)
+      } finally {
+        scope.cancel()
+      }
+    }
+
+  @Test
+  fun `staged channel limits reject excess connections before opening streams`() =
+    runBlocking {
+      val scope = kotlinx.coroutines.CoroutineScope(SupervisorJob() + Dispatchers.IO)
+      val transport = FakeChannelTransport()
+      val registry =
+        WearRealtimeChannelRegistry(
+          scope = scope,
+          transport = transport,
+          maxStagedConnectionsPerNode = 1,
+          maxStagedConnections = 2,
+        )
+      val first = FakeChannel("watch-a", "first", "attempt-a")
+      val sameNodeExcess = FakeChannel("watch-a", "same-node-excess", "attempt-b")
+      val secondNode = FakeChannel("watch-b", "second-node", "attempt-c")
+      val globalExcess = FakeChannel("watch-c", "global-excess", "attempt-d")
+
+      try {
+        registry.accept(first, appendAudio = { _, _ -> }, stopTalk = {})
+        transport.awaitOpened(first)
+
+        registry.accept(sameNodeExcess, appendAudio = { _, _ -> }, stopTalk = {})
+        transport.awaitCloseStarted(sameNodeExcess)
+        assertFalse(transport.wasOpened(sameNodeExcess))
+        assertEquals(1, transport.closeCount(sameNodeExcess))
+
+        registry.accept(secondNode, appendAudio = { _, _ -> }, stopTalk = {})
+        transport.awaitOpened(secondNode)
+
+        registry.accept(globalExcess, appendAudio = { _, _ -> }, stopTalk = {})
+        transport.awaitCloseStarted(globalExcess)
+        assertFalse(transport.wasOpened(globalExcess))
+        assertEquals(1, transport.closeCount(globalExcess))
+      } finally {
+        scope.cancel()
+      }
+    }
 }
 
 private class FakeChannelTransport : WearRealtimeChannelTransport {
@@ -915,6 +1007,8 @@ private class FakeChannelTransport : WearRealtimeChannelTransport {
 
   fun closeCount(channel: ChannelClient.Channel): Int = closeCounts[channel] ?: 0
 
+  fun wasOpened(channel: ChannelClient.Channel): Boolean = openedResources.containsKey(channel)
+
   fun hasStartedReading(channel: ChannelClient.Channel): Boolean = (openedResources[channel]?.input as? ClosingInputStream)?.hasStartedReading() == true
 }
 
@@ -954,10 +1048,11 @@ private data class FakeChannel(
   private val nodeId: String,
   private val label: String,
   private val attemptId: String,
+  private val pathOverride: String? = null,
 ) : ChannelClient.Channel {
   override fun getNodeId(): String = nodeId
 
-  override fun getPath(): String = WearProtocol.realtimeAudioChannelPath(attemptId)
+  override fun getPath(): String = pathOverride ?: WearProtocol.realtimeAudioChannelPath(attemptId)
 
   override fun describeContents(): Int = 0
 

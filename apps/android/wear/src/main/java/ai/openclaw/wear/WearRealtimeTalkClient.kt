@@ -1,6 +1,7 @@
 package ai.openclaw.wear
 
 import ai.openclaw.wear.shared.WearProtocol
+import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRealtimeAudioFrameType
 import ai.openclaw.wear.shared.WearRealtimeAudioFraming
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
@@ -96,14 +97,16 @@ internal class WearRealtimeTalkClient(
   suspend fun start(
     session: WearSession,
     attemptId: String,
+    capabilities: Set<WearProxyCapability>,
   ): WearRealtimeTalkSnapshot =
     lifecycleLock.withLock {
       val nodeId = session.phoneNodeId
+      val attemptScopedAudio = WearProxyCapability.AttemptScopedRealtimeAudio in capabilities
       var resources: ChannelResources? = null
       var channelOpened = false
       var activatedAttempt: ActiveAttempt? = null
       try {
-        resources = openChannel(nodeId, attemptId)
+        resources = openChannel(nodeId, attemptId, attemptScopedAudio)
         channelOpened = true
         val language =
           Locale
@@ -111,7 +114,14 @@ internal class WearRealtimeTalkClient(
             .language
             .lowercase(Locale.ROOT)
             .takeIf { value -> value.length == ISO_639_1_LANGUAGE_LENGTH }
-        val snapshot = repository.startRealtimeTalk(session.key, attemptId, language, nodeId)
+        val snapshot =
+          repository.startRealtimeTalk(
+            sessionKey = session.key,
+            attemptId = attemptId,
+            language = language,
+            phoneNodeId = nodeId,
+            attemptScopedAudio = attemptScopedAudio,
+          )
         val attempt =
           ActiveAttempt(
             nodeId = nodeId,
@@ -163,6 +173,7 @@ internal class WearRealtimeTalkClient(
   private suspend fun openChannel(
     nodeId: String,
     attemptId: String,
+    attemptScopedAudio: Boolean,
   ): ChannelResources {
     var lastError: Throwable? = null
     repeat(CHANNEL_OPEN_ATTEMPTS) { attempt ->
@@ -172,7 +183,7 @@ internal class WearRealtimeTalkClient(
       try {
         opened =
           channelClient
-            .openChannel(nodeId, WearProtocol.realtimeAudioChannelPath(attemptId))
+            .openChannel(nodeId, wearRealtimeAudioChannelPath(attemptId, attemptScopedAudio))
             .awaitRealtimeTask()
         input = channelClient.getInputStream(opened).awaitRealtimeTask()
         output = channelClient.getOutputStream(opened).awaitRealtimeTask()
@@ -512,6 +523,17 @@ internal class WearRealtimeTalkClient(
     const val PLAYBACK_DRAIN_GRACE_MILLIS = 120L
   }
 }
+
+internal fun wearRealtimeAudioChannelPath(
+  attemptId: String,
+  attemptScopedAudio: Boolean,
+): String =
+  if (attemptScopedAudio) {
+    WearProtocol.realtimeAudioChannelPath(attemptId)
+  } else {
+    // v2026.7.2 shipped the fixed path. Keep it for staggered phone/Watch updates.
+    WearProtocol.LEGACY_REALTIME_AUDIO_CHANNEL_PATH
+  }
 
 internal fun pcm16LeMouthLevels(
   pcm: ByteArray,

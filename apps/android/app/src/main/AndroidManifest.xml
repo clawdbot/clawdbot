@@ -67,6 +67,13 @@
                 <data
                     android:scheme="wear"
                     android:host="*"
+                    android:path="/openclaw/wear/v1/realtime/audio" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.CHANNEL_EVENT" />
+                <data
+                    android:scheme="wear"
+                    android:host="*"
                     android:pathPrefix="/openclaw/wear/v1/realtime/audio/" />
             </intent-filter>
         </service>

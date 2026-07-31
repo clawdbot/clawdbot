@@ -291,15 +291,22 @@ internal class WearViewModel(
   }
 
   fun startRealtimeTalk() {
-    val selectedSession = mutableState.value.selectedSession ?: return
-    if (mutableState.value.talkBusy || mutableState.value.realtimeTalk.active) return
+    val current = mutableState.value
+    val selectedSession = current.selectedSession ?: return
+    if (current.talkBusy || current.realtimeTalk.active) return
+    val capabilities = current.proxyCapabilities
     val attemptId = "wear-${UUID.randomUUID()}"
     talkAttemptId = attemptId
     val startJob =
       viewModelScope.launch(start = CoroutineStart.LAZY) {
         mutableState.update { it.copy(talkBusy = true, failure = null) }
         try {
-          val snapshot = realtimeTalkClient.start(selectedSession, attemptId)
+          val snapshot =
+            realtimeTalkClient.start(
+              selectedSession,
+              attemptId,
+              capabilities,
+            )
           if (talkAttemptId != attemptId) return@launch
           mutableState.update { it.copy(realtimeTalk = snapshot, talkBusy = false) }
         } catch (err: CancellationException) {

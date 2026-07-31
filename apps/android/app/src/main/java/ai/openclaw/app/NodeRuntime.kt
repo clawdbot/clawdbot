@@ -1526,8 +1526,8 @@ class NodeRuntime private constructor(
       },
       connectGateway = { refreshGatewayConnection() },
       disconnectGateway = { disconnect() },
-      startRealtimeTalk = { nodeId, sessionKey, attemptId, language ->
-        if (startWearRealtimeTalk(nodeId, sessionKey, attemptId, language)) wearRealtimeTalkSnapshot.value else null
+      startRealtimeTalk = { nodeId, sessionKey, attemptId, language, attemptScopedAudio ->
+        if (startWearRealtimeTalk(nodeId, sessionKey, attemptId, language, attemptScopedAudio)) wearRealtimeTalkSnapshot.value else null
       },
       stopRealtimeTalk = { nodeId, attemptId ->
         if (stopWearRealtimeTalk(nodeId, attemptId)) wearRealtimeTalkSnapshot.value else null
@@ -2101,10 +2101,16 @@ class NodeRuntime private constructor(
     sessionKey: String,
     attemptId: String,
     language: String?,
+    attemptScopedAudio: Boolean,
   ): Boolean {
     if (talkModeEnabled.value || micEnabled.value || micCooldown.value) return false
     val app = appContext as? NodeApp ?: return false
-    val claim = app.wearRealtimeChannels.claim(nodeId, attemptId) ?: return false
+    val claim =
+      app.wearRealtimeChannels.claim(
+        nodeId = nodeId,
+        attemptId = attemptId,
+        attemptScopedAudio = attemptScopedAudio,
+      ) ?: return false
     val owner = claim.owner
     val resolvedLanguage = talkMode.resolveRealtimeLanguageHint(language)
     var started = false

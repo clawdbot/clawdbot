@@ -135,6 +135,18 @@ class WearTalkAvatarTest {
   }
 
   @Test
+  fun realtimeAudioPathUsesNegotiatedAttemptScope() {
+    assertEquals(
+      WearProtocol.LEGACY_REALTIME_AUDIO_CHANNEL_PATH,
+      wearRealtimeAudioChannelPath("attempt-7", attemptScopedAudio = false),
+    )
+    assertEquals(
+      WearProtocol.realtimeAudioChannelPath("attempt-7"),
+      wearRealtimeAudioChannelPath("attempt-7", attemptScopedAudio = true),
+    )
+  }
+
+  @Test
   fun mouthEnvelopeUsesFastAttackAndSoftReleaseWithoutOvershoot() {
     val attack = smoothAvatarMouth(current = 0f, target = 1f, deltaSeconds = 0.02f)
     val release = smoothAvatarMouth(current = 1f, target = 0f, deltaSeconds = 0.02f)

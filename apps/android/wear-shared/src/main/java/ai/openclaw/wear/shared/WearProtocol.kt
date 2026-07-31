@@ -19,6 +19,7 @@ object WearProtocol {
   const val REQUEST_PATH = "/openclaw/wear/v1/request"
   const val RESPONSE_PATH = "/openclaw/wear/v1/response"
   const val EVENT_PATH = "/openclaw/wear/v1/event"
+  const val LEGACY_REALTIME_AUDIO_CHANNEL_PATH = "/openclaw/wear/v1/realtime/audio"
   const val REALTIME_AUDIO_CHANNEL_PATH_PREFIX = "/openclaw/wear/v1/realtime/audio/"
   const val PHONE_CAPABILITY = "openclaw_phone_proxy_v1"
   const val WATCH_CAPABILITY = "openclaw_wear_companion_v1"
@@ -52,6 +53,11 @@ object WearProtocol {
   }
 
   fun isRealtimeAudioChannelPath(path: String): Boolean {
+    if (path == LEGACY_REALTIME_AUDIO_CHANNEL_PATH) return true
+    return isAttemptScopedRealtimeAudioChannelPath(path)
+  }
+
+  fun isAttemptScopedRealtimeAudioChannelPath(path: String): Boolean {
     if (!path.startsWith(REALTIME_AUDIO_CHANNEL_PATH_PREFIX)) return false
     val token = path.substring(REALTIME_AUDIO_CHANNEL_PATH_PREFIX.length)
     return token.length == REALTIME_AUDIO_ATTEMPT_TOKEN_CHARS &&
@@ -69,6 +75,7 @@ enum class WearProxyCapability(
   GatewayControls(wireValue = "gateway-controls"),
   ModelControls(wireValue = "model-controls"),
   SessionSelectionLookup(wireValue = "session-selection-lookup"),
+  AttemptScopedRealtimeAudio(wireValue = "attempt-scoped-realtime-audio"),
   ;
 
   companion object {

@@ -84,6 +84,8 @@ internal class WearRealtimeChannelRegistry(
   private val connectionReadyTimeoutMillis: Long = DEFAULT_CONNECTION_READY_TIMEOUT_MILLIS,
   private val pendingConnectionTimeoutMillis: Long = WearProtocol.REALTIME_AUDIO_PENDING_CHANNEL_TIMEOUT_MILLIS,
   private val retireCallbackTimeoutMillis: Long = DEFAULT_RETIRE_CALLBACK_TIMEOUT_MILLIS,
+  private val maxStagedConnectionsPerNode: Int = DEFAULT_MAX_STAGED_CONNECTIONS_PER_NODE,
+  private val maxStagedConnections: Int = DEFAULT_MAX_STAGED_CONNECTIONS,
 ) {
   private data class ChannelKey(
     val nodeId: String,
@@ -125,6 +127,8 @@ internal class WearRealtimeChannelRegistry(
   private val pendingConnections = mutableMapOf<ChannelKey, Connection>()
   private val promotingConnections = mutableMapOf<ChannelKey, Connection>()
   private val latestClaimSequences = mutableMapOf<String, Long>()
+  private val openingConnectionsByNode = mutableMapOf<String, Int>()
+  private var openingConnectionCount = 0
 
   fun accept(
     channel: ChannelClient.Channel,
@@ -137,70 +141,86 @@ internal class WearRealtimeChannelRegistry(
     }
     val generation = channelGeneration.incrementAndGet()
     scope.launch(Dispatchers.IO) {
-      val resources = transport.open(channel) ?: return@launch
-      val connection = Connection(channel, resources, generation, stopTalk)
-      var published = false
-      var activated = false
-      var displacedActive: Connection? = null
-      val displacedPending =
-        lifecycleMutex.withLock {
-          val active = connections[channel.nodeId]
-          val pending = pendingConnections[connection.key]
-          if (
-            active?.generation?.let { it > generation } == true ||
-            pending?.generation?.let { it > generation } == true
-          ) {
-            return@withLock null
-          }
-          published = true
-          connection.ready = true
-          if (
-            active?.takeIf { it.ready && !it.retirementStarted.get() }?.channel?.path == channel.path
-          ) {
-            // A same-attempt reconnect inherits the live owner before the old reader reports EOF.
-            active.ready = false
-            connection.owner = active.owner
-            connection.claimSequence = active.claimSequence
-            active.owner = null
-            connections[channel.nodeId] = connection
-            displacedActive = active
-            activated = true
-            pendingConnections.remove(connection.key)
-          } else {
-            pendingConnections.put(connection.key, connection)
-          }
-        }
-      if (!published) {
-        connection.retire(transport)
+      if (!reserveOpeningSlot(channel.nodeId)) {
+        runCatching { transport.close(channel, null) }
         return@launch
       }
-      displacedPending?.retire(transport)
-      displacedActive?.retire(transport)
-      if (activated) {
-        connection.activation.complete(true)
-      } else {
-        schedulePendingExpiry(connection)
-      }
+      var openingSlotReserved = true
       try {
-        // The Watch starts capture after the start RPC; do not consume its PCM before that claim owns this path.
-        if (!connection.activation.await()) return@launch
-        while (isKnown(connection)) {
-          val frame = WearRealtimeAudioFraming.read(resources.input) ?: break
-          if (frame.type != WearRealtimeAudioFrameType.INPUT_PCM) break
-          val owner =
-            lifecycleMutex.withLock {
-              connection.owner.takeIf {
-                connection.ready && connections[channel.nodeId] === connection
-              }
+        val resources = transport.open(channel) ?: return@launch
+        val connection = Connection(channel, resources, generation, stopTalk)
+        var published = false
+        var activated = false
+        var displacedActive: Connection? = null
+        val displacedPending =
+          lifecycleMutex.withLock {
+            releaseOpeningSlotLocked(channel.nodeId)
+            openingSlotReserved = false
+            val active = connections[channel.nodeId]
+            val pending = pendingConnections[connection.key]
+            if (
+              active?.generation?.let { it > generation } == true ||
+              pending?.generation?.let { it > generation } == true
+            ) {
+              return@withLock null
             }
-          if (owner != null) appendAudio(owner, frame.payload)
+            published = true
+            connection.ready = true
+            if (
+              WearProtocol.isAttemptScopedRealtimeAudioChannelPath(channel.path) &&
+              active?.takeIf { it.ready && !it.retirementStarted.get() }?.channel?.path == channel.path
+            ) {
+              // Attempt-scoped reconnects can inherit the live owner before the old reader reports EOF.
+              active.ready = false
+              connection.owner = active.owner
+              connection.claimSequence = active.claimSequence
+              active.owner = null
+              connections[channel.nodeId] = connection
+              displacedActive = active
+              activated = true
+              pendingConnections.remove(connection.key)
+            } else {
+              pendingConnections.put(connection.key, connection)
+            }
+          }
+        if (!published) {
+          connection.retire(transport)
+          return@launch
         }
-      } catch (err: CancellationException) {
-        currentCoroutineContext().ensureActive()
-      } catch (_: Throwable) {
-        // A malformed frame or transport failure owns this channel only.
+        displacedPending?.retire(transport)
+        displacedActive?.retire(transport)
+        if (activated) {
+          connection.activation.complete(true)
+        } else {
+          schedulePendingExpiry(connection)
+        }
+        try {
+          // The Watch starts capture after the start RPC; do not consume its PCM before that claim owns this path.
+          if (!connection.activation.await()) return@launch
+          while (isKnown(connection)) {
+            val frame = WearRealtimeAudioFraming.read(resources.input) ?: break
+            if (frame.type != WearRealtimeAudioFrameType.INPUT_PCM) break
+            val owner =
+              lifecycleMutex.withLock {
+                connection.owner.takeIf {
+                  connection.ready && connections[channel.nodeId] === connection
+                }
+              }
+            if (owner != null) appendAudio(owner, frame.payload)
+          }
+        } catch (err: CancellationException) {
+          currentCoroutineContext().ensureActive()
+        } catch (_: Throwable) {
+          // A malformed frame or transport failure owns this channel only.
+        } finally {
+          retireKnownConnection(connection)
+        }
       } finally {
-        retireKnownConnection(connection)
+        if (openingSlotReserved) {
+          withContext(NonCancellable) {
+            releaseOpeningSlot(channel.nodeId)
+          }
+        }
       }
     }
   }
@@ -208,8 +228,14 @@ internal class WearRealtimeChannelRegistry(
   suspend fun claim(
     nodeId: String,
     attemptId: String,
+    attemptScopedAudio: Boolean = true,
   ): WearRealtimeChannelClaim? {
-    val expectedPath = WearProtocol.realtimeAudioChannelPath(attemptId)
+    val expectedPath =
+      if (attemptScopedAudio) {
+        WearProtocol.realtimeAudioChannelPath(attemptId)
+      } else {
+        WearProtocol.LEGACY_REALTIME_AUDIO_CHANNEL_PATH
+      }
     val key = ChannelKey(nodeId, expectedPath)
     val sequence = claimSequence.incrementAndGet()
     lifecycleMutex.withLock {
@@ -249,6 +275,21 @@ internal class WearRealtimeChannelRegistry(
       if (promotingConnections.keys.any { promotingKey -> promotingKey.nodeId == nodeId }) {
         return@withLock ChannelClaimSelection.Wait
       }
+      val connection = pendingConnections.remove(key)
+      if (connection != null) {
+        val displaced = connections[nodeId]
+        // Reservation is the ordering boundary. Later claims wait for this bounded handoff, then may replace it.
+        connection.ready = false
+        displaced?.ready = false
+        promotingConnections[key] = connection
+        return@withLock ChannelClaimSelection.Promote(
+          ChannelPromotion(
+            connection = connection,
+            displaced = displaced,
+            claimSequence = sequence,
+          ),
+        )
+      }
       connections[nodeId]?.let { active ->
         if (active.claimSequence > sequence) return@withLock ChannelClaimSelection.Superseded
         val current = active.owner
@@ -269,20 +310,42 @@ internal class WearRealtimeChannelRegistry(
           }
         }
       }
-      val connection = pendingConnections.remove(key) ?: return@withLock ChannelClaimSelection.Wait
-      val displaced = connections[nodeId]
-      // Reservation is the ordering boundary. Later claims wait for this bounded handoff, then may replace it.
-      connection.ready = false
-      displaced?.ready = false
-      promotingConnections[key] = connection
-      ChannelClaimSelection.Promote(
-        ChannelPromotion(
-          connection = connection,
-          displaced = displaced,
-          claimSequence = sequence,
-        ),
-      )
+      ChannelClaimSelection.Wait
     }
+
+  private suspend fun reserveOpeningSlot(nodeId: String): Boolean =
+    lifecycleMutex.withLock {
+      val stagedForNode =
+        pendingConnections.keys.count { key -> key.nodeId == nodeId } +
+          promotingConnections.keys.count { key -> key.nodeId == nodeId } +
+          (openingConnectionsByNode[nodeId] ?: 0)
+      val stagedTotal = pendingConnections.size + promotingConnections.size + openingConnectionCount
+      if (
+        stagedForNode >= maxStagedConnectionsPerNode ||
+        stagedTotal >= maxStagedConnections
+      ) {
+        return@withLock false
+      }
+      openingConnectionsByNode[nodeId] = (openingConnectionsByNode[nodeId] ?: 0) + 1
+      openingConnectionCount += 1
+      true
+    }
+
+  private suspend fun releaseOpeningSlot(nodeId: String) {
+    lifecycleMutex.withLock {
+      releaseOpeningSlotLocked(nodeId)
+    }
+  }
+
+  private fun releaseOpeningSlotLocked(nodeId: String) {
+    val count = checkNotNull(openingConnectionsByNode[nodeId])
+    if (count == 1) {
+      openingConnectionsByNode.remove(nodeId)
+    } else {
+      openingConnectionsByNode[nodeId] = count - 1
+    }
+    openingConnectionCount -= 1
+  }
 
   private suspend fun completePromotion(
     nodeId: String,
@@ -520,6 +583,8 @@ internal class WearRealtimeChannelRegistry(
     const val CONNECTION_POLL_MILLIS = 25L
     const val DEFAULT_CONNECTION_READY_TIMEOUT_MILLIS = 3_000L
     const val DEFAULT_RETIRE_CALLBACK_TIMEOUT_MILLIS = 1_000L
+    const val DEFAULT_MAX_STAGED_CONNECTIONS_PER_NODE = 4
+    const val DEFAULT_MAX_STAGED_CONNECTIONS = 16
     const val RETIRE_COMPLETION_TIMEOUT_MILLIS = 2_500L
   }
 }
