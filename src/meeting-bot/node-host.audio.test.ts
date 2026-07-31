@@ -205,4 +205,46 @@ describe("meeting node host audio output", () => {
 
     await invokeHost(host, { action: "stop", bridgeId });
   });
+
+  it("accepts legacy output commands and preserves their response shapes", async () => {
+    const originalStdin = createStdin(true);
+    const replacementStdin = createStdin(true);
+    childProcessMocks.spawn
+      .mockReturnValueOnce(createProcess({ stdin: originalStdin }))
+      .mockReturnValueOnce(createProcess({ stdout: new EventEmitter() }))
+      .mockReturnValueOnce(createProcess({ stdin: replacementStdin }));
+    const host = createHost();
+    const started = await invokeHost(host, {
+      action: "start",
+      audioInputCommand: ["capture"],
+      audioOutputCommand: ["play"],
+      launch: false,
+      mode: "bidi",
+    });
+    const bridgeId = started.bridgeId;
+
+    await expect(
+      invokeHost(host, {
+        action: "pushAudio",
+        base64: Buffer.from([1, 2, 3]).toString("base64"),
+        bridgeId,
+      }),
+    ).resolves.toEqual({ bridgeId, ok: true });
+    await expect(invokeHost(host, { action: "clearAudio", bridgeId })).resolves.toEqual({
+      bridgeId,
+      ok: true,
+      clearCount: 1,
+    });
+    await expect(
+      invokeHost(host, {
+        action: "pushAudio",
+        base64: Buffer.from([4, 5, 6]).toString("base64"),
+        bridgeId,
+      }),
+    ).resolves.toEqual({ bridgeId, ok: true });
+    expect(originalStdin.write).toHaveBeenCalledOnce();
+    expect(replacementStdin.write).toHaveBeenCalledOnce();
+
+    await invokeHost(host, { action: "stop", bridgeId });
+  });
 });
