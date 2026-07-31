@@ -218,6 +218,22 @@ describe("OpenClaw PowerShell lifecycle edges", () => {
     },
   );
 
+  it.each([
+    ["(Get-Process OpenClaw).Kill()", ["(Get-Process", "OpenClaw).Kill()"]],
+    ["(Get-Service OpenClaw).Stop()", ["(Get-Service", "OpenClaw).Stop()"]],
+    ["(Get-Process node).Kill()", ["(Get-Process", "node).Kill()"]],
+  ] as Array<[string, string[]]>)(
+    "recognizes direct object lifecycle methods: %s",
+    (command, argv) => {
+      expect(requiresApproval(command, argv)).toBe(true);
+    },
+  );
+
+  it("keeps direct read-only object methods non-blocking", () => {
+    const command = "(Get-Process OpenClaw).Refresh()";
+    expect(requiresApproval(command, ["(Get-Process", "OpenClaw).Refresh()"])).toBe(false);
+  });
+
   it("keeps non-mutating pipeline object methods non-blocking", () => {
     const command = "Get-Process OpenClaw | ForEach-Object { $_.Refresh() }";
     expect(

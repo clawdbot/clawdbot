@@ -93,6 +93,10 @@ const JAVASCRIPT_EXECUTABLE_RUNNERS = new Set([
   "vite-node",
 ]);
 
+export function lifecycleIsJavaScriptExecutableRunner(value: string | undefined): boolean {
+  return JAVASCRIPT_EXECUTABLE_RUNNERS.has(normalizeExecutableToken(value ?? ""));
+}
+
 export type LifecyclePackageRunnerPlan =
   | { kind: "not-runner" }
   | { kind: "approval-required" }
@@ -214,7 +218,7 @@ function isOpenClawPackageTarget(token: string): boolean {
 }
 
 function resolveJavaScriptOpenClawRunnerArgv(argv: readonly string[]): string[] | null {
-  if (JAVASCRIPT_EXECUTABLE_RUNNERS.has(normalizeExecutableToken(argv[0] ?? ""))) {
+  if (lifecycleIsJavaScriptExecutableRunner(argv[0])) {
     const entryIndex = argv.findIndex(
       (token, index) => index > 0 && isOpenClawEntryScriptPath(token),
     );

@@ -1,4 +1,6 @@
 // Resolves lifecycle-sensitive commands carried by xargs.
+import { isOpenClawEntryScriptPath } from "./exec-approvals-lifecycle-patterns.js";
+import { lifecycleIsJavaScriptExecutableRunner } from "./exec-approvals-lifecycle-runners.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 
 const XARGS_FLAGS = new Set([
@@ -118,7 +120,18 @@ function looksLifecycleSensitive(argv: readonly string[]): boolean {
 function containsSensitiveCommandCandidate(argv: readonly string[], start: number): boolean {
   return argv
     .slice(start)
-    .some((token) => STDIN_APPEND_SENSITIVE_EXECUTABLES.has(normalizeExecutableToken(token)));
+    .some((token) => isXargsSensitiveExecutable(token, STDIN_APPEND_SENSITIVE_EXECUTABLES));
+}
+
+function isXargsSensitiveExecutable(
+  value: string | undefined,
+  candidates: ReadonlySet<string>,
+): boolean {
+  return (
+    candidates.has(normalizeExecutableToken(value ?? "")) ||
+    isOpenClawEntryScriptPath(value) ||
+    lifecycleIsJavaScriptExecutableRunner(value)
+  );
 }
 
 /** Resolve the fixed command prefix launched for each xargs input record. */
@@ -131,10 +144,12 @@ export function resolveLifecycleXargsArgv(argv: readonly string[]): LifecycleXar
     const replacementIndex = replacementToken
       ? commandArgv.findIndex((token) => token.includes(replacementToken as string))
       : -1;
-    const executable = normalizeExecutableToken(commandArgv[0] ?? "");
-    return (!replacementToken && STDIN_APPEND_SENSITIVE_EXECUTABLES.has(executable)) ||
+    const executable = commandArgv[0];
+    return (!replacementToken &&
+      isXargsSensitiveExecutable(executable, STDIN_APPEND_SENSITIVE_EXECUTABLES)) ||
       replacementIndex === 0 ||
-      (replacementIndex > 0 && REPLACEMENT_SENSITIVE_EXECUTABLES.has(executable))
+      (replacementIndex > 0 &&
+        isXargsSensitiveExecutable(executable, REPLACEMENT_SENSITIVE_EXECUTABLES))
       ? { kind: "approval-required" }
       : { kind: "argv", argv: commandArgv };
   };

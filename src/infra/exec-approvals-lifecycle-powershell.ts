@@ -84,6 +84,8 @@ const POWERSHELL_EXECUTABLE_SCRIPT_BLOCK_OPTIONS = new Set([
 ]);
 const POWERSHELL_PIPELINE_OBJECT_MUTATION_RE =
   /(?:\$_|\$psitem)\??\.(?:closemainwindow|continue|kill|pause|start|stop)\(/iu;
+const POWERSHELL_DIRECT_OBJECT_MUTATION_RE =
+  /\(\s*((?:get-process|get-service|gps|gsv|ps)\b[^()]*)\)\s*\??\.\s*(?:closemainwindow|continue|kill|pause|start|stop)\s*\(/giu;
 
 function optionName(token: string): string {
   return token.trim().toLowerCase().split(/[=:]/u, 1)[0] ?? "";
@@ -219,6 +221,29 @@ function isPowerShellSelection(argv: readonly string[], allowUnresolved: boolean
     isPowerShellProcessOrServiceSource(argv) &&
     argv.slice(1).some((token) => looksLikeOpenClawSelector(token, allowUnresolved))
   );
+}
+
+/** Return true when a selected OpenClaw process or service is mutated through an object method. */
+export function powerShellDirectObjectMutationRequiresApproval(
+  command: string,
+  argv: readonly string[],
+): boolean {
+  if (!(argv[0] ?? "").trim().startsWith("(")) {
+    return false;
+  }
+  return [...command.matchAll(POWERSHELL_DIRECT_OBJECT_MUTATION_RE)].some((match) => {
+    const selection = splitShellArgs(match[1] ?? "");
+    if (!selection) {
+      return false;
+    }
+    const source = normalizeExecutableToken(selection[0] ?? "");
+    const selectsNode =
+      ["get-process", "gps", "ps"].includes(source) &&
+      selection
+        .slice(1)
+        .some((token) => ["node", "nodejs"].includes(normalizeExecutableToken(token)));
+    return selectsNode || isPowerShellSelection(selection, true);
+  });
 }
 
 function isPowerShellOpenClawFilter(argv: readonly string[], allowUnresolved: boolean): boolean {

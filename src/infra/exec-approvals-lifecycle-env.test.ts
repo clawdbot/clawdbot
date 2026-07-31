@@ -519,6 +519,36 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
 
   it.each([
     [
+      "printf gateway | xargs -I{} /opt/openclaw/dist/entry.js {} restart",
+      ["xargs", "-I{}", "/opt/openclaw/dist/entry.js", "{}", "restart"],
+    ],
+    [
+      "printf 'gateway restart' | xargs /opt/openclaw/dist/entry.js",
+      ["xargs", "/opt/openclaw/dist/entry.js"],
+    ],
+    [
+      "printf gateway | xargs -I{} tsx /opt/openclaw/dist/entry.js {} restart",
+      ["xargs", "-I{}", "tsx", "/opt/openclaw/dist/entry.js", "{}", "restart"],
+    ],
+  ] as Array<[string, string[]]>)("classifies xargs entry runners: %s", (command, argv) => {
+    expect(requiresApproval(command, argv)).toBe(true);
+  });
+
+  it.each(["nodejs", "tsx", "bun"])("fails closed for an unresolved %s entry script", (runner) => {
+    const command = `${runner} "$ENTRY" gateway restart`;
+    expect(
+      commandRequiresOpenClawLifecycleApproval({
+        command,
+        env: {},
+        envComplete: false,
+        platform: "linux",
+        segments: [{ raw: command, argv: [runner, "$ENTRY", "gateway", "restart"] }],
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    [
       "hash -p /usr/local/bin/openclaw oc; oc gateway restart",
       ["hash", "-p", "/usr/local/bin/openclaw", "oc", ";", "oc", "gateway", "restart"],
     ],

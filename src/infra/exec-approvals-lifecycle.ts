@@ -28,6 +28,7 @@ import {
   commandHasPowerShellLifecyclePipeline as pipelineNeedsApproval,
   powerShellArgvUsesWhatIf,
   powerShellAliasLifecycleInvocationRequiresApproval as powerShellAliasNeedsApproval,
+  powerShellDirectObjectMutationRequiresApproval,
   resolvePowerShellStartProcessOpenClawArgv,
 } from "./exec-approvals-lifecycle-powershell.js";
 import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-runners.js";
@@ -224,6 +225,9 @@ function classifyProcessMutation(
   const executable = normalizeExecutableToken(argv[0] ?? "");
   const matchesExecutable = (...names: string[]) =>
     matchesLifecycleExecutablePattern(argv[0], new Set(names));
+  if (shellContext === "powershell" && powerShellDirectObjectMutationRequiresApproval(raw, argv)) {
+    return true;
+  }
   if (shellContext === "powershell" && powerShellArgvUsesWhatIf(argv)) {
     return false;
   }
