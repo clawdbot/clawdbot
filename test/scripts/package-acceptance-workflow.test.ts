@@ -2414,7 +2414,7 @@ describe("package artifact reuse", () => {
       "${{ fromJSON(inputs.timeout_minutes || '120') }}",
     );
     expect(runTestboxStep.uses).toContain("useblacksmith/run-testbox@");
-    expect(runTestboxStep.if).toBe("github.event_name == 'workflow_dispatch' && !cancelled()");
+    expect(runTestboxStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
     expect(closeTestboxSshStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
     expect(closeTestboxSshStep.run).toContain(
       'ss -K state established \\\n  "( sport = :${runner_ssh_port} )"',

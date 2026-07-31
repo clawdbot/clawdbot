@@ -1027,7 +1027,7 @@ describe("ci workflow guards", () => {
       with: { testbox_id: "${{ inputs.testbox_id }}" },
     });
     expect(runStep).toMatchObject({
-      if: "github.event_name == 'workflow_dispatch' && !cancelled()",
+      if: "github.event_name == 'workflow_dispatch' && always()",
     });
   });
 
