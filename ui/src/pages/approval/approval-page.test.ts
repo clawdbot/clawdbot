@@ -586,7 +586,7 @@ describe("ApprovalPage", () => {
     );
   });
 
-  it("does not expose an unreviewed Gateway descriptor", async () => {
+  it("does not localize an unreviewed Gateway descriptor but preserves its canonical message", async () => {
     const request = vi.fn(async () => {
       throw new GatewayRequestError({
         code: "INVALID_REQUEST",
@@ -602,7 +602,7 @@ describe("ApprovalPage", () => {
     await settle(page);
 
     expect(page.querySelector(".approval-page__state--unavailable p")?.textContent).toBe(
-      "This approval could not be found or this device is not authorized to review it.",
+      "internal approval lookup detail",
     );
   });
 

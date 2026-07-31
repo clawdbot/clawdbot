@@ -1,13 +1,6 @@
 import { ErrorCodes } from "./gateway-error-details.js";
 import type { ErrorShape } from "./schema/frames.js";
 
-export type GatewayErrorMessageParam = string | number | boolean;
-
-export type GatewayErrorLocalizationMetadata = {
-  messageKey: string;
-  messageParams?: Readonly<Record<string, GatewayErrorMessageParam>>;
-};
-
 export const GATEWAY_ERROR_LOCALIZATION_DESCRIPTORS = {
   approvalNotFound: {
     code: ErrorCodes.INVALID_REQUEST,
@@ -16,75 +9,50 @@ export const GATEWAY_ERROR_LOCALIZATION_DESCRIPTORS = {
   },
 } as const;
 
-const MESSAGE_KEY_PATTERN = /^[a-z][a-z0-9-]*(?:\.[A-Za-z0-9][A-Za-z0-9_-]*)+$/u;
-const MAX_MESSAGE_KEY_LENGTH = 160;
-const MAX_MESSAGE_PARAMS = 16;
-const MAX_PARAM_KEY_LENGTH = 64;
-const MAX_PARAM_STRING_LENGTH = 4_096;
+type GatewayErrorLocalizationDescriptor =
+  (typeof GATEWAY_ERROR_LOCALIZATION_DESCRIPTORS)[keyof typeof GATEWAY_ERROR_LOCALIZATION_DESCRIPTORS];
+
+export type GatewayErrorLocalizationMetadata = {
+  messageKey: GatewayErrorLocalizationDescriptor["messageKey"];
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isMessageParam(value: unknown): value is GatewayErrorMessageParam {
-  return (
-    typeof value === "string" ||
-    (typeof value === "number" && Number.isFinite(value)) ||
-    typeof value === "boolean"
-  );
-}
-
-function readMessageParams(
-  value: unknown,
-): Readonly<Record<string, GatewayErrorMessageParam>> | null {
-  if (value === undefined) {
-    return Object.freeze({});
-  }
-  if (!isRecord(value) || Object.keys(value).length > MAX_MESSAGE_PARAMS) {
-    return null;
-  }
-  const params: Record<string, GatewayErrorMessageParam> = {};
-  for (const [key, param] of Object.entries(value)) {
-    if (
-      !key ||
-      key.length > MAX_PARAM_KEY_LENGTH ||
-      !isMessageParam(param) ||
-      (typeof param === "string" && param.length > MAX_PARAM_STRING_LENGTH)
-    ) {
-      return null;
-    }
-    params[key] = param;
-  }
-  return Object.freeze(params);
-}
-
-/** Reads bounded localization metadata from an untrusted Gateway error payload. */
-export function readGatewayErrorLocalization(
-  error: Pick<ErrorShape, "details">,
-): GatewayErrorLocalizationMetadata | null {
-  if (!isRecord(error.details) || !isRecord(error.details.localization)) {
-    return null;
-  }
-  const { messageKey, messageParams } = error.details.localization;
-  if (
-    typeof messageKey !== "string" ||
-    messageKey.length > MAX_MESSAGE_KEY_LENGTH ||
-    !MESSAGE_KEY_PATTERN.test(messageKey)
-  ) {
-    return null;
-  }
-  const params = readMessageParams(messageParams);
-  if (!params) {
-    return null;
-  }
-  return {
-    messageKey,
-    ...(messageParams === undefined ? {} : { messageParams: params }),
-  };
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value).toSorted();
+  return actual.length === keys.length && actual.every((key, index) => key === keys[index]);
 }
 
 /**
- * Adds bounded localization metadata inside the existing opaque details object.
+ * Reads the complete shape of one owner-reviewed descriptor tuple from an
+ * untrusted Gateway error. Unknown members and parameters fail closed.
+ */
+export function readGatewayErrorLocalization(error: {
+  code?: string;
+  details?: unknown;
+}): GatewayErrorLocalizationMetadata | null {
+  if (!isRecord(error.details) || !isRecord(error.details.localization)) {
+    return null;
+  }
+  const localization = error.details.localization;
+  if (!hasExactKeys(localization, ["messageKey"])) {
+    return null;
+  }
+  const descriptor = GATEWAY_ERROR_LOCALIZATION_DESCRIPTORS.approvalNotFound;
+  if (
+    error.code !== descriptor.code ||
+    error.details.reason !== descriptor.reason ||
+    localization.messageKey !== descriptor.messageKey
+  ) {
+    return null;
+  }
+  return Object.freeze({ messageKey: descriptor.messageKey });
+}
+
+/**
+ * Adds exact localization metadata inside the existing opaque details object.
  * The canonical English message remains present for old and untranslated clients.
  */
 export function attachGatewayErrorLocalization(
@@ -98,7 +66,8 @@ export function attachGatewayErrorLocalization(
     throw new Error("Gateway error details already contain localization metadata.");
   }
   const validated = readGatewayErrorLocalization({
-    details: { localization },
+    code: error.code,
+    details: { ...error.details, localization },
   });
   if (!validated) {
     throw new Error("Invalid Gateway error localization metadata.");
@@ -107,7 +76,7 @@ export function attachGatewayErrorLocalization(
     ...error,
     details: {
       ...error.details,
-      localization: Object.freeze(validated),
+      localization: validated,
     },
   };
 }

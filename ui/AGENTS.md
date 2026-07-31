@@ -36,3 +36,4 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 - Keep UI-specific rules here.
 - Leave repo-global architecture, verification, and git workflow rules in the root `AGENTS.md`.
+- Follow `.agents/skills/localize-openclaw/SKILL.md` for the shared localization enrollment and verification workflow.

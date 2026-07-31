@@ -10,6 +10,16 @@
       "extensions": [
         ".json"
       ]
+    },
+    {
+      "id": "control-ui-catalog-sources",
+      "owner": "control-ui",
+      "roots": [
+        "ui/src/i18n/locales"
+      ],
+      "extensions": [
+        ".ts"
+      ]
     }
   ],
   "surfaces": [
@@ -20,6 +30,160 @@
       "disposition": "adopted",
       "catalogArea": "wizard-core",
       "namespace": "wizard"
+    },
+    {
+      "id": "control-ui-ar",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/ar.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-de",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/de.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-en-agents",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/en-agents.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-en",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/en.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-es",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/es.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-fa",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/fa.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-fr",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/fr.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-hi",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/hi.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-id",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/id.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-it",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/it.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-ja-JP",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/ja-JP.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-ko",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/ko.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-nl",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/nl.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-pl",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/pl.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-pt-BR",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/pt-BR.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-ru",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/ru.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-th",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/th.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-tr",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/tr.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-uk",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/uk.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-vi",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/vi.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-zh-CN",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/zh-CN.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
+    },
+    {
+      "id": "control-ui-zh-TW",
+      "owner": "control-ui",
+      "source": "ui/src/i18n/locales/zh-TW.ts",
+      "disposition": "conforming-pipeline",
+      "pipeline": "control-ui"
     }
   ]
 }

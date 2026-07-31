@@ -2,72 +2,83 @@ import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../api/gateway.ts";
 import { resolveReviewedGatewayErrorMessage } from "./gateway-error-localization.ts";
 
-function localizedError(overrides: { code?: string; reason?: string; key?: string } = {}) {
+function localizedError(
+  overrides: {
+    code?: string;
+    reason?: unknown;
+    localization?: unknown;
+    message?: string;
+  } = {},
+) {
   return new GatewayRequestError({
     code: overrides.code ?? "INVALID_REQUEST",
-    message: "unknown or expired approval id",
+    message: overrides.message ?? "unknown or expired approval id",
     details: {
       reason: overrides.reason ?? "APPROVAL_NOT_FOUND",
-      localization: { messageKey: overrides.key ?? "gateway.approval.notFound" },
+      localization: overrides.localization ?? { messageKey: "gateway.approval.notFound" },
     },
   });
 }
 
 describe("Gateway error localization", () => {
-  it("renders a reviewed descriptor when the active locale owns the key", () => {
+  it("renders the exact reviewed descriptor when the active locale owns the key", () => {
     const translate = vi.fn(() => "审批请求不存在或已过期。");
     expect(resolveReviewedGatewayErrorMessage(localizedError(), translate, () => true)).toBe(
       "审批请求不存在或已过期。",
     );
-    expect(translate).toHaveBeenCalledWith("gateway.approval.notFound", undefined);
+    expect(translate).toHaveBeenCalledWith("gateway.approval.notFound");
   });
 
-  it("preserves canonical English for a reviewed descriptor without a catalog entry", () => {
+  it("preserves canonical English when the reviewed key has no translation", () => {
     const translate = vi.fn(() => "untrusted translation");
     expect(resolveReviewedGatewayErrorMessage(localizedError(), translate, () => false)).toBe(
       "unknown or expired approval id",
     );
+    expect(translate).not.toHaveBeenCalled();
   });
 
-  it("rejects unknown and mismatched descriptors", () => {
+  it.each([
+    ["malformed metadata", "malformed"],
+    ["oversized key", { messageKey: "gateway." + "x".repeat(10_000) }],
+    ["unknown key", { messageKey: "gateway.unreviewed" }],
+    ["extra member", { messageKey: "gateway.approval.notFound", extra: true }],
+    ["forbidden params", { messageKey: "gateway.approval.notFound", messageParams: {} }],
+  ])("returns canonical Gateway English for %s", (_name, localization) => {
     const translate = vi.fn(() => "untrusted translation");
     expect(
       resolveReviewedGatewayErrorMessage(
-        localizedError({ key: "gateway.unreviewed" }),
+        localizedError({ localization, message: "canonical Gateway message" }),
         translate,
         () => true,
       ),
-    ).toBeNull();
-    expect(
-      resolveReviewedGatewayErrorMessage(
-        localizedError({ reason: "OTHER" }),
-        translate,
-        () => true,
-      ),
-    ).toBeNull();
-    expect(
-      resolveReviewedGatewayErrorMessage(
-        localizedError({ code: "UNAVAILABLE" }),
-        translate,
-        () => true,
-      ),
-    ).toBeNull();
+    ).toBe("canonical Gateway message");
+    expect(translate).not.toHaveBeenCalled();
   });
 
-  it("returns canonical English only for a reviewed untranslated descriptor", () => {
-    expect(resolveReviewedGatewayErrorMessage(localizedError(), vi.fn(), () => false)).toBe(
-      "unknown or expired approval id",
-    );
+  it.each([
+    ["code", { code: "UNAVAILABLE" }],
+    ["reason", { reason: "OTHER" }],
+  ])("returns canonical Gateway English for a %s mismatch", (_name, overrides) => {
+    const translate = vi.fn(() => "untrusted translation");
     expect(
       resolveReviewedGatewayErrorMessage(
-        localizedError({ key: "gateway.unreviewed" }),
-        vi.fn(),
+        localizedError({ ...overrides, message: "canonical mismatch message" }),
+        translate,
         () => true,
       ),
-    ).toBeNull();
+    ).toBe("canonical mismatch message");
+    expect(translate).not.toHaveBeenCalled();
   });
 
-  it("returns null when no reviewed localized message can be rendered", () => {
+  it("returns canonical Gateway English when details are absent", () => {
+    const error = new GatewayRequestError({
+      code: "INVALID_REQUEST",
+      message: "canonical no-details message",
+    });
+    expect(resolveReviewedGatewayErrorMessage(error)).toBe("canonical no-details message");
+  });
+
+  it("returns null for non-Gateway failures", () => {
     expect(resolveReviewedGatewayErrorMessage(new Error("network unavailable"))).toBeNull();
   });
 });

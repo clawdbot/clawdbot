@@ -49,3 +49,4 @@ runtime when they only need plugin-owned static descriptors.
   `pnpm test <file>`.
 - Run `pnpm build` when changing Gateway lazy-loading or bundled plugin
   artifacts.
+- Follow `.agents/skills/localize-openclaw/SKILL.md` for the shared localization enrollment and verification workflow.
