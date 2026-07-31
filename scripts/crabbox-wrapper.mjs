@@ -21,6 +21,7 @@ import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
+import { crabboxProviderChain, normalizeCrabboxWorkload } from "./crabbox-routing-policy.mjs";
 import {
   canonicalProviderName,
   isProviderAdvertised,
@@ -54,9 +55,43 @@ const args = process.argv.slice(2);
 if (args[0] === "--") {
   args.shift();
 }
+const workloadOption = isWorkloadRoutedCommand(args)
+  ? extractWrapperValueOption(args, "--workload")
+  : undefined;
 const userArgStart = args[0] === "actions" && args[1] === "hydrate" ? 2 : 1;
 if (args[userArgStart] === "--") {
   args.splice(userArgStart, 1);
+}
+
+function extractWrapperValueOption(commandArgs, name) {
+  const equalsPrefix = `${name}=`;
+  for (let index = 0; index < commandArgs.length; index += 1) {
+    const arg = commandArgs[index];
+    if (arg === "--") {
+      break;
+    }
+    if (arg === name) {
+      const value = commandArgs[index + 1];
+      if (!value || value === "--" || value.startsWith("-")) {
+        commandArgs.splice(index, 1);
+        return null;
+      }
+      commandArgs.splice(index, 2);
+      return value;
+    }
+    if (arg.startsWith(equalsPrefix)) {
+      commandArgs.splice(index, 1);
+      return arg.slice(equalsPrefix.length) || null;
+    }
+  }
+  return undefined;
+}
+
+function isWorkloadRoutedCommand(commandArgs) {
+  return (
+    ["run", "warmup"].includes(commandArgs[0]) ||
+    (commandArgs[0] === "actions" && commandArgs[1] === "hydrate")
+  );
 }
 
 function commandCandidates(command, platform) {
@@ -232,6 +267,7 @@ const awsMacosPackageManagerScriptTargets = new Set([
   "scripts/restart-mac.sh",
 ]);
 const minimumBlacksmithCrabboxVersion = [0, 22, 0];
+const minimumBrokeredDaytonaCrabboxVersion = [0, 40, 0];
 const shellControlCommandPrefixes = new Set([
   "if",
   "while",
@@ -479,6 +515,27 @@ function gitOutput(commandArgs) {
   };
 }
 
+let resolvedCrabboxConfigCache;
+
+function resolvedCrabboxConfig() {
+  if (resolvedCrabboxConfigCache !== undefined) {
+    return resolvedCrabboxConfigCache;
+  }
+  const result = checkedOutput(binary, ["config", "show", "--json"]);
+  if (result.status !== 0) {
+    resolvedCrabboxConfigCache = null;
+    return resolvedCrabboxConfigCache;
+  }
+  try {
+    const parsed = JSON.parse(result.stdout || result.text);
+    resolvedCrabboxConfigCache =
+      parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    resolvedCrabboxConfigCache = null;
+  }
+  return resolvedCrabboxConfigCache;
+}
+
 function envProvider() {
   const envProviderValue = process.env.CRABBOX_PROVIDER?.trim();
   if (envProviderValue) {
@@ -488,6 +545,10 @@ function envProvider() {
 }
 
 function configProvider() {
+  const resolved = resolvedCrabboxConfig()?.provider;
+  if (typeof resolved === "string" && resolved.trim()) {
+    return resolved.trim();
+  }
   try {
     const config = readFileSync(resolve(repoRoot, ".crabbox.yaml"), "utf8");
     const match = config.match(/^provider:\s*([^\s#]+)/m);
@@ -499,6 +560,26 @@ function configProvider() {
 
 function configuredProvider() {
   return envProvider() || configProvider();
+}
+
+function effectiveTargetContext(commandArgs) {
+  const config = resolvedCrabboxConfig();
+  const configuredTarget = typeof config?.target === "string" ? config.target.trim() : "";
+  const configuredWindowsMode =
+    typeof config?.windowsMode === "string" ? config.windowsMode.trim() : "";
+  return {
+    target: (
+      optionValue(commandArgs, "--target") ||
+      process.env.CRABBOX_TARGET?.trim() ||
+      process.env.CRABBOX_TARGET_OS?.trim() ||
+      configuredTarget
+    ).toLowerCase(),
+    windowsMode: (
+      optionValue(commandArgs, "--windows-mode") ||
+      process.env.CRABBOX_WINDOWS_MODE?.trim() ||
+      configuredWindowsMode
+    ).toLowerCase(),
+  };
 }
 
 const runValueOptions = new Set([
@@ -682,23 +763,165 @@ function commandProvider(commandArgsInput) {
   return "";
 }
 
-function selectedProvider(commandArgs, advertisedProviders = []) {
+function selectedProvider(commandArgs, advertisedProviders = [], versionText = "") {
+  const targetContext = effectiveTargetContext(commandArgs);
+  if (workloadOption === null) {
+    return {
+      provider: "",
+      source: "policy",
+      workload: "",
+      chain: [],
+      error: "--workload requires a value",
+    };
+  }
+  const workload = requestedWorkload(commandArgs);
+  if (workload === null) {
+    return {
+      provider: "",
+      source: "policy",
+      workload: workloadOption ?? process.env.OPENCLAW_CRABBOX_WORKLOAD ?? "",
+      chain: [],
+      error: `unsupported Crabbox workload ${JSON.stringify(workloadOption ?? process.env.OPENCLAW_CRABBOX_WORKLOAD)}`,
+    };
+  }
+  if (workload === "windows" && targetContext.target !== "windows") {
+    return {
+      provider: "",
+      source: "policy",
+      workload,
+      chain: [],
+      error: "Crabbox workload=windows requires target=windows",
+    };
+  }
   const explicitProvider = commandProvider(commandArgs);
   if (explicitProvider) {
-    return explicitProvider;
+    return { provider: explicitProvider, source: "explicit", workload: "", chain: [] };
   }
-  if (shouldPreferAzureForWindows(commandArgs, advertisedProviders)) {
-    return "azure";
+  const environmentProvider = envProvider();
+  if (environmentProvider) {
+    return { provider: environmentProvider, source: "environment", workload: "", chain: [] };
   }
-  return configuredProvider();
+  if (workload && hasOption(commandArgs, "--id")) {
+    return {
+      provider: "",
+      source: "policy",
+      workload,
+      chain: [],
+      error:
+        "reusing a workload-routed lease with --id requires --provider (or CRABBOX_PROVIDER) from the originating route",
+    };
+  }
+  const configured = canonicalProviderName(configProvider());
+  if (!workload && shouldPreferAzureForWindows(commandArgs, advertisedProviders)) {
+    return { provider: "azure", source: "windows-default", workload: "", chain: [] };
+  }
+  if (!workload) {
+    return { provider: configured, source: "config", workload: "", chain: [] };
+  }
+
+  const chain = crabboxProviderChain({
+    workload,
+    configuredProvider: configured,
+    target: targetContext.target,
+    advertisedProviders: advertisedProviders.map(canonicalProviderName),
+  });
+  const readiness = new Map();
+  let selectedProviderName = "";
+  for (const candidate of chain) {
+    const status = crabboxProviderReadiness(candidate, versionText, targetContext);
+    readiness.set(candidate, status);
+    if (status.ready) {
+      selectedProviderName = candidate;
+      break;
+    }
+  }
+  if (!selectedProviderName) {
+    return {
+      provider: "",
+      source: "policy",
+      workload,
+      chain,
+      readiness,
+      error: `no ready provider for workload=${workload}`,
+    };
+  }
+  return {
+    provider: selectedProviderName,
+    source: "policy",
+    workload,
+    chain,
+    readiness,
+  };
 }
 
-function shouldRequireBrokeredAws(commandArgs, providerName) {
-  if (process.env.OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS === "1") {
+function requestedWorkload(commandArgs) {
+  if (!isWorkloadRoutedCommand(commandArgs)) {
+    return "";
+  }
+  const raw = workloadOption ?? process.env.OPENCLAW_CRABBOX_WORKLOAD?.trim() ?? "";
+  if (!raw) {
+    return "";
+  }
+  return normalizeCrabboxWorkload(raw);
+}
+
+let managedBrokerAuthConfiguredCache;
+
+function crabboxProviderReadiness(providerName, versionText, targetContext) {
+  const canonicalProvider = canonicalProviderName(providerName);
+  if (
+    canonicalProvider === "blacksmith-testbox" &&
+    !satisfiesMinimumCrabboxVersion(versionText, minimumBlacksmithCrabboxVersion)
+  ) {
+    return {
+      ready: false,
+      reason: `requires Crabbox >= ${formatVersionTuple(minimumBlacksmithCrabboxVersion)} for Blacksmith Testbox`,
+    };
+  }
+  if (
+    canonicalProvider === "daytona" &&
+    !directCloudOverrideEnabled(canonicalProvider) &&
+    !satisfiesMinimumCrabboxVersion(versionText, minimumBrokeredDaytonaCrabboxVersion)
+  ) {
+    return {
+      ready: false,
+      reason: `requires Crabbox >= ${formatVersionTuple(minimumBrokeredDaytonaCrabboxVersion)} for brokered Daytona`,
+    };
+  }
+  if (
+    ["aws", "azure", "daytona"].includes(canonicalProvider) &&
+    !directCloudOverrideEnabled(canonicalProvider) &&
+    !managedBrokerAuthConfigured()
+  ) {
+    return { ready: false, reason: "managed Crabbox broker auth unavailable" };
+  }
+  const doctorArgs = ["doctor", "--provider", canonicalProvider];
+  if (targetContext.target) {
+    doctorArgs.push("--target", targetContext.target);
+  }
+  if (targetContext.target === "windows" && targetContext.windowsMode) {
+    doctorArgs.push("--windows-mode", targetContext.windowsMode);
+  }
+  doctorArgs.push("--json");
+  const doctor = checkedOutput(binary, doctorArgs);
+  if (doctor.status !== 0) {
+    return { ready: false, reason: `doctor exited ${doctor.status}` };
+  }
+  return { ready: true, reason: "doctor-ready" };
+}
+
+function formatProviderReadiness(readiness) {
+  return [...readiness.entries()]
+    .map(([candidate, status]) => `${candidate}:${status.ready ? "ready" : status.reason}`)
+    .join(",");
+}
+
+function shouldRequireBrokeredCloud(commandArgs, providerName) {
+  if (directCloudOverrideEnabled(providerName)) {
     return false;
   }
   const canonicalProvider = canonicalProviderName(providerName);
-  if (canonicalProvider !== "aws") {
+  if (!["aws", "azure", "daytona"].includes(canonicalProvider)) {
     return false;
   }
   if (commandArgs[0] === "run" || commandArgs[0] === "warmup") {
@@ -707,32 +930,59 @@ function shouldRequireBrokeredAws(commandArgs, providerName) {
   return commandArgs[0] === "actions" && commandArgs[1] === "hydrate";
 }
 
-function brokerAuthConfigured() {
-  const config = checkedOutput(binary, ["config", "show", "--json"]);
-  if (config.status !== 0) {
-    return false;
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(config.stdout || config.text);
-  } catch {
-    return false;
-  }
-  if (!parsed?.coordinator || parsed?.brokerAuth !== "configured") {
-    return false;
-  }
-  return checkedOutput(binary, ["whoami"]).status === 0;
+function directCloudOverrideEnabled(providerName) {
+  return (
+    process.env.OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD === "1" ||
+    (canonicalProviderName(providerName) === "aws" &&
+      process.env.OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS === "1")
+  );
 }
 
-function enforceBrokeredAws(commandArgs, providerName) {
-  if (!shouldRequireBrokeredAws(commandArgs, providerName) || brokerAuthConfigured()) {
+function managedBrokerAuthConfigured() {
+  if (managedBrokerAuthConfiguredCache !== undefined) {
+    return managedBrokerAuthConfiguredCache;
+  }
+  const parsed = resolvedCrabboxConfig();
+  if (
+    !parsed?.coordinator ||
+    parsed?.brokerMode !== "managed" ||
+    parsed?.brokerAuth !== "configured"
+  ) {
+    managedBrokerAuthConfiguredCache = false;
+    return managedBrokerAuthConfiguredCache;
+  }
+  managedBrokerAuthConfiguredCache = checkedOutput(binary, ["whoami"]).status === 0;
+  return managedBrokerAuthConfiguredCache;
+}
+
+function enforceBrokeredDaytonaVersion(commandArgs, providerName, versionText) {
+  if (
+    canonicalProviderName(providerName) !== "daytona" ||
+    !shouldRequireBrokeredCloud(commandArgs, providerName) ||
+    satisfiesMinimumCrabboxVersion(versionText, minimumBrokeredDaytonaCrabboxVersion)
+  ) {
     return;
   }
   console.error(
     [
-      "[crabbox] provider=aws requires a configured Crabbox broker for OpenClaw proof.",
-      "[crabbox] run `crabbox login --url https://crabbox.openclaw.ai --provider aws`, then retry.",
-      "[crabbox] for intentional direct AWS provider debugging, set OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS=1.",
+      `[crabbox] provider=daytona requires Crabbox >= ${formatVersionTuple(minimumBrokeredDaytonaCrabboxVersion)} for brokered execution.`,
+      `[crabbox] selected binary reported version=${versionText || "unknown"}.`,
+      "[crabbox] update Crabbox, or set OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD=1 only for intentional direct-provider debugging.",
+    ].join("\n"),
+  );
+  process.exit(2);
+}
+
+function enforceBrokeredCloud(commandArgs, providerName) {
+  if (!shouldRequireBrokeredCloud(commandArgs, providerName) || managedBrokerAuthConfigured()) {
+    return;
+  }
+  const canonicalProvider = canonicalProviderName(providerName);
+  console.error(
+    [
+      `[crabbox] provider=${canonicalProvider} requires a configured managed Crabbox broker for OpenClaw proof.`,
+      "[crabbox] run `crabbox login --url https://crabbox.openclaw.ai`, then retry.",
+      "[crabbox] for intentional direct cloud debugging, set OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD=1.",
     ].join("\n"),
   );
   process.exit(2);
@@ -797,6 +1047,21 @@ function ensureAzureWindowsProvider(commandArgs, providerName, advertisedProvide
   const optionEnd = commandOptionEnd(commandArgs);
   const normalizedArgs = [...commandArgs];
   normalizedArgs.splice(optionEnd, 0, "--provider", "azure");
+  return normalizedArgs;
+}
+
+function ensurePolicyProvider(commandArgs, selection) {
+  if (
+    selection.source !== "policy" ||
+    !selection.provider ||
+    commandProvider(commandArgs) ||
+    envProvider()
+  ) {
+    return commandArgs;
+  }
+  const normalizedArgs = [...commandArgs];
+  const optionEnd = commandOptionEnd(normalizedArgs);
+  normalizedArgs.splice(optionEnd, 0, "--provider", selection.provider);
   return normalizedArgs;
 }
 
@@ -3483,17 +3748,35 @@ const version = probeCrabboxMetadata(binary, ["--version"]);
 const help = probeCrabboxMetadata(binary, ["run", "--help"]);
 const providers = parseProvidersFromHelp(help.text);
 const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
-const provider = selectedProvider(args, providers);
+const providerSelection = selectedProvider(args, providers, version.text);
+if (providerSelection.error) {
+  console.error(`[crabbox] ${providerSelection.error}`);
+  if (providerSelection.readiness) {
+    console.error(
+      `[crabbox] provider readiness ${formatProviderReadiness(providerSelection.readiness)}`,
+    );
+  }
+  process.exit(2);
+}
+const provider = providerSelection.provider;
 const canonicalProvider = canonicalProviderName(provider);
 const commandProviderValue = commandProvider(args);
 let normalizedArgs = ensureAwsMacOnDemandMarket(
-  ensureNativeWindowsHydrateJob(ensureAzureWindowsProvider(args, provider, providers)),
+  ensurePolicyProvider(
+    ensureNativeWindowsHydrateJob(ensureAzureWindowsProvider(args, provider, providers)),
+    providerSelection,
+  ),
   provider,
 );
 
 console.error(
   `[crabbox] bin=${displayBinary} version=${version.text || "unknown"} provider=${provider || "unknown"} providers=${providers.join(",") || "unknown"}`,
 );
+if (providerSelection.source === "policy") {
+  console.error(
+    `[crabbox] route workload=${providerSelection.workload} selected=${provider} chain=${providerSelection.chain.join(",")} readiness=${formatProviderReadiness(providerSelection.readiness)}`,
+  );
+}
 
 if (version.status !== 0 || help.status !== 0) {
   console.error("[crabbox] selected binary failed basic --version/--help sanity checks");
@@ -3536,7 +3819,8 @@ if (canonicalProvider === "blacksmith-testbox") {
   }
 }
 
-enforceBrokeredAws(normalizedArgs, provider);
+enforceBrokeredDaytonaVersion(normalizedArgs, provider, version.text);
+enforceBrokeredCloud(normalizedArgs, provider);
 
 if (canonicalProvider === "blacksmith-testbox") {
   const envProviderLocal = process.env.CRABBOX_PROVIDER?.trim();

@@ -345,6 +345,7 @@
     "!docs/**/*.jpg",
     "!docs/**/*.png",
     "src/agents/templates/",
+    "scripts/crabbox-routing-policy.mjs",
     "scripts/crabbox-wrapper-providers.mjs",
     "scripts/crabbox-wrapper.mjs",
     "scripts/testbox-lease-freshness.mjs",

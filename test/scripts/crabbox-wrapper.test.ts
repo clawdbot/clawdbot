@@ -93,6 +93,36 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
       `  printf "%s" ${shellSingleQuote(helpText)}`,
       "  exit 0",
       "fi",
+      'if [ "$1" = "doctor" ]; then',
+      '  provider=""',
+      '  target=""',
+      '  windows_mode=""',
+      '  previous_arg=""',
+      '  for arg in "$@"; do',
+      '    if [ "$previous_arg" = "--provider" ] || [ "$previous_arg" = "-provider" ]; then provider="$arg"; fi',
+      '    if [ "$previous_arg" = "--target" ] || [ "$previous_arg" = "-target" ]; then target="$arg"; fi',
+      '    if [ "$previous_arg" = "--windows-mode" ] || [ "$previous_arg" = "-windows-mode" ]; then windows_mode="$arg"; fi',
+      '    case "$arg" in',
+      '      --provider=*|-provider=*) provider="${arg#*=}" ;;',
+      '      --target=*|-target=*) target="${arg#*=}" ;;',
+      '      --windows-mode=*|-windows-mode=*) windows_mode="${arg#*=}" ;;',
+      "    esac",
+      '    previous_arg="$arg"',
+      "  done",
+      '  if [ -n "${OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET:-}" ] && [ "$target" != "$OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET" ]; then',
+      '    printf "%s\\n" "doctor target mismatch: got=$target" >&2',
+      "    exit 64",
+      "  fi",
+      '  if [ -n "${OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE:-}" ] && [ "$windows_mode" != "$OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE" ]; then',
+      '    printf "%s\\n" "doctor windows mode mismatch: got=$windows_mode" >&2',
+      "    exit 64",
+      "  fi",
+      '  case ",${OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS:-}," in',
+      '    *,"$provider",*) printf "%s\\n" "{\\"ok\\":false,\\"provider\\":\\"$provider\\"}" >&2; exit 1 ;;',
+      "  esac",
+      '  printf "%s\\n" "{\\"ok\\":true,\\"provider\\":\\"$provider\\"}"',
+      "  exit 0",
+      "fi",
       'if { [ "$1" = "run" ] || [ "$1" = "warmup" ]; } && { [ -n "${OPENCLAW_FAKE_CRABBOX_CLAIM_PATH:-}" ] || [ -n "${OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID:-}" ]; }; then',
       `  ${shellSingleQuote(process.execPath)} --eval ${shellSingleQuote(stampClaimScript)}`,
       "fi",
@@ -111,7 +141,7 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
       '      if [ -n "${OPENCLAW_FAKE_CRABBOX_CONFIG_JSON+x}" ]; then',
       '        printf "%s" "$OPENCLAW_FAKE_CRABBOX_CONFIG_JSON"',
       "      else",
-      '        printf "%s" "{\\"coordinator\\":\\"configured-broker\\",\\"brokerAuth\\":\\"configured\\"}"',
+      '        printf "%s" "{\\"coordinator\\":\\"configured-broker\\",\\"brokerMode\\":\\"managed\\",\\"brokerAuth\\":\\"configured\\"}"',
       "      fi",
       "      exit 0",
       "    fi",
@@ -220,7 +250,7 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
     "    process.stderr.write('config unavailable\\n');",
     "    process.exit(status);",
     "  }",
-    '  process.stdout.write(process.env.OPENCLAW_FAKE_CRABBOX_CONFIG_JSON || \'{"coordinator":"configured-broker","brokerAuth":"configured"}\');',
+    '  process.stdout.write(process.env.OPENCLAW_FAKE_CRABBOX_CONFIG_JSON || \'{"coordinator":"configured-broker","brokerMode":"managed","brokerAuth":"configured"}\');',
     "  process.exit(0);",
     "}",
     'if (args[0] === "whoami") {',
@@ -263,6 +293,20 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
     "}",
     'if (args[0] === "run" && args[1] === "--help") {',
     `  process.stdout.write(${JSON.stringify(helpText)});`,
+    "  process.exit(0);",
+    "}",
+    'if (args[0] === "doctor") {',
+    "  const optionValue = (name) => { const index = args.findIndex((arg) => arg === `--${name}` || arg === `-${name}`); const assigned = args.find((arg) => arg.startsWith(`--${name}=`) || arg.startsWith(`-${name}=`)); return index >= 0 ? args[index + 1] || '' : assigned?.slice(assigned.indexOf('=') + 1) || ''; };",
+    "  const providerIndex = args.findIndex((arg) => arg === '--provider' || arg === '-provider');",
+    "  const providerArg = args.find((arg) => arg.startsWith('--provider=') || arg.startsWith('-provider='));",
+    "  const provider = providerIndex >= 0 ? args[providerIndex + 1] : providerArg?.slice(providerArg.indexOf('=') + 1) || '';",
+    "  const target = optionValue('target');",
+    "  const windowsMode = optionValue('windows-mode');",
+    "  if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET && target !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET) { process.stderr.write(`doctor target mismatch: got=${target}\\n`); process.exit(64); }",
+    "  if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE && windowsMode !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE) { process.stderr.write(`doctor windows mode mismatch: got=${windowsMode}\\n`); process.exit(64); }",
+    "  const unready = new Set((process.env.OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS || '').split(',').filter(Boolean));",
+    "  if (unready.has(provider)) { process.stderr.write(JSON.stringify({ ok: false, provider }) + '\\n'); process.exit(1); }",
+    "  process.stdout.write(JSON.stringify({ ok: true, provider }) + '\\n');",
     "  process.exit(0);",
     "}",
     `if (args[0] === "run" || args[0] === "warmup") { ${stampClaimScript} }`,
@@ -566,7 +610,12 @@ function wrapperEnv(helpText: string, options: WrapperOptions): NodeJS.ProcessEn
     OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: "0",
     OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY: "1",
     ...(options.configJson
-      ? { OPENCLAW_FAKE_CRABBOX_CONFIG_JSON: JSON.stringify(options.configJson) }
+      ? {
+          OPENCLAW_FAKE_CRABBOX_CONFIG_JSON: JSON.stringify({
+            brokerMode: "managed",
+            ...options.configJson,
+          }),
+        }
       : {}),
     ...(options.configStatus
       ? { OPENCLAW_FAKE_CRABBOX_CONFIG_STATUS: String(options.configStatus) }
@@ -827,6 +876,365 @@ describe("scripts/crabbox-wrapper", () => {
   ];
   beforeAll(() => {
     runWrapper("provider: aws\n", ["--version"]);
+  });
+
+  it("routes CI workloads through the first ready provider", () => {
+    const result = runWrapper(
+      "provider: aws, azure, blacksmith-testbox, or daytona\n",
+      ["run", "--workload", "ci-fast", "--", "echo ok"],
+      {
+        env: {
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0",
+          OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS: "blacksmith-testbox",
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toContain("daytona");
+    expect(result.stderr).toContain(
+      "route workload=ci-fast selected=daytona chain=blacksmith-testbox,daytona,azure,aws",
+    );
+  });
+
+  it("uses brokered cloud providers as the final CI fallback", () => {
+    const result = runWrapper(
+      "provider: aws, azure, blacksmith-testbox, or daytona\n",
+      ["run", "--workload=ci-fast", "--", "echo ok"],
+      {
+        env: {
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0",
+          OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS: "blacksmith-testbox,daytona,azure",
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toContain("aws");
+    expect(result.stderr).toContain("selected=aws");
+  });
+
+  it("keeps the configured provider when no workload is requested", () => {
+    const result = runWrapper(
+      "provider: aws, azure, blacksmith-testbox, or daytona\n",
+      ["run", "--", "echo ok"],
+      {
+        configJson: {
+          provider: "aws",
+          target: "linux",
+          windowsMode: "normal",
+          coordinator: "configured-broker",
+          brokerMode: "managed",
+          brokerAuth: "configured",
+        },
+        env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0" },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).not.toContain("--provider");
+    expect(result.stderr).not.toContain("route workload=");
+  });
+
+  it("requires the originating provider when reusing a workload-routed lease", () => {
+    const result = runWrapper(
+      "provider: aws, azure, blacksmith-testbox, or daytona\n",
+      ["run", "--workload", "interactive", "--id", "cbx_existing", "--", "echo ok"],
+      {
+        env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0" },
+      },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "reusing a workload-routed lease with --id requires --provider",
+    );
+  });
+
+  it("reuses a workload-routed lease through its explicit provider", () => {
+    const result = runWrapper(
+      "provider: aws, azure, blacksmith-testbox, or daytona\n",
+      [
+        "run",
+        "--provider",
+        "daytona",
+        "--workload",
+        "interactive",
+        "--id",
+        "cbx_existing",
+        "--",
+        "echo ok",
+      ],
+      {
+        env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0" },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toContain("daytona");
+    expect(result.stderr).not.toContain("route workload=");
+  });
+
+  it("routes configured macOS targets through AWS", () => {
+    const result = runWrapper(
+      "provider: aws, azure, blacksmith-testbox, or daytona\n",
+      ["run", "--workload", "ci-proof", "--", "echo ok"],
+      {
+        configJson: {
+          provider: "blacksmith-testbox",
+          target: "macos",
+          windowsMode: "normal",
+          coordinator: "configured-broker",
+          brokerAuth: "configured",
+        },
+        env: {
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0",
+          OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET: "macos",
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toContain("aws");
+    expect(result.stderr).toContain("chain=aws");
+  });
+
+  it("probes native Windows readiness with the requested target context", () => {
+    const result = runWrapper(
+      "provider: aws, azure, blacksmith-testbox, or daytona\n",
+      [
+        "run",
+        "--workload",
+        "ci-proof",
+        "--target",
+        "windows",
+        "--windows-mode",
+        "normal",
+        "--",
+        "echo ok",
+      ],
+      {
+        env: {
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0",
+          OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET: "windows",
+          OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE: "normal",
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toContain("azure");
+    expect(result.stderr).toContain("chain=azure,aws");
+  });
+
+  it("rejects the Windows workload without a Windows target", () => {
+    const result = runWrapper(
+      "provider: aws, azure, blacksmith-testbox, or daytona\n",
+      ["run", "--workload", "windows", "--", "echo ok"],
+      { env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0" } },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("workload=windows requires target=windows");
+    expect(result.stdout).toBe("");
+  });
+
+  it("preserves following options when workload has no value", () => {
+    const result = runWrapper(
+      "provider: aws, azure, blacksmith-testbox, or daytona\n",
+      ["run", "--workload", "--target", "windows", "--", "echo ok"],
+      { env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0" } },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("--workload requires a value");
+    expect(result.stderr).not.toContain('unsupported Crabbox workload "--target"');
+    expect(result.stdout).toBe("");
+  });
+
+  it("rejects authenticated registered mode for broker-only cloud routing", () => {
+    const result = runWrapper(
+      "provider: aws, azure, blacksmith-testbox, or daytona\n",
+      ["run", "--workload", "desktop", "--", "echo ok"],
+      {
+        configJson: {
+          provider: "azure",
+          target: "linux",
+          windowsMode: "normal",
+          coordinator: "configured-broker",
+          brokerMode: "registered",
+          brokerAuth: "configured",
+        },
+        env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0" },
+      },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("managed Crabbox broker auth unavailable");
+    expect(result.stdout).toBe("");
+  });
+
+  it("falls through Blacksmith when the Crabbox binary is too old", () => {
+    const result = runWrapper(
+      "provider: aws, azure, blacksmith-testbox, or daytona\n",
+      ["run", "--workload", "ci-fast", "--", "echo ok"],
+      {
+        env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.21.9" },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toContain("azure");
+    expect(result.stderr).toContain(
+      "blacksmith-testbox:requires Crabbox >= 0.22.0 for Blacksmith Testbox",
+    );
+  });
+
+  it("honors direct-cloud debugging during automatic readiness checks", () => {
+    const result = runWrapper(
+      "provider: aws, azure, blacksmith-testbox, or daytona\n",
+      ["run", "--workload", "desktop", "--", "echo ok"],
+      {
+        configJson: { coordinator: "", brokerAuth: "missing" },
+        env: {
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0",
+          OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toContain("azure");
+    expect(result.stderr).toContain("selected=azure");
+  });
+
+  it("keeps workload configuration away from administrative commands", () => {
+    const result = runDefaultWrapper(["--version"], {
+      env: { OPENCLAW_CRABBOX_WORKLOAD: "ci-fast" },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("crabbox 0.22.1");
+    expect(result.stderr).not.toContain("route workload=");
+  });
+
+  it("does not validate workload flags on administrative commands", () => {
+    const result = runDefaultWrapper(["--version", "--workload", "surprise"]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("crabbox 0.22.1");
+    expect(result.stderr).not.toContain("unsupported Crabbox workload");
+  });
+
+  it("keeps explicit provider choices outside automatic routing", () => {
+    const result = runWrapper(
+      "provider: aws, azure, blacksmith-testbox, or daytona\n",
+      ["run", "--provider", "azure", "--workload", "interactive", "--", "echo ok"],
+      {
+        env: {
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0",
+          OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS: "azure",
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toContain("azure");
+    expect(result.stderr).not.toContain("route workload=");
+  });
+
+  it("still validates workloads when a provider is explicit", () => {
+    const result = runWrapper("provider: aws, azure, blacksmith-testbox, or daytona\n", [
+      "run",
+      "--provider",
+      "azure",
+      "--workload",
+      "surprise",
+      "--",
+      "echo ok",
+    ]);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain('unsupported Crabbox workload "surprise"');
+  });
+
+  it("requires a compatible Crabbox for explicit brokered Daytona runs", () => {
+    const result = runWrapper(
+      "provider: aws, azure, blacksmith-testbox, or daytona\n",
+      ["run", "--provider", "daytona", "--", "echo ok"],
+      {
+        env: { OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.39.9" },
+      },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "provider=daytona requires Crabbox >= 0.40.0 for brokered execution",
+    );
+  });
+
+  it("allows intentional direct Daytona debugging on older Crabbox versions", () => {
+    const result = runWrapper(
+      "provider: aws, azure, blacksmith-testbox, or daytona\n",
+      ["run", "--provider", "daytona", "--", "echo ok"],
+      {
+        configJson: { coordinator: "", brokerAuth: "missing" },
+        env: {
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.39.9",
+          OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toContain("daytona");
+  });
+
+  it("allows automatic direct Daytona routing on older Crabbox versions", () => {
+    const result = runWrapper(
+      "provider: aws, azure, blacksmith-testbox, or daytona\n",
+      ["run", "--workload", "interactive", "--", "echo ok"],
+      {
+        configJson: { coordinator: "", brokerAuth: "missing" },
+        env: {
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.39.9",
+          OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toContain("daytona");
+    expect(result.stderr).toContain("selected=daytona");
+  });
+
+  it("fails closed when no policy provider is ready", () => {
+    const result = runWrapper(
+      "provider: aws, azure, blacksmith-testbox, or daytona\n",
+      ["run", "--workload", "ci-fast", "--", "echo ok"],
+      {
+        env: {
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.40.0",
+          OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS: "blacksmith-testbox,daytona,azure,aws",
+        },
+      },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("no ready provider for workload=ci-fast");
+    expect(result.stderr).toContain("provider readiness");
+  });
+
+  it("rejects unknown workload policies before execution", () => {
+    const result = runDefaultWrapper(["run", "--workload", "surprise", "--", "echo ok"]);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain('unsupported Crabbox workload "surprise"');
   });
 
   it("accepts advertised canonical providers from Crabbox help", () => {
@@ -1608,10 +2016,9 @@ describe("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("provider=aws requires a configured Crabbox broker");
-    expect(result.stderr).toContain(
-      "crabbox login --url https://crabbox.openclaw.ai --provider aws",
-    );
+    expect(result.stderr).toContain("provider=aws requires a configured managed Crabbox broker");
+    expect(result.stderr).toContain("crabbox login --url https://crabbox.openclaw.ai");
+    expect(result.stderr).not.toContain("--provider aws");
   });
 
   it("fails closed for AWS proof when broker auth is stale", () => {
@@ -1622,7 +2029,7 @@ describe("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("provider=aws requires a configured Crabbox broker");
+    expect(result.stderr).toContain("provider=aws requires a configured managed Crabbox broker");
   });
 
   it("allows explicit direct AWS debugging without broker auth", () => {
