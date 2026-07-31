@@ -995,7 +995,8 @@ function enforceBrokeredDaytonaVersion(
     [
       `[crabbox] provider=daytona requires Crabbox >= ${formatVersionTuple(minimumBrokeredDaytonaCrabboxVersion)} for brokered execution.`,
       `[crabbox] selected binary reported version=${versionText || "unknown"}.`,
-      "[crabbox] update Crabbox, or set OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD=1 only for intentional direct-provider debugging.",
+      "[crabbox] update Crabbox before brokered Daytona execution.",
+      "[crabbox] direct Daytona debugging requires an original `--provider daytona`, no `--workload`, and OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD=1.",
     ].join("\n"),
   );
   process.exit(2);
@@ -1009,13 +1010,16 @@ function enforceBrokeredCloud(commandArgs, providerName, explicitProviderRequest
     return;
   }
   const canonicalProvider = canonicalProviderName(providerName);
-  console.error(
-    [
-      `[crabbox] provider=${canonicalProvider} requires a configured managed Crabbox broker for OpenClaw proof.`,
-      "[crabbox] run `crabbox login --url https://crabbox.openclaw.ai`, then retry.",
-      "[crabbox] for intentional direct cloud debugging, set OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD=1.",
-    ].join("\n"),
-  );
+  const instructions = [
+    `[crabbox] provider=${canonicalProvider} requires a configured managed Crabbox broker for OpenClaw proof.`,
+    "[crabbox] run `crabbox login --url https://crabbox.openclaw.ai`, then retry.",
+  ];
+  if (canonicalProvider !== "aws") {
+    instructions.push(
+      `[crabbox] direct ${canonicalProvider} debugging requires an original \`--provider ${canonicalProvider}\`, no \`--workload\`, and OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD=1.`,
+    );
+  }
+  console.error(instructions.join("\n"));
   process.exit(2);
 }
 

@@ -1279,6 +1279,9 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain(
       "provider=daytona requires Crabbox >= 0.40.0 for brokered execution",
     );
+    expect(result.stderr).toContain(
+      "direct Daytona debugging requires an original `--provider daytona`, no `--workload`",
+    );
   });
 
   it.each(["azure", "daytona"])(
@@ -1327,6 +1330,9 @@ describe("scripts/crabbox-wrapper", () => {
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(
         `provider=${provider} requires a configured managed Crabbox broker`,
+      );
+      expect(result.stderr).toContain(
+        `direct ${provider} debugging requires an original \`--provider ${provider}\`, no \`--workload\``,
       );
     },
   );
@@ -2217,6 +2223,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("provider=aws requires a configured managed Crabbox broker");
     expect(result.stderr).toContain("crabbox login --url https://crabbox.openclaw.ai");
     expect(result.stderr).not.toContain("--provider aws");
+    expect(result.stderr).not.toContain("OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD");
   });
 
   it("fails closed for AWS proof when broker auth is stale", () => {
