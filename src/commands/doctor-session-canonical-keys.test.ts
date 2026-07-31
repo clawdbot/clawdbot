@@ -181,6 +181,114 @@ describe("doctor canonical session-key repair", () => {
     });
   });
 
+  it("moves a legacy global heartbeat sibling to its agent-qualified key", async () => {
+    await withStateDirEnv("openclaw-doctor-canonical-global-heartbeat-", async ({ stateDir }) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
+      const storePath = resolveStorePath(storeTemplate, { agentId: "historian2", env });
+      const cfg = {
+        agents: { list: [{ id: "main", default: true }, { id: "historian2" }] },
+        session: { scope: "global", store: storeTemplate },
+      } as OpenClawConfig;
+      insertLegacySession({
+        agentId: "historian2",
+        entry: {
+          heartbeatIsolatedBaseSessionKey: "global",
+          lastHeartbeatText: "legacy heartbeat",
+          sessionId: "heartbeat-session",
+          updatedAt: 10,
+        },
+        env,
+        sessionKey: "global:heartbeat",
+        storePath,
+      });
+
+      expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
+        foundGroups: 1,
+        repairedGroups: 1,
+      });
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "historian2",
+          env,
+          sessionKey: "agent:historian2:global:heartbeat",
+          storePath,
+        })?.entry,
+      ).toMatchObject({
+        heartbeatIsolatedBaseSessionKey: "global",
+        lastHeartbeatText: "legacy heartbeat",
+        sessionId: "heartbeat-session",
+      });
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "historian2",
+          env,
+          sessionKey: "global:heartbeat",
+          storePath,
+        }),
+      ).toBeUndefined();
+    });
+  });
+
+  it("preserves in-flight recovery ownership while canonicalizing the main alias", async () => {
+    await withStateDirEnv("openclaw-doctor-canonical-recovery-owner-", async ({ stateDir }) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
+      const storePath = resolveStorePath(storeTemplate, { agentId: "main", env });
+      const cfg = {
+        agents: { list: [{ id: "main", default: true }] },
+        session: { store: storeTemplate },
+      } as OpenClawConfig;
+      insertLegacySession({
+        agentId: "main",
+        entry: {
+          abortedLastRun: true,
+          mainRestartRecovery: {
+            cycleId: "cycle-1",
+            revision: 2,
+            chargedAttempts: 1,
+            reservation: {
+              runId: "recovery-1",
+              attempt: 1,
+              lifecycleGeneration: "generation-1",
+            },
+            foregroundClaims: {
+              lifecycleGeneration: "generation-1",
+              tokens: ["claim-1"],
+            },
+          },
+          sessionId: "main-session",
+          updatedAt: 10,
+        },
+        env,
+        sessionKey: "main",
+        storePath,
+      });
+
+      expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
+        foundGroups: 1,
+        repairedGroups: 1,
+      });
+      expect(
+        loadExactSessionEntryReadOnly({
+          agentId: "main",
+          env,
+          sessionKey: "agent:main:main",
+          storePath,
+        })?.entry,
+      ).toMatchObject({
+        abortedLastRun: true,
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 2,
+          chargedAttempts: 1,
+          reservation: { runId: "recovery-1", attempt: 1 },
+          foregroundClaims: { tokens: ["claim-1"] },
+        },
+      });
+    });
+  });
+
   it("moves an empty stored key to the owning agent main key", async () => {
     await withStateDirEnv("openclaw-doctor-canonical-empty-key-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };

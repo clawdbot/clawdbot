@@ -1408,7 +1408,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(assistantUpdate?.target).toMatchObject({
       agentId: "main",
-      sessionKey: targetSessionKey,
+      sessionKey: `agent:main:${targetSessionKey}`,
     });
   });
 
@@ -1527,7 +1527,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(assistantUpdate?.target).toMatchObject({
       agentId: "main",
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
     });
     expect(context.logGateway.warn).not.toHaveBeenCalledWith(
       "webchat transcript append skipped: inconsistent binding-owned transcript metadata",

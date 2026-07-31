@@ -75,7 +75,7 @@ function buildDiscordCleanupHooks(onDelete: (key: string | undefined) => void) {
 
 async function getDiscordGroupSpawnTool() {
   return await getSessionsSpawnTool({
-    agentSessionKey: "discord:group:req",
+    agentSessionKey: "agent:main:discord:group:req",
     agentChannel: "discord",
   });
 }
@@ -230,7 +230,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     });
 
     const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
+      agentSessionKey: "agent:main:main",
       agentChannel: "whatsapp",
     });
 
@@ -291,7 +291,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       agentWaitResult: { status: "ok", startedAt: 1000, endedAt: 2000 },
     });
     const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
+      agentSessionKey: "agent:main:main",
       agentChannel: "whatsapp",
     });
     setSessionsSpawnConfigOverride({
@@ -337,7 +337,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     });
 
     const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
+      agentSessionKey: "agent:main:main",
       agentChannel: "whatsapp",
     });
 
@@ -535,7 +535,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
         callId: "call-bound-account",
         agentId: "bot-alpha",
         context: {
-          agentSessionKey: "main",
+          agentSessionKey: "agent:main:main",
           agentChannel: "matrix",
           agentAccountId: "bot-beta",
           agentTo: boundRoom,
@@ -562,7 +562,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     const ctx = setupSessionsSpawnGatewayMock({});
 
     const tool = await getSessionsSpawnTool({
-      agentSessionKey: "main",
+      agentSessionKey: "agent:main:main",
       agentChannel: "whatsapp",
       agentAccountId: "kev",
     });
