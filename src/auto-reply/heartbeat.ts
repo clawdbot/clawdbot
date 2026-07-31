@@ -6,7 +6,7 @@ import { HEARTBEAT_TOKEN } from "./tokens.js";
 // Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
 // Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
 export const HEARTBEAT_CRON_TASK_GUIDANCE =
-  "Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch.";
+  "Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch.";
 const HEARTBEAT_CONTEXT_PROMPT = `Follow the heartbeat monitor scratch context when provided. ${HEARTBEAT_CRON_TASK_GUIDANCE} Do not infer or repeat old tasks from prior chats.`;
 /** Default prompt for heartbeat turns when config does not override it. */
 export const HEARTBEAT_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} If nothing needs attention, reply HEARTBEAT_OK.`;

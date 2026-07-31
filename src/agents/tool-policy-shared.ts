@@ -19,10 +19,40 @@ type ToolProfilePolicy = {
 const TOOL_NAME_ALIASES: Record<string, string> = {
   bash: "exec",
   "apply-patch": "apply_patch",
+  // Permanent scheduler-tool alias (owner decision, RFC 0026), like bash -> exec.
+  cron: "automations",
+};
+
+const TOOL_ALLOWLIST_INTERSECTION = Symbol.for("openclaw.toolAllowlistIntersection");
+type ToolAllowlistWithIntersection = string[] & {
+  [TOOL_ALLOWLIST_INTERSECTION]?: readonly string[][];
 };
 
 /** Core tool groups exposed to allow/deny policy config. */
 export const TOOL_GROUPS: Record<string, string[]> = { ...CORE_TOOL_GROUPS };
+
+/**
+ * Preserves independent allowlists until a concrete tool surface can evaluate
+ * them. Intersections of overlapping globs cannot be represented by one glob list.
+ */
+export function attachToolAllowlistIntersection(
+  toolsAllow: string[],
+  restrictions: readonly string[][],
+): string[] {
+  Object.defineProperty(toolsAllow, TOOL_ALLOWLIST_INTERSECTION, {
+    configurable: true,
+    enumerable: false,
+    value: restrictions,
+  });
+  return toolsAllow;
+}
+
+/** Reads independent restrictions attached by a modifying-hook merger. */
+export function readToolAllowlistIntersection(
+  toolsAllow: string[],
+): readonly string[][] | undefined {
+  return (toolsAllow as ToolAllowlistWithIntersection)[TOOL_ALLOWLIST_INTERSECTION];
+}
 
 /** Normalizes a tool name or alias to the policy id used for matching. */
 export function normalizeToolName(name: string) {

@@ -41,8 +41,10 @@ async function withStartedMatrixHarness(
         ({
           baseUrl: targetBaseUrl,
           buildManifest: vi.fn(),
+          installFaultRule: vi.fn(() => ({ hits: () => [], remove: vi.fn() })),
           records: () => [],
           setScenarioId: vi.fn(),
+          setTargetBaseUrl: vi.fn(),
           stop: vi.fn(async () => {}),
         }) as unknown as MatrixQaRecordingProxy);
     const result = await startMatrixQaHarness(
@@ -99,7 +101,9 @@ describe("matrix harness runtime", () => {
       });
 
       const compose = await readFile(result.composeFile, "utf8");
-      expect(compose).toContain("image: ghcr.io/matrix-construct/tuwunel:v1.5.1");
+      expect(compose).toContain(
+        "image: ghcr.io/matrix-construct/tuwunel:v1.8.2@sha256:6f950bb139411a7964781e986321e395e045e4a6a52240a4dda9d23d04075f78",
+      );
       expect(compose).toContain('      - "127.0.0.1:28008:8008"');
       expect(compose).toContain('TUWUNEL_ALLOW_ENCRYPTION: "true"');
       expect(compose).toContain('TUWUNEL_ALLOW_REGISTRATION: "true"');
@@ -152,15 +156,50 @@ describe("matrix harness runtime", () => {
     );
   });
 
+  it("bounds the full homeserver restart and readiness phase", async () => {
+    vi.useFakeTimers();
+    try {
+      await withStartedMatrixHarness(
+        {
+          async runCommand(_command, args) {
+            const rendered = args.join(" ");
+            if (rendered.includes("restart matrix-qa-homeserver")) {
+              return await new Promise<never>(() => {});
+            }
+            if (rendered.includes("ps --format json")) {
+              return { stdout: '[{"State":"running"}]\n', stderr: "" };
+            }
+            return { stdout: "", stderr: "" };
+          },
+          fetchImpl: vi.fn(async () => ({ ok: true })),
+          sleepImpl: vi.fn(async () => {}),
+        },
+        async ({ result }) => {
+          const restarting = result.restartService();
+          const rejection = expect(restarting).rejects.toThrow(
+            `Matrix homeserver restart timed out after ${MATRIX_QA_CLEANUP_TIMEOUT_MS}ms`,
+          );
+          await vi.advanceTimersByTimeAsync(MATRIX_QA_CLEANUP_TIMEOUT_MS);
+          await rejection;
+        },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("lets Docker atomically assign an unpinned loopback port", async () => {
     const calls: string[] = [];
+    const setTargetBaseUrl = vi.fn();
+    let portReadCount = 0;
     await withStartedMatrixHarness(
       {
         async runCommand(command, args, cwd) {
           calls.push([command, ...args, `@${cwd}`].join(" "));
           const rendered = args.join(" ");
           if (rendered.includes("port matrix-qa-homeserver 8008")) {
-            return { stdout: "127.0.0.1:49152\n", stderr: "" };
+            portReadCount += 1;
+            return { stdout: `127.0.0.1:${portReadCount === 1 ? 49_152 : 49_153}\n`, stderr: "" };
           }
           if (rendered.includes("ps --format json")) {
             return { stdout: '[{"State":"running"}]\n', stderr: "" };
@@ -169,6 +208,17 @@ describe("matrix harness runtime", () => {
         },
         fetchImpl: vi.fn(async () => ({ ok: true })),
         sleepImpl: vi.fn(async () => {}),
+        startRecordingProxyImpl: vi.fn(async ({ targetBaseUrl }) => ({
+          baseUrl: targetBaseUrl,
+          buildManifest: vi.fn(),
+          createExchangeContext: vi.fn(),
+          installFaultRule: vi.fn(() => ({ hits: () => [], remove: vi.fn() })),
+          onExchange: vi.fn(),
+          records: () => [],
+          setScenarioId: vi.fn(),
+          setTargetBaseUrl,
+          stop: vi.fn(async () => {}),
+        })),
       },
       async ({ outputDir, result }) => {
         expect(result.homeserverPort).toBe(49152);
@@ -178,6 +228,8 @@ describe("matrix harness runtime", () => {
         );
         const compose = await readFile(result.composeFile, "utf8");
         expect(compose).toContain("      - target: 8008\n        host_ip: 127.0.0.1");
+        await result.restartService();
+        expect(setTargetBaseUrl).toHaveBeenCalledWith("http://127.0.0.1:49153/");
       },
       { dynamicPort: true },
     );

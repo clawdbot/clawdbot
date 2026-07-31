@@ -11,10 +11,12 @@
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"音声入力"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ライブ"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"スレッド"</string>
+    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"スレッドを開く"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← スワイプ →"</string>
     <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"長押し"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"タップ"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ダブルタップ"</string>
+    <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"新着メッセージを表示"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Liveを開始すると、ここに会話が表示されます。"</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"新規"</string>
     <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"入力"</string>

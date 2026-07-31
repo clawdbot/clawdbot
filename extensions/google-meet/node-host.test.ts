@@ -33,7 +33,12 @@ vi.mock("node:child_process", async (importOriginal) => {
         kill: vi.fn(),
         stdout: new EventEmitter(),
         stderr: new EventEmitter(),
-        stdin: Object.assign(new EventEmitter(), { write: vi.fn() }),
+        stdin: Object.assign(new EventEmitter(), {
+          write: vi.fn((_audio: Buffer, callback?: (error?: Error | null) => void) => {
+            callback?.();
+            return true;
+          }),
+        }),
       }) as MockChild;
       child.kill.mockImplementation((signal?: NodeJS.Signals) => {
         const resolvedSignal = signal ?? "SIGTERM";
@@ -311,7 +316,7 @@ describe("google-meet node host bridge sessions", () => {
         }),
       );
 
-      expect(children[2]?.stdin?.write).toHaveBeenCalledWith(audio);
+      expect(children[2]?.stdin?.write).toHaveBeenCalledWith(audio, expect.any(Function));
       expect(firstOutput?.stdin?.write).not.toHaveBeenCalled();
 
       await expect(
@@ -548,7 +553,7 @@ describe("google-meet node host bridge sessions", () => {
       expect(typeof start.bridgeId).toBe("string");
       expect(start.bridgeId.length).toBeGreaterThan(0);
       expect(start).toEqual({
-        audioBridge: { type: "node-command-pair" },
+        audioBridge: { type: "node-command-pair", outputGeneration: true },
         bridgeId: start.bridgeId,
         launched: false,
       });

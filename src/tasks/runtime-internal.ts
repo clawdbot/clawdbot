@@ -29,6 +29,7 @@ export {
   getTaskById,
   hasActiveTaskForChildSessionKey,
   listFreshTasksForOwnerKey,
+  listTaskRecordPage,
   listTaskRecords,
   listTaskRecordsUnsorted,
   listTasksForFlowId,

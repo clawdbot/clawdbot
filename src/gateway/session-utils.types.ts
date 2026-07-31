@@ -107,7 +107,7 @@ export type GatewaySessionRow = {
   agentStatus?: SessionEntry["agentStatus"];
   observerDigest?: Pick<
     SessionObserverDigest,
-    "runId" | "headline" | "health" | "updatedAt" | "revision"
+    "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   >;
   /** Last real user/channel interaction; background work does not advance it. */
   lastInteractionAt?: number;
@@ -121,6 +121,7 @@ export type GatewaySessionRow = {
   thinkingOptions?: string[];
   thinkingDefault?: string;
   fastMode?: FastMode;
+  toolOverrides?: SessionEntry["toolOverrides"];
   effectiveFastMode?: FastMode;
   effectiveFastModeSource?: FastModeSource;
   fastAutoOnSeconds?: number;

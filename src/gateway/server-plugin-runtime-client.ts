@@ -8,6 +8,7 @@ import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { normalizeToolName } from "../agents/tool-policy.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
@@ -20,6 +21,7 @@ export function createSyntheticPluginRuntimeClient(params?: {
   internalDeliveryMediaUrls?: string[];
   internalDeliverySuppressText?: boolean;
   pluginRuntimeOwnerId?: string;
+  pluginSubagentRequester?: PluginSubagentRequesterContext;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   delegatedToolPolicyHandoff?: boolean;
   sessionCreation?: TrustedSessionCreation;
@@ -56,6 +58,9 @@ export function createSyntheticPluginRuntimeClient(params?: {
         : {}),
       ...(params?.scopes?.includes(APPROVALS_SCOPE) ? { approvalRuntime: true } : {}),
       ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
+      ...(params?.pluginSubagentRequester
+        ? { pluginSubagentRequester: params.pluginSubagentRequester }
+        : {}),
       ...(params?.runtimePluginToolGrant
         ? { runtimePluginToolGrant: params.runtimePluginToolGrant }
         : {}),

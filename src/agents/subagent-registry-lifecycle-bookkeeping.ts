@@ -65,68 +65,41 @@ export function createSubagentRegistryLifecycleBookkeeping(
       // Waking here could tell the requester to finalize while the child still runs.
       return;
     }
-    if (cleanupParams.entry.collect) {
-      // Delete-mode session cleanup already ran before this durable bookkeeping.
-      // Preserve only the collector result tombstone for waits and group caps.
-      if (cleanupParams.cleanup === "delete") {
-        params.clearPendingLifecycleError(cleanupParams.runId);
-        runCleanupTail("context-engine cleanup", async () => {
-          await params.notifyContextEngineSubagentEnded({
-            childSessionKey: cleanupParams.entry.childSessionKey,
-            reason: "deleted",
-            agentDir: cleanupParams.entry.agentDir,
-            workspaceDir: cleanupParams.entry.workspaceDir,
-          });
-        });
-      }
-      cleanupParams.entry.cleanupCompletedAt = cleanupParams.completedAt;
-      cleanupParams.entry.requesterSettleWake = undefined;
-      params.persist();
-      retryDeferredCompletedAnnounces(cleanupParams.runId);
-      return;
-    }
-    if (cleanupParams.cleanup === "delete") {
+    const isDeleteCleanup = cleanupParams.cleanup === "delete";
+    if (isDeleteCleanup) {
       params.clearPendingLifecycleError(cleanupParams.runId);
+    }
+    if (isDeleteCleanup || !cleanupParams.entry.collect) {
       runCleanupTail("context-engine cleanup", async () => {
         await params.notifyContextEngineSubagentEnded({
           childSessionKey: cleanupParams.entry.childSessionKey,
-          reason: "deleted",
+          reason: isDeleteCleanup ? "deleted" : "completed",
           agentDir: cleanupParams.entry.agentDir,
           workspaceDir: cleanupParams.entry.workspaceDir,
         });
       });
-      if (cleanupParams.skipRequesterSettleWake) {
-        params.runs.delete(cleanupParams.runId);
-        params.persist();
-        retryDeferredCompletedAnnounces(cleanupParams.runId);
-        return;
-      }
-      persistRequesterSettleWakePending(cleanupParams.entry, {
-        cleanupCompletedAt: cleanupParams.completedAt,
-        retireAfterSettle: true,
-      });
+    }
+    if (cleanupParams.entry.collect) {
+      // Delete-mode session cleanup already ran before this durable bookkeeping.
+      // Preserve only the collector result tombstone for waits and group caps.
+      cleanupParams.entry.cleanupCompletedAt = cleanupParams.completedAt;
+      cleanupParams.entry.requesterSettleWake = undefined;
+      params.persist(cleanupParams.runId);
       retryDeferredCompletedAnnounces(cleanupParams.runId);
-      scheduleRequesterSettleWake(cleanupParams.runId, cleanupParams.entry);
       return;
     }
-    runCleanupTail("context-engine cleanup", async () => {
-      await params.notifyContextEngineSubagentEnded({
-        childSessionKey: cleanupParams.entry.childSessionKey,
-        reason: "completed",
-        agentDir: cleanupParams.entry.agentDir,
-        workspaceDir: cleanupParams.entry.workspaceDir,
-      });
-    });
-    if (
-      cleanupParams.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-      cleanupParams.entry.suppressAnnounceReason !== "killed"
-    ) {
-      // A reconciled killed row has served its tombstone purpose. Retire only
-      // the registry record; keep-mode still preserves the child session.
-      params.clearPendingLifecycleError(cleanupParams.runId);
+    const retireAfterSettle =
+      isDeleteCleanup ||
+      (cleanupParams.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+        cleanupParams.entry.suppressAnnounceReason !== "killed");
+    if (retireAfterSettle) {
+      // Reconciled keep-mode kills retire the registry row, not the child session.
+      if (!isDeleteCleanup) {
+        params.clearPendingLifecycleError(cleanupParams.runId);
+      }
       if (cleanupParams.skipRequesterSettleWake) {
         params.runs.delete(cleanupParams.runId);
-        params.persist();
+        params.persist(cleanupParams.runId);
         retryDeferredCompletedAnnounces(cleanupParams.runId);
         return;
       }
@@ -144,7 +117,7 @@ export function createSubagentRegistryLifecycleBookkeeping(
       });
     } else {
       cleanupParams.entry.cleanupCompletedAt = cleanupParams.completedAt;
-      params.persist();
+      params.persist(cleanupParams.runId);
     }
     retryDeferredCompletedAnnounces(cleanupParams.runId);
     if (!cleanupParams.skipRequesterSettleWake) {

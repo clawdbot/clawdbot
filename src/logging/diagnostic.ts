@@ -29,6 +29,7 @@ import {
 import {
   diagnosticLogger as diag,
   getLastDiagnosticActivityAt,
+  logMessageQueuedWithBacklogPolicy,
   markDiagnosticActivity as markActivity,
   resetDiagnosticActivityForTest,
 } from "./diagnostic-runtime.js";
@@ -671,31 +672,7 @@ export function logMessageQueued(params: {
   channel?: string;
   source: string;
 }) {
-  if (!areDiagnosticsEnabledForProcess()) {
-    return;
-  }
-  const state = getDiagnosticSessionState(params);
-  state.queueDepth += 1;
-  state.lastActivity = Date.now();
-  state.generation = (state.generation ?? 0) + 1;
-  state.lastStuckWarnAgeMs = undefined;
-  state.lastLongRunningWarnAgeMs = undefined;
-  if (diag.isEnabled("debug")) {
-    diag.debug(
-      `message queued: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
-        state.sessionKey ?? "unknown"
-      } source=${params.source} queueDepth=${state.queueDepth} sessionState=${state.state}`,
-    );
-  }
-  emitDiagnosticEvent({
-    type: "message.queued",
-    sessionId: state.sessionId,
-    sessionKey: state.sessionKey,
-    channel: params.channel,
-    source: params.source,
-    queueDepth: state.queueDepth,
-  });
-  markActivity();
+  logMessageQueuedWithBacklogPolicy(params, true);
 }
 
 export function logMessageReceived(params: {
@@ -1146,6 +1123,7 @@ export function logToolLoopAction(
     action: "warn" | "block";
     detector:
       | "generic_repeat"
+      | "argument_churn"
       | "unknown_tool_repeat"
       | "known_poll_no_progress"
       | "global_circuit_breaker"

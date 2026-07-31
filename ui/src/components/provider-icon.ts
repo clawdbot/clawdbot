@@ -37,7 +37,9 @@ const PROVIDER_ICON_NAMES = new Set([
   "kimi",
   "kiro",
   "litellm",
+  "llamacpp",
   "llmproxy",
+  "lmstudio",
   "manus",
   "mimo",
   "minimax",
@@ -71,10 +73,13 @@ const PROVIDER_ICON_ALIASES: Readonly<Record<string, string>> = {
   google: "gemini",
   "google-gemini-cli": "gemini",
   "github-copilot": "copilot",
+  "llama-cpp": "llamacpp",
   // CodexBar names its bundled OpenAI knot asset "codex".
   openai: "codex",
+  moonshot: "kimi",
   "opencode-go": "opencodego",
   "opencode-zen": "opencode",
+  qwen: "alibaba",
   xai: "grok",
   "vertex-ai": "vertexai",
   "z-ai": "zai",
@@ -85,9 +90,14 @@ const PROVIDER_DISPLAY_LABELS: Readonly<Record<string, string>> = {
   anthropic: "Anthropic",
   google: "Google",
   "github-copilot": "GitHub",
+  "llama-cpp": "llama.cpp",
+  lmstudio: "LM Studio",
   openai: "OpenAI",
+  moonshot: "Moonshot AI",
   opencode: "OpenCode",
   openrouter: "OpenRouter",
+  qwen: "Qwen Cloud",
+  zai: "Z.AI",
 };
 
 /** Title-cased fallback label built from the provider id ("z-ai" → "Z Ai"). */

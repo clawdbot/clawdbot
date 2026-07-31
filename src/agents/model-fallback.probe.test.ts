@@ -111,7 +111,7 @@ type AuthProfilesSourceCheckModule = typeof import("./auth-profiles/source-check
 type AuthProfilesUsageModule = typeof import("./auth-profiles/usage.js");
 type AuthProfilesOrderModule = typeof import("./auth-profiles/order.js");
 type ModelFallbackCooldownModule = typeof import("./model-fallback-cooldown.js");
-type ModelFallbackModule = typeof import("./model-fallback.js");
+type ModelFallbackModule = typeof import("./model-fallback-runner.js");
 type LoggerModule = typeof import("../logging/logger.js");
 
 let mockedEnsureAuthProfileStore: ReturnType<
@@ -149,7 +149,7 @@ async function loadModelFallbackProbeModules() {
   const authProfilesOrderModule = await import("./auth-profiles/order.js");
   const loggerModule = await import("../logging/logger.js");
   const modelFallbackCooldownModule = await import("./model-fallback-cooldown.js");
-  const modelFallbackModule = await import("./model-fallback.js");
+  const modelFallbackModule = await import("./model-fallback-runner.js");
   const modelFallbackTestSupport = await import("./model-fallback.test-support.js");
   mockedEnsureAuthProfileStore = vi.mocked(authProfilesStoreModule.ensureAuthProfileStore);
   mockedHasAnyAuthProfileStoreSource = vi.mocked(

@@ -1202,6 +1202,19 @@ describe("buildAssistantMessage", () => {
       total: 0,
     });
   });
+
+  it("records unavailable cache telemetry when Ollama omits the cache split", () => {
+    const response = {
+      model: "qwen3:32b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: { role: "assistant" as const, content: "ok" },
+      done: true,
+      prompt_eval_count: 10,
+      eval_count: 2,
+    };
+    const result = buildAssistantMessage(response, modelInfo);
+    expect(result.usage.cacheTelemetry).toEqual({ state: "unavailable" });
+  });
 });
 
 // Helper: build a ReadableStreamDefaultReader from NDJSON lines

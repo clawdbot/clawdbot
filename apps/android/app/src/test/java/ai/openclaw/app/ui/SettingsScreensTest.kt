@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayCronJobSummary
 import ai.openclaw.app.GatewayExecApprovalSummary
@@ -131,6 +132,30 @@ class SettingsScreensTest {
     assertEquals("Ready", gatewayStatusLabel("auth failed", isConnected = true, gatewayConnectionProblem = authProblem("AUTH_TOKEN_MISSING")))
     assertEquals("Pairing needed", gatewayStatusLabel("Pairing in progress", isConnected = false, gatewayConnectionProblem = problem))
     assertEquals("Cannot reach gateway", gatewayStatusLabel("Connection failed", isConnected = false, gatewayConnectionProblem = problem))
+  }
+
+  @Test
+  fun gatewayStatusLabelPreservesPartialConnectivity() {
+    assertEquals(
+      "Connected (node offline)",
+      gatewayStatusLabel(
+        GatewayConnectionDisplay(
+          isConnected = true,
+          statusText = "Connected (node offline)",
+          problem = null,
+        ),
+      ),
+    )
+    assertEquals(
+      "Connected (operator offline)",
+      gatewayStatusLabel(
+        GatewayConnectionDisplay(
+          isConnected = false,
+          statusText = "Connected (operator offline)",
+          problem = null,
+        ),
+      ),
+    )
   }
 
   @Test

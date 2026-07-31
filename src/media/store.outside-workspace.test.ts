@@ -46,13 +46,19 @@ describe("media store outside-workspace mapping", () => {
   let home = "";
 
   beforeAll(async () => {
+    vi.resetModules();
     ({ saveMediaSource } = await import("./store.js"));
     tempHome = await createTempHomeEnv("openclaw-media-store-test-home-");
     home = tempHome.home;
   });
 
   afterAll(async () => {
-    await tempHome.restore();
+    try {
+      await tempHome.restore();
+    } finally {
+      vi.doUnmock("./store.runtime.js");
+      vi.resetModules();
+    }
   });
 
   it("maps outside-workspace reads to a descriptive invalid-path error", async () => {

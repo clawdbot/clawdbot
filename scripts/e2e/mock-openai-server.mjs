@@ -1,8 +1,9 @@
 // Mock OpenAI-compatible server for broader E2E scenarios.
 import { createHash } from "node:crypto";
 import http from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
 import { escapeRegExp } from "../lib/regexp.mjs";
-import { readTcpPortEnv } from "./lib/env-limits.mjs";
+import { readPositiveIntEnv, readTcpPortEnv } from "./lib/env-limits.mjs";
 import {
   boundedRequestLogBody,
   isRequestBodyTooLargeError,
@@ -18,8 +19,21 @@ const port =
     : readTcpPortEnv("OPENCLAW_MOCK_OPENAI_PORT");
 const successMarker = process.env.SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const requestLog = process.env.MOCK_REQUEST_LOG;
+const responseChunkDelayMs = process.env.MOCK_RESPONSE_CHUNK_DELAY_MS
+  ? readPositiveIntEnv("MOCK_RESPONSE_CHUNK_DELAY_MS", undefined)
+  : 0;
 
-function responseEvents(text) {
+function splitResponseText(text) {
+  if (text.length < 2) {
+    return [text];
+  }
+  const midpoint = Math.floor(text.length / 2);
+  const whitespace = text.lastIndexOf(" ", midpoint);
+  const splitAt = whitespace > 0 ? whitespace : Math.max(1, midpoint);
+  return [text.slice(0, splitAt), text.slice(splitAt)];
+}
+
+function responseEvents(text, deltas = [text]) {
   const itemId = "msg_e2e_1";
   return [
     {
@@ -32,13 +46,13 @@ function responseEvents(text) {
         status: "in_progress",
       },
     },
-    {
+    ...deltas.map((delta) => ({
       type: "response.output_text.delta",
       item_id: itemId,
       output_index: 0,
       content_index: 0,
-      delta: text,
-    },
+      delta,
+    })),
     {
       type: "response.output_text.done",
       item_id: itemId,
@@ -81,6 +95,31 @@ function responseEvents(text) {
   ];
 }
 
+async function writeDefaultResponseEvents(res, text) {
+  if (responseChunkDelayMs === 0) {
+    writeSse(res, responseEvents(text));
+    return;
+  }
+  const events = responseEvents(text, splitResponseText(text));
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  });
+  let deltaCount = 0;
+  for (const event of events) {
+    if (event.type === "response.output_text.delta" && deltaCount > 0) {
+      await delay(responseChunkDelayMs);
+    }
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+    if (event.type === "response.output_text.delta") {
+      deltaCount += 1;
+    }
+  }
+  res.write("data: [DONE]\n\n");
+  res.end();
+}
+
 function buildMockFunctionCall(name, args) {
   const serialized = JSON.stringify(args);
   const suffix = createHash("sha256")
@@ -104,6 +143,108 @@ function buildMockFunctionCall(name, args) {
     responseId: `resp_mock_${name}_${suffix}`,
     serialized,
   };
+}
+
+// Progress-draft proof: assistant text emitted BEFORE a tool call is tagged as
+// commentary, which channels render as the draft's status headline. Streaming
+// text and then a call in one response is the only way to exercise
+// headline-plus-tool-line composition without a live model.
+// The Responses API carries that tag as `phase` on the message item, and the
+// transport reads it straight off the item, so an untagged item produces no
+// preamble at all and the scenario silently proves nothing.
+function preambleThenToolCallEvents(preamble, name, args) {
+  const messageItemId = "msg_e2e_preamble";
+  const call = buildMockFunctionCall(name, args);
+  return [
+    {
+      type: "response.output_item.added",
+      item: {
+        type: "message",
+        id: messageItemId,
+        role: "assistant",
+        content: [],
+        status: "in_progress",
+      },
+    },
+    ...splitResponseText(preamble).map((delta) => ({
+      type: "response.output_text.delta",
+      item_id: messageItemId,
+      output_index: 0,
+      content_index: 0,
+      delta,
+    })),
+    {
+      type: "response.output_text.done",
+      item_id: messageItemId,
+      output_index: 0,
+      content_index: 0,
+      text: preamble,
+    },
+    {
+      type: "response.output_item.done",
+      item: {
+        type: "message",
+        id: messageItemId,
+        role: "assistant",
+        status: "completed",
+        phase: "commentary",
+        content: [{ type: "output_text", text: preamble, annotations: [] }],
+      },
+    },
+    {
+      type: "response.output_item.added",
+      item: {
+        type: "function_call",
+        id: call.itemId,
+        call_id: call.item.call_id,
+        name,
+        arguments: "",
+      },
+    },
+    { type: "response.function_call_arguments.delta", delta: call.serialized },
+    { type: "response.output_item.done", item: call.item },
+    {
+      type: "response.completed",
+      response: {
+        id: call.responseId,
+        status: "completed",
+        output: [
+          {
+            type: "message",
+            id: messageItemId,
+            role: "assistant",
+            status: "completed",
+            phase: "commentary",
+            content: [{ type: "output_text", text: preamble, annotations: [] }],
+          },
+          call.item,
+        ],
+        usage: {
+          input_tokens: 64,
+          output_tokens: 24,
+          total_tokens: 88,
+          input_tokens_details: { cached_tokens: 0 },
+        },
+      },
+    },
+  ];
+}
+
+/** Two-turn draft scenario: preamble + shell call, then a final answer. */
+function progressDraftEvents(body, bodyText) {
+  const allText = collectText(body).join("\n");
+  if (!allText.includes("OPENCLAW_E2E_DRAFTPROOF")) {
+    return null;
+  }
+  if (!collectFunctionCallOutputText(body)) {
+    if (!hasDeclaredTool(bodyText, "exec")) {
+      return null;
+    }
+    return preambleThenToolCallEvents("Checking the workspace before answering.", "exec", {
+      command: ["bash", "-lc", "sleep 3 && echo openclaw-draft-proof"],
+    });
+  }
+  return responseEvents("OPENCLAW_E2E_DRAFTPROOF");
 }
 
 function toolCallEvents(name, args) {
@@ -179,6 +320,64 @@ function writeChatCompletion(res, stream, text = successMarker) {
     choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
     usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
   });
+}
+
+/** Streams assistant content, then a tool call, in one chat-completions turn. */
+function writeChatCompletionPreambleToolCall(res, stream, preamble, name, args) {
+  const serialized = JSON.stringify(args);
+  const callId = `call_mock_${name}_${createHash("sha256").update(name).update(serialized).digest("hex").slice(0, 10)}`;
+  if (!stream) {
+    writeJson(res, 200, {
+      id: "chatcmpl_e2e",
+      object: "chat.completion",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: preamble,
+            tool_calls: [
+              { id: callId, type: "function", function: { name, arguments: serialized } },
+            ],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+      usage: { prompt_tokens: 24, completion_tokens: 18, total_tokens: 42 },
+    });
+    return;
+  }
+  writeSse(res, [
+    {
+      id: "chatcmpl_e2e",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: { role: "assistant", content: "" } }],
+    },
+    ...splitResponseText(preamble).map((delta) => ({
+      id: "chatcmpl_e2e",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: { content: delta } }],
+    })),
+    {
+      id: "chatcmpl_e2e",
+      object: "chat.completion.chunk",
+      choices: [
+        {
+          index: 0,
+          delta: {
+            tool_calls: [
+              { index: 0, id: callId, type: "function", function: { name, arguments: serialized } },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      id: "chatcmpl_e2e",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+    },
+  ]);
 }
 
 function writeImageGeneration(res) {
@@ -361,6 +560,11 @@ const server = http.createServer((req, res) => {
         writeResponsesEvents(res, body.stream, codeModeEvents);
         return;
       }
+      const draftEvents = progressDraftEvents(body, bodyText);
+      if (draftEvents) {
+        writeResponsesEvents(res, body.stream, draftEvents);
+        return;
+      }
       const responseText = resolveResponseText(bodyText);
       if (body.stream === false) {
         writeJson(res, 200, {
@@ -380,11 +584,34 @@ const server = http.createServer((req, res) => {
         });
         return;
       }
-      writeSse(res, responseEvents(responseText));
+      await writeDefaultResponseEvents(res, responseText);
       return;
     }
 
     if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
+      // Progress-draft proof needs assistant content followed by a tool call in
+      // one streamed turn: the completions transport tags that leading text as
+      // commentary, which channels render as the draft status headline.
+      if (bodyText.includes("OPENCLAW_E2E_DRAFTPROOF")) {
+        const messages = Array.isArray(body.messages) ? body.messages : [];
+        const toolTurnDone = messages.some((message) => message?.role === "tool");
+        if (!toolTurnDone) {
+          writeChatCompletionPreambleToolCall(
+            res,
+            body.stream !== false,
+            "Checking the workspace before answering.",
+            "exec",
+            { command: ["bash", "-lc", "sleep 3 && echo openclaw-draft-proof"] },
+          );
+          return;
+        }
+        // Hold the final answer so the turn outlives the progress-draft start
+        // gate. Without this the whole turn finishes in well under a second and
+        // no draft is created, which is correct behavior but proves nothing.
+        await delay(readPositiveIntEnv("MOCK_DRAFTPROOF_FINAL_DELAY_MS", 6000));
+        writeChatCompletion(res, body.stream !== false, "OPENCLAW_E2E_DRAFTPROOF");
+        return;
+      }
       const responseText = resolveResponseText(bodyText);
       writeChatCompletion(res, body.stream !== false, responseText);
       return;

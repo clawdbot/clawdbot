@@ -1,5 +1,6 @@
 // Qa Lab tests cover agentic parity report plugin behavior.
 import { describe, expect, it } from "vitest";
+import { makeRuntimeParitySummary } from "./agentic-parity-report-test-helpers.js";
 import {
   buildQaAgenticParityComparison,
   buildQaRuntimeParityReport,
@@ -40,86 +41,6 @@ function withScenarioOverride(name: string, override: Partial<QaParityReportScen
   return FULL_PARITY_PASS_SCENARIOS.map((scenario) =>
     scenario.name === name ? { ...scenario, ...override } : scenario,
   );
-}
-
-function makeRuntimeParitySummary(): QaRuntimeParitySuiteSummary {
-  return {
-    scenarios: [
-      {
-        name: "Approval turn tool followthrough",
-        status: "pass",
-        steps: [],
-        runtimeParity: {
-          scenarioId: "approval-turn-tool-followthrough",
-          drift: "none",
-          cells: {
-            openclaw: {
-              runtime: "openclaw",
-              status: "pass",
-              transcriptBytes: '{"role":"assistant"}\n',
-              toolCalls: [{ tool: "read_file", argsHash: "a", resultHash: "r" }],
-              finalText: "done",
-              usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
-              wallClockMs: 20,
-              bootStateLines: [],
-            },
-            codex: {
-              runtime: "codex",
-              status: "pass",
-              transcriptBytes: '{"role":"assistant"}\n',
-              toolCalls: [{ tool: "read_file", argsHash: "a", resultHash: "r" }],
-              finalText: "done",
-              usage: { inputTokens: 8, outputTokens: 4, totalTokens: 12 },
-              wallClockMs: 18,
-              bootStateLines: [],
-            },
-          },
-        },
-      },
-      {
-        name: "Compaction retry after mutating tool",
-        status: "pass",
-        steps: [],
-        runtimeParity: {
-          scenarioId: "compaction-retry-after-mutating-tool",
-          drift: "tool-call-shape",
-          driftDetails: "tool call 1 differs",
-          cells: {
-            openclaw: {
-              runtime: "openclaw",
-              status: "pass",
-              transcriptBytes: '{"role":"assistant"}\n',
-              toolCalls: [{ tool: "read_file", argsHash: "a", resultHash: "r" }],
-              finalText: "done",
-              usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
-              wallClockMs: 20,
-              bootStateLines: [],
-            },
-            codex: {
-              runtime: "codex",
-              status: "pass",
-              transcriptBytes: '{"role":"assistant"}\n',
-              toolCalls: [{ tool: "read_file", argsHash: "b", resultHash: "r" }],
-              finalText: "done",
-              usage: { inputTokens: 9, outputTokens: 4, totalTokens: 13 },
-              wallClockMs: 19,
-              bootStateLines: [],
-            },
-          },
-        },
-      },
-    ],
-    counts: {
-      total: 2,
-      passed: 2,
-      failed: 0,
-    },
-    run: {
-      providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.6-luna",
-      runtimePair: ["openclaw", "codex"],
-    },
-  };
 }
 
 function firstRuntimeParityScenario() {
@@ -902,6 +823,89 @@ status=done`,
     expect(report.driftCounts.none).toBe(1);
     expect(report.driftCounts["tool-call-shape"]).toBe(1);
     expect(report.failures).toEqual([]);
+    expect(report.scenarios[0]).toMatchObject({
+      openclawWallClockMs: 20,
+      codexWallClockMs: 18,
+      fasterRuntime: "codex",
+      speedupPercent: (2 / 18) * 100,
+    });
+    expect(report.timing).toEqual({
+      openclaw: {
+        totalWallClockMs: 40,
+        p50WallClockMs: 20,
+        p90WallClockMs: 20,
+      },
+      codex: {
+        totalWallClockMs: 37,
+        p50WallClockMs: 18,
+        p90WallClockMs: 19,
+      },
+      fasterRuntime: "codex",
+      speedupPercent: (3 / 37) * 100,
+    });
+  });
+
+  it("reports tied zero-duration captures without an invalid speedup", () => {
+    const summary = makeRuntimeParitySummary();
+    for (const scenario of summary.scenarios) {
+      if (scenario.runtimeParity) {
+        scenario.runtimeParity.cells.openclaw.wallClockMs = 0;
+        scenario.runtimeParity.cells.codex.wallClockMs = 0;
+      }
+    }
+
+    const report = buildQaRuntimeParityReport({ summary });
+
+    expect(report.pass).toBe(true);
+    expect(report.timing).toEqual({
+      openclaw: { totalWallClockMs: 0, p50WallClockMs: 0, p90WallClockMs: 0 },
+      codex: { totalWallClockMs: 0, p50WallClockMs: 0, p90WallClockMs: 0 },
+      fasterRuntime: "tie",
+      speedupPercent: 0,
+    });
+    expect(report.scenarios[0]).toMatchObject({
+      fasterRuntime: "tie",
+      speedupPercent: 0,
+    });
+  });
+
+  it("excludes missing runtime captures from wall-clock aggregates", () => {
+    const summary = makeRuntimeParitySummary();
+    summary.scenarios.push({ name: "Missing runtime capture", status: "fail" });
+
+    const report = buildQaRuntimeParityReport({ summary });
+
+    expect(report.pass).toBe(false);
+    expect(report.timing.openclaw.totalWallClockMs).toBe(40);
+    expect(report.timing.codex.totalWallClockMs).toBe(37);
+    expect(report.scenarios[2]).toMatchObject({
+      openclawWallClockMs: null,
+      codexWallClockMs: null,
+      fasterRuntime: null,
+      speedupPercent: null,
+    });
+  });
+
+  it("reports missing runtime timing as unavailable instead of zero", () => {
+    const report = buildQaRuntimeParityReport({
+      summary: {
+        scenarios: [{ name: "Missing runtime capture", status: "fail" }],
+        counts: { total: 1, passed: 0, failed: 1 },
+        run: { providerMode: "live-frontier", runtimePair: ["openclaw", "codex"] },
+      },
+    });
+
+    expect(report.timing).toEqual({
+      openclaw: { totalWallClockMs: null, p50WallClockMs: null, p90WallClockMs: null },
+      codex: { totalWallClockMs: null, p50WallClockMs: null, p90WallClockMs: null },
+      fasterRuntime: null,
+      speedupPercent: null,
+    });
+
+    const markdown = renderQaRuntimeParityMarkdownReport(report);
+    expect(markdown).toContain("| openclaw | N/A | N/A | N/A |");
+    expect(markdown).toContain("| codex | N/A | N/A | N/A |");
+    expect(markdown).toContain("- Faster runtime: N/A");
   });
 
   it("fails runtime parity reports when a runtime cell has a hard failure", () => {
@@ -1070,7 +1074,12 @@ status=done`,
 
     expect(report).toContain("# OpenClaw Runtime Parity Report — openclaw vs codex");
     expect(report).toContain("| Tool-call-shape drift | 1 |");
+    expect(report).toContain("## Runtime Timing");
+    expect(report).toContain("| openclaw | 40 ms | 20 ms | 20 ms |");
+    expect(report).toContain("| codex | 37 ms | 18 ms | 19 ms |");
+    expect(report).toContain("- Faster runtime: codex 8.1% faster");
     expect(report).toContain("### Compaction retry after mutating tool");
     expect(report).toContain("- drift: tool-call-shape");
+    expect(report).toContain("- wall time: openclaw 20 ms; codex 19 ms; codex 5.3% faster");
   });
 });

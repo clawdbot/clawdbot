@@ -1,4 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
+import { MEMORY_INDEX_CHUNK_PROVENANCE_TABLE } from "../../packages/memory-host-sdk/src/host/memory-schema-provenance.js";
+import { MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE } from "../../packages/memory-host-sdk/src/host/memory-schema-recall.js";
 import {
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
@@ -20,6 +22,7 @@ import {
   ensureOpenClawAgentBoardSchemaInTransaction,
 } from "./openclaw-agent-board-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import {
   AGENT_MODEL_SPEND_SCHEMA_SQL,
   AGENT_SCHEMA_WITHOUT_MODEL_SPEND_SQL,
@@ -29,6 +32,11 @@ import {
   AGENT_V14_CORE_SCHEMA_SQL,
   AGENT_V14_SESSION_SHARING_SCHEMA_SQL,
 } from "./openclaw-agent-session-sharing-schema.js";
+import {
+  STANDING_INTENTS_FTS_SHADOW_TABLES,
+  STANDING_INTENTS_FTS_TABLE,
+  STANDING_INTENTS_TABLE,
+} from "./openclaw-agent-standing-intents-schema.js";
 
 type ExistingAgentSchemaMeta = {
   agentId: string | null;
@@ -37,6 +45,14 @@ type ExistingAgentSchemaMeta = {
 };
 
 const AGENT_SCHEMA_COMPATIBILITY = {
+  allowedMissingTables: [
+    MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
+    MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
+    STANDING_INTENTS_TABLE,
+    STANDING_INTENTS_FTS_TABLE,
+    ...STANDING_INTENTS_FTS_SHADOW_TABLES,
+  ],
+  allowedMissingColumns: ["standing_intents.creator_sender"],
   allowedColumnDefinitions: {
     "conversations.delivery_target": ["delivery_target TEXT NOT NULL DEFAULT ''"],
   },
@@ -178,9 +194,7 @@ export function assertCanonicalAgentMediaPersistenceVersion(
   const isNewUnownedDatabase =
     userVersion === 0 && readExistingAgentSchemaMeta(db) === null && !hasApplicationSchema;
   if (userVersion < OPENCLAW_AGENT_SCHEMA_VERSION && !isNewUnownedDatabase) {
-    throw new Error(
-      `OpenClaw agent database ${pathname} uses schema version ${userVersion}; run openclaw doctor --fix to migrate persisted media before using it.`,
-    );
+    throw new OpenClawAgentDatabaseMediaMigrationRequiredError(pathname, userVersion);
   }
 }
 

@@ -4,6 +4,7 @@ import { resolvePrimaryStringValue } from "@openclaw/normalization-core/string-c
 import type { ZodIssue } from "zod";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { CONFIG_PATH } from "../config/config.js";
+import { INCLUDE_KEY } from "../config/includes.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
@@ -110,6 +111,11 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
       issuePath.length === 0 ? undefined : parentKey ? STRIP_PROTECTED_KEYS[parentKey] : undefined;
     for (const key of issue.keys) {
       if (typeof key !== "string" || !(key in record)) {
+        continue;
+      }
+      // $include is authored parser syntax at every object depth, not a schema field.
+      // Doctor validates raw source, so stripping it would destroy include-owned config.
+      if (key === INCLUDE_KEY) {
         continue;
       }
       if (protectedSet?.has(key)) {

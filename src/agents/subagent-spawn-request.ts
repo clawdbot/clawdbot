@@ -22,10 +22,6 @@ import { resolveSwarmConfig } from "./swarm-config.js";
 import { validateStructuredOutputSchema } from "./swarm-output-schema.js";
 import { reserveSwarmRun } from "./swarm-scheduler.js";
 
-function resolveConfiguredAgentIds(cfg: OpenClawConfig): string[] {
-  return listAgentIds(cfg);
-}
-
 type ResolvedSubagentSpawnRequest = {
   request: {
     taskName?: string;
@@ -63,6 +59,13 @@ type ResolveSubagentSpawnRequestResult =
   | { ok: false; result: SpawnSubagentResult }
   | { ok: true; resolved: ResolvedSubagentSpawnRequest };
 
+function rejectSubagentSpawnRequest(
+  status: "error" | "forbidden",
+  error: string,
+): ResolveSubagentSpawnRequestResult {
+  return { ok: false, result: { status, error } };
+}
+
 export function resolveSubagentSpawnRequest(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
@@ -73,13 +76,7 @@ export function resolveSubagentSpawnRequest(
 ): ResolveSubagentSpawnRequestResult {
   const taskNameResult = normalizeSubagentTaskName(params.taskName);
   if (taskNameResult.error) {
-    return {
-      ok: false,
-      result: {
-        status: "error",
-        error: taskNameResult.error,
-      },
-    };
+    return rejectSubagentSpawnRequest("error", taskNameResult.error);
   }
   const taskName = taskNameResult.taskName;
   const requestedAgentId = requestedAgent.initial;
@@ -89,13 +86,10 @@ export function resolveSubagentSpawnRequest(
   // through normalizeAgentId and become "agent-not-found--xyz", which later
   // creates ghost workspace directories and triggers cascading cron loops (#31311).
   if (requestedAgentId && !isValidAgentId(requestedAgentId)) {
-    return {
-      ok: false,
-      result: {
-        status: "error",
-        error: `Invalid agentId "${requestedAgentId}". Agent IDs must match [a-z0-9][a-z0-9_-]{0,63}. Use agents_list to discover valid targets.`,
-      },
-    };
+    return rejectSubagentSpawnRequest(
+      "error",
+      `Invalid agentId "${requestedAgentId}". Agent IDs must match [a-z0-9][a-z0-9_-]{0,63}. Use agents_list to discover valid targets.`,
+    );
   }
   const requestThreadBinding = params.thread === true;
   const spawnMode = resolveSpawnMode({
@@ -103,24 +97,17 @@ export function resolveSubagentSpawnRequest(
     threadRequested: requestThreadBinding,
   });
   if (params.collect && (requestThreadBinding || spawnMode === "session")) {
-    return {
-      ok: false,
-      result: {
-        status: "error",
-        error: "sessions_spawn collect=true requires mode=run and thread=false.",
-      },
-    };
+    return rejectSubagentSpawnRequest(
+      "error",
+      "sessions_spawn collect=true requires mode=run and thread=false.",
+    );
   }
   if (spawnMode === "session" && !requestThreadBinding) {
-    return {
-      ok: false,
-      result: {
-        status: "error",
-        error:
-          'sessions_spawn(mode="session") requires thread=true so the subagent can stay bound to a channel thread. ' +
-          'Retry with { mode: "session", thread: true } on a channel that supports threads, use mode="run" for one-shot work, or use sessions_send(sessionKey=...) to keep talking to a persistent session without thread binding.',
-      },
-    };
+    return rejectSubagentSpawnRequest(
+      "error",
+      'sessions_spawn(mode="session") requires thread=true so the subagent can stay bound to a channel thread. ' +
+        'Retry with { mode: "session", thread: true } on a channel that supports threads, use mode="run" for one-shot work, or use sessions_send(sessionKey=...) to keep talking to a persistent session without thread binding.',
+    );
   }
   const cleanup =
     spawnMode === "session"
@@ -175,30 +162,24 @@ export function resolveSubagentSpawnRequest(
     params.fastMode !== undefined ||
     params.groupId !== undefined;
   if (hasSwarmParams && !swarmConfig.enabled) {
-    return {
-      ok: false,
-      result: {
-        status: "forbidden",
-        error: "sessions_spawn swarm parameters require tools.swarm.enabled=true.",
-      },
-    };
+    return rejectSubagentSpawnRequest(
+      "forbidden",
+      "sessions_spawn swarm parameters require tools.swarm.enabled=true.",
+    );
   }
   if (params.outputSchema && !params.collect) {
-    return {
-      ok: false,
-      result: { status: "error", error: "sessions_spawn outputSchema requires collect=true." },
-    };
+    return rejectSubagentSpawnRequest(
+      "error",
+      "sessions_spawn outputSchema requires collect=true.",
+    );
   }
   if (params.groupId !== undefined && !params.collect) {
-    return {
-      ok: false,
-      result: { status: "error", error: "sessions_spawn groupId requires collect=true." },
-    };
+    return rejectSubagentSpawnRequest("error", "sessions_spawn groupId requires collect=true.");
   }
   if (params.outputSchema) {
     const schemaError = validateStructuredOutputSchema(params.outputSchema);
     if (schemaError) {
-      return { ok: false, result: { status: "error", error: schemaError } };
+      return rejectSubagentSpawnRequest("error", schemaError);
     }
   }
 
@@ -209,19 +190,16 @@ export function resolveSubagentSpawnRequest(
     : requestedAgentId;
   if (usingDefaultAgentId) {
     if (!isValidAgentId(effectiveRequestedAgentId)) {
-      return {
-        ok: false,
-        result: {
-          status: "error",
-          error: `tools.swarm.defaultAgentId contains invalid agentId "${effectiveRequestedAgentId}".`,
-        },
-      };
+      return rejectSubagentSpawnRequest(
+        "error",
+        `tools.swarm.defaultAgentId contains invalid agentId "${effectiveRequestedAgentId}".`,
+      );
     }
   }
   const targetAgentId = effectiveRequestedAgentId
     ? normalizeAgentId(effectiveRequestedAgentId)
     : requesterAgentId;
-  const configuredAgentIds = resolveConfiguredAgentIds(cfg);
+  const configuredAgentIds = listAgentIds(cfg);
   const explicitSwarmGroupId = normalizeOptionalString(params.groupId);
   const requesterRunId = normalizeOptionalString(ctx.requesterRunId);
   const swarmGroupId = params.collect
@@ -256,25 +234,18 @@ export function resolveSubagentSpawnRequest(
   };
   const admission = resolveAdmission();
   if (!admission.ok) {
-    return {
-      ok: false,
-      result: {
-        status: "forbidden",
-        error:
-          usingDefaultAgentId && !admission.governingCap?.startsWith("tools.swarm.")
-            ? `tools.swarm.defaultAgentId is unavailable: ${admission.error}`
-            : admission.error,
-      },
-    };
+    return rejectSubagentSpawnRequest(
+      "forbidden",
+      usingDefaultAgentId && !admission.governingCap?.startsWith("tools.swarm.")
+        ? `tools.swarm.defaultAgentId is unavailable: ${admission.error}`
+        : admission.error,
+    );
   }
   if (params.collect && !swarmGroupId) {
-    return {
-      ok: false,
-      result: {
-        status: "error",
-        error: "sessions_spawn collect=true requires a requesting run id when groupId is omitted.",
-      },
-    };
+    return rejectSubagentSpawnRequest(
+      "error",
+      "sessions_spawn collect=true requires a requesting run id when groupId is omitted.",
+    );
   }
   const childDepth = admission.childSessionPatch?.spawnDepth ?? 1;
   const maxSpawnDepth = admission.maxSpawnDepth ?? childDepth;
@@ -300,10 +271,10 @@ export function resolveSubagentSpawnRequest(
           .map((entry) => entry.schedulerSlotId ?? entry.runId),
       })
     ) {
-      return {
-        ok: false,
-        result: { status: "error", error: "sessions_spawn could not reserve swarm FIFO order." },
-      };
+      return rejectSubagentSpawnRequest(
+        "error",
+        "sessions_spawn could not reserve swarm FIFO order.",
+      );
     }
     reservationPending = true;
   }

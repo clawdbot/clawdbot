@@ -430,6 +430,8 @@ The smoke also covers OpenAI backend/WebRTC paths; the Google leg mints the same
 constrained Live API token shape used by Control UI Talk, opens the browser
 WebSocket endpoint, sends the initial setup payload plus a JPEG frame, and
 verifies a text response and `describe_view` function roundtrip.
+The OpenAI path also performs a synthesized PCM24 speech-to-response audio
+roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
 
 ## Advanced configuration
 

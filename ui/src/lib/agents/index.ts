@@ -13,6 +13,7 @@ import {
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
 import type { SessionCapability } from "../sessions/index.ts";
+import type { AgentsPanel } from "./panels.ts";
 import {
   buildToolsEffectiveRequestKey,
   loadToolsEffective as loadToolsEffectiveShared,
@@ -20,14 +21,7 @@ import {
   resetToolsEffectiveState,
 } from "./tools-effective.ts";
 
-export type AgentsPanel =
-  | "overview"
-  | "files"
-  | "tools"
-  | "skills"
-  | "channels"
-  | "cron"
-  | "memory";
+export type { AgentsPanel } from "./panels.ts";
 
 export type AgentsState = {
   client: GatewayBrowserClient | null;

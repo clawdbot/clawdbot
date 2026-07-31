@@ -10,6 +10,21 @@ import type { RunEmbeddedAgentParams } from "./params.js";
 export const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
 export const EMBEDDED_RUN_LANE_HEARTBEAT_MS = EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS / 2;
 
+export async function withEmbeddedRunLaneProgressHeartbeat<T>(
+  noteLaneTaskProgress: () => void,
+  fn: () => Promise<T>,
+): Promise<T> {
+  noteLaneTaskProgress();
+  const progressInterval = setInterval(noteLaneTaskProgress, EMBEDDED_RUN_LANE_HEARTBEAT_MS);
+  progressInterval.unref?.();
+  try {
+    return await fn();
+  } finally {
+    clearInterval(progressInterval);
+    noteLaneTaskProgress();
+  }
+}
+
 export function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number {
   const defaultLaneTimeoutMs = DEFAULT_AGENT_TIMEOUT_MS + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS;
   // "No timeout" resolves to the timer-safe MAX_TIMER sentinel upstream.

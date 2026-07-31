@@ -5,14 +5,18 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import {
+  loadInstalledPluginIndexWithDiscovery,
+  type InstalledPluginIndex,
+} from "./installed-plugin-index.js";
 import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
-import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
 import type {
@@ -60,7 +64,10 @@ function pickPluginMetadataEnv(env: NodeJS.ProcessEnv): Record<string, string> {
 }
 
 export function resolvePluginMetadataEnvFingerprint(env: NodeJS.ProcessEnv): string {
-  return hashJson(pickPluginMetadataEnv(env));
+  return hashJson({
+    env: pickPluginMetadataEnv(env),
+    installRoots: resolveActivePluginInstallRoots(env),
+  });
 }
 
 function throwReadonlyPluginMetadataMutation(): never {
@@ -102,19 +109,6 @@ function freezeSnapshotValue<T>(value: T, seen = new WeakSet<object>()): T {
     freezeSnapshotValue(entry, seen);
   }
   return Object.freeze(value);
-}
-
-function freezePluginMetadataSnapshot(snapshot: PluginMetadataSnapshot): PluginMetadataSnapshot {
-  return freezeSnapshotValue(snapshot);
-}
-
-function resolvePluginMetadataControlPlaneFingerprint(
-  params: Pick<LoadPluginMetadataSnapshotParams, "config" | "env" | "workspaceDir"> & {
-    index?: InstalledPluginIndex;
-    policyHash?: string;
-  },
-): string {
-  return resolvePluginControlPlaneFingerprint(params);
 }
 
 function indexesMatch(
@@ -186,7 +180,7 @@ export function isPluginMetadataSnapshotCompatible(params: {
     params.snapshot.policyHash === resolveInstalledPluginIndexPolicyHash(params.config) &&
     (!params.snapshot.configFingerprint ||
       params.snapshot.configFingerprint ===
-        resolvePluginMetadataControlPlaneFingerprint({
+        resolvePluginControlPlaneFingerprint({
           config: params.config,
           env,
           index: params.index ?? params.snapshot.index,
@@ -299,20 +293,31 @@ export function loadPluginMetadataSnapshot(
   params: LoadPluginMetadataSnapshotParams,
 ): PluginMetadataSnapshot {
   const activeTimelineSpan = getActiveDiagnosticsTimelineSpan();
-  return freezePluginMetadataSnapshot(
-    measureDiagnosticsTimelineSpanSync(
-      "plugins.metadata.scan",
-      () => loadPluginMetadataSnapshotImpl(params),
-      {
-        phase: activeTimelineSpan?.phase ?? "startup",
-        config: params.config,
-        env: params.env,
-        attributes: {
-          hasWorkspaceDir: params.workspaceDir !== undefined,
-          hasInstalledIndex: params.index !== undefined,
-        },
+  const snapshot = measureDiagnosticsTimelineSpanSync(
+    "plugins.metadata.scan",
+    () => loadPluginMetadataSnapshotImpl(params),
+    {
+      phase: activeTimelineSpan?.phase ?? "startup",
+      config: params.config,
+      env: params.env,
+      attributes: {
+        hasWorkspaceDir: params.workspaceDir !== undefined,
+        hasInstalledIndex: params.index !== undefined,
       },
-    ),
+    },
+  );
+  return measureDiagnosticsTimelineSpanSync(
+    "plugins.metadata.freeze",
+    () => freezeSnapshotValue(snapshot),
+    {
+      phase: activeTimelineSpan?.phase ?? "startup",
+      config: params.config,
+      env: params.env,
+      attributes: {
+        indexPluginCount: snapshot.index.plugins.length,
+        manifestPluginCount: snapshot.plugins.length,
+      },
+    },
   );
 }
 
@@ -363,39 +368,29 @@ function loadPluginMetadataSnapshotImpl(
 ): PluginMetadataSnapshot {
   const totalStartedAt = performance.now();
   const registryStartedAt = performance.now();
-  const registryResult = loadPluginRegistrySnapshotWithMetadata({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    ...(params.stateDir ? { stateDir: params.stateDir } : {}),
-    env: params.env,
-    ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
-    ...(params.index ? { index: params.index } : {}),
-  }) ?? {
-    source: "derived" as const,
-    snapshot: { plugins: [] },
-    diagnostics: [],
-  };
+  const registryResult =
+    loadPluginRegistrySnapshotWithMetadata({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+      env: params.env,
+      ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
+      ...(params.index ? { index: params.index } : {}),
+    }) ?? deriveBootstrapPluginRegistrySnapshot(params);
   const registrySnapshotMs = performance.now() - registryStartedAt;
   const index = normalizeInstalledPluginIndex(registryResult.snapshot);
   const pluginIds = resolvePluginMetadataSnapshotPluginIds({ params, index });
   const manifestStartedAt = performance.now();
-  const manifestRegistry =
-    index.plugins.length === 0
-      ? loadPluginManifestRegistry({
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-          diagnostics: [...index.diagnostics],
-          installRecords: index.installRecords,
-        })
-      : loadPluginManifestRegistryForInstalledIndex({
-          index,
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-          ...(pluginIds !== undefined ? { pluginIds } : {}),
-          includeDisabled: true,
-        });
+  // Empty installed indexes are authoritative; bootstrap first derives a real
+  // index so every manifest and scope follows the same immutable graph.
+  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
+    index,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    ...(pluginIds !== undefined ? { pluginIds } : {}),
+    includeDisabled: true,
+  });
   const manifestRegistryMs = performance.now() - manifestStartedAt;
   const normalizePluginId = createPluginRegistryIdNormalizer(index, { manifestRegistry });
   const byPluginId = new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
@@ -407,7 +402,7 @@ function loadPluginMetadataSnapshotImpl(
   return {
     policyHash: index.policyHash,
     registrySource: registryResult.source,
-    configFingerprint: resolvePluginMetadataControlPlaneFingerprint({
+    configFingerprint: resolvePluginControlPlaneFingerprint({
       config: params.config,
       env: params.env,
       index,
@@ -434,4 +429,14 @@ function loadPluginMetadataSnapshotImpl(
     },
     discovery: registryResult.discovery,
   };
+}
+
+function deriveBootstrapPluginRegistrySnapshot(params: LoadPluginMetadataSnapshotParams): {
+  source: "derived";
+  snapshot: InstalledPluginIndex;
+  diagnostics: [];
+  discovery: ReturnType<typeof loadInstalledPluginIndexWithDiscovery>["discovery"];
+} {
+  const { index, discovery } = loadInstalledPluginIndexWithDiscovery(params);
+  return { source: "derived", snapshot: index, diagnostics: [], discovery };
 }

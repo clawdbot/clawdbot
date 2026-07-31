@@ -4,7 +4,7 @@ import {
   countSensitiveConfigValues,
   hintForPath,
   isSensitiveConfigPath,
-  REDACTED_PLACEHOLDER,
+  redactedPlaceholder,
 } from "../../components/config-form.shared.ts";
 import { t } from "../../i18n/index.ts";
 import { isJson5Warm, parseJson5Text } from "../../lib/json5-runtime.ts";
@@ -236,7 +236,7 @@ export function renderRawDiffValue(
 ): string {
   const hasSensitiveValue = countSensitiveConfigValues(value, path, uiHints) > 0;
   if (!rawRevealed && value != null && (isSensitiveDiffPath(path, uiHints) || hasSensitiveValue)) {
-    return REDACTED_PLACEHOLDER;
+    return redactedPlaceholder();
   }
   return truncateValue(value);
 }

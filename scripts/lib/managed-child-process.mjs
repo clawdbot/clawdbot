@@ -84,6 +84,7 @@ export function terminateManagedChild(
  *   windowsVerbatimArguments?: boolean;
  *   platform?: NodeJS.Platform;
  *   comSpec?: string;
+ *   timeoutMs?: number;
  *   onReady?: (child: import("node:child_process").ChildProcess) => void;
  * }} options
  * @returns {Promise<number>}
@@ -98,6 +99,7 @@ export async function runManagedCommand({
   shell = platform === "win32",
   windowsVerbatimArguments,
   comSpec,
+  timeoutMs,
   onReady,
 }) {
   const spawnSpec = createManagedCommandSpawnSpec({
@@ -119,6 +121,8 @@ export async function runManagedCommand({
   };
   addManagedChild(managedChild);
   onReady?.(child);
+  let timeoutTimer = null;
+  let timedOut = false;
 
   try {
     return await new Promise((resolve, reject) => {
@@ -129,19 +133,35 @@ export async function runManagedCommand({
         }
         if (managedChild.receivedSignal) {
           terminateManagedChild(child, "SIGKILL");
+          resolve(signalExitCode(managedChild.receivedSignal));
+          return;
         }
-        resolve(
-          managedChild.receivedSignal
-            ? signalExitCode(managedChild.receivedSignal)
-            : signal
-              ? signalExitCode(signal)
-              : (status ?? 1),
-        );
+        if (timedOut) {
+          reject(createManagedCommandTimeoutError(timeoutMs));
+          return;
+        }
+        resolve(signal ? signalExitCode(signal) : (status ?? 1));
       });
+      if (timeoutMs !== undefined) {
+        timeoutTimer = setTimeout(() => {
+          timedOut = true;
+          // Shell commands may spawn grandchildren, so timeout cleanup owns the whole tree.
+          terminateManagedChild(child, "SIGKILL", { platform });
+        }, timeoutMs);
+      }
     });
   } finally {
+    if (timeoutTimer) {
+      clearTimeout(timeoutTimer);
+    }
     removeManagedChild(managedChild);
   }
+}
+
+function createManagedCommandTimeoutError(timeoutMs) {
+  return Object.assign(new Error(`Managed command timed out after ${timeoutMs}ms`), {
+    code: "ETIMEDOUT",
+  });
 }
 
 /**

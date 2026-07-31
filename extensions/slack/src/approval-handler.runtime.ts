@@ -25,9 +25,10 @@ import {
   shouldHandleSlackNativeApprovalRequest,
 } from "./approval-native-gates.js";
 import { normalizeSlackApproverId } from "./exec-approvals.js";
+import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { sendMessageSlack } from "./send.js";
-import { truncateSlackText } from "./truncate.js";
+import { truncateSlackTextByUtf8Bytes } from "./truncate.js";
 
 type SlackBlock = Block | KnownBlock;
 type SlackPendingApproval = {
@@ -48,7 +49,6 @@ type SlackPluginApprovalView =
   | PluginApprovalExpiredView;
 
 const SLACK_CONTEXT_ELEMENTS_MAX = 10;
-const SLACK_CHAT_UPDATE_TEXT_LIMIT = 4000;
 const SLACK_TEXT_OBJECT_MAX = 3000;
 
 type SlackExecApprovalConfig = NonNullable<
@@ -418,7 +418,7 @@ async function updateMessage(params: {
     await params.app.client.chat.update({
       channel: params.channelId,
       ts: params.messageTs,
-      text: truncateSlackText(params.text, SLACK_CHAT_UPDATE_TEXT_LIMIT),
+      text: truncateSlackTextByUtf8Bytes(params.text, SLACK_EDIT_TEXT_MAX_BYTES),
       blocks: params.blocks,
     });
   } catch (err) {

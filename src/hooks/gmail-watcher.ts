@@ -6,9 +6,11 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
+import process from "node:process";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { killProcessTree } from "../process/kill-tree.js";
 import { hasBinary } from "../skills/loading/config.js";
 import { ensureTailscaleEndpoint } from "./gmail-setup-utils.js";
 import { isAddressInUseError } from "./gmail-watcher-errors.js";
@@ -80,7 +82,8 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
 
   const child = spawn(invocation.command, invocation.args, {
     stdio: ["ignore", "pipe", "pipe"],
-    detached: false,
+    // Own process group on Unix so killProcessTree can reach descendants on shutdown.
+    detached: process.platform !== "win32",
     windowsHide: invocation.windowsHide,
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   });
@@ -157,42 +160,71 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
 }
 
 /**
- * Send SIGTERM, escalate to SIGKILL after 3 s, and resolve on exit/close/error
- * or a final 5 s timeout after SIGKILL so the caller never hangs.
+ * Signal the gog process tree to exit gracefully (SIGTERM, SIGKILL after 3 s)
+ * and resolve on exit/close/error or a final 8 s safety timeout.
  */
 function settleProcess(proc: ChildProcess): Promise<void> {
   return new Promise<void>((resolve) => {
     let settled = false;
+    let processSettled = false;
+    let graceElapsed = false;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
     const settle = () => {
       if (settled) {
         return;
       }
       settled = true;
-      clearTimeout(escalation);
-      clearTimeout(finalTimeout);
+      if (graceTimer) {
+        clearTimeout(graceTimer);
+      }
+      if (finalTimeout) {
+        clearTimeout(finalTimeout);
+      }
       resolve();
     };
-
-    proc.on("exit", settle);
-    proc.on("close", settle);
-    proc.on("error", settle);
-
-    proc.kill("SIGTERM");
-
-    const escalation: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
-      try {
-        proc.kill("SIGKILL");
-      } catch {
-        // already dead
+    const settleAfterEscalation = () => {
+      processSettled = true;
+      if (graceElapsed) {
+        settle();
       }
-    }, 3_000);
-
-    const finalTimeout: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
+    };
+    const finalTimeout = setTimeout(() => {
       if (!settled) {
         log.warn("gog process did not exit after SIGKILL; giving up");
         settle();
       }
     }, 8_000);
+
+    proc.on("exit", settleAfterEscalation);
+    proc.on("close", settleAfterEscalation);
+    proc.on("error", settleAfterEscalation);
+
+    // killProcessTree sends SIGTERM to the process group (Unix) or uses taskkill /T
+    // (Windows) and escalates to SIGKILL after graceMs, reaching any descendants
+    // spawned by gog that plain proc.kill() would miss.
+    if (typeof proc.pid === "number") {
+      const graceMs = 3_000;
+      killProcessTree(proc.pid, {
+        graceMs,
+        detached: process.platform !== "win32",
+      });
+      // killProcessTree owns escalation but intentionally unrefs its timer.
+      // Keep shutdown referenced until that escalation has had a chance to run.
+      graceTimer = setTimeout(() => {
+        graceElapsed = true;
+        if (processSettled) {
+          settle();
+        }
+      }, graceMs + 25);
+    } else {
+      // pid absent means spawn never started; direct kill clears any lingering state.
+      try {
+        proc.kill("SIGTERM");
+      } catch {
+        /* process may not exist */
+      }
+      graceElapsed = true;
+    }
   });
 }
 

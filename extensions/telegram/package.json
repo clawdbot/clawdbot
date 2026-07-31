@@ -9,7 +9,7 @@
     "@grammyjs/transformer-throttler": "1.2.1",
     "grammy": "1.45.1",
     "typebox": "1.3.6",
-    "undici": "8.6.0",
+    "undici": "8.9.0",
     "zod": "4.4.3"
   },
   "devDependencies": {

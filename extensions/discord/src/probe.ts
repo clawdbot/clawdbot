@@ -129,7 +129,10 @@ async function readDiscordProbeGetMeJson(
       new Error(`${DISCORD_PROBE_GET_ME_LABEL}: JSON response exceeds ${maxBytes} bytes`),
   });
   try {
-    return JSON.parse(new TextDecoder().decode(bytes)) as { id?: string; username?: string };
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as {
+      id?: string;
+      username?: string;
+    };
   } catch (cause) {
     throw new Error(`${DISCORD_PROBE_GET_ME_LABEL}: malformed JSON response`, { cause });
   }

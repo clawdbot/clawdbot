@@ -4,8 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
+import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import {
+  discoverAuthStorage,
+  discoverModels,
+  discoverModelsFromCapturedSources,
+} from "./agent-model-discovery.js";
 
 // Discovery must not cold-load bundled plugin runtime: with build artifacts
 // present, the openai plugin's normalizeResolvedModel currently overrides
@@ -37,6 +41,33 @@ function writeModelsJson(agentDir: string, modelId: string): void {
 }
 
 describe("discoverModels", () => {
+  it("uses a directory-independent source label for lifecycle-captured catalogs", () => {
+    const firstAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-models-first-"));
+    const secondAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-models-second-"));
+    try {
+      const createRegistry = (agentDir: string) =>
+        discoverModelsFromCapturedSources(
+          discoverAuthStorage(agentDir, { skipCredentials: true }),
+          {
+            includePluginCatalogs: true,
+            modelsJsonContents: "not valid json",
+            pluginCatalogs: [],
+          },
+        );
+
+      const firstError = createRegistry(firstAgentDir).getError();
+      const secondError = createRegistry(secondAgentDir).getError();
+
+      expect(firstError).toBe(secondError);
+      expect(firstError).toContain("captured:models.json");
+      expect(firstError).not.toContain(firstAgentDir);
+      expect(secondError).not.toContain(secondAgentDir);
+    } finally {
+      fs.rmSync(firstAgentDir, { recursive: true, force: true });
+      fs.rmSync(secondAgentDir, { recursive: true, force: true });
+    }
+  });
+
   it("clears cached find results when the agent model registry refreshes", () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-models-"));
     writeModelsJson(agentDir, "old-model");

@@ -168,6 +168,7 @@ export async function resolveEmbeddedModelSelection(params: {
   }
 
   if (
+    !isModelSelectionLocked(sessionEntry) &&
     sessionEntry &&
     params.sessionStore &&
     params.sessionKey &&
@@ -233,6 +234,10 @@ export async function resolveEmbeddedModelSelection(params: {
       hasLegacyAutoFallbackOverrideWithoutOrigin =
         adoptedHasStoredOverride && hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
     }
+  }
+
+  if (isModelSelectionLocked(sessionEntry)) {
+    hasLegacyAutoFallbackOverrideWithoutOrigin = false;
   }
 
   const storedProviderOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
@@ -306,7 +311,10 @@ export async function resolveEmbeddedModelSelection(params: {
       storedAlias?.model ?? storedModelOverride,
       params.modelManifestContext,
     );
-    if (visibilityPolicy.allowsKey(modelKey(normalizedStored.provider, normalizedStored.model))) {
+    if (
+      isModelSelectionLocked(sessionEntry) ||
+      visibilityPolicy.allowsKey(modelKey(normalizedStored.provider, normalizedStored.model))
+    ) {
       provider = normalizedStored.provider;
       model = normalizedStored.model;
       requestedRouteResolution =
@@ -372,7 +380,9 @@ export async function resolveEmbeddedModelSelection(params: {
     requestedRouteResolution = "resolved";
   }
   const unresolvedSelectionKey = modelKey(provider, model);
-  const allowedInitialSelection = visibilityPolicy.resolveSelection({ provider, model });
+  const allowedInitialSelection = isModelSelectionLocked(sessionEntry)
+    ? { provider, model }
+    : visibilityPolicy.resolveSelection({ provider, model });
   if (!allowedInitialSelection) {
     const policyPath = visibilityPolicy.allowConfigPath ?? "modelPolicy.allow";
     throw new Error(

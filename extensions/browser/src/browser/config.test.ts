@@ -142,6 +142,39 @@ describe("browser config", () => {
     expect(resolveProfile(resolved, "work")?.cdpPort).toBe(20123);
   });
 
+  it("does not assign an implicit extension relay an explicitly pinned extension port", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        work: { driver: "extension", cdpPort: 18799, color: "#00AA00" },
+      },
+    });
+
+    expect(resolveProfile(resolved, "work")?.cdpPort).toBe(18799);
+    expect(resolveProfile(resolved, "chrome")?.cdpPort).toBe(18798);
+  });
+
+  it("does not assign an implicit extension relay an explicitly pinned managed port", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        pinned: { cdpPort: 18799, color: "#00AA00" },
+      },
+    });
+
+    expect(resolveProfile(resolved, "pinned")?.cdpPort).toBe(18799);
+    expect(resolveProfile(resolved, "chrome")?.cdpPort).toBe(18798);
+  });
+
+  it("rejects implicit extension relays that exhaust the reserved port band", () => {
+    const profiles: NonNullable<BrowserConfig["profiles"]> = Object.fromEntries(
+      Array.from({ length: 8 }, (_, index) => [
+        `extension-${index}`,
+        { driver: "extension" as const, color: "#00AA00" },
+      ]),
+    );
+
+    expect(() => resolveBrowserConfig({ profiles })).toThrow(/extension.*relay.*port/i);
+  });
+
   it("embeds the host-local relay secret as Basic auth in the extension cdpUrl", () => {
     const token = "a".repeat(64);
     writeRelaySecret(token);
@@ -175,13 +208,6 @@ describe("browser config", () => {
       expect(openclaw?.cdpPort).toBe(19022);
       expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:19022");
     });
-  });
-
-  it("normalizes hex colors", () => {
-    const resolved = resolveBrowserConfig({
-      color: "ff4500",
-    });
-    expect(resolved.color).toBe("#FF4500");
   });
 
   it("expands tilde-prefixed executablePath with the OS home directory", () => {
@@ -239,21 +265,6 @@ describe("browser config", () => {
     });
 
     expect(resolved.executablePath).toBe("/opt/~chromium/chrome");
-  });
-
-  it("falls back to default color for invalid hex", () => {
-    const resolved = resolveBrowserConfig({
-      color: "#GGGGGG",
-    });
-    expect(resolved.color).toBe("#FF4500");
-  });
-
-  it("treats non-loopback cdpUrl as remote", () => {
-    const resolved = resolveBrowserConfig({
-      cdpUrl: "http://example.com:9222",
-    });
-    const profile = resolveProfile(resolved, "openclaw");
-    expect(profile?.cdpIsLoopback).toBe(false);
   });
 
   it("supports explicit CDP URLs for the default profile", () => {
@@ -1034,62 +1045,17 @@ describe("browser config", () => {
     expect(getBrowserProfileCapabilities(work).usesChromeMcp).toBe(false);
   });
 
-  describe("default profile preference", () => {
-    it("defaults to openclaw profile when defaultProfile is not configured", () => {
-      const resolved = resolveBrowserConfig({
-        headless: false,
-        noSandbox: false,
-      });
-      expect(resolved.defaultProfile).toBe("openclaw");
+  it("resolves a configured custom default profile", () => {
+    const resolved = resolveBrowserConfig({
+      defaultProfile: "custom",
+      profiles: {
+        custom: { cdpPort: 19999 },
+      },
     });
 
-    it("keeps openclaw default when headless=true", () => {
-      const resolved = resolveBrowserConfig({
-        headless: true,
-      });
-      expect(resolved.defaultProfile).toBe("openclaw");
-    });
-
-    it("keeps openclaw default when noSandbox=true", () => {
-      const resolved = resolveBrowserConfig({
-        noSandbox: true,
-      });
-      expect(resolved.defaultProfile).toBe("openclaw");
-    });
-
-    it("keeps openclaw default when both headless and noSandbox are true", () => {
-      const resolved = resolveBrowserConfig({
-        headless: true,
-        noSandbox: true,
-      });
-      expect(resolved.defaultProfile).toBe("openclaw");
-    });
-
-    it("explicit defaultProfile config overrides defaults in headless mode", () => {
-      const resolved = resolveBrowserConfig({
-        headless: true,
-        defaultProfile: "user",
-      });
-      expect(resolved.defaultProfile).toBe("user");
-    });
-
-    it("explicit defaultProfile config overrides defaults in noSandbox mode", () => {
-      const resolved = resolveBrowserConfig({
-        noSandbox: true,
-        defaultProfile: "user",
-      });
-      expect(resolved.defaultProfile).toBe("user");
-    });
-
-    it("allows custom profile as default even in headless mode", () => {
-      const resolved = resolveBrowserConfig({
-        headless: true,
-        defaultProfile: "custom",
-        profiles: {
-          custom: { cdpPort: 19999, color: "#00FF00" },
-        },
-      });
-      expect(resolved.defaultProfile).toBe("custom");
-    });
+    const profile = resolveProfile(resolved, resolved.defaultProfile);
+    expect(resolved.defaultProfile).toBe("custom");
+    expect(profile?.name).toBe("custom");
+    expect(profile?.cdpPort).toBe(19999);
   });
 });

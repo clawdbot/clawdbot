@@ -2509,7 +2509,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         enabledPluginIds: ["memory-lancedb"],
         memorySlot: "memory-lancedb",
       }),
-      expected: ["demo-channel", "browser", "memory-lancedb"],
+      expected: ["demo-channel", "browser", "memory-core", "memory-lancedb"],
     });
   });
 

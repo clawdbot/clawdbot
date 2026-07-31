@@ -298,7 +298,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     if (!tempHome) {
       throw new Error("temp home not initialized");
     }
-    const stateDir = await fs.mkdtemp(path.join(tempHome, prefix));
+    const stateDir = await fs.realpath(await fs.mkdtemp(path.join(tempHome, prefix)));
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
     return stateDir;
@@ -358,6 +358,30 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     gatewayServiceMock.isLoaded.mockClear();
     gatewayServiceMock.readRuntime.mockClear();
     readLastGatewayErrorLineMock.mockClear();
+  });
+
+  it("writes the implicit workspace under a non-default state directory", async () => {
+    await withStateDir("state-isolated-workspace-", async (stateDir) => {
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "local",
+          authChoice: "skip",
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: false,
+          gatewayBind: "loopback",
+          gatewayAuth: "token",
+          gatewayToken: "tok_state_isolation",
+        },
+        runtime,
+      );
+
+      const workspace = path.join(stateDir, "workspace");
+      const cfg = readTestConfig();
+      expect(cfg.agents?.defaults?.workspace).toBe(workspace);
+      expect(cfg.agents?.entries?.main?.workspace).toBe(workspace);
+    });
   });
 
   it("preserves existing config on onboard rerun (openclaw#84692)", async () => {

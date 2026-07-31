@@ -630,6 +630,15 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     expect(productionOutputs).not.toContain("dist/plugin-sdk/test-fixtures.d.ts");
     expect(privateQaOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
     expect(privateQaOutputs).toContain("dist/plugin-sdk/test-fixtures.d.ts");
+    for (const entry of [
+      "channel-contract-testing",
+      "plugin-state-test-runtime",
+      "plugin-test-runtime",
+    ]) {
+      expect(productionOutputs).not.toContain(`dist/plugin-sdk/${entry}.d.ts`);
+      expect(privateQaOutputs).toContain(`dist/plugin-sdk/${entry}.d.ts`);
+      expect(privateQaOutputs).toContain(`packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`);
+    }
   });
 
   it("parses prep mode and rejects unknown values", () => {

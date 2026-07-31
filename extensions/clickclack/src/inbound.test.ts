@@ -67,6 +67,10 @@ function createRuntime(): PluginRuntime {
         model: "gpt-5.4-mini",
         agentId: "service-bot",
         usage: {},
+        execution: {
+          mode: "direct-provider",
+          owner: { kind: "provider", id: "openai" },
+        },
         audit: {
           caller: { kind: "plugin", id: "clickclack" },
         },
@@ -138,6 +142,9 @@ function createAgentAccount(
     agentActivity: false,
     commandMenu: true,
     discussions: { enabled: false, workspace: "wsp_1", section: "Sessions" },
+    requireMention: false,
+    mentionPatterns: [],
+    groups: {},
     config: {
       allowFrom: ["*"],
     },
@@ -209,6 +216,9 @@ describe("handleClickClackInbound", () => {
       commandMenu: true,
       discussions: { enabled: false, workspace: "wsp_1", section: "Sessions" },
       config: {},
+      requireMention: false,
+      mentionPatterns: [],
+      groups: {},
     } satisfies ResolvedClickClackAccount;
 
     await handleClickClackInbound({
@@ -285,6 +295,10 @@ describe("handleClickClackInbound", () => {
       model: "gpt-5.4-mini",
       agentId: "service-bot",
       usage: {},
+      execution: {
+        mode: "direct-provider",
+        owner: { kind: "provider", id: "openai" },
+      },
       audit: { caller: { kind: "plugin", id: "clickclack" } },
     });
     setClickClackRuntime(runtime);

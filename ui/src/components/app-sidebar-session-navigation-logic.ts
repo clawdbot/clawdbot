@@ -132,6 +132,7 @@ export function buildSidebarSessionNavigationState(input: {
         basePath: context?.basePath ?? "",
         row,
         mainKey,
+        preferenceDerivedFace: true,
       }).href,
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
@@ -422,7 +423,7 @@ export function promoteSidebarSessionCreatedOrder(
 export function applySidebarSessionCreatorFilter(input: {
   projected: readonly SidebarRecentSession[];
   creatorRows: readonly { createdActor?: SessionCreatedActor }[];
-  creatorFacet: readonly { id: string; label?: string }[] | undefined;
+  creatorFacet: readonly { id: string; label?: string; avatarUrl?: string }[] | undefined;
   selectedCreatorId: string | null;
 }): {
   rows: SidebarRecentSession[];

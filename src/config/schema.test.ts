@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags } from "./schema.tags.js";
 import { applyResolvedConfigTierHints } from "./schema.tiers.js";
+import { validateConfigObjectRaw } from "./validation.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -255,6 +256,55 @@ describe("config schema", () => {
           nodeHost: { mcp: { servers: { [serverName]: { command: "server" } } } },
         }),
       ).toThrow(/MCP server name must be non-empty and must not have surrounding whitespace/);
+    }
+  });
+
+  it("rejects the reserved __proto__ MCP server name without tightening other names", () => {
+    for (const raw of [
+      '{"mcp":{"servers":{"__proto__":{"command":"server"}}}}',
+      '{"nodeHost":{"mcp":{"servers":{"__proto__":{"command":"server"}}}}}',
+    ]) {
+      const result = OpenClawSchema.safeParse(JSON.parse(raw));
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toContainEqual(
+          expect.objectContaining({
+            message: 'MCP server name "__proto__" is reserved; rename the server',
+          }),
+        );
+      }
+    }
+
+    for (const serverName of ["docs", "_internal"]) {
+      expect(
+        OpenClawSchema.safeParse({
+          mcp: { servers: { [serverName]: { command: "server" } } },
+          nodeHost: { mcp: { servers: { [serverName]: { command: "server" } } } },
+        }).success,
+      ).toBe(true);
+    }
+  });
+
+  it("rejects reserved MCP server names from the pre-normalization config", () => {
+    const sourceRaw = JSON.parse('{"mcp":{"servers":{"__proto__":{"command":"server"}}}}');
+    const result = validateConfigObjectRaw({ mcp: { servers: {} } }, { sourceRaw });
+
+    expect(result).toEqual({
+      ok: false,
+      issues: [
+        expect.objectContaining({
+          path: "mcp.servers.__proto__",
+          message: 'MCP server name "__proto__" is reserved; rename the server',
+        }),
+      ],
+    });
+
+    const directResult = validateConfigObjectRaw(sourceRaw);
+    expect(directResult.ok).toBe(false);
+    if (!directResult.ok) {
+      expect(
+        directResult.issues.filter((issue) => issue.path === "mcp.servers.__proto__"),
+      ).toHaveLength(1);
     }
   });
 
@@ -894,6 +944,16 @@ describe("config schema", () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it("accepts the Code Mode auto tier and rejects unknown tiers", () => {
+    expect(ToolsSchema.parse({ codeMode: "auto" })?.codeMode).toBe("auto");
+    expect(ToolsSchema.parse({ codeMode: false })?.codeMode).toBe(false);
+    expect(ToolsSchema.parse({ codeMode: { enabled: "auto" } })?.codeMode).toEqual({
+      enabled: "auto",
+    });
+    expect(ToolsSchema.safeParse({ codeMode: "on" }).success).toBe(false);
+    expect(ToolsSchema.safeParse({ codeMode: { enabled: "always" } }).success).toBe(false);
   });
 
   it("accepts strict Swarm config in the runtime zod schema", () => {

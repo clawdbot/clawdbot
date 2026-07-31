@@ -93,6 +93,7 @@ vi.mock("./provider-local-service.js", () => ({
 
 vi.mock("./provider-request-config.js", () => ({
   buildProviderRequestDispatcherPolicy: buildProviderRequestDispatcherPolicyMock,
+  getModelProviderMetadataOwners: vi.fn(() => undefined),
   getModelProviderRequestTransport: vi.fn(() => undefined),
   mergeModelProviderRequestOverrides: mergeModelProviderRequestOverridesMock,
   resolveProviderRequestPolicyConfig: resolveProviderRequestPolicyConfigMock,
@@ -1176,11 +1177,17 @@ describe("buildGuardedModelFetch", () => {
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
     } as unknown as Model<"openai-responses">;
+    const body = JSON.stringify({ model: "gpt-5.5", stream: true });
+    const parse = vi.spyOn(JSON, "parse");
 
     const response = await buildGuardedModelFetch(model)("https://api.openai.com/v1/responses", {
       method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
     });
 
+    expect(parse).not.toHaveBeenCalled();
+    parse.mockRestore();
     await expect(response.text()).resolves.toBe(
       'event: response.created\n\ndata: {"ok": true}\n\n',
     );

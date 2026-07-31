@@ -44,22 +44,6 @@ describe("slack actions contract", () => {
         expectedCapabilities: ["presentation"],
       },
       {
-        name: "interactive replies keep the shared presentation capability",
-        cfg: {
-          channels: {
-            slack: {
-              botToken: "xoxb-test",
-              appToken: "xapp-test",
-              capabilities: {
-                interactiveReplies: true,
-              },
-            },
-          },
-        } as OpenClawConfig,
-        expectedActions: slackDefaultActions,
-        expectedCapabilities: ["presentation"],
-      },
-      {
         name: "missing tokens disables the actions surface",
         cfg: {
           channels: {

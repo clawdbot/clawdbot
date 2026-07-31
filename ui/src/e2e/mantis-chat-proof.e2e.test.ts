@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
+  pauseVirtualClock,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
@@ -96,6 +97,9 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
       await page.goto(`${server.baseUrl}chat`);
       await page.getByText("Mantis web UI proof is ready.").waitFor({ timeout: 10_000 });
       await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      // The working timer starts at the send click; pause first so the elapsed
+      // reading is exactly the fastForward below, not inflated by real time.
+      await pauseVirtualClock(page);
       await page.getByRole("button", { name: "Send message" }).click();
 
       const sendRequest = await gateway.waitForRequest("chat.send");

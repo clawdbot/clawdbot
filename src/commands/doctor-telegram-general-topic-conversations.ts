@@ -13,13 +13,13 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targe
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
-import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
-  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 
 const GENERAL_TOPIC_ID = "1";
 const LEGACY_GENERAL_TARGET = /^telegram:(-?\d+):topic:1$/u;
@@ -106,24 +106,30 @@ export function detectTelegramGeneralTopicConversationRepairs(params: {
 }): TelegramGeneralTopicConversationRepair[] {
   const env = params.env ?? process.env;
   return resolveRepairScopes(params.cfg, env).flatMap(({ scope, storePath }) => {
-    const result = withOpenClawAgentDatabaseReadOnly(
-      (database) =>
-        listLegacyRows(database.db).flatMap((row) => {
-          const canonical = canonicalIdentity(row);
-          return canonical && canonical.conversationId !== row.conversation_id
-            ? [
-                {
-                  agentId: scope.agentId,
-                  canonicalConversationId: canonical.conversationId,
-                  legacyConversationId: row.conversation_id,
-                  storePath,
-                },
-              ]
-            : [];
-        }),
-      toDatabaseOptions(scope),
-    );
-    return result.found ? result.value : [];
+    const databaseOptions = toDatabaseOptions(scope);
+    const inspected = runDoctorAgentDatabaseOperation({
+      agentId: scope.agentId,
+      path: databaseOptions.path ?? storePath,
+      run: () =>
+        withOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            listLegacyRows(database.db).flatMap((row) => {
+              const canonical = canonicalIdentity(row);
+              return canonical && canonical.conversationId !== row.conversation_id
+                ? [
+                    {
+                      agentId: scope.agentId,
+                      canonicalConversationId: canonical.conversationId,
+                      legacyConversationId: row.conversation_id,
+                      storePath,
+                    },
+                  ]
+                : [];
+            }),
+          databaseOptions,
+        ),
+    });
+    return inspected.ok && inspected.value.found ? inspected.value.value : [];
   });
 }
 
@@ -316,10 +322,8 @@ export async function repairTelegramGeneralTopicConversations(params: {
   let repaired = 0;
   for (const { scope } of resolveRepairScopes(params.cfg, env)) {
     await runExclusiveSqliteSessionWrite(scope, async () => {
-      const database = openOpenClawAgentDatabase(toDatabaseOptions(scope));
-      repaired += runSqliteImmediateTransactionSync(
-        database.db,
-        () => {
+      repaired += runOpenClawAgentWriteTransaction(
+        (database) => {
           // Detection is advisory. Re-read every candidate after BEGIN so a live
           // session write cannot turn the doctor repair into a stale merge.
           let databaseRepairs = 0;
@@ -330,7 +334,8 @@ export async function repairTelegramGeneralTopicConversations(params: {
           }
           return databaseRepairs;
         },
-        { databaseLabel: database.path, operationLabel: "doctor-telegram-general-topic" },
+        toDatabaseOptions(scope),
+        { operationLabel: "doctor-telegram-general-topic" },
       );
     });
   }

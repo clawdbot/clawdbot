@@ -109,6 +109,9 @@ docs/internal/
 tmp/
 IDENTITY.md
 USER.md
+# Keep packaged workspace templates visible to Git-aware remote syncs.
+!docs/reference/templates/IDENTITY.md
+!docs/reference/templates/USER.md
 # Exception: oc-path real-world test fixtures need to be tracked even
 # though the bare names match the local-untracked rule above.
 !extensions/oc-path/src/oc-path/tests/fixtures/real/IDENTITY.md
@@ -179,6 +182,8 @@ USER.md
 !.agents/skills/openclaw-parallels-smoke/**
 !.agents/skills/openclaw-pr-maintainer/
 !.agents/skills/openclaw-pr-maintainer/**
+!.agents/skills/prototype-openclaw-tui/
+!.agents/skills/prototype-openclaw-tui/**
 !.agents/skills/openclaw-qa-testing/
 !.agents/skills/openclaw-qa-testing/**
 !.agents/skills/openclaw-refactor-docs/
