@@ -247,16 +247,16 @@ function resolveGitInstallRepoDir(params: {
 
 async function withGitStagingDir<T>(
   persistentRepoDir: string | undefined,
-  fn: (tmpDir: string) => Promise<T>,
+  fn: (tmpDir: string, stagedRepoIsTargetLocal: boolean) => Promise<T>,
 ): Promise<T> {
   if (!persistentRepoDir) {
-    return await withTempDir("openclaw-git-plugin-", fn);
+    return await withTempDir("openclaw-git-plugin-", (tmpDir) => fn(tmpDir, false));
   }
   const targetParent = path.dirname(persistentRepoDir);
   try {
     await fs.mkdir(targetParent, { recursive: true });
   } catch {
-    return await withTempDir("openclaw-git-plugin-", fn);
+    return await withTempDir("openclaw-git-plugin-", (tmpDir) => fn(tmpDir, false));
   }
 
   let callbackStarted = false;
@@ -265,7 +265,7 @@ async function withGitStagingDir<T>(
       "openclaw-git-plugin-",
       async (tmpDir) => {
         callbackStarted = true;
-        return await fn(tmpDir);
+        return await fn(tmpDir, true);
       },
       { rootDir: targetParent },
     );
@@ -275,20 +275,38 @@ async function withGitStagingDir<T>(
     if (callbackStarted) {
       throw err;
     }
-    return await withTempDir("openclaw-git-plugin-", fn);
+    return await withTempDir("openclaw-git-plugin-", (tmpDir) => fn(tmpDir, false));
   }
 }
 
 async function replaceManagedGitRepo(params: {
   stagedRepoDir: string;
+  stagedRepoIsTargetLocal: boolean;
   persistentRepoDir: string;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
+  const replace = async (stagedDir: string) => {
     await replaceDirectoryAtomic({
-      stagedDir: params.stagedRepoDir,
+      stagedDir,
       targetDir: params.persistentRepoDir,
       backupPrefix: ".repo-backup-",
     });
+  };
+  try {
+    if (params.stagedRepoIsTargetLocal) {
+      await replace(params.stagedRepoDir);
+    } else {
+      await withTempDir(
+        "openclaw-git-plugin-commit-",
+        async (targetLocalDir) => {
+          await fs.cp(params.stagedRepoDir, targetLocalDir, {
+            recursive: true,
+            verbatimSymlinks: true,
+          });
+          await replace(targetLocalDir);
+        },
+        { rootDir: path.dirname(params.persistentRepoDir) },
+      );
+    }
     return { ok: true };
   } catch (err) {
     return {
@@ -374,7 +392,7 @@ export async function installPluginFromGitSpec(
   const effectiveMode =
     params.mode === "update" && (await pathExists(persistentRepoDir)) ? "update" : "install";
   const stagingRepoDir = params.dryRun ? undefined : persistentRepoDir;
-  return await withGitStagingDir(stagingRepoDir, async (tmpDir) => {
+  return await withGitStagingDir(stagingRepoDir, async (tmpDir, stagedRepoIsTargetLocal) => {
     const repoDir = path.join(tmpDir, "repo");
     params.logger?.info?.(
       `Cloning ${sanitizeForLog(redactSensitiveUrlLikeString(parsed.label))}...`,
@@ -497,6 +515,7 @@ export async function installPluginFromGitSpec(
     if (!params.dryRun) {
       const replaceResult = await replaceManagedGitRepo({
         stagedRepoDir: repoDir,
+        stagedRepoIsTargetLocal,
         persistentRepoDir,
       });
       if (!replaceResult.ok) {
