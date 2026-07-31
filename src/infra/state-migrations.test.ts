@@ -41,6 +41,7 @@ import * as sessionStore from "./state-migrations.legacy-session-store.js";
 import {
   migrateLegacyCurrentConversationBindings,
   migrateLegacyPluginBindingApprovals,
+  migrateLegacyVoiceWakeSettings,
 } from "./state-migrations.runtime-state.js";
 import { loadVoiceWakeRoutingConfig, setVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "./voicewake.js";
@@ -476,6 +477,86 @@ async function createMixedPluginBindingCommitFailureFixture(): Promise<MixedComm
     readRowCount: () => readPluginBindingApprovalRows(env).length,
     sourceFragment: "Imported Plugin",
     sourcePath,
+  };
+}
+
+type VoiceWakeCommitFailureFixture = {
+  env: NodeJS.ProcessEnv;
+  expectedWarning: string;
+  migrate: () => ReturnType<typeof migrateLegacyVoiceWakeSettings>;
+  readRowCount: () => number;
+  rowsAfterRetry: number;
+  sourceFragment: string;
+  sourcePath: string;
+};
+
+function countVoiceWakeTriggerRows(env: NodeJS.ProcessEnv): number {
+  const { db } = openOpenClawStateDatabase({ env });
+  const stateDb = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "voicewake_triggers">>(db);
+  return executeSqliteQuerySync(db, stateDb.selectFrom("voicewake_triggers").select(["trigger"]))
+    .rows.length;
+}
+
+function countVoiceWakeRoutingConfigRows(env: NodeJS.ProcessEnv): number {
+  const { db } = openOpenClawStateDatabase({ env });
+  const stateDb =
+    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "voicewake_routing_config">>(db);
+  return executeSqliteQuerySync(
+    db,
+    stateDb.selectFrom("voicewake_routing_config").select(["config_key"]),
+  ).rows.length;
+}
+
+async function createVoiceWakeTriggersCommitFailureFixture(): Promise<VoiceWakeCommitFailureFixture> {
+  const root = await createTempDir();
+  const stateDir = path.join(root, ".openclaw");
+  const env = createEnv(stateDir);
+  const triggersPath = path.join(stateDir, "settings", "voicewake.json");
+  const routingPath = path.join(stateDir, "settings", "voicewake-routing.json");
+  await fs.mkdir(path.dirname(triggersPath), { recursive: true });
+  await fs.writeFile(triggersPath, JSON.stringify({ triggers: ["hey legacy assistant"] }), "utf8");
+  return {
+    env,
+    expectedWarning: "Failed migrating legacy voice wake triggers: Error: forced commit failure",
+    migrate: () =>
+      migrateLegacyVoiceWakeSettings({
+        detected: { triggersPath, routingPath, hasLegacy: true },
+        stateDir,
+      }),
+    readRowCount: () => countVoiceWakeTriggerRows(env),
+    rowsAfterRetry: 1,
+    sourceFragment: "hey legacy assistant",
+    sourcePath: triggersPath,
+  };
+}
+
+async function createVoiceWakeRoutingCommitFailureFixture(): Promise<VoiceWakeCommitFailureFixture> {
+  const root = await createTempDir();
+  const stateDir = path.join(root, ".openclaw");
+  const env = createEnv(stateDir);
+  const triggersPath = path.join(stateDir, "settings", "voicewake.json");
+  const routingPath = path.join(stateDir, "settings", "voicewake-routing.json");
+  await fs.mkdir(path.dirname(routingPath), { recursive: true });
+  await fs.writeFile(
+    routingPath,
+    JSON.stringify({
+      defaultTarget: { mode: "current" },
+      routes: [{ trigger: "hey legacy assistant", target: { agentId: "main" } }],
+    }),
+    "utf8",
+  );
+  return {
+    env,
+    expectedWarning: "Failed migrating legacy voice wake routing: Error: forced commit failure",
+    migrate: () =>
+      migrateLegacyVoiceWakeSettings({
+        detected: { triggersPath, routingPath, hasLegacy: true },
+        stateDir,
+      }),
+    readRowCount: () => countVoiceWakeRoutingConfigRows(env),
+    rowsAfterRetry: 1,
+    sourceFragment: "hey legacy assistant",
+    sourcePath: routingPath,
   };
 }
 
@@ -3823,6 +3904,36 @@ describe("state migrations", () => {
     const retry = fixture.migrate();
     expect(retry.warnings).toStrictEqual([]);
     expect(fixture.readRowCount()).toBe(2);
+    await expectMissingPath(fixture.sourcePath);
+  });
+
+  it.each([
+    {
+      name: "voice wake triggers",
+      setup: createVoiceWakeTriggersCommitFailureFixture,
+    },
+    {
+      name: "voice wake routing",
+      setup: createVoiceWakeRoutingCommitFailureFixture,
+    },
+  ])("keeps $name retryable when SQLite commit fails", async ({ setup }) => {
+    const fixture = await setup();
+    const commit = failNextStateDbCommit(fixture.env);
+    const result = fixture.migrate();
+    commit.mockRestore();
+
+    expect(result.warnings).toEqual([fixture.expectedWarning]);
+    expect(result.notices).toBeUndefined();
+    expect(result.changes).toStrictEqual([]);
+    expect(fixture.readRowCount()).toBe(0);
+    await expect(fs.readFile(fixture.sourcePath, "utf8")).resolves.toContain(
+      fixture.sourceFragment,
+    );
+    await expectMissingPath(`${fixture.sourcePath}.migrated`);
+
+    const retry = fixture.migrate();
+    expect(retry.warnings).toStrictEqual([]);
+    expect(fixture.readRowCount()).toBe(fixture.rowsAfterRetry);
     await expectMissingPath(fixture.sourcePath);
   });
 
