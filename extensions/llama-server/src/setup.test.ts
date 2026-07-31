@@ -14,6 +14,12 @@ import {
 
 const discoverMock = vi.hoisted(() => vi.fn());
 const runtimeApiKeyMock = vi.hoisted(() => vi.fn());
+const removeProviderAuthProfilesMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
+  removeProviderAuthProfilesWithLock: removeProviderAuthProfilesMock,
+}));
 
 vi.mock("./discovery.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./discovery.js")>()),
@@ -80,6 +86,8 @@ describe("llama-server setup", () => {
     discoverMock.mockReset();
     runtimeApiKeyMock.mockReset();
     runtimeApiKeyMock.mockResolvedValue(undefined);
+    removeProviderAuthProfilesMock.mockReset();
+    removeProviderAuthProfilesMock.mockResolvedValue({ version: 1, profiles: {} });
   });
 
   it("detects a running local server without writing config", async () => {
@@ -161,7 +169,14 @@ describe("llama-server setup", () => {
       confirm: vi.fn(async () => false),
     };
     const result = await runLlamaServerSetup({
-      config: {},
+      config: {
+        auth: {
+          profiles: {
+            "llama-server:default": { provider: "llama-server", mode: "api_key" },
+          },
+          order: { "llama-server": ["llama-server:default"] },
+        },
+      },
       env: {},
       prompter,
       runtime: runtime(),
@@ -175,6 +190,14 @@ describe("llama-server setup", () => {
       result.configPatch?.models?.providers?.[LLAMA_SERVER_PROVIDER_ID]?.apiKey,
     ).toBeUndefined();
     expect(result.defaultModel).toBe("llama-server/qwen/model:Q4_K_M");
+    expect(removeProviderAuthProfilesMock).toHaveBeenCalledWith({
+      provider: LLAMA_SERVER_PROVIDER_ID,
+      agentDir: undefined,
+    });
+    expect(result.configPatch?.auth).toEqual({
+      profiles: { "llama-server:default": undefined },
+      order: { "llama-server": undefined },
+    });
   });
 
   it("returns an API-key profile when the operator enables auth", async () => {
@@ -228,6 +251,14 @@ describe("llama-server setup", () => {
   it("validates and configures non-interactively without requiring an API key", async () => {
     discoverMock.mockResolvedValue(successfulDiscovery());
     const ctx = nonInteractiveContext({ customBaseUrl: "http://localhost:8080/v1" });
+    ctx.config = {
+      auth: {
+        profiles: {
+          "llama-server:default": { provider: "llama-server", mode: "api_key" },
+        },
+        order: { "llama-server": ["llama-server:default"] },
+      },
+    };
 
     await expect(validateLlamaServerNonInteractive(ctx)).resolves.toBe(true);
     const configured = await configureLlamaServerNonInteractive(ctx);
@@ -242,6 +273,11 @@ describe("llama-server setup", () => {
     expect(configured?.agents?.defaults?.model).toEqual(
       expect.objectContaining({ primary: "llama-server/qwen/model:Q4_K_M" }),
     );
+    expect(removeProviderAuthProfilesMock).toHaveBeenCalledWith({
+      provider: LLAMA_SERVER_PROVIDER_ID,
+      agentDir: undefined,
+    });
+    expect(configured?.auth).toEqual({ profiles: {}, order: undefined });
   });
 
   it("removes stale Authorization when non-interactive setup selects an API key", async () => {

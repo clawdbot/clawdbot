@@ -9,6 +9,7 @@ import {
   buildApiKeyCredential,
   ensureApiKeyFromEnvOrPrompt,
   normalizeOptionalSecretInput,
+  removeProviderAuthProfilesWithLock,
   upsertAuthProfileWithLock,
   type OpenClawConfig,
   type SecretInput,
@@ -75,12 +76,62 @@ function stripAuthorizationHeader(
   };
 }
 
+function removeLlamaServerAuthProfileConfig(config: OpenClawConfig): OpenClawConfig {
+  const profiles = Object.fromEntries(
+    Object.entries(config.auth?.profiles ?? {}).filter(([id]) => id !== PROFILE_ID),
+  );
+  const order = Object.entries(config.auth?.order ?? {}).reduce<Record<string, string[]>>(
+    (nextOrder, [providerId, providerOrder]) => {
+      const next = providerOrder.filter((id) => id !== PROFILE_ID);
+      if (next.length > 0 || next.length === providerOrder.length) {
+        nextOrder[providerId] = next;
+      }
+      return nextOrder;
+    },
+    {},
+  );
+  return {
+    ...config,
+    auth: {
+      ...config.auth,
+      profiles,
+      order: Object.keys(order).length > 0 ? order : undefined,
+    },
+  };
+}
+
+function buildAuthProfileRemovalPatch(config: OpenClawConfig): Partial<OpenClawConfig> {
+  const profiles = config.auth?.profiles;
+  const order = config.auth?.order;
+  const profileExists = profiles ? Object.hasOwn(profiles, PROFILE_ID) : false;
+  const referencedOrders = Object.entries(order ?? {}).filter(([, ids]) =>
+    ids.includes(PROFILE_ID),
+  );
+  if (!profileExists && referencedOrders.length === 0) {
+    return {};
+  }
+  const profilePatch = profileExists ? { [PROFILE_ID]: undefined } : undefined;
+  const orderPatch = Object.fromEntries(
+    referencedOrders.map(([providerId, ids]) => {
+      const next = ids.filter((id) => id !== PROFILE_ID);
+      return [providerId, next.length > 0 ? next : undefined];
+    }),
+  );
+  return {
+    auth: {
+      ...(profilePatch ? { profiles: profilePatch } : {}),
+      ...(referencedOrders.length > 0 ? { order: orderPatch } : {}),
+    },
+  } as Partial<OpenClawConfig>;
+}
+
 function buildSetupResult(params: {
   config: OpenClawConfig;
   discovery: Extract<LlamaServerDiscoveryResult, { kind: "success" }>;
   modelId: string;
   credentialInput?: SecretInput;
   useApiKey?: boolean;
+  clearStoredProfile?: boolean;
 }): ProviderAuthResult {
   const configuredProvider = params.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
   const existingProvider = params.useApiKey
@@ -102,6 +153,7 @@ function buildSetupResult(params: {
       : [],
     defaultModel: `${LLAMA_SERVER_PROVIDER_ID}/${params.modelId}`,
     configPatch: {
+      ...(params.clearStoredProfile ? buildAuthProfileRemovalPatch(params.config) : {}),
       models: {
         mode: params.config.models?.mode ?? "merge",
         providers: {
@@ -259,12 +311,19 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
   if (!modelId) {
     throw new Error(`No llama-server text models were found at ${discovery.endpoint.origin}.`);
   }
+  if (!credentialInput) {
+    await removeProviderAuthProfilesWithLock({
+      provider: LLAMA_SERVER_PROVIDER_ID,
+      agentDir: ctx.agentDir,
+    });
+  }
   return buildSetupResult({
     config: ctx.config,
     discovery,
     modelId,
     credentialInput,
     useApiKey: Boolean(apiKey),
+    clearStoredProfile: !credentialInput,
   });
 }
 
@@ -378,6 +437,12 @@ export async function configureLlamaServerNonInteractive(
       provider: LLAMA_SERVER_PROVIDER_ID,
       mode: "api_key",
     });
+  } else {
+    await removeProviderAuthProfilesWithLock({
+      provider: LLAMA_SERVER_PROVIDER_ID,
+      agentDir: ctx.agentDir,
+    });
+    config = removeLlamaServerAuthProfileConfig(config);
   }
 
   ctx.runtime.log(`Default ${LLAMA_SERVER_PROVIDER_LABEL} model: ${validated.modelId}`);
