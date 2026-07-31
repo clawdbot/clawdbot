@@ -143,7 +143,8 @@ function stripAnthropicSystemPromptBoundary(system: unknown): void {
   }
 }
 
-function applyAnthropicCacheControlToMessages(
+/** Apply one shared deepest-stable-message cache breakpoint policy. */
+export function applyAnthropicCacheControlToMessages(
   messages: unknown,
   cacheControl: AnthropicEphemeralCacheControl,
   markerLimit: number,
