@@ -14,7 +14,7 @@ describe("toFeishuSendResult", () => {
       }
 
       expect(isChannelPartialDeliveryError(caught)).toBe(true);
-      if (!isChannelPartialDeliveryError(caught)) {
+      if (!(caught instanceof Error) || !isChannelPartialDeliveryError(caught)) {
         throw new Error("expected an accepted Feishu delivery without an identity");
       }
       expect(caught.message).toBe("Feishu send failed: no message_id returned");

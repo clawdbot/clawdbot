@@ -850,7 +850,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 if (isChannelPartialDeliveryError(error)) {
                   // The attachment is already visible; text recovery would duplicate delivery.
                   markVisibleReplySent();
-                  throw error;
+                  throw toError(error);
                 }
                 const fallbackText = await buildFeishuMediaFallbackText({
                   text: sentFallbackText ? undefined : options.fallbackText,

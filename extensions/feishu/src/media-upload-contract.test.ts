@@ -266,7 +266,7 @@ describe("Feishu upload contracts", () => {
     }
 
     expect(isChannelPartialDeliveryError(caught)).toBe(true);
-    if (!isChannelPartialDeliveryError(caught)) {
+    if (!(caught instanceof Error) || !isChannelPartialDeliveryError(caught)) {
       throw new Error("expected an accepted Feishu media delivery without an identity");
     }
     expect(caught.message).toBe(`${media.prefix}: no message_id returned`);

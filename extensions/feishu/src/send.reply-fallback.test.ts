@@ -151,7 +151,7 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
       }
 
       expect(isChannelPartialDeliveryError(caught)).toBe(true);
-      if (!isChannelPartialDeliveryError(caught)) {
+      if (!(caught instanceof Error) || !isChannelPartialDeliveryError(caught)) {
         throw new Error("expected an accepted Feishu reply without an identity");
       }
       expect(caught.message).toBe(`${prefix}: no message_id returned`);

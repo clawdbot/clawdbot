@@ -1643,7 +1643,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
       expect(isChannelPartialDeliveryError(error)).toBe(true);
       expect(provider).toHaveBeenCalledOnce();
-      await options.onError?.(error, { kind: "final" });
+      await Promise.resolve(options.onError?.(error, { kind: "final" }));
       expect(result.getVisibleReplyState().visibleReplySent).toBe(true);
       await expect(result.ensureNoVisibleReplyFallback("accepted-no-id")).resolves.toBe(false);
       expect(provider).toHaveBeenCalledOnce();
