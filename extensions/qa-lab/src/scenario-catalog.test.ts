@@ -687,7 +687,7 @@ describe("qa scenario catalog", () => {
     expect(scenario.execution.flow).toBeUndefined();
   });
 
-  it("accepts the update.run producer's blocked evidence without destructive opt-in", async () => {
+  it("keeps the update.run producer blocked without destructive opt-in", async () => {
     const outputDir = await fs.promises.mkdtemp(
       path.join(os.tmpdir(), "openclaw-update-run-blocked-"),
     );
@@ -705,7 +705,7 @@ describe("qa scenario catalog", () => {
       });
 
       expect(result.results[0]).toMatchObject({
-        status: "pass",
+        status: "blocked",
         producerEvidence: {
           entries: [
             {
