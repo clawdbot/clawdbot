@@ -1831,6 +1831,9 @@ export const NATIVE_TOOLS_FULL_SET = [
   "Projects",
   "ReportFindings",
   "ShowOnboardingRolePicker",
+  "ClaudeDesign",
+  "ProposeSkills",
+  "SendFeedback",
   // Automation / scheduling
   "CronCreate",
   "CronDelete",
@@ -1842,6 +1845,7 @@ export const NATIVE_TOOLS_FULL_SET = [
   "ListMcpResources",
   "ReadMcpResource",
   "ReadMcpResourceDir",
+  "RefreshMcpTools",
 ];
 
 function computeNativeDisallowedTools(params: EmbeddedRunAttemptParams): string[] {
