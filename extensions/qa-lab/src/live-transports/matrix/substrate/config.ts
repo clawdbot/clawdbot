@@ -437,21 +437,16 @@ function buildMatrixQaChannelAccountConfig(params: {
   );
   // Matrix accepts only the nested streaming shape; harness overrides keep
   // their scalar/boolean vocabulary and normalize here before config write.
-  const streamingSlots = {
-    ...(params.overrides?.streaming !== undefined
-      ? { mode: resolveMatrixQaStreamingMode(params.overrides.streaming) }
-      : {}),
-    ...(isMatrixQaStreamingConfig(params.overrides?.streaming) &&
-    params.overrides.streaming.preview?.toolProgress !== undefined
-      ? { preview: { toolProgress: params.overrides.streaming.preview.toolProgress } }
-      : {}),
-    ...(params.snapshot.chunkMode !== undefined ? { chunkMode: params.snapshot.chunkMode } : {}),
-    ...(params.overrides?.blockStreaming !== undefined
-      ? { block: { enabled: params.snapshot.blockStreaming } }
-      : {}),
+  // Scenario config is applied with config.patch, which recursively merges objects.
+  // Write every slot so a prior streaming scenario cannot leak into the next one.
+  const streamingConfig = {
+    streaming: {
+      block: { enabled: params.snapshot.blockStreaming },
+      chunkMode: params.snapshot.chunkMode ?? "length",
+      mode: params.snapshot.streaming,
+      preview: { toolProgress: params.snapshot.streamingPreviewToolProgress },
+    },
   };
-  const streamingConfig =
-    Object.keys(streamingSlots).length > 0 ? { streaming: streamingSlots } : {};
   const startupVerificationConfig =
     params.snapshot.startupVerification !== undefined
       ? { startupVerification: params.snapshot.startupVerification }

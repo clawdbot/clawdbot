@@ -72,6 +72,7 @@ export type AgentEventRuntimePayload = AgentEventPayload & {
   readonly controlUiVisible?: boolean;
   readonly contextClaimId?: string;
   readonly deliverySessionKey?: string;
+  readonly projectSessionLifecycle?: boolean;
 };
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
@@ -88,6 +89,8 @@ type AgentRunContext = {
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
   projectSessionActive?: boolean;
+  /** Whether lifecycle events may update the shared session row. */
+  projectSessionLifecycle?: boolean;
   /** Active cadence state by job; admission permits one invocation per job. */
   cronRunsByJobId?: Map<string, { pacingEnabled: boolean; nextCheckMs?: number }>;
   /** Timestamp when this context was first registered (for TTL-based cleanup). */
@@ -270,6 +273,9 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext,
   }
   if (context.projectSessionActive !== undefined) {
     existing.projectSessionActive = context.projectSessionActive;
+  }
+  if (context.projectSessionLifecycle !== undefined) {
+    existing.projectSessionLifecycle = context.projectSessionLifecycle;
   }
   if (context.cronRunsByJobId !== undefined) {
     existing.cronRunsByJobId ??= new Map();
@@ -656,6 +662,12 @@ function enrichAgentEvent(
   if (context?.isControlUiVisible !== undefined) {
     Object.defineProperty(enriched, "controlUiVisible", {
       value: context.isControlUiVisible,
+      enumerable: false,
+    });
+  }
+  if (context?.projectSessionLifecycle !== undefined) {
+    Object.defineProperty(enriched, "projectSessionLifecycle", {
+      value: context.projectSessionLifecycle,
       enumerable: false,
     });
   }

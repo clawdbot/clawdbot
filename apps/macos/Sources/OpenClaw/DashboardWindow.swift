@@ -55,6 +55,15 @@ enum DashboardNativeCommand: String {
         case .commandPalette: "openclaw:native-open-search"
         }
     }
+
+    var supersedesPendingNavigation: Bool {
+        self == .newSession
+    }
+}
+
+struct DashboardNativeNavigation: Equatable {
+    let path: String
+    let fallbackURL: URL
 }
 
 enum DashboardLinkTarget: String, Equatable {

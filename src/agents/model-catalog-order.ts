@@ -8,6 +8,7 @@ import type { ModelCatalogEntry } from "./model-catalog.types.js";
 export function assignProviderModelOrder(
   entries: readonly ModelCatalogEntry[],
   existingEntries: readonly ModelCatalogEntry[] = [],
+  options: { appendUnknown?: boolean } = {},
 ): ModelCatalogEntry[] {
   const orderByModel = new Map<string, number>();
   const nextOrderByProvider = new Map<string, number>();
@@ -29,6 +30,9 @@ export function assignProviderModelOrder(
     const existingOrder = orderByModel.get(key);
     if (existingOrder !== undefined) {
       return { ...entry, providerOrder: existingOrder };
+    }
+    if (options.appendUnknown === false) {
+      return entry;
     }
     const providerOrder = nextOrderByProvider.get(provider) ?? 0;
     nextOrderByProvider.set(provider, providerOrder + 1);

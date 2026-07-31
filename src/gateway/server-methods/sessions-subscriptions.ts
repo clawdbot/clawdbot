@@ -4,6 +4,7 @@ import {
   errorShape,
   validateSessionsMessagesSubscribeParams,
   validateSessionsMessagesUnsubscribeParams,
+  validateSessionsViewerPresenceSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { canReviewOperatorApproval } from "../operator-approval-authorization.js";
@@ -29,6 +30,44 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       context.unsubscribeSessionEvents(connId);
     }
     respond(true, { subscribed: false }, undefined);
+  },
+  "sessions.viewers.set": ({ params, client, context, respond }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSessionsViewerPresenceSetParams,
+        "sessions.viewers.set",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const connId = client?.connId?.trim();
+    const declarations = context.sessionViewerPresence;
+    if (!connId || !declarations) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "session viewer presence unavailable"),
+      );
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    const canonicalKeys: string[] = [];
+    for (const rawKey of params.sessionKeys) {
+      const trimmed = rawKey.trim();
+      if (!trimmed) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "invalid sessions.viewers.set params"),
+        );
+        return;
+      }
+      canonicalKeys.push(resolveSessionStoreKey({ cfg, sessionKey: trimmed }));
+    }
+    const sessionKeys = declarations.replace(connId, canonicalKeys);
+    respond(true, { sessionKeys }, undefined);
   },
   "sessions.messages.subscribe": ({ params, client, context, respond }) => {
     if (

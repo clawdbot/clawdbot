@@ -5,21 +5,20 @@ import {
   formatMemoryDreamingDay,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { MemoryConsolidationResult } from "./dreaming-consolidation-artifacts.js";
 import { filterConsolidationCandidates } from "./dreaming-consolidation-candidates.js";
-import { updateDreamsFile } from "./dreaming-dreams-file.js";
 import type { SubagentSurface } from "./dreaming-narrative.js";
-import {
-  readMemoryCoreWorkspaceEntries,
-  writeMemoryCoreWorkspaceEntries,
-  DREAMING_MEMORY_BACKUP_NAMESPACE,
-} from "./dreaming-state.js";
 import { DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
-import { buildPromotionRecallAnnotations } from "./short-term-promotion-metadata.js";
+import {
+  buildPromotionRecallAnnotations,
+  groupPromotionCandidatesByProjectKey,
+  memoryEntryMatchesPromotionProjectGroup,
+  type PromotionProjectGroup,
+} from "./short-term-promotion-metadata.js";
 import type { PromotionCandidate } from "./short-term-promotion-types.js";
 
 const CONSOLIDATION_TIMEOUT_MS = 60_000;
 const CONSOLIDATION_MESSAGE_LIMIT = 5;
-const CONSOLIDATION_BACKUP_LIMIT = 8;
 const PROMOTION_MARKER_PREFIX = "openclaw-memory-promotion:";
 const PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE = 4;
 const CONSOLIDATION_SYSTEM_PROMPT = [
@@ -39,12 +38,6 @@ type Logger = {
   warn: (message: string) => void;
 };
 
-type ConsolidationBackup = {
-  createdAt: string;
-  content: string;
-  contentHash: string;
-};
-
 type ConsolidationOperation = {
   candidateKey: string;
   action: "added" | "merged" | "superseded";
@@ -59,14 +52,6 @@ type ConsolidationOutput = {
 };
 
 type MemoryConsolidationPlan = ConsolidationOutput;
-
-type MemoryConsolidationResult = {
-  content: string;
-  added: number;
-  merged: number;
-  superseded: number;
-  highlights: string[];
-};
 
 function candidateSourceRef(candidate: PromotionCandidate): string {
   return `${candidate.path}#L${candidate.startLine}-L${candidate.endLine}`;
@@ -101,6 +86,7 @@ function buildConsolidationPrompt(
       resultEntry: buildCandidateResultEntry(candidate, maxPromotedSnippetTokens),
       sourceRef: candidateSourceRef(candidate),
       provenance: candidate.provenance,
+      projectKey: candidate.projectKey ?? null,
       supersedesKey: candidate.provenance?.supersedesKey ?? null,
     })),
   });
@@ -219,6 +205,7 @@ function normalizeComparableMemoryFact(value: string): string {
     .replace(/^[-*+]\s+/u, "")
     .replace(/\s+<!--\s*trigger:[^\r\n]*?-->/giu, "")
     .replace(/\s+<!--\s*importance:\s*\d+\s*-->/giu, "")
+    .replace(/\s+<!--\s*project:\s*[^\r\n]*?-->/giu, "")
     .replace(/\s+Source:\s+[^\r\n]+#L\d+-L\d+\s*$/giu, "")
     .replace(
       /\s+\[score=\d+(?:\.\d+)? signals=\d+ recalls=\d+ avg=\d+(?:\.\d+)? source=[^\]]+\]\s*$/u,
@@ -260,6 +247,7 @@ function validateConsolidatedMemory(params: {
   previous: string;
   output: ConsolidationOutput;
   candidates: PromotionCandidate[];
+  projectKey?: string;
   maxPriorEntryLossFraction: number;
   memoryFileMaxChars: number;
   maxPromotedSnippetTokens: number;
@@ -344,6 +332,13 @@ function validateConsolidatedMemory(params: {
       (operation.action === "added" && priorEntrySet.has(operation.resultEntry))
     ) {
       return `output has invalid prior-entry evidence for candidate ${candidate.key}`;
+    }
+    if (
+      operation.priorEntries.some(
+        (entry) => !memoryEntryMatchesPromotionProjectGroup(entry, params.projectKey),
+      )
+    ) {
+      return `output crosses project groups for candidate ${candidate.key}`;
     }
     if (
       operation.action === "merged" &&
@@ -537,33 +532,6 @@ export function applyMemoryConsolidationPlan(params: {
   };
 }
 
-export async function storeMemoryPreimage(params: {
-  workspaceDir: string;
-  content: string;
-  nowMs: number;
-}): Promise<void> {
-  const current = await readMemoryCoreWorkspaceEntries<ConsolidationBackup>({
-    namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
-    workspaceDir: params.workspaceDir,
-  });
-  const createdAt = new Date(params.nowMs).toISOString();
-  const contentHash = createHash("sha256").update(params.content).digest("hex");
-  const entries = [
-    ...current,
-    {
-      key: `${createdAt}:${contentHash.slice(0, 12)}`,
-      value: { createdAt, content: params.content, contentHash },
-    },
-  ]
-    .toSorted((left, right) => left.value.createdAt.localeCompare(right.value.createdAt))
-    .slice(-CONSOLIDATION_BACKUP_LIMIT);
-  await writeMemoryCoreWorkspaceEntries({
-    namespace: DREAMING_MEMORY_BACKUP_NAMESPACE,
-    workspaceDir: params.workspaceDir,
-    entries,
-  });
-}
-
 export async function consolidateMemory(params: {
   subagent: SubagentSurface;
   workspaceDir: string;
@@ -580,28 +548,118 @@ export async function consolidateMemory(params: {
   if (candidates.length === 0) {
     return null;
   }
-  const sessionKey = `dreaming-narrative-consolidation-${createHash("sha1")
+  const sessionPrefix = `dreaming-narrative-consolidation-${createHash("sha1")
     .update(params.workspaceDir)
     .digest("hex")
     .slice(0, 12)}-${randomUUID()}`;
-  try {
-    const maxPromotedSnippetTokens = Math.max(
-      1,
-      Math.floor(
-        params.maxPromotedSnippetTokens ?? DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
-      ),
+  const maxPromotedSnippetTokens = Math.max(
+    1,
+    Math.floor(
+      params.maxPromotedSnippetTokens ?? DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
+    ),
+  );
+  const budget = Math.max(
+    1,
+    Math.floor(params.memoryFileMaxChars ?? DEFAULT_MEMORY_FILE_MAX_CHARS),
+  );
+  const groups = groupPromotionCandidatesByProjectKey(candidates);
+  const outputs: ConsolidationOutput[] = [];
+  let rejected = false;
+
+  for (const [groupIndex, group] of groups.entries()) {
+    const sessionKey = `${sessionPrefix}-${groupIndex}`;
+    try {
+      const output = await runConsolidationGroup({
+        ...params,
+        group,
+        sessionKey,
+        maxPromotedSnippetTokens,
+      });
+      if (!output) {
+        rejected = true;
+        continue;
+      }
+      const rejection = validateConsolidatedMemory({
+        previous: params.existingMemory,
+        output,
+        candidates: group.candidates,
+        ...(group.projectKey ? { projectKey: group.projectKey } : {}),
+        maxPriorEntryLossFraction: params.maxPriorEntryLossFraction,
+        memoryFileMaxChars: budget,
+        maxPromotedSnippetTokens,
+      });
+      if (rejection) {
+        params.logger.warn(
+          `memory-core: consolidation rejected because ${rejection}; using append-only fallback.`,
+        );
+        rejected = true;
+        continue;
+      }
+      outputs.push(output);
+    } catch (error) {
+      params.logger.warn(
+        `memory-core: consolidation failed (${error instanceof Error ? error.message : String(error)}); using append-only fallback.`,
+      );
+      rejected = true;
+    } finally {
+      await params.subagent.deleteSession({ sessionKey }).catch(() => undefined);
+    }
+  }
+
+  if (rejected || outputs.length !== groups.length) {
+    return null;
+  }
+
+  const candidatesByKey = new Map(candidates.map((candidate) => [candidate.key, candidate]));
+  const operations = outputs
+    .flatMap((output) => output.operations)
+    .map((operation) => {
+      const lineageKey = candidatesByKey.get(operation.candidateKey)?.provenance?.supersedesKey;
+      if (lineageKey) {
+        operation.lineageKey = lineageKey;
+      }
+      return operation;
+    });
+  const plan = { memory: params.existingMemory, operations };
+  const aggregate = applyMemoryConsolidationPlan({
+    existingMemory: params.existingMemory,
+    plan,
+    nowMs: params.nowMs,
+    memoryFileMaxChars: budget,
+    maxPriorEntryLossFraction: params.maxPriorEntryLossFraction,
+  });
+  if (!aggregate) {
+    params.logger.warn(
+      "memory-core: combined consolidation plan is invalid; using append-only fallback.",
     );
+    return null;
+  }
+  plan.memory = aggregate.content;
+  return plan;
+}
+
+async function runConsolidationGroup(params: {
+  subagent: SubagentSurface;
+  existingMemory: string;
+  group: PromotionProjectGroup;
+  model?: string;
+  nowMs: number;
+  sessionKey: string;
+  maxPromotedSnippetTokens: number;
+  logger: Logger;
+}): Promise<ConsolidationOutput | null> {
+  try {
     const run = await params.subagent.run({
-      idempotencyKey: `${sessionKey}-${params.nowMs}`,
-      sessionKey,
+      idempotencyKey: `${params.sessionKey}-${params.nowMs}`,
+      sessionKey: params.sessionKey,
       message: buildConsolidationPrompt(
         params.existingMemory,
-        candidates,
-        maxPromotedSnippetTokens,
+        params.group.candidates,
+        params.maxPromotedSnippetTokens,
       ),
       ...(params.model ? { model: params.model } : {}),
       extraSystemPrompt: CONSOLIDATION_SYSTEM_PROMPT,
-      lane: `dreaming-consolidation:${sessionKey}`,
+      lane: `dreaming-consolidation:${params.sessionKey}`,
       lightContext: true,
       deliver: false,
     });
@@ -616,7 +674,7 @@ export async function consolidateMemory(params: {
       return null;
     }
     const { messages } = await params.subagent.getSessionMessages({
-      sessionKey,
+      sessionKey: params.sessionKey,
       limit: CONSOLIDATION_MESSAGE_LIMIT,
     });
     const assistantText = extractAssistantText(messages);
@@ -627,97 +685,11 @@ export async function consolidateMemory(params: {
       );
       return null;
     }
-    const budget = Math.max(
-      1,
-      Math.floor(params.memoryFileMaxChars ?? DEFAULT_MEMORY_FILE_MAX_CHARS),
-    );
-    const rejection = validateConsolidatedMemory({
-      previous: params.existingMemory,
-      output,
-      candidates,
-      maxPriorEntryLossFraction: params.maxPriorEntryLossFraction,
-      memoryFileMaxChars: budget,
-      maxPromotedSnippetTokens,
-    });
-    if (rejection) {
-      params.logger.warn(
-        `memory-core: consolidation rejected because ${rejection}; using append-only fallback.`,
-      );
-      return null;
-    }
-    const candidatesByKey = new Map(candidates.map((candidate) => [candidate.key, candidate]));
-    return {
-      ...output,
-      operations: output.operations.map((operation) => {
-        const lineageKey = candidatesByKey.get(operation.candidateKey)?.provenance?.supersedesKey;
-        if (lineageKey) {
-          operation.lineageKey = lineageKey;
-        }
-        return operation;
-      }),
-    };
+    return output;
   } catch (error) {
     params.logger.warn(
       `memory-core: consolidation failed (${error instanceof Error ? error.message : String(error)}); using append-only fallback.`,
     );
     return null;
-  } finally {
-    await params.subagent.deleteSession({ sessionKey }).catch(() => undefined);
   }
-}
-
-export async function appendConsolidationSummary(params: {
-  workspaceDir: string;
-  result: MemoryConsolidationResult;
-  nowMs: number;
-}): Promise<void> {
-  const timestamp = new Date(params.nowMs).toISOString();
-  const lines = [
-    `### ${timestamp}`,
-    "",
-    `- Added: ${params.result.added}`,
-    `- Merged: ${params.result.merged}`,
-    `- Superseded: ${params.result.superseded}`,
-    ...(params.result.highlights.length > 0
-      ? [
-          "- Highlights:",
-          ...params.result.highlights.map((line) => `  - \`${line.replaceAll("`", "'")}\``),
-        ]
-      : []),
-    "",
-  ];
-  await updateDreamsFile({
-    workspaceDir: params.workspaceDir,
-    updater: (existing, dreamsPath) => {
-      const heading = "## Memory Consolidation History";
-      const base = existing.includes(heading)
-        ? existing.trimEnd()
-        : `${existing.trimEnd()}${existing.trim() ? "\n\n" : ""}${heading}`;
-      return {
-        content: `${base}\n\n${lines.join("\n")}`,
-        result: dreamsPath,
-      };
-    },
-  });
-}
-
-export async function appendConsolidationSkippedSummary(params: {
-  workspaceDir: string;
-  nowMs: number;
-  reason: string;
-}): Promise<void> {
-  const timestamp = new Date(params.nowMs).toISOString();
-  await updateDreamsFile({
-    workspaceDir: params.workspaceDir,
-    updater: (existing, _dreamsPath) => {
-      const heading = "## Memory Consolidation History";
-      const base = existing.includes(heading)
-        ? existing.trimEnd()
-        : `${existing.trimEnd()}${existing.trim() ? "\n\n" : ""}${heading}`;
-      return {
-        content: `${base}\n\n### ${timestamp}\n\n- Rewrite skipped: ${params.reason}.\n- Fallback: append-only promotion.\n`,
-        result: undefined,
-      };
-    },
-  });
 }

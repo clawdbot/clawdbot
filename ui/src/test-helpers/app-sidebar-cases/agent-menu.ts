@@ -240,7 +240,7 @@ describe("AppSidebar agent chip", () => {
     expect(settingsRow).toBeDefined();
     settingsRow?.click();
     await sidebar.updateComplete;
-    expect(onNavigate).toHaveBeenCalledWith("agents", { search: "?agent=main" });
+    expect(onNavigate).toHaveBeenCalledWith("agents", { pathname: "/settings/agents/main" });
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
   });
 

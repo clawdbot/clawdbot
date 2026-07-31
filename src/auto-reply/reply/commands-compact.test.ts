@@ -343,11 +343,11 @@ describe("handleCompactCommand", () => {
     expect(vi.mocked(incrementCompactionCount)).not.toHaveBeenCalled();
   });
 
-  it("treats already_compacted_recently manual compaction as skipped", async () => {
+  it("treats already_compacted manual compaction as skipped", async () => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: false,
       compacted: false,
-      reason: "already_compacted_recently",
+      reason: "already_compacted",
     });
 
     const result = await handleCompactCommand(
@@ -365,7 +365,7 @@ describe("handleCompactCommand", () => {
     );
 
     expect(result?.reply?.text).toBe(
-      "⚙️ Compaction skipped: session was already compacted recently • Context 12.1k",
+      "⚙️ Compaction skipped: session is already compacted • Context 12.1k",
     );
     expect(result?.reply?.isStatusNotice).toBe(true);
   });

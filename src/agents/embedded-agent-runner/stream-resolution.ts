@@ -232,6 +232,7 @@ export function resolveEmbeddedAgentStreamFn(
         authProfileId: params.authProfileId,
         authStorage: params.authStorage,
         providerId: params.model.provider,
+        sessionId: params.sessionId,
         promptCacheKey: params.promptCacheKey,
       });
     }

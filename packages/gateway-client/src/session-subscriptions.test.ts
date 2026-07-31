@@ -209,7 +209,6 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
 
   it("retries a rejected final unsubscribe with the original live lease", async () => {
     let unsubscribeCount = 0;
-    const released = vi.fn();
     const { client, request } = createClient(async (method, params) => {
       if (method === "sessions.messages.subscribe") {
         return { key: params.key };
@@ -221,90 +220,17 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
       return {};
     });
     const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
-    const subscription = await coordinator.acquire("main", { onRelease: released });
+    const subscription = await coordinator.acquire("main");
 
     await expect(coordinator.release(subscription)).rejects.toThrow(
       "temporary unsubscribe failure",
     );
-    expect(released).not.toHaveBeenCalled();
-
     await expect(coordinator.release(subscription)).resolves.toBeUndefined();
 
     expect(unsubscribeCount).toBe(2);
-    expect(released).toHaveBeenCalledExactlyOnceWith(subscription);
     expect(request).toHaveBeenCalledTimes(3);
     await expect(coordinator.release(subscription)).resolves.toBeUndefined();
     expect(request).toHaveBeenCalledTimes(3);
-  });
-
-  it("discards a successfully unsubscribed observer before its release callback throws", async () => {
-    const { client, request } = createClient();
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
-    const subscription = await coordinator.acquire("main", {
-      onRelease: () => {
-        throw new Error("release callback failed");
-      },
-    });
-
-    await expect(coordinator.release(subscription)).rejects.toThrow("release callback failed");
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.unsubscribe", {
-      key: "main",
-    });
-
-    const replacement = await coordinator.acquire("main");
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.messages.subscribe", { key: "main" });
-    await coordinator.release(replacement);
-    expect(request).toHaveBeenNthCalledWith(4, "sessions.messages.unsubscribe", {
-      key: "main",
-    });
-  });
-
-  it("retains another live owner when a nonfinal release callback throws", async () => {
-    const { client, request } = createClient();
-    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
-    const first = await coordinator.acquire("main", {
-      onRelease: () => {
-        throw new Error("first owner callback failed");
-      },
-    });
-    const second = await coordinator.acquire("main");
-
-    await expect(coordinator.release(first)).rejects.toThrow("first owner callback failed");
-    expect(request).toHaveBeenCalledOnce();
-
-    await coordinator.release(second);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", { key: "main" });
-
-    const replacement = await coordinator.acquire("main");
-    expect(request).toHaveBeenNthCalledWith(3, "sessions.messages.subscribe", { key: "main" });
-    await coordinator.release(replacement);
-  });
-
-  it("retires every connection lease before surfacing a reset callback failure", async () => {
-    const { client, request } = createClient();
-    const coordinator = getGatewaySessionMessageSubscriptionCoordinator(client);
-    const released = vi.fn();
-    const first = await coordinator.acquire("main", {
-      onRelease: () => {
-        throw new Error("reset callback failed");
-      },
-    });
-    const second = await coordinator.acquire("other", { onRelease: released });
-
-    expect(() => resetGatewaySessionMessageSubscriptionCoordinator(client)).toThrow(
-      "reset callback failed",
-    );
-    expect(released).toHaveBeenCalledExactlyOnceWith(second);
-    await expect(releaseGatewaySessionMessageSubscription(first)).resolves.toBeUndefined();
-    await expect(releaseGatewaySessionMessageSubscription(second)).resolves.toBeUndefined();
-
-    const replacementCoordinator = getGatewaySessionMessageSubscriptionCoordinator(client);
-    expect(replacementCoordinator).not.toBe(coordinator);
-    const replacement = await replacementCoordinator.acquire("main");
-    expect(request).toHaveBeenCalledTimes(3);
-    expect(request).toHaveBeenLastCalledWith("sessions.messages.subscribe", { key: "main" });
-    await replacementCoordinator.release(replacement);
   });
 
   it("coalesces concurrent releases of the final lease", async () => {
@@ -583,24 +509,33 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("applies UI key equivalence to a previously cached default coordinator", async () => {
+  it("configures a cached coordinator before sharing UI session aliases", async () => {
     const { client, request } = createClient(async (method) =>
       method === "sessions.messages.subscribe" ? { key: "agent:main:main" } : {},
     );
-    const firstCoordinator = getGatewaySessionMessageSubscriptionCoordinator(client);
-    const first = await firstCoordinator.acquire("MAIN");
-
-    const uiCoordinator = getGatewaySessionMessageSubscriptionCoordinator(client, {
-      keysEquivalent: (left, right) => left.toLowerCase() === right.toLowerCase(),
+    const cached = getGatewaySessionMessageSubscriptionCoordinator(client);
+    const keysEquivalent = (left: string, right: string) =>
+      left.toLowerCase() === right.toLowerCase();
+    const configured = getGatewaySessionMessageSubscriptionCoordinator(client, {
+      keysEquivalent,
     });
-    const second = await uiCoordinator.acquire("main");
 
-    expect(uiCoordinator).toBe(firstCoordinator);
+    expect(configured).toBe(cached);
+    const first = await configured.acquire("MAIN");
+    const second = await getGatewaySessionMessageSubscriptionCoordinator(client, {
+      keysEquivalent,
+    }).acquire("main");
+
     expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
       key: "MAIN",
     });
     expect(first.key).toBe("agent:main:main");
     expect(second.key).toBe("agent:main:main");
+    expect(() =>
+      getGatewaySessionMessageSubscriptionCoordinator(client, {
+        keysEquivalent: (left, right) => left === right,
+      }),
+    ).toThrow("key equivalence cannot change for an active connection");
 
     await releaseGatewaySessionMessageSubscription(first);
     expect(request).toHaveBeenCalledOnce();
@@ -609,22 +544,5 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     expect(request).toHaveBeenLastCalledWith("sessions.messages.unsubscribe", {
       key: "agent:main:main",
     });
-  });
-
-  it("rejects a new matcher that would merge already active wire observers", async () => {
-    const { client, request } = createClient();
-    const coordinator = getGatewaySessionMessageSubscriptionCoordinator(client);
-    const first = await coordinator.acquire("MAIN");
-    const second = await coordinator.acquire("main");
-
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(() =>
-      getGatewaySessionMessageSubscriptionCoordinator(client, {
-        keysEquivalent: (left, right) => left.toLowerCase() === right.toLowerCase(),
-      }),
-    ).toThrow("key equivalence conflicts with existing Gateway observers");
-
-    await releaseGatewaySessionMessageSubscription(first);
-    await releaseGatewaySessionMessageSubscription(second);
   });
 });

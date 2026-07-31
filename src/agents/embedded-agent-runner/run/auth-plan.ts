@@ -7,6 +7,7 @@ import {
   ensureAuthProfileStoreWithoutExternalProfiles,
 } from "../../model-auth.js";
 import { OPENAI_PROVIDER_ID } from "../../openai-routing.js";
+import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import {
   createPreparedRuntimeModelMaterializer,
   providerUsesCredentialScopedModelMetadata,
@@ -53,6 +54,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   nativeModelOwned: boolean;
   authStorage: ModelResolution["authStorage"];
   modelRegistry: ModelResolution["modelRegistry"];
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   getAgentHarness: () => AgentHarness;
   setAgentHarness: (harness: AgentHarness) => void;
   getRuntimeModel: () => RuntimeModel;
@@ -187,6 +189,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
           skipAgentDiscovery: true,
           allowBundledStaticCatalogFallback: true,
           preferBundledStaticCatalogTransport: true,
+          preparedModelRuntime: params.preparedModelRuntime,
           workspaceDir: params.workspaceDir,
           authProfileId,
           authProfileMode,

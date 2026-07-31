@@ -76,5 +76,12 @@ describe("QA runtime-pair scenario catalog", () => {
       requiredProviderMode: "live-frontier",
       harnessRuntime: "codex",
     });
+    const longContextFlow = JSON.stringify(
+      readQaScenarioById("long-context-progress-watchdog").execution.flow,
+    );
+    expect(longContextFlow).toContain("agentRuntime: { id: config.harnessRuntime }, params: null");
+    expect(longContextFlow).toContain(
+      "snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.params === undefined",
+    );
   });
 });

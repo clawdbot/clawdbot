@@ -4,16 +4,20 @@ import { Type } from "typebox";
 import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../session-icon.js";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./frames.js";
+import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionsCreateParamsSchema } from "./sessions-create.js";
+import { SessionToolOverridesSchema } from "./sessions-row.js";
 
 export { SessionsCreateParamsSchema };
 export {
   SessionCreatedActorSchema,
   SessionRowSchema,
+  SessionToolOverridesSchema,
   type SessionCreatedActor,
   type SessionRow,
+  type SessionToolOverrides,
 } from "./sessions-row.js";
 
 export const SESSION_OBSERVER_HEALTH_VALUES = [
@@ -166,6 +170,19 @@ export const SessionFileRelevanceSchema = Type.Union([
   Type.Literal("mixed"),
 ]);
 
+/** Encoding used when a session file preview includes inline content. */
+export const SessionFileContentEncodingSchema = Type.Union([
+  Type.Literal("utf8"),
+  Type.Literal("base64"),
+]);
+
+/** Renderer class selected for one session workspace file preview. */
+export const SessionFilePreviewKindSchema = Type.Union([
+  Type.Literal("text"),
+  Type.Literal("image"),
+  Type.Literal("unsupported"),
+]);
+
 const SessionFileHashSchema = Type.String({
   minLength: 64,
   maxLength: 64,
@@ -183,6 +200,9 @@ export const SessionFileEntrySchema = closedObject({
   updatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   content: Type.Optional(Type.String()),
   hash: Type.Optional(SessionFileHashSchema),
+  mimeType: Type.Optional(NonEmptyString),
+  contentEncoding: Type.Optional(SessionFileContentEncodingSchema),
+  previewKind: Type.Optional(SessionFilePreviewKindSchema),
 });
 
 /** One file or folder in the session-rooted browser. */
@@ -438,7 +458,7 @@ export const SessionsSendParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   message: Type.String(),
   thinking: Type.Optional(Type.String()),
-  attachments: Type.Optional(Type.Array(Type.Unknown())),
+  attachments: Type.Optional(ChatAttachmentsSchema),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   idempotencyKey: Type.Optional(NonEmptyString),
 });
@@ -498,6 +518,7 @@ export const SessionsPatchParamsSchema = closedObject({
   ),
   thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Null()])),
+  toolOverrides: Type.Optional(Type.Union([SessionToolOverridesSchema, Type.Null()])),
   verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   traceLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   reasoningLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -864,7 +885,9 @@ export type SessionsGroupsDeleteParams = Static<typeof SessionsGroupsDeleteParam
 export type SessionsGroupsMutationResult = Static<typeof SessionsGroupsMutationResultSchema>;
 export type SessionsCompactParams = Static<typeof SessionsCompactParamsSchema>;
 export type SessionsUsageParams = Static<typeof SessionsUsageParamsSchema>;
+export type SessionFileContentEncoding = Static<typeof SessionFileContentEncodingSchema>;
 export type SessionFileKind = Static<typeof SessionFileKindSchema>;
+export type SessionFilePreviewKind = Static<typeof SessionFilePreviewKindSchema>;
 export type SessionFileRelevance = Static<typeof SessionFileRelevanceSchema>;
 export type SessionFileEntry = Static<typeof SessionFileEntrySchema>;
 export type SessionFileBrowserEntry = Static<typeof SessionFileBrowserEntrySchema>;

@@ -73,6 +73,76 @@ describe("OpenClaw state lease", () => {
     });
   });
 
+  it("keeps state database exit-cleanup diagnostics off stdout for machine-readable output", async () => {
+    await withOpenClawTestState({ label: "core-state-lease-exit-stdout" }, async (state) => {
+      const leaseModuleUrl = pathToFileURL(path.resolve("src/state/openclaw-state-lease.ts")).href;
+      const stateDbModuleUrl = pathToFileURL(path.resolve("src/state/openclaw-state-db.ts")).href;
+      const loggingStateModuleUrl = pathToFileURL(path.resolve("src/logging/state.ts")).href;
+      const childScript = await state.writeText(
+        "lease-exit-stdout-child.mts",
+        `
+          import { withOpenClawStateLease } from ${JSON.stringify(leaseModuleUrl)};
+          import {
+            closeOpenClawStateDatabaseForTest,
+            openOpenClawStateDatabase,
+          } from ${JSON.stringify(stateDbModuleUrl)};
+          import { loggingState } from ${JSON.stringify(loggingStateModuleUrl)};
+          const stateDir = process.argv[2];
+          const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+          // Simulate --json console routing being active for the command.
+          loggingState.forceConsoleToStderr = true;
+          await withOpenClawStateLease({
+            scope: "core:test",
+            key: "exit-stdout",
+            database: { scope: "shared", options: { env } },
+            leaseMs: 300_000,
+            waitMs: 0,
+          }, async () => {
+            // Recreate the pending-migration condition for the exit-time reopen.
+            const { db } = openOpenClawStateDatabase({ env });
+            db.exec("PRAGMA user_version = 0;");
+            closeOpenClawStateDatabaseForTest();
+            // Simulate the JSON envelope followed by restored output routing.
+            // Await the write callback — stdout is piped in the test harness, so
+            // a bare write() can drop the data before process.exit flushes.
+            await new Promise<void>((resolve) => {
+              process.stdout.write(JSON.stringify({ ok: true }) + "\\n", resolve);
+            });
+            loggingState.forceConsoleToStderr = false;
+            process.exit(23);
+          });
+        `,
+      );
+
+      const childResult = await new Promise<{
+        code: number | null;
+        stdout: string;
+        stderr: string;
+      }>((resolve, reject) => {
+        const child = spawn(process.execPath, ["--import", "tsx", childScript, state.stateDir], {
+          // Keep console logging enabled in the child despite the inherited VITEST env.
+          env: { ...process.env, OPENCLAW_TEST_CONSOLE: "1" },
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        let stdout = "";
+        let stderr = "";
+        child.stdout.on("data", (chunk) => (stdout += chunk));
+        child.stderr.on("data", (chunk) => (stderr += chunk));
+        child.on("error", reject);
+        child.on("close", (code) => resolve({ code, stdout, stderr }));
+      });
+
+      expect(
+        childResult.code,
+        `lease child exited ${childResult.code}: ${childResult.stderr}`,
+      ).toBe(23);
+      // The exit-time lease release reopens the state database and hits the
+      // pending-migration diagnostic; stdout must stay machine-readable.
+      expect(childResult.stdout).toBe(`${JSON.stringify({ ok: true })}\n`);
+      expect(childResult.stderr).toContain("state database schema migration pending");
+    });
+  }, 60_000);
+
   it("rechecks exact ownership inside the caller's write transaction", async () => {
     await withOpenClawTestState({ label: "core-state-lease" }, async () => {
       await expect(

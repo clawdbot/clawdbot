@@ -67,8 +67,6 @@ import { activateSwarmRun, removeQueuedSwarmRun } from "./swarm-scheduler.js";
 
 export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
 
-const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
-
 function sanitizeMountPathHint(value?: string): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
@@ -220,15 +218,10 @@ export async function spawnSubagentDirect(
         resolvedModel,
       });
       if (runtimeModelPersistError) {
-        try {
-          await callSubagentGateway({
-            method: "sessions.delete",
-            params: { key: childSessionKey, emitLifecycleHooks: false },
-            timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
-          });
-        } catch {
-          // Best-effort cleanup only.
-        }
+        await cleanupProvisionalSession(childSessionKey, {
+          emitLifecycleHooks: false,
+          deleteTranscript: true,
+        });
         return {
           status: "error",
           error: runtimeModelPersistError,
@@ -253,15 +246,10 @@ export async function spawnSubagentDirect(
         },
       });
       if (bindResult.status === "error") {
-        try {
-          await callSubagentGateway({
-            method: "sessions.delete",
-            params: { key: childSessionKey, deleteTranscript: true, emitLifecycleHooks: false },
-            timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
-          });
-        } catch {
-          // Best-effort cleanup only.
-        }
+        await cleanupProvisionalSession(childSessionKey, {
+          emitLifecycleHooks: false,
+          deleteTranscript: true,
+        });
         return {
           status: "error",
           error: bindResult.error,
@@ -544,6 +532,7 @@ export async function spawnSubagentDirect(
       };
     }
     childRunId = pipelineResult.runId;
+    let collectorSessionKey: string | undefined;
     if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
       let launchTerminationConfirmed = false;
       activateSwarmRun({
@@ -614,33 +603,10 @@ export async function spawnSubagentDirect(
         },
       });
       swarmReservationPending = false;
-      emitSessionLifecycleEvent({
-        sessionKey: childSessionKey,
-        reason: "create",
-        parentSessionKey: requesterInternalKey,
-        label: label || undefined,
-      });
-      const acceptedNote = resolveSubagentSpawnAcceptedNote({
-        spawnMode,
-        agentSessionKey: ctx.agentSessionKey,
-      });
-      return {
-        status: "accepted",
-        childSessionKey,
-        sessionKey: childSessionKey,
-        runId: childRunId,
-        mode: spawnMode,
-        taskName,
-        note: preparedSpawnContext.forkFallbackNote
-          ? `${acceptedNote} ${preparedSpawnContext.forkFallbackNote}`
-          : acceptedNote,
-        ...resolvedModelMetadata,
-        modelApplied: resolvedModel ? modelApplied : undefined,
-        attachments: attachmentsReceipt,
-      };
+      collectorSessionKey = childSessionKey;
+    } else {
+      await emitSpawnLifecycleHooks(childRunId);
     }
-
-    await emitSpawnLifecycleHooks(childRunId);
 
     // Emit lifecycle event so the gateway can broadcast sessions.changed to SSE subscribers.
     emitSessionLifecycleEvent({
@@ -657,6 +623,7 @@ export async function spawnSubagentDirect(
     return {
       status: "accepted",
       childSessionKey,
+      ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),
       runId: childRunId,
       mode: spawnMode,
       taskName,

@@ -388,8 +388,9 @@ async function sendFollowupPayloads(params: {
         replyKind: params.kind,
         runId: params.runId,
       });
-      if (!result.ok) {
-        logVerbose(`followup queue: route-reply failed: ${result.error ?? "unknown error"}`);
+      if (!result.delivered && !result.suppressed) {
+        const routeError = result.error ?? "no visible delivery";
+        logVerbose(`followup queue: route-reply failed: ${routeError}`);
         const provider = resolveOriginMessageProvider({
           provider: turn.queued.run.messageProvider,
         });
@@ -399,11 +400,16 @@ async function sendFollowupPayloads(params: {
         } else if (defaults.opts?.onBlockReply) {
           crossChannelFailure = true;
         } else {
-          defaultRuntime.error?.(
-            `followup queue: route-reply failed: ${result.error ?? "unknown error"}`,
+          defaultRuntime.error?.(`followup queue: route-reply failed: ${routeError}`);
+        }
+      } else if (result.delivered) {
+        if (!result.ok) {
+          logVerbose(
+            `followup queue: route-reply partially failed after delivery: ${
+              result.error ?? "unknown error"
+            }`,
           );
         }
-      } else if (!result.suppressed) {
         const provider = resolveOriginMessageProvider({
           provider: turn.queued.run.messageProvider,
         });

@@ -986,8 +986,15 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   if (!toolCallId) {
     return;
   }
-  const name = typeof data.name === "string" ? data.name : "tool";
+  const toolStreamIdentity = buildToolStreamIdentity(payload.runId, toolCallId);
+  let entry = host.toolStreamById.get(toolStreamIdentity);
   const phase = typeof data.phase === "string" ? data.phase : "";
+  // A started call owns its concrete identity even when later events omit or
+  // contradict it; an unnamed placeholder can still adopt its first real name.
+  const name =
+    phase !== "start" && entry?.name && entry.name !== "tool"
+      ? entry.name
+      : (toTrimmedString(data.name) ?? entry?.name ?? "tool");
   if (phase === "start" && payload.runId === host.chatRunId) {
     host.chatRunStartup = { state: "activity", runId: payload.runId };
   }
@@ -1006,8 +1013,6 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   const now = Date.now();
-  const toolStreamIdentity = buildToolStreamIdentity(payload.runId, toolCallId);
-  let entry = host.toolStreamById.get(toolStreamIdentity);
   if (!entry) {
     // Commit any in-progress streaming text as a segment so it renders
     // above the tool card instead of below it.

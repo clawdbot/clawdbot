@@ -87,6 +87,54 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     });
   });
 
+  it("restores only the unpersisted assistant response after reconnecting", async () => {
+    const artifactDir = path.resolve(".artifacts/control-ui-e2e/chat-inflight-reconnect");
+    const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+    if (captureProof) {
+      await mkdir(artifactDir, { recursive: true });
+    }
+    const context = await browser.newContext({
+      viewport: { height: 800, width: 1200 },
+      ...(captureProof
+        ? { recordVideo: { dir: artifactDir, size: { height: 800, width: 1200 } } }
+        : {}),
+    });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    await installMockGateway(currentPage, {
+      historyMessages: [
+        { role: "user", content: "Continue working.", timestamp: Date.now() - 2_000 },
+        { role: "assistant", content: "Saved opening.", timestamp: Date.now() - 1_000 },
+      ],
+      inFlightRun: {
+        runId: "run-reconnected",
+        text: "Saved opening. Still working after reconnect.",
+      },
+      sessionInfo: {
+        activeRunIds: ["run-reconnected"],
+        hasActiveRun: true,
+        key: "main",
+      },
+    });
+
+    await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+    await currentPage.getByText("Saved opening.", { exact: true }).waitFor();
+    const stream = currentPage.locator(".chat-bubble.streaming", {
+      hasText: "Still working after reconnect.",
+    });
+    await stream.waitFor({ state: "visible" });
+
+    expect(await currentPage.getByText("Saved opening.", { exact: true }).count()).toBe(1);
+    expect(await stream.textContent()).not.toContain("Saved opening.");
+    await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
+    if (captureProof) {
+      await currentPage.screenshot({
+        path: path.join(artifactDir, "restored-inflight-tail.png"),
+        fullPage: true,
+      });
+    }
+  });
+
   it("shows compaction savings and live working time", async () => {
     const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();

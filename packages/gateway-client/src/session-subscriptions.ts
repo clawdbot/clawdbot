@@ -12,7 +12,6 @@ export type GatewaySessionMessageSubscription = {
 export type GatewaySessionMessageSubscriptionOptions = {
   agentId?: string | null;
   includeApprovals?: boolean;
-  onRelease?: (subscription: GatewaySessionMessageSubscription) => void;
 };
 
 type SessionMessageSubscriptionResponse = {
@@ -32,12 +31,11 @@ type SessionMessageSubscriptionEntry = {
   handles: Set<GatewaySessionMessageSubscription>;
   pendingOwners: number;
   release: Promise<void> | null;
-  retired: boolean;
 };
 
 type SessionMessageSubscriptionOwner = {
+  coordinator: GatewaySessionMessageSubscriptionCoordinator;
   entry: SessionMessageSubscriptionEntry;
-  onRelease?: (subscription: GatewaySessionMessageSubscription) => void;
 };
 
 export type GatewaySessionMessageSubscriptionCoordinatorOptions = {
@@ -57,12 +55,9 @@ function sessionSubscriptionParams(key: string, agentId: string | null) {
  */
 export class GatewaySessionMessageSubscriptionCoordinator {
   readonly #client: GatewaySessionMessageRequestClient;
-  readonly #keyMatchers = new Set<(left: string, right: string) => boolean>();
+  // Choose one matcher before the first lease; changing live aliases splits wire ownership.
+  #keysEquivalent?: (left: string, right: string) => boolean;
   readonly #entries = new Set<SessionMessageSubscriptionEntry>();
-  readonly #owners = new WeakMap<
-    GatewaySessionMessageSubscription,
-    SessionMessageSubscriptionOwner
-  >();
   #retired = false;
 
   constructor(
@@ -70,31 +65,18 @@ export class GatewaySessionMessageSubscriptionCoordinator {
     options: GatewaySessionMessageSubscriptionCoordinatorOptions = {},
   ) {
     this.#client = client;
-    this.configure(options);
+    this.#keysEquivalent = options.keysEquivalent;
   }
 
   configure(options: GatewaySessionMessageSubscriptionCoordinatorOptions = {}): this {
     const matcher = options.keysEquivalent;
-    if (!matcher || this.#keyMatchers.has(matcher)) {
+    if (!matcher || matcher === this.#keysEquivalent) {
       return this;
     }
-
-    const entries = [...this.#entries].filter((entry) => !entry.retired);
-    for (const [index, first] of entries.entries()) {
-      for (const second of entries.slice(index + 1)) {
-        if (
-          first.agentId === second.agentId &&
-          [first.key, ...first.requestedKeys].some((left) =>
-            [second.key, ...second.requestedKeys].some((right) => matcher(left, right)),
-          )
-        ) {
-          throw new Error(
-            "Session message key equivalence conflicts with existing Gateway observers",
-          );
-        }
-      }
+    if (this.#keysEquivalent || this.#entries.size > 0) {
+      throw new Error("Session message key equivalence cannot change for an active connection");
     }
-    this.#keyMatchers.add(matcher);
+    this.#keysEquivalent = matcher;
     return this;
   }
 
@@ -115,7 +97,6 @@ export class GatewaySessionMessageSubscriptionCoordinator {
       }
       const existing = [...this.#entries].find(
         (candidate) =>
-          !candidate.retired &&
           candidate.agentId === agentId &&
           (this.#areKeysEquivalent(candidate.key, normalizedKey) ||
             [...candidate.requestedKeys].some((requestedKey) =>
@@ -124,8 +105,7 @@ export class GatewaySessionMessageSubscriptionCoordinator {
       );
       if (!existing) {
         const provisional = [...this.#entries].find(
-          (candidate) =>
-            !candidate.retired && candidate.agentId === agentId && !candidate.canonicalSettled,
+          (candidate) => candidate.agentId === agentId && !candidate.canonicalSettled,
         );
         if (provisional) {
           // Requested aliases cannot be compared safely until their first
@@ -149,7 +129,7 @@ export class GatewaySessionMessageSubscriptionCoordinator {
     entry.pendingOwners += 1;
     try {
       const result = await this.#acquireCapability(entry, options.includeApprovals === true);
-      if (this.#retired || entry.retired) {
+      if (this.#retired) {
         throw new Error("Session message subscription completed on a replaced Gateway connection");
       }
 
@@ -166,8 +146,10 @@ export class GatewaySessionMessageSubscriptionCoordinator {
           : {}),
       };
       entry.handles.add(subscription);
-      this.#owners.set(subscription, { entry, onRelease: options.onRelease });
-      sessionMessageSubscriptionOwners.set(subscription, this);
+      sessionMessageSubscriptionOwners.set(subscription, {
+        coordinator: this,
+        entry,
+      });
       return subscription;
     } finally {
       entry.pendingOwners -= 1;
@@ -178,20 +160,14 @@ export class GatewaySessionMessageSubscriptionCoordinator {
   }
 
   release(subscription: GatewaySessionMessageSubscription): Promise<void> {
-    const owner = this.#owners.get(subscription);
-    if (!owner) {
+    const owner = sessionMessageSubscriptionOwners.get(subscription);
+    if (!owner || owner.coordinator !== this) {
       return Promise.resolve();
     }
     const { entry } = owner;
-    if (entry.retired || this.#retired || entry.handles.size > 1) {
-      try {
-        this.#finishRelease(subscription, owner);
-        return Promise.resolve();
-      } catch (error) {
-        return Promise.resolve().then(() => {
-          throw error;
-        });
-      }
+    if (this.#retired || entry.handles.size > 1) {
+      this.#finishRelease(subscription, owner);
+      return Promise.resolve();
     }
     if (entry.release) {
       return entry.release;
@@ -229,27 +205,15 @@ export class GatewaySessionMessageSubscriptionCoordinator {
   /** A reconnect retires leases without touching the next connection's observers. */
   reset(): void {
     this.#retired = true;
-    const callbackFailures: unknown[] = [];
     for (const entry of this.#entries) {
-      entry.retired = true;
       for (const subscription of entry.handles) {
-        const owner = this.#owners.get(subscription);
-        if (owner) {
-          try {
-            this.#finishRelease(subscription, owner);
-          } catch (error) {
-            callbackFailures.push(error);
-          }
+        const owner = sessionMessageSubscriptionOwners.get(subscription);
+        if (owner?.coordinator === this) {
+          this.#finishRelease(subscription, owner);
         }
       }
     }
     this.#entries.clear();
-    if (callbackFailures.length === 1) {
-      throw callbackFailures[0];
-    }
-    if (callbackFailures.length > 1) {
-      throw new AggregateError(callbackFailures, "Session message release callbacks failed");
-    }
   }
 
   #createEntry(
@@ -269,7 +233,6 @@ export class GatewaySessionMessageSubscriptionCoordinator {
       handles: new Set(),
       pendingOwners: 0,
       release: null,
-      retired: false,
     };
     entry.ready = this.#requestSubscribe(entry, includeApprovals).then((result) => {
       entry.key = result.key;
@@ -301,7 +264,7 @@ export class GatewaySessionMessageSubscriptionCoordinator {
           // A concurrent plain owner must retry without approvals if the
           // first approval-only request is rejected by the Gateway.
           entry.plainFallback = approvalRequest.catch(async (error: unknown) => {
-            if (this.#retired || entry.retired) {
+            if (this.#retired) {
               throw error;
             }
             const result = await this.#requestSubscribe(entry, false);
@@ -364,26 +327,24 @@ export class GatewaySessionMessageSubscriptionCoordinator {
     owner: SessionMessageSubscriptionOwner,
     removeEntry = false,
   ): void {
-    if (this.#owners.get(subscription) !== owner) {
+    if (sessionMessageSubscriptionOwners.get(subscription) !== owner) {
       return;
     }
-    this.#owners.delete(subscription);
     sessionMessageSubscriptionOwners.delete(subscription);
     owner.entry.handles.delete(subscription);
     if (removeEntry) {
       this.#entries.delete(owner.entry);
     }
-    owner.onRelease?.(subscription);
   }
 
   #areKeysEquivalent(left: string, right: string): boolean {
-    return left === right || [...this.#keyMatchers].some((matcher) => matcher(left, right));
+    return left === right || this.#keysEquivalent?.(left, right) === true;
   }
 }
 
 const sessionMessageSubscriptionOwners = new WeakMap<
   GatewaySessionMessageSubscription,
-  GatewaySessionMessageSubscriptionCoordinator
+  SessionMessageSubscriptionOwner
 >();
 
 const sessionMessageSubscriptionCoordinators = new WeakMap<
@@ -407,17 +368,15 @@ export function getGatewaySessionMessageSubscriptionCoordinator(
 export function resetGatewaySessionMessageSubscriptionCoordinator(
   client: GatewaySessionMessageRequestClient,
 ): void {
-  try {
-    sessionMessageSubscriptionCoordinators.get(client)?.reset();
-  } finally {
-    sessionMessageSubscriptionCoordinators.delete(client);
-  }
+  sessionMessageSubscriptionCoordinators.get(client)?.reset();
+  sessionMessageSubscriptionCoordinators.delete(client);
 }
 
 export function releaseGatewaySessionMessageSubscription(
   subscription: GatewaySessionMessageSubscription,
 ): Promise<void> {
   return (
-    sessionMessageSubscriptionOwners.get(subscription)?.release(subscription) ?? Promise.resolve()
+    sessionMessageSubscriptionOwners.get(subscription)?.coordinator.release(subscription) ??
+    Promise.resolve()
   );
 }

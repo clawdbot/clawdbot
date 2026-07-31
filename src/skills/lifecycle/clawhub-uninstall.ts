@@ -4,6 +4,11 @@ import path from "node:path";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { normalizeTrackedSkillSlug, resolveWorkspaceSkillInstallDir } from "./archive-install.js";
 import { resolveClawHubSkillStatusLinkSync, untrackClawHubSkill } from "./clawhub.js";
+import {
+  dispatchCommittedSkillChangeBestEffort,
+  hasCommittedSkillChangeHooks,
+  snapshotCommittedSkillArtifactBestEffort,
+} from "./skill-change-hook.js";
 import { digestClawHubSkillTree } from "./skill-tree-digest.js";
 
 export type ClawHubSkillUninstallPlan = {
@@ -132,6 +137,15 @@ export async function applyClawHubSkillUninstall(
   if (!current.ok) {
     return { ok: false, error: current.error };
   }
+  const shouldDispatchChange = hasCommittedSkillChangeHooks();
+  const before = shouldDispatchChange
+    ? await snapshotCommittedSkillArtifactBestEffort({
+        skillDir: plan.targetDir,
+        skillKey: plan.slug,
+        source: "clawhub",
+        sourceVersion: plan.version,
+      })
+    : undefined;
   const stagedDir = `${plan.targetDir}.openclaw-skill-remove-${randomUUID()}`;
   let staged = false;
   let restoreTracking: (() => Promise<void>) | undefined;
@@ -150,6 +164,14 @@ export async function applyClawHubSkillUninstall(
     }
     restoreTracking = await (deps.untrack ?? untrackClawHubSkill)(plan.workspaceDir, plan.slug);
     await (deps.removeDir ?? fs.rm)(stagedDir, { recursive: true, force: false });
+    if (shouldDispatchChange) {
+      await dispatchCommittedSkillChangeBestEffort({
+        action: "removed",
+        source: "clawhub",
+        workspaceDir: plan.workspaceDir,
+        before,
+      });
+    }
     return { ok: true };
   } catch (error) {
     const rollbackErrors: string[] = [];

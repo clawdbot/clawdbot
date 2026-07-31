@@ -129,55 +129,56 @@ export const DEPRECATED_PLUGIN_SDK_SUBPATH_RECORDS = DEPRECATED_PLUGIN_SDK_SUBPA
     }) satisfies PluginCompatRecord,
 ) satisfies readonly PluginCompatRecord[];
 
-const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATHS = [
-  "media-understanding",
-  "memory-host-core",
-  "plugin-config-runtime",
-  "tool-plugin",
-] as const;
-
-type SdkReplacement = { replacement: string; docsPath: string };
-const DOCUMENTED_PUBLIC_PLUGIN_SDK_REPLACEMENTS: Record<string, SdkReplacement> = {
-  "media-understanding": {
+const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_SEEDS = [
+  {
+    subpath: "media-understanding",
+    status: "removal-pending",
+    removeAfter: "2026-09-30",
     replacement:
-      "`api.registerMediaUnderstandingProvider(...)` with provider-owned request helpers and types from `openclaw/plugin-sdk/plugin-entry`",
+      "`api.registerMediaUnderstandingProvider(...)` with provider-owned request helpers and types from `openclaw/plugin-sdk/plugin-entry`; retain the public subpath through the 2026-09-30 window while official plugin consumers migrate",
     docsPath: "/plugins/architecture",
   },
-  "memory-host-core": {
+  {
+    subpath: "memory-host-core",
+    status: "removal-pending",
+    removeAfter: "2026-09-30",
     replacement:
-      "host-prepared memory prompts via `openclaw/plugin-sdk/core` and memory capability registration through the injected plugin API; retain the facade for companion-plugin public-artifact discovery until a focused read seam exists",
+      "host-prepared memory prompts via `openclaw/plugin-sdk/core` and memory capability registration through the injected plugin API; retain the facade through the 2026-09-30 window and until a focused public-artifact read seam exists",
     docsPath: "/plugins/architecture-internals#context-engine-plugins",
   },
-  "plugin-config-runtime": {
+  {
+    subpath: "plugin-config-runtime",
+    status: "removal-pending",
+    removeAfter: "2026-12-01",
     replacement:
-      "`api.pluginConfig`, runtime tool context config, and focused `config-contracts`, `runtime-config-snapshot`, or `config-mutation` subpaths",
+      "`api.pluginConfig`, runtime tool context config, and focused `config-contracts`, `runtime-config-snapshot`, or `config-mutation` subpaths; retain the public subpath through the 2026-12-01 window while official plugin consumers migrate",
     docsPath: "/plugins/sdk-runtime",
   },
-};
+  {
+    subpath: "tool-plugin",
+    status: "deprecated",
+    replacement:
+      "retain the public subpath until plugin authoring has a nonexecuting static metadata replacement for `defineToolPlugin`; `getToolPluginMetadata` currently reads metadata only from an already-executed entry",
+    docsPath: "/plugins/tool-plugins",
+  },
+] as const;
+
+function buildPublicSdkSubpathRecord({
+  subpath,
+  ...compat
+}: (typeof BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_SEEDS)[number]) {
+  return {
+    code: `plugin-sdk-${subpath}-public-demotion` as const,
+    owner: "sdk" as const,
+    introduced: "2026-07-15",
+    deprecated: "2026-07-15",
+    warningStarts: "2026-07-15",
+    ...compat,
+    surfaces: [`openclaw/plugin-sdk/${subpath}`],
+    diagnostics: ["registry-backed public SDK demotion window; no external runtime import warning"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+  } satisfies PluginCompatRecord;
+}
 
 export const BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS =
-  BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATHS.map((subpath) => {
-    const documented = DOCUMENTED_PUBLIC_PLUGIN_SDK_REPLACEMENTS[subpath];
-    return {
-      code: `plugin-sdk-${subpath}-public-demotion` as const,
-      status: "removal-pending" as const,
-      owner: "sdk" as const,
-      introduced: "2026-07-15",
-      deprecated: "2026-07-15",
-      warningStarts: "2026-07-15",
-      removeAfter: "2026-07-30",
-      replacement:
-        subpath === "tool-plugin"
-          ? "retain the public subpath until plugin authoring has a nonexecuting static metadata replacement for `defineToolPlugin`"
-          : `${documented?.replacement ?? "define and document a public replacement"}; retain the public subpath until the 2026-07-30 window closes and official plugin consumers migrate`,
-      docsPath:
-        subpath === "tool-plugin"
-          ? "/plugins/tool-plugins"
-          : (documented?.docsPath ?? "/plugins/sdk-migration"),
-      surfaces: [`openclaw/plugin-sdk/${subpath}`],
-      diagnostics: [
-        "registry-backed public SDK demotion window; no external runtime import warning",
-      ],
-      tests: ["src/plugins/compat/registry.test.ts"],
-    } satisfies PluginCompatRecord;
-  }) satisfies readonly PluginCompatRecord[];
+  BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_SEEDS.map(buildPublicSdkSubpathRecord);

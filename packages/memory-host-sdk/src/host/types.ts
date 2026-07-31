@@ -25,6 +25,8 @@ export type MemorySearchResult = {
   source: MemorySource;
   importance?: number;
   triggers?: string;
+  /** Semicolon-separated stable repository identities lifted from inline annotations. */
+  projectKey?: string;
   /** Future provenance column supplied by the promoted-memory workstream. */
   originClass?: string;
   citation?: string;
@@ -100,6 +102,12 @@ export type MemorySearchRuntimeDebug = {
   configuredMode?: string;
   effectiveMode?: string;
   fallback?: string;
+  embeddingBootstrap?: {
+    ok: false;
+    provider: string;
+    reason: string;
+    degradedTo: "keyword-only";
+  };
   qmd?: MemorySearchRuntimeQmdDebug;
 };
 
@@ -167,6 +175,8 @@ export interface MemorySearchManager {
        * network round-trip per inbound message.
        */
       lexicalOnly?: boolean;
+      /** Active repository identities used only for project-aware ranking. */
+      activeProjectKeys?: string[];
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       sources?: MemorySource[];
@@ -174,7 +184,14 @@ export interface MemorySearchManager {
       signal?: AbortSignal;
     },
   ): Promise<MemorySearchResult[]>;
-  listTriggerCandidates?(opts?: { limit?: number }): Promise<MemorySearchResult[]>;
+  listTriggerCandidates?(opts?: {
+    limit?: number;
+    activeProjectKeys?: string[];
+  }): Promise<MemorySearchResult[]>;
+  listCuratedProjectCandidates?(opts: {
+    activeProjectKeys: string[];
+    limit?: number;
+  }): Promise<MemorySearchResult[]>;
   readFile(params: { relPath: string; from?: number; lines?: number }): Promise<MemoryReadResult>;
   status(): MemoryProviderStatus;
   sync?(params?: MemorySyncParams): Promise<void>;

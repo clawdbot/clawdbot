@@ -17,6 +17,7 @@ import {
   subscribeChatOutboxProjection,
   updateQueuedMessageForSession,
 } from "./chat-queue.ts";
+import { createInitialChatRealtimeState } from "./chat-realtime.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -134,6 +135,62 @@ describe("canonical session message recovery", () => {
     expect(state.chatMessages[0]).toMatchObject({
       __openclaw: { importedFrom: "claude-cli", externalId: "source-local-user", seq: 3 },
     });
+  });
+
+  it("renders distinct live peers immediately and coalesces their stale history", async () => {
+    let resolveHistory!: (result: {
+      messages: unknown[];
+      sessionId: string;
+      thinkingLevel: null;
+    }) => void;
+    const history = new Promise<{
+      messages: unknown[];
+      sessionId: string;
+      thinkingLevel: null;
+    }>((resolve) => {
+      resolveHistory = resolve;
+    });
+    const { request, state } = createSessionEventState({ chatDisplayedLeafEntryId: undefined });
+    request.mockReturnValue(history);
+
+    for (const [index, client] of ["web", "tui"].entries()) {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey: state.sessionKey,
+          messageId: `conflicting-${client}-envelope`,
+          messageSeq: 100 + index,
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "shared prompt" }],
+            __openclaw: {
+              id: `canonical-${client}-same-text`,
+              idempotencyKey: `${client}-same-text-run:user`,
+              seq: index + 1,
+            },
+          },
+        },
+      });
+
+      expect(state.chatMessages).toHaveLength(index + 1);
+      expect(state.requestUpdate).toHaveBeenCalledTimes(index + 1);
+    }
+
+    expect(request).toHaveBeenCalledOnce();
+    resolveHistory({
+      messages: [],
+      sessionId: "selected-session",
+      thinkingLevel: null,
+    });
+
+    await vi.waitFor(() => expect(state.chatLoading).toBe(false));
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(state.chatMessages).toMatchObject([
+      { __openclaw: { id: "canonical-web-same-text", seq: 1 } },
+      { __openclaw: { id: "canonical-tui-same-text", seq: 2 } },
+    ]);
   });
 
   it("drops pre-reset live and pending messages before accepting a new session turn", () => {
@@ -856,6 +913,68 @@ describe("ChatStateController render lifecycle", () => {
     expect(effect).not.toHaveBeenCalled();
   });
 
+  it("fully tears down realtime Talk when its state owner disconnects", () => {
+    const host = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost;
+    const controller = new ChatStateController<ChatPageHost>(host);
+    controller.hostConnected();
+    const renderLifecycle = controller.createRenderLifecycle();
+    const context = {
+      agents: {
+        state: { agentsList: null },
+        adoptList: vi.fn(),
+      },
+      agentSelection: { state: { selectedId: "main" } },
+      basePath: "",
+      config: {
+        current: {
+          allowExternalEmbedUrls: false,
+          assistantIdentity: { name: "Assistant" },
+          embedSandboxMode: "scripts",
+          localMediaPreviewRoots: [],
+        },
+      },
+      initialUserMessage: createInitialUserMessageHandoff(),
+      sessions: {},
+    } as unknown as ApplicationContext;
+    const state = createPageState(context, renderLifecycle, { querySelector: () => null });
+    const stop = vi.fn(() => {
+      expect(state.realtimeTalkSession).toBeNull();
+    });
+    state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
+    state.realtimeTalkActive = true;
+    state.realtimeTalkStatus = "listening";
+    state.realtimeTalkDetail = "live";
+    state.realtimeTalkInputLevel.set(0.8);
+    state.realtimeTalkConversation = [
+      { id: "utterance", role: "user", text: "stale", isStreaming: true },
+    ];
+    state.realtimeTalkVideoStream = {} as MediaStream;
+    state.realtimeTalkCameraDevices = [{ deviceId: "camera", label: "Camera" }];
+    state.realtimeTalkVideoCapable = true;
+    state.realtimeTalkVideoPending = true;
+    state.realtimeTalkCameraError = true;
+    controller.attach(state);
+
+    controller.hostDisconnected();
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(state.realtimeTalkActive).toBe(false);
+    expect(state.realtimeTalkStatus).toBe("idle");
+    expect(state.realtimeTalkDetail).toBeNull();
+    expect(state.realtimeTalkInputLevel.value).toBe(0);
+    expect(state.realtimeTalkConversation).toEqual([]);
+    expect(state.realtimeTalkVideoStream).toBeNull();
+    expect(state.realtimeTalkCameraDevices).toEqual([]);
+    expect(state.realtimeTalkVideoCapable).toBe(false);
+    expect(state.realtimeTalkVideoPending).toBe(false);
+    expect(state.realtimeTalkCameraError).toBe(false);
+  });
+
   it("aborts attachment reads when a pane adopts a different session", () => {
     const host = {
       addController: () => undefined,
@@ -1268,8 +1387,7 @@ describe("route composer fallback", () => {
       toolStreamById: new Map(),
       toolStreamOrder: [],
       sessionsResult: null,
-      realtimeTalkConversation: [],
-      realtimeTalkConversationState: { phase: "idle" },
+      ...createInitialChatRealtimeState(),
       resetChatInputHistoryNavigation,
       resetChatScroll,
       requestUpdate: vi.fn(),
@@ -1290,6 +1408,43 @@ describe("route composer fallback", () => {
 
     expect(release).toHaveBeenCalledTimes(1);
     expect(state.imageLightbox).toBeNull();
+  });
+
+  it("retires realtime Talk before adopting the next route", () => {
+    const { state } = createRouteState("");
+    const previousSessionKey = state.sessionKey;
+    const stop = vi.fn(() => {
+      expect(state.realtimeTalkSession).toBeNull();
+      expect(state.sessionKey).toBe(previousSessionKey);
+    });
+    state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
+    state.realtimeTalkActive = true;
+    state.realtimeTalkStatus = "listening";
+    state.realtimeTalkDetail = "live";
+    state.realtimeTalkInputLevel.set(0.6);
+    state.realtimeTalkConversation = [
+      { id: "utterance", role: "assistant", text: "stale", isStreaming: true },
+    ];
+    state.realtimeTalkVideoStream = {} as MediaStream;
+    state.realtimeTalkCameraDevices = [{ deviceId: "camera", label: "Camera" }];
+    state.realtimeTalkVideoCapable = true;
+    state.realtimeTalkVideoPending = true;
+    state.realtimeTalkCameraError = true;
+
+    resetChatStateForRouteSession(state, "agent:main:second");
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(state.sessionKey).toBe("agent:main:second");
+    expect(state.realtimeTalkActive).toBe(false);
+    expect(state.realtimeTalkStatus).toBe("idle");
+    expect(state.realtimeTalkDetail).toBeNull();
+    expect(state.realtimeTalkInputLevel.value).toBe(0);
+    expect(state.realtimeTalkConversation).toEqual([]);
+    expect(state.realtimeTalkVideoStream).toBeNull();
+    expect(state.realtimeTalkCameraDevices).toEqual([]);
+    expect(state.realtimeTalkVideoCapable).toBe(false);
+    expect(state.realtimeTalkVideoPending).toBe(false);
+    expect(state.realtimeTalkCameraError).toBe(false);
   });
 
   it("clears transient detail content on a route switch", () => {

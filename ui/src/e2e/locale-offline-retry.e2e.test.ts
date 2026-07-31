@@ -83,7 +83,7 @@ describeControlUiE2e("Control UI offline locale retry", () => {
     let navigationCount = 0;
 
     try {
-      const response = await page.goto(`${server.baseUrl}settings/general`);
+      const response = await page.goto(`${server.baseUrl}settings/appearance`);
       expect(response?.status()).toBe(200);
       page.on("framenavigated", (frame) => {
         if (frame === page.mainFrame()) {
@@ -125,7 +125,7 @@ describeControlUiE2e("Control UI offline locale retry", () => {
       ).toBe("e2e");
       await page.waitForTimeout(500);
       expect(navigationCount).toBe(1);
-      expect(new URL(page.url()).pathname).toBe("/settings/general");
+      expect(new URL(page.url()).pathname).toBe("/settings/appearance");
     } finally {
       await page.unroute(frenchLocaleModule, abortFrenchLocale);
       await context.close();

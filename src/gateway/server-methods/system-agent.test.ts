@@ -475,9 +475,11 @@ describe("openclaw.chat", () => {
       error: {
         code: "UNAVAILABLE",
         message: "OpenClaw requires working inference: no configured model",
+        details: {
+          code: "system_agent_inference_unavailable",
+        },
       },
     });
-    expect(call.error).not.toHaveProperty("details");
     expect(sessions.size).toBe(0);
   });
 
@@ -524,6 +526,7 @@ describe("openclaw.chat", () => {
         unavailableCandidates: [],
         manualProviders: [],
         authOptions: [],
+        prepareOptions: [],
         recommendedInstalls: [],
         workspace: "/tmp/work",
         setupComplete: false,

@@ -6,11 +6,17 @@
 // those answers live here rather than in the view module — importing the view
 // from search would pull lit, hub-tabs, and settings-ui into the startup chunk.
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveSlotSelection } from "../../../../src/plugins/slots.ts";
+import type { RouteLocation } from "@openclaw/uirouter";
+import { defaultSlotIdForKey, resolveSlotSelection } from "../../../../src/plugins/slots.ts";
+import { memoryTabFromPath, pathForMemoryTab, type MemoryRouteTab } from "../../app-route-paths.ts";
 
-export type MemoryTab = "overview" | "dreams" | "settings";
+export type MemoryTab = MemoryRouteTab;
 
 export type MemoryBackend = "builtin" | "qmd";
+export type MemoryBackendSelection =
+  | { kind: "default"; backend: "builtin" }
+  | { kind: "pinned"; backend: MemoryBackend }
+  | { kind: "invalid"; backend: null; value: unknown };
 
 /**
  * How `plugins.slots.memory` reads today, mirroring resolveSlotSelection in
@@ -23,10 +29,12 @@ export type MemoryEngineSelection =
   | { kind: "off" }
   | { kind: "pinned"; engineId: string };
 
+export const DEFAULT_MEMORY_ENGINE_ID = defaultSlotIdForKey("memory");
+
 /** Scroll target for `memory.backend`, which Settings curates out of the editor. */
 export const MEMORY_BACKEND_ANCHOR_ID = "memory-backend";
 
-const MEMORY_TABS: readonly MemoryTab[] = ["overview", "dreams", "settings"];
+const MEMORY_TABS: readonly MemoryTab[] = ["overview", "memories", "dreams", "settings"];
 
 /** Reads a `?tab=` value from a settings-search destination or a shared link. */
 function normalizeMemoryTab(value: string | null | undefined): MemoryTab | null {
@@ -40,20 +48,62 @@ function normalizeMemoryTab(value: string | null | undefined): MemoryTab | null 
 }
 
 /** Old settings-search URLs had a memory section/hash but no tab. */
-export function memoryTabForRoute(route: {
-  tab?: string | null;
-  section?: string | null;
-  targetBlockId?: string | null;
-}): MemoryTab | null {
+export function memoryTabForRoute(
+  route: {
+    pathname?: string;
+    tab?: string | null;
+    section?: string | null;
+    targetBlockId?: string | null;
+  },
+  basePath = "",
+): MemoryTab | null {
+  const pathTab = route.pathname ? memoryTabFromPath(route.pathname, basePath) : null;
+  if (pathTab && pathTab !== "overview") {
+    return pathTab;
+  }
   const tab = normalizeMemoryTab(route.tab);
   if (tab) {
     return tab;
   }
   const target = route.targetBlockId ?? "";
-  return route.section === "memory" ||
+  if (
+    route.section === "memory" ||
     target === MEMORY_BACKEND_ANCHOR_ID ||
     target.startsWith("config-section-memory")
-    ? "settings"
+  ) {
+    return "settings";
+  }
+  return pathTab;
+}
+
+export function canonicalMemoryRouteLocation(
+  route: {
+    pathname: string;
+    search: string;
+    hash: string;
+    tab?: string | null;
+    section?: string | null;
+    targetBlockId?: string | null;
+    advanced?: boolean;
+  },
+  basePath = "",
+): RouteLocation | null {
+  const params = new URLSearchParams(route.search);
+  const hadLegacyTab = params.has("tab");
+  const hadLegacySection = route.section === "memory" && params.has("section");
+  params.delete("tab");
+  if (hadLegacySection) {
+    params.delete("section");
+    params.delete("advanced");
+  }
+  const search = params.toString();
+  const canonical: RouteLocation = {
+    pathname: pathForMemoryTab(memoryTabForRoute(route, basePath) ?? "overview", basePath),
+    search: search ? `?${search}` : "",
+    hash: route.hash,
+  };
+  return hadLegacyTab || hadLegacySection || canonical.pathname !== route.pathname
+    ? canonical
     : null;
 }
 
@@ -92,11 +142,24 @@ export function resolveMemoryEngineSelection(
  * retrieval and `memory.backend` would save a value nothing consumes. Settings
  * search resolves it from the same config so both agree on what is visible.
  */
-export function resolveMemoryBackend(configObject: Record<string, unknown>): MemoryBackend | null {
+export function resolveMemoryBackendSelection(
+  configObject: Record<string, unknown>,
+): MemoryBackendSelection | null {
   if (selectedEngineId(resolveMemoryEngineSelection(configObject)) !== MEMORY_CORE_PLUGIN_ID) {
     return null;
   }
-  return asConfigRecord(configObject.memory)?.backend === "qmd" ? "qmd" : "builtin";
+  const memory = asConfigRecord(configObject.memory);
+  if (!memory || !Object.hasOwn(memory, "backend")) {
+    return { kind: "default", backend: "builtin" };
+  }
+  const backend = memory.backend;
+  return backend === "builtin" || backend === "qmd"
+    ? { kind: "pinned", backend }
+    : { kind: "invalid", backend: null, value: backend };
+}
+
+export function resolveMemoryBackend(configObject: Record<string, unknown>): MemoryBackend | null {
+  return resolveMemoryBackendSelection(configObject)?.backend ?? null;
 }
 
 type JsonRecord = Record<string, unknown>;

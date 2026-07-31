@@ -2,7 +2,12 @@ import {
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
 } from "@openclaw/ai/internal/openai";
-import { emitModelTransportDebug, isCodeModeModelVisibleToolName } from "@openclaw/ai/transports";
+import {
+  emitModelTransportDebug,
+  filterCodeModePayloadTools,
+  isCodeModeModelVisibleToolName,
+  readCodeModePayloadToolName,
+} from "@openclaw/ai/transports";
 import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
@@ -129,98 +134,12 @@ function isCodeModeEnabled(config?: OpenClawConfig): boolean {
   );
 }
 
-function readPayloadToolField(record: Record<string, unknown>, field: string): unknown {
-  try {
-    return record[field];
-  } catch {
-    return undefined;
-  }
-}
-
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return (
     value !== null &&
     (typeof value === "object" || typeof value === "function") &&
     typeof (value as { then?: unknown }).then === "function"
   );
-}
-
-function readPayloadToolName(tool: unknown): string | undefined {
-  if (!tool || typeof tool !== "object") {
-    return undefined;
-  }
-  const record = tool as Record<string, unknown>;
-  const name = readPayloadToolField(record, "name");
-  if (typeof name === "string") {
-    return name;
-  }
-  const fn = readPayloadToolField(record, "function");
-  if (!fn || typeof fn !== "object") {
-    return undefined;
-  }
-  const fnName = readPayloadToolField(fn as Record<string, unknown>, "name");
-  return typeof fnName === "string" ? fnName : undefined;
-}
-
-function isCodeModePayloadToolName(
-  name: string | undefined,
-  visibleToolNames: ReadonlySet<string>,
-): boolean {
-  return typeof name === "string" && isCodeModeModelVisibleToolName(name, visibleToolNames);
-}
-
-function filterCodeModeToolDeclarations(
-  declarations: unknown,
-  visibleToolNames: ReadonlySet<string>,
-): unknown[] | undefined {
-  if (!Array.isArray(declarations)) {
-    return undefined;
-  }
-  return declarations.filter((declaration) =>
-    isCodeModePayloadToolName(readPayloadToolName(declaration), visibleToolNames),
-  );
-}
-
-function filterCodeModeGroupedToolDeclarations(
-  tool: unknown,
-  visibleToolNames: ReadonlySet<string>,
-): Record<string, unknown> | undefined {
-  if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
-    return undefined;
-  }
-  const record = tool as Record<string, unknown>;
-  const filteredGroups: Record<string, unknown> = {};
-  for (const key of ["functionDeclarations", "function_declarations"] as const) {
-    const filtered = filterCodeModeToolDeclarations(
-      readPayloadToolField(record, key),
-      visibleToolNames,
-    );
-    if (filtered === undefined) {
-      continue;
-    }
-    if (filtered.length > 0) {
-      filteredGroups[key] = filtered;
-    }
-  }
-  return Object.keys(filteredGroups).length > 0 ? filteredGroups : undefined;
-}
-
-function filterCodeModePayloadTools(payload: unknown, visibleToolNames: ReadonlySet<string>): void {
-  if (!payload || typeof payload !== "object") {
-    return;
-  }
-  const record = payload as { tools?: unknown };
-  if (!Array.isArray(record.tools)) {
-    return;
-  }
-  record.tools = record.tools.flatMap((tool) => {
-    const name = readPayloadToolName(tool);
-    if (isCodeModePayloadToolName(name, visibleToolNames)) {
-      return [tool];
-    }
-    const grouped = filterCodeModeGroupedToolDeclarations(tool, visibleToolNames);
-    return grouped ? [grouped] : [];
-  });
 }
 
 function filterCodeModePayloadHookResult(
@@ -241,10 +160,13 @@ function resolveCodeModeVisibleToolNames(context: {
   }
   const names = new Set(
     context.tools
-      .map(readPayloadToolName)
+      .map(readCodeModePayloadToolName)
       .filter((name): name is string => typeof name === "string"),
   );
-  return names.has("exec") && names.has("wait") ? names : undefined;
+  return isCodeModeModelVisibleToolName("exec", names) &&
+    isCodeModeModelVisibleToolName("wait", names)
+    ? names
+    : undefined;
 }
 
 function shouldApplyOpenAIReasoningCompatibility(model: {

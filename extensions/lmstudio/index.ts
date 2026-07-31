@@ -13,6 +13,7 @@ import {
   CUSTOM_LOCAL_AUTH_MARKER,
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
+import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { lmstudioMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
@@ -144,7 +145,7 @@ export default definePluginEntry({
         {
           id: "custom",
           label: LMSTUDIO_PROVIDER_LABEL,
-          hint: "Local/self-hosted LM Studio server",
+          hint: "Connect to a running LM Studio server and use an already loaded model",
           kind: "custom",
           appGuidedSetup: {
             detect: async (ctx) => {
@@ -172,6 +173,8 @@ export default definePluginEntry({
               prompter: ctx.prompter,
               secretInputMode: ctx.secretInputMode,
               allowSecretRefPrompt: ctx.allowSecretRefPrompt,
+              isRemote: ctx.isRemote,
+              signal: ctx.signal,
             });
           },
           validateNonInteractive: validateLmstudioNonInteractive,
@@ -216,11 +219,12 @@ export default definePluginEntry({
           ?.find((model) => model.id === ctx.modelId),
       augmentModelCatalog: (ctx) => resolveLmstudioAugmentedCatalogEntries(ctx.config),
       wrapStreamFn: wrapLmstudioInferencePreload,
+      ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
       wizard: {
         setup: {
           choiceId: PROVIDER_ID,
           choiceLabel: "LM Studio",
-          choiceHint: "Local/self-hosted LM Studio server",
+          choiceHint: "Connect to a running LM Studio server and use an already loaded model",
           groupId: PROVIDER_ID,
           groupLabel: "LM Studio",
           groupHint: "Self-hosted open-weight models",

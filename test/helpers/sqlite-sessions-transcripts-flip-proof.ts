@@ -528,7 +528,8 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     const finalInspectDoctor = await runDoctor(inst, "inspect", context.storePath);
     await record("after-final-doctor-inspect", finalInspectDoctor);
   } catch (error) {
-    failures.push(error instanceof Error ? error.message : String(error));
+    const message = error instanceof Error ? error.message : String(error);
+    failures.push(`${message}\nGateway diagnostics:\n${tail(inst.logs(), 6_000)}`);
     await record("failure");
   } finally {
     await stopChildProcess(mockOpenAi);

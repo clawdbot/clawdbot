@@ -28,6 +28,7 @@ import {
   resolveLocalHeavyCheckEnv,
 } from "./lib/local-heavy-check-runtime.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
+import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mjs";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mjs";
 
 const NPM_LOCK_POLICY_PATH_RE =
@@ -74,6 +75,7 @@ const MACOS_APP_CI_PATH_RE =
   /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh$|scripts\/lib\/(?:plistbuddy|swift-toolchain)\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
 let corepackPnpmShimDir;
 let corepackPnpmShimCleanupRegistered = false;
+let cachedGeneratedExtensionAssetPaths;
 let npmLockPackageDirsForChangedPaths;
 
 async function ensureChangedCheckRuntimeDependencies(paths) {
@@ -220,16 +222,10 @@ export function buildChangedCheckCrabboxArgs(argv = [], options = {}) {
   return [
     "scripts/crabbox-wrapper.mjs",
     "run",
-    "--provider",
-    "blacksmith-testbox",
-    "--blacksmith-org",
-    "openclaw",
-    "--blacksmith-workflow",
-    ".github/workflows/ci-check-testbox.yml",
-    "--blacksmith-job",
-    "check",
-    "--blacksmith-ref",
-    "main",
+    "--workload",
+    "ci-fast",
+    // Keep workload-routed calls provider-neutral. Blacksmith reads its workflow
+    // defaults from .crabbox.yaml; cloud fallbacks must not receive its flags.
     "--idle-timeout",
     "90m",
     "--ttl",
@@ -390,7 +386,7 @@ export function delegationFailedBeforeRunning(output) {
 }
 
 async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
-  console.error("[check:changed] delegating to Blacksmith Testbox via the Node wrapper.");
+  console.error("[check:changed] delegating through Crabbox workload routing.");
   let tail = "";
   const exitCode = await runManagedCommand({
     bin: "node",
@@ -421,6 +417,11 @@ async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
 export function createChangedCheckPlan(result, options = {}) {
   const commands = [];
   const baseEnv = createChangedCheckChildEnv(options.env ?? process.env);
+  const generatedExtensionAssetPaths = result.paths.some((changedPath) =>
+    LINTABLE_EXTENSION_PATH_RE.test(changedPath),
+  )
+    ? (cachedGeneratedExtensionAssetPaths ??= new Set(listGeneratedExtensionAssetSources()))
+    : new Set();
   const add = (name, args, env) => {
     if (!commands.some((command) => command.name === name && sameArgs(command.args, args))) {
       commands.push({ name, args, ...(env ? { env } : {}) });
@@ -437,9 +438,18 @@ export function createChangedCheckPlan(result, options = {}) {
   };
   const addTypecheck = (name, args) => add(name, args, createSparseTsgoSkipEnv(baseEnv));
   const addLint = (name, args) => add(name, args, baseEnv);
-  const addTargetedLint = (createCommand, lintablePathRe, fallbackName, fallbackArgs) => {
-    const targets = result.paths.filter((changedPath) => lintablePathRe.test(changedPath));
-    const otherPaths = result.paths.filter((changedPath) => !lintablePathRe.test(changedPath));
+  const addTargetedLint = (
+    createCommand,
+    lintablePathRe,
+    fallbackName,
+    fallbackArgs,
+    ignoredPaths,
+  ) => {
+    const candidatePaths = ignoredPaths
+      ? result.paths.filter((changedPath) => !ignoredPaths.has(changedPath))
+      : result.paths;
+    const targets = candidatePaths.filter((changedPath) => lintablePathRe.test(changedPath));
+    const otherPaths = candidatePaths.filter((changedPath) => !lintablePathRe.test(changedPath));
     const targetedCommands = [];
 
     for (let offset = 0; offset < targets.length; offset += TARGETED_LINT_PATH_LIMIT) {
@@ -685,12 +695,24 @@ export function createChangedCheckPlan(result, options = {}) {
     addLint("lint core", ["lint:core"]);
   }
   if (lanes.extensions || lanes.extensionTests) {
-    addTargetedLint(
-      createTargetedExtensionLintCommand,
-      LINTABLE_EXTENSION_PATH_RE,
-      "lint extensions",
-      ["lint:extensions"],
-    );
+    // Generated plugin outputs have their own asset-integrity gate and are
+    // intentionally ignored by oxlint; manifests still need full-lane fallback.
+    if (
+      !result.paths.some((changedPath) => generatedExtensionAssetPaths.has(changedPath)) ||
+      result.paths.some(
+        (changedPath) =>
+          getChangedPathFacts(changedPath).surface === "extension" &&
+          !generatedExtensionAssetPaths.has(changedPath),
+      )
+    ) {
+      addTargetedLint(
+        createTargetedExtensionLintCommand,
+        LINTABLE_EXTENSION_PATH_RE,
+        "lint extensions",
+        ["lint:extensions"],
+        generatedExtensionAssetPaths,
+      );
+    }
   }
   if (lanes.tooling || lanes.liveDockerTooling) {
     if (

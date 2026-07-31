@@ -1,9 +1,11 @@
 // Mattermost plugin module owns raw WebSocket durable ingress mapping and draining.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { getMattermostRuntime } from "../runtime.js";
@@ -16,11 +18,6 @@ import {
 
 const MATTERMOST_INGRESS_PAYLOAD_VERSION = 1;
 const MATTERMOST_INGRESS_POLL_INTERVAL_MS = 1_000;
-const MATTERMOST_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-const MATTERMOST_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const MATTERMOST_INGRESS_COMPLETED_MAX_ENTRIES = 20_000;
-const MATTERMOST_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const MATTERMOST_INGRESS_FAILED_MAX_ENTRIES = 20_000;
 
 export type MattermostIngressLifecycle = {
   abortSignal: AbortSignal;
@@ -44,20 +41,9 @@ type MattermostIngressDispatch = (
   lifecycle: MattermostIngressLifecycle,
 ) => Promise<MattermostIngressDispatchResult | void> | MattermostIngressDispatchResult | void;
 
-class MattermostIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "invalid-event" | "mattermost-auth",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "MattermostIngressPermanentError";
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const MattermostIngressPermanentError = createChannelIngressError<
+  "invalid-event" | "mattermost-auth"
+>("MattermostIngressPermanentError", { withReason: true });
 
 function parseRawObject(raw: string, subject: string): Record<string, unknown> {
   let parsed: unknown;
@@ -215,13 +201,7 @@ export function createMattermostIngressMonitor(options: {
     pollIntervalMs: options.pollIntervalMs ?? MATTERMOST_INGRESS_POLL_INTERVAL_MS,
     // Preserve Mattermost's existing one-drain-at-a-time delivery cycle.
     waitForDeliveryIdleBeforeRepump: true,
-    retention: {
-      pruneIntervalMs: MATTERMOST_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: MATTERMOST_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: MATTERMOST_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: MATTERMOST_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: MATTERMOST_INGRESS_FAILED_MAX_ENTRIES,
-    },
+    retention: "standard",
     drain: {
       resolveNonRetryableFailure: resolveMattermostIngressNonRetryableFailure,
       ...(options.adoptionStallTimeoutMs === undefined

@@ -71,7 +71,7 @@ describe("cron next_check action", () => {
         jobId: "another-job",
         in: "15m",
       }),
-    ).rejects.toThrow("Cron tool is restricted to the current cron job.");
+    ).rejects.toThrow("Automations tool is restricted to the current automation.");
   });
 
   it("rejects next_check outside a current cron run", async () => {

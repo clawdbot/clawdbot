@@ -2,12 +2,14 @@
 import type { webhook } from "@line/bot-sdk";
 import {
   bindIngressLifecycleToReplyOptions,
+  createChannelIngressError,
   createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { danger, type RuntimeEnv, warn } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import { getLineRuntime } from "./runtime.js";
 
@@ -16,8 +18,6 @@ const LINE_WEBHOOK_DRAIN_INTERVAL_MS = 500;
 const LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES = 8;
 const LINE_WEBHOOK_DRAIN_SCAN_LIMIT = 100;
 const LINE_WEBHOOK_ACTIVE_DELIVERY_STOP_GRACE_MS = 5_000;
-const LINE_WEBHOOK_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60_000;
-const LINE_WEBHOOK_TOMBSTONE_MAX_ENTRIES = 4096;
 
 type LineWebhookSpoolPayload = {
   version: number;
@@ -50,12 +50,7 @@ type LineWebhookSpoolOptions = {
   queue?: ChannelIngressQueue<LineWebhookSpoolPayload>;
 };
 
-class LineWebhookPayloadError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = "LineWebhookPayloadError";
-  }
-}
+const LineWebhookPayloadError = createChannelIngressError("LineWebhookPayloadError");
 
 export class LineWebhookTerminalDeliveryError extends Error {
   readonly reason = "delivery-side-effects-committed" as const;
@@ -71,10 +66,6 @@ type LineWebhookSpool = {
   start: () => void;
   stop: () => Promise<void>;
 };
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
 
 /** Message ids preserve the shipped replay-guard keyspace; other events use LINE's delivery id. */
 function eventIdFor(event: unknown): string {
@@ -174,7 +165,6 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       accountId: options.accountId,
     });
   const activeDeliveries = new Set<Promise<void>>();
-  const deferredClaims = new Map<string, Promise<void>>();
   let acceptsDeferredClaims = true;
   const monitor = createChannelIngressMonitor<
     LineWebhookIngressEvent,
@@ -217,42 +207,21 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
             : "LINE webhook event identity changed after durable admission.",
         ),
     },
-    deliver: async ({ event, destination }, lifecycle, claim) => {
+    deliver: async ({ event, destination }, lifecycle) => {
       // Reply options intentionally omit the drain-only onAdoptionFinalizing callback;
       // the monitor wrapper already tracks that callback as a handoff before invoking us.
       const boundLifecycle = bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle;
       let handedOff = false;
-      let resolveDeferredClaim!: () => void;
-      const deferredClaim = new Promise<void>((resolve) => {
-        resolveDeferredClaim = resolve;
-      });
-      let deferredClaimSettled = false;
-      const settleDeferredClaim = () => {
-        if (deferredClaimSettled) {
-          return;
-        }
-        deferredClaimSettled = true;
-        // Delete only this dispatch's entry; a later retry may reuse the claim id.
-        if (deferredClaims.get(claim.id) === deferredClaim) {
-          deferredClaims.delete(claim.id);
-        }
-        resolveDeferredClaim();
-      };
       const delivery = options.deliver(event, destination, {
         turnAdoptionLifecycle: {
           ...boundLifecycle,
           onAdopted: async () => {
             handedOff = true;
-            try {
-              await boundLifecycle.onAdopted();
-            } finally {
-              settleDeferredClaim();
-            }
+            await boundLifecycle.onAdopted();
           },
           onDeferred: () => {
             handedOff = true;
             if (!acceptsDeferredClaims) {
-              settleDeferredClaim();
               void Promise.resolve()
                 .then(() => boundLifecycle.onAbandoned())
                 .catch((error: unknown) => {
@@ -262,18 +231,11 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
                 });
               return;
             }
-            if (!deferredClaimSettled) {
-              deferredClaims.set(claim.id, deferredClaim);
-            }
             boundLifecycle.onDeferred();
           },
           onAbandoned: async () => {
             handedOff = true;
-            try {
-              await boundLifecycle.onAbandoned();
-            } finally {
-              settleDeferredClaim();
-            }
+            await boundLifecycle.onAbandoned();
           },
         },
       });
@@ -294,15 +256,14 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
     pollIntervalMs: LINE_WEBHOOK_DRAIN_INTERVAL_MS,
     retention: {
       pruneIntervalMs: 0,
-      completedTtlMs: LINE_WEBHOOK_TOMBSTONE_TTL_MS,
-      completedMaxEntries: LINE_WEBHOOK_TOMBSTONE_MAX_ENTRIES,
-      failedTtlMs: LINE_WEBHOOK_TOMBSTONE_TTL_MS,
-      failedMaxEntries: LINE_WEBHOOK_TOMBSTONE_MAX_ENTRIES,
+      completedMaxEntries: 4096,
+      failedMaxEntries: 4096,
     },
     appendRetryDelaysMs: [0],
     // The monitor carries active deliveries across pumps and applies startLimit before each claim.
     waitForDeliveryIdleBeforeRepump: false,
     waitForDeliveryIdleOnStop: false,
+    deferredClaims: "manual",
     runPumpTask: runDetachedWebhookWork,
     admissionMode: "durable-after-stop",
     drain: {
@@ -372,9 +333,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
           // Accepted shutdown tradeoff: deferred claims may wait for the full agent run.
           // A deadline would allow duplicate side effects after replacement recovery;
           // remove this wait only when core can cancel or abandon the run before release.
-          while (deferredClaims.size > 0) {
-            await Promise.allSettled(deferredClaims.values());
-          }
+          await monitor.waitForDeferredClaims();
           // Close registration only after the live map drains. Later deferrals
           // are rejected through onAbandoned so disposal cannot orphan a run.
           acceptsDeferredClaims = false;

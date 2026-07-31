@@ -82,8 +82,24 @@ export const ChatMessageGetResultSchema = closedObject({
 /** Typed result shape for callers that branch on message availability. */
 export type ChatMessageGetResult = Static<typeof ChatMessageGetResultSchema>;
 
-/** Attachment envelope shared by chat.send and session creation's initial turn. */
-export const ChatAttachmentsSchema = Type.Array(Type.Unknown());
+/** Permissive attachment envelope shared by chat and session entrypoints. */
+export const ChatAttachmentSchema = Type.Object(
+  {
+    type: Type.Optional(Type.String()),
+    mimeType: Type.Optional(Type.String()),
+    fileName: Type.Optional(Type.String()),
+    // Runtime normalization also accepts ArrayBuffer views from native/browser callers.
+    content: Type.Optional(Type.Unknown()),
+    sizeBytes: Type.Optional(Type.Number()),
+    durationMs: Type.Optional(Type.Number()),
+    width: Type.Optional(Type.Number()),
+    height: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: true },
+);
+
+/** Attachment list shared by chat.send and session creation's initial turn. */
+export const ChatAttachmentsSchema = Type.Array(ChatAttachmentSchema);
 
 /** Opaque, out-of-band plugin bindings carried separately from model input. */
 const RunToolBindingsSchema = Type.Record(

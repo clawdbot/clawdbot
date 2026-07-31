@@ -669,6 +669,30 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
   });
 
+  it("returns synthetic-auth discovery entries only when explicitly requested", () => {
+    const syntheticProvider: ProviderPlugin = {
+      id: "claude-cli",
+      label: "Claude CLI",
+      auth: [],
+      resolveSyntheticAuth: () => ({
+        apiKey: "synthetic-token",
+        source: "test",
+        mode: "oauth",
+      }),
+    };
+    mocks.loadSource.mockReturnValue(syntheticProvider);
+
+    expect(resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true })).toEqual([]);
+    const providers = resolvePluginDiscoveryProvidersRuntime({
+      discoveryEntriesOnly: true,
+      includeSyntheticAuthProviders: true,
+    });
+
+    expect(providers).toHaveLength(1);
+    expect(providers[0]).toMatchObject({ id: "claude-cli", pluginId: "deepseek" });
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
   it("returns manifest model catalogs as static discovery entries", async () => {
     mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["openai"]);
     mocks.loadPluginMetadataSnapshot.mockReturnValue({

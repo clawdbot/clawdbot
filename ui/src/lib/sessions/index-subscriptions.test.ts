@@ -122,36 +122,6 @@ describe("createSessionCapability message subscriptions", () => {
     sessions.dispose();
   });
 
-  it("shares an existing approval observer without downgrading its Gateway capability", async () => {
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      if (method === "sessions.messages.subscribe") {
-        return {
-          key: params?.key,
-          ...(params?.includeApprovals ? { approvalReplay: { approvals: [] } } : {}),
-        };
-      }
-      if (method === "sessions.messages.unsubscribe") {
-        return {};
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createSessionCapability(createGateway(client));
-
-    const approval = await sessions.subscribeMessages("main", { includeApprovals: true });
-    const plain = await sessions.subscribeMessages("main");
-
-    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.messages.subscribe", {
-      key: "main",
-      includeApprovals: true,
-    });
-    await sessions.unsubscribeMessages(approval);
-    expect(request).toHaveBeenCalledOnce();
-    await sessions.unsubscribeMessages(plain);
-    expect(request).toHaveBeenCalledTimes(2);
-    sessions.dispose();
-  });
-
   it("isolates targeted global observers by the selected canonical agent", async () => {
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "sessions.messages.subscribe") {

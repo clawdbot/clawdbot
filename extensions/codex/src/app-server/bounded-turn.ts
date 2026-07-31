@@ -79,6 +79,15 @@ type CodexBoundedTurnResult = {
 
 type CodexBoundedTurnModelSelection = { mode: "required"; id: string } | { mode: "live-default" };
 
+class CodexBoundedTurnTimeoutError extends Error {
+  override name = "TimeoutError";
+
+  constructor(taskLabel: string, timeoutMs: number) {
+    const bound = timeoutMs % 1_000 === 0 ? `${timeoutMs / 1_000}s` : `${timeoutMs}ms`;
+    super(`codex app-server ${taskLabel} turn timed out after ${bound}`);
+  }
+}
+
 type CodexBoundedTurnParams = {
   config?: OpenClawConfig;
   model: CodexBoundedTurnModelSelection;
@@ -138,10 +147,11 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   timing?: { deadline: number; timeoutMs: number },
 ): Promise<CodexBoundedTurnResult> {
   const totalTimeoutMs = timing?.timeoutMs ?? resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
+  const timeoutError = new CodexBoundedTurnTimeoutError(params.taskLabel, totalTimeoutMs);
   const deadline = timing?.deadline ?? Date.now() + totalTimeoutMs;
   const timeoutMs = deadline - Date.now();
   if (timeoutMs <= 0) {
-    throw new Error(`${params.taskLabel} timed out`);
+    throw timeoutError;
   }
   const agentDir = params.agentDir?.trim() || undefined;
   // Hosted search needs a private Codex home and cwd so inherited native tools
@@ -199,9 +209,9 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   }
   const remainingRunMs = deadline - Date.now();
   if (remainingRunMs <= 0) {
-    abortRun("timeout");
+    abortRun(timeoutError);
   }
-  const timeout = setTimeout(() => abortRun("timeout"), Math.max(1, remainingRunMs));
+  const timeout = setTimeout(() => abortRun(timeoutError), Math.max(1, remainingRunMs));
   timeout.unref?.();
 
   let retrySelection = false;
@@ -289,8 +299,8 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       }
       return {
         ...(await collector.collect(turn.turn, {
-          timeoutMs,
           signal: abortController.signal,
+          timeoutError,
         })),
         model,
       };
@@ -299,6 +309,13 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       cleanup();
     }
   } catch (error) {
+    if (abortController.signal.aborted) {
+      throw resolveCodexBoundedTurnAbortError(
+        abortController.signal,
+        params.taskLabel,
+        timeoutError,
+      );
+    }
     if (ownsClient && isCodexAppServerStartSelectionChangedError(error) && selectionAttempt === 0) {
       retrySelection = true;
     } else {
@@ -522,7 +539,7 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
     handleNotification,
     async collect(
       startedTurn: CodexTurn,
-      options: { timeoutMs: number; signal: AbortSignal },
+      options: { signal: AbortSignal; timeoutError: CodexBoundedTurnTimeoutError },
     ): Promise<Omit<CodexBoundedTurnResult, "model">> {
       turnId = startedTurn.id;
       if (isTerminalTurn(startedTurn)) {
@@ -534,9 +551,9 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
       if (!completedTurn && !promptError) {
         await waitForTurnCompletion({
           completion,
-          timeoutMs: options.timeoutMs,
           signal: options.signal,
           taskLabel,
+          timeoutError: options.timeoutError,
         });
       }
       if (promptError) {
@@ -581,36 +598,41 @@ function collectCompletedItems(
 
 async function waitForTurnCompletion(params: {
   completion: Promise<void>;
-  timeoutMs: number;
   signal: AbortSignal;
   taskLabel: string;
+  timeoutError: CodexBoundedTurnTimeoutError;
 }): Promise<void> {
   if (params.signal.aborted) {
-    throw new Error(`codex app-server ${params.taskLabel} turn aborted`);
+    throw resolveCodexBoundedTurnAbortError(params.signal, params.taskLabel, params.timeoutError);
   }
-  let timeout: ReturnType<typeof setTimeout> | undefined;
   let cleanupAbort: (() => void) | undefined;
   try {
     await Promise.race([
       params.completion,
       new Promise<never>((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error(`codex app-server ${params.taskLabel} turn timed out`)),
-          params.timeoutMs,
-        );
-        timeout.unref?.();
         const abortListener = () =>
-          reject(new Error(`codex app-server ${params.taskLabel} turn aborted`));
+          reject(
+            resolveCodexBoundedTurnAbortError(params.signal, params.taskLabel, params.timeoutError),
+          );
         params.signal.addEventListener("abort", abortListener, { once: true });
         cleanupAbort = () => params.signal.removeEventListener("abort", abortListener);
       }),
     ]);
   } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
     cleanupAbort?.();
   }
+}
+
+function resolveCodexBoundedTurnAbortError(
+  signal: AbortSignal,
+  taskLabel: string,
+  timeoutError: CodexBoundedTurnTimeoutError,
+): Error {
+  // Only this owner can classify its deadline as a timeout. Caller cancellation
+  // reasons remain behind the established Error-shaped aborted-turn boundary.
+  return signal.reason === timeoutError
+    ? timeoutError
+    : new Error(`codex app-server ${taskLabel} turn aborted`);
 }
 
 function collectAssistantTextFromItems(items: CodexThreadItem[] | undefined): string {

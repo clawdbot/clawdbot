@@ -726,17 +726,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       threadId: "42",
     });
     await queueCronMessageToolDeliveryAwareness({
-      cfg: {} as never,
-      job: {
-        id: "test-job",
-        name: "Test Job",
-        sessionTarget: "isolated",
-        deleteAfterRun: false,
-        payload: { kind: "agentTurn", message: "hello" },
-      } as never,
-      agentId: "main",
-      agentSessionKey: "agent:main",
-      runStartedAt: 1_000,
+      ...makeBaseParams({ runStartedAt: 1_000 }),
       resolvedDelivery: makeResolvedDelivery({ threadId: "42" }),
       sourceDeliveryOutcome: {
         visibleDeliveries: [
@@ -764,7 +754,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       }),
     );
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      "A scheduled cron job delivered this message to this channel:\nThreaded cron update.",
+      "A scheduled automation delivered this message to this channel:\nThreaded cron update.",
       {
         sessionKey: "agent:main:telegram:direct:123456:thread:42",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:42",
@@ -776,17 +766,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     vi.mocked(resolveOutboundSessionRoute).mockResolvedValue(null);
 
     await queueCronMessageToolDeliveryAwareness({
-      cfg: {} as never,
-      job: {
-        id: "test-job",
-        name: "Test Job",
-        sessionTarget: "isolated",
-        deleteAfterRun: false,
-        payload: { kind: "agentTurn", message: "hello" },
-      } as never,
-      agentId: "main",
-      agentSessionKey: "agent:main",
-      runStartedAt: 1_000,
+      ...makeBaseParams({ runStartedAt: 1_000 }),
       resolvedDelivery: makeResolvedDelivery(),
       sourceDeliveryOutcome: {
         visibleDeliveries: [
@@ -808,7 +788,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
 
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      "A scheduled cron job delivered this message to this channel:\nMain-scoped cron update.",
+      "A scheduled automation delivered this message to this channel:\nMain-scoped cron update.",
       {
         sessionKey: "agent:main",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
@@ -836,17 +816,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       });
 
     await queueCronMessageToolDeliveryAwareness({
-      cfg: {} as never,
-      job: {
-        id: "test-job",
-        name: "Test Job",
-        sessionTarget: "isolated",
-        deleteAfterRun: false,
-        payload: { kind: "agentTurn", message: "hello" },
-      } as never,
-      agentId: "main",
-      agentSessionKey: "agent:main",
-      runStartedAt: 1_000,
+      ...makeBaseParams({ runStartedAt: 1_000 }),
       resolvedDelivery: makeResolvedDelivery(),
       sourceDeliveryOutcome: {
         visibleDeliveries: [
@@ -879,14 +849,14 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(2);
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "A scheduled cron job delivered this message to this channel:\nShared cron update.",
+      "A scheduled automation delivered this message to this channel:\nShared cron update.",
       {
         sessionKey: "agent:main:telegram:direct:123456",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
       },
     );
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "A scheduled cron job delivered this message to this channel:\nShared cron update.",
+      "A scheduled automation delivered this message to this channel:\nShared cron update.",
       {
         sessionKey: "agent:main:openclaw-weixin:direct:123456",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:openclaw-weixin::123456:",
@@ -902,17 +872,8 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
 
     await queueCronMessageToolDeliveryAwareness({
-      cfg: {} as never,
-      job: {
-        id: "test-job",
-        name: "Test Job",
-        sessionTarget: "session:agent:main:main",
-        deleteAfterRun: false,
-        payload: { kind: "agentTurn", message: "hello" },
-      } as never,
-      agentId: "main",
+      ...makeBaseParams({ runStartedAt: 1_000, sessionTarget: "session:agent:main:main" }),
       agentSessionKey: "agent:main:main",
-      runStartedAt: 1_000,
       resolvedDelivery: makeResolvedDelivery(),
       sourceDeliveryOutcome: {
         visibleDeliveries: [
@@ -941,7 +902,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       }),
     );
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      "A scheduled cron job delivered this message to this channel:\nSession-targeted off-plan update.",
+      "A scheduled automation delivered this message to this channel:\nSession-targeted off-plan update.",
       {
         sessionKey: "agent:main:telegram:direct:123456",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
@@ -953,17 +914,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     mockResolvedOutboundRoute();
 
     await queueCronMessageToolDeliveryAwareness({
-      cfg: {} as never,
-      job: {
-        id: "test-job",
-        name: "Test Job",
-        sessionTarget: "isolated",
-        deleteAfterRun: false,
-        payload: { kind: "agentTurn", message: "hello" },
-      } as never,
-      agentId: "main",
-      agentSessionKey: "agent:main",
-      runStartedAt: 1_000,
+      ...makeBaseParams({ runStartedAt: 1_000 }),
       resolvedDelivery: makeResolvedDelivery(),
       sourceDeliveryOutcome: {
         visibleDeliveries: [
@@ -985,7 +936,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
 
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      "A scheduled cron job delivered this message to this channel:\nweather-map.png",
+      "A scheduled automation delivered this message to this channel:\nweather-map.png",
       {
         sessionKey: "agent:main:telegram:direct:123456",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
@@ -1001,17 +952,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
 
     await queueCronMessageToolDeliveryAwareness({
-      cfg: {} as never,
-      job: {
-        id: "test-job",
-        name: "Test Job",
-        sessionTarget: "isolated",
-        deleteAfterRun: false,
-        payload: { kind: "agentTurn", message: "hello" },
-      } as never,
-      agentId: "main",
-      agentSessionKey: "agent:main",
-      runStartedAt: 1_000,
+      ...makeBaseParams({ runStartedAt: 1_000 }),
       resolvedDelivery: makeResolvedDelivery({
         channel: "telegram",
         to: "123456",
@@ -1046,7 +987,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       }),
     );
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      "A scheduled cron job delivered this message to this channel:\n386502",
+      "A scheduled automation delivered this message to this channel:\n386502",
       {
         sessionKey: "agent:main:openclaw-weixin:direct:user-123",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:openclaw-weixin::user-123:",
@@ -1324,7 +1265,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
     });
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "A scheduled cron job delivered this message to this channel:\nRedacted cron update.",
+      "A scheduled automation delivered this message to this channel:\nRedacted cron update.",
       {
         sessionKey: "agent:main:telegram:direct:123456",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
@@ -1366,7 +1307,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
     });
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "A scheduled cron job delivered this message to this channel:\nMorning briefing complete.",
+      "A scheduled automation delivered this message to this channel:\nMorning briefing complete.",
       {
         sessionKey: "agent:main",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
@@ -1639,7 +1580,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      "A scheduled cron job delivered this message to this channel:\nSession-bound cron update.",
+      "A scheduled automation delivered this message to this channel:\nSession-bound cron update.",
       {
         sessionKey: "agent:main",
         contextKey: expect.stringMatching(
@@ -2140,90 +2081,43 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
   });
 
-  it("does not retry a batch after an earlier direct announce payload was sent", async () => {
-    mockResolvedOutboundRoute({
-      sessionKey: "agent:main:telegram:direct:123456",
-      baseSessionKey: "agent:main:telegram:direct:123456",
-      to: "telegram:123456",
-    });
-    const notDispatchedError = new PlatformMessageNotDispatchedError(
-      "second payload stopped before final dispatch",
-      {
-        cause: Object.assign(new Error("connect ECONNREFUSED"), {
-          code: "ECONNREFUSED",
-          syscall: "connect",
-        }),
-      },
-    );
-    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-    vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (deliveryParams) => {
-      deliveryParams.onPayloadDeliveryOutcome?.({
+  it.each([
+    {
+      name: "does not retry a batch after an earlier direct announce payload was sent",
+      firstOutcome: {
         index: 0,
-        status: "sent",
-        results: [{ channel: "telegram", messageId: "tg-first" }] as never,
-      });
-      deliveryParams.onPayloadDeliveryOutcome?.({
-        index: 1,
-        status: "failed",
-        error: notDispatchedError,
-        sentBeforeError: false,
-        stage: "platform_send",
-      });
-      return [{ channel: "telegram", messageId: "tg-first" }] as never;
-    });
-
-    const params = makeBaseParams({
-      synthesizedText: undefined,
-      runStartedAt: 1_000,
-    });
-    params.deliveryPayloads = [{ text: "First payload." }, { text: "Second payload." }];
-    params.outputText = "Second payload.";
-    params.summary = "Second payload.";
-    const state = await dispatchCronDelivery(params);
-
-    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expectResultFields(state.result, {
-      status: "error",
-      error: String(notDispatchedError),
-      deliveryAttempted: true,
-    });
-    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-      [
-        "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
-        "Job: Test Job",
-        "Target: telegram:123456",
-        "Delivery error: second payload stopped before final dispatch | connect ECONNREFUSED | ECONNREFUSED",
-        "One or more scheduled message payloads may already have been delivered.",
-      ].join("\n"),
-      {
-        sessionKey: "agent:main:telegram:direct:123456",
-        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456::failure",
+        status: "sent" as const,
+        results: [{ channel: "telegram", messageId: "tg-first" }],
       },
-    );
-  });
-
-  it("does not retry after an earlier direct announce payload returned no identity", async () => {
-    mockResolvedOutboundRoute({
-      sessionKey: "agent:main:telegram:direct:123456",
-      baseSessionKey: "agent:main:telegram:direct:123456",
-      to: "telegram:123456",
-    });
-    const notDispatchedError = new PlatformMessageNotDispatchedError(
-      "second payload stopped before final dispatch",
-      {
-        cause: Object.assign(new Error("connect ECONNREFUSED"), {
-          code: "ECONNREFUSED",
-          syscall: "connect",
-        }),
-      },
-    );
-    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-    vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (deliveryParams) => {
-      deliveryParams.onPayloadDeliveryOutcome?.({
+      results: [{ channel: "telegram", messageId: "tg-first" }],
+    },
+    {
+      name: "does not retry after an earlier direct announce payload returned no identity",
+      firstOutcome: {
         index: 0,
-        status: "suppressed",
+        status: "suppressed" as const,
         reason: "adapter_returned_no_identity",
-      });
+      },
+      results: [],
+    },
+  ])("$name", async ({ firstOutcome, results }) => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:telegram:direct:123456",
+      baseSessionKey: "agent:main:telegram:direct:123456",
+      to: "telegram:123456",
+    });
+    const notDispatchedError = new PlatformMessageNotDispatchedError(
+      "second payload stopped before final dispatch",
+      {
+        cause: Object.assign(new Error("connect ECONNREFUSED"), {
+          code: "ECONNREFUSED",
+          syscall: "connect",
+        }),
+      },
+    );
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (deliveryParams) => {
+      deliveryParams.onPayloadDeliveryOutcome?.(firstOutcome as never);
       deliveryParams.onPayloadDeliveryOutcome?.({
         index: 1,
         status: "failed",
@@ -2231,7 +2125,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         sentBeforeError: false,
         stage: "platform_send",
       });
-      return [] as never;
+      return results as never;
     });
 
     const params = makeBaseParams({
@@ -2251,7 +2145,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
       [
-        "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
+        "A scheduled automation attempted to deliver to this channel, but delivery failed.",
         "Job: Test Job",
         "Target: telegram:123456",
         "Delivery error: second payload stopped before final dispatch | connect ECONNREFUSED | ECONNREFUSED",
@@ -2626,7 +2520,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
       [
-        "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
+        "A scheduled automation attempted to deliver to this channel, but delivery failed.",
         "Job: Test Job",
         "Target: telegram:123456 thread 42",
         "Delivery error: Call to 'sendMessage' failed! (400: Bad Request: message thread not found)",
@@ -2673,7 +2567,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
       [
-        "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
+        "A scheduled automation attempted to deliver to this channel, but delivery failed.",
         "Job: Test Job",
         "Target: telegram:123456",
         "Delivery error: second payload failed",

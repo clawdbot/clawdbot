@@ -89,24 +89,6 @@ type LoadSessionPullRequestDeps = SessionPullRequestLocalGitDeps & {
   ) => Promise<SessionPullRequestGitContext | null>;
 };
 
-export function parseControlUiSessionPullRequestsParams(
-  value: unknown,
-): ControlUiSessionPullRequestsParams | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const sessionKey = typeof value.sessionKey === "string" ? value.sessionKey.trim() : "";
-  if (!sessionKey) {
-    return null;
-  }
-  const agentId = typeof value.agentId === "string" ? value.agentId.trim() : "";
-  return {
-    sessionKey,
-    ...(agentId ? { agentId } : {}),
-    ...(value.refresh === true ? { refresh: true } : {}),
-  };
-}
-
 /** Resolves the checkout root without spawning Git. */
 function resolveSessionPullRequestGitRoot(
   params: ControlUiSessionPullRequestsParams,

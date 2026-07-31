@@ -151,9 +151,10 @@ function resolveDefaultTokenProfileId(provider: string): string {
 
 function normalizeManualAuthProvider(provider: string): string {
   const normalized = normalizeProviderId(provider);
-  return normalized === "openai" || normalized === "codex" || normalized === "openai-codex"
-    ? "openai"
-    : normalized;
+  if (normalized === "openai-codex" || normalized === "codex-cli") {
+    throw new Error(`"${normalized}" is a legacy provider ID; use --provider openai.`);
+  }
+  return normalized === "openai" || normalized === "codex" ? "openai" : normalized;
 }
 
 function isOpenAIProvider(provider: string): boolean {

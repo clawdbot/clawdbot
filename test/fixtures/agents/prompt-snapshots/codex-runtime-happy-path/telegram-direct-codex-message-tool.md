@@ -78,7 +78,7 @@
     "agents_list",
     "message",
     "sessions_spawn",
-    "cron",
+    "automations",
     "gateway",
     "nodes",
     "session_status",
@@ -221,20 +221,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 61075,
-    "roughTokens": 15269
+    "chars": 61148,
+    "roughTokens": 15287
   },
   "openClawDeveloperInstructions": {
-    "chars": 2362,
-    "roughTokens": 591
+    "chars": 2702,
+    "roughTokens": 676
   },
   "totalTextOnly": {
-    "chars": 26374,
-    "roughTokens": 6594
+    "chars": 26714,
+    "roughTokens": 6679
   },
   "totalWithDynamicToolsJson": {
-    "chars": 87451,
-    "roughTokens": 21863
+    "chars": 87864,
+    "roughTokens": 21966
   },
   "userInputText": {
     "chars": 929,
@@ -421,9 +421,11 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ````text
 You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
-Deferred searchable OpenClaw dynamic tools available: cron, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
+Deferred searchable OpenClaw dynamic tools available: automations, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
 
 Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
+
+When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.
 
 Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. When the message is the completed reply to the current source conversation, set `final=true`; OpenClaw stops after confirming delivery. If `final` is omitted, OpenClaw continues and resolves the latest omitted source reply only when the turn ends successfully. Do not repeat visible message content in your final answer.
 
@@ -518,7 +520,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
   "agents_list",
   "message",
   "sessions_spawn",
-  "cron",
+  "automations",
   "gateway",
   "nodes",
   "session_status",

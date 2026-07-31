@@ -361,8 +361,43 @@ describe("ollama setup", () => {
     expect(events).toEqual(["select", "text"]);
   });
 
-  it("shows cloud-mode unreachable guidance when the host is down", async () => {
+  it("retries the configured host after showing unreachable guidance", async () => {
     const prompter = createLocalPrompter();
+    prompter.confirm = vi.fn().mockResolvedValueOnce(true);
+    const reachableFetch = createOllamaFetchMock({ tags: ["qwen3:0.6b"] });
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("down"))
+      .mockImplementation(reachableFetch);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await promptAndConfigureOllama({
+      cfg: {},
+      prompter,
+    });
+
+    expect(prompter.note).toHaveBeenCalledWith(
+      [
+        "Ollama could not be reached at http://127.0.0.1:11434.",
+        "Start or restart the Ollama server for this address.",
+        "If Ollama is not installed on that machine, download it at https://ollama.com/download",
+        "",
+        "Continue when it is running. OpenClaw will retry this address.",
+      ].join("\n"),
+      "Ollama",
+    );
+    expect(prompter.confirm).toHaveBeenCalledWith({
+      message: "Retry this Ollama address now?",
+      initialValue: true,
+    });
+    expect(result.config.models?.providers?.ollama?.models).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "qwen3:0.6b" })]),
+    );
+  });
+
+  it("reports the configured host when the retry is still unreachable", async () => {
+    const prompter = createLocalPrompter();
+    prompter.confirm = vi.fn().mockResolvedValueOnce(true);
     const fetchMock = createOllamaFetchMock({ tagsError: new Error("down") });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -371,17 +406,9 @@ describe("ollama setup", () => {
         cfg: {},
         prompter,
       }),
-    ).rejects.toThrow("Ollama not reachable");
+    ).rejects.toThrow("Ollama is still not reachable at http://127.0.0.1:11434");
 
-    expect(prompter.note).toHaveBeenCalledWith(
-      [
-        "Ollama could not be reached at http://127.0.0.1:11434.",
-        "Download it at https://ollama.com/download",
-        "",
-        "Start Ollama and re-run setup.",
-      ].join("\n"),
-      "Ollama",
-    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("cloud + local mode falls back to local models when ollama signin is missing", async () => {
@@ -1048,7 +1075,8 @@ describe("ollama setup", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       [
         "Ollama could not be reached at http://127.0.0.1:11435.",
-        "Download it at https://ollama.com/download",
+        "Start or restart the Ollama server for this address.",
+        "If Ollama is not installed on that machine, download it at https://ollama.com/download",
       ].join("\n"),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);

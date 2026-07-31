@@ -54,7 +54,7 @@ describe("model setup first-run redirect", () => {
     ).toBe(false);
     expect(
       isDefaultChatLanding(
-        { pathname: "/settings/general", search: "", hash: "" },
+        { pathname: "/settings/appearance", search: "", hash: "" },
         "",
         routeIdFromPath,
       ),

@@ -1,6 +1,13 @@
 // Covers heartbeat ack truncation limits.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { addTestHook } from "../plugins/hooks.test-helpers.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getLastHeartbeatEvent } from "./heartbeat-events.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
@@ -268,6 +275,52 @@ describe("runHeartbeatOnce ack handling", () => {
         text: "HEARTBEAT_OK",
         cfg,
       });
+    });
+  });
+
+  it("reports a hook-suppressed HEARTBEAT_OK as silent", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const registry = getActivePluginRegistry();
+      if (!registry) {
+        throw new Error("Expected the heartbeat test plugin registry");
+      }
+      addTestHook({
+        registry,
+        pluginId: "heartbeat-test-suppression",
+        hookName: "message_sending",
+        handler: () => ({ cancel: true }),
+      });
+      initializeGlobalHookRunner(registry);
+      try {
+        const cfg = createWhatsAppHeartbeatConfig({
+          tmpDir,
+          storePath,
+          visibility: { showOk: true },
+        });
+        await seedMainSessionStore(storePath, cfg, {
+          lastChannel: "whatsapp",
+          lastProvider: "whatsapp",
+          lastTo: WHATSAPP_GROUP,
+        });
+        replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+        const sendWhatsApp = createMessageSendSpy();
+
+        expect(
+          (
+            await runHeartbeatOnce({
+              cfg,
+              deps: {
+                ...makeWhatsAppDeps({ sendWhatsApp }),
+                getReplyFromConfig: replySpy,
+              },
+            })
+          ).status,
+        ).toBe("ran");
+        expect(sendWhatsApp).not.toHaveBeenCalled();
+        expect(getLastHeartbeatEvent()).toMatchObject({ status: "ok-token", silent: true });
+      } finally {
+        resetGlobalHookRunner();
+      }
     });
   });
 

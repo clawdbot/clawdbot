@@ -181,6 +181,7 @@ export type TuiBackend = {
   };
   onEvent?: (evt: TuiEvent) => void;
   onConnected?: () => void;
+  onConnectError?: (error: Error) => void;
   onDisconnected?: (reason: string) => void;
   onGap?: (info: { expected: number; received: number }) => void;
   start: () => void;

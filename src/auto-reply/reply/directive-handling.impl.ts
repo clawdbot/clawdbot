@@ -10,6 +10,7 @@ import {
   resolveFastModeState,
 } from "../../agents/fast-mode.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import {
   adoptPersistedSessionSnapshot,
@@ -36,6 +37,7 @@ import {
 } from "./directive-handling.model-runtime.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import { maybeHandleModelDirectiveInfo } from "./directive-handling.model.js";
+import { maybeHandleUnexpectedNativeDirectiveArguments } from "./directive-handling.native.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import { maybeHandleQueueDirective } from "./directive-handling.queue-validation.js";
 import {
@@ -347,6 +349,10 @@ export async function handleDirectiveOnly(
         text: "Exec node requires a value.",
       };
     }
+    const unexpectedExecArguments = maybeHandleUnexpectedNativeDirectiveArguments(directives);
+    if (unexpectedExecArguments) {
+      return unexpectedExecArguments;
+    }
     if (!directives.hasExecOptions) {
       const execDefaults = resolveExecDefaults({
         cfg: params.cfg,
@@ -372,6 +378,11 @@ export async function handleDirectiveOnly(
   });
   if (queueAck) {
     return queueAck;
+  }
+
+  const unexpectedNativeArguments = maybeHandleUnexpectedNativeDirectiveArguments(directives);
+  if (unexpectedNativeArguments) {
+    return unexpectedNativeArguments;
   }
 
   if (
@@ -606,6 +617,18 @@ export async function handleDirectiveOnly(
           ? "Model change was not applied because the session changed. Retry."
           : "Session settings were not applied because the session changed. Retry.",
       };
+    }
+    if (
+      modelSelection &&
+      modelSelectionApplied &&
+      !modelSelection.isDefault &&
+      !params.persistenceState &&
+      params.canPersistStickyModelSelection === true
+    ) {
+      persistStickyModelSelectionBestEffort({
+        agentId: activeAgentId,
+        model: `${modelSelection.provider}/${modelSelection.model}`,
+      });
     }
     if (modelSelection && modelSelectionUpdated && modelSelectionApplied && sessionKey) {
       triggerSessionPatchHook({

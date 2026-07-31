@@ -13,6 +13,7 @@ import {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
+  TALK_SCOPE,
   WRITE_SCOPE,
 } from "./method-scopes.js";
 import type {
@@ -54,7 +55,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   shutdown: [],
   tick: [],
   "talk.event": [READ_SCOPE],
-  "talk.mode": [WRITE_SCOPE],
+  "talk.mode": [TALK_SCOPE],
   task: [READ_SCOPE],
   "task.suggestion": [READ_SCOPE],
   "update.available": [],
@@ -71,6 +72,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "node.presence": [READ_SCOPE],
   "sessions.catalog.host": [READ_SCOPE],
   "sessions.changed": [READ_SCOPE],
+  "controlUi.sessionPullRequests.changed": [READ_SCOPE],
   "session.approval": [APPROVALS_SCOPE],
   "session.message": [READ_SCOPE],
   "session.observer": [READ_SCOPE],
@@ -178,6 +180,9 @@ function hasEventScope(
   }
   if (required.includes(READ_SCOPE)) {
     return scopes.includes(READ_SCOPE) || scopes.includes(WRITE_SCOPE);
+  }
+  if (required.includes(TALK_SCOPE)) {
+    return scopes.includes(TALK_SCOPE) || scopes.includes(WRITE_SCOPE);
   }
   return required.some((scope) => scopes.includes(scope));
 }

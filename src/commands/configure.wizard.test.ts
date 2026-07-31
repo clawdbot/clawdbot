@@ -486,6 +486,30 @@ describe("runConfigureWizard", () => {
     expect(remoteProbe?.timeoutMs).toBe(300);
   });
 
+  it("ignores blank gateway env credentials when probing the local gateway", async () => {
+    setupBaseWizardState({
+      gateway: {
+        mode: "local",
+        auth: { token: "configured-token", password: "configured-password" },
+      },
+    });
+    process.env.OPENCLAW_GATEWAY_TOKEN = "";
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "";
+    try {
+      await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+    } finally {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    }
+
+    const probeRequests = mocks.probeGatewayReachable.mock.calls.map(([request]) =>
+      requireRecord(request, "probe request"),
+    );
+    const localProbe = probeRequests.find((request) => request.url === "ws://127.0.0.1:18789");
+    expect(localProbe?.token).toBe("configured-token");
+    expect(localProbe?.password).toBe("configured-password");
+  });
+
   it("uses the resolved configured port for the local gateway startup hint", async () => {
     setupBaseWizardState({
       gateway: {

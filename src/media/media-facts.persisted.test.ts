@@ -107,6 +107,33 @@ describe("canonical persisted media", () => {
     });
   });
 
+  it("round-trips duration and dimensions in canonical persisted facts", () => {
+    const result = canonicalizePersistedUserMessageMedia({
+      __openclaw: {
+        media: [
+          {
+            path: "/media/clip.mp4",
+            contentType: "video/mp4",
+            durationMs: 12_346,
+            width: 1280,
+            height: 720,
+          },
+        ],
+      },
+    });
+
+    expect(readPersistedMediaFacts(result.message)).toEqual([
+      expect.objectContaining({
+        path: "/media/clip.mp4",
+        contentType: "video/mp4",
+        kind: "video",
+        durationMs: 12_346,
+        width: 1280,
+        height: 720,
+      }),
+    ]);
+  });
+
   it("rejects compact types after a sparse positional gap", () => {
     expect(() =>
       canonicalizePersistedUserMessageMedia({

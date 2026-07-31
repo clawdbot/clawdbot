@@ -1,4 +1,5 @@
 // Control UI chat module implements bounded visible-message caching.
+import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
 import {
   DEFAULT_MAIN_KEY,
   isUiGlobalSessionKey,
@@ -11,7 +12,6 @@ import {
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
-import { readTranscriptSequence } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
 // JSON code-unit weight bounds retained payloads without allocating another
@@ -219,7 +219,7 @@ function mergeRetainedSessionDepth(
     return incoming;
   }
   const overlapStart = existing.messages.findIndex((message) => {
-    const sequence = readTranscriptSequence(message);
+    const sequence = readSessionMessageSequence(message);
     return sequence !== null && sequence >= incomingBounds.oldest;
   });
   const retainedPrefix =
@@ -244,7 +244,7 @@ function transcriptSequenceBounds(
   let oldest: number | null = null;
   let newest: number | null = null;
   for (const message of messages) {
-    const sequence = readTranscriptSequence(message);
+    const sequence = readSessionMessageSequence(message);
     if (sequence === null) {
       continue;
     }
@@ -314,14 +314,14 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
     if (start >= snapshot.messages.length) {
       return null;
     }
-    const boundarySeq = readTranscriptSequence(snapshot.messages[start]);
+    const boundarySeq = readSessionMessageSequence(snapshot.messages[start]);
     retainedMessageWeight -= messageWeights[start] ?? 0;
     start += 1;
     if (boundarySeq === null) {
       continue;
     }
     while (start < snapshot.messages.length) {
-      if (readTranscriptSequence(snapshot.messages[start]) !== boundarySeq) {
+      if (readSessionMessageSequence(snapshot.messages[start]) !== boundarySeq) {
         break;
       }
       retainedMessageWeight -= messageWeights[start] ?? 0;
@@ -387,7 +387,7 @@ function capSnapshotPagination(
   const totalMessages = pagination.totalMessages;
   let oldestSeq: number | null = null;
   for (let index = start; index < messages.length; index += 1) {
-    oldestSeq = readTranscriptSequence(messages[index]);
+    oldestSeq = readSessionMessageSequence(messages[index]);
     if (oldestSeq !== null) {
       break;
     }

@@ -46,6 +46,8 @@ function writeSourceFixture(sourceDir: string) {
           cpuCoreRatio: { p95: 0.25 },
           startupTrace: {
             "memory.ready.heapUsedMb": { p50: 30, p95: 32 },
+            "phase.load.total": { p50: 70, p95: 80 },
+            "phase.load.itemCount": { p50: 40, p95: 50 },
             "phase.load": { p50: 7, p95: 8 },
           },
         },
@@ -165,6 +167,10 @@ describe("buildMarkdown", () => {
     expect(buildMarkdown(sourceDir, null)).toContain("gateway health json");
     expect(buildMarkdown(sourceDir, null)).toContain("## SQLite State Smoke");
     expect(buildMarkdown(sourceDir, null)).toContain("4100");
+    expect(buildMarkdown(sourceDir, null)).toContain("| default | phase.load | 7.0ms | 8.0ms |");
+    expect(buildMarkdown(sourceDir, null)).not.toContain("phase.load.total");
+    expect(buildMarkdown(sourceDir, null)).not.toContain("phase.load.itemCount");
+    expect(buildMarkdown(sourceDir, null)).not.toContain("memory.ready.heapUsedMb");
   });
 
   it("rejects a missing source directory", () => {

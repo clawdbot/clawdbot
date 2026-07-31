@@ -10,6 +10,7 @@ import {
   listSessionTranscriptCorpusEntriesForAgent,
   parseUsageCountedSessionIdFromFileName,
   sessionPathForFile,
+  statSessionEntrySync,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
@@ -35,6 +36,7 @@ import {
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
   type DreamNarrativeRequest,
+  type DreamNarrativeOutcome,
   readRecentDreamDiaryEntries,
   type NarrativePhaseData,
   runDreamNarrative,
@@ -873,6 +875,41 @@ async function collectSessionIngestionBatches(params: {
     let fingerprint: { mtimeMs: number; size: number };
     let entry: Awaited<ReturnType<typeof buildSessionEntry>>;
     if (file.transcriptSource === "sqlite") {
+      const sqliteIdentity = file.storePath
+        ? {
+            agentId: file.agentId,
+            sessionId: file.sessionId,
+            storePath: file.storePath,
+            ...(file.updatedAtMs !== undefined ? { updatedAtMs: file.updatedAtMs } : {}),
+          }
+        : undefined;
+      let fileState: ReturnType<typeof statSessionEntrySync> = null;
+      if (sqliteIdentity) {
+        try {
+          fileState = statSessionEntrySync(file.absolutePath, sqliteIdentity);
+        } catch {
+          // Stats only avoid a full unchanged transcript read. A racing or unavailable
+          // store remains the tolerant builder's responsibility below.
+        }
+      }
+      if (fileState) {
+        fingerprint = {
+          mtimeMs: Math.floor(Math.max(0, fileState.mtimeMs)),
+          size: Math.floor(Math.max(0, fileState.size)),
+        };
+        const cursorAtEnd =
+          previous !== undefined && previous.lastContentLine >= previous.lineCount;
+        const unchanged =
+          previous !== undefined &&
+          previous.mtimeMs === fingerprint.mtimeMs &&
+          previous.size === fingerprint.size &&
+          previous.contentHash.length > 0 &&
+          cursorAtEnd;
+        if (unchanged) {
+          nextFiles[stateKey] = previous;
+          continue;
+        }
+      }
       entry = await buildSessionEntry(file.absolutePath, {
         generatedByDreamingNarrative: file.generatedByDreamingNarrative,
         generatedByCronRun: file.generatedByCronRun,
@@ -1770,7 +1807,7 @@ async function runLightDreaming(params: {
   subagent?: DreamNarrativeRequest["subagent"];
   detachNarratives?: boolean;
   nowMs?: number;
-}): Promise<void> {
+}): Promise<DreamNarrativeOutcome> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   await ingestDailyMemorySignals({
     workspaceDir: params.workspaceDir,
@@ -1845,7 +1882,7 @@ async function runLightDreaming(params: {
       ...(themes.length > 0 ? { themes } : {}),
       ...(recentDiaryEntries.length > 0 ? { recentDiaryEntries } : {}),
     };
-    await runDreamNarrative({
+    return await runDreamNarrative({
       agentId: params.agentId,
       subagent: params.subagent,
       workspaceDir: params.workspaceDir,
@@ -1857,6 +1894,7 @@ async function runLightDreaming(params: {
       detached: params.detachNarratives,
     });
   }
+  return { status: "skipped" };
 }
 
 async function runRemDreaming(params: {
@@ -1869,7 +1907,7 @@ async function runRemDreaming(params: {
   subagent?: DreamNarrativeRequest["subagent"];
   detachNarratives?: boolean;
   nowMs?: number;
-}): Promise<void> {
+}): Promise<DreamNarrativeOutcome> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   await ingestDailyMemorySignals({
     workspaceDir: params.workspaceDir,
@@ -1951,7 +1989,7 @@ async function runRemDreaming(params: {
               .filter(Boolean),
       ...(themes.length > 0 ? { themes } : {}),
     };
-    await runDreamNarrative({
+    return await runDreamNarrative({
       agentId: params.agentId,
       subagent: params.subagent,
       workspaceDir: params.workspaceDir,
@@ -1963,7 +2001,13 @@ async function runRemDreaming(params: {
       detached: params.detachNarratives,
     });
   }
+  return { status: "skipped" };
 }
+
+type DreamingSweepPhaseResult = {
+  degradedPhases: number;
+  pendingNarratives: number;
+};
 
 export async function runDreamingSweepPhases(params: {
   /**
@@ -1979,9 +2023,18 @@ export async function runDreamingSweepPhases(params: {
   subagent?: DreamNarrativeRequest["subagent"];
   detachNarratives?: boolean;
   nowMs?: number;
-}): Promise<void> {
+}): Promise<DreamingSweepPhaseResult> {
   // Normalize nowMs once so all phase timestamps and narrative session keys are consistent.
   const sweepNowMs: number = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  let degradedPhases = 0;
+  let pendingNarratives = 0;
+  const recordNarrativeOutcome = (outcome: DreamNarrativeOutcome): void => {
+    if (outcome.status === "degraded") {
+      degradedPhases += 1;
+    } else if (outcome.status === "pending") {
+      pendingNarratives += 1;
+    }
+  };
 
   const light = resolveMemoryLightDreamingConfig({
     pluginConfig: params.pluginConfig,
@@ -1989,16 +2042,18 @@ export async function runDreamingSweepPhases(params: {
   });
   if (light.enabled && light.limit > 0) {
     try {
-      await runLightDreaming({
-        agentId: params.agentId,
-        workspaceDir: params.workspaceDir,
-        cfg: params.cfg,
-        config: light,
-        logger: params.logger,
-        subagent: params.subagent,
-        nowMs: sweepNowMs,
-        detachNarratives: params.detachNarratives,
-      });
+      recordNarrativeOutcome(
+        await runLightDreaming({
+          agentId: params.agentId,
+          workspaceDir: params.workspaceDir,
+          cfg: params.cfg,
+          config: light,
+          logger: params.logger,
+          subagent: params.subagent,
+          nowMs: sweepNowMs,
+          detachNarratives: params.detachNarratives,
+        }),
+      );
     } catch (err) {
       await appendFailedDreamingEvent({
         workspaceDir: params.workspaceDir,
@@ -2018,16 +2073,18 @@ export async function runDreamingSweepPhases(params: {
   });
   if (rem.enabled && rem.limit > 0) {
     try {
-      await runRemDreaming({
-        agentId: params.agentId,
-        workspaceDir: params.workspaceDir,
-        cfg: params.cfg,
-        config: rem,
-        logger: params.logger,
-        subagent: params.subagent,
-        nowMs: sweepNowMs,
-        detachNarratives: params.detachNarratives,
-      });
+      recordNarrativeOutcome(
+        await runRemDreaming({
+          agentId: params.agentId,
+          workspaceDir: params.workspaceDir,
+          cfg: params.cfg,
+          config: rem,
+          logger: params.logger,
+          subagent: params.subagent,
+          nowMs: sweepNowMs,
+          detachNarratives: params.detachNarratives,
+        }),
+      );
     } catch (err) {
       await appendFailedDreamingEvent({
         workspaceDir: params.workspaceDir,
@@ -2040,6 +2097,7 @@ export async function runDreamingSweepPhases(params: {
       throw err;
     }
   }
+  return { degradedPhases, pendingNarratives };
 }
 
 // Session backfill is a batch driver over the live-ingestion primitives. Keep

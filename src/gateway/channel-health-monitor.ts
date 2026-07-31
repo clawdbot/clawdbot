@@ -51,6 +51,9 @@ export type ChannelHealthMonitor = {
 type RestartRecord = {
   lastRestartAt: number;
   restartsThisHour: { at: number }[];
+  // True once the free pending-continuation pass ran; cleared when the account
+  // leaves the pending-restart state so the next recovery earns a new pass.
+  pendingContinuationUsed?: boolean;
 };
 
 function resolveTimingPolicy(
@@ -133,6 +136,18 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             continue;
           }
           suppressedAccounts.delete(key);
+          const pendingRestartState =
+            status.running !== true &&
+            status.restartPending === true &&
+            (status.reconnectAttempts ?? 0) === 0;
+          // Clear only on genuine recovery (running or pending flag dropped);
+          // a transient reconnectAttempts bump while still stuck pending must
+          // not re-arm the free continuation pass.
+          const leftPendingRestart = status.running === true || status.restartPending !== true;
+          const trackedRecord = restartRecords.get(key);
+          if (trackedRecord?.pendingContinuationUsed && leftPendingRestart) {
+            trackedRecord.pendingContinuationUsed = false;
+          }
           const healthPolicy: ChannelHealthPolicy = {
             channelId,
             now,
@@ -162,14 +177,14 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             restartsThisHour: [],
           };
 
-          const continuingPendingRestart =
-            status.running !== true &&
-            status.restartPending === true &&
-            (status.reconnectAttempts ?? 0) === 0;
-
           // A timed-out recovery stop uses the first start request to mark
           // restartPending; the next monitor pass must finish that same recovery
           // instead of waiting behind this monitor's fresh-restart cooldown.
+          // Only one continuation is free: an account stuck in restartPending
+          // rejoins cooldown + hourly budget so it cannot thrash forever (#105189).
+          const continuingPendingRestart =
+            pendingRestartState && record.pendingContinuationUsed !== true;
+
           if (!continuingPendingRestart && now - record.lastRestartAt <= cooldownMs) {
             continue;
           }
@@ -186,11 +201,13 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
 
-          if (!continuingPendingRestart) {
+          if (continuingPendingRestart) {
+            record.pendingContinuationUsed = true;
+          } else {
             record.lastRestartAt = now;
             record.restartsThisHour.push({ at: now });
-            restartRecords.set(key, record);
           }
+          restartRecords.set(key, record);
 
           try {
             if (status.running) {

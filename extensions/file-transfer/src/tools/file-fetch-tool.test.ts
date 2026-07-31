@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { FILE_TRANSFER_SUBDIR } from "./descriptors.js";
 import { createFileFetchTool } from "./file-fetch-tool.js";
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
@@ -57,7 +58,7 @@ describe("file_fetch tool", () => {
     });
     vi.mocked(saveMediaBuffer).mockResolvedValue({
       id: "media-1",
-      path: "/gateway/media/file-transfer/report.md",
+      path: "/gateway/media/tool-file-transfer/report.md",
       size: Buffer.byteLength(fileText),
       contentType: "text/markdown",
     });
@@ -80,6 +81,45 @@ describe("file_fetch tool", () => {
     expect(text).not.toContain('<<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeef12345678">>>'); // pragma: allowlist secret
   });
 
+  it("strips one leading UTF-8 BOM only from inline text", async () => {
+    const fileText = "\uFEFF# Title\nembedded marker: \uFEFFkeep\n";
+    const originalBuffer = Buffer.from(fileText, "utf-8");
+    const originalSha256 = crypto.createHash("sha256").update(originalBuffer).digest("hex");
+    vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1", displayName: "Node One" }]);
+    vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
+    vi.mocked(callGatewayTool).mockResolvedValue({
+      payload: textPayload({
+        path: "/tmp/bom.md",
+        mimeType: "text/markdown",
+        text: fileText,
+      }),
+    });
+    vi.mocked(saveMediaBuffer).mockResolvedValue({
+      id: "media-1",
+      path: "/gateway/media/tool-file-transfer/bom.md",
+      size: originalBuffer.byteLength,
+      contentType: "text/markdown",
+    });
+
+    const result = await createFileFetchTool().execute("tool-call-1", {
+      node: "node-1",
+      path: "/tmp/bom.md",
+    });
+
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain("--- contents ---\n# Title\nembedded marker: \uFEFFkeep\n");
+    expect(text).not.toContain("--- contents ---\n\uFEFF# Title");
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      originalBuffer,
+      "text/markdown",
+      FILE_TRANSFER_SUBDIR,
+      expect.any(Number),
+    );
+    const details = result.details as { sha256: string; size: number };
+    expect(details.sha256).toBe(originalSha256);
+    expect(details.size).toBe(originalBuffer.byteLength);
+  });
+
   it("falls back to text for a zero-byte file with an image-extension mimeType", async () => {
     vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1", displayName: "Node One" }]);
     vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
@@ -95,7 +135,7 @@ describe("file_fetch tool", () => {
     });
     vi.mocked(saveMediaBuffer).mockResolvedValue({
       id: "media-1",
-      path: "/gateway/media/file-transfer/empty.png",
+      path: "/gateway/media/tool-file-transfer/empty.png",
       size: 0,
       contentType: "image/png",
     });
@@ -109,7 +149,7 @@ describe("file_fetch tool", () => {
     expect(result.content[0]?.type).toBe("text");
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
     expect(text).toContain("Fetched /tmp/empty.png");
-    expect(text).toContain("saved at /gateway/media/file-transfer/empty.png");
+    expect(text).toContain("saved at /gateway/media/tool-file-transfer/empty.png");
   });
 
   it("still inlines a non-empty image payload", async () => {
@@ -128,7 +168,7 @@ describe("file_fetch tool", () => {
     });
     vi.mocked(saveMediaBuffer).mockResolvedValue({
       id: "media-1",
-      path: "/gateway/media/file-transfer/photo.png",
+      path: "/gateway/media/tool-file-transfer/photo.png",
       size: buffer.byteLength,
       contentType: "image/png",
     });

@@ -14,6 +14,7 @@ import type { CommandContext } from "./commands-types.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import { resolveModelRuntimeDirective } from "./directive-handling.model-runtime.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
+import { maybeHandleUnexpectedNativeDirectiveArguments } from "./directive-handling.native.js";
 import type { ApplyInlineDirectivesFastLaneParams } from "./directive-handling.params.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
@@ -184,6 +185,9 @@ export async function applyInlineDirectiveOverrides(params: {
   let { directives } = params;
   let { provider, model } = params;
   let { contextTokens } = params;
+  const canPersistStickyModelSelection = Array.isArray(ctx.GatewayClientScopes)
+    ? ctx.GatewayClientScopes.includes("operator.admin")
+    : command.senderIsOwner;
   const directiveModelState = {
     allowedModelKeys: modelState.allowedModelKeys,
     allowedModelCatalog: modelState.allowedModelCatalog,
@@ -209,6 +213,7 @@ export async function applyInlineDirectiveOverrides(params: {
     model,
     initialModelLabel,
     formatModelSwitchEvent,
+    canPersistStickyModelSelection,
   });
 
   let directiveAck: ReplyPayload | undefined;
@@ -302,6 +307,7 @@ export async function applyInlineDirectiveOverrides(params: {
     thinkingCatalog: modelState.allowedModelCatalog,
     initialModelLabel,
     formatModelSwitchEvent,
+    canPersistStickyModelSelection,
     agentCfg,
     messageProvider: ctx.Provider,
     surface: ctx.Surface,
@@ -309,6 +315,15 @@ export async function applyInlineDirectiveOverrides(params: {
     commandAuthorized: command.isAuthorizedSender,
     senderIsOwner: command.senderIsOwner,
   };
+
+  // Model-only directives have a focused persistence service; reject leftovers before that mutation.
+  if (directives.nativeCommand?.name === "model") {
+    const unexpectedNativeArguments = maybeHandleUnexpectedNativeDirectiveArguments(directives);
+    if (unexpectedNativeArguments) {
+      typing.cleanup();
+      return { kind: "reply", reply: unexpectedNativeArguments };
+    }
+  }
 
   if (
     isDirectiveOnly({
@@ -374,6 +389,7 @@ export async function applyInlineDirectiveOverrides(params: {
           allowedModelKeys: modelState.allowedModelKeys,
           modelCatalog: modelState.allowedModelCatalog,
           thinkingCatalog: modelState.allowedModelCatalog,
+          canPersistStickyModelSelection,
           request: {
             ...modelSelection,
             profileOverride: modelResolution.profileOverride,
@@ -513,6 +529,7 @@ export async function applyInlineDirectiveOverrides(params: {
       model,
       initialModelLabel,
       formatModelSwitchEvent,
+      canPersistStickyModelSelection,
       agentCfg,
       modelState: {
         resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,

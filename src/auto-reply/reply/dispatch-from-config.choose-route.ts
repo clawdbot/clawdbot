@@ -4,6 +4,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
+import { createPluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   copyReplyPayloadMetadata,
@@ -192,10 +193,13 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   const noteCommentaryProgress = async (payload: { itemId?: string; progressText?: string }) => {
     const itemId = payload.itemId?.trim() || undefined;
     const text = payload.progressText ?? "";
+    const repeatsBufferedText =
+      pendingCommentaryProgress !== null && pendingCommentaryProgress.text.trim() === text.trim();
     const updatesBufferedItem =
       pendingCommentaryProgress !== null &&
-      pendingCommentaryProgress.itemId !== undefined &&
-      pendingCommentaryProgress.itemId === itemId;
+      ((pendingCommentaryProgress.itemId !== undefined &&
+        pendingCommentaryProgress.itemId === itemId) ||
+        repeatsBufferedText);
     if (!text.trim()) {
       // Empty commentary with an item id means the producer retracted that
       // item; drop it if it has not been sent yet.
@@ -455,6 +459,18 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
 
   // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
   if (hookRunner?.hasHooks("before_dispatch")) {
+    // This outer lookup key is resolved from the routed context; fields inside
+    // sessionStoreEntry.entry cannot redirect hook or requester lineage.
+    const beforeDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
+    const pluginSubagentRequester = createPluginSubagentRequesterContext({
+      sessionKey: beforeDispatchSessionKey,
+      origin: {
+        channel: routeReplyChannel,
+        to: routeReplyTo,
+        accountId: replyContextAccountId,
+        threadId: routeReplyThreadId,
+      },
+    });
     const beforeDispatchResult = await traceReplyPhase("reply.before_dispatch_hooks", () =>
       runWithDispatchLifecycleAdmission(
         async () =>
@@ -463,10 +479,11 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
             () =>
               hookRunner.runBeforeDispatch(
                 {
+                  messageId: state.hookContext.messageId,
                   content: state.hookContext.content,
                   body: state.hookContext.bodyForAgent ?? state.hookContext.body,
                   channel: state.hookContext.channelId,
-                  sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+                  sessionKey: beforeDispatchSessionKey,
                   senderId: state.hookContext.senderId,
                   replyToId: state.hookContext.replyToId,
                   replyToIdFull: state.hookContext.replyToIdFull,
@@ -477,10 +494,11 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   timestamp: state.hookContext.timestamp,
                 },
                 {
+                  messageId: state.hookContext.messageId,
                   channelId: state.hookContext.channelId,
                   accountId: state.hookContext.accountId,
                   conversationId: state.inboundClaimContext.conversationId,
-                  sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+                  sessionKey: beforeDispatchSessionKey,
                   senderId: state.hookContext.senderId,
                   replyToId: state.hookContext.replyToId,
                   replyToIdFull: state.hookContext.replyToIdFull,
@@ -488,6 +506,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   replyToSender: state.hookContext.replyToSender,
                   replyToIsQuote: state.hookContext.replyToIsQuote,
                 },
+                pluginSubagentRequester,
               ),
             trackDispatchLifecycleWork,
           ),

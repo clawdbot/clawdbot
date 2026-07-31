@@ -499,6 +499,23 @@ export function buildApprovalReactionPendingContent(params: {
   return { reactionPayload, manualFallbackPayload };
 }
 
+/**
+ * Prompt copy for channels whose native controls (Apple Messages polls, inline
+ * buttons) own the decision surface. Same bold headers and labels as the
+ * reaction prompt (#85954) minus the tapback hint, which would advertise a
+ * second, redundant control path next to the native one.
+ */
+export function buildApprovalNativeControlsPromptText(params: {
+  view: PendingApprovalView;
+  nowMs: number;
+}): string {
+  return buildApprovalReactionPromptText({
+    view: params.view,
+    nowMs: params.nowMs,
+    reactionHint: null,
+  });
+}
+
 /** Build reaction and manual-fallback pending approval content directly from a request. */
 export function buildApprovalReactionPendingContentForRequest(params: {
   request: ApprovalRequest;

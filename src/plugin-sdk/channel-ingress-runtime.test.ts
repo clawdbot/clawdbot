@@ -32,6 +32,7 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
       onAdopted: vi.fn(async () => {}),
       onDeferred: vi.fn(),
       onAdoptionFinalizing: vi.fn(),
+      onFailed: vi.fn(async () => {}),
       onAbandoned: vi.fn(async () => {}),
     });
     const first = createLifecycle();
@@ -58,6 +59,7 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
       onAdopted: adopted,
       onDeferred: vi.fn(),
       onAdoptionFinalizing: vi.fn(),
+      onFailed: vi.fn(async () => {}),
       onAbandoned: abandoned,
     };
 
@@ -79,6 +81,7 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
         },
         onDeferred: vi.fn(),
         onAdoptionFinalizing: vi.fn(),
+        onFailed: vi.fn(async () => {}),
         onAbandoned: abandoned,
       },
     ]);

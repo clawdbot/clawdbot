@@ -248,6 +248,26 @@ describe("read tool", () => {
     expect(textContent(result)).toBe(bytes.toString("utf8"));
   });
 
+  it("strips one leading UTF-8 BOM without changing embedded markers", async () => {
+    const tool = createReadToolDefinition("/workspace", {
+      operations: {
+        access: async () => {},
+        detectImageMimeType: async () => null,
+        readFile: async () => Buffer.from("\uFEFFimport value\nconst marker = '\uFEFF';"),
+      },
+    });
+
+    const result = await tool.execute(
+      "call-1",
+      { path: "source.ts" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(textContent(result)).toBe("import value\nconst marker = '\uFEFF';");
+  });
+
   it("uses an injected backend decoder when declared", async () => {
     const bytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
     const tool = createReadToolDefinition("/workspace", {

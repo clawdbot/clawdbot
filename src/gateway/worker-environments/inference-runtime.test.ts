@@ -6,7 +6,10 @@ import {
 import type { applyExtraParamsToAgent } from "../../agents/embedded-agent-runner/extra-params.js";
 import type { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import type { resolveEmbeddedAgentStreamFn } from "../../agents/embedded-agent-runner/stream-resolution.js";
-import type { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
+import type {
+  acquireAgentRunPreparedModelRuntime,
+  PreparedModelRuntimeSnapshot,
+} from "../../agents/prepared-model-runtime.js";
 import type { registerProviderStreamForModel } from "../../agents/provider-stream.js";
 import type { prepareSimpleCompletionModel } from "../../agents/simple-completion-runtime.js";
 import { resolveSimpleCompletionModelResolverWorkspace } from "../../agents/simple-completion-scope.js";
@@ -169,11 +172,31 @@ function setup(entry: SessionEntry = sessionEntry) {
     agentRuntime?: string;
     authProfile?: string;
     catalogWorkspace?: string;
+    preparedModelRuntime?: boolean;
     prepareWorkspace?: string;
   } = {};
+  const preparedModelRuntime = {
+    agentDir: "/gateway-agent",
+    activeProjectKeys: [],
+    workspaceDir: WORKSPACE,
+    config,
+    metadataSnapshot: { plugins: [] } as never,
+    modelCatalog: {
+      entries: [
+        { provider: PROVIDER, id: MODEL, name: "Approved model" },
+        { provider: PROVIDER, id: "known-but-unapproved", name: "Unapproved model" },
+      ],
+      routeVariants: [],
+    },
+    configuredRuntimeModels: [],
+    inlineProviderModels: [],
+    createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
+  } satisfies PreparedModelRuntimeSnapshot;
+  let leasedPreparedModelRuntime: PreparedModelRuntimeSnapshot | undefined;
   const resolveModel = vi.fn<Deps["resolveModel"]>(
     async (_provider, _model, _dir, _cfg, options) => {
       scope.agentRuntime = options?.agentRuntimeId;
+      scope.preparedModelRuntime = options?.preparedModelRuntime === leasedPreparedModelRuntime;
       return {} as Awaited<ReturnType<Deps["resolveModel"]>>;
     },
   );
@@ -210,21 +233,9 @@ function setup(entry: SessionEntry = sessionEntry) {
   const acquireRuntimeLease = vi.fn<Deps["acquireRuntimeLease"]>(async (runtimeParams) => {
     scope.agentDir = runtimeParams.agentDir;
     scope.catalogWorkspace = WORKSPACE;
+    leasedPreparedModelRuntime = { ...preparedModelRuntime, agentDir: runtimeParams.agentDir };
     return {
-      snapshot: {
-        agentDir: runtimeParams.agentDir,
-        workspaceDir: WORKSPACE,
-        config,
-        metadataSnapshot: { plugins: [] } as never,
-        modelCatalog: {
-          entries: [
-            { provider: PROVIDER, id: MODEL, name: "Approved model" },
-            { provider: PROVIDER, id: "known-but-unapproved", name: "Unapproved model" },
-          ],
-          routeVariants: [],
-        },
-        createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
-      },
+      snapshot: leasedPreparedModelRuntime,
       release: releaseRuntime,
     };
   });
@@ -371,6 +382,7 @@ describe("worker inference provider runtime", () => {
       agentRuntime: "openclaw",
       authProfile: PROFILE,
       catalogWorkspace: WORKSPACE,
+      preparedModelRuntime: true,
       prepareWorkspace: WORKSPACE,
     });
     expect(runtime.acquireRuntimeLease).toHaveBeenCalledWith(

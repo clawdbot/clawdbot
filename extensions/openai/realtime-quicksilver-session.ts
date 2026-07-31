@@ -20,12 +20,17 @@ import {
   type OpenAIQuicksilverTranscriptEntry,
 } from "./realtime-quicksilver-instructions.js";
 import {
+  releaseOpenAIQuicksilverSession,
+  reserveOpenAIQuicksilverSession,
+} from "./realtime-quicksilver-session-limit.js";
+import {
   connectOpenAIQuicksilverSideband,
   type OpenAIQuicksilverSocket,
   type OpenAIQuicksilverSocketFactory,
 } from "./realtime-quicksilver-sideband.js";
 import {
   boundOpenAIQuicksilverContextItems,
+  boundOpenAIQuicksilverDelegationResult,
   buildOpenAIQuicksilverSession,
   chunkOpenAIQuicksilverAppendText,
   createOpenAIQuicksilverCall,
@@ -36,9 +41,10 @@ import {
   type OpenAIQuicksilverInitialItem,
   type OpenAIQuicksilverRequestIds,
 } from "./realtime-quicksilver-wire.js";
+import { isOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 export const OPENAI_QUICKSILVER_OFFER_PATH = "/plugins/openai/realtime/calls";
 export const OPENAI_QUICKSILVER_CAPABILITIES = {
-  transports: ["webrtc" as const],
+  transports: ["webrtc" as const, "gateway-relay" as const],
   handlesAgentConsult: true as const,
   supportsToolCalls: false,
   supportsVideoFrames: false,
@@ -46,7 +52,6 @@ export const OPENAI_QUICKSILVER_CAPABILITIES = {
 
 const OPENAI_QUICKSILVER_PENDING_TTL_MS = 60_000;
 const OPENAI_QUICKSILVER_SESSION_TTL_MS = 30 * 60_000;
-const OPENAI_QUICKSILVER_MAX_SESSIONS = 8;
 const OPENAI_QUICKSILVER_MAX_SDP_BYTES = 256 * 1024;
 const OPENAI_QUICKSILVER_UPSTREAM_TIMEOUT_MS = 30_000;
 const WEBSOCKET_OPEN = 1;
@@ -67,9 +72,15 @@ type PendingOffer = {
   request: PreparedOpenAIQuicksilverSessionRequest;
 };
 
+type PendingDelegation = {
+  id: string;
+  prompt: string;
+};
+
 type ActiveSession = {
   abortController: AbortController;
   consultController?: AbortController;
+  pendingDelegation?: PendingDelegation;
   socket: OpenAIQuicksilverSocket;
   timer: NodeJS.Timeout;
   token: string;
@@ -246,7 +257,9 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
     }
     activeSessions.delete(session.token);
     reservations.delete(session.token);
+    releaseOpenAIQuicksilverSession(session.token);
     clearTimeout(session.timer);
+    session.pendingDelegation = undefined;
     session.consultController?.abort(new Error("GPT-Live delegation stopped"));
     session.abortController.abort(new Error("GPT-Live session closed"));
     return true;
@@ -283,7 +296,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       if (signal.aborted) {
         return;
       }
-      finalText = result.text;
+      finalText = boundOpenAIQuicksilverDelegationResult(result.text);
     } catch (error) {
       if (signal.aborted) {
         return;
@@ -305,6 +318,42 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       text: finalText,
       channel: "speakable",
     });
+  };
+
+  const startDelegation = (
+    session: ActiveSession,
+    delegation: PendingDelegation,
+    runAgentConsult: NonNullable<OpenAIQuicksilverSessionRequest["runAgentConsult"]>,
+  ) => {
+    if (activeSessions.get(session.token) !== session || session.abortController.signal.aborted) {
+      return;
+    }
+    if (session.consultController) {
+      session.pendingDelegation = delegation;
+      session.consultController.abort(new Error("GPT-Live delegation superseded"));
+      return;
+    }
+    const consultController = new AbortController();
+    session.consultController = consultController;
+    const signal = AbortSignal.any([session.abortController.signal, consultController.signal]);
+    void handleDelegation(session, delegation.id, delegation.prompt, signal, runAgentConsult)
+      .catch((error: unknown) => {
+        params.logger.warn(
+          `OpenAI GPT-Live delegation failed: ${shortConsultFailureReason(error)}`,
+        );
+        closeSession(session);
+      })
+      .finally(() => {
+        if (session.consultController !== consultController) {
+          return;
+        }
+        session.consultController = undefined;
+        const pending = session.pendingDelegation;
+        session.pendingDelegation = undefined;
+        if (pending && activeSessions.get(session.token) === session) {
+          startDelegation(session, pending, runAgentConsult);
+        }
+      });
   };
 
   const scheduleSessionExpiry = (session: ActiveSession, ttlMs: number) => {
@@ -343,6 +392,11 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       }
       return;
     }
+    // WebRTC carries media separately; only the direct backend bridge consumes
+    // Frameless output_audio.delta events received on the provider WebSocket.
+    if (event.kind === "audio") {
+      return;
+    }
     const delegationInput = event.prompt;
     if (!delegationInput.trim()) {
       params.logger.debug?.("OpenAI GPT-Live ignored an empty client delegation");
@@ -358,23 +412,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       input: delegationInput,
       transcript,
     });
-    // A newer spoken task supersedes the prior consult so steering is immediate.
-    session.consultController?.abort(new Error("GPT-Live delegation superseded"));
-    const consultController = new AbortController();
-    session.consultController = consultController;
-    const signal = AbortSignal.any([session.abortController.signal, consultController.signal]);
-    void handleDelegation(session, event.id, prompt, signal, runAgentConsult)
-      .catch((error: unknown) => {
-        params.logger.warn(
-          `OpenAI GPT-Live delegation failed: ${shortConsultFailureReason(error)}`,
-        );
-        closeSession(session);
-      })
-      .finally(() => {
-        if (session.consultController === consultController) {
-          session.consultController = undefined;
-        }
-      });
+    startDelegation(session, { id: event.id, prompt }, runAgentConsult);
   };
 
   const handleSidebandFrame = (
@@ -416,6 +454,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       if (offer.expiresAt <= now) {
         pendingOffers.delete(token);
         reservations.delete(token);
+        releaseOpenAIQuicksilverSession(token);
       }
     }
   };
@@ -429,20 +468,18 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       if (cleanedUp || shutdownController.signal.aborted) {
         throw new Error("OpenAI GPT-Live sessions are stopping; restart Gateway and try again");
       }
-      if (!request.runAgentConsult) {
+      const model = request.model?.trim();
+      if (!model) {
+        throw new Error("OpenAI realtime browser sessions require a model");
+      }
+      if (isOpenAIGptLiveModel(model) && !request.runAgentConsult) {
         throw new Error("OpenAI GPT-Live requires the Gateway agent-consult runtime");
       }
       prunePendingOffers();
-      if (reservations.size >= OPENAI_QUICKSILVER_MAX_SESSIONS) {
-        throw new Error("Too many concurrent OpenAI GPT-Live sessions; try again in a minute");
-      }
-      const model = request.model?.trim();
-      if (!model) {
-        throw new Error("OpenAI GPT-Live requires a model");
-      }
       const voice = resolveOpenAIQuicksilverVoice(request.voice);
       const token = randomBytes(32).toString("base64url");
       const expiresAt = Date.now() + OPENAI_QUICKSILVER_PENDING_TTL_MS;
+      reserveOpenAIQuicksilverSession(token, { expiresAtMs: expiresAt });
       pendingOffers.set(token, {
         auth,
         expiresAt,
@@ -475,6 +512,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
         closeSession(active);
       } else {
         reservations.delete(session.clientSecret);
+        releaseOpenAIQuicksilverSession(session.clientSecret);
       }
     },
   };
@@ -548,10 +586,6 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
         respondText(res, 400, "SDP offer is required");
         return true;
       }
-      const runAgentConsult = offer.request.runAgentConsult;
-      if (!runAgentConsult) {
-        throw new Error("OpenAI GPT-Live requires the Gateway agent-consult runtime");
-      }
       const upstreamSignal = AbortSignal.any([
         lifecycleSignal,
         AbortSignal.timeout(OPENAI_QUICKSILVER_UPSTREAM_TIMEOUT_MS),
@@ -569,6 +603,18 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
         signal: upstreamSignal,
         fetchImpl: params.fetchImpl,
       });
+      if (call.kind === "ga-realtime") {
+        res.statusCode = call.status;
+        res.setHeader("cache-control", "no-store");
+        res.setHeader("content-type", "application/sdp");
+        res.setHeader("x-content-type-options", "nosniff");
+        res.end(call.answerSdp);
+        return true;
+      }
+      const runAgentConsult = offer.request.runAgentConsult;
+      if (!runAgentConsult) {
+        throw new Error("OpenAI GPT-Live requires the Gateway agent-consult runtime");
+      }
       const connected = await connectOpenAIQuicksilverSideband({
         auth: offer.auth,
         createSocket,
@@ -597,6 +643,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
         partialTranscriptRole: undefined,
       };
       activeSessions.set(token, session);
+      reserveOpenAIQuicksilverSession(token);
       reservationTransferred = true;
       attachSidebandHandlers(session, runAgentConsult);
       const terminalEvent = connected.detachBuffer();
@@ -648,6 +695,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       inFlightOffers.delete(token);
       if (!reservationTransferred) {
         reservations.delete(token);
+        releaseOpenAIQuicksilverSession(token);
       }
     }
   };
@@ -672,6 +720,9 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       closeSession(session);
     }
     await Promise.allSettled(inFlightHandlers);
+    for (const token of reservations) {
+      releaseOpenAIQuicksilverSession(token);
+    }
     reservations.clear();
   };
 

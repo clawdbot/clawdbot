@@ -29,7 +29,7 @@ export function registerCronScratchCommand(cron: Command) {
   addGatewayClientOptions(
     cron
       .command("scratch")
-      .description("Read or replace a cron job's private scratch")
+      .description("Read or replace an automation's private scratch")
       .argument("<id>", "Job id")
       .option("--set <text>", "Replace scratch with exact text")
       .option("--file <path>", "Replace scratch from a file, or - for stdin")

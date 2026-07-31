@@ -1,3 +1,4 @@
+import type { SessionToolOverrides } from "../config/sessions/types.js";
 /**
  * Embedded agent MCP config loader.
  *
@@ -19,11 +20,13 @@ export function loadEmbeddedAgentMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers">;
 }): EmbeddedAgentMcpConfig {
   const bundleMcp = loadMergedBundleMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
     manifestRegistry: params.manifestRegistry,
+    toolOverrides: params.toolOverrides,
   });
 
   return {

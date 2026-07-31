@@ -1,69 +1,75 @@
+import { consume } from "@lit/context";
+import { property, state as litState } from "lit/decorators.js";
+import type {
+  SessionCatalogHost,
+  SessionCatalogSession,
+  SessionDiscussionState,
+  SessionSharingRole,
+  SessionSuggestion,
+  TaskSuggestion,
+} from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  ControlUiSessionBranch,
+  ControlUiSessionPullRequest,
+} from "../../../../src/gateway/control-ui-contract.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { applicationContext } from "../../app/context.ts";
 import type {
   NativeGatewaysCapability,
   NativeGatewaysSnapshot,
 } from "../../app/native-gateways.runtime.ts";
 import {
-  consume,
-  applicationContext,
-  property,
-  litState,
   createQuestionPromptState,
-  ChatSessionCompanionThreads,
   listQuestionPrompts,
-  parseCatalogSessionKey,
-  requestSessionCompanionAnswer,
-  requestSessionCompanionState,
-  resetSessionCompanion,
-  sendSessionObserverVisibility,
-  PollController,
-  SubscriptionsController,
-  ChatStateController,
-  ChatTranscriptController,
-  OpenClawLightDomElement,
-  ObserverDigestHistory,
-  SessionParticipationTracker,
-  SessionUnreadPatchGuard,
-  type BoardCommandEvent,
-  type BoardProvider,
-  type BoardProviderLease,
-  type BoardSnapshot,
-  type BoardTab,
-  type BoardViewSnapshot,
-  type ChatHistoryPagination,
-  type ChatMessageCache,
-  type ChatPageHost,
-  type ChatSessionScrollPosition,
-  type ChatPaneHeaderAction,
-  type ChatSessionSharingState,
-  type ControlUiSessionBranch,
-  type ControlUiSessionPullRequest,
-  type GatewayBrowserClient,
-  type PresencePayload,
   type QuestionPrompt,
-  type SessionCatalogHost,
-  type SessionCatalogSession,
-  type SessionDiscussionState,
-  type SessionDiscussionPanelConfig,
-  type SessionRailMode,
-  type SessionSharingRole,
-  type SessionSuggestion,
-  type SwarmRosterHydrator,
-  type TaskSuggestion,
-  type BoardChatDockSize,
-  type BoardFace,
-} from "./chat-pane-deps.ts";
+} from "../../app/question-prompt.ts";
+import type { PresencePayload } from "../../app/user-profile.ts";
+import type {
+  BoardCommandEvent,
+  BoardProvider,
+  BoardProviderLease,
+} from "../../lib/board/provider.ts";
+import type { BoardFace } from "../../lib/board/settings.ts";
+import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
+import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
+import { ObserverDigestHistory } from "../../lib/observer-digest.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
+import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { PollController } from "../../lit/poll-controller.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import type { BoardChatDockSize } from "./board-session-surface.ts";
+import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.ts";
+import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import { sendSessionObserverVisibility } from "./chat-observer.ts";
 import {
   boardChatDockLayout,
   type ChatPageContext,
   type PaneSessionChangeOptions,
   type VisibleBoardDock,
 } from "./chat-pane-shared.ts";
+import { SessionParticipationTracker } from "./chat-pane-state.ts";
+import {
+  ChatSessionCompanionThreads,
+  requestSessionCompanionAnswer,
+  requestSessionCompanionState,
+  resetSessionCompanion,
+} from "./chat-session-companion.ts";
+import { ChatStateController } from "./chat-state-controller.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
+import type { SessionRailMode } from "./components/chat-session-rail.ts";
+import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
+import { ChatTranscriptController } from "./components/chat-thread.ts";
+import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
+import type { ChatSessionScrollPosition } from "./scroll.ts";
+import type { ChatMessageCache } from "./session-message-cache.ts";
 
 export abstract class ChatPaneBase extends OpenClawLightDomElement {
-  // One lifecycle-owned minute tick refreshes both relative labels and external PR state.
+  // Relative labels still need a minute tick; external PR state is server-pushed.
   readonly minutePoll = new PollController(this, 60_000, () => {
     this.requestUpdate();
-    void this.refreshSessionPullRequests();
   });
   @consume({ context: applicationContext, subscribe: true })
   protected context!: ChatPageContext;
@@ -98,6 +104,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) boardProvider?: BoardProvider;
 
   protected readonly chatState = new ChatStateController<ChatPageHost>(this);
+  protected readonly composerCapabilities = new ChatComposerCapabilityHost(() =>
+    this.requestUpdate(),
+  );
   protected readonly transcript = new ChatTranscriptController(this);
   protected readonly questionPromptState = createQuestionPromptState(() => {
     this.questionPrompts = listQuestionPrompts(this.questionPromptState);
@@ -279,7 +288,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected sessionPullRequests: ControlUiSessionPullRequest[] = [];
   protected sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
   protected sessionPullRequestsRateLimited = false;
-  protected sessionPullRequestsRequestVersion = 0;
   protected sessionPullRequestsExpanded = false;
   protected dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
   protected readonly dismissedWorkspaceConflictRefs = new Map<string, string>();

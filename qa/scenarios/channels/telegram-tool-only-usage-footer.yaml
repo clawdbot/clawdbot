@@ -8,7 +8,7 @@ scenario:
     primary:
       - observability.model-usage
     secondary:
-      - channels.channel-native-commands
+      - telegram.built-in-commands
   regressionRefs:
     - openclaw/openclaw#87392
   objective: Verify Telegram usage mode decorates a message-tool-only visible reply.
@@ -34,8 +34,8 @@ flow:
             conversation: { id: telegram-command-room, kind: channel }
             senderId: qa-command-operator
             senderName: QA Command Operator
-            text:
-              expr: "transport.id === 'telegram' ? '/usage@openclaw tokens' : '/usage tokens'"
+            text: /usage tokens
+            nativeCommand: { name: usage }
         - waitForOutbound:
             conversation: { id: telegram-command-room, kind: channel }
             textIncludes: tokens
@@ -70,8 +70,8 @@ flow:
                   conversation: { id: telegram-command-room, kind: channel }
                   senderId: qa-command-operator
                   senderName: QA Command Operator
-                  text:
-                    expr: "transport.id === 'telegram' ? '/usage@openclaw off' : '/usage off'"
+                  text: /usage off
+                  nativeCommand: { name: usage }
               - waitForOutbound:
                   conversation: { id: telegram-command-room, kind: channel }
                   textIncludes: "Usage footer: off"

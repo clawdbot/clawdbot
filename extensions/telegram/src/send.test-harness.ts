@@ -160,7 +160,12 @@ vi.mock("grammy", () => ({
   GrammyError: class GrammyError extends Error {
     description = "";
   },
-  InputFile: function InputFile() {},
+  InputFile: class InputFile {
+    constructor(
+      public readonly fileData: Buffer,
+      public readonly filename?: string,
+    ) {}
+  },
 }));
 
 vi.mock("undici", async () => {

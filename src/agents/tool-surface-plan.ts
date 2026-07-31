@@ -24,6 +24,7 @@ type AgentToolSurfacePlanParams = {
   isRawModelRun: boolean;
   skillWorkshopProposalOnly?: boolean;
   toolsAllow?: readonly string[];
+  forceCodeModeControls?: boolean;
 };
 
 export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) {
@@ -45,7 +46,11 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
     params.skillWorkshopProposalOnly !== true &&
     params.toolsAllow?.length !== 0;
   const codeModeControlsEnabled =
-    toolsAvailable && isCodeModeEngagedForModel(codeModeConfig, params.model);
+    toolsAvailable &&
+    // Restart recovery continues one provider turn. Keep its original control
+    // schema even when the reloaded config disables Code Mode for new turns.
+    (params.forceCodeModeControls === true ||
+      isCodeModeEngagedForModel(codeModeConfig, params.model));
   const toolSearchControlsEnabled =
     toolsAvailable && !codeModeControlsEnabled && toolSearchConfig.enabled;
   return {
@@ -65,6 +70,7 @@ type ApplyAgentToolSurfaceCatalogParams = Omit<CodeModeCatalogParams, "directToo
   codeModeControlsEnabled: boolean;
   toolSearchConfig: ToolSearchConfig;
   forceDirectMessageTool: boolean;
+  forceCodeModeControls?: boolean;
 };
 
 export function applyAgentToolSurfaceCatalog({
@@ -72,21 +78,27 @@ export function applyAgentToolSurfaceCatalog({
   toolSearchConfig,
   toolSearchRuntimeConfig,
   forceDirectMessageTool,
+  forceCodeModeControls,
   ...catalogParams
 }: ApplyAgentToolSurfaceCatalogParams) {
   // When the message tool is the only reply path it must stay directly visible
   // in every search mode; a hidden delivery tool can leave the run mute.
   const directToolNames = forceDirectMessageTool ? ["message"] : [];
-  const applyCatalog = codeModeControlsEnabled
-    ? applyCodeModeCatalog
-    : toolSearchConfig.mode === "directory"
+  if (codeModeControlsEnabled) {
+    return applyCodeModeCatalog({
+      ...catalogParams,
+      config: catalogParams.config,
+      directToolNames,
+      forceEnabled: forceCodeModeControls,
+    });
+  }
+  const applyCatalog =
+    toolSearchConfig.mode === "directory"
       ? applyToolSchemaDirectoryCatalog
       : applyToolSearchCatalog;
   return applyCatalog({
     ...catalogParams,
-    // Code mode reads the base config; tool-search modes read the run's
-    // resolved tool-search runtime config.
-    config: codeModeControlsEnabled ? catalogParams.config : toolSearchRuntimeConfig,
+    config: toolSearchRuntimeConfig,
     directToolNames,
   });
 }

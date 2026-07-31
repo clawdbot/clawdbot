@@ -141,6 +141,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder | null;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
+  /** Reads the sticky untrusted-content flag for the current user turn. */
+  isTurnTainted?: () => boolean;
   /** Signals that the attempt's own run-timeout watchdog is active. */
   onAttemptTimeoutArmed?: () => void;
   /** Signals that this attempt's timeout has fired and must unwind promptly. */

@@ -113,6 +113,20 @@ describe("android screenshots script", () => {
     expect(script).toContain("is not the screenshot AVD");
   });
 
+  it("prefers avdmanager from the configured SDK over an unrelated PATH install", () => {
+    const script = readFileSync(SCRIPT, "utf8");
+    const functionStart = script.indexOf("avdmanager_bin() {");
+    const sdkLookup = script.indexOf(
+      'for sdk_root in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "$HOME/Library/Android/sdk"; do',
+      functionStart,
+    );
+    const pathLookup = script.indexOf("if command -v avdmanager", functionStart);
+
+    expect(functionStart).toBeGreaterThan(-1);
+    expect(sdkLookup).toBeGreaterThan(functionStart);
+    expect(pathLookup).toBeGreaterThan(sdkLookup);
+  });
+
   it.each(["../escape", "en/US", ".hidden", "en..US", ""])(
     "rejects locale path escapes before dry-run output: %j",
     (locale) => {

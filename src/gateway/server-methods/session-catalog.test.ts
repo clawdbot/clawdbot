@@ -176,7 +176,7 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
-  it("single-flights identical concurrent lists and gives followers only the final result", async () => {
+  it("single-flights identical concurrent lists and fans progress to active followers", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -189,8 +189,8 @@ describe("session catalog Gateway methods", () => {
       sessions: [],
     };
     const list = vi.fn(async ({ onHost }: { onHost?: (value: typeof host) => void }) => {
-      onHost?.(host);
       await gate;
+      onHost?.(host);
       return [host];
     });
     hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { list }) }];
@@ -224,7 +224,7 @@ describe("session catalog Gateway methods", () => {
     ]);
 
     expect(leaderBroadcast).toHaveBeenCalledOnce();
-    expect(followerBroadcast).not.toHaveBeenCalled();
+    expect(followerBroadcast).toHaveBeenCalledOnce();
     for (const pending of [leader, follower, otherAgent, otherParams]) {
       expect(pending.respond).toHaveBeenCalledWith(true, {
         catalogs: [expect.objectContaining({ id: "codex", hosts: [host] })],

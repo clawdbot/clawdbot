@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   ensurePortAvailable: vi.fn<(port: number, host?: string) => Promise<void>>(),
+  resolveSshClient: vi.fn<() => string | null>(() => "/usr/bin/ssh"),
   spawn: vi.fn(),
 }));
 
@@ -16,6 +17,10 @@ vi.mock("./ports.js", async (importOriginal) => ({
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: mocks.spawn,
+}));
+
+vi.mock("./ssh-client.js", () => ({
+  resolveSshClient: mocks.resolveSshClient,
 }));
 
 import { PortInUseError } from "./ports.js";
@@ -96,6 +101,8 @@ describe("startSshPortForward", () => {
       });
     }
     mocks.ensurePortAvailable.mockReset();
+    mocks.resolveSshClient.mockReset();
+    mocks.resolveSshClient.mockReturnValue("/usr/bin/ssh");
     mocks.spawn.mockReset();
   });
 
@@ -130,6 +137,22 @@ describe("startSshPortForward", () => {
       return child;
     });
   }
+
+  it("fails before port probing when no trusted SSH client is installed", async () => {
+    mocks.resolveSshClient.mockReturnValueOnce(null);
+
+    await expect(
+      startSshPortForward({
+        target: "me@example.com",
+        localPortPreferred: 43210,
+        remotePort: 18789,
+        timeoutMs: 250,
+      }),
+    ).rejects.toThrow("trusted SSH client not found in system directories");
+
+    expect(mocks.ensurePortAvailable).not.toHaveBeenCalled();
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
 
   it("scopes the preferred-port preflight to the IPv4 loopback interface", async () => {
     const sentinel = new Error("stop before spawning ssh");

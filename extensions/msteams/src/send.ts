@@ -188,6 +188,7 @@ export async function sendMessageMSTeams(
     ref,
     log,
     conversationType,
+    replyStyle,
     tokenProvider,
     sharePointSiteId,
     sdkCloudOptions,
@@ -328,6 +329,11 @@ export async function sendMessageMSTeams(
         app,
         ref,
         activity,
+        // Only channel replies carry a thread root; top-level and group sends must stay unchanged.
+        threadActivityId:
+          replyStyle === "thread" && conversationType === "channel"
+            ? (ref.threadId ?? ref.activityId)
+            : undefined,
         serviceUrlBoundary: sdkCloudOptions,
       });
 
@@ -429,16 +435,20 @@ type ProactiveActivityParams = {
   serviceUrlBoundary: MSTeamsProactiveContext["sdkCloudOptions"];
 };
 
-type ProactiveActivityRawParams = Omit<ProactiveActivityParams, "errorPrefix">;
+type ProactiveActivityRawParams = Omit<ProactiveActivityParams, "errorPrefix"> & {
+  threadActivityId?: string;
+};
 
 async function sendProactiveActivityRaw({
   app,
   ref,
   activity,
+  threadActivityId,
   serviceUrlBoundary,
 }: ProactiveActivityRawParams): Promise<string> {
   const baseRef = buildConversationReference(ref);
   const response = await sendMSTeamsActivityWithReference(app, baseRef, activity, {
+    ...(threadActivityId ? { threadActivityId } : {}),
     serviceUrlBoundary,
   });
   return extractMessageId(response) ?? "unknown";

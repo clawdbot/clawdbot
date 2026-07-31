@@ -30,7 +30,7 @@ export type UsageLike = {
   reasoningTokens?: number;
   reasoning_tokens?: number;
   completion_tokens_details?: { reasoning_tokens?: number };
-  output_tokens_details?: { reasoning_tokens?: number };
+  output_tokens_details?: { reasoning_tokens?: number; thinking_tokens?: number };
   // Moonshot/Kimi uses cached_tokens for cache read count (explicit caching API).
   cached_tokens?: number;
   // OpenAI Responses reports cached prompt reuse here.
@@ -201,7 +201,8 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     raw.reasoningTokens ??
       raw.reasoning_tokens ??
       raw.completion_tokens_details?.reasoning_tokens ??
-      raw.output_tokens_details?.reasoning_tokens,
+      raw.output_tokens_details?.reasoning_tokens ??
+      raw.output_tokens_details?.thinking_tokens,
   );
   const total = normalizeTokenCount(raw.total ?? raw.totalTokens ?? raw.total_tokens);
 

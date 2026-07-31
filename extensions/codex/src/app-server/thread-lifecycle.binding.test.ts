@@ -1,4 +1,5 @@
 // Codex tests cover thread lifecycle.binding plugin behavior.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -389,6 +390,80 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(buildFinalConfigPatch).toHaveBeenNthCalledWith(2, {
       action: "resume",
       binding: expect.objectContaining({ threadId: "thread-warm" }),
+    });
+  });
+
+  it("reuses an isolated retained thread without dropping native skill isolation", async () => {
+    vi.stubEnv("HOME", tempDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "isolated-state"));
+    const sessionFile = path.join(tempDir, "warm-isolated-session.jsonl");
+    const workspaceDir = path.join(tempDir, "warm-isolated-workspace");
+    const personalSkill = path.join(tempDir, ".claude", "skills", "personal", "SKILL.md");
+    await fs.mkdir(path.dirname(personalSkill), { recursive: true });
+    await fs.writeFile(personalSkill, "personal");
+    const personalSkillRealPath = await fs.realpath(personalSkill);
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "skills/list") {
+        return {
+          data: [
+            {
+              cwd: workspaceDir,
+              errors: [],
+              skills: [
+                {
+                  name: "personal",
+                  description: "Personal skill",
+                  path: personalSkillRealPath,
+                  scope: "user",
+                  enabled: true,
+                },
+              ],
+            },
+          ],
+        };
+      }
+      if (method === "thread/start") {
+        return threadStartResult("thread-warm-isolated");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getInstanceId: () => "client-warm-isolated",
+      request,
+      addNotificationHandler: () => () => undefined,
+      addRequestHandler: () => () => undefined,
+    } as never;
+    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+    const common = {
+      client,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+    };
+
+    const started = await startOrResumeThread(common);
+    await expect(
+      retainCodexAppServerLiveThread(
+        client,
+        started.threadId,
+        undefined,
+        started.liveThreadConfigFingerprint,
+      ),
+    ).resolves.toEqual({});
+    await expect(startOrResumeThread(common)).resolves.toMatchObject({
+      threadId: "thread-warm-isolated",
+      lifecycle: { action: "resumed" },
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["skills/list", "thread/start"]);
+    const startRequest = request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+    expect(startRequest).toMatchObject({
+      config: {
+        "skills.include_instructions": false,
+        "skills.config": [{ path: personalSkillRealPath, enabled: false }],
+      },
     });
   });
 

@@ -36,6 +36,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   bootstrapPromptWarningSignaturesSeen: string[];
   resolveRuntimeFallbackReason: () => string | null;
   observeToolOutcome: Parameters<typeof dispatchEmbeddedRunAttempt>[0]["control"]["onToolOutcome"];
+  isTurnTainted: () => boolean;
   allocateToolOutcomeOrdinal: Parameters<
     typeof dispatchEmbeddedRunAttempt
   >[0]["control"]["allocateToolOutcomeOrdinal"];
@@ -95,13 +96,14 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   }
   const basePrompt =
     sessionPromptState.activePrompt.override ??
-    resolveEmbeddedAttemptBasePrompt({ nativeModelOwned, provider, prompt: params.prompt });
+    resolveEmbeddedAttemptBasePrompt({ provider, prompt: params.prompt });
   const prompt = terminalRetryState.compactionContinuationInstruction
     ? `${basePrompt}\n\n${terminalRetryState.compactionContinuationInstruction}`
     : basePrompt;
-  const resolvedStreamApiKey = resolveAttemptDispatchApiKey({
+  const resolvedAttemptApiKey = resolveAttemptDispatchApiKey({
     apiKeyInfo: runtime.apiKeyInfo,
     runtimeAuthState: runtime.runtimeAuthState,
+    pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
   });
   const attemptFastMode = resolveAttemptFastModeParam();
   const existingSessionTarget = sessionPromptState.sessionTarget;
@@ -190,10 +192,12 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   }
   const dispatchedAttempt = await dispatchEmbeddedRunAttempt({
     params,
+    transcriptOwnership: params.sessionManager
+      ? { kind: "caller-owned", sessionManager: params.sessionManager }
+      : { kind: "runtime-target", sessionTarget: resolvedSessionTarget },
     runtime: {
       sessionId: sessionPromptState.sessionId,
       sessionFile: sessionPromptState.sessionFile,
-      sessionTarget: resolvedSessionTarget,
       sessionKey: resolvedSessionKey,
       trajectoryRecorder: trajectoryRecorder ?? undefined,
       workspaceDir,
@@ -213,7 +217,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       expectedRuntimeArtifact: expectedHarnessArtifact?.artifact,
       runtimePlan,
       model: runtime.effectiveModel,
-      resolvedApiKey: resolvedStreamApiKey,
+      resolvedApiKey: resolvedAttemptApiKey,
       authProfileId: runtime.lastProfileId,
       authProfileIdSource: lockedProfileId ? "user" : "auto",
       initialReplayState: input.replayState,
@@ -242,6 +246,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       laneTaskReleaseController,
       noteLaneTaskProgress,
       onToolOutcome: input.observeToolOutcome,
+      isTurnTainted: input.isTurnTainted,
       allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,
       onToolStreamBoundary: maybeAnnounceFastModeAutoOff,
       onRunProgress: notifyRunProgress,

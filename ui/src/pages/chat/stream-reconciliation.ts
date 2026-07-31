@@ -501,7 +501,7 @@ function timestampOrderedInsertIndex(
   return messages.length;
 }
 
-export function messageTimestampMs(message: unknown): number | null {
+function messageTimestampMs(message: unknown): number | null {
   if (!message || typeof message !== "object") {
     return null;
   }

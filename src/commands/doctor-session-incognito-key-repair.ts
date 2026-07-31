@@ -15,6 +15,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import {
   collectSharedStateSessionKeys,
   deleteRepairJournal,
@@ -46,20 +47,25 @@ export function repairReservedIncognitoSessionKeys(params: {
     ? collectSharedStateSessionKeys(sharedDatabase.db)
     : new Set<string>();
   for (const target of targets) {
-    const inspected = withOpenClawAgentDatabaseReadOnly(
-      (database) => ({
-        occupied: params.apply ? collectOccupiedSessionKeys(database.db) : new Set<string>(),
-        reserved: listReservedIncognitoKeys(database.db),
-      }),
-      { agentId: target.agentId, env: params.env, path: target.sqlitePath },
-    );
-    if (!inspected.found) {
+    const operation = runDoctorAgentDatabaseOperation({
+      agentId: target.agentId,
+      path: target.sqlitePath,
+      run: () =>
+        withOpenClawAgentDatabaseReadOnly(
+          (database) => ({
+            occupied: params.apply ? collectOccupiedSessionKeys(database.db) : new Set<string>(),
+            reserved: listReservedIncognitoKeys(database.db),
+          }),
+          { agentId: target.agentId, env: params.env, path: target.sqlitePath },
+        ),
+    });
+    if (!operation.ok || !operation.value.found) {
       continue;
     }
-    for (const key of inspected.value.reserved) {
+    for (const key of operation.value.value.reserved) {
       reservedKeys.add(key);
     }
-    for (const key of inspected.value.occupied) {
+    for (const key of operation.value.value.occupied) {
       occupiedKeys.add(key);
     }
   }

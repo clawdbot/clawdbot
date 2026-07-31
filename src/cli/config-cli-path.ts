@@ -69,9 +69,10 @@ function parsePath(raw: string): PathSegment[] {
     const ch = trimmed[i];
     if (ch === "\\") {
       const next = trimmed[i + 1];
-      if (next) {
-        current += next;
+      if (next === undefined) {
+        throw new Error(`Invalid path (trailing escape): ${raw}`);
       }
+      current += next;
       i += 2;
       continue;
     }

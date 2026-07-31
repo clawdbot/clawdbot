@@ -31,6 +31,51 @@ function createSourceCheckoutPlugin(pluginId: string): {
 }
 
 describe("plugin install plan helpers", () => {
+  it.each([
+    "clawhub:",
+    "clawhub:demo@",
+    "clawhub:@scope/pkg@",
+    "CLAWHUB:",
+    "ClAwHuB:demo@",
+    " clawhub:demo@ ",
+  ])("rejects the malformed explicit ClawHub selector %s before npm fallback", (raw) => {
+    expect(resolvePluginInstallSourcePlan({ raw, mode: "install" })).toEqual({
+      ok: false,
+      error: `Unsupported ClawHub plugin spec: ${raw}`,
+    });
+  });
+
+  it.each(["clawhub:demo", "CLAWHUB:demo", "clawhub:@scope/pkg@1.2.3"])(
+    "keeps the valid explicit ClawHub selector %s on the ClawHub install path",
+    (raw) => {
+      expect(resolvePluginInstallSourcePlan({ raw, mode: "install" })).toMatchObject({
+        ok: true,
+        request: { source: "clawhub", spec: raw },
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "keeps an existing ClawHub-prefixed local path on the local install path",
+    () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-plan-clawhub-"));
+      const localPath = path.join(tempRoot, "clawhub:demo@");
+      fs.mkdirSync(localPath);
+
+      try {
+        expect(resolvePluginInstallSourcePlan({ raw: localPath, mode: "install" })).toMatchObject({
+          ok: true,
+          request: {
+            source: "local",
+            path: localPath,
+          },
+        });
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("keeps explicit npm specs with local-looking suffixes on the registry path", () => {
     expect(resolvePluginInstallSourcePlan({ raw: "npm:plugin.js", mode: "install" })).toMatchObject(
       {

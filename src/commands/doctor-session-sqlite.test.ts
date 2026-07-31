@@ -6,6 +6,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { CURRENT_SESSION_VERSION, SessionManager } from "../agents/sessions/session-manager.js";
 import {
   loadExactSqliteSessionEntry,
   loadSqliteTranscriptEventsSync,
@@ -34,6 +35,7 @@ import {
   type ActiveSessionSqliteMigrationRun,
 } from "./doctor-session-sqlite-migration-run.js";
 import {
+  createTranscriptEventReader,
   readOnlySqliteSessionEntries,
   resolveTargetSqlitePath,
 } from "./doctor-session-sqlite-readers.js";
@@ -415,7 +417,7 @@ describe("runDoctorSessionSqlite", () => {
     }
   });
 
-  it("repairs legacy message and route shapes at the import boundary", async () => {
+  it("repairs legacy transcript and route shapes at the import boundary", async () => {
     const store = createLegacyStore({
       entryOverrides: {
         route: "stale-custom-slot",
@@ -423,7 +425,9 @@ describe("runDoctorSessionSqlite", () => {
       },
       transcriptLines: [
         '{"type":"session","sessionId":"session-1"}',
+        '{"type":"plugin_state","id":"opaque-1","payload":{"keep":"exact"}}',
         '{"type":"message","id":"m1","parentId":null,"message":{"role":"assistant","content":"legacy string"}}',
+        '{"type":"compaction","summary":"legacy summary","firstKeptEntryIndex":2,"tokensBefore":42}',
       ],
     });
 
@@ -448,9 +452,44 @@ describe("runDoctorSessionSqlite", () => {
       storePath: store.storePath,
     });
     const message = events.find((event) => (event as { type?: string }).type === "message") as {
+      id?: string;
       message?: { content?: unknown };
     };
+    const compaction = events.find(
+      (event) => (event as { type?: string }).type === "compaction",
+    ) as { firstKeptEntryId?: string; parentId?: string };
+    expect(events[0]).toMatchObject({
+      id: "session-1",
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+    });
+    expect(events[0]).not.toHaveProperty("sessionId");
+    expect(events[1]).toEqual({
+      id: "opaque-1",
+      payload: { keep: "exact" },
+      type: "plugin_state",
+    });
     expect(message?.message?.content).toEqual([{ type: "text", text: "legacy string" }]);
+    expect(compaction).toMatchObject({
+      firstKeptEntryId: message.id,
+      parentId: message.id,
+    });
+    const manager = SessionManager.open(
+      {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      },
+      store.tempDir,
+    );
+    expect(
+      manager.appendMessage({
+        content: "post-import message",
+        role: "user",
+        timestamp: Date.now(),
+      }),
+    ).toEqual(expect.any(String));
     closeOpenClawAgentDatabasesForTest();
     const sqlite = nodeSqlite.requireNodeSqlite();
     const migrated = new sqlite.DatabaseSync(
@@ -470,6 +509,40 @@ describe("runDoctorSessionSqlite", () => {
       ).toEqual([{ generation_length: 32, session_id: "session-1" }]);
     } finally {
       migrated.close();
+    }
+  });
+
+  it("aborts import when the legacy transcript changes between passes", () => {
+    const store = createLegacyStore();
+    const realStatSync = fs.statSync.bind(fs);
+    let fingerprintReads = 0;
+    const statSpy = vi.spyOn(fs, "statSync").mockImplementation(((candidate, options) => {
+      const stat = realStatSync(candidate, options as never);
+      if (
+        path.resolve(String(candidate)) === path.resolve(store.transcriptPath) &&
+        (options as { bigint?: boolean } | undefined)?.bigint === true
+      ) {
+        fingerprintReads += 1;
+        if (fingerprintReads === 2) {
+          fs.appendFileSync(store.transcriptPath, '{"type":"custom","customType":"late"}\n');
+        }
+      }
+      return stat;
+    }) as typeof fs.statSync);
+
+    try {
+      const events: unknown[] = [];
+      expect(() =>
+        createTranscriptEventReader(
+          store.transcriptPath,
+          "session-1",
+        )((event) => {
+          events.push(event);
+        }),
+      ).toThrow(/stop active session writers and rerun `openclaw doctor --fix`/);
+      expect(events).toEqual([]);
+    } finally {
+      statSpy.mockRestore();
     }
   });
 
@@ -2024,7 +2097,12 @@ describe("runDoctorSessionSqlite", () => {
   );
 
   it("imports aliases that share one legacy transcript before archiving it", async () => {
-    const store = createLegacyStore();
+    const store = createLegacyStore({
+      transcriptLines: [
+        '{"type":"session","sessionId":"session-1"}',
+        '{"type":"message","message":{"role":"user","content":"shared legacy message"}}',
+      ],
+    });
     const legacyStore = JSON.parse(fs.readFileSync(store.storePath, "utf-8")) as Record<
       string,
       unknown

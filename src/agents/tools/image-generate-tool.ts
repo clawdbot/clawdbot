@@ -826,6 +826,7 @@ async function executeImageGenerationJob(params: {
     path: image.path,
     mimeType: image.contentType,
     name: image.id,
+    sizeBytes: image.size,
   }));
   const lines = [
     `Generated ${savedImages.length} image${savedImages.length === 1 ? "" : "s"} with ${displayProvider}/${displayModel}.`,

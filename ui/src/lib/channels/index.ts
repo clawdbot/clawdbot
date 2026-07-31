@@ -1,3 +1,4 @@
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.ts";
 import type {
   ChannelsPairingApproveResult,
@@ -79,6 +80,36 @@ export type ChannelCapability = {
   subscribe: (listener: (state: ChannelsState) => void) => () => void;
   dispose: () => void;
 };
+
+export function channelSnapshotEntryIsActive(
+  snapshot: ChannelsStatusSnapshot | null,
+  channelId: string,
+): boolean {
+  if (!snapshot) {
+    return false;
+  }
+  const status = asRecord(snapshot.channels[channelId]);
+  if (status?.configured === true || status?.running === true || status?.connected === true) {
+    return true;
+  }
+  return (snapshot.channelAccounts[channelId] ?? []).some(
+    (account) =>
+      account.configured === true || account.running === true || account.connected === true,
+  );
+}
+
+/** Matches the Channels hub's definition of a transport the operator already uses. */
+export function channelSnapshotHasActiveChannel(snapshot: ChannelsStatusSnapshot | null): boolean {
+  if (!snapshot) {
+    return false;
+  }
+  const channelIds = new Set([
+    ...snapshot.channelOrder,
+    ...Object.keys(snapshot.channels),
+    ...Object.keys(snapshot.channelAccounts),
+  ]);
+  return [...channelIds].some((channelId) => channelSnapshotEntryIsActive(snapshot, channelId));
+}
 
 export function resolveChannelPairingAuthSignature(
   snapshot: Partial<ChannelGatewaySnapshot>,

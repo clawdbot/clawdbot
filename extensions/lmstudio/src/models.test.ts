@@ -632,6 +632,42 @@ describe("lmstudio-models", () => {
     }
   });
 
+  it("keeps valid model records when a reachable catalog includes malformed entries", async () => {
+    const model = {
+      type: "llm",
+      key: "qwen3-8b-instruct",
+      max_context_length: 32_768,
+      loaded_instances: [],
+    };
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ models: [null, model, [], "invalid-model", 42] }),
+    );
+
+    const result = await fetchLmstudioModels({
+      baseUrl: "http://localhost:1234/v1",
+      fetchImpl: asFetch(fetchMock),
+    });
+
+    expect(result).toEqual({ reachable: true, status: 200, models: [model] });
+  });
+
+  it("discovers valid local models from partially malformed catalogs", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        models: [null, { type: "llm", key: "qwen3-8b-instruct" }, []],
+      }),
+    );
+
+    const models = await discoverLmstudioModels({
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: "lm-token",
+      quiet: true,
+      fetchImpl: asFetch(fetchMock),
+    });
+
+    expect(models).toEqual([expect.objectContaining({ id: "qwen3-8b-instruct" })]);
+  });
+
   it("caps oversized direct fetch timeouts before discovering models", async () => {
     const timeoutController = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);

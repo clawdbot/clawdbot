@@ -20,6 +20,7 @@ struct DashboardGatewayCatalogTests {
         let entries = DashboardGatewayCatalog.entries(
             mode: .remote,
             primaryRemoteURL: primaryURL,
+            resolvedRemoteURL: nil,
             resolvedRemoteHostLabel: "studio.example:443",
             profiles: [duplicate, other],
             primaryHealth: .ok)
@@ -31,6 +32,42 @@ struct DashboardGatewayCatalogTests {
         #expect(!entries[0].canPromote)
         #expect(!entries[1].canPromote)
         #expect(entries[1].health == .unknown)
+    }
+
+    @Test func `catalog deduplicates profile matching resolved SSH endpoint`() throws {
+        let tunnelURL = try #require(URL(string: "ws://127.0.0.1:18789"))
+        let profile = MacGatewayCatalogProfile(
+            profile: MacGatewayProfile(id: "loopback", name: "127.0.0.1", url: tunnelURL),
+            canPromote: true)
+
+        let entries = DashboardGatewayCatalog.entries(
+            mode: .remote,
+            primaryRemoteURL: nil,
+            resolvedRemoteURL: tunnelURL,
+            resolvedRemoteHostLabel: "127.0.0.1:18789",
+            profiles: [profile],
+            primaryHealth: .ok)
+
+        #expect(entries.map(\.id) == ["primary"])
+        #expect(entries[0].name == "127.0.0.1")
+    }
+
+    @Test func `catalog deduplicates configured SSH endpoint before resolution`() throws {
+        let tunnelURL = try #require(URL(string: "ws://127.0.0.1:18789"))
+        let profile = MacGatewayCatalogProfile(
+            profile: MacGatewayProfile(id: "loopback", name: "127.0.0.1", url: tunnelURL),
+            canPromote: true)
+
+        let entries = DashboardGatewayCatalog.entries(
+            mode: .remote,
+            primaryRemoteURL: tunnelURL,
+            resolvedRemoteURL: nil,
+            resolvedRemoteHostLabel: nil,
+            profiles: [profile],
+            primaryHealth: .unknown)
+
+        #expect(entries.map(\.id) == ["primary"])
+        #expect(entries[0].name == "127.0.0.1")
     }
 
     @Test @MainActor func `catalog maps only connected control state to healthy`() {
@@ -45,6 +82,7 @@ struct DashboardGatewayCatalogTests {
         let entries = DashboardGatewayCatalog.entries(
             mode: .local,
             primaryRemoteURL: url,
+            resolvedRemoteURL: nil,
             resolvedRemoteHostLabel: "127.0.0.1:18789",
             profiles: [.init(
                 profile: .init(id: "studio", name: "Studio", url: url),
@@ -109,6 +147,25 @@ struct DashboardGatewaysBridgeTests {
         #expect(!DashboardWindowController.isExpectedTLSAuthority(
             host: "other.example",
             port: 443,
+            dashboardURL: url))
+    }
+
+    @Test func `media capture trust requires the dashboard origin`() throws {
+        let url = try #require(URL(string: "https://gateway.example/control/"))
+        #expect(DashboardWindowController.isTrustedMediaCaptureOrigin(
+            protocol: "https",
+            host: "gateway.example",
+            port: 443,
+            dashboardURL: url))
+        #expect(!DashboardWindowController.isTrustedMediaCaptureOrigin(
+            protocol: "https",
+            host: "other.example",
+            port: 443,
+            dashboardURL: url))
+        #expect(!DashboardWindowController.isTrustedMediaCaptureOrigin(
+            protocol: "http",
+            host: "gateway.example",
+            port: 80,
             dashboardURL: url))
     }
 }

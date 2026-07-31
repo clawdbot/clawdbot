@@ -12,6 +12,7 @@ export function renderMcpServerForm(props: {
   busy: boolean;
   disabled?: boolean;
   blockedReason?: string | null;
+  autofocus?: boolean;
   onSubmit: (form: McpServerForm) => void;
   onCancel: () => void;
 }): TemplateResult {
@@ -40,6 +41,7 @@ export function renderMcpServerForm(props: {
           required
           placeholder="context7"
           autocomplete="off"
+          ?autofocus=${props.autofocus ?? false}
           title=${props.blockedReason ?? ""}
           ?disabled=${disabled}
         />

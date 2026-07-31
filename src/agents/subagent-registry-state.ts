@@ -8,9 +8,11 @@ import {
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForControllerFromSqlite,
   loadSubagentRegistryFromSqlite,
+  loadSubagentSessionListRunsFromSqlite,
+  saveSubagentRegistryChangesToSqlite,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry.store.sqlite.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const SUBAGENT_RUNS_READ_CACHE_TTL_MS = 500;
 
@@ -18,6 +20,13 @@ let persistedSubagentRunsReadCache:
   | {
       loadedAtMs: number;
       runs: Map<string, SubagentRunRecord>;
+    }
+  | undefined;
+
+let persistedSubagentSessionListRunsReadCache:
+  | {
+      loadedAtMs: number;
+      runs: Map<string, SubagentRunReadRecord>;
     }
   | undefined;
 
@@ -49,11 +58,103 @@ function cloneSubagentRunsSnapshot(
   return new Map([...runs.entries()].map(([runId, entry]) => [runId, structuredClone(entry)]));
 }
 
+function projectSubagentRunForSessionList(entry: SubagentRunRecord): SubagentRunReadRecord {
+  return {
+    runId: entry.runId,
+    childSessionKey: entry.childSessionKey,
+    ...(entry.controllerSessionKey ? { controllerSessionKey: entry.controllerSessionKey } : {}),
+    requesterSessionKey: entry.requesterSessionKey,
+    ...(entry.model ? { model: entry.model } : {}),
+    ...(entry.generation !== undefined ? { generation: entry.generation } : {}),
+    createdAt: entry.createdAt,
+    ...(entry.startedAt !== undefined ? { startedAt: entry.startedAt } : {}),
+    ...(entry.sessionStartedAt !== undefined ? { sessionStartedAt: entry.sessionStartedAt } : {}),
+    ...(entry.accumulatedRuntimeMs !== undefined
+      ? { accumulatedRuntimeMs: entry.accumulatedRuntimeMs }
+      : {}),
+    ...(entry.endedAt !== undefined ? { endedAt: entry.endedAt } : {}),
+    ...(entry.runTimeoutSeconds !== undefined
+      ? { runTimeoutSeconds: entry.runTimeoutSeconds }
+      : {}),
+    ...(entry.endedReason ? { endedReason: entry.endedReason } : {}),
+    ...(entry.outcome ? { outcome: { status: entry.outcome.status } } : {}),
+    ...(entry.cleanupCompletedAt !== undefined
+      ? { cleanupCompletedAt: entry.cleanupCompletedAt }
+      : {}),
+    ...(entry.delivery
+      ? {
+          delivery: {
+            status: entry.delivery.status,
+            ...(entry.delivery.suspendedAt !== undefined
+              ? { suspendedAt: entry.delivery.suspendedAt }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function projectSubagentRunsForSessionList(
+  runs: Map<string, SubagentRunRecord>,
+): Map<string, SubagentRunReadRecord> {
+  return new Map(
+    [...runs.entries()].map(([runId, entry]) => [runId, projectSubagentRunForSessionList(entry)]),
+  );
+}
+
 function rememberPersistedSubagentRunsSnapshot(runs: Map<string, SubagentRunRecord>): void {
+  const loadedAtMs = Date.now();
   persistedSubagentRunsReadCache = {
-    loadedAtMs: Date.now(),
+    loadedAtMs,
     runs: cloneSubagentRunsSnapshot(runs),
   };
+  persistedSubagentSessionListRunsReadCache = {
+    loadedAtMs,
+    runs: projectSubagentRunsForSessionList(runs),
+  };
+}
+
+function rememberPersistedSubagentRunChanges(
+  runs: Map<string, SubagentRunRecord>,
+  changedRunIds: readonly string[],
+): void {
+  const loadedAtMs = Date.now();
+  if (!persistedSubagentRunsReadCache) {
+    persistedSubagentRunsReadCache = {
+      loadedAtMs,
+      runs: cloneSubagentRunsSnapshot(runs),
+    };
+  } else {
+    for (const runId of new Set(changedRunIds)) {
+      const entry = runs.get(runId);
+      if (entry) {
+        persistedSubagentRunsReadCache.runs.set(runId, structuredClone(entry));
+      } else {
+        persistedSubagentRunsReadCache.runs.delete(runId);
+      }
+    }
+    persistedSubagentRunsReadCache.loadedAtMs = loadedAtMs;
+  }
+
+  if (!persistedSubagentSessionListRunsReadCache) {
+    persistedSubagentSessionListRunsReadCache = {
+      loadedAtMs,
+      runs: projectSubagentRunsForSessionList(runs),
+    };
+    return;
+  }
+  for (const runId of new Set(changedRunIds)) {
+    const entry = runs.get(runId);
+    if (entry) {
+      persistedSubagentSessionListRunsReadCache.runs.set(
+        runId,
+        projectSubagentRunForSessionList(entry),
+      );
+    } else {
+      persistedSubagentSessionListRunsReadCache.runs.delete(runId);
+    }
+  }
+  persistedSubagentSessionListRunsReadCache.loadedAtMs = loadedAtMs;
 }
 
 function shouldReadPersistedSubagentRuns(): boolean {
@@ -79,7 +180,23 @@ function loadPersistedSubagentRunsForRead(): Map<string, SubagentRunRecord> {
   }
 
   const runs = loadSubagentRegistryFromSqlite();
-  persistedSubagentRunsReadCache = {
+  rememberPersistedSubagentRunsSnapshot(runs);
+  return persistedSubagentRunsReadCache?.runs ?? runs;
+}
+
+function loadPersistedSubagentSessionListRunsForRead(): Map<string, SubagentRunReadRecord> {
+  const nowMs = Date.now();
+  const cached = persistedSubagentSessionListRunsReadCache;
+  if (
+    cached &&
+    nowMs >= cached.loadedAtMs &&
+    nowMs - cached.loadedAtMs < SUBAGENT_RUNS_READ_CACHE_TTL_MS
+  ) {
+    return cached.runs;
+  }
+
+  const runs = loadSubagentSessionListRunsFromSqlite();
+  persistedSubagentSessionListRunsReadCache = {
     loadedAtMs: nowMs,
     runs,
   };
@@ -106,23 +223,45 @@ function resolvesToControllerSessionKey(
 
 export function clearSubagentRunsReadCacheForTest(): void {
   persistedSubagentRunsReadCache = undefined;
+  persistedSubagentSessionListRunsReadCache = undefined;
 }
 
-export function persistSubagentRunsToDisk(runs: Map<string, SubagentRunRecord>) {
+export function persistSubagentRunsToDisk(
+  runs: Map<string, SubagentRunRecord>,
+  // Undefined replaces the complete snapshot; an array applies exact row mutations.
+  changedRunIds?: readonly string[],
+) {
   try {
-    saveSubagentRegistryToSqlite(runs);
+    if (changedRunIds) {
+      saveSubagentRegistryChangesToSqlite(runs, changedRunIds);
+    } else {
+      saveSubagentRegistryToSqlite(runs);
+    }
   } catch {
     // ignore persistence failures
   } finally {
     // In-process readers must observe the authoritative memory snapshot before the wake.
-    rememberPersistedSubagentRunsSnapshot(runs);
+    if (changedRunIds) {
+      rememberPersistedSubagentRunChanges(runs, changedRunIds);
+    } else {
+      rememberPersistedSubagentRunsSnapshot(runs);
+    }
     emitSubagentRegistryPersisted();
   }
 }
 
-export function persistSubagentRunsToDiskOrThrow(runs: Map<string, SubagentRunRecord>) {
-  saveSubagentRegistryToSqlite(runs);
-  rememberPersistedSubagentRunsSnapshot(runs);
+export function persistSubagentRunsToDiskOrThrow(
+  runs: Map<string, SubagentRunRecord>,
+  // Undefined replaces the complete snapshot; an array applies exact row mutations.
+  changedRunIds?: readonly string[],
+) {
+  if (changedRunIds) {
+    saveSubagentRegistryChangesToSqlite(runs, changedRunIds);
+    rememberPersistedSubagentRunChanges(runs, changedRunIds);
+  } else {
+    saveSubagentRegistryToSqlite(runs);
+    rememberPersistedSubagentRunsSnapshot(runs);
+  }
   emitSubagentRegistryPersisted();
 }
 
@@ -166,6 +305,25 @@ export function getSubagentRunsSnapshotForRead(
   }
   for (const [runId, entry] of inMemoryRuns.entries()) {
     merged.set(runId, entry);
+  }
+  return merged;
+}
+
+export function getSubagentSessionListRunsSnapshotForRead(
+  inMemoryRuns: Map<string, SubagentRunRecord>,
+): Map<string, SubagentRunReadRecord> {
+  const merged = new Map<string, SubagentRunReadRecord>();
+  if (shouldReadPersistedSubagentRuns()) {
+    try {
+      for (const [runId, entry] of loadPersistedSubagentSessionListRunsForRead()) {
+        merged.set(runId, entry);
+      }
+    } catch {
+      // Ignore disk read failures and fall back to local memory.
+    }
+  }
+  for (const [runId, entry] of inMemoryRuns) {
+    merged.set(runId, projectSubagentRunForSessionList(entry));
   }
   return merged;
 }

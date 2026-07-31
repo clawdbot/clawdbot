@@ -127,7 +127,7 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
         ) => {
           const job = jobs.find((candidate) => candidate.id === id);
           if (!job) {
-            throw new Error(`unknown cron job id: ${id}`);
+            throw new Error(`unknown automation id: ${id}`);
           }
           await precondition(job, Date.now());
           return await update(id, patch);
@@ -137,6 +137,7 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
       enqueueRun: vi.fn(async () => ({ ok: true, enqueued: true, runId: "run-1" })),
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn((id: string) => jobs.find((job) => job.id === id)),
+      prepareWake: vi.fn(async () => undefined),
       wake: vi.fn(() => ({ ok: true }) as const),
       readJob: vi.fn(async (id: string) => jobs.find((job) => job.id === id)),
       list: vi.fn(async () => jobs),
@@ -696,6 +697,18 @@ describe("cron method validation", () => {
       code: "INVALID_REQUEST",
       messageIncludes: "cron job not found: missing",
     });
+  });
+
+  it("keeps the exact cron.get missing wording older CLI matchers parse", async () => {
+    const { respond } = await invokeCronGet({ jobId: "missing" });
+
+    // Wire contract: shipped CLIs detect a missing job via
+    // error.message.includes(`cron job not found: ${id}`) before falling back to
+    // name lookup (isMissingCronGetError). Rewording the server message strands
+    // older clients, so pin the legacy-matcher form here.
+    const error = respond.mock.calls.at(-1)?.[2];
+    expect(String(error?.message)).toContain("cron job not found: missing");
+    expect(String(error?.message)).not.toContain("automation not found");
   });
 
   it("scopes cron.list to the caller agent", async () => {
@@ -3182,7 +3195,7 @@ describe("cron method validation", () => {
 
   it("returns INVALID_REQUEST when cron.run cannot find the job", async () => {
     const context = createCronContext();
-    context.cron.enqueueRun.mockRejectedValueOnce(new Error("unknown cron job id: missing"));
+    context.cron.enqueueRun.mockRejectedValueOnce(new Error("unknown automation id: missing"));
     const { respond } = await invokeCron("cron.run", { id: "missing" }, { context });
 
     expect(context.cron.enqueueRun).not.toHaveBeenCalled();
@@ -3468,6 +3481,10 @@ describe("cron method validation", () => {
         text: "ping",
         sessionKey: "agent:main:telegram:dm:42",
       });
+      expect(context.cron.prepareWake).toHaveBeenCalledOnce();
+      expect(context.cron.prepareWake.mock.invocationCallOrder[0]).toBeLessThan(
+        context.cron.wake.mock.invocationCallOrder[0]!,
+      );
       expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     });
 
@@ -3497,6 +3514,7 @@ describe("cron method validation", () => {
         sessionKey,
       });
       expect(context.cron.wake).not.toHaveBeenCalled();
+      expect(context.cron.prepareWake).not.toHaveBeenCalled();
       expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "sessionKey" });
     });
 

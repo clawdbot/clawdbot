@@ -476,7 +476,7 @@ describe("node_inference agent tool", () => {
         maxTokens: 32,
         timeoutMs: 120_000,
       },
-      timeoutMs: 130_000,
+      timeoutMs: 120_000,
       scopes: ["operator.write"],
     });
     expect(result.details).toMatchObject({

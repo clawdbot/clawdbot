@@ -1,7 +1,9 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { resolveZoomMeetingsConfig } from "./config.js";
+import { zoomMeetingsConfig } from "./config.js";
 import { ZoomMeetingsRuntime } from "./runtime.js";
+
+const resolveZoomMeetingsConfig = zoomMeetingsConfig.resolveConfig;
 
 const URL = "https://zoom.us/j/12345678904?pwd=runtime";
 

@@ -56,18 +56,6 @@ type TogetherVideoResponse = {
       }>;
 };
 
-// Reads the Together create-video response through the shared provider JSON
-// reader so a provider that streams an unbounded JSON body cannot force the
-// runtime to buffer the whole payload before parsing it on the success path.
-// The shared helper applies the established 16 MiB provider JSON cap and the
-// standard malformed-JSON wrapping instead of a provider-local reimplementation.
-async function readTogetherVideoJson(response: Response): Promise<TogetherVideoResponse> {
-  return (await readProviderJsonResponse(
-    response,
-    "Together video generation failed",
-  )) as TogetherVideoResponse;
-}
-
 function resolveTogetherVideoBaseUrl(req: VideoGenerationRequest): string {
   const configuredBaseUrl = normalizeOptionalString(req.cfg?.models?.providers?.together?.baseUrl);
   if (
@@ -97,6 +85,12 @@ function extractTogetherVideoUrl(payload: TogetherVideoResponse): string | undef
     normalizeOptionalString(payload.outputs?.video_url) ??
     normalizeOptionalString(payload.outputs?.url)
   );
+}
+
+function readTogetherVideoFailureMessage(payload: TogetherVideoResponse): string | undefined {
+  return payload.status === "failed"
+    ? (normalizeOptionalString(payload.error?.message) ?? "Together video generation failed")
+    : undefined;
 }
 
 function resolveTogetherDurationSeconds(value: unknown): string | undefined {
@@ -132,10 +126,7 @@ async function pollTogetherVideo(params: {
     requestFailedMessage: "Together video status request failed",
     timeoutMessage: `Together video generation task ${params.videoId} did not finish in time`,
     isComplete: (payload) => payload.status === "completed",
-    getFailureMessage: (payload) =>
-      payload.status === "failed"
-        ? (normalizeOptionalString(payload.error?.message) ?? "Together video generation failed")
-        : undefined,
+    getFailureMessage: readTogetherVideoFailureMessage,
   });
 }
 
@@ -276,7 +267,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
         if (!value) {
           throw new Error("Together reference image is missing image data.");
         }
-        body.reference_images = [value];
+        body.media = { reference_images: [value] };
       }
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/videos`,
@@ -292,21 +283,31 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
       });
       try {
         await assertOkOrThrowHttpError(response, "Together video generation failed");
-        const submitted = await readTogetherVideoJson(response);
+        const submitted = await readProviderJsonResponse<TogetherVideoResponse>(
+          response,
+          "Together video generation failed",
+        );
+        const failureMessage = readTogetherVideoFailureMessage(submitted);
+        if (failureMessage) {
+          throw new Error(failureMessage);
+        }
         const videoId = normalizeOptionalString(submitted.id);
         if (!videoId) {
           throw new Error("Together video generation response missing id");
         }
-        const completed = await pollTogetherVideo({
-          videoId,
-          headers,
-          timeoutMs: resolveProviderOperationTimeoutMs({
-            deadline,
-            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-          }),
-          baseUrl,
-          fetchFn,
-        });
+        const completed =
+          submitted.status === "completed"
+            ? submitted
+            : await pollTogetherVideo({
+                videoId,
+                headers,
+                timeoutMs: resolveProviderOperationTimeoutMs({
+                  deadline,
+                  defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+                }),
+                baseUrl,
+                fetchFn,
+              });
         const videoUrl = extractTogetherVideoUrl(completed);
         if (!videoUrl) {
           throw new Error("Together video generation completed without an output URL");

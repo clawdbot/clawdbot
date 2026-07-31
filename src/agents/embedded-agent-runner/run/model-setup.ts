@@ -127,6 +127,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
           skipAgentDiscovery: true,
           allowBundledStaticCatalogFallback: pluginHarnessOwnsTransport,
           preferBundledStaticCatalogTransport: pluginHarnessOwnsTransport,
+          preparedModelRuntime: params.preparedModelRuntime,
           workspaceDir: params.workspaceDir,
           authProfileId: runParams.authProfileId,
         },
@@ -164,6 +165,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
             workspaceDir: params.workspaceDir,
             authProfileId: runParams.authProfileId,
             allowBundledStaticCatalogFallback: true,
+            preparedModelRuntime,
           },
         );
         firstModelResolution ??= candidateResolution;

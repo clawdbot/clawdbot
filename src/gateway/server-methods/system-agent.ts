@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 // OpenClaw gateway methods host the setup/repair conversation for clients.
 import {
+  buildSystemAgentInferenceUnavailableErrorDetails,
   buildSystemAgentSessionInvalidatedErrorDetails,
   ErrorCodes,
   errorShape,
@@ -559,6 +560,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               errorShape(
                 ErrorCodes.UNAVAILABLE,
                 `OpenClaw requires working inference: ${inference.error}`,
+                {
+                  details: buildSystemAgentInferenceUnavailableErrorDetails(),
+                },
               ),
             );
             return;

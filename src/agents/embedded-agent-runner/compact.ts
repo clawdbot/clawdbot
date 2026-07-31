@@ -20,10 +20,12 @@ import { isFallbackSummaryError } from "../model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
+import { resolveProjectKey } from "../project-memory-scope.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
+import { resolveSystemPromptRepoRoot } from "../system-prompt-params.js";
 import type {
   CompactEmbeddedAgentSessionParams,
   CompactEmbeddedAgentSessionRuntimeParams,
@@ -44,6 +46,7 @@ import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js
 import { prepareCompactionSessionAgent } from "./compaction-session-agent.js";
 import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compaction-preparation.js";
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
+import { prepareEmbeddedSessionActiveProjectKeys } from "./session-prompt-state.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
@@ -155,7 +158,26 @@ export async function compactEmbeddedAgentSessionDirect(
     preserveWorkspaceDirOnRefresh: requestedWorkspaceDir !== canonicalWorkspaceDir,
   });
   try {
-    const preparedModelRuntime = preparedModelRuntimeLease.snapshot;
+    const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
+    const preparedWorkspaceDir =
+      preparedModelRuntimeOwnerSnapshot.workspaceDir ?? requestedWorkspaceDir;
+    const repoRoot =
+      resolveSystemPromptRepoRoot({
+        config: preparedModelRuntimeOwnerSnapshot.config,
+        workspaceDir: preparedWorkspaceDir,
+        cwd: requestedParams.cwd,
+      }) ?? null;
+    const projectKey = repoRoot ? await resolveProjectKey(repoRoot) : null;
+    const activeProjectKeys = prepareEmbeddedSessionActiveProjectKeys(
+      requestedParams.sessionId,
+      projectKey,
+    );
+    const preparedModelRuntime = Object.freeze({
+      ...preparedModelRuntimeOwnerSnapshot,
+      repoRoot,
+      projectKey,
+      activeProjectKeys,
+    });
     // Fallback policy and every attempt consume the same generation as model/auth discovery.
     // A reload may have committed while session targeting was resolved above.
     const params: PreparedCompactEmbeddedAgentSessionParams = {
@@ -163,7 +185,7 @@ export async function compactEmbeddedAgentSessionDirect(
       config: preparedModelRuntime.config,
       agentId: preparedModelRuntime.agentId ?? requestedAgentIds.sessionAgentId,
       agentDir: preparedModelRuntime.agentDir,
-      workspaceDir: preparedModelRuntime.workspaceDir ?? requestedWorkspaceDir,
+      workspaceDir: preparedWorkspaceDir,
       preparedModelRuntime,
     };
     if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {

@@ -112,6 +112,8 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   });
   private readonly onGlobalKeyDown = (event: KeyboardEvent) => this.handleGlobalKey(event);
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
+  private readonly onDocumentPointerDown = (event: PointerEvent) =>
+    this.handleDocumentPointerDown(event);
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -123,6 +125,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       window.addEventListener("keydown", this.onGlobalKeyDown);
       window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     }
+    document.addEventListener("pointerdown", this.onDocumentPointerDown, true);
     if (this.dockLayout.open) {
       void this.terminalSessions.restoreSessions();
     }
@@ -132,6 +135,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     super.disconnectedCallback();
     window.removeEventListener("keydown", this.onGlobalKeyDown);
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    document.removeEventListener("pointerdown", this.onDocumentPointerDown, true);
     this.terminalSessions.disconnectHost();
   }
 
@@ -199,6 +203,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   closeTerminalPanel(): void {
+    this.closeSessionPicker(false);
     this.dockLayout.setOpen(false);
   }
 
@@ -231,10 +236,61 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   private toggleSessionPicker(): void {
-    this.sessionPickerOpen = !this.sessionPickerOpen;
     if (this.sessionPickerOpen) {
-      void this.refreshSessionPicker();
+      this.closeSessionPicker(true);
+      return;
     }
+    this.sessionPickerOpen = true;
+    void this.refreshSessionPicker();
+    void this.updateComplete.then(() => {
+      if (this.sessionPickerOpen) {
+        this.renderRoot.querySelector<HTMLButtonElement>(".tp-session-refresh")?.focus();
+      }
+    });
+  }
+
+  private closeSessionPicker(restoreFocus: boolean): void {
+    if (!this.sessionPickerOpen) {
+      return;
+    }
+    this.sessionPickerOpen = false;
+    if (restoreFocus) {
+      void this.updateComplete.then(() => {
+        this.renderRoot
+          .querySelector<HTMLButtonElement>('[aria-controls="terminal-session-picker-dialog"]')
+          ?.focus();
+      });
+    }
+  }
+
+  private handleDocumentPointerDown(event: PointerEvent): void {
+    if (!this.sessionPickerOpen) {
+      return;
+    }
+    const picker = this.renderRoot.querySelector(".tp-session-picker");
+    // Document capture sees retargeted shadow-DOM events. The composed path
+    // preserves the picker wrapper so its trigger and actions stay clickable.
+    const path = event.composedPath();
+    if (picker && !path.includes(picker)) {
+      this.closeSessionPicker(false);
+    }
+  }
+
+  private handleSessionPickerFocusOut(event: FocusEvent): void {
+    const picker = event.currentTarget;
+    const next = event.relatedTarget;
+    if (picker instanceof HTMLElement && next instanceof Node && picker.contains(next)) {
+      return;
+    }
+    queueMicrotask(() => {
+      if (
+        picker instanceof HTMLElement &&
+        !picker.contains(this.shadowRoot?.activeElement ?? null) &&
+        this.sessionPickerOpen
+      ) {
+        this.closeSessionPicker(false);
+      }
+    });
   }
 
   private refreshSessionPicker(): Promise<void> {
@@ -255,7 +311,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   resetTerminalSessionPicker(): void {
-    this.sessionPickerOpen = false;
+    this.closeSessionPicker(false);
     void this.sessionPickerTask.run([null]);
     this.pickerSessions = [];
   }
@@ -293,6 +349,8 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
           ),
       ),
       onToggle: () => this.toggleSessionPicker(),
+      onDismiss: (restoreFocus) => this.closeSessionPicker(restoreFocus),
+      onFocusOut: (event) => this.handleSessionPickerFocusOut(event),
       onRefresh: () => void this.refreshSessionPicker(),
       onAttach: (sessionId, owner) => void this.attachPickedSession(sessionId, owner),
     });

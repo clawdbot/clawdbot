@@ -183,12 +183,12 @@ requested action plus any supported marketplace flags in its migration guidance.
 OpenClaw uses the same app-server API that Codex itself exposes. The
 marketplace fields choose where Codex should find `computer-use`.
 
-| Field                | Use when                                                        | Install support                                          |
-| -------------------- | --------------------------------------------------------------- | -------------------------------------------------------- |
-| No marketplace field | You want Codex app-server to use marketplaces it already knows. | Yes, when app-server returns a local marketplace.        |
-| `marketplaceSource`  | You have a Codex marketplace source app-server can add.         | Yes, for explicit `/codex computer-use install`.         |
-| `marketplacePath`    | You already know the local marketplace file path on the host.   | Yes, for explicit install and turn-start auto-install.   |
-| `marketplaceName`    | You want to select one already registered marketplace by name.  | Yes only when the selected marketplace has a local path. |
+| Field                | Use when                                                        | Install support                                        |
+| -------------------- | --------------------------------------------------------------- | ------------------------------------------------------ |
+| No marketplace field | You want Codex app-server to use marketplaces it already knows. | Yes, from a discovered local or remote marketplace.    |
+| `marketplaceSource`  | You have a Codex marketplace source app-server can add.         | Yes, for explicit `/codex computer-use install`.       |
+| `marketplacePath`    | You already know the local marketplace file path on the host.   | Yes, for explicit install and turn-start auto-install. |
+| `marketplaceName`    | You want to select one already registered marketplace by name.  | Yes, from the selected local or remote marketplace.    |
 
 Fresh Codex homes may need a short moment to seed their official
 marketplaces. During install, OpenClaw polls `plugin/list` for up to
@@ -240,21 +240,17 @@ failed replacement copy also preserves the active cache. Explicit
 `marketplaceName` or `marketplacePath` configuration disables this
 reconciliation so OpenClaw does not override that selection.
 
-## Remote catalog limit
+## Remote marketplaces
 
-Codex app-server can list and read remote-only catalog entries, but it does
-not currently support remote `plugin/install`. That means `marketplaceName`
-can select a remote-only marketplace for status checks, but installs and
-re-enables still need a local marketplace via `marketplaceSource` or
-`marketplacePath`.
+Codex 0.146.0 can read and install Computer Use plugins from discovered remote
+marketplaces. OpenClaw passes the opaque remote plugin ID returned by Codex to
+`plugin/read` and `plugin/install`; a human-readable plugin name is not a valid
+substitute.
 
-If status says the plugin is available in a remote Codex marketplace but
-remote install is unsupported, run install with a local source or path:
-
-```text
-/codex computer-use install --source <marketplace-source>
-/codex computer-use install --marketplace-path <path>
-```
+`/codex computer-use install` can explicitly install or re-enable a discovered
+remote plugin. Turn-start `autoInstall` can also use an already discovered local
+or remote marketplace. Status checks and turns without `autoInstall` do not
+install plugins or modify Codex configuration.
 
 ## Configuration reference
 
@@ -279,7 +275,8 @@ remote install is unsupported, run install with a local source or path:
 Turn-start auto-install intentionally refuses configured `marketplaceSource`
 values. Adding a new source is an explicit setup operation, so use
 `/codex computer-use install --source <marketplace-source>` once, then let
-`autoInstall` handle future re-enables from discovered local marketplaces.
+`autoInstall` handle future re-enables from discovered local or remote
+marketplaces.
 Turn-start auto-install can use a configured `marketplacePath`, because that
 is already a local path on the host.
 
@@ -309,17 +306,16 @@ matching config key is unset:
 OpenClaw reports a stable setup reason internally and formats the
 user-facing status for chat:
 
-| Reason                       | Meaning                                                | Next step                                     |
-| ---------------------------- | ------------------------------------------------------ | --------------------------------------------- |
-| `disabled`                   | `computerUse.enabled` resolved to false.               | Set `enabled` or another Computer Use field.  |
-| `marketplace_missing`        | No matching marketplace was available.                 | Configure source, path, or marketplace name.  |
-| `plugin_not_installed`       | Marketplace exists, but the plugin is not installed.   | Run install or enable `autoInstall`.          |
-| `plugin_disabled`            | Plugin is installed but disabled in Codex config.      | Run install to re-enable it.                  |
-| `remote_install_unsupported` | Selected marketplace is remote-only.                   | Use `marketplaceSource` or `marketplacePath`. |
-| `mcp_missing`                | Plugin is enabled, but the MCP server is unavailable.  | Check Codex Computer Use and OS permissions.  |
-| `ready`                      | Plugin and MCP tools are available.                    | Start the Codex-mode turn.                    |
-| `check_failed`               | A Codex app-server request failed during status check. | Check app-server connectivity and logs.       |
-| `auto_install_blocked`       | Turn-start setup would need to add a new source.       | Run explicit install first.                   |
+| Reason                 | Meaning                                                | Next step                                    |
+| ---------------------- | ------------------------------------------------------ | -------------------------------------------- |
+| `disabled`             | `computerUse.enabled` resolved to false.               | Set `enabled` or another Computer Use field. |
+| `marketplace_missing`  | No matching marketplace was available.                 | Configure source, path, or marketplace name. |
+| `plugin_not_installed` | Marketplace exists, but the plugin is not installed.   | Run install or enable `autoInstall`.         |
+| `plugin_disabled`      | Plugin is installed but disabled in Codex config.      | Run install to re-enable it.                 |
+| `mcp_missing`          | Plugin is enabled, but the MCP server is unavailable.  | Check Codex Computer Use and OS permissions. |
+| `ready`                | Plugin and MCP tools are available.                    | Start the Codex-mode turn.                   |
+| `check_failed`         | A Codex app-server request failed during status check. | Check app-server connectivity and logs.      |
+| `auto_install_blocked` | Turn-start setup would need to add a new source.       | Run explicit install first.                  |
 
 The chat output includes the plugin state, MCP server state, marketplace,
 tools when available, and the specific message for the failing setup step.
@@ -352,9 +348,10 @@ marketplace is not discovered, pass `--source` or `--marketplace-path`.
 **Status says installed but disabled.** Run `/codex computer-use install`
 again. Codex app-server install writes the plugin config back to enabled.
 
-**Status says remote install is unsupported.** Use a local marketplace
-source or path. Remote-only catalog entries can be inspected but not
-installed through the current app-server API.
+**A discovered remote plugin cannot be installed.** Confirm Codex reports the
+marketplace and the plugin's opaque remote ID, then run `/codex computer-use
+install`. Add a new `marketplaceSource` only through explicit install; turn-start
+`autoInstall` uses remote marketplaces that Codex has already discovered.
 
 **Status says the MCP server is unavailable.** Re-run install once so MCP
 servers reload. If it remains unavailable, fix the Codex Computer Use app,
@@ -383,7 +380,7 @@ retry in a fresh session.
 **Turn-start auto-install refuses a source.** This is intentional. Add the
 source with explicit `/codex computer-use install --source
 <marketplace-source>` first, then future turn-start auto-install can use the
-discovered local marketplace.
+discovered local or remote marketplace.
 
 ## Related
 

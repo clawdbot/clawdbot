@@ -1,9 +1,36 @@
 // Qa Lab tests cover Slack live adapter message reconciliation.
+import type { FetchFunction } from "@slack/web-api";
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "../../bus-state.js";
 import { testing } from "./adapter.runtime.js";
 
 describe("Slack live adapter reconciliation", () => {
+  it("aborts an in-flight observer fetch when the adapter stops", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const fetchImpl: FetchFunction = async (_url, init) => {
+      observedSignal = init?.signal;
+      await new Promise<void>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("observer aborted")), {
+          once: true,
+        });
+      });
+      throw new Error("unreachable");
+    };
+    const lifecycle = new AbortController();
+    const request = new AbortController();
+
+    const pending = testing.withSlackLifecycleSignal(fetchImpl, lifecycle.signal)(
+      "https://slack.test",
+      {
+        signal: request.signal,
+      },
+    );
+    lifecycle.abort();
+
+    await expect(pending).rejects.toThrow("observer aborted");
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
   it("records streamed updates to the same Slack timestamp as bus edits", async () => {
     const state = createQaBusState();
     const busMessageIds = new Map<string, string>();

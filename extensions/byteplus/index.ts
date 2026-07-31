@@ -15,7 +15,7 @@ const BYTEPLUS_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest,
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "BytePlus Provider",
-  description: "Bundled BytePlus provider plugin",
+  description: "BytePlus provider plugin",
   manifest,
   provider: {
     label: "BytePlus",

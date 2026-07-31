@@ -12,6 +12,7 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  isRecord,
   normalizeOptionalString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -40,10 +41,6 @@ type OpenRouterVideoModel = {
   supported_frame_images?: unknown;
   supported_resolutions?: unknown;
   supported_sizes?: unknown;
-};
-
-type OpenRouterVideoModelsResponse = {
-  data?: OpenRouterVideoModel[];
 };
 
 type OpenRouterVideoModelCatalogCapabilities = VideoGenerationProviderCapabilities & {
@@ -98,6 +95,10 @@ function normalizeStringRecord(value: unknown): Record<string, string> | undefin
     }
   }
   return Object.keys(record).length > 0 ? record : undefined;
+}
+
+function isOpenRouterVideoModel(value: unknown): value is OpenRouterVideoModel {
+  return isRecord(value);
 }
 
 function buildOpenRouterVideoModeCapabilities(params: {
@@ -190,11 +191,15 @@ function buildOpenRouterVideoModelCapabilities(
 }
 
 function projectOpenRouterVideoModelsToCatalogEntries(
-  payload: OpenRouterVideoModelsResponse,
+  payload: unknown,
 ): Array<UnifiedModelCatalogEntry<OpenRouterVideoModelCatalogCapabilities>> {
   const entries: Array<UnifiedModelCatalogEntry<OpenRouterVideoModelCatalogCapabilities>> = [];
   const seen = new Set<string>();
-  for (const model of payload.data ?? []) {
+  const models = isRecord(payload) && Array.isArray(payload.data) ? payload.data : [];
+  for (const model of models) {
+    if (!isOpenRouterVideoModel(model)) {
+      continue;
+    }
     const id = normalizeOptionalString(model.id);
     if (!id || seen.has(id)) {
       continue;
@@ -266,7 +271,7 @@ async function fetchOpenRouterVideoModels(params: {
   timeoutMs: number;
   allowPrivateNetwork: boolean;
   dispatcherPolicy: OpenRouterVideoDispatcherPolicy;
-}): Promise<OpenRouterVideoModelsResponse> {
+}): Promise<unknown> {
   return await getCachedLiveCatalogValue({
     keyParts: [
       "openrouter",
@@ -287,7 +292,7 @@ async function fetchOpenRouterVideoModels(params: {
       });
       try {
         await assertOkOrThrowHttpError(response, "OpenRouter video models request failed");
-        return await readProviderJsonResponse<OpenRouterVideoModelsResponse>(
+        return await readProviderJsonResponse<unknown>(
           response,
           "OpenRouter video models request failed",
         );

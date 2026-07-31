@@ -30,6 +30,25 @@ const defaultClientFactory: GatewayClientFactory = (opts) => new GatewayBrowserC
 // Grace window before offline presentation appears; reconnects never wait.
 const OFFLINE_INDICATOR_DELAY_MS = 2_000;
 
+function notifyGatewayObservers<T>(
+  listeners: ReadonlySet<(value: T) => void>,
+  value: T,
+  errorLabel: string,
+  isCurrent?: (value: T) => boolean,
+): void {
+  // Snapshot membership because callbacks may mutate subscriptions or replace their owner.
+  for (const listener of Array.from(listeners)) {
+    if (isCurrent && !isCurrent(value)) {
+      return;
+    }
+    try {
+      listener(value);
+    } catch (error) {
+      console.error(`[gateway] ${errorLabel} handler error:`, error);
+    }
+  }
+}
+
 function sameSelfUser(
   left: ApplicationGatewaySnapshot["selfUser"],
   right: ApplicationGatewaySnapshot["selfUser"],
@@ -80,16 +99,14 @@ export function createApplicationGateway(
   // kicking the operator back to the login gate.
   let everConnected = false;
   let stopped = true;
+  // Snapshot observers can synchronously stop or replace their publishing client.
+  const isCurrentClient = (expected: GatewayBrowserClient | null) =>
+    !stopped && client === expected;
   let offlineIndicatorTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();
   const eventLogListeners = new Set<(events: readonly EventLogEntry[]) => void>();
   let eventLog: EventLogEntry[] = [];
-  const notify = () => {
-    for (const listener of listeners) {
-      listener(snapshot);
-    }
-  };
   const clearOfflineIndicatorTimer = () => {
     if (offlineIndicatorTimer !== null) {
       globalThis.clearTimeout(offlineIndicatorTimer);
@@ -120,7 +137,7 @@ export function createApplicationGateway(
       snapshot = next;
       scheduleOfflineIndicator();
     }
-    notify();
+    notifyGatewayObservers(listeners, snapshot, "snapshot", (current) => current === snapshot);
   };
   const loadCanvasSurfaceLease = (): Promise<CanvasSurfaceLease> => {
     if (canvasSurfaceLease) {
@@ -205,11 +222,6 @@ export function createApplicationGateway(
     // frame that remounts after the socket closes.
     bumpCanvasWidgetFrameConnectionGeneration();
   };
-  const publishEventLog = () => {
-    for (const listener of eventLogListeners) {
-      listener(eventLog);
-    }
-  };
   const updateSettings = (patch: Partial<typeof settings>, selectGateway = false) => {
     const next = { ...settings, ...patch };
     if (!persistConnectionSettings && !selectGateway) {
@@ -230,7 +242,12 @@ export function createApplicationGateway(
         // A live connection owns its authenticated identity until onClose. Older
         // gateways can omit still-connected clients after presence TTL pruning.
         if (selfUser && !sameSelfUser(snapshot.selfUser, selfUser)) {
+          const eventClient = client;
           setSnapshot({ ...snapshot, selfUser });
+          // A presence observer can replace its client before this event reaches the log.
+          if (!isCurrentClient(eventClient)) {
+            return;
+          }
         }
       }
     }
@@ -238,7 +255,7 @@ export function createApplicationGateway(
       0,
       250,
     );
-    publishEventLog();
+    notifyGatewayObservers(eventLogListeners, eventLog, "event");
   };
 
   const connect = (overrides: ApplicationGatewayConnectOptions = {}) => {
@@ -377,7 +394,7 @@ export function createApplicationGateway(
         });
       },
       onGap: ({ expected, received }) => {
-        if (client !== nextClient) {
+        if (!isCurrentClient(nextClient)) {
           return;
         }
         setSnapshot({
@@ -385,7 +402,9 @@ export function createApplicationGateway(
           lastError: `event gap detected (expected seq ${expected}, got ${received}); reconnecting`,
           lastErrorCode: null,
         });
-        connect();
+        if (isCurrentClient(nextClient)) {
+          connect();
+        }
       },
       onEvent: (event) => {
         // A replaced socket can still deliver queued events; never let it
@@ -400,18 +419,8 @@ export function createApplicationGateway(
           // not prevent chat, approvals, or the remaining app from updating.
           console.error("[gateway] event handler error:", error);
         }
-        // Snapshot listeners so subscriptions changed during delivery affect
-        // only the next frame, not sibling consumers of the current frame.
-        for (const listener of Array.from(eventListeners)) {
-          if (client !== nextClient) {
-            return;
-          }
-          try {
-            listener(event);
-          } catch (error) {
-            console.error("[gateway] event listener handler error:", error);
-          }
-        }
+        const isActiveClient = () => isCurrentClient(nextClient);
+        notifyGatewayObservers(eventListeners, event, "event listener", isActiveClient);
       },
     });
     client = nextClient;
@@ -429,7 +438,9 @@ export function createApplicationGateway(
       lastError: null,
       lastErrorCode: null,
     });
-    nextClient.start();
+    if (isCurrentClient(nextClient)) {
+      nextClient.start();
+    }
   };
 
   const gateway: ApplicationGateway = {

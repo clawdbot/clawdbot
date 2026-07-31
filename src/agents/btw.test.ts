@@ -112,6 +112,8 @@ vi.mock("./prepared-model-runtime.js", () => ({
       agentDir: params.agentDir,
       config: params.config,
       workspaceDir: params.workspaceDir,
+      configuredRuntimeModels: [],
+      inlineProviderModels: [],
       createStores: () => ({ authStorage, modelRegistry }),
     };
   },
@@ -837,7 +839,13 @@ describe("runBtwSideQuestion", () => {
       "gpt-5.5",
       DEFAULT_AGENT_DIR,
       expect.any(Object),
-      expect.objectContaining({ authProfileMode: "token" }),
+      expect.objectContaining({
+        authProfileMode: "token",
+        preparedModelRuntime: expect.objectContaining({
+          configuredRuntimeModels: [],
+          inlineProviderModels: [],
+        }),
+      }),
     );
     expect(
       (mockArg(codexSideQuestionMock, 0, 0) as { sessionFile?: string }).sessionFile,
@@ -1762,6 +1770,10 @@ describe("runBtwSideQuestion", () => {
         modelRegistry,
         authProfileId: "anthropic:backup",
         authProfileMode: "api_key",
+        preparedModelRuntime: expect.objectContaining({
+          configuredRuntimeModels: [],
+          inlineProviderModels: [],
+        }),
         skipAgentDiscovery: true,
       }),
     );

@@ -40,7 +40,7 @@ export type DoctorHealthFlowContext = {
   healthOk?: boolean;
   gatewayHealthAuthenticated?: boolean;
   gatewayHealthSkipped?: boolean;
-  gatewayStatus?: import("../commands/status.types.js").StatusSummary;
+  gatewayStatus?: import("../status/types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
   postInstallDoctorResult?: UpdatePostInstallDoctorResult;
 };

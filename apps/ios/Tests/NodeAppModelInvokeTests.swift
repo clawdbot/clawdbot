@@ -6165,6 +6165,11 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(outbox.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-a") == reply)
     }
 
+    @Test func `watch messages only override thinking for quick replies`() {
+        #expect(NodeAppModel.watchThinkingOverride(for: .chat) == nil)
+        #expect(NodeAppModel.watchThinkingOverride(for: .quickReply) == "low")
+    }
+
     @Test func `watch message outbox discards permanent gateway failures`() {
         #expect(NodeAppModel._test_shouldDiscardFailedWatchMessage(code: "INVALID_REQUEST"))
         #expect(!NodeAppModel._test_shouldDiscardFailedWatchMessage(

@@ -307,6 +307,7 @@ async function runMessageActionRequest(
         messageActionContext?: {
           expiresAtMs: number;
           sessionId?: string;
+          sourceReplySessionKey?: string;
           sourceReplyFinal?: boolean;
           sourceReplyToolCallId?: string;
           requesterAccountId?: string;
@@ -535,6 +536,7 @@ async function runTelegramTerminalAction(params: {
   message?: string;
   presentation?: Record<string, unknown>;
   sessionKey?: string;
+  sourceReplySessionKey?: string;
   currentMessageId?: string;
   currentThreadTs?: string;
   sourceReplyFinal?: boolean;
@@ -563,6 +565,9 @@ async function runTelegramTerminalAction(params: {
           messageActionContext: {
             expiresAtMs: Date.now() + 60_000,
             sessionId: params.sessionId,
+            ...(params.sourceReplySessionKey === undefined
+              ? {}
+              : { sourceReplySessionKey: params.sourceReplySessionKey }),
             sourceReplyFinal: params.sourceReplyFinal ?? true,
             ...(params.toolCallId === undefined
               ? {}
@@ -2832,6 +2837,44 @@ describe("gateway send mirroring", () => {
     expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { name: "another agent", sourceReplySessionKey: "agent:other:main" },
+    { name: "a malformed key", sourceReplySessionKey: "not-a-session-key" },
+  ])("rejects a signed source-reply session for $name", async ({ sourceReplySessionKey }) => {
+    const sessionKey = "agent:main:whatsapp:direct:alice";
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "whatsapp",
+        action: "react",
+        params: { messageId: "wamid.1", emoji: "ok" },
+        sessionKey,
+        sessionId: "session-1",
+        agentId: "main",
+        idempotencyKey: `idem-invalid-source-session:${sourceReplySessionKey}`,
+      },
+      {
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey,
+            messageActionContext: {
+              expiresAtMs: Date.now() + 60_000,
+              sessionId: "session-1",
+              sourceReplySessionKey,
+            },
+          },
+        },
+      },
+    );
+
+    expect(firstRespondCall(respond)[0]).toBe(false);
+    expect(firstRespondCall(respond)[2]?.message).toContain(
+      "agent runtime identity does not match the requested session",
+    );
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+  });
+
   it("rejects ingress-issued message action context after expiry", async () => {
     const sessionKey = "agent:main:whatsapp:direct:alice";
     const { respond } = await runMessageActionRequest(
@@ -2943,6 +2986,47 @@ describe("gateway send mirroring", () => {
         mocks.completeRestartRecoveryTerminalDelivery.mock.invocationCallOrder[0],
         "expected terminal completion order",
       ),
+    );
+  });
+
+  it("uses the signed run session for gateway-owned source reply receipts", async () => {
+    registerMessageActionPlugin({
+      messageId: "tg-split-session",
+      registrySuffix: "source-message-action-split-session",
+    });
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-split-session" }),
+    );
+    const policySessionKey = "agent:main:telegram:default:direct:chat-123";
+    const runSessionKey = "agent:main:main";
+
+    const { respond } = await runTelegramTerminalAction({
+      sessionId: "session-split-key",
+      sessionKey: policySessionKey,
+      sourceReplySessionKey: runSessionKey,
+      idempotencyKey: "idem-source-message-action-split-key",
+      sourceTurnId: "channel-user:v1:split-key",
+      toolCallId: "message-call-split-key",
+      message: "visible source reply",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.beginRestartRecoveryTerminalDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-split-key",
+        sessionKey: runSessionKey,
+        sourceTurnId: "channel-user:v1:split-key",
+        toolCallId: "message-call-split-key",
+      }),
+    );
+    expect(mocks.completeRestartRecoveryTerminalDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: runSessionKey }),
+    );
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: runSessionKey }),
+    );
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: policySessionKey }),
     );
   });
 

@@ -40,7 +40,7 @@ export function classifyCompactionReason(reason?: string): string {
     return "below_threshold";
   }
   if (text.includes("already compacted") || text.includes("already_compacted")) {
-    return "already_compacted_recently";
+    return "already_compacted";
   }
   if (text.includes("deferred to background")) {
     return "deferred_background";
@@ -79,7 +79,7 @@ export function classifyCompactionReason(reason?: string): string {
 /** Return whether a classified reason represents an intentional compaction no-op. */
 export function isBenignCompactionSkipReason(reason?: string): boolean {
   const classification = classifyCompactionReason(reason);
-  return classification === "below_threshold" || classification === "already_compacted_recently";
+  return classification === "below_threshold" || classification === "already_compacted";
 }
 
 /** Return whether a compaction result is an intentional no-op rather than a failure. */

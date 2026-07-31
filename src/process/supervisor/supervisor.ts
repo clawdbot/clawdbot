@@ -1,7 +1,6 @@
 // Process supervisor manages long-running child and PTY process lifecycles.
 import crypto from "node:crypto";
 import { performance } from "node:perf_hooks";
-import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -80,27 +79,19 @@ function resolveElapsedTimeoutReason(params: {
   overallTimeoutDeadlineMs: number | null;
   noOutputTimeoutDeadlineMs: number | null;
 }): TerminationReason | null {
-  const elapsedDeadlines: Array<{ reason: TerminationReason; deadlineMs: number }> = [];
-  if (params.overallTimeoutDeadlineMs !== null && params.nowMs >= params.overallTimeoutDeadlineMs) {
-    elapsedDeadlines.push({
-      reason: "overall-timeout",
-      deadlineMs: params.overallTimeoutDeadlineMs,
-    });
-  }
   if (
-    params.noOutputTimeoutDeadlineMs !== null &&
-    params.nowMs >= params.noOutputTimeoutDeadlineMs
+    params.overallTimeoutDeadlineMs !== null &&
+    params.nowMs >= params.overallTimeoutDeadlineMs &&
+    (params.noOutputTimeoutDeadlineMs === null ||
+      params.nowMs < params.noOutputTimeoutDeadlineMs ||
+      params.overallTimeoutDeadlineMs <= params.noOutputTimeoutDeadlineMs)
   ) {
-    elapsedDeadlines.push({
-      reason: "no-output-timeout",
-      deadlineMs: params.noOutputTimeoutDeadlineMs,
-    });
+    return "overall-timeout";
   }
-  if (elapsedDeadlines.length === 0) {
-    return null;
-  }
-  elapsedDeadlines.sort((a, b) => a.deadlineMs - b.deadlineMs);
-  return expectDefined(elapsedDeadlines[0], "elapsed deadlines entry at 0").reason;
+  return params.noOutputTimeoutDeadlineMs !== null &&
+    params.nowMs >= params.noOutputTimeoutDeadlineMs
+    ? "no-output-timeout"
+    : null;
 }
 
 export function createProcessSupervisor(): ProcessSupervisor {
@@ -391,18 +382,6 @@ export function createProcessSupervisor(): ProcessSupervisor {
           noOutputTimeoutDeadlineMs,
         });
         const terminalReason = forcedReason ?? deadlineReason;
-        if (settled) {
-          return {
-            reason: terminalReason ?? "exit",
-            exitCode: result.code,
-            exitSignal: result.signal,
-            durationMs: Date.now() - startedAtMs,
-            stdout,
-            stderr,
-            timedOut: isTimeoutReason(terminalReason ?? "exit"),
-            noOutputTimedOut: terminalReason === "no-output-timeout",
-          };
-        }
         settled = true;
         clearTimers();
         adapter.dispose();
@@ -417,7 +396,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
           durationMs: Date.now() - startedAtMs,
           stdout,
           stderr,
-          timedOut: isTimeoutReason(terminalReason ?? reason),
+          timedOut: isTimeoutReason(reason),
           noOutputTimedOut: terminalReason === "no-output-timeout",
         };
         registry.finalize(runId, {

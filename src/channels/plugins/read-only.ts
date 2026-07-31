@@ -745,23 +745,6 @@ function addSetupChannelPlugins(
     if (!ownedMissingChannelIds || ownedMissingChannelIds.length === 0) {
       continue;
     }
-    if (ownedMissingChannelIds.includes(setup.plugin.id)) {
-      addChannelPlugins(byId, [setup.plugin], {
-        onlyIds: new Set(ownedMissingChannelIds),
-        allowOverwrite: false,
-      });
-      addChannelPlugins(
-        byId,
-        ownedMissingChannelIds
-          .filter((channelId) => channelId !== setup.plugin.id)
-          .map((channelId) => cloneChannelPluginForChannelId(setup.plugin, channelId)),
-        {
-          onlyIds: new Set(ownedMissingChannelIds),
-          allowOverwrite: false,
-        },
-      );
-      continue;
-    }
     const ownedChannelIds = (options.ownedChannelIdsByPluginId.get(setup.pluginId) ?? []).filter(
       isSafeManifestChannelId,
     );
@@ -829,17 +812,6 @@ function listBundledChannelManifestRecords(
   records: readonly PluginManifestRecord[],
 ): PluginManifestRecord[] {
   return records.filter((plugin) => plugin.origin === "bundled" && plugin.channels.length > 0);
-}
-
-function listPluginIdsForChannels(
-  records: readonly PluginManifestRecord[],
-  channelIds: readonly string[],
-): string[] {
-  const requestedChannelIds = new Set(channelIds);
-  return records
-    .filter((plugin) => plugin.channels.some((channelId) => requestedChannelIds.has(channelId)))
-    .map((plugin) => plugin.id)
-    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function resolveExternalReadOnlyChannelPluginIds(params: {
@@ -965,9 +937,14 @@ export function resolveReadOnlyChannelPluginsForConfig(
   const bundledManifestMissingChannelIds = configuredChannelIds.filter(
     (channelId) => !byId.has(channelId),
   );
+  const bundledManifestMissingChannelIdSet = new Set(bundledManifestMissingChannelIds);
   addManifestChannelPlugins(byId, bundledManifestRecords, {
     pluginIds: new Set(
-      listPluginIdsForChannels(bundledManifestRecords, bundledManifestMissingChannelIds),
+      bundledManifestRecords.flatMap((record) =>
+        record.channels.some((channelId) => bundledManifestMissingChannelIdSet.has(channelId))
+          ? [record.id]
+          : [],
+      ),
     ),
     channelIds: bundledManifestMissingChannelIds,
   });

@@ -96,22 +96,22 @@ describe("method scope resolution", () => {
     ["skills.curator.restore", ["operator.admin"]],
     ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
-    ["talk.client.create", ["operator.write"]],
-    ["talk.client.transcript", ["operator.write"]],
-    ["talk.client.close", ["operator.write"]],
-    ["talk.client.toolCall", ["operator.write"]],
-    ["talk.client.steer", ["operator.write"]],
-    ["talk.session.create", ["operator.write"]],
-    ["talk.session.join", ["operator.write"]],
-    ["talk.session.appendAudio", ["operator.write"]],
-    ["talk.session.startTurn", ["operator.write"]],
-    ["talk.session.endTurn", ["operator.write"]],
-    ["talk.session.cancelTurn", ["operator.write"]],
-    ["talk.session.cancelOutput", ["operator.write"]],
-    ["talk.session.acknowledgeMark", ["operator.write"]],
-    ["talk.session.submitToolResult", ["operator.write"]],
-    ["talk.session.steer", ["operator.write"]],
-    ["talk.session.close", ["operator.write"]],
+    ["talk.client.create", ["operator.talk"]],
+    ["talk.client.transcript", ["operator.talk"]],
+    ["talk.client.close", ["operator.talk"]],
+    ["talk.client.toolCall", ["operator.talk"]],
+    ["talk.client.steer", ["operator.talk"]],
+    ["talk.session.create", ["operator.talk"]],
+    ["talk.session.join", ["operator.talk"]],
+    ["talk.session.appendAudio", ["operator.talk"]],
+    ["talk.session.startTurn", ["operator.talk"]],
+    ["talk.session.endTurn", ["operator.talk"]],
+    ["talk.session.cancelTurn", ["operator.talk"]],
+    ["talk.session.cancelOutput", ["operator.talk"]],
+    ["talk.session.acknowledgeMark", ["operator.talk"]],
+    ["talk.session.submitToolResult", ["operator.talk"]],
+    ["talk.session.steer", ["operator.talk"]],
+    ["talk.session.close", ["operator.talk"]],
     ["update.status", ["operator.admin"]],
     ["config.schema", ["operator.admin"]],
     ["config.patch", ["operator.admin"]],
@@ -157,13 +157,18 @@ describe("method scope resolution", () => {
       resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", { command: "browser.proxy" }),
     ).toEqual(["operator.admin"]);
     expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", {
+        command: "browser.proxy.upload.v1",
+      }),
+    ).toEqual(["operator.admin"]);
+    expect(
       authorizeOperatorScopesForMethod("node.invoke", ["operator.write"], {
         command: "fs.listDir",
       }),
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", {
-        command: "browser.proxy",
+        command: "browser.proxy.upload.v1",
         params: { method: "POST", path: "/profiles/create" },
       }),
     ).toEqual(["operator.write"]);
@@ -186,6 +191,19 @@ describe("method scope resolution", () => {
         includeSecrets: true,
       }),
     ).toEqual({ allowed: true });
+  });
+
+  it("accepts dedicated Talk access and preserves operator.write compatibility", () => {
+    expect(authorizeOperatorScopesForMethod("talk.client.create", ["operator.talk"])).toEqual({
+      allowed: true,
+    });
+    expect(authorizeOperatorScopesForMethod("talk.client.create", ["operator.write"])).toEqual({
+      allowed: true,
+    });
+    expect(authorizeOperatorScopesForMethod("talk.client.create", ["operator.read"])).toEqual({
+      allowed: false,
+      missingScope: "operator.talk",
+    });
   });
 
   it("requires admin only when DM pairing approval bootstraps a command owner", () => {
@@ -708,7 +726,7 @@ describe("operator scope authorization", () => {
     });
   });
 
-  it("allows operator.write clients to use unified Talk sessions", () => {
+  it("allows operator.talk and legacy operator.write clients to use unified Talk sessions", () => {
     for (const method of [
       "talk.client.create",
       "talk.client.transcript",
@@ -727,12 +745,15 @@ describe("operator scope authorization", () => {
       "talk.session.steer",
       "talk.session.close",
     ]) {
+      expect(authorizeOperatorScopesForMethod(method, ["operator.talk"])).toEqual({
+        allowed: true,
+      });
       expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
         allowed: true,
       });
       expect(authorizeOperatorScopesForMethod(method, ["operator.read"])).toEqual({
         allowed: false,
-        missingScope: "operator.write",
+        missingScope: "operator.talk",
       });
     }
   });
@@ -884,6 +905,7 @@ describe("core gateway method classification", () => {
   it("exposes skill proposal methods through the core gateway registry", () => {
     for (const method of [
       "skills.proposals.list",
+      "skills.proposals.events.list",
       "skills.proposals.inspect",
       "skills.proposals.historyStatus",
     ]) {
@@ -899,6 +921,7 @@ describe("core gateway method classification", () => {
       "skills.proposals.create",
       "skills.proposals.update",
       "skills.proposals.revise",
+      "skills.proposals.evaluate",
       "skills.proposals.historyScan",
       "skills.proposals.apply",
       "skills.proposals.reject",

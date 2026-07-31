@@ -21,6 +21,11 @@ import {
   restorePluginInteractiveHandlers,
 } from "./interactive-registry.js";
 import {
+  restoreLegacyPluginInternalHooks,
+  snapshotLegacyPluginInternalHooks,
+  type LegacyPluginInternalHookState,
+} from "./legacy-internal-hook-state.js";
+import {
   listRegisteredMemoryEmbeddingProviders,
   restoreRegisteredMemoryEmbeddingProviders,
 } from "./memory-embedding-providers.js";
@@ -44,6 +49,7 @@ export type PluginProcessGlobalState = {
   detachedTaskRuntimeRegistration: ReturnType<typeof getDetachedTaskLifecycleRuntimeRegistration>;
   embeddingProviders: ReturnType<typeof listRegisteredEmbeddingProviders>;
   interactiveHandlers: ReturnType<typeof listPluginInteractiveHandlers>;
+  legacyInternalHooks: LegacyPluginInternalHookState;
   memoryCapability: ReturnType<typeof getMemoryCapabilityRegistration>;
   memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
@@ -60,6 +66,7 @@ export function snapshotPluginProcessGlobalState(): PluginProcessGlobalState {
     detachedTaskRuntimeRegistration: getDetachedTaskLifecycleRuntimeRegistration(),
     embeddingProviders: listRegisteredEmbeddingProviders(),
     interactiveHandlers: listPluginInteractiveHandlers(),
+    legacyInternalHooks: snapshotLegacyPluginInternalHooks(),
     memoryCapability: getMemoryCapabilityRegistration(),
     memoryCorpusSupplements: listMemoryCorpusSupplements(),
     memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
@@ -76,6 +83,7 @@ export function restorePluginProcessGlobalState(state: PluginProcessGlobalState)
   restoreDetachedTaskLifecycleRuntimeRegistration(state.detachedTaskRuntimeRegistration);
   restoreRegisteredEmbeddingProviders(state.embeddingProviders);
   restorePluginInteractiveHandlers(state.interactiveHandlers);
+  restoreLegacyPluginInternalHooks(state.legacyInternalHooks);
   restoreRegisteredMemoryEmbeddingProviders(state.memoryEmbeddingProviders);
   restoreMemoryPluginState({
     capability: state.memoryCapability,

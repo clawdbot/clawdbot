@@ -246,7 +246,7 @@ function buildTalkCatalog(config: OpenClawConfig) {
   const activeTranscriptionProvider = transcriptionSelection.activeProvider;
   const realtimeConfig = buildTalkRealtimeConfig(config);
   const realtimeSurface =
-    realtimeConfig.transport === "gateway-relay" ? "bridge" : "browser-session";
+    realtimeConfig.transport === "gateway-relay" ? "gateway-relay" : "browser-session";
   // Mirror talk.client.create's resolution inputs (agent scope + top-level model
   // override) so catalog readiness matches what session creation will actually do;
   // diverging here previously reported GPT-Live over OAuth as unconfigured.

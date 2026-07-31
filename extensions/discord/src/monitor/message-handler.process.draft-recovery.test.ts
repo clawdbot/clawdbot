@@ -490,7 +490,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
     expect(firstDispatchParams().replyOptions?.disableBlockStreaming).toBe(true);
   });
 
-  it("shows only the agent status in the default Discord progress draft", async () => {
+  it("shows the agent status above the tool lines in the default Discord progress draft", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
@@ -519,9 +519,10 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     expect(draftStream.update).toHaveBeenCalledTimes(1);
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Claiming my square footage. Tastefully, but with claws.",
+      "Claiming my square footage. Tastefully, but with claws.\n\n🛠️ Exec\n• exec done",
     );
-    expect(String(draftStream.update.mock.calls[0]?.[0])).not.toMatch(/Working|Exec|\n\n/);
+    // No config, so the implicit label stays hidden under the status headline.
+    expect(String(draftStream.update.mock.calls[0]?.[0])).not.toMatch(/Working/);
     expect(draftStream.flush).toHaveBeenCalledTimes(1);
     expect(
       requireRecord(firstDispatchParams().replyOptions, "dispatch reply options")
@@ -559,7 +560,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenLastCalledWith(
-      "Checking private context before replying.",
+      "Checking private context before replying.\n\n🛠️ Exec",
     );
     expectFinalWithProgressReceipt("done", "🛠️ 1 tool call");
     expect(getDeliveredFinalTexts()[0]).not.toContain("💬");

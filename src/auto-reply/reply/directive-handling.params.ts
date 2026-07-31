@@ -34,6 +34,7 @@ type HandleDirectiveOnlyCoreParams = {
   model: string;
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
+  canPersistStickyModelSelection?: boolean;
 };
 
 /** Full directive-only command handler inputs. */

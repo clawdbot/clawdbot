@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import OpenAI from "openai";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import {
@@ -101,6 +102,26 @@ async function postChatCompletions(port: number, body: unknown, headers?: Record
   return res;
 }
 
+async function postRawChatCompletions(port: number, body: string) {
+  return await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-openclaw-scopes": "operator.write",
+    },
+    body,
+  });
+}
+
+function createOpenAiChatClient(port: number): OpenAI {
+  return new OpenAI({
+    apiKey: "test",
+    baseURL: `http://127.0.0.1:${port}/v1`,
+    defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+    maxRetries: 0,
+  });
+}
+
 function parseSseDataLines(text: string): string[] {
   return text
     .split("\n")
@@ -184,9 +205,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       });
       expect(res.status).toBe(400);
       const json = (await res.json()) as Record<string, unknown>;
-      expect((json.error as Record<string, unknown> | undefined)?.type).toBe(
-        "invalid_request_error",
-      );
+      const error = json.error as Record<string, unknown> | undefined;
+      expect(error?.type).toBe("invalid_request_error");
+      expect(error?.message).toBe("Invalid image_url content in `messages`.");
       expect(agentCommand).toHaveBeenCalledTimes(0);
     };
     const postSyncUserMessage = async (message: string) => {
@@ -540,6 +561,48 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         },
       ]);
 
+      const malformedImageParts = [
+        { type: "image_url" },
+        { type: "image_url", image_url: null },
+        { type: "image_url", image_url: {} },
+        { type: "image_url", image_url: { url: "   " } },
+        { type: "image_url", image_url: { url: 123 } },
+        { type: "image_url", image_url: { url: null } },
+        { type: "image_url", image_url: "   " },
+        { type: "image_url", image_url: 123 },
+      ];
+      const validImagePart = {
+        type: "image_url",
+        image_url: { url: "data:image/png;base64,QUJDRA==" },
+      };
+      for (const imagePart of malformedImageParts) {
+        for (const content of [
+          [imagePart],
+          [{ type: "text", text: "describe this" }, imagePart],
+          [validImagePart, imagePart],
+        ]) {
+          await expectInvalidRequestNoDispatch([{ role: "user", content }]);
+        }
+      }
+
+      for (const malformedDataUri of [
+        "data:image/png,QUJDRA==",
+        "data:image/png;base64,",
+        "data:image/png;base64,%%%",
+        "data:image/svg+xml;base64,PHN2Zz4=",
+        "data:image/png;base64,JVBERi0xLjQK",
+      ]) {
+        await expectInvalidRequestNoDispatch([
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "describe this" },
+              { type: "image_url", image_url: { url: malformedDataUri } },
+            ],
+          },
+        ]);
+      }
+
       {
         mockAgentOnce([{ text: "I can see the image" }]);
         const res = await postChatCompletions(port, {
@@ -587,6 +650,33 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(firstCall?.images).toBeUndefined();
         expect(firstCall?.message ?? "").not.toContain("User sent image(s) with no text.");
         await res.text();
+      }
+
+      for (const historicalImageParts of [
+        [{ type: "image_url", image_url: { url: "   " } }],
+        [validImagePart, { type: "image_url", image_url: { url: "   " } }],
+      ]) {
+        for (const followup of [
+          { role: "user", content: "What color was it?" },
+          { role: "tool", content: "Vision tool says it is blue." },
+        ]) {
+          mockAgentOnce([{ text: "follow up answer" }]);
+          const res = await postChatCompletions(port, {
+            model: "openclaw",
+            messages: [
+              {
+                role: "user",
+                content: [{ type: "text", text: "look at this" }, ...historicalImageParts],
+              },
+              { role: "assistant", content: "Checking the image." },
+              followup,
+            ],
+          });
+          expect(res.status).toBe(200);
+          expect(getFirstAgentCall()?.images).toBeUndefined();
+          expect(getFirstAgentMessage()).toContain("User: look at this");
+          await res.text();
+        }
       }
 
       {
@@ -1501,60 +1591,132 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
   });
 
-  it("forwards inbound max_completion_tokens and max_tokens into streamParams", async () => {
+  it("validates and forwards max_completion_tokens and max_tokens into streamParams", async () => {
     const port = enabledPort;
-    const mockAgentOnce = (payloads: Array<{ text: string }>) => {
+    const mockAgentOnce = () => {
       agentCommand.mockClear();
-      agentCommand.mockResolvedValueOnce({ payloads } as never);
+      agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
     };
-    const getFirstAgentMaxTokens = () => firstAgentCommandOptions()?.streamParams?.maxTokens;
+    const getRecordedAgentMaxTokens = () => firstAgentCommandOptions()?.streamParams?.maxTokens;
 
-    {
-      mockAgentOnce([{ text: "hello" }]);
+    const validCases: Array<{
+      name: string;
+      body: Record<string, unknown>;
+      expected: number | undefined;
+    }> = [
+      { name: "current field", body: { max_completion_tokens: 256 }, expected: 256 },
+      { name: "legacy field", body: { max_tokens: 128 }, expected: 128 },
+      {
+        name: "current field precedence",
+        body: { max_completion_tokens: 64, max_tokens: 999 },
+        expected: 64,
+      },
+      {
+        name: "null current field leaves legacy active",
+        body: { max_completion_tokens: null, max_tokens: 32 },
+        expected: 32,
+      },
+      {
+        name: "null legacy field leaves current active",
+        body: { max_completion_tokens: 16, max_tokens: null },
+        expected: 16,
+      },
+      {
+        name: "largest safe integer",
+        body: { max_completion_tokens: Number.MAX_SAFE_INTEGER },
+        expected: Number.MAX_SAFE_INTEGER,
+      },
+      { name: "omitted fields", body: {}, expected: undefined },
+    ];
+
+    for (const testCase of validCases) {
+      mockAgentOnce();
       const res = await postChatCompletions(port, {
         model: "openclaw",
-        max_completion_tokens: 256,
+        ...testCase.body,
         messages: [{ role: "user", content: "hi" }],
       });
       expect(res.status).toBe(200);
-      expect(getFirstAgentMaxTokens()).toBe(256);
+      expect(agentCommand, testCase.name).toHaveBeenCalledTimes(1);
+      expect(getRecordedAgentMaxTokens(), testCase.name).toBe(testCase.expected);
       await res.text();
     }
 
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        max_tokens: 128,
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getFirstAgentMaxTokens()).toBe(128);
-      await res.text();
+    mockAgentOnce();
+    const client = createOpenAiChatClient(port);
+    await client.chat.completions.create({
+      model: "openclaw",
+      max_completion_tokens: null,
+      max_tokens: null,
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(agentCommand, "SDK null fields").toHaveBeenCalledTimes(1);
+    expect(getRecordedAgentMaxTokens(), "SDK null fields").toBeUndefined();
+  });
+
+  it("rejects malformed token caps before agent dispatch", async () => {
+    const port = enabledPort;
+    const invalidValues: Array<{ name: string; value: unknown }> = [
+      { name: "string", value: "32" },
+      { name: "object", value: {} },
+      { name: "array", value: [32] },
+      { name: "zero", value: 0 },
+      { name: "negative", value: -1 },
+      { name: "fractional", value: 1.5 },
+      { name: "unsafe integer", value: Number.MAX_SAFE_INTEGER + 1 },
+    ];
+
+    for (const field of ["max_completion_tokens", "max_tokens"] as const) {
+      for (const testCase of invalidValues) {
+        agentCommand.mockClear();
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          [field]: testCase.value,
+          messages: [{ role: "user", content: "hi" }],
+        });
+        expect(res.status, `${field}: ${testCase.name}`).toBe(400);
+        const json = (await res.json()) as { error?: { type?: string; message?: string } };
+        expect(json.error?.type).toBe("invalid_request_error");
+        expect(json.error?.message).toContain(field);
+        expect(agentCommand, `${field}: ${testCase.name}`).toHaveBeenCalledTimes(0);
+      }
+
+      agentCommand.mockClear();
+      const res = await postRawChatCompletions(
+        port,
+        `{"model":"openclaw","messages":[{"role":"user","content":"hi"}],"${field}":1e309}`,
+      );
+      expect(res.status, `${field}: non-finite raw number`).toBe(400);
+      const json = (await res.json()) as { error?: { type?: string; message?: string } };
+      expect(json.error?.type).toBe("invalid_request_error");
+      expect(json.error?.message).toContain(field);
+      expect(agentCommand, `${field}: non-finite raw number`).toHaveBeenCalledTimes(0);
     }
 
-    {
-      mockAgentOnce([{ text: "hello" }]);
+    const shadowedCases = [
+      {
+        name: "malformed current field with valid legacy field",
+        body: { max_completion_tokens: "64", max_tokens: 32 },
+        field: "max_completion_tokens",
+      },
+      {
+        name: "malformed legacy field with valid current field",
+        body: { max_completion_tokens: 64, max_tokens: "32" },
+        field: "max_tokens",
+      },
+    ];
+    for (const testCase of shadowedCases) {
+      agentCommand.mockClear();
       const res = await postChatCompletions(port, {
         model: "openclaw",
-        max_completion_tokens: 64,
-        max_tokens: 999,
+        ...testCase.body,
         messages: [{ role: "user", content: "hi" }],
       });
-      expect(res.status).toBe(200);
-      expect(getFirstAgentMaxTokens()).toBe(64);
-      await res.text();
-    }
-
-    {
-      mockAgentOnce([{ text: "hello" }]);
-      const res = await postChatCompletions(port, {
-        model: "openclaw",
-        messages: [{ role: "user", content: "hi" }],
-      });
-      expect(res.status).toBe(200);
-      expect(getFirstAgentMaxTokens()).toBeUndefined();
-      await res.text();
+      expect(res.status, testCase.name).toBe(400);
+      const json = (await res.json()) as { error?: { type?: string; message?: string } };
+      expect(json.error?.type).toBe("invalid_request_error");
+      expect(json.error?.message).toContain(testCase.field);
+      expect(agentCommand, testCase.name).toHaveBeenCalledTimes(0);
     }
   });
 
@@ -1879,6 +2041,170 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     );
   });
 
+  it.each([
+    {
+      name: "a split custom XML opener",
+      deltas: ["<", "xiaohai-banli>milk tea</", "xiaohai-banli>"],
+      expected: "<xiaohai-banli>milk tea</xiaohai-banli>",
+    },
+    {
+      name: "literal script-like content",
+      deltas: ["<", "script>alert('literal')</", "script>"],
+      expected: "<script>alert('literal')</script>",
+    },
+  ])("preserves $name through the official OpenAI SDK SSE stream", async ({ deltas, expected }) => {
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      const { session, emit } = createStubSessionHarness();
+      subscribeEmbeddedAgentSession({ session, runId });
+      emit({ type: "message_start", message: { role: "assistant" } });
+      for (const delta of deltas) {
+        emitAssistantTextDelta({ emit, delta });
+      }
+      return { payloads: [{ text: expected }] };
+    }) as never);
+
+    const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
+      model: "openclaw",
+      messages: [{ role: "user", content: "Preserve the literal output." }],
+      stream: true,
+    });
+    const content: string[] = [];
+    const finishReasons: Array<string | null> = [];
+    for await (const chunk of stream) {
+      for (const choice of chunk.choices) {
+        if (typeof choice.delta.content === "string") {
+          content.push(choice.delta.content);
+        }
+        finishReasons.push(choice.finish_reason);
+      }
+    }
+
+    expect(content.join("")).toBe(expected);
+    expect(finishReasons.at(-1)).toBe("stop");
+    expect(agentCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves buffered leading content in cumulative assistant snapshots", async () => {
+    const expected = "<xiaohai-banli>milk tea</xiaohai-banli>";
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: {
+          text: expected,
+          delta: "xiaohai-banli>milk tea</xiaohai-banli>",
+        },
+      });
+      return { payloads: [{ text: expected }] };
+    }) as never);
+
+    const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
+      model: "openclaw",
+      messages: [{ role: "user", content: "Preserve the full snapshot." }],
+      stream: true,
+    });
+    const content: string[] = [];
+    const finishReasons: Array<string | null> = [];
+    for await (const chunk of stream) {
+      for (const choice of chunk.choices) {
+        if (typeof choice.delta.content === "string") {
+          content.push(choice.delta.content);
+        }
+        finishReasons.push(choice.finish_reason);
+      }
+    }
+
+    expect(content.join("")).toBe(expected);
+    expect(finishReasons.at(-1)).toBe("stop");
+  });
+
+  it("flushes same-turn assistant microtasks before the SSE done frame", async () => {
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce(((opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({ runId, stream: "assistant", data: { delta: "start " } });
+      const result = Promise.resolve({ payloads: [{ text: "start finish" }] });
+      void result.then(() => {
+        emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+        void Promise.resolve().then(() => {
+          emitAgentEvent({ runId, stream: "assistant", data: { delta: "finish" } });
+        });
+      });
+      return result;
+    }) as never);
+
+    const res = await postChatCompletions(enabledPort, {
+      stream: true,
+      model: "openclaw",
+      messages: [{ role: "user", content: "Finish the streamed response." }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+
+    const data = parseSseDataLines(await res.text());
+    expect(data.at(-1)).toBe("[DONE]");
+    const chunks = data
+      .filter((line) => line !== "[DONE]")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const content = chunks
+      .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
+      .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
+      .filter((value): value is string => typeof value === "string")
+      .join("");
+    expect(content).toBe("start finish");
+    const finishChoice = chunks
+      .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
+      .at(-1);
+    expect(finishChoice?.finish_reason).toBe("stop");
+  });
+
+  it.each([
+    { name: "successful completion", fail: false, expected: "hello" },
+    { name: "internal agent error", fail: true, expected: "Error: internal error" },
+  ])(
+    "separates streamed content from the terminal finish for an official SDK $name",
+    async ({ fail, expected }) => {
+      agentCommand.mockClear();
+      if (fail) {
+        agentCommand.mockRejectedValueOnce(new Error("private upstream failure"));
+      } else {
+        agentCommand.mockImplementationOnce((async (opts: unknown) =>
+          buildAssistantDeltaResult({
+            opts,
+            emit: emitAgentEvent,
+            deltas: ["he", "llo"],
+            text: expected,
+          })) as never);
+      }
+
+      const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
+        model: "openclaw",
+        messages: [{ role: "user", content: "Return a complete streamed response." }],
+        stream: true,
+      });
+      const choices: Array<{
+        delta: { content?: string | null };
+        finish_reason: string | null;
+      }> = [];
+      for await (const chunk of stream) {
+        choices.push(...chunk.choices);
+      }
+
+      const contentChoices = choices.filter((choice) => typeof choice.delta.content === "string");
+      expect(contentChoices.map((choice) => choice.delta.content).join("")).toBe(expected);
+      expect(contentChoices.every((choice) => choice.finish_reason === null)).toBe(true);
+
+      const terminalChoices = choices.filter((choice) => choice.finish_reason === "stop");
+      expect(terminalChoices).toHaveLength(1);
+      expect(terminalChoices[0]?.delta).toEqual({});
+      expect(choices.at(-1)).toEqual(terminalChoices[0]);
+    },
+  );
+
   it("streams SSE chunks when stream=true", async () => {
     const port = enabledPort;
     try {
@@ -1914,6 +2240,18 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           .filter((v): v is string => typeof v === "string")
           .join("");
         expect(allContent).toBe("hello");
+        const contentChoices = jsonChunks
+          .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
+          .filter(
+            (choice) =>
+              typeof (choice.delta as Record<string, unknown> | undefined)?.content === "string",
+          );
+        expect(contentChoices.every((choice) => choice.finish_reason === null)).toBe(true);
+        const stopChoices = jsonChunks
+          .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
+          .filter((choice) => choice.finish_reason === "stop");
+        expect(stopChoices).toHaveLength(1);
+        expect(stopChoices[0]?.delta).toEqual({});
         const usageChunks = jsonChunks.filter((c) => "usage" in c);
         expect(usageChunks).toHaveLength(0);
       }
@@ -2252,17 +2590,90 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const errorChunks = errorData
           .filter((d) => d !== "[DONE]")
           .map((d) => JSON.parse(d) as Record<string, unknown>);
-        const stopChoice = errorChunks
-          .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
-          .find((choice) => choice.finish_reason === "stop");
-        expect((stopChoice?.delta as Record<string, unknown> | undefined)?.content).toBe(
-          "Error: internal error",
+        const choices = errorChunks.flatMap(
+          (chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [],
         );
+        const errorContentChoice = choices.find(
+          (choice) =>
+            (choice.delta as Record<string, unknown> | undefined)?.content ===
+            "Error: internal error",
+        );
+        expect(errorContentChoice?.finish_reason).toBeNull();
+        const stopChoices = choices.filter((choice) => choice.finish_reason === "stop");
+        expect(stopChoices).toHaveLength(1);
+        expect(stopChoices[0]?.delta).toEqual({});
+        expect(choices.at(-1)).toEqual(stopChoices[0]);
       }
     } finally {
       // shared server
     }
   });
+
+  it.each([
+    { astral: "😀", boundary: 255 },
+    { astral: "𐐷", boundary: 511 },
+  ])(
+    "keeps streamed tool-call arguments well-formed ($astral at UTF-16 boundary $boundary)",
+    async ({ astral, boundary }) => {
+      const argumentPrefix = '{"value":"';
+      const value = `${"a".repeat(boundary - argumentPrefix.length)}${astral}tail`;
+      const expectedArguments = JSON.stringify({ value });
+      expect(expectedArguments.indexOf(astral)).toBe(boundary);
+
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({
+        payloads: [{ text: "Calling the tool." }],
+        meta: {
+          stopReason: "tool_calls",
+          pendingToolCalls: [
+            {
+              id: "call_1",
+              name: "read_value",
+              arguments: expectedArguments,
+            },
+          ],
+        },
+      } as never);
+
+      const res = await postChatCompletions(enabledPort, {
+        stream: true,
+        model: "openclaw",
+        messages: [{ role: "user", content: "read the value" }],
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("text/event-stream");
+
+      const data = parseSseDataLines(await res.text());
+      expect(data.at(-1)).toBe("[DONE]");
+
+      const chunks = data
+        .filter((line) => line !== "[DONE]")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const choices = chunks.flatMap(
+        (chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [],
+      );
+      const argumentDeltas = choices
+        .flatMap((choice) => {
+          const delta = choice.delta as Record<string, unknown> | undefined;
+          return (delta?.tool_calls as Array<Record<string, unknown>> | undefined) ?? [];
+        })
+        .map((toolCall) => {
+          const toolFunction = toolCall.function as Record<string, unknown> | undefined;
+          return toolFunction?.arguments;
+        })
+        .filter((argumentsDelta): argumentsDelta is string => typeof argumentsDelta === "string");
+
+      expect(argumentDeltas.length).toBeGreaterThan(1);
+      for (const argumentsDelta of argumentDeltas) {
+        expect(new TextDecoder().decode(new TextEncoder().encode(argumentsDelta))).toBe(
+          argumentsDelta,
+        );
+      }
+      expect(argumentDeltas.join("")).toBe(expectedArguments);
+      expect(JSON.parse(argumentDeltas.join(""))).toEqual({ value });
+      expect(choices.some((choice) => choice.finish_reason === "tool_calls")).toBe(true);
+    },
+  );
 
   it(
     "sends an initial SSE chunk before a streaming agent run settles",

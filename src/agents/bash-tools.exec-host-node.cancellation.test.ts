@@ -29,6 +29,10 @@ vi.mock("../infra/exec-approvals.js", () => ({
     const priority: Record<ExecAsk, number> = { off: 0, "on-miss": 1, always: 2 };
     return priority[left] >= priority[right] ? left : right;
   },
+  minSecurity: (left: ExecSecurity, right: ExecSecurity) => {
+    const priority: Record<ExecSecurity, number> = { deny: 0, allowlist: 1, full: 2 };
+    return priority[left] <= priority[right] ? left : right;
+  },
   requiresExecApproval: mocks.requiresExecApproval,
   resolveExecApprovalAllowedDecisions: vi.fn(() => ["allow-once", "allow-always", "deny"]),
   resolveExecApprovalUnavailableDecisions: vi.fn(() => []),

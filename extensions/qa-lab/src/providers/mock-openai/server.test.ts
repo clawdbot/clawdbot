@@ -1,6 +1,7 @@
 // Qa Lab tests cover server plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
+import { readTargetFromPrompt } from "./mock-openai-tooling.js";
 import { startQaMockOpenAiServer } from "./server.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -504,7 +505,9 @@ describe("qa mock openai server", () => {
 
     const initialText = initialBody.output?.[0]?.content?.[0]?.text ?? "";
     expect(initialText).toContain("QA-STRANDED-85714");
-    expect(initialText.length).toBeGreaterThanOrEqual(120);
+    expect(initialText).toContain("近 7 日營收較前期增加");
+    expect(initialText).toHaveLength(167);
+    expect(initialText.match(/[.!?]+(?:\s|$)/g) ?? []).toHaveLength(0);
     expect(outputItems(initialBody).some((item) => item.type === "function_call")).toBe(false);
 
     const retryBody = await expectResponsesJson(server, {
@@ -525,7 +528,7 @@ describe("qa mock openai server", () => {
     const toolCall = outputToolCall(retryBody, "message");
     expect(outputToolArgsFromItem(toolCall)).toEqual({
       action: "send",
-      message: "QA-STRANDED-85714",
+      message: initialText,
     });
   });
 
@@ -809,6 +812,41 @@ describe("qa mock openai server", () => {
     expect(final.output[0]?.content?.[0]?.text).toBe("TOOL_PROGRESS_MARKER_OK");
   });
 
+  it("prefers a current tool-result marker over system and stale user directives", async () => {
+    const server = await startMockServer();
+    const prompt = [
+      "Tool progress QA check: call the read tool exactly once on `QA_KICKOFF_TASK.md` before answering.",
+      "The only valid final marker is inside that file.",
+      "After the read completes, reply with only the exact marker from the file.",
+    ].join(" ");
+    const marker = "TOOL_PROGRESS_OUTPUT_MARKER_OK";
+
+    const final = await expectResponsesJson<{
+      output: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      instructions: "If nothing needs attention, reply exactly: HEARTBEAT_OK",
+      input: [
+        makeUserInput(
+          "Earlier tool progress QA check: after the tool returns, reply exactly `STALE_PROGRESS_MARKER`.",
+        ),
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_1",
+          output: [
+            "Matrix tool progress QA task.",
+            "Reply with only this exact marker and no other text:",
+            marker,
+          ].join("\n"),
+        },
+        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+      ],
+    });
+
+    expect(final.output[0]?.content?.[0]?.text).toBe(marker);
+  });
+
   it("plans deterministic tool-progress exec commands from exact command prompts", async () => {
     const server = await startMockServer();
     const command =
@@ -940,7 +978,7 @@ describe("qa mock openai server", () => {
     expect(errorOutput.output[0]?.content?.[0]?.text).toBe("TOOL_PROGRESS_ERROR_OK");
   });
 
-  it("uses the latest user prompt path for tool-progress plans", async () => {
+  it("uses the latest user tool-progress prompt kind and target for plans", async () => {
     const server = await startMockServer();
 
     const response = await postResponses(server, {
@@ -963,6 +1001,253 @@ describe("qa mock openai server", () => {
     expect(body).toContain('"name":"read"');
     expect(body).toContain("latest-missing-progress-target.txt");
     expect(body).not.toContain("older-progress-target.txt");
+
+    const command = "sleep 2; cat 'current-progress-target.txt'";
+    const currentNormal = await postResponses(server, {
+      stream: true,
+      input: [
+        makeUserInput(
+          "Tool progress error QA check: read `stale-missing-progress-target.txt` before answering. After the read fails, reply exactly `STALE_PROGRESS_OK`.",
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_stale_progress_read",
+          output: JSON.stringify({ error: "ENOENT: stale turn" }),
+        },
+        makeUserInput(
+          `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`${command}\`. After that command completes, reply exactly \`CURRENT_PROGRESS_OK\`.`,
+        ),
+      ],
+    });
+
+    expect(currentNormal.status).toBe(200);
+    const currentNormalBody = await currentNormal.text();
+    expect(currentNormalBody).toContain('"name":"exec"');
+    expect(currentNormalBody).toContain(command);
+    expect(currentNormalBody).not.toContain("stale-missing-progress-target.txt");
+  });
+
+  it.each([
+    {
+      name: "preview",
+      prompt:
+        "@openclaw:matrix-qa.test Tool progress QA check: call the read tool exactly once on `QA_KICKOFF_TASK.md` before answering. After that read completes, reply exactly `CURRENT_PREVIEW_OK`.",
+      toolName: "read",
+      expectedArgs: { path: "QA_KICKOFF_TASK.md" },
+    },
+    {
+      name: "command preview",
+      prompt:
+        "@openclaw:matrix-qa.test Tool progress QA check: call the exec tool exactly once with this exact command before answering: `printf 'matrix-command-progress-start\\n'; sleep 2`. After that exec command completes or fails, reply exactly `CURRENT_COMMAND_OK`.",
+      toolName: "exec",
+      expectedArgs: { command: "printf 'matrix-command-progress-start\\n'; sleep 2" },
+    },
+    {
+      name: "error",
+      prompt:
+        "@openclaw:matrix-qa.test Tool progress error QA check: read `missing-matrix-tool-progress-target.txt` before answering. After the read fails, reply exactly `CURRENT_ERROR_OK`.",
+      toolName: "read",
+      expectedArgs: { path: "missing-matrix-tool-progress-target.txt" },
+    },
+    {
+      name: "mention safety",
+      prompt:
+        "@openclaw:matrix-qa.test Tool progress QA check: read the missing workspace file `matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt` before answering. After that read fails, reply exactly `CURRENT_MENTION_OK`.",
+      toolName: "read",
+      expectedArgs: {
+        path: "matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt",
+      },
+    },
+  ])("routes current Matrix $name after stale streaming history", async (fixture) => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_STREAMING_OK`.",
+        ),
+        makeUserInput(fixture.prompt),
+        makeUserInput("Continue with the current Matrix QA scenario."),
+      ],
+    });
+
+    const toolCall = outputToolCall(payload, fixture.toolName);
+    expect(outputToolArgsFromItem(toolCall)).toEqual(fixture.expectedArgs);
+    expect(JSON.stringify(payload)).not.toContain("STALE_STREAMING_OK");
+  });
+
+  it("does not let a prior Matrix tool result satisfy the current progress prompt", async () => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "@openclaw:matrix-qa.test Tool progress QA check: read `stale-progress-target.txt` before answering. Reply exactly `STALE_PROGRESS_OK`.",
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_stale_progress",
+          output: "STALE_PROGRESS_OK",
+        },
+        makeUserInput(
+          "@openclaw:matrix-qa.test Tool progress QA check: read `current-progress-target.txt` before answering. Reply exactly `CURRENT_PROGRESS_OK`.",
+        ),
+      ],
+    });
+
+    const toolCall = outputToolCall(payload, "read");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({ path: "current-progress-target.txt" });
+    expect(JSON.stringify(payload)).not.toContain("STALE_PROGRESS_OK");
+  });
+
+  it.each([
+    {
+      name: "quiet streaming",
+      stalePrompt:
+        "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_QUIET_OK`.",
+    },
+    {
+      name: "tool progress",
+      stalePrompt:
+        "@openclaw:matrix-qa.test Tool progress QA check: read `stale-progress-target.txt` before answering. Reply exactly `STALE_PROGRESS_OK`.",
+    },
+  ])("does not resurrect stale Matrix $name across an ordinary turn", async (fixture) => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(fixture.stalePrompt),
+        makeUserInput("Reply exactly `CURRENT_ORDINARY_OK`."),
+      ],
+    });
+
+    expect(outputText(payload)).toBe("CURRENT_ORDINARY_OK");
+    expect(JSON.stringify(payload)).not.toContain("stale-progress-target.txt");
+  });
+
+  it("does not treat an ordinary retry request as a Matrix scenario continuation", async () => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_STREAMING_OK`.",
+        ),
+        makeUserInput(
+          "Please retry the new database operation, then reply exactly `CURRENT_RETRY_OK`.",
+        ),
+      ],
+    });
+
+    expect(outputText(payload)).toBe("CURRENT_RETRY_OK");
+    expect(JSON.stringify(payload)).not.toContain("STALE_STREAMING_OK");
+  });
+
+  it("uses the current tool result marker after stale streaming history", async () => {
+    const server = await startMockServer();
+    const currentPrompt =
+      "@openclaw:matrix-qa.test Tool progress QA check: call the read tool exactly once on `QA_KICKOFF_TASK.md` before answering. The only valid final marker is inside that file.";
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_STREAMING_OK`.",
+        ),
+        makeUserInput(currentPrompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_current_progress",
+          output: "Reply with only this exact marker and no other text:\nCURRENT_PROGRESS_OK",
+        },
+      ],
+    });
+
+    expect(outputText(payload)).toBe("CURRENT_PROGRESS_OK");
+  });
+
+  it("selects tool progress after quiet streaming in one user envelope", async () => {
+    const server = await startMockServer();
+    const currentPrompt =
+      "@openclaw:matrix-qa.test Tool progress QA check: call the read tool exactly once on `QA_KICKOFF_TASK.md` before answering. The only valid final marker is inside that file.";
+    const envelope = [
+      "@openclaw:matrix-qa.test Quiet streaming QA check: reply exactly `STALE_ENVELOPE_OK`.",
+      currentPrompt,
+    ].join("\n");
+    const plan = await expectResponsesJson(server, {
+      stream: false,
+      input: [makeUserInput(envelope)],
+    });
+
+    const toolCall = outputToolCall(plan, "read");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({ path: "QA_KICKOFF_TASK.md" });
+    expect(JSON.stringify(plan)).not.toContain("STALE_ENVELOPE_OK");
+
+    const final = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(envelope),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_current_envelope",
+          output: "Reply with only this exact marker and no other text:\nCURRENT_ENVELOPE_OK",
+        },
+      ],
+    });
+
+    expect(outputText(final)).toBe("CURRENT_ENVELOPE_OK");
+  });
+
+  it("selects the latest tool-progress target in one user envelope", async () => {
+    const server = await startMockServer();
+    const envelope = [
+      "Tool progress QA check: read `stale-progress-target.txt` before answering. Reply exactly `STALE_PROGRESS_OK`.",
+      "Tool progress QA check: read `current-progress-target.txt` before answering. Reply exactly `CURRENT_PROGRESS_OK`.",
+    ].join("\n");
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [makeUserInput(envelope)],
+    });
+
+    const toolCall = outputToolCall(payload, "read");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({ path: "current-progress-target.txt" });
+    expect(JSON.stringify(payload)).not.toContain("stale-progress-target.txt");
+  });
+
+  it("selects the latest block-streaming markers and target in one user envelope", async () => {
+    const server = await startMockServer();
+    const envelope = [
+      "Block streaming QA check: first exact marker: `STALE_ONE`; read `stale-block.txt`; second exact marker: `STALE_TWO`.",
+      "Block streaming QA check: first exact marker: `CURRENT_ONE`; read `current-block.txt`; second exact marker: `CURRENT_TWO`.",
+    ].join("\n");
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [makeUserInput(envelope)],
+    });
+
+    expect(outputText(payload)).toBe("CURRENT_ONE");
+    const toolCall = outputToolCall(payload, "read");
+    expect(outputToolArgsFromItem(toolCall)).toEqual({ path: "current-block.txt" });
+    expect(JSON.stringify(payload)).not.toContain("STALE_ONE");
+    expect(JSON.stringify(payload)).not.toContain("stale-block.txt");
+  });
+
+  it("rejects successful error-progress results without a prompt directive", async () => {
+    const server = await startMockServer();
+    const payload = await expectResponsesJson(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "Tool progress error QA check: read `missing-progress-target.txt` before answering. The final marker is supplied only after the tool runs.",
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_unexpected_success",
+          output: "Reply with only this exact marker and no other text:\nFALSE_POSITIVE_OK",
+        },
+      ],
+    });
+
+    expect(outputText(payload)).toBe("BUG-TOOL-DID-NOT-FAIL");
   });
 
   it("prefers path-like refs over generic quoted keys in prompts", async () => {
@@ -996,6 +1281,15 @@ describe("qa mock openai server", () => {
       'Please inspect "message_id" metadata first, then read `./QA_KICKOFF_TASK.md`.',
     );
     expect(debugPayload.plannedToolName).toBe("read");
+  });
+
+  it("keeps unformatted Matrix mention-shaped filenames intact", () => {
+    expect(
+      readTargetFromPrompt(
+        "Read the missing workspace file matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt before answering.",
+      ),
+    ).toBe("matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt");
+    expect(readTargetFromPrompt("Read _fixture.json before answering.")).toBe("_fixture.json");
   });
 
   it("reads unquoted fixture paths and honors exact replies after tool output", async () => {
@@ -1137,6 +1431,85 @@ describe("qa mock openai server", () => {
     const body = await response.text();
     expect(body).toContain("Remembered ALPHA-7.");
     expect(body).not.toContain('"name":"read"');
+  });
+
+  it("requires retained bot history in the Slack MPIM thread-history prelude", async () => {
+    const server = await startMockServer();
+    const seedMarker = "SLACK_QA_MPIM_SEED_A1B2C3D4";
+    const recallMarker = "SLACK_QA_MPIM_RECALL_A1B2C3D4";
+    const missingMarker = "SLACK_QA_MPIM_MISSING_A1B2C3D4";
+    const seedPrompt =
+      `Slack MPIM assistant-history seed check. Reply with only a marker in this exact format: ${seedMarker}_BOT_<NONCE>. ` +
+      "Replace <NONCE> with 8 to 32 new uppercase letters or digits. " +
+      "Do not include angle brackets, spaces, Markdown, or punctuation.";
+    const seedResponse = await expectResponsesJson<unknown>(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      input: [makeUserInput(seedPrompt)],
+    });
+    const botReplyMarker = outputText(seedResponse);
+    expect(botReplyMarker).toMatch(new RegExp(`^${seedMarker}_BOT_[A-Z0-9]+$`, "u"));
+    const botNonce = botReplyMarker.slice(`${seedMarker}_BOT_`.length);
+    const expectedRecallMarker = `${recallMarker}_${botNonce}`;
+    const recallPrompt = [
+      "Slack MPIM assistant-history recall check.",
+      `Recall the nonce from your immediately previous reply beginning with ${seedMarker}_BOT_.`,
+      `Reply with only this exact format: ${recallMarker}_<NONCE>, using that same nonce.`,
+      `Otherwise reply with only: ${missingMarker}`,
+    ].join(" ");
+    expect(recallPrompt).not.toContain(botReplyMarker);
+    expect(recallPrompt).not.toContain(botNonce);
+
+    const withRetainedBotHistory = await expectResponsesJson<unknown>(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(
+          [
+            "[Thread history - for context]",
+            `[Slack Driver (user) Fri 2026-07-31 10:00 UTC] ${seedPrompt}`,
+            "[slack message id: 1.000000 channel: C123]",
+            "",
+            `[Slack OpenClaw (this assistant) (assistant) Fri 2026-07-31 10:01 UTC] ${botReplyMarker}`,
+            "[slack message id: 1.500000 channel: C123]",
+            "",
+            `[Slack Driver (user) Fri 2026-07-31 10:02 UTC] ${recallPrompt}`,
+          ].join("\n"),
+        ),
+      ],
+    });
+    expect(outputText(withRetainedBotHistory)).toBe(expectedRecallMarker);
+
+    const withStructuredAssistantHistoryOnly = await expectResponsesJson<unknown>(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(seedPrompt),
+        {
+          role: "assistant",
+          content: [{ type: "output_text", text: botReplyMarker }],
+        },
+        makeUserInput(recallPrompt),
+      ],
+    });
+    expect(outputText(withStructuredAssistantHistoryOnly)).toBe(missingMarker);
+
+    const withHumanAttributedSeed = await expectResponsesJson<unknown>(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(
+          [
+            "[Thread history - for context]",
+            `[Slack Alice (user) Fri 2026-07-31 10:00 UTC] ${botReplyMarker}`,
+            "[slack message id: 1.000000 channel: C123]",
+            "",
+            `[Slack Driver (user) Fri 2026-07-31 10:02 UTC] ${recallPrompt}`,
+          ].join("\n"),
+        ),
+      ],
+    });
+    expect(outputText(withHumanAttributedSeed)).toBe(missingMarker);
   });
 
   it("drives repo-contract followthrough as read-read-read-write-then-report", async () => {
@@ -2471,7 +2844,7 @@ describe("qa mock openai server", () => {
     expect(structuredThreadMemorySummary.status).toBe(200);
     expect(JSON.stringify(await structuredThreadMemorySummary.json())).toContain("ORBIT-22");
 
-    const systemFallbackThreadMemorySummary = await postResponses(server, {
+    const unavailableThreadMemorySummary = await postResponses(server, {
       stream: false,
       input: [
         {
@@ -2492,8 +2865,31 @@ describe("qa mock openai server", () => {
         },
       ],
     });
-    expect(systemFallbackThreadMemorySummary.status).toBe(200);
-    expect(JSON.stringify(await systemFallbackThreadMemorySummary.json())).toContain("ORBIT-22");
+    expect(unavailableThreadMemorySummary.status).toBe(200);
+    const unavailableThreadMemoryText = JSON.stringify(await unavailableThreadMemorySummary.json());
+    expect(unavailableThreadMemoryText).toContain("NONE");
+    expect(unavailableThreadMemoryText).not.toContain("ORBIT-22");
+
+    const emptyThreadMemorySummary = await postResponses(server, {
+      stream: false,
+      input: [
+        {
+          role: "system",
+          content: "## /workspace/MEMORY.md\nThread-hidden codename: ORBIT-22.",
+        },
+        makeUserInput(
+          "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
+        ),
+        {
+          type: "function_call_output",
+          output: JSON.stringify({ results: [] }),
+        },
+      ],
+    });
+    expect(emptyThreadMemorySummary.status).toBe(200);
+    const emptyThreadMemoryText = JSON.stringify(await emptyThreadMemorySummary.json());
+    expect(emptyThreadMemoryText).toContain("NONE");
+    expect(emptyThreadMemoryText).not.toContain("ORBIT-22");
 
     const memoryFollowup = await postResponses(server, {
       stream: true,
@@ -2515,6 +2911,7 @@ describe("qa mock openai server", () => {
                 path: "sessions/qa-session-memory-ranking.jsonl",
                 startLine: 2,
                 endLine: 3,
+                snippet: "Project Nebula current codename: ORBIT-10.",
               },
             ],
           }),
@@ -2546,11 +2943,13 @@ describe("qa mock openai server", () => {
                 path: "MEMORY.md",
                 startLine: 1,
                 endLine: 2,
+                snippet: "Project Nebula stale codename: ORBIT-9.",
               },
               {
                 path: "sessions/qa-session-memory-ranking.jsonl",
                 startLine: 2,
                 endLine: 3,
+                snippet: "Project Nebula current codename: ORBIT-10.",
               },
             ],
           }),
@@ -2561,6 +2960,81 @@ describe("qa mock openai server", () => {
     expect(await memoryFollowupPrefersSessionResult.text()).toContain(
       "Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10.",
     );
+
+    const pathOnlySessionMemory = await postResponses(server, {
+      stream: true,
+      input: [
+        makeUserInput(
+          "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
+        ),
+        {
+          type: "function_call_output",
+          output: JSON.stringify({
+            results: [
+              {
+                path: "sessions/qa-session-memory-ranking.jsonl",
+                startLine: 2,
+                endLine: 3,
+              },
+            ],
+          }),
+        },
+      ],
+    });
+    expect(pathOnlySessionMemory.status).toBe(200);
+    const pathOnlySessionMemoryText = await pathOnlySessionMemory.text();
+    expect(pathOnlySessionMemoryText).toContain('"name":"memory_get"');
+    expect(pathOnlySessionMemoryText).not.toContain("codename is ORBIT-10");
+
+    const unavailableSessionMemory = await postResponses(server, {
+      stream: true,
+      input: [
+        makeUserInput(
+          "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
+        ),
+        {
+          type: "function_call_output",
+          output: JSON.stringify({
+            results: [
+              {
+                path: "sessions/qa-session-memory-ranking.jsonl",
+                snippet: "Project Nebula current codename: ORBIT-10.",
+              },
+            ],
+            unavailable: true,
+            error: "database is not open",
+          }),
+        },
+      ],
+    });
+    expect(unavailableSessionMemory.status).toBe(200);
+    const unavailableSessionMemoryText = await unavailableSessionMemory.text();
+    expect(unavailableSessionMemoryText).toContain("NONE");
+    expect(unavailableSessionMemoryText).not.toContain("codename is ORBIT-10");
+
+    const differentlyRankedSessionMemory = await postResponses(server, {
+      stream: true,
+      input: [
+        makeUserInput(
+          "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
+        ),
+        {
+          type: "function_call_output",
+          output: JSON.stringify({
+            results: [
+              {
+                path: "sessions/qa-session-memory-ranking.jsonl",
+                snippet: "Project Nebula current codename: ORBIT-9.",
+              },
+            ],
+          }),
+        },
+      ],
+    });
+    expect(differentlyRankedSessionMemory.status).toBe(200);
+    const differentlyRankedSessionMemoryText = await differentlyRankedSessionMemory.text();
+    expect(differentlyRankedSessionMemoryText).toContain("codename is ORBIT-9");
+    expect(differentlyRankedSessionMemoryText).not.toContain("codename is ORBIT-10");
 
     const activeMemorySearch = await postResponses(server, {
       stream: true,
@@ -3781,20 +4255,46 @@ describe("qa mock openai server", () => {
 
   it("completes an image without replaying a tool unavailable to the completion turn", async () => {
     const server = await startMockServer();
+    const prompt = "Image generation check: generate a QA lighthouse image.";
+    const imagePlan = await expectResponsesJson<unknown>(server, {
+      stream: false,
+      tools: [IMAGE_GENERATE_TOOL],
+      input: [makeUserInput(prompt)],
+    });
+    const imageCall = outputToolCall(imagePlan, "image_generate");
+    const callId = outputToolCallId(imageCall, "call_mock_image_generate_unavailable");
+    const completionEvent = [
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "OpenClaw runtime context (internal):",
+      "",
+      "[Internal task completion event]",
+      "source: image_generation",
+      "task: A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
+      "status: completed successfully",
+      "Generated media:",
+      "MEDIA:/tmp/qa-lighthouse.png",
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    ].join("\n");
     const completion = await expectResponsesJson<unknown>(server, {
       stream: false,
       tools: [MESSAGE_TOOL],
       input: [
-        makeUserInput("Image generation check: generate a QA lighthouse image."),
-        makeUserInput(
-          [
-            "[Internal task completion event]",
-            "source: image_generation",
-            "status: completed successfully",
-            "Generated media:",
-            "MEDIA:/tmp/qa-lighthouse.png",
-          ].join("\n"),
-        ),
+        makeUserInput(prompt),
+        {
+          type: "function_call",
+          name: "image_generate",
+          call_id: callId,
+          arguments: String(imageCall.arguments),
+        },
+        {
+          type: "function_call_output",
+          call_id: callId,
+          output: JSON.stringify({
+            content: [{ type: "text", text: "Background image generation started." }],
+            details: { async: true, status: "started" },
+          }),
+        },
+        makeUserInput(completionEvent),
       ],
     });
 
@@ -4841,6 +5341,514 @@ describe("qa mock openai server", () => {
     const debugPayload = requireRecord(await debugResponse.json(), "debug request");
     expect(debugPayload.model).toBe("claude-opus-4-8");
     expect(debugPayload.plannedToolName).toBe("read");
+  });
+
+  it("routes Anthropic hidden tools through Code Mode and preserves scenario evidence", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Repo contract followthrough check. Read AGENT.md, SOUL.md, and FOLLOWTHROUGH_INPUT.md first. Then follow the repo contract exactly, write ./repo-contract-summary.txt, and reply with three labeled lines: Read, Wrote, Status.";
+    const tools = [
+      {
+        name: "exec",
+        input_schema: {
+          type: "object",
+          properties: {
+            language: { type: "string" },
+            code: { type: "string" },
+          },
+          required: ["code"],
+        },
+      },
+      {
+        name: "wait",
+        input_schema: {
+          type: "object",
+          properties: { runId: { type: "string" } },
+          required: ["runId"],
+        },
+      },
+    ];
+    const messages: Array<Record<string, unknown>> = [
+      {
+        role: "user",
+        content: [{ type: "text", text: prompt }],
+      },
+    ];
+
+    const request = async () => {
+      const response = await postJson(server, "/v1/messages", {
+        model: "claude-opus-4-8",
+        max_tokens: 256,
+        tools,
+        messages,
+      });
+      expect(response.status).toBe(200);
+      return (await response.json()) as {
+        stop_reason: string;
+        content: Array<Record<string, unknown>>;
+      };
+    };
+    const readToolUse = (body: {
+      stop_reason: string;
+      content: Array<Record<string, unknown>>;
+    }) => {
+      expect(body.stop_reason).toBe("tool_use");
+      const toolUse = body.content.find((block) => block.type === "tool_use");
+      if (!toolUse || typeof toolUse.id !== "string" || typeof toolUse.name !== "string") {
+        throw new Error("Expected Anthropic tool_use block");
+      }
+      return toolUse;
+    };
+    const appendToolResult = (
+      toolUse: Record<string, unknown>,
+      result: Record<string, unknown>,
+    ) => {
+      messages.push(
+        { role: "assistant", content: [toolUse] },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: toolUse.id,
+              content: JSON.stringify(result),
+            },
+          ],
+        },
+      );
+    };
+    const expectPlan = async (name: string, args: Record<string, unknown>, wireName = "exec") => {
+      const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+      expect(debugResponse.status).toBe(200);
+      const debug = requireRecord(await debugResponse.json(), "debug request");
+      expect(debug.plannedToolName).toBe(name);
+      expect(debug.plannedWireToolName).toBe(wireName);
+      expect(debug.plannedToolArgs).toEqual(args);
+    };
+
+    const readAgent = readToolUse(await request());
+    expect(readAgent.name).toBe("exec");
+    const readAgentCode = String(requireRecord(readAgent.input, "exec input").code);
+    expect(readAgentCode).toContain("tools.callValue(target.id, targetArgs)");
+    expect(readAgentCode).toContain("value.content.slice(0, 2048)");
+    await expectPlan("read", { path: "AGENT.md" });
+
+    appendToolResult(readAgent, { status: "waiting", runId: "qa-code-mode-read-agent" });
+    const waitForAgent = readToolUse(await request());
+    expect(waitForAgent.name).toBe("wait");
+    const waitDebug = requireRecord(
+      await fetch(`${server.baseUrl}/debug/last-request`).then((response) => response.json()),
+      "wait debug request",
+    );
+    expect(waitDebug.plannedToolName).toBe("wait");
+    expect(waitDebug).not.toHaveProperty("plannedWireToolName");
+    expect(waitDebug.plannedToolArgs).toEqual({ runId: "qa-code-mode-read-agent" });
+
+    appendToolResult(waitForAgent, {
+      status: "completed",
+      value: { kind: "text", content: "# Repo contract\nDo not stop after planning." },
+    });
+    const readSoul = readToolUse(await request());
+    expect(readSoul.name).toBe("exec");
+    await expectPlan("read", { path: "SOUL.md" });
+
+    appendToolResult(readSoul, {
+      status: "completed",
+      value: { kind: "text", content: "# Execution style\nStay action-first." },
+    });
+    const readInput = readToolUse(await request());
+    expect(readInput.name).toBe("exec");
+    await expectPlan("read", { path: "FOLLOWTHROUGH_INPUT.md" });
+
+    appendToolResult(readInput, {
+      status: "completed",
+      value: {
+        kind: "text",
+        content:
+          "Mission: prove you followed the repo contract.\nEvidence path: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md -> repo-contract-summary.txt",
+      },
+    });
+    const writeSummary = readToolUse(await request());
+    expect(writeSummary.name).toBe("exec");
+    await expectPlan("write", {
+      path: "repo-contract-summary.txt",
+      content:
+        "Mission: prove you followed the repo contract.\nEvidence: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md\nStatus: complete",
+    });
+
+    appendToolResult(writeSummary, {
+      status: "completed",
+      value: "Successfully wrote 146 bytes to repo-contract-summary.txt.",
+    });
+    const final = await request();
+    expect(final.stop_reason).toBe("end_turn");
+    const text = final.content.find((block) => block.type === "text")?.text;
+    expect(text).toBe(
+      "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md\nWrote: repo-contract-summary.txt\nStatus: complete",
+    );
+  });
+
+  it("routes Anthropic image generation through Code Mode when only exec and wait are visible", async () => {
+    const server = await startMockServer();
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      tools: [
+        {
+          name: "exec",
+          input_schema: {
+            type: "object",
+            properties: { code: { type: "string" } },
+            required: ["code"],
+          },
+        },
+        {
+          name: "wait",
+          input_schema: {
+            type: "object",
+            properties: { runId: { type: "string" } },
+            required: ["runId"],
+          },
+        },
+      ],
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Capability flip image check: generate a QA lighthouse image in this turn right now.",
+            },
+          ],
+        },
+      ],
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      stop_reason: string;
+      content: Array<Record<string, unknown>>;
+    };
+    expect(body.stop_reason).toBe("tool_use");
+    expect(body.content.find((block) => block.type === "tool_use")?.name).toBe("exec");
+
+    const debug = requireRecord(
+      await fetch(`${server.baseUrl}/debug/last-request`).then((result) => result.json()),
+      "debug request",
+    );
+    expect(debug.plannedToolName).toBe("image_generate");
+    expect(debug.plannedWireToolName).toBe("exec");
+  });
+
+  it("does not route hidden capabilities through ordinary shell exec", async () => {
+    const server = await startMockServer();
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      tools: [
+        {
+          name: "exec",
+          input_schema: {
+            type: "object",
+            properties: { command: { type: "string" } },
+            required: ["command"],
+          },
+        },
+      ],
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Capability flip image check: generate a QA lighthouse image in this turn right now.",
+            },
+          ],
+        },
+      ],
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      stop_reason: string;
+      content: Array<Record<string, unknown>>;
+    };
+    expect(body.stop_reason).toBe("end_turn");
+    expect(body.content.some((block) => block.type === "tool_use")).toBe(false);
+  });
+
+  it("does not interpret ordinary tool results as Code Mode control envelopes", async () => {
+    const server = await startMockServer();
+    const prompt = "Read the seeded docs and report worked, failed, blocked, and follow-up items.";
+    const tools = [
+      {
+        name: "read",
+        input_schema: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
+        },
+      },
+      {
+        name: "wait",
+        input_schema: {
+          type: "object",
+          properties: { runId: { type: "string" } },
+          required: ["runId"],
+        },
+      },
+    ];
+    const messages: Array<Record<string, unknown>> = [
+      { role: "user", content: [{ type: "text", text: prompt }] },
+    ];
+    const firstResponse = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      tools,
+      messages,
+    });
+    const firstBody = (await firstResponse.json()) as {
+      content: Array<Record<string, unknown>>;
+    };
+    const readToolUse = firstBody.content.find((block) => block.type === "tool_use");
+    if (!readToolUse || typeof readToolUse.id !== "string") {
+      throw new Error("Expected Anthropic read tool_use block");
+    }
+    messages.push(
+      { role: "assistant", content: [readToolUse] },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: readToolUse.id,
+            content: JSON.stringify({ status: "waiting", runId: "ordinary-read" }),
+          },
+        ],
+      },
+    );
+
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      tools,
+      messages,
+    });
+    const body = (await response.json()) as {
+      stop_reason: string;
+      content: Array<Record<string, unknown>>;
+    };
+    expect(body.stop_reason).toBe("end_turn");
+    expect(body.content.some((block) => block.type === "tool_use")).toBe(false);
+  });
+
+  it("does not interpret unmarked direct exec results as Code Mode control envelopes", async () => {
+    const server = await startMockServer();
+    const response = await postJson(server, "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 256,
+      tools: [
+        {
+          name: "exec",
+          input_schema: {
+            type: "object",
+            properties: { code: { type: "string" } },
+            required: ["code"],
+          },
+        },
+        {
+          name: "wait",
+          input_schema: {
+            type: "object",
+            properties: { runId: { type: "string" } },
+            required: ["runId"],
+          },
+        },
+      ],
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Direct exec envelope isolation check." }],
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_direct_exec",
+              name: "exec",
+              input: { language: "javascript", code: "return 1;" },
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_direct_exec",
+              content: JSON.stringify({ status: "waiting", runId: "direct-exec" }),
+            },
+          ],
+        },
+      ],
+    });
+    const body = (await response.json()) as {
+      stop_reason: string;
+      content: Array<Record<string, unknown>>;
+    };
+    expect(body.stop_reason).toBe("end_turn");
+    expect(body.content.some((block) => block.type === "tool_use")).toBe(false);
+  });
+
+  it("finishes Anthropic Code Mode fanout after the second wrapped spawn result", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn, not ACP.";
+    const messages: Array<Record<string, unknown>> = [
+      { role: "user", content: [{ type: "text", text: prompt }] },
+    ];
+    const request = async () => {
+      const response = await postJson(server, "/v1/messages", {
+        model: "claude-opus-4-8",
+        max_tokens: 256,
+        tools: [
+          {
+            name: "exec",
+            input_schema: {
+              type: "object",
+              properties: { code: { type: "string" } },
+              required: ["code"],
+            },
+          },
+          {
+            name: "wait",
+            input_schema: {
+              type: "object",
+              properties: { runId: { type: "string" } },
+              required: ["runId"],
+            },
+          },
+        ],
+        messages,
+      });
+      expect(response.status).toBe(200);
+      return (await response.json()) as {
+        stop_reason: string;
+        content: Array<Record<string, unknown>>;
+      };
+    };
+    const appendCompletedResult = (
+      toolUse: Record<string, unknown>,
+      value: Record<string, unknown>,
+    ) => {
+      messages.push(
+        { role: "assistant", content: [toolUse] },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: toolUse.id,
+              content: JSON.stringify({ status: "completed", value }),
+            },
+          ],
+        },
+      );
+    };
+    const requireToolUse = (
+      body: {
+        stop_reason: string;
+        content: Array<Record<string, unknown>>;
+      },
+      expectedName: string,
+    ) => {
+      expect(body.stop_reason).toBe("tool_use");
+      const toolUse = body.content.find((block) => block.type === "tool_use");
+      if (!toolUse || typeof toolUse.id !== "string") {
+        throw new Error("Expected Anthropic tool_use block");
+      }
+      expect(toolUse.name).toBe(expectedName);
+      return toolUse;
+    };
+    const alpha = requireToolUse(await request(), "exec");
+    appendCompletedResult(alpha, { status: "accepted", childSessionKey: "alpha" });
+    const beta = requireToolUse(await request(), "exec");
+    appendCompletedResult(beta, { status: "accepted", childSessionKey: "beta" });
+    const firstYield = requireToolUse(await request(), "exec");
+    appendCompletedResult(firstYield, { status: "yielded" });
+    messages.push({
+      role: "user",
+      content: [{ type: "text", text: "[Inter-session message]\nALPHA-OK" }],
+    });
+    const secondYield = requireToolUse(await request(), "exec");
+    appendCompletedResult(secondYield, { status: "yielded" });
+    messages.push({
+      role: "user",
+      content: [{ type: "text", text: "[Inter-session message]\nBETA-OK" }],
+    });
+
+    const final = await request();
+    expect(final.stop_reason).toBe("end_turn");
+    expect(final.content.find((block) => block.type === "text")?.text).toBe(
+      "subagent-1: ok\nsubagent-2: ok",
+    );
+  });
+
+  it("finishes Anthropic fanout without sessions_yield when Code Mode is unavailable", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn, not ACP.";
+    const messages: Array<Record<string, unknown>> = [
+      { role: "user", content: [{ type: "text", text: prompt }] },
+    ];
+    const request = async () => {
+      const response = await postJson(server, "/v1/messages", {
+        model: "claude-opus-4-8",
+        max_tokens: 256,
+        tools: [
+          {
+            name: "sessions_spawn",
+            input_schema: { type: "object", properties: {} },
+          },
+        ],
+        messages,
+      });
+      return (await response.json()) as {
+        stop_reason: string;
+        content: Array<Record<string, unknown>>;
+      };
+    };
+    const appendResult = (toolUse: Record<string, unknown>, childSessionKey: string) => {
+      messages.push(
+        { role: "assistant", content: [toolUse] },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: toolUse.id,
+              content: JSON.stringify({ status: "accepted", childSessionKey }),
+            },
+          ],
+        },
+      );
+    };
+
+    const alpha = (await request()).content.find((block) => block.type === "tool_use");
+    if (!alpha || typeof alpha.id !== "string") {
+      throw new Error("Expected first Anthropic sessions_spawn tool_use block");
+    }
+    appendResult(alpha, "alpha");
+    const beta = (await request()).content.find((block) => block.type === "tool_use");
+    if (!beta || typeof beta.id !== "string") {
+      throw new Error("Expected second Anthropic sessions_spawn tool_use block");
+    }
+    appendResult(beta, "beta");
+
+    const final = await request();
+    expect(final.stop_reason).toBe("end_turn");
+    expect(final.content.find((block) => block.type === "text")?.text).toBe(
+      "subagent-1: ok\nsubagent-2: ok",
+    );
   });
 
   it("preserves Anthropic /v1/messages declared tools for explicit sessions_spawn prompts", async () => {

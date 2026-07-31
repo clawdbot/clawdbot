@@ -241,7 +241,7 @@ export async function runCodeModeScriptHeadless(params: {
           kind: "exec",
           source,
           catalog,
-          apiFiles: createCodeModeApiFilesForRun(namespaceCatalog, swarmEnabled),
+          apiFiles: createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled),
           namespaces,
           swarmEnabled,
         },

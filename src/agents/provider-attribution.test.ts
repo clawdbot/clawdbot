@@ -117,17 +117,27 @@ const providerEndpointPlugins = vi.hoisted(() => [
 ]);
 
 const providerMetadataState = vi.hoisted(() => ({
-  compatible: true,
+  defaultDiscoveryCompatible: true,
+  pluginIdScoped: false,
   snapshot: undefined as unknown,
 }));
+const loadPluginMetadataSnapshot = vi.hoisted(() =>
+  vi.fn(() => ({
+    owners: {
+      providerEndpoints: [],
+      providerRequests: new Map(),
+    },
+  })),
+);
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: (params?: {
-    config?: unknown;
+    allowScopedSnapshot?: boolean;
     requireDefaultDiscoveryContext?: boolean;
   }) =>
-    params?.config !== undefined ||
-    (params?.requireDefaultDiscoveryContext && !providerMetadataState.compatible)
+    (providerMetadataState.pluginIdScoped && params?.allowScopedSnapshot !== true) ||
+    (params?.requireDefaultDiscoveryContext === true &&
+      !providerMetadataState.defaultDiscoveryCompatible)
       ? undefined
       : (providerMetadataState.snapshot ?? {
           owners: {
@@ -149,6 +159,10 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
             ),
           },
         }),
+}));
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot,
 }));
 
 import {
@@ -188,8 +202,10 @@ function listProviderAttributionPolicies(env: ProviderAttributionTestEnv) {
 
 describe("provider attribution", () => {
   afterEach(() => {
-    providerMetadataState.compatible = true;
+    providerMetadataState.defaultDiscoveryCompatible = true;
+    providerMetadataState.pluginIdScoped = false;
     providerMetadataState.snapshot = undefined;
+    loadPluginMetadataSnapshot.mockClear();
   });
 
   it("uses provider facts from the replacement plugin snapshot after reload", () => {
@@ -235,8 +251,8 @@ describe("provider attribution", () => {
     );
   });
 
-  it("rejects provider facts from a scoped current snapshot", () => {
-    providerMetadataState.compatible = false;
+  it("rejects provider facts from a plugin-id-scoped current snapshot", () => {
+    providerMetadataState.pluginIdScoped = true;
     providerMetadataState.snapshot = {
       owners: {
         providerEndpoints: [
@@ -252,6 +268,59 @@ describe("provider attribution", () => {
     };
 
     expect(resolveProviderEndpoint("https://scoped-only.example").endpointClass).toBe("custom");
+  });
+
+  it("reuses lifecycle provider facts without a default-discovery fallback", () => {
+    providerMetadataState.defaultDiscoveryCompatible = false;
+    providerMetadataState.snapshot = {
+      owners: {
+        providerEndpoints: [],
+        providerRequests: new Map([["custom-provider", { family: "custom" }]]),
+      },
+    };
+
+    for (let index = 0; index < 10; index += 1) {
+      expect(
+        resolveProviderRequestPolicy({ provider: "custom-provider" }).knownProviderFamily,
+      ).toBe("custom");
+    }
+    expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("uses explicitly prepared provider facts without reading process metadata", () => {
+    providerMetadataState.pluginIdScoped = true;
+    providerMetadataState.snapshot = undefined;
+    const providerMetadataOwners = {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+      providerEndpoints: [
+        {
+          endpointClass: "anthropic-public" as const,
+          hosts: ["prepared.example"],
+          hostSuffixes: [],
+          baseUrls: [],
+        },
+      ],
+      providerRequests: new Map([["prepared", { family: "prepared-family" }]]),
+    };
+
+    expect(
+      resolveProviderRequestPolicy({
+        provider: "prepared",
+        baseUrl: "https://prepared.example",
+        providerMetadataOwners,
+      }),
+    ).toMatchObject({
+      endpointClass: "anthropic-public",
+      knownProviderFamily: "prepared-family",
+    });
+    expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
   it("resolves the canonical OpenClaw product and runtime version", () => {

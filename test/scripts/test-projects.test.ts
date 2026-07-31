@@ -12,6 +12,7 @@ import {
   DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
   applyDefaultMultiSpecVitestCachePaths,
   applyDefaultVitestNoOutputTimeout,
+  applyFullExtensionsHeapBudget,
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
   buildVitestArgs,
@@ -220,6 +221,23 @@ describe("scripts/test-projects changed-target routing", () => {
       "src/utils/provider-utils.test.ts",
     ]);
   });
+
+  it.each([
+    "src/system-agent/setup-inference-persist.ts",
+    "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",
+    "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
+  ])(
+    "routes setup inference transcript ownership changes through both regressions for %s",
+    (path) => {
+      expect(resolveChangedTestTargetPlan([path])).toEqual({
+        mode: "targets",
+        targets: [
+          "src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts",
+          "src/commands/onboard-guided.inference.e2e.test.ts",
+        ],
+      });
+    },
+  );
 
   it("keeps changed mode focused by default for Vitest wiring edits", () => {
     expect(
@@ -1297,6 +1315,18 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/plugin-contract-test-plan.test.ts",
         "test/scripts/plugin-prerelease-test-plan.test.ts",
         "test/scripts/verify-pr-hosted-gates.test.ts",
+      ],
+    });
+  });
+
+  it("keeps npm release workflow edits on the preflight cache guard", () => {
+    expect(resolveChangedTestTargetPlan([".github/workflows/openclaw-npm-release.yml"])).toEqual({
+      mode: "targets",
+      targets: [
+        "test/openclaw-npm-postpublish-verify.test.ts",
+        "test/scripts/openclaw-npm-extended-stable-workflow.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
       ],
     });
   });
@@ -3268,6 +3298,12 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(result.stderr).not.toContain("[test] starting");
   });
 
+  it("lets buffered failure diagnostics drain before the dispatcher exits", () => {
+    const source = fs.readFileSync("scripts/test-projects.mjs", "utf8");
+
+    expect(source).not.toContain("process.exit(");
+  });
+
   it("allows explicit split Vitest config targets without treating them as unmatched tests", () => {
     expect(
       findUnmatchedExplicitTestTargets(
@@ -4609,6 +4645,7 @@ describe("scripts/test-projects full-suite sharding", () => {
   it("keeps CI=1 full-suite runs on aggregate shard configs", () => {
     vi.stubEnv("CI", "1");
     vi.stubEnv("GITHUB_ACTIONS", "");
+    vi.stubEnv("OPENCLAW_TESTBOX_REMOTE_RUN", "");
     vi.stubEnv("OPENCLAW_TEST_PROJECTS_LEAF_SHARDS", "");
     vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "");
     try {
@@ -4618,6 +4655,75 @@ describe("scripts/test-projects full-suite sharding", () => {
       expect(configs).toContain("test/vitest/vitest.full-extensions.config.ts");
       expect(configs).not.toContain("test/vitest/vitest.gateway-server.config.ts");
       expect(configs).not.toContain("test/vitest/vitest.extension-telegram.config.ts");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("gives only the aggregate extension shard an 8 GiB heap floor", () => {
+    const specs = applyFullExtensionsHeapBudget([
+      {
+        config: "test/vitest/vitest.full-extensions.config.ts",
+        env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=4096" },
+      },
+      {
+        config: "test/vitest/vitest.full-core-runtime.config.ts",
+        env: { NODE_OPTIONS: "--max-old-space-size=4096" },
+      },
+    ]);
+
+    expect(specs[0]?.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
+    expect(specs[1]?.env.NODE_OPTIONS).toBe("--max-old-space-size=4096");
+  });
+
+  it("preserves a larger aggregate extension heap override", () => {
+    const specs = applyFullExtensionsHeapBudget([
+      {
+        config: "test/vitest/vitest.full-extensions.config.ts",
+        env: { NODE_OPTIONS: "--max_old_space_size 12288 --trace-warnings" },
+      },
+    ]);
+
+    expect(specs[0]?.env.NODE_OPTIONS).toBe("--max_old_space_size 12288 --trace-warnings");
+  });
+
+  it("preserves inherited Node options when the spec has no override", () => {
+    const specs = applyFullExtensionsHeapBudget(
+      [{ config: "test/vitest/vitest.full-extensions.config.ts", env: {} }],
+      {
+        env: {
+          NODE_OPTIONS: "--require ./test-hook.cjs --max-old-space-size=12288",
+        },
+      },
+    );
+
+    expect(specs[0]?.env.NODE_OPTIONS).toBe("--require ./test-hook.cjs --max-old-space-size=12288");
+  });
+
+  it("raises the effective last aggregate extension heap override", () => {
+    const specs = applyFullExtensionsHeapBudget([
+      {
+        config: "test/vitest/vitest.full-extensions.config.ts",
+        env: { NODE_OPTIONS: "--max-old-space-size=12288 --max_old_space_size=4096" },
+      },
+    ]);
+
+    expect(specs[0]?.env.NODE_OPTIONS).toBe("--max-old-space-size=12288 --max_old_space_size=8192");
+  });
+
+  it("splits the Testbox agentic and extension shards into bounded processes", () => {
+    vi.stubEnv("CI", "1");
+    vi.stubEnv("GITHUB_ACTIONS", "");
+    vi.stubEnv("OPENCLAW_TESTBOX_REMOTE_RUN", "1");
+    vi.stubEnv("OPENCLAW_TEST_PROJECTS_LEAF_SHARDS", "");
+    vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "");
+    try {
+      const configs = buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config);
+
+      expect(configs).not.toContain("test/vitest/vitest.full-agentic.config.ts");
+      expect(configs).not.toContain("test/vitest/vitest.full-extensions.config.ts");
+      expect(configs).toContain("test/vitest/vitest.agents-core.config.ts");
+      expect(configs).toContain("test/vitest/vitest.extension-telegram.config.ts");
     } finally {
       vi.unstubAllEnvs();
     }

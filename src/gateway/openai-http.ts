@@ -3,10 +3,12 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
@@ -282,7 +284,7 @@ function writeAssistantRoleChunk(res: ServerResponse, params: { runId: string; m
 
 function writeAssistantContentChunk(
   res: ServerResponse,
-  params: { runId: string; model: string; content: string; finishReason: "stop" | null },
+  params: { runId: string; model: string; content: string },
 ) {
   writeSse(res, {
     id: params.runId,
@@ -293,7 +295,7 @@ function writeAssistantContentChunk(
       {
         index: 0,
         delta: { content: params.content },
-        finish_reason: params.finishReason,
+        finish_reason: null,
       },
     ],
   });
@@ -324,8 +326,14 @@ function splitArgumentsForStreaming(argumentsValue: string): string[] {
   }
   const chunkSize = 256;
   const chunks: string[] = [];
-  for (let i = 0; i < argumentsValue.length; i += chunkSize) {
-    chunks.push(argumentsValue.slice(i, i + chunkSize));
+  for (let start = 0; start < argumentsValue.length;) {
+    const end = avoidTrailingHighSurrogateBreak(
+      argumentsValue,
+      start,
+      Math.min(start + chunkSize, argumentsValue.length),
+    );
+    chunks.push(argumentsValue.slice(start, end));
+    start = end;
   }
   return chunks.length > 0 ? chunks : [""];
 }
@@ -512,11 +520,13 @@ function resolveImageUrlPart(part: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function extractImageUrls(content: unknown): string[] {
-  if (!Array.isArray(content)) {
-    return [];
-  }
+type ExtractedImageUrls = { kind: "valid"; urls: string[] } | { kind: "invalid" };
+
+function extractImageUrls(content: unknown): ExtractedImageUrls {
   const urls: string[] = [];
+  if (!Array.isArray(content)) {
+    return { kind: "valid", urls };
+  }
   for (const part of content) {
     if (!part || typeof part !== "object") {
       continue;
@@ -525,17 +535,18 @@ function extractImageUrls(content: unknown): string[] {
       continue;
     }
     const url = resolveImageUrlPart(part);
-    if (url) {
-      urls.push(url);
+    if (!url) {
+      return { kind: "invalid" };
     }
+    urls.push(url);
   }
-  return urls;
+  return { kind: "valid", urls };
 }
 
 type ActiveTurnContext = {
   activeTurnIndex: number;
   activeUserMessageIndex: number;
-  urls: string[];
+  imageUrls: ExtractedImageUrls;
 };
 
 function parseImageUrlToSource(url: string): InputImageSource {
@@ -578,20 +589,29 @@ function resolveActiveTurnContext(messagesUnknown: unknown): ActiveTurnContext {
     if (normalizedRole !== "user" && normalizedRole !== "tool") {
       continue;
     }
+    const imageUrls: ExtractedImageUrls =
+      normalizedRole === "user" ? extractImageUrls(msg.content) : { kind: "valid", urls: [] };
     return {
       activeTurnIndex: i,
       activeUserMessageIndex: normalizedRole === "user" ? i : -1,
-      urls: normalizedRole === "user" ? extractImageUrls(msg.content) : [],
+      imageUrls,
     };
   }
-  return { activeTurnIndex: -1, activeUserMessageIndex: -1, urls: [] };
+  return {
+    activeTurnIndex: -1,
+    activeUserMessageIndex: -1,
+    imageUrls: { kind: "valid", urls: [] },
+  };
 }
 
 async function resolveImagesForRequest(
-  activeTurnContext: Pick<ActiveTurnContext, "urls">,
+  activeTurnContext: Pick<ActiveTurnContext, "imageUrls">,
   limits: ResolvedOpenAiChatCompletionsLimits,
 ): Promise<ImageContent[]> {
-  const urls = activeTurnContext.urls;
+  if (activeTurnContext.imageUrls.kind === "invalid") {
+    throw new Error("image_url part is missing a valid URL");
+  }
+  const urls = activeTurnContext.imageUrls.urls;
   if (urls.length === 0) {
     return [];
   }
@@ -632,12 +652,14 @@ export const testOnlyOpenAiHttp = {
 
 function buildAgentPrompt(
   messagesUnknown: unknown,
-  activeUserMessageIndex: number,
+  activeTurnContext: Pick<ActiveTurnContext, "activeUserMessageIndex" | "imageUrls">,
 ): {
   message: string;
   extraSystemPrompt?: string;
 } {
   const messages = asMessages(messagesUnknown);
+  const hasActiveTurnImage =
+    activeTurnContext.imageUrls.kind === "valid" && activeTurnContext.imageUrls.urls.length > 0;
 
   const systemParts: string[] = [];
   const conversationEntries: ConversationEntry[] = [];
@@ -648,7 +670,6 @@ function buildAgentPrompt(
     }
     const role = normalizeOptionalString(msg.role) ?? "";
     const content = extractTextContent(msg.content).trim();
-    const hasImage = extractImageUrls(msg.content).length > 0;
     if (!role) {
       continue;
     }
@@ -671,7 +692,10 @@ function buildAgentPrompt(
     // Keep the image-only placeholder scoped to the active user turn so we don't
     // mention historical image-only turns whose bytes are intentionally not replayed.
     const baseMessageContent =
-      normalizedRole === "user" && !content && hasImage && i === activeUserMessageIndex
+      normalizedRole === "user" &&
+      !content &&
+      hasActiveTurnImage &&
+      i === activeTurnContext.activeUserMessageIndex
         ? IMAGE_ONLY_USER_MESSAGE
         : content;
     const messageContent = [baseMessageContent, assistantToolCallsSummary]
@@ -861,6 +885,17 @@ function resolveStopSequences(value: unknown): string[] | undefined {
   return sequences.length > 0 ? sequences : undefined;
 }
 
+function resolveChatCompletionTokenCap(value: unknown, field: string): number | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  const maxTokens = asPositiveSafeInteger(value);
+  if (maxTokens === undefined) {
+    throw new Error(`${field} must be a positive safe integer`);
+  }
+  return maxTokens;
+}
+
 function resolveErrorMessage(err: unknown): string {
   if (err instanceof Error) {
     const message = err.message.trim();
@@ -906,12 +941,20 @@ export async function handleOpenAiHttpRequest(
   const streamIncludeUsage = stream && resolveIncludeUsageForStreaming(payload);
   const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;
-  const maxTokens =
-    typeof payload.max_completion_tokens === "number"
-      ? payload.max_completion_tokens
-      : typeof payload.max_tokens === "number"
-        ? payload.max_tokens
-        : undefined;
+  let maxTokens: number | undefined;
+  try {
+    const maxCompletionTokens = resolveChatCompletionTokenCap(
+      payload.max_completion_tokens,
+      "max_completion_tokens",
+    );
+    const legacyMaxTokens = resolveChatCompletionTokenCap(payload.max_tokens, "max_tokens");
+    maxTokens = maxCompletionTokens ?? legacyMaxTokens;
+  } catch (err) {
+    sendJson(res, 400, {
+      error: { message: resolveErrorMessage(err), type: "invalid_request_error" },
+    });
+    return true;
+  }
   const temperature = typeof payload.temperature === "number" ? payload.temperature : undefined;
   const topP = typeof payload.top_p === "number" ? payload.top_p : undefined;
   const frequencyPenalty =
@@ -1010,7 +1053,7 @@ export async function handleOpenAiHttpRequest(
     return true;
   }
   const activeTurnContext = resolveActiveTurnContext(payload.messages);
-  const prompt = buildAgentPrompt(payload.messages, activeTurnContext.activeUserMessageIndex);
+  const prompt = buildAgentPrompt(payload.messages, activeTurnContext);
   let resolvedClientTools: ClientToolDefinition[];
   let toolChoicePrompt: string | undefined;
   let toolChoiceConstraint: ToolChoiceConstraint | undefined;
@@ -1182,17 +1225,19 @@ export async function handleOpenAiHttpRequest(
   let wroteRole = false;
   let wroteStopChunk = false;
   let sawAssistantDelta = false;
+  let streamedAssistantText = "";
   let bufferedAssistantContent = "";
   let bufferedReplaceableAssistantContent = "";
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeRequested = false;
+  let finalizeScheduled = false;
   let finalizeFinishReason: "stop" | "tool_calls" = "stop";
   let resultResolved = false;
   let closed = false;
   let stopWatchingDisconnect = () => {};
 
   const maybeFinalize = () => {
-    if (closed || !finalizeRequested) {
+    if (closed || finalizeScheduled || !finalizeRequested) {
       return;
     }
     if (!resultResolved) {
@@ -1201,22 +1246,32 @@ export async function handleOpenAiHttpRequest(
     if (streamIncludeUsage && !finalUsage) {
       return;
     }
-    closed = true;
-    stopWatchingDisconnect();
-    unsubscribe();
-    if (!wroteStopChunk) {
-      writeAssistantFinishChunk(res, { runId, model, finishReason: finalizeFinishReason });
-      wroteStopChunk = true;
-    }
-    if (streamIncludeUsage && finalUsage) {
-      writeUsageChunk(res, { runId, model, usage: finalUsage });
-    }
-    writeDone(res);
-    res.end();
+    // Agent text_end flushes run in a microtask. Keep the stream subscribed
+    // until those same-turn deltas arrive, then emit exactly one terminal frame.
+    finalizeScheduled = true;
+    queueMicrotask(() => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      stopWatchingDisconnect();
+      unsubscribe();
+      if (!wroteStopChunk) {
+        writeAssistantFinishChunk(res, { runId, model, finishReason: finalizeFinishReason });
+        wroteStopChunk = true;
+      }
+      if (streamIncludeUsage && finalUsage) {
+        writeUsageChunk(res, { runId, model, usage: finalUsage });
+      }
+      writeDone(res);
+      res.end();
+    });
   };
 
   const requestFinalize = (finishReason: "stop" | "tool_calls" = "stop") => {
-    finalizeFinishReason = finishReason;
+    if (!finalizeRequested || finishReason === "tool_calls") {
+      finalizeFinishReason = finishReason;
+    }
     finalizeRequested = true;
     maybeFinalize();
   };
@@ -1244,10 +1299,16 @@ export async function handleOpenAiHttpRequest(
         return;
       }
 
-      const content = resolveAssistantStreamDeltaText(evt) ?? "";
+      // Snapshots include prefixes held during tag-boundary filtering; the raw
+      // delta alone can omit a literal leading less-than.
+      const content =
+        typeof text === "string" && text.startsWith(streamedAssistantText)
+          ? text.slice(streamedAssistantText.length)
+          : resolveAssistantStreamDeltaText(evt);
       if (!content) {
         return;
       }
+      streamedAssistantText += content;
 
       // Hold prose until the run proves the requested client-tool call exists.
       // If the provider ignores `tool_choice`, no partial text should leak
@@ -1267,7 +1328,6 @@ export async function handleOpenAiHttpRequest(
         runId,
         model,
         content,
-        finishReason: null,
       });
       return;
     }
@@ -1345,7 +1405,6 @@ export async function handleOpenAiHttpRequest(
               runId,
               model,
               content: commentary,
-              finishReason: null,
             });
           }
         }
@@ -1375,7 +1434,6 @@ export async function handleOpenAiHttpRequest(
           runId,
           model,
           content,
-          finishReason: null,
         });
       }
       requestFinalize();
@@ -1411,9 +1469,7 @@ export async function handleOpenAiHttpRequest(
         runId,
         model,
         content,
-        finishReason: "stop",
       });
-      wroteStopChunk = true;
       finalUsage = {
         prompt_tokens: 0,
         completion_tokens: 0,

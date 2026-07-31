@@ -4,6 +4,7 @@
  * Reads child session output, detects waiting states, and formats completion findings for announcements.
  */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
@@ -28,6 +29,17 @@ import { extractAssistantText, sanitizeTextContent } from "./tools/chat-history-
 import { isAnnounceSkip, selectDeliverableSessionsReply } from "./tools/sessions-send-tokens.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
+const MAX_CHILD_COMPLETION_RESULT_CHARS = 512;
+const MAX_CHILD_COMPLETION_FIELD_CHARS = 256;
+const MAX_CHILD_COMPLETION_FINDINGS_CHARS = 4_096;
+const CHILD_RESULT_TRUNCATION_NOTICE = "\n[child result truncated]";
+const ASSISTANT_TOOL_CALL_BLOCK_TYPES = new Set([
+  "toolCall",
+  "tool_use",
+  "toolUse",
+  "functionCall",
+  "function_call",
+]);
 
 type SubagentAnnounceOutputDeps = {
   callGateway: typeof callGateway;
@@ -128,8 +140,7 @@ function countAssistantToolCalls(message: unknown): number {
         (block) =>
           block &&
           typeof block === "object" &&
-          ((block as { type?: unknown }).type === "toolCall" ||
-            (block as { type?: unknown }).type === "tool_use"),
+          ASSISTANT_TOOL_CALL_BLOCK_TYPES.has((block as { type?: string }).type ?? ""),
       ).length
     : 0;
   const toolCalls =
@@ -146,6 +157,23 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
       continue;
     }
     const role = (message as { role?: unknown }).role;
+    const provenance = (message as { provenance?: unknown }).provenance;
+    if (
+      role === "user" ||
+      (provenance &&
+        typeof provenance === "object" &&
+        !Array.isArray(provenance) &&
+        (provenance as { kind?: unknown }).kind === "inter_session")
+    ) {
+      // A fresh input owns a new turn; never announce an older turn's reply
+      // when the current run fails or completes without visible output.
+      snapshot.latestAssistantText = undefined;
+      snapshot.latestSilentText = undefined;
+      snapshot.latestToolCallCount = undefined;
+      snapshot.waitingForContinuation = false;
+      previousAssistantCalledYield = false;
+      continue;
+    }
     if (role === "assistant") {
       if (assistantCallsSessionsYield(message)) {
         snapshot.latestAssistantText = undefined;
@@ -341,12 +369,27 @@ function describeSubagentOutcome(outcome?: SubagentRunOutcome): string {
 }
 
 function formatChildResultData(resultText?: string | null): string {
+  const text = resultText?.trim() || "(no output)";
+  const boundedText =
+    text.length > MAX_CHILD_COMPLETION_RESULT_CHARS
+      ? `${truncateUtf16Safe(
+          text,
+          MAX_CHILD_COMPLETION_RESULT_CHARS - CHILD_RESULT_TRUNCATION_NOTICE.length,
+        )}${CHILD_RESULT_TRUNCATION_NOTICE}`
+      : text;
   return (
     wrapPromptDataBlock({
       label: "Child result",
-      text: resultText?.trim() || "(no output)",
+      text: boundedText,
+      maxChars: MAX_CHILD_COMPLETION_RESULT_CHARS,
     }) || "Child result: (no output)"
   );
+}
+
+function truncateChildCompletionField(value: string): string {
+  return value.length > MAX_CHILD_COMPLETION_FIELD_CHARS
+    ? `${truncateUtf16Safe(value, MAX_CHILD_COMPLETION_FIELD_CHARS - 1)}…`
+    : value;
 }
 
 type ChildCompletionRow = {
@@ -367,6 +410,12 @@ type ChildCompletionRow = {
     };
   };
   outcome?: SubagentRunOutcome;
+};
+
+type ChildCompletionSection = {
+  index: number;
+  text: string;
+  actionable: boolean;
 };
 
 function selectChildCompletionResultText(child: ChildCompletionRow): string | undefined {
@@ -400,10 +449,19 @@ export function buildChildCompletionFindings(
     }
     const aEnded = typeof a.endedAt === "number" ? a.endedAt : Number.MAX_SAFE_INTEGER;
     const bEnded = typeof b.endedAt === "number" ? b.endedAt : Number.MAX_SAFE_INTEGER;
-    return aEnded - bEnded;
+    if (aEnded !== bEnded) {
+      return aEnded - bEnded;
+    }
+    // Parallel children commonly share millisecond timestamps; their stable
+    // session identity keeps parent-visible findings and prompt bytes ordered.
+    return a.childSessionKey < b.childSessionKey
+      ? -1
+      : a.childSessionKey > b.childSessionKey
+        ? 1
+        : 0;
   });
 
-  const sections: string[] = [];
+  const sections: ChildCompletionSection[] = [];
   for (const [index, child] of sorted.entries()) {
     const resultText = selectChildCompletionResultText(child);
     const outcome = describeSubagentOutcome(child.outcome);
@@ -416,18 +474,61 @@ export function buildChildCompletionFindings(
       child.childSessionKey.trim() ||
       `child ${index + 1}`;
     const displayIndex = sections.length + 1;
-    sections.push(
-      [`${displayIndex}. ${title}`, `status: ${outcome}`, formatChildResultData(resultText)].join(
-        "\n",
-      ),
-    );
+    sections.push({
+      index: displayIndex,
+      actionable: child.outcome?.status !== "ok",
+      text: [
+        `${displayIndex}. ${truncateChildCompletionField(title)}`,
+        `status: ${truncateChildCompletionField(outcome)}`,
+        formatChildResultData(resultText),
+      ].join("\n"),
+    });
   }
 
   if (sections.length === 0) {
     return undefined;
   }
 
-  return ["Child completion results:", "", ...sections].join("\n\n");
+  // Escaping can expand bounded child text. Preserve failures before successes,
+  // keep rendered survivors chronological, and account for omitted completions.
+  const render = (visibleSections: string[], omittedCount = 0) =>
+    [
+      "Child completion results:",
+      "",
+      ...visibleSections,
+      ...(omittedCount > 0
+        ? [
+            `[${omittedCount} additional child completion result${omittedCount === 1 ? "" : "s"} omitted to fit the context budget.]`,
+          ]
+        : []),
+    ].join("\n\n");
+  const allSections = sections.map((section) => section.text);
+  if (render(allSections).length <= MAX_CHILD_COMPLETION_FINDINGS_CHARS) {
+    return render(allSections);
+  }
+  const prioritizedSections = [
+    ...sections.filter((section) => section.actionable),
+    ...sections.filter((section) => !section.actionable),
+  ];
+  let visibleSections: ChildCompletionSection[] = [];
+  for (const section of prioritizedSections) {
+    const nextSections = [...visibleSections, section].toSorted(
+      (left, right) => left.index - right.index,
+    );
+    const omittedCount = sections.length - nextSections.length;
+    if (
+      render(
+        nextSections.map((entry) => entry.text),
+        omittedCount,
+      ).length <= MAX_CHILD_COMPLETION_FINDINGS_CHARS
+    ) {
+      visibleSections = nextSections;
+    }
+  }
+  return render(
+    visibleSections.map((section) => section.text),
+    sections.length - visibleSections.length,
+  );
 }
 
 export function dedupeLatestChildCompletionRows(

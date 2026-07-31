@@ -43,13 +43,7 @@ import { isCodexAppServerNativeAuthProfile } from "./session-binding.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 const CODEX_APP_SERVER_AUTH_PROVIDER = "openai";
-const OPENAI_CODEX_APP_SERVER_AUTH_PROVIDER = "openai-codex";
-const LEGACY_CODEX_APP_SERVER_AUTH_PROVIDER = "codex-cli";
-const CODEX_APP_SERVER_EXTERNAL_CLI_PROVIDER_IDS = [
-  CODEX_APP_SERVER_AUTH_PROVIDER,
-  LEGACY_CODEX_APP_SERVER_AUTH_PROVIDER,
-];
-const OPENAI_PROVIDER = "openai";
+const CODEX_APP_SERVER_EXTERNAL_CLI_PROVIDER_IDS = [CODEX_APP_SERVER_AUTH_PROVIDER];
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";
 const CODEX_HOME_ENV_VAR = "CODEX_HOME";
 const HOME_ENV_VAR = "HOME";
@@ -112,7 +106,6 @@ export async function bridgeCodexAppServerStartOptions(params: {
   const shouldClearInheritedOpenAiApiKey = shouldClearOpenAiApiKeyForCodexAuthProfile({
     store,
     authProfileId,
-    config: params.config,
   });
   return shouldClearInheritedOpenAiApiKey
     ? withClearedEnvironmentVariables(scopedStartOptions, CODEX_APP_SERVER_API_KEY_ENV_VARS)
@@ -227,7 +220,7 @@ export async function resolveCodexAppServerPreparedAuthProfileSnapshot(params: {
     return undefined;
   }
   const credential = store.profiles[profileId];
-  if (!credential || !isCodexAppServerAuthProfileCredential(credential, params.config)) {
+  if (!credential || !isCodexAppServerAuthProfileCredential(credential)) {
     return undefined;
   }
   const loginParams = await resolveCodexAppServerAuthProfileLoginParamsInternal({
@@ -340,7 +333,7 @@ export async function resolveCodexAppServerAuthAccountCacheKey(params: {
     return undefined;
   }
   const credential = store.profiles[profileId];
-  if (!credential || !isCodexAppServerAuthProfileCredential(credential, params.config)) {
+  if (!credential || !isCodexAppServerAuthProfileCredential(credential)) {
     return undefined;
   }
   if (credential.type === "api_key") {
@@ -627,9 +620,9 @@ async function resolveCodexAppServerAuthProfileLoginParams(params: {
       `Codex app-server auth profile "${profileId}" was not found.`,
     );
   }
-  if (profileId && profile && !isCodexAppServerAuthProfileCredential(profile, params.config)) {
+  if (profileId && profile && !isCodexAppServerAuthProfileCredential(profile)) {
     throw new CodexAppServerAuthProfileUnavailableError(
-      `Codex app-server auth profile "${profileId}" must be OpenAI Codex auth or an OpenAI API-key backup.`,
+      `Codex app-server auth profile "${profileId}" must use the canonical OpenAI auth provider; run "openclaw doctor --fix" to migrate legacy provider IDs.`,
     );
   }
   return await resolveCodexAppServerAuthProfileLoginParamsInternal({
@@ -683,9 +676,9 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
   if (!credential) {
     throw new Error(`Codex app-server auth profile "${profileId}" was not found.`);
   }
-  if (!isCodexAppServerAuthProfileCredential(credential, params.config)) {
+  if (!isCodexAppServerAuthProfileCredential(credential)) {
     throw new Error(
-      `Codex app-server auth profile "${profileId}" must be OpenAI Codex auth or an OpenAI API-key backup.`,
+      `Codex app-server auth profile "${profileId}" must use the canonical OpenAI auth provider; run "openclaw doctor --fix" to migrate legacy provider IDs.`,
     );
   }
   const loginParams = await resolveLoginParamsForCredential(profileId, credential, {
@@ -867,13 +860,12 @@ async function resolveOAuthCredentialForCodexAppServer(
   const persistedOAuthCredential =
     !useScopedCredential &&
     persistedCredential?.type === "oauth" &&
-    isCodexAppServerAuthProvider(persistedCredential.provider, params.config)
+    isCodexAppServerAuthProvider(persistedCredential.provider)
       ? persistedCredential
       : undefined;
   const ownerCredential = store.profiles[profileId];
   const overlaidOAuthCredential =
-    ownerCredential?.type === "oauth" &&
-    isCodexAppServerAuthProvider(ownerCredential.provider, params.config)
+    ownerCredential?.type === "oauth" && isCodexAppServerAuthProvider(ownerCredential.provider)
       ? ownerCredential
       : undefined;
   if (useScopedCredential && overlaidOAuthCredential) {
@@ -904,7 +896,7 @@ async function resolveOAuthCredentialForCodexAppServer(
     ? undefined
     : loadAuthProfileStoreForSecretsRuntime(ownerAgentDir).profiles[profileId];
   const refreshedOAuthCredential =
-    refreshed?.type === "oauth" && isCodexAppServerAuthProvider(refreshed.provider, params.config)
+    refreshed?.type === "oauth" && isCodexAppServerAuthProvider(refreshed.provider)
       ? refreshed
       : undefined;
   if (refreshedOAuthCredential && isDeepStrictEqual(params.store.profiles[profileId], credential)) {
@@ -915,8 +907,7 @@ async function resolveOAuthCredentialForCodexAppServer(
   const storedCredential = store.profiles[profileId];
   const candidate = refreshedOAuthCredential
     ? refreshedOAuthCredential
-    : storedCredential?.type === "oauth" &&
-        isCodexAppServerAuthProvider(storedCredential.provider, params.config)
+    : storedCredential?.type === "oauth" && isCodexAppServerAuthProvider(storedCredential.provider)
       ? storedCredential
       : credential;
   return resolved?.apiKey ? { ...candidate, access: resolved.apiKey } : candidate;
@@ -1005,54 +996,28 @@ async function resolveScopedOAuthCredential(params: {
   }
 }
 
-function isCodexAppServerAuthProvider(provider: string, config?: AuthProfileOrderConfig): boolean {
-  const resolvedProvider = resolveProviderIdForAuth(provider, { config });
-  return (
-    resolvedProvider === CODEX_APP_SERVER_AUTH_PROVIDER ||
-    resolvedProvider === OPENAI_CODEX_APP_SERVER_AUTH_PROVIDER ||
-    // Older Codex auth profiles stored the CLI runtime id here. The app-server
-    // login protocol still receives the same externally managed ChatGPT token.
-    resolvedProvider === LEGACY_CODEX_APP_SERVER_AUTH_PROVIDER
-  );
+// Runtime consumes canonical auth state; doctor owns retired profile-id migration.
+function isCodexAppServerAuthProvider(provider: string): boolean {
+  return provider.trim().toLowerCase() === CODEX_APP_SERVER_AUTH_PROVIDER;
 }
 
-function isOpenAIApiKeyBackupCredential(
-  credential: AuthProfileCredential,
-  config?: AuthProfileOrderConfig,
-): boolean {
-  return (
-    credential.type === "api_key" &&
-    resolveProviderIdForAuth(credential.provider, { config }) === OPENAI_PROVIDER
-  );
-}
-
-function isCodexAppServerAuthProfileCredential(
-  credential: AuthProfileCredential,
-  config?: AuthProfileOrderConfig,
-): boolean {
-  return (
-    isCodexAppServerAuthProvider(credential.provider, config) ||
-    isOpenAIApiKeyBackupCredential(credential, config)
-  );
+function isCodexAppServerAuthProfileCredential(credential: AuthProfileCredential): boolean {
+  return isCodexAppServerAuthProvider(credential.provider);
 }
 
 function shouldClearOpenAiApiKeyForCodexAuthProfile(params: {
   store: ReturnType<typeof ensureAuthProfileStore>;
   authProfileId?: string;
-  config?: AuthProfileOrderConfig;
 }): boolean {
   const profileId = params.authProfileId?.trim();
   const credential = profileId
     ? params.store.profiles[profileId]
     : params.store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID];
-  return isCodexSubscriptionCredential(credential, params.config);
+  return isCodexSubscriptionCredential(credential);
 }
 
-function isCodexSubscriptionCredential(
-  credential: AuthProfileCredential | undefined,
-  config?: AuthProfileOrderConfig,
-): boolean {
-  if (!credential || !isCodexAppServerAuthProvider(credential.provider, config)) {
+function isCodexSubscriptionCredential(credential: AuthProfileCredential | undefined): boolean {
+  if (!credential || !isCodexAppServerAuthProvider(credential.provider)) {
     return false;
   }
   return credential.type === "oauth" || credential.type === "token";

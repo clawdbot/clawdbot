@@ -80,7 +80,10 @@ import {
   type MessageBroadcastAccountPlan,
   validateExplicitMessageAccountSelection,
 } from "./message-account-selection.js";
-import { normalizeMessageActionInput } from "./message-action-normalization.js";
+import {
+  normalizeMessageActionInput,
+  resolveImplicitMessageActionTarget,
+} from "./message-action-normalization.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 import {
   collectActionMediaSourceHints,
@@ -176,6 +179,8 @@ export type RunMessageActionParams = {
   gateway?: MessageActionRunnerGateway;
   deps?: OutboundSendDeps;
   sessionKey?: string;
+  /** @internal Durable session key for source-reply transcript and receipt state. */
+  sourceReplySessionKey?: string;
   agentId?: string;
   /** Caller owns durable outbound context and must avoid the generic delivery mirror. */
   suppressTranscriptMirror?: boolean;
@@ -286,7 +291,9 @@ function markDeliveredCurrentSourceReply<T extends MessageActionRunResult>(
     replyToIsExplicit: boolean;
   },
 ): T {
-  if (result.kind !== "send" || params.input.sourceReplyDeliveryMode !== "message_tool_only") {
+  // Current-source identity comes from the authorized route and delivery receipt,
+  // not the reply mode; automatic runs also use this marker to avoid false fallbacks.
+  if (result.kind !== "send") {
     return result;
   }
   const authorization = params.input.messageActionAuthorization;
@@ -800,8 +807,7 @@ function hasPotentialActionTargetInput(
 ): boolean {
   return Boolean(
     hasExplicitSingularTargetParam(params) ||
-    normalizeOptionalString(input.toolContext?.currentChannelId) ||
-    normalizeOptionalString(input.toolContext?.currentMessagingTarget) ||
+    resolveImplicitMessageActionTarget(input.toolContext) ||
     hasPotentialPluginActionParam(params),
   );
 }
@@ -934,7 +940,7 @@ async function runGatewayPluginMessageActionOrNull(params: {
     accountId: params.accountId,
     currentAccountId:
       params.input.messageActionAuthorization?.requesterAccountId ?? params.input.defaultAccountId,
-    sessionKey: params.input.sessionKey,
+    sessionKey: params.input.sourceReplySessionKey ?? params.input.sessionKey,
     sessionId: params.input.sessionId,
     agentId: params.agentId,
     toolContext: params.input.messageActionAuthorization?.toolContext,

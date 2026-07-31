@@ -331,6 +331,64 @@ suite.define(() => {
     }
   });
 
+  it("sorts threads from the keyboard and identifies destructive selection targets", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:alpha", "Alpha thread", 1),
+          sessionRow("agent:main:zulu", "Zulu thread", 2),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}sessions`);
+      const table = page.locator(".sessions-table");
+      const rowNames = () =>
+        table.locator("tbody .session-data-row .session-label-chip").allTextContents();
+      await expect.poll(rowNames).toEqual(["Zulu thread", "Alpha thread"]);
+
+      for (const name of ["Key", "Kind", "Updated", "Tokens"]) {
+        await table.getByRole("columnheader", { name }).getByRole("button", { name }).waitFor();
+      }
+
+      const updatedHeader = table.getByRole("columnheader", { name: "Updated" });
+      expect(await updatedHeader.getAttribute("aria-sort")).toBe("descending");
+      await updatedHeader.getByRole("button", { name: "Updated" }).press("Space");
+      await expect.poll(rowNames).toEqual(["Alpha thread", "Zulu thread"]);
+      expect(await updatedHeader.getAttribute("aria-sort")).toBe("ascending");
+
+      const keyHeader = table.getByRole("columnheader", { name: "Key" });
+      await keyHeader.getByRole("button", { name: "Key" }).press("Enter");
+      await expect.poll(rowNames).toEqual(["Zulu thread", "Alpha thread"]);
+      expect(await keyHeader.getAttribute("aria-sort")).toBe("descending");
+      expect(await updatedHeader.getAttribute("aria-sort")).toBeNull();
+
+      const keyHeaderBounds = await keyHeader.boundingBox();
+      if (!keyHeaderBounds) {
+        throw new Error("Expected visible session sort header");
+      }
+      await page.mouse.click(
+        keyHeaderBounds.x + keyHeaderBounds.width - 2,
+        keyHeaderBounds.y + keyHeaderBounds.height / 2,
+      );
+      await expect.poll(rowNames).toEqual(["Alpha thread", "Zulu thread"]);
+      expect(await keyHeader.getAttribute("aria-sort")).toBe("ascending");
+
+      await table.getByRole("checkbox", { name: "Select thread: agent:main:alpha" }).waitFor();
+      await table.getByRole("checkbox", { name: "Select thread: agent:main:zulu" }).waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows a rejected Sessions-page custom group instead of leaking a page error", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -360,7 +418,7 @@ suite.define(() => {
         message: "group name exceeds 512 characters",
       });
 
-      const error = page.locator(".sessions-error");
+      const error = page.getByRole("alert");
       await error.waitFor({ state: "visible" });
       await expect.poll(() => error.textContent()).toContain("group name exceeds 512 characters");
       expect(pageErrors).toEqual([]);
@@ -783,6 +841,75 @@ suite.define(() => {
       expect(requireRecord(putRequest.params)).toMatchObject({
         names: ["First group", "Second group"],
       });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("explains empty gateway groups for the selected agent", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      assistantName: "Ivan",
+      defaultAgentId: "ivan",
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      methodResponses: {
+        "sessions.list": {
+          cases: [
+            {
+              match: { agentId: "ivan" },
+              response: sessionsListResponse([
+                sessionRow("agent:ivan:main", "Ivan", Date.parse("2026-07-28T18:00:00.000Z")),
+              ]),
+            },
+            {
+              match: { agentId: "main" },
+              response: sessionsListResponse([
+                sessionRow("agent:main:email", "Email intake", 1, { category: "Email intake" }),
+                sessionRow("agent:main:replies", "Customer replies", 1, {
+                  category: "Customer replies",
+                }),
+              ]),
+            },
+          ],
+        },
+      },
+      sessionGroups: ["Email intake", "Customer replies"],
+      sessionKey: "agent:ivan:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("sessions.list")).some(
+            (request) => requireRecord(request.params).agentId === "ivan",
+          ),
+        )
+        .toBe(true);
+
+      const emptyGroups = page.locator('[data-session-section^="category:"]');
+      await expect.poll(() => emptyGroups.count()).toBe(2);
+      await captureUiProof(page, "sidebar-empty-cross-agent-groups.png");
+      await expect
+        .poll(() => emptyGroups.locator(".sidebar-session-empty-placeholder").allTextContents())
+        .toEqual(["No sessions found for this agent", "No sessions found for this agent"]);
+      const firstEmptyGroup = emptyGroups.first();
+      const textLeft = (selector: string) =>
+        firstEmptyGroup.locator(selector).evaluate((element) => {
+          const range = document.createRange();
+          range.selectNodeContents(element);
+          return range.getBoundingClientRect().x;
+        });
+      const [titleLeft, placeholderLeft] = await Promise.all([
+        textLeft(".sidebar-recent-sessions__label-text"),
+        textLeft(".sidebar-session-empty-placeholder"),
+      ]);
+      expect(placeholderLeft).toBeCloseTo(titleLeft, 0);
     } finally {
       await context.close();
     }

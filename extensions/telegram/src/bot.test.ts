@@ -124,6 +124,17 @@ const FIRE_EMOJI = "\u{1F525}";
 const PARTY_EMOJI = "\u{1F389}";
 const EYES_EMOJI = "\u{1F440}";
 const HEART_EMOJI = "\u{2764}\u{FE0F}";
+
+type TelegramReactionPolicyCase = {
+  name: string;
+  updateId: number;
+  channelConfig: NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>;
+  reaction?: Record<string, unknown>;
+  sentByBot?: boolean;
+  expectedEnqueueCalls: number;
+  expectedEvent?: string;
+};
+
 async function withTelegramSpooledReplayUpdate<T>(
   update: object,
   fn: () => Promise<T>,
@@ -6214,7 +6225,7 @@ describe("createTelegramBot", () => {
     expect(String(systemEventOptions().contextKey)).toContain("telegram:reaction:add:1234:42:9");
   });
 
-  it.each([
+  const telegramReactionPolicyCases: TelegramReactionPolicyCase[] = [
     {
       name: "blocks reaction when dmPolicy is disabled",
       updateId: 510,
@@ -6271,243 +6282,123 @@ describe("createTelegramBot", () => {
       },
       expectedEnqueueCalls: 0,
     },
-  ])("$name", async ({ updateId, channelConfig, reaction, expectedEnqueueCalls }) => {
-    onSpy.mockClear();
-    enqueueSystemEventSpy.mockClear();
-
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: channelConfig,
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message_reaction") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    await handler(createTelegramReactionContext({ updateId, reaction }));
-
-    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(expectedEnqueueCalls);
-  });
-
-  it("skips reaction when reactionNotifications is off", async () => {
-    onSpy.mockClear();
-    enqueueSystemEventSpy.mockClear();
-    wasSentByBot.mockReturnValue(true);
-
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "off" },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message_reaction") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    await handler({
-      update: { update_id: 501 },
-      messageReaction: {
-        chat: { id: 1234, type: "private" },
-        message_id: 42,
-        user: { id: 9, first_name: "Ada" },
-        date: 1736380800,
-        old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
-      },
-    });
-
-    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
-  });
-
-  it("defaults reactionNotifications to own", async () => {
-    onSpy.mockClear();
-    enqueueSystemEventSpy.mockClear();
-    wasSentByBot.mockReturnValue(true);
-
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: { dmPolicy: "open", allowFrom: ["*"] },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message_reaction") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    await handler({
-      update: { update_id: 502 },
-      messageReaction: {
-        chat: { id: 1234, type: "private" },
-        message_id: 43,
-        user: { id: 9, first_name: "Ada" },
-        date: 1736380800,
-        old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
-      },
-    });
-
-    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("allows reaction in all mode regardless of message sender", async () => {
-    onSpy.mockClear();
-    enqueueSystemEventSpy.mockClear();
-    wasSentByBot.mockReturnValue(false);
-
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message_reaction") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    await handler({
-      update: { update_id: 503 },
-      messageReaction: {
-        chat: { id: 1234, type: "private" },
+    {
+      name: "skips reaction when reactionNotifications is off",
+      updateId: 501,
+      channelConfig: { dmPolicy: "open", reactionNotifications: "off" },
+      sentByBot: true,
+      expectedEnqueueCalls: 0,
+    },
+    {
+      name: "defaults reactionNotifications to own",
+      updateId: 502,
+      channelConfig: { dmPolicy: "open", allowFrom: ["*"] },
+      reaction: { message_id: 43 },
+      sentByBot: true,
+      expectedEnqueueCalls: 1,
+    },
+    {
+      name: "allows reaction in all mode regardless of message sender",
+      updateId: 503,
+      channelConfig: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
+      reaction: {
         message_id: 99,
-        user: { id: 9, first_name: "Ada" },
-        date: 1736380800,
-        old_reaction: [],
         new_reaction: [{ type: "emoji", emoji: PARTY_EMOJI }],
       },
-    });
-
-    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
-    expect(firstSystemEventArg(0)).toBe(`Telegram reaction added: ${PARTY_EMOJI} by Ada on msg 99`);
-    expect(firstSystemEventArg(1)).toBeTypeOf("object");
-  });
-
-  it("skips reaction in own mode when message is not sent by bot", async () => {
-    onSpy.mockClear();
-    enqueueSystemEventSpy.mockClear();
-    wasSentByBot.mockReturnValue(false);
-
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "own" },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message_reaction") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    await handler({
-      update: { update_id: 503 },
-      messageReaction: {
-        chat: { id: 1234, type: "private" },
+      sentByBot: false,
+      expectedEnqueueCalls: 1,
+      expectedEvent: `Telegram reaction added: ${PARTY_EMOJI} by Ada on msg 99`,
+    },
+    {
+      name: "skips reaction in own mode when message is not sent by bot",
+      updateId: 503,
+      channelConfig: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "own" },
+      reaction: {
         message_id: 99,
-        user: { id: 9, first_name: "Ada" },
-        date: 1736380800,
-        old_reaction: [],
         new_reaction: [{ type: "emoji", emoji: PARTY_EMOJI }],
       },
-    });
-
-    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
-  });
-
-  it("allows reaction in own mode when message is sent by bot", async () => {
-    onSpy.mockClear();
-    enqueueSystemEventSpy.mockClear();
-    wasSentByBot.mockReturnValue(true);
-
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "own" },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message_reaction") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    await handler({
-      update: { update_id: 503 },
-      messageReaction: {
-        chat: { id: 1234, type: "private" },
+      sentByBot: false,
+      expectedEnqueueCalls: 0,
+    },
+    {
+      name: "allows reaction in own mode when message is sent by bot",
+      updateId: 503,
+      channelConfig: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "own" },
+      reaction: {
         message_id: 99,
-        user: { id: 9, first_name: "Ada" },
-        date: 1736380800,
-        old_reaction: [],
         new_reaction: [{ type: "emoji", emoji: PARTY_EMOJI }],
       },
-    });
-
-    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("skips reaction from bot users", async () => {
-    onSpy.mockClear();
-    enqueueSystemEventSpy.mockClear();
-    wasSentByBot.mockReturnValue(true);
-
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message_reaction") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    await handler({
-      update: { update_id: 503 },
-      messageReaction: {
-        chat: { id: 1234, type: "private" },
+      sentByBot: true,
+      expectedEnqueueCalls: 1,
+    },
+    {
+      name: "skips reaction from bot users",
+      updateId: 503,
+      channelConfig: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
+      reaction: {
         message_id: 99,
         user: { id: 9, first_name: "Bot", is_bot: true },
-        date: 1736380800,
-        old_reaction: [],
         new_reaction: [{ type: "emoji", emoji: PARTY_EMOJI }],
       },
-    });
-
-    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
-  });
-
-  it("skips reaction removal (only processes added reactions)", async () => {
-    onSpy.mockClear();
-    enqueueSystemEventSpy.mockClear();
-
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message_reaction") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    await handler({
-      update: { update_id: 504 },
-      messageReaction: {
-        chat: { id: 1234, type: "private" },
-        message_id: 42,
-        user: { id: 9, first_name: "Ada" },
-        date: 1736380800,
+      sentByBot: true,
+      expectedEnqueueCalls: 0,
+    },
+    {
+      name: "skips reaction removal (only processes added reactions)",
+      updateId: 504,
+      channelConfig: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
+      reaction: {
         old_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
         new_reaction: [],
       },
-    });
+      expectedEnqueueCalls: 0,
+    },
+    {
+      name: "blocks reaction in own mode when cache is warm and message not sent by bot",
+      updateId: 601,
+      channelConfig: { dmPolicy: "open", reactionNotifications: "own" },
+      reaction: { message_id: 99 },
+      sentByBot: false,
+      expectedEnqueueCalls: 0,
+    },
+  ];
 
-    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
-  });
+  it.each(telegramReactionPolicyCases)(
+    "$name",
+    async ({
+      updateId,
+      channelConfig,
+      reaction,
+      sentByBot,
+      expectedEnqueueCalls,
+      expectedEvent,
+    }) => {
+      onSpy.mockClear();
+      enqueueSystemEventSpy.mockClear();
+      if (sentByBot !== undefined) {
+        wasSentByBot.mockReturnValue(sentByBot);
+      }
+
+      loadConfig.mockReturnValue({
+        channels: {
+          telegram: channelConfig,
+        },
+      });
+
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message_reaction") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      await handler(createTelegramReactionContext({ updateId, reaction }));
+
+      expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(expectedEnqueueCalls);
+      if (expectedEvent) {
+        expect(firstSystemEventArg(0)).toBe(expectedEvent);
+        expect(firstSystemEventArg(1)).toBeTypeOf("object");
+      }
+    },
+  );
 
   it("enqueues one event per added emoji reaction", async () => {
     onSpy.mockClear();
@@ -6657,37 +6548,6 @@ describe("createTelegramBot", () => {
     };
     const sessionKey = eventOptions.sessionKey ?? "";
     expect(sessionKey).not.toContain(":topic:");
-  });
-
-  it("blocks reaction in own mode when cache is warm and message not sent by bot", async () => {
-    onSpy.mockClear();
-    enqueueSystemEventSpy.mockClear();
-    wasSentByBot.mockReturnValue(false);
-
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "own" },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message_reaction") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    await handler({
-      update: { update_id: 601 },
-      messageReaction: {
-        chat: { id: 1234, type: "private" },
-        message_id: 99,
-        user: { id: 9, first_name: "Ada" },
-        date: 1736380800,
-        old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
-      },
-    });
-
-    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

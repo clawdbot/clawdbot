@@ -340,6 +340,33 @@ describe("isDeliveredMessagingToolResult", () => {
 });
 
 describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
+  it("accepts a confirmed adopted-thread reply outside message-tool-only mode", () => {
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "automatic",
+        toolName: "message",
+        args: { action: "thread-reply", threadId: "thread-1", message: "done" },
+        result: {
+          details: {
+            ok: true,
+            sourceReplyRoute: "current-source",
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects an unconfirmed thread reply outside message-tool-only mode", () => {
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "automatic",
+        toolName: "message",
+        args: { action: "thread-reply", threadId: "thread-1", message: "done" },
+        result: { details: { ok: true } },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts only confirmed implicit message sends", () => {
     expect(
       isDeliveredMessageToolOnlySourceReplyResult({

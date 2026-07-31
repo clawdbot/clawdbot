@@ -285,6 +285,11 @@ answer until those completions arrive.
 loops over `subagents`, `sessions_list`, `sessions_history`, shell
 `sleep`, or process polling just to detect child completion.
 
+On native Codex harness turns, `wait_agent` keeps the current turn active and
+is reserved for an intentional same-turn wait when the immediate next step is
+blocked on the child. Use `sessions_yield` instead when a native child's result
+should resume the parent in a later turn.
+
 Only use `sessions_yield` when the session's effective tool list includes
 it. Some minimal or custom tool profiles may expose `sessions_spawn` and
 `subagents` without exposing `sessions_yield`; in that case, do not invent

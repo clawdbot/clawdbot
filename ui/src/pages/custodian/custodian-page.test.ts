@@ -80,6 +80,26 @@ describe("custodian page", () => {
     expect(connectOption.disabled).toBe(true);
   });
 
+  it("collapses an empty transcript around a blocking startup error", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(
+          "OpenClaw requires working inference: No agent model is configured. Run `openclaw onboard` first.",
+        ),
+      );
+    const { context } = createContext(request);
+    const { page } = await mountPage(context, { onboarding: false });
+
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() =>
+      expect(page.querySelector(".custodian-surface--empty-error")).not.toBeNull(),
+    );
+    expect(page.querySelector("[role=alert]")?.textContent).toContain(
+      "No agent model is configured",
+    );
+  });
+
   it.each([
     { pathname: "/settings/channels", expectedPage: "channels" },
     { pathname: "/not-an-openclaw-route", expectedPage: undefined },

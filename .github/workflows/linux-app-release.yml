@@ -93,6 +93,9 @@ jobs:
             build-essential \
             curl \
             file \
+            gstreamer1.0-libav \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-good \
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libssl-dev \

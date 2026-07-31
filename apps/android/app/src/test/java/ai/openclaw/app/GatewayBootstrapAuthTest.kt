@@ -738,6 +738,32 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
+  fun permissionSurfaceReconnectsOnlyAfterAndroidAuthorityChanges() {
+    val app: android.app.Application = RuntimeEnvironment.getApplication()
+    shadowOf(app).denyPermissions(Manifest.permission.CAMERA)
+    val (runtime, prefs) = createNeutralizedRuntime()
+    armSavedActiveManualGateway(prefs)
+    writeField(
+      runtime,
+      "connectedEndpoint",
+      GatewayEndpoint.manual(host = "127.0.0.1", port = 18789),
+    )
+
+    runtime.refreshNodePermissionSurface()
+    assertNull(desiredConnection(runtime, "nodeSession"))
+
+    shadowOf(app).grantPermissions(Manifest.permission.CAMERA)
+    runtime.refreshNodePermissionSurface()
+
+    val options =
+      readField<GatewayConnectOptions>(
+        waitForDesiredConnection(runtime, "nodeSession"),
+        "options",
+      )
+    assertTrue(options.permissions.getValue("camera"))
+  }
+
+  @Test
   fun connect_showsSecureEndpointGuidanceWhenTlsProbeFails() {
     val app = RuntimeEnvironment.getApplication()
     val runtime =

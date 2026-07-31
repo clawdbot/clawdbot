@@ -14,14 +14,17 @@ import {
   withDoctorSqliteMaintenanceLock,
 } from "./doctor-sqlite-maintenance-lock.js";
 
-const MEMORY_RECALL_METADATA_COLUMNS = ["importance", "triggers"] as const;
+const LEGACY_MEMORY_RECALL_METADATA_COLUMNS = ["importance", "triggers", "project_key"] as const;
+const LEGACY_MEMORY_PROVENANCE_TRIGGER = "memory_index_chunk_provenance_after_insert";
+const MEMORY_RECALL_METADATA_TABLE = "memory_index_chunk_recall_metadata";
 
-type MemoryRecallMetadataColumn = (typeof MEMORY_RECALL_METADATA_COLUMNS)[number];
+type LegacyMemoryRecallMetadataColumn = (typeof LEGACY_MEMORY_RECALL_METADATA_COLUMNS)[number];
 
 type DoctorAgentMemorySchemaRepair = {
   agentId: string;
-  columns: readonly MemoryRecallMetadataColumn[];
+  columns: readonly LegacyMemoryRecallMetadataColumn[];
   path: string;
+  removedTrigger: boolean;
 };
 
 type DoctorAgentMemorySchemaReport = {
@@ -29,9 +32,15 @@ type DoctorAgentMemorySchemaReport = {
   warnings: readonly string[];
 };
 
-function readMissingMemoryRecallMetadataColumns(
+type MemoryRecallMetadataMigrationState = {
+  columns: LegacyMemoryRecallMetadataColumn[];
+  hasMetadataTable: boolean;
+  hasProvenanceTrigger: boolean;
+};
+
+function readMemoryRecallMetadataMigrationState(
   database: DatabaseSync,
-): MemoryRecallMetadataColumn[] | null {
+): MemoryRecallMetadataMigrationState | null {
   const rows =
     /* sqlite-allow-raw -- Read-only schema inspection before doctor maintenance. */ database
       .prepare("PRAGMA table_info(memory_index_chunks)")
@@ -40,25 +49,37 @@ function readMissingMemoryRecallMetadataColumns(
     return null;
   }
   const columns = new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
-  return MEMORY_RECALL_METADATA_COLUMNS.filter((column) => !columns.has(column));
+  return {
+    columns: LEGACY_MEMORY_RECALL_METADATA_COLUMNS.filter((column) => columns.has(column)),
+    hasMetadataTable: Boolean(
+      database
+        .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get(MEMORY_RECALL_METADATA_TABLE),
+    ),
+    hasProvenanceTrigger: Boolean(
+      database
+        .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = ?")
+        .get(LEGACY_MEMORY_PROVENANCE_TRIGGER),
+    ),
+  };
 }
 
-function inspectAgentMemoryRecallMetadataColumns(
+function inspectAgentMemoryRecallMetadataMigration(
   pathname: string,
-): MemoryRecallMetadataColumn[] | null {
+): MemoryRecallMetadataMigrationState | null {
   const stat = fs.lstatSync(pathname);
   if (!stat.isFile()) {
     throw new Error(`OpenClaw agent database is not a regular file: ${pathname}`);
   }
   const database = openNodeSqliteDatabase(pathname, { readOnly: true });
   try {
-    return readMissingMemoryRecallMetadataColumns(database);
+    return readMemoryRecallMetadataMigrationState(database);
   } finally {
     database.close();
   }
 }
 
-/** Eagerly canonicalize memory recall columns in every registered agent database. */
+/** Move the unreleased inline metadata shape into rollback-safe additive tables. */
 function repairDoctorAgentMemorySchemas(
   options: { env?: NodeJS.ProcessEnv } = {},
 ): DoctorAgentMemorySchemaReport {
@@ -67,7 +88,10 @@ function repairDoctorAgentMemorySchemas(
   const warnings: string[] = [];
   let registered: ReturnType<typeof listOpenClawRegisteredAgentDatabases>;
   try {
-    registered = listOpenClawRegisteredAgentDatabases({ env });
+    registered = listOpenClawRegisteredAgentDatabases({
+      env,
+      includeIncompatibleSchemaVersions: true,
+    });
   } catch (error) {
     return {
       repaired,
@@ -77,24 +101,34 @@ function repairDoctorAgentMemorySchemas(
 
   for (const entry of registered) {
     try {
-      const missing = inspectAgentMemoryRecallMetadataColumns(entry.path);
-      if (!missing || missing.length === 0) {
+      const before = inspectAgentMemoryRecallMetadataMigration(entry.path);
+      if (!before || (before.columns.length === 0 && !before.hasProvenanceTrigger)) {
         continue;
       }
       // Doctor owns offline maintenance. Close any handle opened by an earlier
-      // doctor contribution before the feature owner ALTERs the shared table.
+      // doctor contribution before the feature owner migrates the shared table.
       closeOpenClawAgentDatabaseByPath(entry.path);
       migrateOpenClawAgentDatabaseForMaintenance({
         agentId: entry.agentId,
         pathname: entry.path,
       });
-      const remaining = inspectAgentMemoryRecallMetadataColumns(entry.path);
-      if (remaining === null || remaining.length > 0) {
+      const after = inspectAgentMemoryRecallMetadataMigration(entry.path);
+      if (
+        after === null ||
+        after.columns.length > 0 ||
+        after.hasProvenanceTrigger ||
+        !after.hasMetadataTable
+      ) {
         throw new Error(
-          `memory_index_chunks did not converge on the recall metadata schema (${remaining?.join(", ") ?? "table missing"})`,
+          "memory recall metadata did not converge on rollback-safe additive storage",
         );
       }
-      repaired.push({ agentId: entry.agentId, columns: missing, path: entry.path });
+      repaired.push({
+        agentId: entry.agentId,
+        columns: before.columns,
+        path: entry.path,
+        removedTrigger: before.hasProvenanceTrigger,
+      });
     } catch (error) {
       warnings.push(
         `Agent ${entry.agentId} database ${shortenHomePath(entry.path)}: ${formatErrorMessage(error)}`,
@@ -130,12 +164,17 @@ export async function noteDoctorAgentMemorySchemaHealth(
   if (report.repaired.length > 0) {
     writeNote(
       report.repaired
-        .map(
-          (repair) =>
-            `- Agent ${repair.agentId}: added ${repair.columns
-              .map((column) => `memory_index_chunks.${column}`)
-              .join(", ")} (${shortenHomePath(repair.path)}).`,
-        )
+        .map((repair) => {
+          const changes = [
+            repair.columns.length > 0
+              ? `moved ${repair.columns
+                  .map((column) => `memory_index_chunks.${column}`)
+                  .join(", ")} to additive storage`
+              : null,
+            repair.removedTrigger ? `removed ${LEGACY_MEMORY_PROVENANCE_TRIGGER}` : null,
+          ].filter((change): change is string => change !== null);
+          return `- Agent ${repair.agentId}: ${changes.join("; ")} (${shortenHomePath(repair.path)}).`;
+        })
         .join("\n"),
       "Doctor changes",
     );

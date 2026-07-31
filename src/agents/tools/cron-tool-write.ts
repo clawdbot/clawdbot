@@ -12,13 +12,13 @@ export function assertNoCronShellExecution(value: unknown): void {
   const payload = isRecord(value.payload) ? value.payload : undefined;
   if (normalizeLowercaseStringOrEmpty(payload?.kind) === "command") {
     throw new Error(
-      "cron command payloads cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
+      "automation command payloads cannot be created or edited through the agent automations tool; use the CLI or Gateway API.",
     );
   }
   const schedule = isRecord(value.schedule) ? value.schedule : undefined;
   if (schedule?.kind === "on-exit") {
     throw new Error(
-      "cron on-exit schedules cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
+      "automation on-exit schedules cannot be created or edited through the agent automations tool; use the CLI or Gateway API.",
     );
   }
   // Stream argv is authorized by the Gateway's cron.triggers.enabled gate,

@@ -24,7 +24,11 @@ import type {
 import type { CliBackendPlugin, PluginTextTransforms } from "./cli-backend.types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { PluginConversationBindingResolvedEvent } from "./conversation-binding.types.js";
-import type { PluginHookHandlerMap, PluginHookName } from "./hook-types.js";
+import type {
+  PluginHookHandlerMap,
+  PluginHookName,
+  PluginHookRegistrationOptions,
+} from "./hook-types.js";
 import type {
   PluginAgentEventEmitParams,
   PluginAgentEventEmitResult,
@@ -451,6 +455,6 @@ export type OpenClawPluginApi = {
   on: <K extends PluginHookName>(
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number; timeoutMs?: number },
+    opts?: PluginHookRegistrationOptions<K>,
   ) => void;
 };

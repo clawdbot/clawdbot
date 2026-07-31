@@ -71,6 +71,20 @@ describe("resolveAgentToolSurfacePlan", () => {
     expect(plan.toolSearchControlsEnabled).toBe(expected.toolSearch);
     expect(plan.codeModeControlsEnabled && plan.toolSearchControlsEnabled).toBe(false);
   });
+
+  it("preserves Code Mode controls for a checkpoint-proven restart recovery", () => {
+    const config: OpenClawConfig = {
+      tools: { codeMode: false, toolSearch: true },
+    };
+    const plan = resolveAgentToolSurfacePlan({
+      ...basePlanParams,
+      config,
+      forceCodeModeControls: true,
+    });
+
+    expect(plan.codeModeControlsEnabled).toBe(true);
+    expect(plan.toolSearchControlsEnabled).toBe(false);
+  });
 });
 
 describe("applyAgentToolSurfaceCatalog", () => {
@@ -92,6 +106,34 @@ describe("applyAgentToolSurfaceCatalog", () => {
       codeModeControlsEnabled: plan.codeModeControlsEnabled,
       toolSearchConfig: plan.toolSearchConfig,
       forceDirectMessageTool: false,
+      catalogRef,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+    expect(result.catalogToolCount).toBe(1);
+  });
+
+  it("forces the Code Mode catalog for a checkpoint-proven restart recovery", () => {
+    const config: OpenClawConfig = {
+      tools: { codeMode: false, toolSearch: { enabled: true, mode: "directory" } },
+    };
+    const plan = resolveAgentToolSurfacePlan({
+      ...basePlanParams,
+      config,
+      forceCodeModeControls: true,
+    });
+    const catalogRef = createToolSearchCatalogRef();
+    const result = applyAgentToolSurfaceCatalog({
+      tools: [
+        ...createCodeModeTools({ config, catalogRef, executeTool }),
+        createStubTool("hidden_target"),
+      ],
+      config,
+      toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
+      codeModeControlsEnabled: plan.codeModeControlsEnabled,
+      toolSearchConfig: plan.toolSearchConfig,
+      forceDirectMessageTool: false,
+      forceCodeModeControls: true,
       catalogRef,
     });
 

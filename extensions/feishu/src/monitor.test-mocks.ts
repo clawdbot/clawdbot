@@ -41,6 +41,7 @@ export function createFeishuRuntimeMockModule(): {
           enqueue: async () => {},
           flushKey: async () => {},
           cancelKey: () => false,
+          drain: async () => {},
         }),
       },
       text: {

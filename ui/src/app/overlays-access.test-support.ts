@@ -3,7 +3,11 @@ import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts"
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 
-export type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
+export type RequestFn = (
+  method: string,
+  params?: unknown,
+  options?: { timeoutMs?: number | null },
+) => Promise<unknown>;
 
 const SYSTEM_APPROVAL_TITLE = "OpenClaw change";
 const SYSTEM_APPROVAL_COMMAND = "Set gateway.port to 19001";

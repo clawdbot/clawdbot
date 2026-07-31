@@ -413,9 +413,9 @@ describe("runDreamNarrative", () => {
     const nowMs = Date.parse("2026-04-05T03:00:00Z");
     const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
     const expectedRunKey = `dreaming-narrative-main-light-${workspaceHash}`;
-    const expectedSessionKey = `agent:main:dreaming-narrative-light-${workspaceHash}`;
+    const expectedSessionKey = `agent:main:dreaming-narrative-memory-core-v2-light-${workspaceHash}`;
 
-    await runDreamNarrative({
+    const outcome = await runDreamNarrative({
       agentId: "main",
       subagent,
       workspaceDir,
@@ -441,10 +441,42 @@ describe("runDreamNarrative", () => {
     expect(runOptions.model).toBe("anthropic/claude-sonnet-4-6");
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
     expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
+    expect(outcome).toEqual({ status: "completed" });
 
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(content).toContain("The repository whispered of forgotten endpoints.");
     expect(logger.info).toHaveBeenCalled();
+  });
+
+  it("keeps creation and cleanup on the memory-core-owned session identity", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-owner-");
+    const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
+    const legacyUnownedKey = `agent:blockdigest:dreaming-narrative-rem-${workspaceHash}`;
+    const ownedKey = `agent:blockdigest:dreaming-narrative-memory-core-v2-rem-${workspaceHash}`;
+    const subagent = createMockSubagent("The digest folded itself into a paper moon.");
+    subagent.deleteSession.mockImplementation(async ({ sessionKey }: { sessionKey: string }) => {
+      if (sessionKey === legacyUnownedKey) {
+        throw new Error('Plugin "memory-core" cannot delete session because it did not create it');
+      }
+    });
+    const logger = createMockLogger();
+
+    const outcome = await runDreamNarrative({
+      agentId: "blockdigest",
+      subagent,
+      workspaceDir,
+      data: { phase: "rem", snippets: ["A digest session needs one lifecycle owner."] },
+      logger,
+    });
+
+    expect(mockObjectArg(subagent.run, "subagent run").sessionKey).toBe(ownedKey);
+    expect(
+      subagent.deleteSession.mock.calls.map(
+        (call: unknown[]) => (call[0] as { sessionKey: string }).sessionKey,
+      ),
+    ).toEqual([ownedKey, ownedKey]);
+    expect(outcome).toEqual({ status: "completed" });
+    expectLogExcludes(logger.warn, "did not create it");
   });
 
   // Regression: unscoped narrative session keys cannot be resolved to a per-agent SQLite
@@ -456,7 +488,7 @@ describe("runDreamNarrative", () => {
     const logger = createMockLogger();
     const nowMs = Date.parse("2026-04-05T03:00:00Z");
     const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
-    const sessionSuffix = `dreaming-narrative-rem-${workspaceHash}`;
+    const sessionSuffix = `dreaming-narrative-memory-core-v2-rem-${workspaceHash}`;
 
     await runDreamNarrative({
       agentId: "researcher",
@@ -518,11 +550,11 @@ describe("runDreamNarrative", () => {
 
       expect(subagent.getSessionMessages).toHaveBeenCalledTimes(2);
       expect(subagent.getSessionMessages).toHaveBeenNthCalledWith(1, {
-        sessionKey: expect.stringContaining("dreaming-narrative-light-"),
+        sessionKey: expect.stringContaining("dreaming-narrative-memory-core-v2-light-"),
         limit: expect.any(Number),
       });
       expect(subagent.getSessionMessages).toHaveBeenNthCalledWith(2, {
-        sessionKey: expect.stringContaining("dreaming-narrative-light-"),
+        sessionKey: expect.stringContaining("dreaming-narrative-memory-core-v2-light-"),
         limit: expect.any(Number),
       });
       const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
@@ -573,7 +605,7 @@ describe("runDreamNarrative", () => {
     const logger = createMockLogger();
     const nowMs = Date.parse("2026-04-05T03:00:00Z");
     const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
-    const expectedSessionKey = `agent:main:dreaming-narrative-light-${workspaceHash}`;
+    const expectedSessionKey = `agent:main:dreaming-narrative-memory-core-v2-light-${workspaceHash}`;
     const retrySessionKey = `${expectedSessionKey}-retry-1`;
 
     await runDreamNarrative({
@@ -626,7 +658,7 @@ describe("runDreamNarrative", () => {
     const logger = createMockLogger();
     const nowMs = Date.parse("2026-04-05T03:00:00Z");
     const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
-    const expectedSessionKey = `agent:main:dreaming-narrative-rem-${workspaceHash}`;
+    const expectedSessionKey = `agent:main:dreaming-narrative-memory-core-v2-rem-${workspaceHash}`;
     const retrySessionKey = `${expectedSessionKey}-retry-1`;
 
     await runDreamNarrative({
@@ -773,7 +805,7 @@ describe("runDreamNarrative", () => {
     subagent.deleteSession.mockRejectedValue(new Error("still active"));
     const logger = createMockLogger();
 
-    await runDreamNarrative({
+    const outcome = await runDreamNarrative({
       agentId: "main",
       subagent,
       workspaceDir,
@@ -784,6 +816,7 @@ describe("runDreamNarrative", () => {
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
     expect(mockObjectArg(subagent.waitForRun, "wait for run").timeoutMs).toBe(60_000);
     expectLogIncludes(logger.warn, "narrative session cleanup failed for rem phase");
+    expect(outcome).toEqual({ status: "degraded", error: "still active" });
   });
 
   it("handles subagent error gracefully", async () => {
@@ -1120,8 +1153,8 @@ describe("runDreamNarrative", () => {
     expect(firstSessionKey).toBeTypeOf("string");
     expect(secondSessionKey).toBeTypeOf("string");
     expect(firstSessionKey).not.toBe(secondSessionKey);
-    expect(firstSessionKey).toContain("dreaming-narrative-light-");
-    expect(secondSessionKey).toContain("dreaming-narrative-light-");
+    expect(firstSessionKey).toContain("dreaming-narrative-memory-core-v2-light-");
+    expect(secondSessionKey).toContain("dreaming-narrative-memory-core-v2-light-");
     const deleteKeys = subagent.deleteSession.mock.calls.map(
       (call: unknown[]) => (call[0] as { sessionKey: string })?.sessionKey,
     );

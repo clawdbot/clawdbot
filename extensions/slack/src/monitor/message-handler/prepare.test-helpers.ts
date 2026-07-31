@@ -20,6 +20,7 @@ export function createInboundSlackTestContext(params: {
   channelsConfig?: SlackChannelConfigEntries;
   dmHistoryLimit?: number;
   groupDmEnabled?: boolean;
+  groupPolicy?: "open" | "disabled" | "allowlist";
   channelRuntime?: ChannelRuntimeSurface;
 }) {
   return createSlackMonitorContext({
@@ -45,7 +46,7 @@ export function createInboundSlackTestContext(params: {
     groupDmChannels: [],
     defaultRequireMention: params.defaultRequireMention ?? true,
     channelsConfig: params.channelsConfig,
-    groupPolicy: "open",
+    groupPolicy: params.groupPolicy ?? "open",
     useAccessGroups: true,
     reactionMode: "off",
     reactionAllowlist: [],

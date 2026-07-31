@@ -542,6 +542,35 @@ describe("subagent registry lifecycle hardening", () => {
     });
   });
 
+  it.each([
+    { identity: "ASCII", runId: "run-1234567890", expected: "run-…7890" },
+    { identity: "short ASCII", runId: "short", expected: "***" },
+    { identity: "astral prefix", runId: "abc😀" + "x".repeat(10), expected: "abc…xxxx" },
+    { identity: "astral suffix", runId: "x".repeat(10) + "😀abc", expected: "xxxx…abc" },
+    {
+      identity: "astral prefix and suffix",
+      runId: "abc😀" + "x".repeat(10) + "😀xyz",
+      expected: "abc…xyz",
+    },
+  ])(
+    "keeps $identity run IDs well-formed in actual completion warnings",
+    async ({ runId, expected }) => {
+      const warn = vi.fn();
+      const entry = createRunEntry({ runId });
+      taskExecutorMocks.completeTaskRunByRunId.mockImplementation(() => {
+        throw new Error("task store boom");
+      });
+
+      const controller = createLifecycleController({ entry, warn });
+      await expect(completeRun(controller, entry)).resolves.toBeUndefined();
+
+      const [, warningFields] = firstCall(warn);
+      const maskedRunId = (warningFields as { runId?: string }).runId;
+      expect(maskedRunId).toBe(expected);
+      expect(new TextDecoder().decode(new TextEncoder().encode(maskedRunId))).toBe(maskedRunId);
+    },
+  );
+
   it("restores the registry state when canonical completion persistence fails", async () => {
     const entry = createRunEntry();
     const original = structuredClone(entry);

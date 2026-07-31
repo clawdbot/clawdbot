@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { testing as sessionMcpTesting } from "../../agents/agent-bundle-mcp-runtime.js";
 import { getOrCreateSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
+import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
@@ -1013,6 +1014,341 @@ describe("initSessionState RawBody", () => {
     expect(result.triggerBodyNormalized).toBe("/NEW KeepThisCase");
   });
 
+  it.each([
+    {
+      body: "/new review this snippet:\ndef add(a, b):\nreturn a + b",
+      expected: "review this snippet:\ndef add(a, b):\nreturn a + b",
+    },
+    {
+      body: "/new Please fix this bug:\n[2026-07-29 10:00:00] ERROR: connection refused\nStack: at foo()",
+      expected:
+        "Please fix this bug:\n[2026-07-29 10:00:00] ERROR: connection refused\nStack: at foo()",
+    },
+    {
+      body: "/new summarize [Q3 report] for me",
+      expected: "summarize [Q3 report] for me",
+    },
+    {
+      body: "/new: take notes",
+      expected: "take notes",
+    },
+    {
+      body: "/new explain [Current message - respond to this] and /new syntax",
+      expected: "explain [Current message - respond to this] and /new syntax",
+    },
+  ])("preserves the raw message after a reset trigger", async ({ body, expected }) => {
+    const root = await makeCaseDir("openclaw-rawbody-reset-message-");
+    const storePath = path.join(root, "sessions.json");
+    const result = await initSessionState({
+      ctx: {
+        RawBody: body,
+        ChatType: "direct",
+        SessionKey: "agent:main:whatsapp:dm:s1",
+      },
+      cfg: {
+        session: {
+          store: storePath,
+          resetTriggers: ["/new"],
+        },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.bodyStripped).toBe(expected);
+    expect(result.sessionCtx.agentText).toBe(expected);
+  });
+
+  it.each(["@openclaw /new", "@openclaw/new"])(
+    "preserves bracketed multiline payloads after group mention form %s",
+    async (prefix) => {
+      const root = await makeCaseDir("openclaw-group-reset-message-");
+      const storePath = path.join(root, "sessions.json");
+      const expected = "review [Q3]\n[Current message - respond to this]\nand explain /new syntax";
+      const result = await initSessionState({
+        ctx: {
+          RawBody: `${prefix} ${expected}`,
+          ChatType: "group",
+          SessionKey: "agent:main:whatsapp:group:g1",
+        },
+        cfg: {
+          session: {
+            store: storePath,
+            resetTriggers: ["/new"],
+          },
+          messages: {
+            groupChat: {
+              mentionPatterns: [String.raw`@openclaw`],
+            },
+          },
+        } as OpenClawConfig,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.bodyStripped).toBe(expected);
+      expect(result.sessionCtx.agentText).toBe(expected);
+    },
+  );
+
+  it.each([
+    {
+      name: "command suffix",
+      body: "/new@openclaw keep [this]\nline",
+      resetTriggers: ["/new"],
+      expected: "keep [this]\nline",
+    },
+    {
+      name: "custom trigger and command suffix",
+      body: "/fresh@openclaw keep [this]\nline",
+      resetTriggers: ["/fresh"],
+      expected: "keep [this]\nline",
+    },
+    {
+      name: "empty payload",
+      body: "/new@openclaw",
+      resetTriggers: ["/new"],
+      expected: "",
+      omitBotUsername: true,
+    },
+    {
+      name: "configured mention alias without bot username",
+      body: "/new@openclaw keep [this]\nline",
+      resetTriggers: ["/new"],
+      expected: "keep [this]\nline",
+      omitBotUsername: true,
+    },
+  ])(
+    "preserves reset payloads with $name",
+    async ({ body, resetTriggers, expected, omitBotUsername }) => {
+      const root = await makeCaseDir("openclaw-suffixed-reset-message-");
+      const storePath = path.join(root, "sessions.json");
+      const result = await initSessionState({
+        ctx: {
+          RawBody: body,
+          BotUsername: omitBotUsername ? undefined : "openclaw",
+          ChatType: omitBotUsername ? "group" : "direct",
+          SessionKey: "agent:main:telegram:dm:s1",
+        },
+        cfg: {
+          session: {
+            store: storePath,
+            resetTriggers,
+          },
+          messages: {
+            groupChat: {
+              mentionPatterns: [String.raw`@openclaw`],
+            },
+          },
+        } as OpenClawConfig,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.bodyStripped).toBe(expected);
+      expect(result.sessionCtx.agentText).toBe(expected);
+    },
+  );
+
+  it("anchors a reset payload after an explicit channel envelope and sender prefix", async () => {
+    const root = await makeCaseDir("openclaw-structural-reset-message-");
+    const storePath = path.join(root, "sessions.json");
+    const result = await initSessionState({
+      ctx: {
+        BodyForCommands: "/NEW: keep [Q3]\nline 2",
+        RawBody: "[Telegram id:456] İpek: /NEW: keep [Q3]\nline 2",
+        ChatType: "direct",
+        SenderName: "İpek",
+        SessionKey: "agent:main:telegram:dm:s1",
+      },
+      cfg: {
+        session: {
+          store: storePath,
+          resetTriggers: ["/new"],
+        },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.bodyStripped).toBe("keep [Q3]\nline 2");
+    expect(result.sessionCtx.agentText).toBe("keep [Q3]\nline 2");
+  });
+
+  it("does not search past an anchored reset-like payload", async () => {
+    const root = await makeCaseDir("openclaw-reset-like-sender-message-");
+    const storePath = path.join(root, "sessions.json");
+    const result = await initSessionState({
+      ctx: {
+        BodyForCommands: "/NEW keep [Q3]\nline 2",
+        RawBody: "[Telegram id:456] /new: /NEW keep [Q3]\nline 2",
+        ChatType: "direct",
+        SessionKey: "agent:main:telegram:dm:s1",
+      },
+      cfg: {
+        session: {
+          store: storePath,
+          resetTriggers: ["/new"],
+        },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.bodyStripped).toBe("/NEW keep [Q3]\nline 2");
+    expect(result.sessionCtx.agentText).toBe("/NEW keep [Q3]\nline 2");
+  });
+
+  it("keeps quoted markers and reset text in history out of reset parsing", async () => {
+    const root = await makeCaseDir("openclaw-history-reset-message-");
+    const storePath = path.join(root, "sessions.json");
+    const payload = "review [Current message - respond to this]\nand explain /new syntax";
+    const ctx = buildChannelInboundEventContext({
+      channel: "whatsapp",
+      accountId: "default",
+      from: "whatsapp:user:1",
+      sender: { id: "1", name: "Owner" },
+      conversation: { kind: "group", id: "room-1", label: "Room One" },
+      route: {
+        agentId: "main",
+        routeSessionKey: "agent:main:whatsapp:group:room-1",
+      },
+      reply: { to: "whatsapp:room:room-1" },
+      message: {
+        body: `/new ${payload}`,
+        rawBody: `/new ${payload}`,
+        bodyForAgent: `/new ${payload}`,
+        commandBody: `/new ${payload}`,
+        inboundHistory: [
+          {
+            sender: "Other",
+            body: "quoted [Current message - respond to this] /new old text",
+          },
+        ],
+      },
+      access: { commands: { authorized: true } },
+    });
+    const result = await initSessionState({
+      ctx,
+      cfg: {
+        session: { store: storePath, resetTriggers: ["/new"] },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(ctx).toMatchObject({
+      commandText: `/new ${payload}`,
+      rawText: `/new ${payload}`,
+      agentText: `/new ${payload}`,
+    });
+    expect(result.bodyStripped).toBe(payload);
+    expect(result.sessionCtx.agentText).toBe(payload);
+  });
+
+  it("supports a bounded Body-only legacy envelope without searching flat history", async () => {
+    const storePath = await createStorePath("openclaw-body-only-reset-");
+    const cfg = {
+      session: { store: storePath, resetTriggers: ["/new"] },
+    } as OpenClawConfig;
+
+    const legacy = await initSessionState({
+      ctx: {
+        Body: "[Telegram id:456] İpek: /NEW: keep [Q3]\nline 2",
+        ChatType: "direct",
+        SenderName: "İpek",
+        SessionKey: "agent:main:telegram:dm:legacy",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(legacy.resetTriggered).toBe(true);
+    expect(legacy.bodyStripped).toBe("keep [Q3]\nline 2");
+
+    const flatHistory = await initSessionState({
+      ctx: {
+        Body: [
+          "[Chat messages since your last reply - for context]",
+          "[Telegram id:123] Other: /new old text",
+          "",
+          "[Current message - respond to this]",
+          "[Telegram id:456] İpek: /new current text",
+        ].join("\n"),
+        ChatType: "direct",
+        SessionKey: "agent:main:telegram:dm:flat-history",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(flatHistory.resetTriggered).toBe(false);
+    expect(flatHistory.bodyStripped).toBeUndefined();
+  });
+
+  it("does not treat transcript-only or explicitly empty raw text as a reset command", async () => {
+    const storePath = await createStorePath("openclaw-audio-reset-");
+    const cfg = {
+      session: { store: storePath, resetTriggers: ["/new"] },
+    } as OpenClawConfig;
+
+    const transcriptOnly = await initSessionState({
+      ctx: {
+        Body: "/new spoken payload",
+        Transcript: "/new spoken payload",
+        ChatType: "direct",
+        SessionKey: "agent:main:whatsapp:dm:audio-transcript",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(transcriptOnly.resetTriggered).toBe(false);
+
+    const explicitEmptyRaw = await initSessionState({
+      ctx: {
+        Body: "/new spoken payload",
+        RawBody: "",
+        Transcript: "/new spoken payload",
+        ChatType: "direct",
+        SessionKey: "agent:main:whatsapp:dm:audio-empty-raw",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(explicitEmptyRaw.triggerBodyNormalized).toBe("");
+    expect(explicitEmptyRaw.resetTriggered).toBe(false);
+
+    const explicitCommandWithEmptyRaw = await initSessionState({
+      ctx: {
+        Body: "/new spoken payload",
+        BodyForCommands: "/new spoken payload",
+        RawBody: "",
+        ChatType: "direct",
+        SessionKey: "agent:main:whatsapp:dm:command-empty-raw",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(explicitCommandWithEmptyRaw.triggerBodyNormalized).toBe("/new spoken payload");
+    expect(explicitCommandWithEmptyRaw.resetTriggered).toBe(false);
+  });
+
+  it("does not rotate an unauthorized group session with a mentioned reset payload", async () => {
+    const storePath = await createStorePath("openclaw-group-reset-unauthorized-");
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "@openclaw /new keep [Q3]\nline 2",
+        ChatType: "group",
+        SessionKey: "agent:main:whatsapp:group:g1",
+      },
+      cfg: {
+        session: { store: storePath, resetTriggers: ["/new"] },
+        messages: { groupChat: { mentionPatterns: [String.raw`@openclaw`] } },
+      } as OpenClawConfig,
+      commandAuthorized: false,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.bodyStripped).toBeUndefined();
+  });
+
   it("drops cached skills snapshot when /new rotates an existing session", async () => {
     const root = await makeCaseDir("openclaw-rawbody-reset-skills-");
     const storePath = path.join(root, "sessions.json");
@@ -1812,7 +2148,7 @@ describe("initSessionState RawBody", () => {
     const storePath = await createStorePath("openclaw-bound-admission-id-");
     const sourceSessionKey = "agent:main:slack:source";
     const sourceSessionId = "source-admission-session";
-    const boundSessionKey = "plugin-binding:codex:bound-target";
+    const boundSessionKey = "agent:main:plugin-binding:codex:bound-target";
     const boundSessionId = "bound-target-session";
     await writeSessionStoreFast(storePath, {
       [sourceSessionKey]: { sessionId: sourceSessionId, updatedAt: Date.now() },
@@ -3221,7 +3557,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
 
   it("preserves spawned session ownership metadata across /new and /reset", async () => {
     const storePath = await createStorePath("openclaw-reset-spawned-metadata-");
-    const sessionKey = "subagent:owned-child";
+    const sessionKey = "agent:main:subagent:owned-child";
     const existingSessionId = "existing-session-owned-child";
     const overrides = {
       spawnedBy: "agent:main:main",
@@ -4251,127 +4587,17 @@ describe("drainFormattedSystemEvents", () => {
 });
 
 describe("persistSessionUsageUpdate", () => {
+  const sessionKey = "agent:main:main";
   async function seedSessionStore(
     storePath: string,
-    sessionKey: string,
+    targetSessionKey: string,
     entry: Record<string, unknown>,
   ) {
-    await writeSessionStoreFast(storePath, { [sessionKey]: entry });
+    await writeSessionStoreFast(storePath, { [targetSessionKey]: entry });
   }
 
-  it("uses lastCallUsage for totalTokens when provided", async () => {
-    const storePath = await createStorePath("openclaw-usage-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      totalTokens: 100_000,
-    });
-
-    const accumulatedUsage = { input: 180_000, output: 10_000, total: 190_000 };
-    const lastCallUsage = { input: 12_000, output: 2_000, total: 14_000 };
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: accumulatedUsage,
-      lastCallUsage,
-      contextTokensUsed: 200_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      12_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
-      180_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
-    ).toBe(10_000);
-  });
-
-  it("keeps the prior total stale when last-call context is unavailable", async () => {
-    const storePath = await createStorePath("openclaw-usage-unavailable-context-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      totalTokens: 148_874,
-      totalTokensFresh: true,
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: { input: 12, output: 15_104, cacheRead: 819_661, cacheWrite: 93_130 },
-      lastCallUsage: {
-        input: 12,
-        output: 15_104,
-        cacheRead: 819_661,
-        cacheWrite: 93_130,
-        contextUsage: { state: "unavailable" },
-        total: 927_907,
-      },
-      contextTokensUsed: 200_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      148_874,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(false);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
-      12,
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
-      819_661,
-    );
-  });
-
-  it.each([
-    {
-      name: "marks a fresh zero stale when a completed run has no context snapshot",
-      totalTokens: 0,
-      preserve: false,
-      expectedFresh: false,
-    },
-    {
-      name: "preserves fresh post-compaction totalTokens across model-only updates",
-      totalTokens: 42_000,
-      preserve: true,
-      expectedFresh: true,
-    },
-  ])("$name", async ({ totalTokens, preserve, expectedFresh }) => {
-    const storePath = await createStorePath("openclaw-usage-no-snapshot-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      totalTokens,
-      totalTokensFresh: true,
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      modelUsed: "claude-sonnet-4-6",
-      contextTokensUsed: 200_000,
-      preserveFreshTotalTokensOnStaleUsage: preserve,
-    });
-
-    const stored = expectDefined(readSessionStoreFast(storePath)[sessionKey], "stored session");
-    expect(stored.totalTokens).toBe(totalTokens);
-    expect(stored.totalTokensFresh).toBe(expectedFresh);
-  });
   it("accounts exhausted-run usage without committing its model and persists CLI binding", async () => {
     const storePath = await createStorePath("openclaw-usage-exhausted-");
-    const sessionKey = "main";
     await seedSessionStore(storePath, sessionKey, {
       sessionId: "s1",
       updatedAt: 1,
@@ -4420,7 +4646,6 @@ describe("persistSessionUsageUpdate", () => {
 
   it("accounts goal usage when fresh token snapshots are persisted", async () => {
     const storePath = await createStorePath("openclaw-usage-goal-");
-    const sessionKey = "main";
     await seedSessionStore(storePath, sessionKey, {
       sessionId: "s1",
       updatedAt: 1,
@@ -4471,6 +4696,304 @@ describe("persistSessionUsageUpdate", () => {
 
   it.each([
     {
+      name: "preserves the displayed session model when heartbeat usage uses a heartbeat model",
+      seed: { modelProvider: "openai", model: "gpt-5.4" },
+      update: {
+        isHeartbeat: true,
+        usage: { input: 1_200, output: 100, cacheRead: 300, cacheWrite: 10 },
+        lastCallUsage: { input: 900, output: 80, cacheRead: 200, cacheWrite: 5 },
+        providerUsed: "openai",
+        modelUsed: "gpt-5.1-codex-mini",
+        contextTokensUsed: 128_000,
+      },
+      expected: {
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        inputTokens: 1_200,
+        outputTokens: 100,
+        cacheRead: 200,
+        totalTokens: 1_105,
+      },
+    },
+    {
+      name: "persists heartbeat CLI binding while preserving displayed session model",
+      seed: {
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        cliSessionBindings: { "claude-cli": { sessionId: "old-heartbeat-cli-session" } },
+        cliSessionIds: { "claude-cli": "old-heartbeat-cli-session" },
+        claudeCliSessionId: "old-heartbeat-cli-session",
+      },
+      update: {
+        isHeartbeat: true,
+        usage: { input: 1_200, output: 100 },
+        usageIsContextSnapshot: true,
+        providerUsed: "claude-cli",
+        modelUsed: "claude-sonnet-4-6",
+        cliSessionBinding: {
+          sessionId: "new-heartbeat-cli-session",
+          authProfileId: "anthropic:heartbeat",
+        },
+        contextTokensUsed: 128_000,
+      },
+      expected: {
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        cliSessionIds: { "claude-cli": "new-heartbeat-cli-session" },
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "new-heartbeat-cli-session",
+            authProfileId: "anthropic:heartbeat",
+          },
+        },
+        claudeCliSessionId: "new-heartbeat-cli-session",
+      },
+    },
+    {
+      name: "honors heartbeat CLI binding clears while preserving displayed session model",
+      seed: {
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        cliSessionIds: {
+          "claude-cli": "old-heartbeat-cli-session",
+          "codex-cli": "codex-cli-session",
+        },
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "old-heartbeat-cli-session" },
+          "codex-cli": { sessionId: "codex-cli-session" },
+        },
+        claudeCliSessionId: "old-heartbeat-cli-session",
+      },
+      update: {
+        isHeartbeat: true,
+        usage: { input: 1_200, output: 100 },
+        usageIsContextSnapshot: true,
+        providerUsed: "claude-cli",
+        modelUsed: "claude-sonnet-4-6",
+        clearCliSessionBinding: true,
+        contextTokensUsed: 128_000,
+      },
+      expected: {
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        cliSessionIds: { "codex-cli": "codex-cli-session" },
+        cliSessionBindings: { "codex-cli": { sessionId: "codex-cli-session" } },
+        claudeCliSessionId: undefined,
+      },
+    },
+    {
+      name: "treats CLI usage as a fresh context snapshot when requested",
+      seed: {},
+      update: {
+        usage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
+        usageIsContextSnapshot: true,
+        providerUsed: "claude-cli",
+        cliSessionBinding: {
+          sessionId: "cli-session-1",
+          authProfileId: "anthropic:default",
+          extraSystemPromptHash: "prompt-hash",
+          mcpConfigHash: "mcp-hash",
+        },
+      },
+      expected: {
+        totalTokens: 32_000,
+        totalTokensFresh: true,
+        cliSessionIds: { "claude-cli": "cli-session-1" },
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "cli-session-1",
+            authProfileId: "anthropic:default",
+            extraSystemPromptHash: "prompt-hash",
+            mcpConfigHash: "mcp-hash",
+          },
+        },
+      },
+    },
+    {
+      name: "clears stale CLI binding when usage update reports an unflushed replacement",
+      seed: {
+        cliSessionIds: { "claude-cli": "stale-cli-session", "codex-cli": "codex-session" },
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "stale-cli-session", authProfileId: "anthropic:old" },
+          "codex-cli": { sessionId: "codex-session" },
+        },
+        claudeCliSessionId: "stale-cli-session",
+      },
+      update: {
+        usage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
+        usageIsContextSnapshot: true,
+        providerUsed: "claude-cli",
+        clearCliSessionBinding: true,
+      },
+      expected: {
+        cliSessionIds: { "codex-cli": "codex-session" },
+        cliSessionBindings: { "codex-cli": { sessionId: "codex-session" } },
+        claudeCliSessionId: undefined,
+      },
+    },
+    {
+      name: "prefers fresh final usage over zero compactionTokensAfter",
+      seed: {
+        totalTokens: 1_794_391,
+        totalTokensFresh: true,
+        inputTokens: 20,
+        outputTokens: 10_855,
+        cacheRead: 1_761_324,
+        cacheWrite: 33_047,
+      },
+      update: {
+        usage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
+        lastCallUsage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
+        usageIsContextSnapshot: true,
+        providerUsed: "claude-cli",
+        contextTokensUsed: 1_048_576,
+        compactionTokensAfter: 0,
+      },
+      expected: {
+        totalTokens: 1_794_391,
+        totalTokensFresh: true,
+        inputTokens: 20,
+        outputTokens: 10_855,
+        cacheRead: 1_761_324,
+        cacheWrite: 33_047,
+      },
+    },
+    {
+      name: "prefers fresh lastCallUsage over positive compactionTokensAfter",
+      seed: { totalTokens: 180_000, totalTokensFresh: true },
+      update: {
+        usage: { input: 100_000, output: 3_000, cacheRead: 20_000 },
+        lastCallUsage: { input: 91_000, output: 1_000, cacheRead: 4_000 },
+        providerUsed: "openai",
+        compactionTokensAfter: 80_000,
+      },
+      expected: {
+        totalTokens: 95_000,
+        totalTokensFresh: true,
+        inputTokens: 100_000,
+        outputTokens: 3_000,
+        cacheRead: 4_000,
+      },
+    },
+    {
+      name: "uses positive compactionTokensAfter when final usage has no prompt total",
+      seed: {
+        totalTokens: 180_000,
+        totalTokensFresh: true,
+        inputTokens: 5_000,
+        outputTokens: 2_000,
+        cacheRead: 50_000,
+        contextBudgetStatus: {
+          schemaVersion: 1,
+          source: "pre-prompt-estimate",
+          updatedAt: 1,
+          provider: "claude-cli",
+          model: "claude-opus-4-7",
+          route: "compact_only",
+          shouldCompact: true,
+          estimatedPromptTokens: 180_000,
+          contextTokenBudget: 1_048_576,
+          promptBudgetBeforeReserve: 1_044_480,
+          reserveTokens: 4_096,
+          effectiveReserveTokens: 4_096,
+          remainingPromptBudgetTokens: 864_480,
+          overflowTokens: 0,
+          toolResultReducibleChars: 0,
+          messageCount: 0,
+          unwindowedMessageCount: 0,
+        },
+      },
+      update: {
+        usage: { output: 125 },
+        lastCallUsage: { output: 125 },
+        providerUsed: "claude-cli",
+        contextTokensUsed: undefined,
+        compactionTokensAfter: 80_000,
+      },
+      expected: {
+        totalTokens: 80_000,
+        totalTokensFresh: true,
+        inputTokens: undefined,
+        outputTokens: undefined,
+        cacheRead: undefined,
+        contextBudgetStatus: undefined,
+      },
+    },
+    {
+      name: "persists totalTokens from promptTokens when usage is unavailable",
+      seed: { inputTokens: 1_234, outputTokens: 456 },
+      update: { usage: undefined, promptTokens: 39_000 },
+      expected: {
+        totalTokens: 39_000,
+        totalTokensFresh: true,
+        inputTokens: 1_234,
+        outputTokens: 456,
+      },
+    },
+    {
+      name: "keeps non-clamped lastCallUsage totalTokens when exceeding context window",
+      seed: {},
+      update: {
+        usage: { input: 300_000, output: 10_000, total: 310_000 },
+        lastCallUsage: { input: 250_000, output: 5_000, total: 255_000 },
+        contextTokensUsed: 200_000,
+      },
+      expected: { totalTokens: 250_000, totalTokensFresh: true },
+    },
+    {
+      name: "uses lastCallUsage for totalTokens when provided",
+      seed: { totalTokens: 100_000 },
+      update: {
+        usage: { input: 180_000, output: 10_000, total: 190_000 },
+        lastCallUsage: { input: 12_000, output: 2_000, total: 14_000 },
+      },
+      expected: {
+        totalTokens: 12_000,
+        totalTokensFresh: true,
+        inputTokens: 180_000,
+        outputTokens: 10_000,
+      },
+    },
+    {
+      name: "keeps the prior total stale when last-call context is unavailable",
+      seed: { totalTokens: 148_874, totalTokensFresh: true },
+      update: {
+        usage: { input: 12, output: 15_104, cacheRead: 819_661, cacheWrite: 93_130 },
+        lastCallUsage: {
+          input: 12,
+          output: 15_104,
+          cacheRead: 819_661,
+          cacheWrite: 93_130,
+          contextUsage: { state: "unavailable" },
+          total: 927_907,
+        },
+      },
+      expected: {
+        totalTokens: 148_874,
+        totalTokensFresh: false,
+        inputTokens: 12,
+        cacheRead: 819_661,
+      },
+    },
+    {
+      name: "marks a fresh zero stale when a completed run has no context snapshot",
+      seed: { totalTokens: 0, totalTokensFresh: true },
+      update: {
+        modelUsed: "claude-sonnet-4-6",
+        preserveFreshTotalTokensOnStaleUsage: false,
+      },
+      expected: { totalTokens: 0, totalTokensFresh: false },
+    },
+    {
+      name: "preserves fresh post-compaction totalTokens across model-only updates",
+      seed: { totalTokens: 42_000, totalTokensFresh: true },
+      update: {
+        modelUsed: "claude-sonnet-4-6",
+        preserveFreshTotalTokensOnStaleUsage: true,
+      },
+      expected: { totalTokens: 42_000, totalTokensFresh: true },
+    },
+    {
       name: "uses lastCallUsage cache counters when available",
       seed: {},
       update: {
@@ -4506,9 +5029,13 @@ describe("persistSessionUsageUpdate", () => {
       update: { usage: { input: 50_000, output: 5_000, total: 55_000 }, promptTokens: 42_000 },
       expected: { totalTokens: 42_000, totalTokensFresh: true },
     },
-  ])("$name", async ({ seed, update, expected, name }) => {
+  ] satisfies Array<{
+    name: string;
+    seed: Partial<SessionEntry>;
+    update: Omit<Parameters<typeof persistSessionUsageUpdate>[0], "storePath" | "sessionKey">;
+    expected: Partial<SessionEntry>;
+  }>)("$name", async ({ seed, update, expected, name }) => {
     const storePath = await createStorePath("openclaw-usage-");
-    const sessionKey = "main";
     await seedSessionStore(storePath, sessionKey, {
       sessionId: "s1",
       updatedAt: Date.now(),
@@ -4528,314 +5055,8 @@ describe("persistSessionUsageUpdate", () => {
       name,
     );
   });
-  it("treats CLI usage as a fresh context snapshot when requested", async () => {
-    const storePath = await createStorePath("openclaw-usage-cli-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, { sessionId: "s1", updatedAt: Date.now() });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
-      usageIsContextSnapshot: true,
-      providerUsed: "claude-cli",
-      cliSessionBinding: {
-        sessionId: "cli-session-1",
-        authProfileId: "anthropic:default",
-        extraSystemPromptHash: "prompt-hash",
-        mcpConfigHash: "mcp-hash",
-      },
-      contextTokensUsed: 200_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      32_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
-        "claude-cli"
-      ],
-    ).toBe("cli-session-1");
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
-        "claude-cli"
-      ],
-    ).toEqual({
-      sessionId: "cli-session-1",
-      authProfileId: "anthropic:default",
-      extraSystemPromptHash: "prompt-hash",
-      mcpConfigHash: "mcp-hash",
-    });
-  });
-
-  it("clears stale CLI binding when usage update reports an unflushed replacement", async () => {
-    const storePath = await createStorePath("openclaw-usage-cli-clear-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      cliSessionIds: {
-        "claude-cli": "stale-cli-session",
-        "codex-cli": "codex-session",
-      },
-      cliSessionBindings: {
-        "claude-cli": {
-          sessionId: "stale-cli-session",
-          authProfileId: "anthropic:old",
-        },
-        "codex-cli": {
-          sessionId: "codex-session",
-        },
-      },
-      claudeCliSessionId: "stale-cli-session",
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
-      usageIsContextSnapshot: true,
-      providerUsed: "claude-cli",
-      clearCliSessionBinding: true,
-      contextTokensUsed: 200_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
-        "claude-cli"
-      ],
-    ).toBeUndefined();
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
-        "codex-cli"
-      ],
-    ).toBe("codex-session");
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
-        "claude-cli"
-      ],
-    ).toBeUndefined();
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
-        "codex-cli"
-      ],
-    ).toEqual({
-      sessionId: "codex-session",
-    });
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").claudeCliSessionId,
-    ).toBeUndefined();
-  });
-
-  it("prefers fresh final usage over zero compactionTokensAfter", async () => {
-    const storePath = await createStorePath("openclaw-usage-compaction-reset-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      totalTokens: 1_794_391,
-      totalTokensFresh: true,
-      inputTokens: 20,
-      outputTokens: 10_855,
-      cacheRead: 1_761_324,
-      cacheWrite: 33_047,
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
-      lastCallUsage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
-      usageIsContextSnapshot: true,
-      providerUsed: "claude-cli",
-      contextTokensUsed: 1_048_576,
-      compactionTokensAfter: 0,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      1_794_391,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
-      20,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
-    ).toBe(10_855);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
-      1_761_324,
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheWrite).toBe(
-      33_047,
-    );
-  });
-
-  it("prefers fresh lastCallUsage over positive compactionTokensAfter", async () => {
-    const storePath = await createStorePath("openclaw-usage-compaction-positive-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      totalTokens: 180_000,
-      totalTokensFresh: true,
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: { input: 100_000, output: 3_000, cacheRead: 20_000 },
-      lastCallUsage: { input: 91_000, output: 1_000, cacheRead: 4_000 },
-      providerUsed: "openai",
-      contextTokensUsed: 200_000,
-      compactionTokensAfter: 80_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      95_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
-      100_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
-    ).toBe(3_000);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
-      4_000,
-    );
-  });
-
-  it("uses positive compactionTokensAfter when final usage has no prompt total", async () => {
-    const storePath = await createStorePath("openclaw-usage-compaction-fallback-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      totalTokens: 180_000,
-      totalTokensFresh: true,
-      inputTokens: 5_000,
-      outputTokens: 2_000,
-      cacheRead: 50_000,
-      contextBudgetStatus: {
-        schemaVersion: 1,
-        source: "pre-prompt-estimate",
-        updatedAt: 1,
-        provider: "claude-cli",
-        model: "claude-opus-4-7",
-        route: "compact_only",
-        shouldCompact: true,
-        estimatedPromptTokens: 180_000,
-        contextTokenBudget: 1_048_576,
-        promptBudgetBeforeReserve: 1_044_480,
-        reserveTokens: 4_096,
-        effectiveReserveTokens: 4_096,
-        remainingPromptBudgetTokens: 864_480,
-        overflowTokens: 0,
-        toolResultReducibleChars: 0,
-        messageCount: 0,
-        unwindowedMessageCount: 0,
-      },
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: { output: 125 },
-      lastCallUsage: { output: 125 },
-      providerUsed: "claude-cli",
-      compactionTokensAfter: 80_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      80_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens,
-    ).toBeUndefined();
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
-    ).toBeUndefined();
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead,
-    ).toBeUndefined();
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").contextBudgetStatus,
-    ).toBeUndefined();
-  });
-
-  it("persists totalTokens from promptTokens when usage is unavailable", async () => {
-    const storePath = await createStorePath("openclaw-usage-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      inputTokens: 1_234,
-      outputTokens: 456,
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: undefined,
-      promptTokens: 39_000,
-      contextTokensUsed: 200_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      39_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
-      1_234,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
-    ).toBe(456);
-  });
-
-  it("keeps non-clamped lastCallUsage totalTokens when exceeding context window", async () => {
-    const storePath = await createStorePath("openclaw-usage-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, { sessionId: "s1", updatedAt: Date.now() });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      usage: { input: 300_000, output: 10_000, total: 310_000 },
-      lastCallUsage: { input: 250_000, output: 5_000, total: 255_000 },
-      contextTokensUsed: 200_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      250_000,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
-  });
-
   it("snapshots estimatedCostUsd instead of accumulating (fixes #69347)", async () => {
     const storePath = await createStorePath("openclaw-usage-cost-");
-    const sessionKey = "main";
     await seedSessionStore(storePath, sessionKey, {
       sessionId: "s1",
       updatedAt: Date.now(),
@@ -4901,174 +5122,10 @@ describe("persistSessionUsageUpdate", () => {
     ).toBeCloseTo(0.007725, 8);
   });
 
-  it("preserves the displayed session model when heartbeat usage uses a heartbeat model", async () => {
-    const storePath = await createStorePath("openclaw-usage-heartbeat-model-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      modelProvider: "openai",
-      model: "gpt-5.4",
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      isHeartbeat: true,
-      usage: { input: 1_200, output: 100, cacheRead: 300, cacheWrite: 10 },
-      lastCallUsage: { input: 900, output: 80, cacheRead: 200, cacheWrite: 5 },
-      providerUsed: "openai",
-      modelUsed: "gpt-5.1-codex-mini",
-      contextTokensUsed: 128_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelProvider,
-    ).toBe("openai");
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").model).toBe(
-      "gpt-5.4",
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
-      1_200,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
-    ).toBe(100);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
-      200,
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      1_105,
-    );
-  });
-
-  it("persists heartbeat CLI binding while preserving displayed session model", async () => {
-    const storePath = await createStorePath("openclaw-usage-heartbeat-cli-binding-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      modelProvider: "openai",
-      model: "gpt-5.4",
-      cliSessionBindings: {
-        "claude-cli": { sessionId: "old-heartbeat-cli-session" },
-      },
-      cliSessionIds: {
-        "claude-cli": "old-heartbeat-cli-session",
-      },
-      claudeCliSessionId: "old-heartbeat-cli-session",
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      isHeartbeat: true,
-      usage: { input: 1_200, output: 100 },
-      usageIsContextSnapshot: true,
-      providerUsed: "claude-cli",
-      modelUsed: "claude-sonnet-4-6",
-      cliSessionBinding: {
-        sessionId: "new-heartbeat-cli-session",
-        authProfileId: "anthropic:heartbeat",
-      },
-      contextTokensUsed: 128_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelProvider,
-    ).toBe("openai");
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").model).toBe(
-      "gpt-5.4",
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
-        "claude-cli"
-      ],
-    ).toBe("new-heartbeat-cli-session");
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
-        "claude-cli"
-      ],
-    ).toEqual({
-      sessionId: "new-heartbeat-cli-session",
-      authProfileId: "anthropic:heartbeat",
-    });
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").claudeCliSessionId,
-    ).toBe("new-heartbeat-cli-session");
-  });
-
-  it("honors heartbeat CLI binding clears while preserving displayed session model", async () => {
-    const storePath = await createStorePath("openclaw-usage-heartbeat-cli-clear-");
-    const sessionKey = "main";
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      modelProvider: "openai",
-      model: "gpt-5.4",
-      cliSessionIds: {
-        "claude-cli": "old-heartbeat-cli-session",
-        "codex-cli": "codex-cli-session",
-      },
-      cliSessionBindings: {
-        "claude-cli": { sessionId: "old-heartbeat-cli-session" },
-        "codex-cli": { sessionId: "codex-cli-session" },
-      },
-      claudeCliSessionId: "old-heartbeat-cli-session",
-    });
-
-    await persistSessionUsageUpdate({
-      storePath,
-      sessionKey,
-      isHeartbeat: true,
-      usage: { input: 1_200, output: 100 },
-      usageIsContextSnapshot: true,
-      providerUsed: "claude-cli",
-      modelUsed: "claude-sonnet-4-6",
-      clearCliSessionBinding: true,
-      contextTokensUsed: 128_000,
-    });
-
-    const stored = readSessionStoreFast(storePath);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelProvider,
-    ).toBe("openai");
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").model).toBe(
-      "gpt-5.4",
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
-        "claude-cli"
-      ],
-    ).toBeUndefined();
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
-        "codex-cli"
-      ],
-    ).toBe("codex-cli-session");
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
-        "claude-cli"
-      ],
-    ).toBeUndefined();
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
-        "codex-cli"
-      ],
-    ).toEqual({
-      sessionId: "codex-cli-session",
-    });
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").claudeCliSessionId,
-    ).toBeUndefined();
-  });
-
   it("preserves the displayed session model when an internal announce uses fallback", async () => {
     const storePath = await createStorePath("openclaw-usage-internal-announce-model-");
-    const sessionKey = "agent:main:telegram:group:-1003871627242:topic:6823";
-    await seedSessionStore(storePath, sessionKey, {
+    const topicSessionKey = "agent:main:telegram:group:-1003871627242:topic:6823";
+    await seedSessionStore(storePath, topicSessionKey, {
       sessionId: "s1",
       updatedAt: Date.now(),
       modelProvider: "openai",
@@ -5093,7 +5150,7 @@ describe("persistSessionUsageUpdate", () => {
 
     await persistSessionUsageUpdate({
       storePath,
-      sessionKey,
+      sessionKey: topicSessionKey,
       preserveUserFacingSessionModelState: true,
       usage: { input: 39_908, output: 122, cacheRead: 0, cacheWrite: 0 },
       lastCallUsage: { input: 39_908, output: 122, cacheRead: 0, cacheWrite: 0 },
@@ -5108,7 +5165,7 @@ describe("persistSessionUsageUpdate", () => {
     });
     await persistSessionUsageUpdate({
       storePath,
-      sessionKey,
+      sessionKey: topicSessionKey,
       preserveUserFacingSessionModelState: true,
       providerUsed: "claude-cli",
       modelUsed: "claude-sonnet-4-6",
@@ -5117,57 +5174,30 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored = readSessionStoreFast(storePath);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").modelProvider,
-    ).toBe("openai");
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").model).toBe(
-      "gpt-5.5",
+    const storedEntry = expectDefined(
+      stored[topicSessionKey],
+      "stored[topicSessionKey] test invariant",
     );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").contextTokens,
-    ).toBe(200_000);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").inputTokens).toBe(
-      1_234,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").outputTokens,
-    ).toBe(56);
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheRead).toBe(
-      7,
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cacheWrite).toBe(
-      8,
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokens).toBe(
-      1_305,
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
-    ).toBe(true);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").estimatedCostUsd,
-    ).toBe(0.123);
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionIds?.[
-        "claude-cli"
-      ],
-    ).toBe("visible-cli-session");
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").cliSessionBindings?.[
-        "claude-cli"
-      ],
-    ).toEqual({
+    expect(storedEntry.modelProvider).toBe("openai");
+    expect(storedEntry.model).toBe("gpt-5.5");
+    expect(storedEntry.contextTokens).toBe(200_000);
+    expect(storedEntry.inputTokens).toBe(1_234);
+    expect(storedEntry.outputTokens).toBe(56);
+    expect(storedEntry.cacheRead).toBe(7);
+    expect(storedEntry.cacheWrite).toBe(8);
+    expect(storedEntry.totalTokens).toBe(1_305);
+    expect(storedEntry.totalTokensFresh).toBe(true);
+    expect(storedEntry.estimatedCostUsd).toBe(0.123);
+    expect(storedEntry.cliSessionIds?.["claude-cli"]).toBe("visible-cli-session");
+    expect(storedEntry.cliSessionBindings?.["claude-cli"]).toEqual({
       sessionId: "visible-cli-session",
       authProfileId: "anthropic:visible",
     });
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").claudeCliSessionId,
-    ).toBe("visible-cli-session");
+    expect(storedEntry.claudeCliSessionId).toBe("visible-cli-session");
   });
 
   it("persists zero estimatedCostUsd for free priced models", async () => {
     const storePath = await createStorePath("openclaw-usage-free-cost-");
-    const sessionKey = "main";
     await seedSessionStore(storePath, sessionKey, {
       sessionId: "s1",
       updatedAt: Date.now(),

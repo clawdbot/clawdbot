@@ -11,7 +11,8 @@ import {
   clampTimerTimeoutMs,
   finiteSecondsToTimerSafeMilliseconds,
 } from "@openclaw/normalization-core/number-coercion";
-import { formatDurationCompact } from "../../../src/infra/format-time/format-duration.ts";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import prettyMilliseconds from "pretty-ms";
 import {
   die,
   ensureValue,
@@ -532,7 +533,17 @@ function platformRecord<T>(value: T): Record<Platform, T> {
 }
 
 function formatDuration(durationMs: number): string {
-  return formatDurationCompact(durationMs, { spaced: true }) ?? "0ms";
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return "0ms";
+  }
+  const roundedMs = Math.round(durationMs);
+  if (roundedMs < 1000) {
+    return prettyMilliseconds(roundedMs);
+  }
+  return prettyMilliseconds(Math.round(durationMs / 1000) * 1000, {
+    hideYear: true,
+    unitCount: 2,
+  });
 }
 
 function readHarnessCheckoutVersion(): string {
@@ -556,10 +567,6 @@ function parseOpenClawPackageSpecVersion(spec: string): string {
 
 function readString(value: unknown): string {
   return typeof value === "string" ? value : "";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export function parseRegistryPackageMetadata(raw: string): {

@@ -20,6 +20,7 @@ import {
   removeRemoteNodeInfoForConnection,
 } from "../skills/runtime/remote.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
+import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { clearNodeWakeState } from "./node-wake-state.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
@@ -38,6 +39,7 @@ import {
   refreshGatewayHealthSnapshot,
 } from "./server/health-state.js";
 import { broadcastPresenceSnapshot } from "./server/presence-events.js";
+import { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 
 type GatewayRuntimePreparation = Awaited<ReturnType<typeof prepareGatewayRuntimeState>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -145,53 +147,13 @@ export async function prepareGatewayLifecycle(params: {
     completeControlUiDeviceAuthMigrationForEffectiveOperator,
   );
   workerGatewayEndpoint.resolve = getWorkerIngressEndpoint;
-  const presenceWatchedSessions = (connId: string): string[] => {
-    // Presence snapshots stay small even if a long-lived client accumulates
-    // subscriptions. Keep only the 32 most recently subscribed session keys.
-    return [...sessionMessageSubscribers.getForConnection(connId)].slice(-32).toSorted();
-  };
-  const updateWatchedSessionsPresence = (connId: string, previous: readonly string[]) => {
-    const watchedSessions = presenceWatchedSessions(connId);
-    if (
-      watchedSessions.length === previous.length &&
-      watchedSessions.every((key, index) => key === previous[index])
-    ) {
-      return;
-    }
-    const client = [...clients].find((candidate) => candidate.connId === connId);
-    if (!client?.presenceKey) {
-      return;
-    }
-    upsertPresence(client.presenceKey, {
-      watchedSessions: watchedSessions.length > 0 ? watchedSessions : undefined,
-    });
-    broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
-  };
   const subscribeSessionMessageEvents: GatewayRequestContext["subscribeSessionMessageEvents"] = (
     connId,
     sessionKey,
     options,
-  ) => {
-    const previous = presenceWatchedSessions(connId);
-    const rollback = sessionMessageSubscribers.subscribe(connId, sessionKey, options);
-    updateWatchedSessionsPresence(connId, previous);
-    if (!rollback) {
-      return undefined;
-    }
-    const rollbackPresence = (() => {
-      const rollbackPrevious = presenceWatchedSessions(connId);
-      rollback();
-      updateWatchedSessionsPresence(connId, rollbackPrevious);
-    }) as NonNullable<ReturnType<GatewayRequestContext["subscribeSessionMessageEvents"]>>;
-    rollbackPresence.commit = () => rollback.commit();
-    return rollbackPresence;
-  };
+  ) => sessionMessageSubscribers.subscribe(connId, sessionKey, options);
   const unsubscribeSessionMessageEvents: GatewayRequestContext["unsubscribeSessionMessageEvents"] =
-    (connId, sessionKey) => {
-      const previous = presenceWatchedSessions(connId);
-      sessionMessageSubscribers.unsubscribe(connId, sessionKey);
-      updateWatchedSessionsPresence(connId, previous);
-    };
+    (connId, sessionKey) => sessionMessageSubscribers.unsubscribe(connId, sessionKey);
   const restartRecoveryCandidates = new Map<string, RestartRecoveryCandidate>();
   const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
   const {
@@ -284,6 +246,21 @@ export async function prepareGatewayLifecycle(params: {
     gatewayMethods: listActiveGatewayMethods(pluginRuntime.baseGatewayMethods),
   });
   const runtimeState = runtimeStateRef.current;
+  runtimeState.controlUiSessionPullRequests = createControlUiSessionPullRequestSubscriptions({
+    broadcastToConnIds,
+  });
+  runtimeState.sessionViewerPresence = createSessionViewerPresenceDeclarations({
+    onReplace: (connId, sessionKeys) => {
+      const client = [...clients].find((candidate) => candidate.connId === connId);
+      if (!client?.presenceKey) {
+        return;
+      }
+      upsertPresence(client.presenceKey, {
+        watchedSessions: sessionKeys.length > 0 ? [...sessionKeys] : undefined,
+      });
+      broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
+    },
+  });
   deps.cron = runtimeState.cronState.cron;
   const pluginHostServices = {
     get cron() {
@@ -323,6 +300,8 @@ export async function prepareGatewayLifecycle(params: {
   };
   const markClosePreludeStarted = () => {
     lifecycle.closePreludeStarted = true;
+    runtimeState.controlUiSessionPullRequests?.stop();
+    runtimeState.sessionViewerPresence?.stop();
     unsubscribeEffectiveOperatorPairing();
     startupState.dispatchReady = false;
     gatewayInstanceRuntimeRef.current?.close();

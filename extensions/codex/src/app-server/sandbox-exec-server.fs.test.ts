@@ -19,6 +19,29 @@ afterEach(async () => {
 });
 
 describe("OpenClaw Codex sandbox exec-server filesystem", () => {
+  it("returns the required Codex file size in sandbox metadata", async () => {
+    const sandbox = createSandboxContext({
+      stat: async () => ({ type: "file", size: 1234, mtimeMs: 5678 }),
+    });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "fs/getMetadata", { path: "file:///workspace/attachment.txt" }),
+    ).resolves.toEqual({
+      isDirectory: false,
+      isFile: true,
+      isSymlink: false,
+      size: 1234,
+      createdAtMs: 0,
+      modifiedAtMs: 5678,
+    });
+    socket.close();
+  });
+
   it("routes file writes through the sandbox fs bridge", async () => {
     const writeFile = vi.fn(async () => undefined);
     const sandbox = createSandboxContext({ writeFile });
@@ -427,6 +450,41 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     socket.close();
   });
 
+  it("bounds buffered file copies when a sandbox bridge cannot stream them", async () => {
+    const data = Buffer.from("copy me");
+    const readFile = vi.fn(async () => data);
+    const writeFile = vi.fn(async () => undefined);
+    const sandbox = createSandboxContext({
+      readFile,
+      stat: async () => ({ type: "file", size: data.byteLength, mtimeMs: 1 }),
+      writeFile,
+    });
+    if (sandbox.fsBridge) {
+      sandbox.fsBridge.copyFile = undefined;
+    }
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await rpc(socket, "fs/copy", {
+      sourcePath: "file:///workspace/source.txt",
+      destinationPath: "file:///workspace/destination.txt",
+    });
+
+    expect(readFile).toHaveBeenCalledWith({
+      filePath: "/workspace/source.txt",
+      maxBytes: 512 * 1024 * 1024,
+    });
+    expect(writeFile).toHaveBeenCalledWith({
+      filePath: "/workspace/destination.txt",
+      data,
+      mkdir: true,
+    });
+    socket.close();
+  });
+
   it("rejects recursive directory copies into their own subtree", async () => {
     const mkdirp = vi.fn(async () => undefined);
     const sandbox = createSandboxContext({
@@ -472,6 +530,29 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     await expect(
       rpc(socket, "fs/getMetadata", { path: "file:///workspace/missing" }),
     ).rejects.toThrow("file not found");
+    socket.close();
+  });
+
+  it("bounds legacy whole-file reads within the sandbox filesystem bridge", async () => {
+    const data = Buffer.from("bounded legacy read");
+    const readFile = vi.fn(async () => data);
+    const sandbox = createSandboxContext({
+      readFile,
+      stat: async () => ({ type: "file", size: data.byteLength, mtimeMs: 1 }),
+    });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "fs/readFile", { path: "file:///workspace/note.txt" }),
+    ).resolves.toEqual({ dataBase64: data.toString("base64") });
+    expect(readFile).toHaveBeenCalledWith({
+      filePath: "/workspace/note.txt",
+      maxBytes: 512 * 1024 * 1024,
+    });
     socket.close();
   });
 

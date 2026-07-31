@@ -256,6 +256,7 @@ export function refreshQueuedFollowupSession(params: {
         run.authProfileIdSource = run.authProfileId ? params.nextAuthProfileIdSource : undefined;
       }
       if (params.nextThinking) {
+        run.thinkingCatalog = params.nextThinking.catalog;
         const explicitLevel = normalizeThinkLevel(params.nextThinking.level);
         run.thinkLevel = explicitLevel
           ? resolveSupportedThinkingLevel({

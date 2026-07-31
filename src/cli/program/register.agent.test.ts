@@ -102,6 +102,20 @@ describe("agent command registration", () => {
     return call;
   }
 
+  it("keeps both agent thinking help surfaces aligned with the canonical levels", () => {
+    const program = new Command();
+    registerAgentTurnCommand(program, { agentChannelOptions: "last|telegram|discord" });
+    const agent = program.commands.find((command) => command.name() === "agent");
+    const exec = agent?.commands.find((command) => command.name() === "exec");
+
+    expect(agent?.options.find((option) => option.long === "--thinking")?.description).toContain(
+      "ultra",
+    );
+    expect(exec?.options.find((option) => option.long === "--thinking")?.description).toContain(
+      "ultra",
+    );
+  });
+
   it("runs agent command with verbose enabled for --verbose on", async () => {
     await runCli(["agent", "--message", "hi", "--verbose", "ON", "--json"]);
 
@@ -180,6 +194,9 @@ describe("agent command registration", () => {
       "/tmp/project",
       "--model",
       "openai/gpt-5.6-sol",
+      "--code-mode",
+      "code",
+      "--local-model-lean",
       "--fallback",
       "anthropic/claude-sonnet-4-6",
       "--fallback",
@@ -193,11 +210,36 @@ describe("agent command registration", () => {
       expect.objectContaining({
         cwd: "/tmp/project",
         model: "openai/gpt-5.6-sol",
+        codeMode: "code",
+        localModelLean: true,
         fallback: ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
-        authEnvOnly: true,
+        // Stored credentials are the default so exec reaches the same logins as
+        // the rest of the CLI; --auth-env-only is the opt-in restriction.
+        authEnvOnly: false,
+        isolated: false,
         timeout: "600",
         json: true,
       }),
+      runtime,
+    );
+  });
+
+  it("restricts credentials and config to the process environment with --auth-env-only", async () => {
+    await runCli(["agent", "exec", "fix it", "--auth-env-only"]);
+
+    expect(agentExecCommandMock).toHaveBeenCalledWith(
+      "fix it",
+      expect.objectContaining({ authEnvOnly: true }),
+      runtime,
+    );
+  });
+
+  it("forwards the pinned-config and isolated run flags", async () => {
+    await runCli(["agent", "exec", "fix it", "--config", "/tmp/ci.json", "--isolated"]);
+
+    expect(agentExecCommandMock).toHaveBeenCalledWith(
+      "fix it",
+      expect.objectContaining({ config: "/tmp/ci.json", isolated: true }),
       runtime,
     );
   });

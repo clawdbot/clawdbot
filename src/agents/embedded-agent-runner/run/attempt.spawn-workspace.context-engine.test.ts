@@ -524,7 +524,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
       createSession: () => {
         const session = createDefaultEmbeddedSession();
+        const setActiveToolsByName = session.setActiveToolsByName;
         session.setActiveToolsByName = (toolNames) => {
+          setActiveToolsByName(toolNames);
           activeToolNames.push([...toolNames]);
         };
         return session;

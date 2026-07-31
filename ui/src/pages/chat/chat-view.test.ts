@@ -14,7 +14,11 @@ import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
+import {
+  buildFallbackSlashCommands,
+  replaceSlashCommands,
+  SLASH_COMMANDS,
+} from "../../lib/chat/commands.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import type { SessionPatchOptions } from "../../lib/sessions/patch.ts";
 import {
@@ -588,7 +592,15 @@ function getThinkingSliderValues(container: Element): string[] {
 }
 
 function getThinkingReasoningValueLabel(container: Element): string {
-  return container.querySelector(".chat-controls__reasoning-value")?.textContent?.trim() ?? "";
+  const preview = container.querySelector(
+    "[data-chat-thinking-preview-committed]:not([hidden]), " +
+      "[data-chat-thinking-preview-index]:not([hidden])",
+  );
+  return (
+    preview?.textContent?.trim() ??
+    container.querySelector(".chat-controls__reasoning-value")?.textContent?.trim() ??
+    ""
+  );
 }
 
 function getThinkingResetButton(container: Element): HTMLButtonElement | null {
@@ -1834,11 +1846,30 @@ afterEach(() => {
   renderMessageGroupMock.mockClear();
   assistantAttachmentRenderVersionMock.value = 0;
   resetChatViewState();
+  replaceSlashCommands(buildFallbackSlashCommands());
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
 describe("per-pane chat presentation state", () => {
+  it("opens thread search from the physical shortcut on a non-Latin layout", () => {
+    const onRequestUpdate = vi.fn();
+    const container = renderChatView({ onRequestUpdate });
+    const chat = requireElement(container, "section.card.chat", "chat view");
+    const event = new KeyboardEvent("keydown", {
+      key: "а",
+      code: "KeyF",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    chat.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onRequestUpdate).toHaveBeenCalledOnce();
+  });
+
   it("keeps slash menus independent and resets only the targeted pane", () => {
     const paneA = document.createElement("div");
     const paneB = document.createElement("div");
@@ -3229,6 +3260,491 @@ describe("chat slash menu accessibility", () => {
     expect(onSlashIntent).toHaveBeenCalledTimes(1);
   });
 
+  it("hydrates the skill catalog once per active $ reference", async () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "prose",
+        name: "prose",
+        description: "Prose skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    let draft = "";
+    const onSlashIntent = vi.fn(async () => undefined);
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange: (next) => {
+              draft = next;
+            },
+            onRequestUpdate: renderCurrent,
+            onSlashIntent,
+          }),
+        ),
+        container,
+      );
+    };
+    const type = async (value: string) => {
+      const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+      textarea.value = value;
+      textarea.setSelectionRange(value.length, value.length);
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+    renderCurrent();
+
+    await type("Use $");
+    await type("Use $p");
+    await type("Use $pro");
+
+    expect(onSlashIntent).toHaveBeenCalledOnce();
+  });
+
+  it("opens a skill picker for $ references anywhere in a normal prompt", async () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "prose",
+        name: "prose",
+        description: "Draft polished prose.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSlashIntent = vi.fn(async () => undefined);
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange,
+            onRequestUpdate: renderCurrent,
+            onSlashIntent,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.value = "Polish this with $pro:";
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const listbox = container.querySelector<HTMLElement>("#chat-single-skill-menu-listbox");
+    const renderedTextarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(listbox?.getAttribute("aria-label")).toBe("Skill references");
+    expect(listbox?.querySelector(".slash-menu-name")?.textContent).toBe("$prose");
+    expect(renderedTextarea?.getAttribute("aria-controls")).toBe("chat-single-skill-menu-listbox");
+    expect(renderedTextarea?.getAttribute("aria-expanded")).toBe("true");
+    expect(onSlashIntent).toHaveBeenCalledOnce();
+  });
+
+  it("fills a selected $ skill without submitting the surrounding prompt", async () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "prose",
+        name: "prose",
+        description: "Draft polished prose.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn();
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange,
+            onRequestUpdate: renderCurrent,
+            onSend,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.value = "Polish this with $pro:";
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+
+    keydownComposer(container, "Enter");
+
+    expect(draft).toBe("Polish this with $prose:");
+    expect(onSend).not.toHaveBeenCalled();
+    expect(container.querySelector(".skill-menu")).toBeNull();
+    await Promise.resolve();
+    const completed = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(completed?.selectionStart).toBe("Polish this with $prose:".length);
+  });
+
+  it("consumes a trailing hyphen from an incomplete skill query", () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "release_notes",
+        name: "release_notes",
+        description: "Draft release notes.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    let draft = "";
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange: (next) => {
+              draft = next;
+            },
+            onRequestUpdate: renderCurrent,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.value = "Use $release-";
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+
+    keydownComposer(container, "Enter");
+
+    expect(draft).toBe("Use $release_notes ");
+  });
+
+  it("does not treat common uppercase shell variables as skill references", () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "home",
+        name: "home",
+        description: "Home skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+      {
+        key: "editor",
+        name: "editor",
+        description: "Editor skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    let draft = "";
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange: (next) => {
+              draft = next;
+            },
+            onRequestUpdate: renderCurrent,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+    for (const variable of ["HOME", "EDITOR"]) {
+      const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+      textarea.value = `Inspect $${variable}`;
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+      expect(container.querySelector(".skill-menu")).toBeNull();
+    }
+  });
+
+  it("does not offer skill references inside a slash-command draft", () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "prose",
+        name: "prose",
+        description: "Prose skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    let draft = "";
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange: (next) => {
+              draft = next;
+            },
+            onRequestUpdate: renderCurrent,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.value = "/status $pro";
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+
+    expect(container.querySelector(".skill-menu")).toBeNull();
+  });
+
+  it("does not submit an incomplete skill reference while the catalog is loading", () => {
+    replaceSlashCommands(buildFallbackSlashCommands());
+    const refresh = createDeferred<void>();
+    let draft = "";
+    const onSend = vi.fn();
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange: (next) => {
+              draft = next;
+            },
+            onRequestUpdate: renderCurrent,
+            onSend,
+            onSlashIntent: () => refresh.promise,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.value = "Use $pro";
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    expect(container.querySelector(".skill-menu")?.textContent).toContain("Loading skills");
+    const send = container.querySelector<HTMLButtonElement>(".chat-send-btn");
+    expect(send?.disabled).toBe(true);
+
+    keydownComposer(container, "Enter");
+    send?.click();
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(draft).toBe("Use $pro");
+  });
+
+  it("keeps skill keyboard navigation and selection on the same highlighted item", () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "alpha",
+        name: "alpha",
+        description: "Alpha skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+      {
+        key: "beta",
+        name: "beta",
+        description: "Beta skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    let draft = "";
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange: (next) => {
+              draft = next;
+            },
+            onRequestUpdate: renderCurrent,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.value = "Use $";
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+
+    keydownComposer(container, "ArrowDown");
+    expect(
+      container.querySelector(".skill-menu .slash-menu-item--active .slash-menu-name")?.textContent,
+    ).toBe("$beta");
+    keydownComposer(container, "Enter");
+
+    expect(draft).toBe("Use $beta ");
+    expect(container.querySelector(".skill-menu")).toBeNull();
+  });
+
+  it("does not reopen a dismissed skill picker after a slow refresh", async () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "prose",
+        name: "prose",
+        description: "Prose skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    const refresh = createDeferred<void>();
+    let draft = "";
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange: (next) => {
+              draft = next;
+            },
+            onRequestUpdate: renderCurrent,
+            onSlashIntent: () => refresh.promise,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.value = "$pro";
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    expect(container.querySelector(".skill-menu")?.textContent).toContain("Loading skills");
+    expect(container.querySelectorAll(".skill-menu [role='option']")).toHaveLength(0);
+
+    keydownComposer(container, "Escape");
+    expect(container.querySelector(".skill-menu")).toBeNull();
+    refresh.resolve();
+    await refresh.promise;
+    await Promise.resolve();
+
+    expect(container.querySelector(".skill-menu")).toBeNull();
+  });
+
+  it("closes a stale skill picker when the caret leaves its token", () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "prose",
+        name: "prose",
+        description: "Prose skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    let draft = "";
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange: (next) => {
+              draft = next;
+            },
+            onRequestUpdate: renderCurrent,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+    let textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.value = "Use $pro then continue";
+    textarea.setSelectionRange("Use $pro".length, "Use $pro".length);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    expect(container.querySelector(".skill-menu")).not.toBeNull();
+
+    textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.dispatchEvent(new Event("select", { bubbles: true }));
+
+    expect(container.querySelector(".skill-menu")).toBeNull();
+  });
+
+  it("matches backend escape parity and absorbs rejected skill refreshes", async () => {
+    replaceSlashCommands([
+      ...buildFallbackSlashCommands(),
+      {
+        key: "prose",
+        name: "prose",
+        description: "Prose skill.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+    ]);
+    let draft = "";
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange: (next) => {
+              draft = next;
+            },
+            onRequestUpdate: renderCurrent,
+            onSlashIntent: async () => {
+              throw new Error("catalog unavailable");
+            },
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.value = String.raw`Use \\$pro`;
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(container.querySelector(".skill-menu")).not.toBeNull();
+  });
+
   it("does not reopen slash suggestions when command hydration finishes after plain typing", async () => {
     let draft = "";
     const hydration = createDeferred<void>();
@@ -3500,7 +4016,7 @@ describe("chat slash menu accessibility", () => {
     expect(wrapper?.hasAttribute("aria-haspopup")).toBe(false);
     expect(wrapper?.hasAttribute("aria-controls")).toBe(false);
     expect(textarea?.hasAttribute("role")).toBe(false);
-    expect(textarea?.hasAttribute("aria-expanded")).toBe(false);
+    expect(textarea?.getAttribute("aria-expanded")).toBe("true");
     expect(textarea?.hasAttribute("aria-haspopup")).toBe(false);
     expect(textarea?.getAttribute("aria-controls")).toBe("chat-single-slash-menu-listbox");
     expect(textarea?.getAttribute("aria-autocomplete")).toBe("list");
@@ -4159,6 +4675,13 @@ describe("chat attachment picker", () => {
     expect(clickInput).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps attachment-only composers free of capability rows", () => {
+    const container = renderChatView();
+
+    expect(container.querySelectorAll(".agent-chat__attach-menu-option")).toHaveLength(3);
+    expect(container.querySelector(".agent-chat__capability-menu-item")).toBeNull();
+  });
+
   it("opens the camera input from the attachment menu and attaches the captured photo", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
@@ -4209,7 +4732,7 @@ describe("chat attachment picker", () => {
     expect(container.querySelector('button[aria-label="Send message"]')).not.toBeNull();
   });
 
-  it("accepts and previews non-video file attachments", async () => {
+  it("accepts and previews file attachments", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
     const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
@@ -4239,20 +4762,32 @@ describe("chat attachment picker", () => {
     expect(preview.querySelector(".chat-attachment-file__name")?.textContent).toBe("brief.pdf");
   });
 
-  it("filters video file attachments", () => {
+  it("accepts video file attachments with the generic file preview", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
     const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
     const file = new File(["video"], "clip.mp4", { type: "video/mp4" });
 
     expect(input).toBeInstanceOf(HTMLInputElement);
+    expect(input?.accept).toContain("video/*");
     Object.defineProperty(input!, "files", {
       configurable: true,
       value: [file],
     });
     input!.dispatchEvent(new Event("change", { bubbles: true }));
 
-    expect(onAttachmentsChange).not.toHaveBeenCalled();
+    await waitForFast(() => {
+      const attachments = requireFirstAttachmentsChange(onAttachmentsChange);
+      expect(attachments).toHaveLength(1);
+      expect(attachments[0]?.fileName).toBe("clip.mp4");
+      expect(attachments[0]?.mimeType).toBe("video/mp4");
+      expect(attachments[0]?.sizeBytes).toBe(file.size);
+    });
+
+    const nextAttachments = requireFirstAttachmentsChange(onAttachmentsChange);
+    const preview = renderChatView({ attachments: nextAttachments });
+    expect(preview.querySelectorAll(".chat-attachment-thumb--file")).toHaveLength(1);
+    expect(preview.querySelector(".chat-attachment-file__name")?.textContent).toBe("clip.mp4");
   });
 });
 
@@ -4268,6 +4803,8 @@ describe("chat welcome", () => {
     sessionKey?: string;
     sessionHost?: { assistantAgentId?: string | null } | null;
     onOpenSession?: (sessionKey: string) => void;
+    modelSetupRequired?: boolean;
+    onModelSetup?: () => void;
   }) {
     const container = document.createElement("div");
     render(
@@ -4279,6 +4816,8 @@ describe("chat welcome", () => {
         sessionKey: params.sessionKey,
         sessionHost: params.sessionHost,
         onOpenSession: params.onOpenSession,
+        modelSetupRequired: params.modelSetupRequired,
+        onModelSetup: params.onModelSetup,
         onDraftChange: () => undefined,
         onSend: () => undefined,
       }),
@@ -4310,6 +4849,37 @@ describe("chat welcome", () => {
     expect(clawd).not.toBeNull();
     expect(clawd?.querySelector("openclaw-mascot")?.getAttribute("mood")).toBe("idle");
     expect(container.querySelector(".agent-chat__badge")).toBeNull();
+  });
+
+  it("replaces sendable welcome actions with model setup", () => {
+    const onModelSetup = vi.fn();
+    const container = renderWelcome({
+      assistantAvatar: null,
+      modelSetupRequired: true,
+      onModelSetup,
+    });
+
+    expect(container.textContent).toContain("No AI provider configured");
+    expect(container.querySelector(".agent-chat__suggestions")).toBeNull();
+
+    container.querySelector<HTMLButtonElement>(".agent-chat__welcome button")?.click();
+    expect(onModelSetup).toHaveBeenCalledOnce();
+  });
+
+  it("omits the composer footer behind the empty model setup splash", () => {
+    const container = renderChatView({
+      canSend: false,
+      disabledBanner: {
+        kind: "composer-replacement",
+        text: "We couldn't find a provider and model configured for this agent. Choose a supported connection; OpenClaw will test it before enabling chat.",
+        actionLabel: "Connect an AI provider",
+        onAction: () => undefined,
+      },
+      modelSetupRequired: true,
+    });
+
+    expect(container.querySelector(".agent-chat__welcome--setup")).not.toBeNull();
+    expect(container.querySelector(".agent-chat__composer-shell")).toBeNull();
   });
 
   it("teases and catches file drags with the welcome mascot", () => {
@@ -4481,6 +5051,7 @@ describe("chat model controls", () => {
     expect(container.querySelector(".chat-controls__model-provenance-value--inherit")).toBeNull();
     const reset = container.querySelector<HTMLButtonElement>("[data-chat-model-reset]");
     expect(reset).toBeInstanceOf(HTMLButtonElement);
+    expect(reset?.textContent?.trim()).toBe("Use default");
     reset?.click();
     expect(onModelSelect).toHaveBeenCalledWith("", "main");
   });
@@ -4619,7 +5190,7 @@ describe("chat model controls", () => {
     expect(onModelSelect).not.toHaveBeenCalled();
   });
 
-  it("groups models by provider and switches the visible provider section", () => {
+  it("previews provider models on hover and keyboard focus", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
@@ -4630,6 +5201,7 @@ describe("chat model controls", () => {
       ],
     });
     const container = renderModelControls(state);
+    document.body.append(container);
 
     const providerButtons = Array.from(
       container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider]"),
@@ -4647,7 +5219,7 @@ describe("chat model controls", () => {
       container.querySelector<HTMLElement>('[data-chat-model-provider-group="anthropic"]')?.hidden,
     ).toBe(true);
 
-    providerButtons[1]?.click();
+    providerButtons[1]?.dispatchEvent(new MouseEvent("mouseenter"));
 
     expect(providerButtons[0]?.getAttribute("aria-pressed")).toBe("false");
     expect(providerButtons[1]?.getAttribute("aria-pressed")).toBe("true");
@@ -4659,6 +5231,32 @@ describe("chat model controls", () => {
     );
     expect(anthropicModels?.hidden).toBe(false);
     expect(anthropicModels?.textContent).toContain("Claude Sonnet 4.6");
+
+    const browser = container.querySelector<HTMLElement>(".chat-controls__model-browser");
+    browser?.dispatchEvent(new MouseEvent("mouseleave"));
+    expect(providerButtons[0]?.getAttribute("aria-pressed")).toBe("true");
+    expect(anthropicModels?.hidden).toBe(true);
+
+    providerButtons[2]?.dispatchEvent(new FocusEvent("focus"));
+    expect(providerButtons[2]?.getAttribute("aria-pressed")).toBe("true");
+    expect(providerButtons.map((button) => button.tabIndex)).toEqual([-1, -1, 0]);
+    expect(
+      container.querySelector<HTMLElement>('[data-chat-model-provider-group="google"]')?.hidden,
+    ).toBe(false);
+
+    providerButtons[2]?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft" }));
+    expect(providerButtons[1]?.getAttribute("aria-pressed")).toBe("true");
+    expect(providerButtons.map((button) => button.tabIndex)).toEqual([-1, 0, -1]);
+    providerButtons[2]?.dispatchEvent(new MouseEvent("mouseenter"));
+    expect(providerButtons[1]?.getAttribute("aria-pressed")).toBe("true");
+    browser?.dispatchEvent(new MouseEvent("mouseleave"));
+    expect(providerButtons[1]?.getAttribute("aria-pressed")).toBe("true");
+
+    browser?.dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: document.body }),
+    );
+    expect(providerButtons[0]?.getAttribute("aria-pressed")).toBe("true");
+    container.remove();
   });
 
   it("groups legacy Codex model references under OpenAI", () => {
@@ -4754,6 +5352,45 @@ describe("chat model controls", () => {
     expect(modelOption?.closest("openclaw-tooltip")).toBeNull();
   });
 
+  it("marks chat-only models in the active control and picker", () => {
+    const { state } = createChatHeaderState({
+      model: "qwen3-8b",
+      modelProvider: "lmstudio",
+      models: [
+        {
+          id: "qwen3-8b",
+          name: "Qwen3 8B",
+          provider: "lmstudio",
+          contextWindow: 32_768,
+          supportsTools: false,
+        },
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          provider: "openai",
+          supportsTools: true,
+        },
+      ],
+    });
+    const container = renderModelControls(state);
+    const trigger = getChatModelSelect(container);
+
+    expect(trigger.dataset.chatModelTools).toBe("unavailable");
+    expect(
+      trigger.querySelector(".chat-controls__model-capability-badge")?.textContent?.trim(),
+    ).toBe("Chat only");
+    expect(trigger.getAttribute("aria-label")).toContain("Chat only");
+    expect(
+      container
+        .querySelector('[data-chat-model-option="lmstudio/qwen3-8b"]')
+        ?.querySelector(".chat-controls__model-option-meta")
+        ?.textContent?.trim(),
+    ).toBe("32.8k context · Chat only");
+    expect(
+      container.querySelector('[data-chat-model-option="openai/gpt-5.5"]')?.textContent,
+    ).not.toContain("Chat only");
+  });
+
   it("shows canonical OpenAI model names instead of command aliases", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
@@ -4826,7 +5463,11 @@ describe("chat model controls", () => {
     expect(defaultOption?.dataset.chatModelOption).toBe("openai/gpt-5.5");
     expect(defaultOption?.getAttribute("aria-selected")).toBe("true");
     expect(defaultOption?.textContent).toContain("GPT-5.5");
-    expect(defaultOption?.textContent).toContain("Default");
+    expect(defaultOption?.textContent).toContain("Current");
+    expect(defaultOption?.textContent).not.toContain("Default");
+    expect(
+      defaultOption?.querySelector(".chat-controls__model-state-label--current"),
+    ).not.toBeNull();
     expect(container.querySelector('[data-chat-model-option=""]')).toBeNull();
   });
 
@@ -4868,6 +5509,14 @@ describe("chat model controls", () => {
     );
     expect(defaultOption).toBeInstanceOf(HTMLButtonElement);
     expect(defaultOption?.getAttribute("aria-selected")).toBe(selected);
+    expect(defaultOption?.textContent).toContain(selected === "true" ? "Current" : "Default");
+    expect(defaultOption?.textContent).not.toContain(selected === "true" ? "Default" : "Current");
+    const currentOption = container.querySelector<HTMLButtonElement>('[aria-selected="true"]');
+    expect(currentOption?.textContent).toContain("Current");
+    expect(currentOption?.textContent).not.toContain("Default");
+    expect(
+      currentOption?.querySelector(".chat-controls__model-state-label--current"),
+    ).not.toBeNull();
     defaultOption?.click();
 
     await waitForFast(() => {
@@ -5002,11 +5651,16 @@ describe("chat model controls", () => {
     if (slider) {
       slider.value = "0";
       slider.dispatchEvent(new Event("input", { bubbles: true }));
-      // Drag preview is attribute-only: mutating rendered text would eject
-      // Lit's ChildPart markers and freeze later menu renders.
       expect(slider.getAttribute("aria-valuetext")).toBe("Low");
-      expect(getThinkingReasoningValueLabel(container)).toBe("High");
+      expect(getThinkingReasoningValueLabel(container)).toBe("Low");
       slider.dispatchEvent(new Event("change", { bubbles: true }));
+      expect(getThinkingReasoningValueLabel(container)).toBe("High");
+
+      slider.value = "0";
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+      slider.dispatchEvent(new Event("pointercancel"));
+      expect(slider.value).toBe(String(getThinkingSliderValues(container).indexOf("high")));
+      expect(getThinkingReasoningValueLabel(container)).toBe("High");
     }
     expect(onThinkingSelect).toHaveBeenCalledWith("low", "main");
 
@@ -5661,13 +6315,14 @@ describe("right-click Reply", () => {
     section.appendChild(confirmationOwner);
     window.localStorage.removeItem("openclaw:skip-rewind-confirm");
     chatMessage.openChatRewindConfirmation(confirmationTrigger, vi.fn());
+    const confirmation = document.querySelector<HTMLElement>(".chat-delete-confirm");
     const { bubble } = appendChatBubble(container, { text: "open message actions" });
 
     try {
-      expect(confirmationOwner.querySelector(".chat-delete-confirm")).not.toBeNull();
+      expect(confirmation?.isConnected).toBe(true);
       bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
 
-      expect(confirmationOwner.querySelector(".chat-delete-confirm")).toBeNull();
+      expect(confirmation?.isConnected).toBe(false);
       expect(document.querySelector(".chat-reply-context-menu")).not.toBeNull();
     } finally {
       chatMessage.dismissConfirmedActionPopovers(confirmationOwner);
@@ -5817,9 +6472,7 @@ describe("right-click Reply", () => {
     rewindButton!.click();
     flushFrames();
 
-    const cancel = document.querySelector<HTMLButtonElement>(
-      ".chat-reply-context-menu .chat-delete-confirm__cancel",
-    );
+    const cancel = document.querySelector<HTMLButtonElement>(".chat-delete-confirm__cancel");
     expect(cancel).toBeInstanceOf(HTMLButtonElement);
     expect(document.activeElement).toBe(cancel);
     const confirmationEscape = new KeyboardEvent("keydown", {

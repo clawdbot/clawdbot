@@ -70,55 +70,6 @@ describe("board providers", () => {
     });
   });
 
-  it("keeps older gateways without board methods on the null provider", () => {
-    mockLocation.search = "";
-    const provider = boardProviderForSession("agent:main:legacy", {} as never, false);
-
-    expect(provider.canPinWidgets).toBe(false);
-    expect(boardExists(provider.snapshot$.value)).toBe(false);
-  });
-
-  it("keeps the cached gateway transport stable across consumer capability profiles", () => {
-    mockLocation.search = "";
-    const client = {
-      request: vi.fn(),
-      addEventListener: vi.fn(() => () => {}),
-    };
-    const provider = boardProviderForSession(
-      "agent:main:pin-capability",
-      client as never,
-      true,
-      false,
-      false,
-    );
-
-    expect(provider.canPinWidgets).toBe(false);
-    expect(provider.canPinMcpApps).toBe(false);
-    expect(
-      boardProviderForSession(
-        "agent:main:pin-capability",
-        client as never,
-        true,
-        false,
-        true,
-        false,
-      ),
-    ).toBe(provider);
-    expect(provider.canPinWidgets).toBe(false);
-    expect(provider.canPinMcpApps).toBe(false);
-    expect(
-      boardProviderForSession(
-        "agent:main:pin-capability",
-        client as never,
-        true,
-        false,
-        true,
-        true,
-      ),
-    ).toBe(provider);
-    expect(provider.canPinMcpApps).toBe(false);
-  });
-
   registerBoardProviderLeaseCases(() => {
     mockLocation.search = "";
   });

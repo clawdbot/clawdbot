@@ -5,7 +5,7 @@ import { readCronJobScratchState, writeCronJobScratch } from "../scratch-store.j
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
-import { findJobOrThrow, isJobEnabled, nextWakeAtMs } from "./jobs.js";
+import { findJobOrThrow, isJobEnabled, nextWakeAtMs, resolveJobLastRunStatus } from "./jobs.js";
 import { sortCronJobs } from "./list-page-sort.js";
 import type {
   CronJobsEnabledFilter,
@@ -50,7 +50,7 @@ export async function list(state: CronServiceState, opts?: { includeDisabled?: b
     await ensureLoadedForRead(state);
     const includeDisabled = opts?.includeDisabled === true;
     const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || isJobEnabled(j));
-    return jobs.toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
+    return sortCronJobs(jobs, "nextRunAtMs", "asc");
   });
 }
 
@@ -251,10 +251,6 @@ function resolveLastRunStatusFilter(opts?: CronListPageOptions): CronJobsLastRun
   return "all";
 }
 
-function resolveJobLastRunStatus(job: CronJob): CronJobsLastRunStatusFilter {
-  return job.state.lastRunStatus ?? job.state.lastStatus ?? "unknown";
-}
-
 /** Lists a filtered, sorted, bounded page of cron jobs for CLI/RPC callers. */
 export async function listPage(state: CronServiceState, opts?: CronListPageOptions) {
   return await locked(state, async () => {
@@ -283,14 +279,23 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       if (scheduleKindFilter !== "all" && job.schedule.kind !== scheduleKindFilter) {
         return false;
       }
-      if (lastRunStatusFilter !== "all" && resolveJobLastRunStatus(job) !== lastRunStatusFilter) {
+      if (
+        lastRunStatusFilter !== "all" &&
+        (resolveJobLastRunStatus(job) ?? "unknown") !== lastRunStatusFilter
+      ) {
         return false;
       }
       if (!query) {
         return true;
       }
       const haystack = normalizeLowercaseStringOrEmpty(
-        [job.id, job.name, job.description ?? "", job.agentId ?? ""].join(" "),
+        [
+          job.id,
+          job.name,
+          job.description ?? "",
+          job.agentId ?? "",
+          ...(job.displayName ? [job.displayName] : []),
+        ].join(" "),
       );
       return haystack.includes(query);
     });

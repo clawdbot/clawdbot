@@ -478,6 +478,40 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
+  it("checkpoints after a dreaming conflict is archived without a migration warning", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    autoMigrateLegacyPluginDoctorState.mockResolvedValueOnce({
+      migrated: true,
+      skipped: false,
+      changes: [
+        "Resolved Memory Core session ingestion legacy conflict by keeping canonical SQLite plugin state",
+        "Archived Memory Core session ingestion conflicting legacy source",
+      ],
+      warnings: [],
+    });
+
+    await runDoctorConfigPreflight({
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      requireStartupMigrationCheckpoint: true,
+      skipPristineCoreStateMigrations: true,
+    });
+
+    expect(autoMigrateLegacyPluginDoctorState).toHaveBeenCalledOnce();
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Resolved Memory Core session ingestion legacy conflict by keeping canonical SQLite plugin state",
+      ),
+      "Doctor changes",
+    );
+    expect(note).not.toHaveBeenCalledWith(
+      expect.stringContaining("SQLite rows conflict with the legacy source"),
+      "Doctor warnings",
+    );
+    expect(recordSuccessfulStartupMigrations).toHaveBeenCalledOnce();
+    expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
+  });
+
   it("maps active payload failures into refreshed plugin quarantine", () => {
     const result = mapStartupPluginQuarantineRefresh({
       cfg: {

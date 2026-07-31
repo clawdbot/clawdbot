@@ -13,6 +13,7 @@ import {
   deleteSession,
   drainSession,
   getActiveBackgroundExecSessionCount,
+  getFinishedSession,
   listFinishedSessions,
   listRunningSessions,
   markBackgrounded,
@@ -185,6 +186,91 @@ describe("bash process registry", () => {
         totalOutputChars: 0,
       },
     ]);
+  });
+
+  it("evicts the oldest finished sessions when their count exceeds the retention limit", () => {
+    for (let index = 0; index < 53; index += 1) {
+      const session = createRegistrySession({
+        id: `finished-${index}`,
+        maxOutputChars: 100,
+        pendingMaxOutputChars: 100,
+        backgrounded: true,
+      });
+      addSession(session);
+      appendOutput(session, "stdout", `output-${index}`);
+      markExited(session, 0, null, "completed");
+    }
+
+    expect(listFinishedSessions()).toHaveLength(50);
+    expect(getFinishedSession("finished-0")).toBeUndefined();
+    expect(getFinishedSession("finished-2")).toBeUndefined();
+    expect(getFinishedSession("finished-3")?.aggregated).toBe("output-3");
+    expect(getFinishedSession("finished-52")?.aggregated).toBe("output-52");
+  });
+
+  it("bounds aggregate finished-session output without truncating retained logs", () => {
+    for (let index = 0; index < 11; index += 1) {
+      const session = createRegistrySession({
+        id: `large-finished-${index}`,
+        maxOutputChars: 250_000,
+        pendingMaxOutputChars: 250_000,
+        backgrounded: true,
+      });
+      addSession(session);
+      appendOutput(session, "stdout", String(index).repeat(250_000));
+      markExited(session, 0, null, "completed");
+    }
+
+    expect(listFinishedSessions()).toHaveLength(8);
+    expect(getFinishedSession("large-finished-2")).toBeUndefined();
+    expect(getFinishedSession("large-finished-3")?.aggregated).toBe("3".repeat(250_000));
+    expect(getFinishedSession("large-finished-10")?.aggregated).toBe("10".repeat(125_000));
+  });
+
+  it("releases the aggregate budget when a completed session is explicitly cleared", () => {
+    for (let index = 0; index < 8; index += 1) {
+      const session = createRegistrySession({
+        id: `clear-budget-${index}`,
+        maxOutputChars: 250_000,
+        pendingMaxOutputChars: 250_000,
+        backgrounded: true,
+      });
+      addSession(session);
+      appendOutput(session, "stdout", String(index).repeat(250_000));
+      markExited(session, 0, null, "completed");
+    }
+
+    deleteSession("clear-budget-3");
+
+    const replacement = createRegistrySession({
+      id: "clear-budget-replacement",
+      maxOutputChars: 250_000,
+      pendingMaxOutputChars: 250_000,
+      backgrounded: true,
+    });
+    addSession(replacement);
+    appendOutput(replacement, "stdout", "r".repeat(250_000));
+    markExited(replacement, 0, null, "completed");
+
+    expect(listFinishedSessions()).toHaveLength(8);
+    expect(getFinishedSession("clear-budget-0")?.aggregated).toBe("0".repeat(250_000));
+    expect(getFinishedSession("clear-budget-3")).toBeUndefined();
+    expect(getFinishedSession("clear-budget-replacement")?.aggregated).toBe("r".repeat(250_000));
+  });
+
+  it("retains the complete newest log when it alone exceeds the aggregate budget", () => {
+    const session = createRegistrySession({
+      id: "oversized-finished",
+      maxOutputChars: 2_000_001,
+      pendingMaxOutputChars: 2_000_001,
+      backgrounded: true,
+    });
+    addSession(session);
+    appendOutput(session, "stdout", "x".repeat(2_000_001));
+    markExited(session, 0, null, "completed");
+
+    expect(listFinishedSessions()).toHaveLength(1);
+    expect(getFinishedSession("oversized-finished")?.aggregated).toHaveLength(2_000_001);
   });
 
   it("tracks only live backgrounded sessions", () => {

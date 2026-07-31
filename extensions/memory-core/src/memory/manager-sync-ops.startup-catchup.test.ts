@@ -364,7 +364,6 @@ describe("session startup catch-up", () => {
       sessionKey,
       storePath,
       entry: {
-        sessionFile: marker,
         sessionId,
         updatedAt: params.updatedAt ?? 10,
       },
@@ -675,7 +674,6 @@ describe("session startup catch-up", () => {
       sessionKey,
       storePath,
       entry: {
-        sessionFile: marker,
         sessionId,
         updatedAt: 10,
       },

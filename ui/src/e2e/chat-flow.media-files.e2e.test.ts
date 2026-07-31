@@ -73,6 +73,219 @@ suite.define(() => {
     }
   });
 
+  it.each([
+    {
+      kind: "audio",
+      source: "/home/node/.openclaw/media/outbound/bootstrap-voice.mp3",
+      ticket: "ticket-bootstrap-audio",
+    },
+    {
+      kind: "image",
+      source: "/home/node/.openclaw/media/outbound/bootstrap-image.png",
+      ticket: "ticket-bootstrap-image",
+    },
+  ] as const)(
+    "renders local assistant $kind through server metadata before preview roots load",
+    async ({ kind, source, ticket }) => {
+      const context = await suite.newBrowserContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      });
+      const page = await context.newPage();
+      const requestedMediaUrls: URL[] = [];
+
+      await page.route("**/__openclaw__/assistant-media?**", async (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        requestedMediaUrls.push(url);
+        expect(url.searchParams.get("source")).toBe(source);
+        if (url.searchParams.get("meta") === "1") {
+          expect(request.headers().authorization).toBe("Bearer e2e-device-token");
+          await route.fulfill({
+            contentType: "application/json",
+            body: JSON.stringify({
+              available: true,
+              mediaTicket: ticket,
+              mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+            }),
+          });
+          return;
+        }
+
+        expect(url.searchParams.get("mediaTicket")).toBe(ticket);
+        expect(request.headers().authorization).toBeUndefined();
+        await route.fulfill(
+          kind === "image"
+            ? {
+                contentType: "image/png",
+                body: Buffer.from(
+                  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=",
+                  "base64",
+                ),
+              }
+            : {
+                contentType: "audio/mpeg",
+                body: Buffer.from("ID3\u0003\u0000\u0000\u0000\u0000\u0000\u0000"),
+              },
+        );
+      });
+
+      await installMockGateway(page, {
+        historyMessages: [
+          kind === "image"
+            ? {
+                id: "assistant-bootstrap-local-image",
+                role: "assistant",
+                content: [{ type: "image", url: source, alt: "Local bootstrap image" }],
+                timestamp: Date.now(),
+              }
+            : {
+                id: "assistant-bootstrap-local-audio",
+                role: "assistant",
+                content: [{ type: "text", text: `Your recording\nMEDIA:${source}` }],
+                timestamp: Date.now(),
+              },
+        ],
+      });
+
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const media =
+          kind === "image"
+            ? page.getByAltText("Local bootstrap image")
+            : page.locator(".chat-assistant-attachment-card audio");
+        await media.waitFor({
+          state: kind === "image" ? "visible" : "attached",
+          timeout: 10_000,
+        });
+        await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(2);
+        expect(requestedMediaUrls[0]?.searchParams.get("meta")).toBe("1");
+        expect(requestedMediaUrls[1]?.searchParams.get("mediaTicket")).toBe(ticket);
+        expect(await page.getByText("Outside allowed folders").count()).toBe(0);
+
+        if (kind === "image") {
+          await expect
+            .poll(() =>
+              media.evaluate((element) =>
+                element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
+              ),
+            )
+            .toBe(1);
+        }
+
+        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        if (artifactDir) {
+          await mkdir(artifactDir, { recursive: true });
+          await page.screenshot({
+            fullPage: true,
+            path: path.join(artifactDir, `bootstrap-local-${kind}.png`),
+          });
+        }
+        if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
+          process.stdout.write(
+            `${JSON.stringify({
+              proof: "control-ui-local-media-bootstrap",
+              kind,
+              source,
+              metadataAuthenticated: true,
+              ticketScoped: true,
+              rawRequestHasBearer: false,
+              requests: requestedMediaUrls.map((url) => ({
+                source: url.searchParams.get("source"),
+                meta: url.searchParams.get("meta"),
+                mediaTicket: url.searchParams.get("mediaTicket"),
+              })),
+            })}\n`,
+          );
+        }
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
+
+  it.each([
+    {
+      code: "outside-allowed-folders",
+      reason: "Outside allowed folders",
+      source: "/home/node/private/bootstrap-secret.mp3",
+    },
+    {
+      code: "file-not-found",
+      reason: "File not found",
+      source: "/home/node/.openclaw/media/outbound/bootstrap-missing.mp3",
+    },
+  ] as const)(
+    "keeps server-rejected $code media blocked before preview roots load",
+    async ({ code, reason, source }) => {
+      const context = await suite.newBrowserContext({
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      });
+      const page = await context.newPage();
+      const requestedMediaUrls: URL[] = [];
+
+      await page.route("**/__openclaw__/assistant-media?**", async (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        requestedMediaUrls.push(url);
+        expect(url.searchParams.get("source")).toBe(source);
+        expect(url.searchParams.get("meta")).toBe("1");
+        expect(request.headers().authorization).toBe("Bearer e2e-device-token");
+        await route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify({ available: false, code, reason }),
+        });
+      });
+
+      await installMockGateway(page, {
+        historyMessages: [
+          {
+            id: `assistant-bootstrap-blocked-${code}`,
+            role: "assistant",
+            content: [{ type: "text", text: `Unavailable recording\nMEDIA:${source}` }],
+            timestamp: Date.now(),
+          },
+        ],
+      });
+
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await page
+          .getByText(reason, { exact: true })
+          .waitFor({ state: "visible", timeout: 10_000 });
+        expect(requestedMediaUrls).toHaveLength(1);
+        expect(await page.locator(".chat-assistant-attachment-card audio").count()).toBe(0);
+        expect(await page.locator(".chat-assistant-attachment-card__link").count()).toBe(0);
+
+        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        if (artifactDir) {
+          await mkdir(artifactDir, { recursive: true });
+          await page.screenshot({
+            fullPage: true,
+            path: path.join(artifactDir, `bootstrap-blocked-${code}.png`),
+          });
+        }
+        if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
+          process.stdout.write(
+            `${JSON.stringify({
+              proof: "control-ui-local-media-bootstrap",
+              code,
+              source,
+              metadataAuthenticated: true,
+              rawMediaRequested: false,
+              visibleReason: reason,
+            })}\n`,
+          );
+        }
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
+
   it("renders a direct tool-result image from Gateway history", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -388,6 +601,13 @@ suite.define(() => {
             ),
         )
         .toBe(64);
+      const initialBlobUrls = await page
+        .locator("img.chat-message-image")
+        .evaluateAll((images) => images.map((image) => image.getAttribute("src")));
+      const retainedRecentBlobUrl = expectDefined(
+        initialBlobUrls[0],
+        "recent managed image Blob URL",
+      );
 
       await replaceHistory(
         historyFor([0], "Recently viewed managed image"),
@@ -398,26 +618,30 @@ suite.define(() => {
       await replaceHistory(historyFor([64], "Overflow managed image"), "Overflow managed image 65");
       await expect.poll(async () => (await readBlobProof()).created.length).toBe(65);
       const overflowProof = await readBlobProof();
-      const retainedRecentBlobUrl = expectDefined(
-        overflowProof.created[0],
-        "recent managed image Blob URL",
-      );
+      // Concurrent image fetches can resolve in any order. Find the real LRU
+      // rather than assuming that creation order matches transcript order.
       const evictedBlobUrl = expectDefined(
-        overflowProof.created[1],
+        overflowProof.created.find((blobUrl) => blobUrl !== retainedRecentBlobUrl),
         "evicted managed image Blob URL",
       );
+      const evictedImageIndex = initialBlobUrls.indexOf(evictedBlobUrl);
+      expect(evictedImageIndex).toBeGreaterThanOrEqual(0);
       expect(overflowProof.revoked).toContain(evictedBlobUrl);
       expect(overflowProof.revoked).not.toContain(retainedRecentBlobUrl);
 
       const evictedPath = new URL(
-        expectDefined(imageUrls[1], "evicted managed image URL"),
+        expectDefined(imageUrls[evictedImageIndex], "evicted managed image URL"),
         suite.server.baseUrl,
       ).pathname;
       const fetchesBeforeRevisit = fetchedMedia.filter(
         (request) => request.pathname === evictedPath,
       ).length;
-      await replaceHistory(historyFor([1], "Refetched managed image"), "Refetched managed image 2");
-      const revisitedImage = page.getByAltText("Refetched managed image 2");
+      const revisitedImageAlt = `Refetched managed image ${evictedImageIndex + 1}`;
+      await replaceHistory(
+        historyFor([evictedImageIndex], "Refetched managed image"),
+        revisitedImageAlt,
+      );
+      const revisitedImage = page.getByAltText(revisitedImageAlt);
       await expect
         .poll(() =>
           revisitedImage.evaluate((image) =>
@@ -442,7 +666,7 @@ suite.define(() => {
       const proofSummary = {
         cacheCapacity: 64,
         createdBlobUrls: finalProof.created.length,
-        evictedBlobIndex: 1,
+        evictedBlobIndex: evictedImageIndex,
         evictedImageFetches,
         refetchedImageNaturalWidth: await revisitedImage.evaluate(
           (image) => (image as HTMLImageElement).naturalWidth,

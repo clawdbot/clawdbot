@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelThinkingDefault from "../agents/model-thinking-default.js";
+import { SessionManager } from "../agents/sessions/index.js";
 import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
@@ -76,6 +77,48 @@ function lastEmbeddedAgentCall(): {
     workspaceDir?: string;
     sessionFile?: string;
   };
+}
+
+function mockEmbeddedTranscriptWrite(
+  storePath: string,
+  content: string,
+  resultMeta?: {
+    sessionId?: string;
+    sessionFile?: string;
+    compactionCount?: number;
+    compactionTokensAfter?: number;
+  },
+): void {
+  runEmbeddedAgentMock.mockImplementationOnce(async (input: Record<string, unknown>) => {
+    const agentId = typeof input.agentId === "string" ? input.agentId : "main";
+    const sessionId = typeof input.sessionId === "string" ? input.sessionId : "";
+    const sessionKey = typeof input.sessionKey === "string" ? input.sessionKey : "";
+    const workspaceDir =
+      typeof input.workspaceDir === "string" ? input.workspaceDir : process.cwd();
+    const manager = SessionManager.open(
+      { agentId, sessionId, sessionKey, storePath },
+      workspaceDir,
+    );
+    manager.appendMessage({ role: "user", content, timestamp: Date.now() });
+    return {
+      payloads: [{ text: "ok" }],
+      meta: {
+        durationMs: 5,
+        agentMeta: {
+          sessionId: resultMeta?.sessionId ?? sessionId,
+          ...(resultMeta?.sessionFile ? { sessionFile: resultMeta.sessionFile } : {}),
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          ...(resultMeta?.compactionCount !== undefined
+            ? { compactionCount: resultMeta.compactionCount }
+            : {}),
+          ...(resultMeta?.compactionTokensAfter !== undefined
+            ? { compactionTokensAfter: resultMeta.compactionTokensAfter }
+            : {}),
+        },
+      },
+    };
+  });
 }
 
 describe("runCronIsolatedAgentTurn session identity", () => {
@@ -178,6 +221,32 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     });
   });
 
+  it.each([
+    ["cron", "cron:job-1"],
+    ["hook", "hook:webhook:request-1"],
+  ])("initializes the exact %s run session before transcript writes", async (_name, sessionKey) => {
+    await useRealCronSessionState();
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      mockEmbeddedTranscriptWrite(storePath, `${sessionKey} transcript`);
+
+      const { res } = await runCronTurn(home, {
+        jobPayload: {
+          kind: "agentTurn",
+          message: "persist this turn",
+          ...(sessionKey.startsWith("hook:") ? { externalContentSource: "webhook" as const } : {}),
+        },
+        message: "persist this turn",
+        mockTexts: null,
+        sessionKey,
+        storePath,
+      });
+
+      expect(res.status, res.status === "error" ? res.error : undefined).toBe("ok");
+      expect(res.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
+    });
+  });
+
   it("persists rotated transcript identity for current-bound cron runs", async () => {
     await withTempHome(async (home) => {
       const deps = makeDeps();
@@ -194,20 +263,6 @@ describe("runCronIsolatedAgentTurn session identity", () => {
           systemSent: true,
         },
       });
-      runEmbeddedAgentMock.mockResolvedValueOnce({
-        payloads: [{ text: "ok" }],
-        meta: {
-          durationMs: 5,
-          agentMeta: {
-            sessionId: "bound-session-rotated",
-            sessionFile: rotatedSessionFile,
-            provider: "anthropic",
-            model: "claude-opus-4-6",
-            compactionCount: 1,
-            compactionTokensAfter: 42,
-          },
-        },
-      });
       const currentBoundJob = normalizeCronJobCreate(
         {
           ...makeJob(DEFAULT_AGENT_TURN_PAYLOAD),
@@ -217,6 +272,12 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         { sessionContext: { sessionKey: boundSessionKey } },
       ) as CronJob;
       const executionSessionKey = `agent:main:cron:${currentBoundJob.id}`;
+      mockEmbeddedTranscriptWrite(storePath, "current-bound transcript", {
+        sessionId: "bound-session-rotated",
+        sessionFile: rotatedSessionFile,
+        compactionCount: 1,
+        compactionTokensAfter: 42,
+      });
 
       const res = await runCronIsolatedAgentTurn({
         cfg: makeCfg(home, storePath),

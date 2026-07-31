@@ -11,17 +11,27 @@ import { Type } from "typebox";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { AgentRouteBinding } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
+import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
+  buildAgentMainSessionKey,
   isSubagentSessionKey,
+  normalizeAccountId,
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
-import { isCronRunSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
+import {
+  isCronRunSessionKey,
+  parseAgentSessionKey,
+  parseSessionDeliveryRoute,
+} from "../../sessions/session-key-utils.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
@@ -593,7 +603,101 @@ export function createSessionsSendTool(opts?: {
       // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
-      const requesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
+      const rawRequesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
+      const parsedRequesterSessionKey = parseAgentSessionKey(rawRequesterSessionKey);
+      const requesterRouteBindings = cfg.bindings?.filter(
+        (binding): binding is AgentRouteBinding => binding.type !== "acp",
+      );
+      const requesterDeliveryRoute = requesterRouteBindings?.length
+        ? parseSessionDeliveryRoute(rawRequesterSessionKey)
+        : null;
+      const bareRequesterPeerId = parsedRequesterSessionKey?.rest.startsWith("direct:")
+        ? parsedRequesterSessionKey.rest.slice("direct:".length)
+        : parsedRequesterSessionKey?.rest.startsWith("dm:")
+          ? parsedRequesterSessionKey.rest.slice("dm:".length)
+          : undefined;
+      const requesterRouteChannel = requesterDeliveryRoute?.channel ?? opts?.agentChannel;
+      const requesterRoutePeerId = requesterDeliveryRoute?.peerId ?? bareRequesterPeerId;
+      const requesterRoute =
+        requesterRouteBindings?.length && requesterRouteChannel && requesterRoutePeerId
+          ? resolveAgentRoute({
+              cfg,
+              channel: requesterRouteChannel,
+              accountId: requesterDeliveryRoute?.accountId,
+              peer: { kind: "direct", id: requesterRoutePeerId },
+            })
+          : undefined;
+      // Any configured route can transfer this peer to another agent. A key
+      // without enough route facts must never be reassigned to guessed ownership.
+      const hasUnresolvedRequesterRoute = Boolean(
+        requesterRouteBindings?.length &&
+        (!requesterRoute || requesterRoute.agentId !== parsedRequesterSessionKey?.agentId),
+      );
+      // Session keys can discard account, peer casing, team, guild, and roles.
+      // Preserve the authenticated caller whenever any possible binding would
+      // choose another agent or an isolated DM scope using those missing facts.
+      const hasUnsafeRequesterDmBinding = Boolean(
+        requesterRouteBindings?.some((binding) => {
+          const effectiveDmScope = binding.session?.dmScope ?? cfg.session?.dmScope ?? "main";
+          const isForeignAgent =
+            normalizeAgentId(binding.agentId) !== parsedRequesterSessionKey?.agentId;
+          if (!isForeignAgent && effectiveDmScope === "main") {
+            return false;
+          }
+          if (
+            requesterRouteChannel &&
+            normalizeRouteBindingChannelId(binding.match.channel) !==
+              normalizeRouteBindingChannelId(requesterRouteChannel)
+          ) {
+            return false;
+          }
+          const bindingAccountId = binding.match.accountId?.trim();
+          if (
+            requesterDeliveryRoute?.accountId &&
+            bindingAccountId !== "*" &&
+            normalizeAccountId(bindingAccountId) !==
+              normalizeAccountId(requesterDeliveryRoute.accountId)
+          ) {
+            return false;
+          }
+          const peer = binding.match.peer;
+          if (peer) {
+            const peerId = peer.id.trim();
+            if (
+              peer.kind !== "direct" ||
+              (peerId !== "*" &&
+                peerId.toLowerCase() !== requesterRoutePeerId?.trim().toLowerCase())
+            ) {
+              return false;
+            }
+          }
+          return true;
+        }),
+      );
+      const requesterDmScope =
+        requesterRoute && requesterRoute.agentId === parsedRequesterSessionKey?.agentId
+          ? (requesterRoute.dmScope ?? cfg.session?.dmScope ?? "main")
+          : (cfg.session?.dmScope ?? "main");
+      // Normalize legacy DM reply addresses only after exact-key visibility
+      // checks; global/binding-isolated DMs and non-DM owners stay private.
+      const requesterSessionKey = rawRequesterSessionKey;
+      const replyRequesterSessionKey =
+        rawRequesterSessionKey &&
+        parsedRequesterSessionKey &&
+        rawRequesterSessionKey !== resolvedKey &&
+        requesterDmScope === "main" &&
+        !hasUnresolvedRequesterRoute &&
+        !hasUnsafeRequesterDmBinding &&
+        !parsedRequesterSessionKey.rest.startsWith("cron:") &&
+        !parsedRequesterSessionKey.rest.startsWith("hook:") &&
+        !isSubagentSessionKey(rawRequesterSessionKey) &&
+        !parseSessionThreadInfo(rawRequesterSessionKey).threadId &&
+        deriveSessionChatTypeFromKey(rawRequesterSessionKey) === "direct"
+          ? buildAgentMainSessionKey({
+              agentId: parsedRequesterSessionKey.agentId,
+              mainKey,
+            })
+          : rawRequesterSessionKey;
       const timeoutMs =
         finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, {
           floorSeconds: true,
@@ -670,10 +774,10 @@ export function createSessionsSendTool(opts?: {
             const watched =
               watchRequested &&
               !access.expectedSessionId &&
-              requesterSessionKey &&
-              requesterSessionKey !== targetSessionKey
+              replyRequesterSessionKey &&
+              replyRequesterSessionKey !== targetSessionKey
                 ? registerSessionStateWatch({
-                    watcherSessionKey: requesterSessionKey,
+                    watcherSessionKey: replyRequesterSessionKey,
                     targetSessionKey,
                   })
                 : false;
@@ -717,13 +821,13 @@ export function createSessionsSendTool(opts?: {
               : undefined;
 
           const agentMessageContext = buildAgentToAgentMessageContext({
-            requesterSessionKey,
+            requesterSessionKey: replyRequesterSessionKey,
             requesterChannel,
             targetSessionKey: displayKey,
           });
           const inputProvenance = {
             kind: "inter_session" as const,
-            sourceSessionKey: requesterSessionKey,
+            sourceSessionKey: replyRequesterSessionKey,
             sourceChannel: requesterChannel,
             sourceTool: "sessions_send",
           };
@@ -808,7 +912,7 @@ export function createSessionsSendTool(opts?: {
               // Cron runs are isolated jobs; target replies must not become new
               // requester turns, but the target-side announce still runs.
               maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
-              requesterSessionKey,
+              requesterSessionKey: replyRequesterSessionKey,
               requesterChannel,
               baseline: flowBaseline,
               roundOneReply,

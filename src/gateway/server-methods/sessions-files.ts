@@ -1,6 +1,7 @@
 // Gateway methods expose session files and workspace browsing.
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { detectMime } from "@openclaw/media-core/mime";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -44,6 +45,7 @@ import {
   listWorkspacePath,
   normalizeRelativePath,
   readWorkspaceFile,
+  readWorkspaceFilePrefix,
   resolveWorkspacePath,
   sortDirents,
   sortWorkspaceEntries,
@@ -82,6 +84,24 @@ const MAX_SEARCH_VISITED_ENTRIES = 5_000;
 const TOUCHED_FILES_CACHE_LIMIT = 16;
 const TOUCHED_FILES_DELTA_MAX_MESSAGES = 1_000;
 const TOUCHED_FILES_DELTA_MAX_BYTES = 1_000_000;
+// Matches file-type's documented default buffer sample while keeping metadata
+// classification independent from the 256 KiB inline-content cap.
+const MIME_SNIFF_PREFIX_BYTES = 4_100;
+// Inline previews stay limited to formats supported by modern Control UI browsers.
+// Native workspace clients intentionally own a broader, separate image policy.
+const BROWSER_PREVIEW_IMAGE_MIME_TYPES = new Set([
+  "image/avif",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+const DETECTED_TEXT_MIME_TYPES = new Set([
+  "application/rtf",
+  "application/xml",
+  "application/x-ms-regedit",
+  "model/stl",
+]);
 const SEARCH_SKIP_DIRS = new Set([
   ".git",
   ".hg",
@@ -405,6 +425,54 @@ function displayNameForPath(filePath: string): string {
   return base || filePath;
 }
 
+function isDetectedTextMime(mimeType: string): boolean {
+  return (
+    mimeType.startsWith("text/") ||
+    mimeType.endsWith("+xml") ||
+    DETECTED_TEXT_MIME_TYPES.has(mimeType)
+  );
+}
+
+function applyInlineFilePreview(entry: SessionFileEntry, buffer: Buffer, mimeType?: string): void {
+  if (mimeType && BROWSER_PREVIEW_IMAGE_MIME_TYPES.has(mimeType)) {
+    entry.mimeType = mimeType;
+    entry.contentEncoding = "base64";
+    entry.previewKind = "image";
+    entry.content = buffer.toString("base64");
+    return;
+  }
+  const text = decodeUtf8Strict(buffer);
+  if ((!mimeType || isDetectedTextMime(mimeType)) && text !== undefined) {
+    entry.mimeType = mimeType ?? "text/plain";
+    entry.contentEncoding = "utf8";
+    entry.previewKind = "text";
+    entry.content = text;
+    // The hash doubles as the sessions.files.set CAS token. Binary files
+    // never receive one, so replacement characters cannot be saved back.
+    entry.hash = createHash("sha256").update(buffer).digest("hex");
+    return;
+  }
+  entry.previewKind = "unsupported";
+  if (mimeType) {
+    entry.mimeType = mimeType;
+  }
+}
+
+function applyOversizedFileMetadata(
+  entry: SessionFileEntry,
+  buffer: Buffer,
+  mimeType?: string,
+): void {
+  const prefixIsText = decodeUtf8Strict(buffer) !== undefined;
+  if ((!mimeType && prefixIsText) || (mimeType && isDetectedTextMime(mimeType) && prefixIsText)) {
+    return;
+  }
+  entry.previewKind = "unsupported";
+  if (mimeType) {
+    entry.mimeType = mimeType;
+  }
+}
+
 async function toSessionFileEntry(
   touched: TouchedFile,
   root: string | undefined,
@@ -432,25 +500,33 @@ async function toSessionFileEntry(
     size: stat.size,
     updatedAtMs: toUpdatedAtMs(stat.mtimeMs),
   };
-  if (opts.includeContent && stat.size <= MAX_PREVIEW_BYTES) {
+  if (!opts.includeContent) {
+    return entry;
+  }
+  if (stat.size <= MAX_PREVIEW_BYTES) {
     const read = await readWorkspaceFile(root!, browserPath);
     if (!read) {
       return { ...base, missing: true };
     }
-    if (read !== "too-large") {
-      entry.workspacePath = read.canonicalPath;
-      entry.size = read.stat.size;
-      entry.updatedAtMs = toUpdatedAtMs(read.stat.mtimeMs);
-      const text = decodeUtf8Strict(read.buffer);
-      entry.content = text ?? read.buffer.toString("utf8");
-      // The hash doubles as the sessions.files.set CAS token, so it is only
-      // issued for strict-UTF-8 text; binary previews stay read-only because
-      // re-encoding their replacement characters would corrupt the file.
-      if (text !== undefined) {
-        entry.hash = createHash("sha256").update(read.buffer).digest("hex");
-      }
+    if (read === "too-large") {
+      return entry;
     }
+    entry.workspacePath = read.canonicalPath;
+    entry.size = read.stat.size;
+    entry.updatedAtMs = toUpdatedAtMs(read.stat.mtimeMs);
+    const mimeType = await detectMime({ buffer: read.buffer });
+    applyInlineFilePreview(entry, read.buffer, mimeType);
+    return entry;
   }
+  const prefix = await readWorkspaceFilePrefix(root!, browserPath, MIME_SNIFF_PREFIX_BYTES);
+  if (!prefix) {
+    return { ...base, missing: true };
+  }
+  entry.workspacePath = prefix.canonicalPath;
+  entry.size = prefix.stat.size;
+  entry.updatedAtMs = toUpdatedAtMs(prefix.stat.mtimeMs);
+  const mimeType = await detectMime({ buffer: prefix.buffer });
+  applyOversizedFileMetadata(entry, prefix.buffer, mimeType);
   return entry;
 }
 
@@ -801,12 +877,12 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       return;
     }
     const result = await findSessionFile(params);
-    if (typeof result.file?.content !== "string") {
-      if (result.file && !result.file.missing) {
-        respondSessionFileTooLarge(respond, result.file, params.path);
-        return;
-      }
+    if (!result.file || result.file.missing) {
       respondSessionFileNotFound(respond, params.path);
+      return;
+    }
+    if (typeof result.file.content !== "string" && result.file.previewKind !== "unsupported") {
+      respondSessionFileTooLarge(respond, result.file, params.path);
       return;
     }
     respond(true, {

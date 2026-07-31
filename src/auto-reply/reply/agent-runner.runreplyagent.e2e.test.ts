@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -41,6 +42,7 @@ import {
 } from "./reply-operation-run-state.js";
 import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
+import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { consumeReplyUsageState } from "./reply-usage-state.js";
 import { buildChannelSourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -436,13 +438,52 @@ function requireBuiltChannelSourceTurnId(
 }
 
 describe("runReplyAgent active steering", () => {
+  it("keeps the continuing Telegram task's typing alive after an accepted steer", async () => {
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "session",
+      resetTriggered: false,
+    });
+    active.setPhase("running");
+    const taskTyping = createMockTypingController({ isActive: vi.fn(() => true) });
+    bindReplyOperationTyping(active, taskTyping);
+    const { run, typing } = createMinimalRun({
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "123",
+        NativeChannelId: "123",
+        MessageSid: "steer-telegram",
+      },
+      runOverrides: { agentId: "main", messageProvider: "telegram" },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(taskTyping.startTypingLoop).toHaveBeenCalledOnce();
+    expect(taskTyping.cleanup).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledOnce();
+
+    active.complete();
+
+    expect(taskTyping.cleanup).toHaveBeenCalledOnce();
+  });
+
   it("dispatches a declined steer once with its source-turn identity", async () => {
+    const runState: ReplyOperationRunState = {};
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
     );
     state.beforeAgentReplyRunMock.mockResolvedValue(undefined);
     state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
     const { run, sourceTurnId } = createMinimalRun({
+      opts: { [REPLY_OPERATION_RUN_STATE]: runState },
       isActive: true,
       isStreaming: true,
       shouldSteer: true,
@@ -464,6 +505,7 @@ describe("runReplyAgent active steering", () => {
 
     await expect(run()).resolves.toBeUndefined();
 
+    expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledWith(
       { cleanedBody: "hello" },
@@ -1077,6 +1119,109 @@ describe("runReplyAgent heartbeat followup guard", () => {
 });
 
 describe("runReplyAgent pending final delivery capture", () => {
+  it("delivers an authenticated channel reply through the configured default agent", async () => {
+    const config = {
+      agents: {
+        list: [{ id: "ops", default: true }, { id: "worker" }],
+        defaults: { compaction: { memoryFlush: {} } },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = join(
+      tempDirs.make("openclaw-custom-default-agent-"),
+      "agents",
+      "ops",
+      "sessions",
+      "sessions.json",
+    );
+    await replaceSessionEntry(
+      { agentId: "ops", defaultAgentId: "ops", sessionKey: "main", storePath },
+      sessionEntry,
+    );
+    const sessionCtx = {
+      Provider: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:24680",
+      MessageSid: "custom-default-source-message",
+      SenderId: "sender-42",
+      SenderName: "Ada",
+    } as const;
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "custom default agent reply" }],
+      meta: {},
+    });
+    const { followupRun, run, sourceTurnId } = createMinimalRun({
+      sessionCtx,
+      runOverrides: {
+        agentId: undefined,
+        config,
+        messageProvider: "discord",
+      },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+    if (!sourceTurnId) {
+      throw new Error("test channel source turn id required");
+    }
+    followupRun.userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+      input: {
+        text: "custom default agent request",
+        idempotencyKey: sourceTurnId,
+        sender: { id: "sender-42", name: "Ada" },
+      },
+      target: {
+        agentId: "ops",
+        config,
+        cwd: "/tmp",
+        sessionEntry,
+        sessionId: "session",
+        sessionKey: "main",
+        sessionStore,
+        storePath,
+      },
+    });
+
+    setRuntimeConfigSnapshot(config, config);
+    try {
+      await expect(run()).resolves.toEqual(
+        expect.objectContaining({ text: "custom default agent reply" }),
+      );
+
+      expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(
+        await loadTranscriptEvents({
+          agentId: "ops",
+          sessionId: "session",
+          sessionKey: "main",
+          storePath,
+        }),
+      ).toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({
+            role: "user",
+            content: "custom default agent request",
+          }),
+        }),
+      );
+      expect(await readStoredMainSession(storePath)).toMatchObject({
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "custom default agent reply",
+          context: { channel: "discord", to: "channel:24680" },
+        },
+        restartRecoveryTerminalRunIds: [sourceTurnId],
+      });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
   it("does not persist message-tool-only final replies for heartbeat replay", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",

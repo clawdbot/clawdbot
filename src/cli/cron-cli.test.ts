@@ -654,7 +654,9 @@ describe("cron cli", () => {
       "Option prompt",
     ]);
 
-    expectRuntimeErrorContaining("Pass the cron job message either positionally or with --message");
+    expectRuntimeErrorContaining(
+      "Pass the automation message either positionally or with --message",
+    );
   });
 
   it("rejects ambiguous cron add names", async () => {
@@ -670,7 +672,7 @@ describe("cron cli", () => {
       "tick",
     ]);
 
-    expectRuntimeErrorContaining("Pass the cron job name either positionally or with --name");
+    expectRuntimeErrorContaining("Pass the automation name either positionally or with --name");
   });
 
   it("rejects webhook delivery mixed with chat delivery on cron add", async () => {

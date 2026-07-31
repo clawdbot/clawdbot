@@ -156,6 +156,7 @@ export type AgentCommandOpts = {
   swarmOutputSchema?: Record<string, unknown>;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
+  forceCodeModeTools?: boolean;
   /** Host-owned exact media set for a scoped automatic recovery delivery. */
   internalDeliveryMediaUrls?: string[];
   internalDeliverySuppressText?: boolean;

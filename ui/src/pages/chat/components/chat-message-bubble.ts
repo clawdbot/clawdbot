@@ -362,7 +362,9 @@ export function renderGroupedMessage(
         ${duplicateCount > 1
           ? html`<div
               class="chat-duplicate-count"
-              aria-label=${`${duplicateCount} consecutive identical messages collapsed`}
+              aria-label=${t("chat.messages.duplicatesCollapsed", {
+                count: String(duplicateCount),
+              })}
             >
               ×${duplicateCount}
             </div>`
@@ -420,6 +422,7 @@ export function renderGroupedMessage(
                         opts.onAssistantAttachmentLoaded,
                         opts.onRequestOpenImage,
                         opts.onOpenImage,
+                        opts.resolveArtifactDownload,
                       )}
                       ${assistantViewContent}
                       ${reasoningMarkdown
@@ -486,6 +489,7 @@ export function renderGroupedMessage(
               opts.onAssistantAttachmentLoaded,
               opts.onRequestOpenImage,
               opts.onOpenImage,
+              opts.resolveArtifactDownload,
             )}
             ${reasoningMarkdown
               ? html`<div class="chat-thinking">
@@ -525,7 +529,9 @@ export function renderGroupedMessage(
       ${duplicateCount > 1
         ? html`<div
             class="chat-duplicate-count"
-            aria-label=${`${duplicateCount} consecutive identical messages collapsed`}
+            aria-label=${t("chat.messages.duplicatesCollapsed", {
+              count: String(duplicateCount),
+            })}
           >
             ×${duplicateCount}
           </div>`

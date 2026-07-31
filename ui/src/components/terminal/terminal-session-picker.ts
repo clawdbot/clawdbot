@@ -8,19 +8,25 @@ type TerminalSessionPickerProps = {
   sessions: TerminalSessionInfo[];
   currentSessionIds: ReadonlySet<string>;
   onToggle: () => void;
+  onDismiss: (restoreFocus: boolean) => void;
+  onFocusOut: (event: FocusEvent) => void;
   onRefresh: () => void;
   onAttach: (sessionId: string, owner: TerminalSessionInfo["owner"]) => void;
 };
 
+const TERMINAL_SESSION_PICKER_ID = "terminal-session-picker-dialog";
+
 export function renderTerminalSessionPicker(props: TerminalSessionPickerProps) {
   return html`
-    <div class="tp-session-picker">
+    <div class="tp-session-picker" @focusout=${props.onFocusOut}>
       <button
         class="tp-icon"
         type="button"
         title=${t("terminal.sessions")}
         aria-label=${t("terminal.sessions")}
         aria-expanded=${props.open ? "true" : "false"}
+        aria-haspopup="dialog"
+        aria-controls=${TERMINAL_SESSION_PICKER_ID}
         @click=${props.onToggle}
       >
         <svg
@@ -37,7 +43,20 @@ export function renderTerminalSessionPicker(props: TerminalSessionPickerProps) {
         </svg>
       </button>
       ${props.open
-        ? html`<div class="tp-session-menu" role="dialog" aria-label=${t("terminal.sessions")}>
+        ? html`<div
+            id=${TERMINAL_SESSION_PICKER_ID}
+            class="tp-session-menu"
+            role="dialog"
+            aria-label=${t("terminal.sessions")}
+            @keydown=${(event: KeyboardEvent) => {
+              if (event.key !== "Escape") {
+                return;
+              }
+              event.preventDefault();
+              event.stopPropagation();
+              props.onDismiss(true);
+            }}
+          >
             <div class="tp-session-menu__header">
               <span>${t("terminal.sessions")}</span>
               <button class="tp-session-refresh" type="button" @click=${props.onRefresh}>

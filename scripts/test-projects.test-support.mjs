@@ -171,6 +171,7 @@ const EXTENSION_VOICE_CALL_VITEST_CONFIG = "test/vitest/vitest.extension-voice-c
 const EXTENSION_WHATSAPP_VITEST_CONFIG = "test/vitest/vitest.extension-whatsapp.config.ts";
 const EXTENSION_ZALO_VITEST_CONFIG = "test/vitest/vitest.extension-zalo.config.ts";
 const EXTENSIONS_VITEST_CONFIG = "test/vitest/vitest.extensions.config.ts";
+const FULL_AGENTIC_VITEST_CONFIG = "test/vitest/vitest.full-agentic.config.ts";
 const FULL_EXTENSIONS_VITEST_CONFIG = "test/vitest/vitest.full-extensions.config.ts";
 const GATEWAY_CLIENT_VITEST_CONFIG = "test/vitest/vitest.gateway-client.config.ts";
 const GATEWAY_CORE_VITEST_CONFIG = "test/vitest/vitest.gateway-core.config.ts";
@@ -447,6 +448,17 @@ const BROAD_CHANGED_FALLBACK_PATTERNS = [
   /^test\/helpers\//u,
 ];
 const PRECISE_SOURCE_TEST_TARGETS = new Map([
+  ...[
+    "src/system-agent/setup-inference-persist.ts",
+    "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",
+    "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
+  ].map((sourcePath) => [
+    sourcePath,
+    [
+      "src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts",
+      "src/commands/onboard-guided.inference.e2e.test.ts",
+    ],
+  ]),
   [
     "src/plugins/contracts/tts-contract-suites.ts",
     [
@@ -645,6 +657,7 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
     ".github/workflows/openclaw-npm-release.yml",
     [
       "test/openclaw-npm-postpublish-verify.test.ts",
+      "test/scripts/openclaw-npm-extended-stable-workflow.test.ts",
       "test/scripts/package-acceptance-workflow.test.ts",
     ],
   ],
@@ -1429,6 +1442,8 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/lib/plugin-npm-runtime-build.mjs",
     ["test/scripts/plugin-npm-runtime-build-args.test.ts", "test/plugin-npm-runtime-build.test.ts"],
   ],
+  ["scripts/lib/output-root-guard.mjs", ["test/scripts/output-root-guard.test.ts"]],
+  ["scripts/lib/output-root-guard.d.mts", ["test/scripts/output-root-guard.test.ts"]],
   [
     "scripts/lib/npm-publish-plan.mjs",
     [
@@ -2239,6 +2254,8 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/write-package-dist-inventory.ts", ["test/scripts/test-install-sh-docker.test.ts"]],
   ["scripts/e2e/cron-mcp-cleanup-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
   ["scripts/bundled-plugin-assets.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
+  ["scripts/copy-export-html-templates.ts", ["test/scripts/copy-export-html-templates.test.ts"]],
+  ["scripts/ui.js", ["test/scripts/ui.test.ts"]],
   ["scripts/bundle-a2ui.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/build-discord-activity-sdk.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/build-diffs-viewer-runtime.mjs", ["test/scripts/build-diffs-viewer-runtime.test.ts"]],
@@ -4746,7 +4763,13 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
     ) {
       return [];
     }
-    const expandShard = expandToProjectConfigs;
+    // The remote Testbox full gate runs every agentic and extension project in one process tree.
+    // Bound project and worker lifetimes before either aggregate reaches V8's heap limit.
+    const expandShard =
+      expandToProjectConfigs ||
+      (process.env.OPENCLAW_TESTBOX_REMOTE_RUN === "1" &&
+        (shard.config === FULL_AGENTIC_VITEST_CONFIG ||
+          shard.config === FULL_EXTENSIONS_VITEST_CONFIG));
     const configs = expandShard ? shard.projects : [shard.config];
     return configs.flatMap((config) => {
       if (expandShard && targetArgs.length === 0) {
@@ -4837,6 +4860,45 @@ function hasConservativeVitestWorkerBudget(env) {
       : "OPENCLAW_VITEST_MAX_WORKERS",
   );
   return workerBudget !== null && workerBudget <= 1;
+}
+
+const FULL_EXTENSIONS_CONFIG = "test/vitest/vitest.full-extensions.config.ts";
+const FULL_EXTENSIONS_MIN_HEAP_MB = 8192;
+
+function ensureMaxOldSpaceSize(nodeOptions, minimumMb) {
+  const normalized = nodeOptions?.trim() ?? "";
+  const matches = Array.from(
+    normalized.matchAll(/(^|\s)--max[-_]old[-_]space[-_]size(?:=|\s+)(\d+)(?=\s|$)/gu),
+  );
+  const match = matches.at(-1);
+  if (!match) {
+    return [normalized, `--max-old-space-size=${minimumMb}`].filter(Boolean).join(" ");
+  }
+  const currentMb = Number(match[2]);
+  if (Number.isSafeInteger(currentMb) && currentMb >= minimumMb) {
+    return normalized;
+  }
+  const start = match.index;
+  const replacement = match[0].replace(/\d+$/u, String(minimumMb));
+  return `${normalized.slice(0, start)}${replacement}${normalized.slice(start + match[0].length)}`;
+}
+
+export function applyFullExtensionsHeapBudget(specs, params = {}) {
+  const baseEnv = params.env ?? {};
+  return specs.map((spec) =>
+    spec.config === FULL_EXTENSIONS_CONFIG
+      ? {
+          ...spec,
+          env: {
+            ...spec.env,
+            NODE_OPTIONS: ensureMaxOldSpaceSize(
+              spec.env?.NODE_OPTIONS ?? baseEnv.NODE_OPTIONS,
+              FULL_EXTENSIONS_MIN_HEAP_MB,
+            ),
+          },
+        }
+      : spec,
+  );
 }
 
 export function resolveParallelFullSuiteConcurrency(specCount, envInput, hostInfo) {

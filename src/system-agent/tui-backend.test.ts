@@ -1,5 +1,6 @@
 // OpenClaw TUI backend tests cover rescue status integration with the TUI backend.
 import { describe, expect, it, vi } from "vitest";
+import * as preparedModelCatalog from "../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
@@ -7,10 +8,6 @@ import type { SystemAgentCommandDeps, SystemAgentOperation } from "./operations.
 import type { SystemAgentOverview } from "./overview.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
 import { runSystemAgentTui, type SystemAgentTuiOptions } from "./tui-backend.js";
-
-vi.mock("../agents/prepared-model-catalog.js", () => ({
-  loadPreparedModelCatalog: vi.fn(async () => []),
-}));
 
 vi.mock("../plugins/providers.js", () => ({
   resolveOwningPluginIdsForModelRefs: vi.fn(() => []),
@@ -20,6 +17,7 @@ vi.mock("../plugins/providers.js", () => ({
 vi.mock("../agents/prepared-model-catalog.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/prepared-model-catalog.js")>()),
   // These tests exercise the TUI boundary, not filesystem-backed catalog discovery.
+  getPreparedModelCatalogSnapshot: vi.fn(() => undefined),
   loadPreparedModelCatalog: vi.fn(async () => []),
 }));
 
@@ -159,6 +157,39 @@ describe("runSystemAgentTui", () => {
       throw new Error("expected openclaw TUI backend");
     }
   }, 240_000);
+
+  it("opens the verified setup shell without preparing an unpublished model catalog", async () => {
+    const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
+    const catalogPreparation = vi.mocked(preparedModelCatalog.loadPreparedModelCatalog);
+    const publishedSnapshot = vi
+      .spyOn(preparedModelCatalog, "getPreparedModelCatalogSnapshot")
+      .mockReturnValue(undefined);
+    const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
+
+    catalogPreparation.mockClear();
+    catalogPreparation.mockRejectedValueOnce(new Error("catalog preparation must not block setup"));
+
+    try {
+      await runSystemAgentTui({ ...verified, runTui }, createRuntime());
+
+      expect(publishedSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ config: verifiedConfig, readOnly: true }),
+      );
+      expect(catalogPreparation).not.toHaveBeenCalled();
+      expect(runTui).toHaveBeenCalledOnce();
+      expect(runTui).toHaveBeenCalledWith(
+        expect.objectContaining({
+          local: true,
+          session: "agent:openclaw:main",
+          title: "openclaw setup",
+        }),
+      );
+    } finally {
+      publishedSnapshot.mockRestore();
+      catalogPreparation.mockReset();
+      catalogPreparation.mockResolvedValue([]);
+    }
+  });
 
   it("reports the verified model without its auth profile and the effective thinking level", async () => {
     const config = {

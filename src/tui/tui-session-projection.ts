@@ -1,12 +1,20 @@
 import {
   createSessionProjection,
+  readSessionMessageIdentity,
+  readSessionMessageSequence,
   reduceSessionProjection,
-  type SessionProjectionRun,
+  type SessionProjectionEvent,
   type SessionProjectionScope,
   type SessionProjectionState,
 } from "../../packages/gateway-client/src/session-projection.js";
+import { agentSessionKeysMatchByRequestKey } from "../routing/session-key.js";
 import { extractTextFromMessage } from "./tui-formatters.js";
-import type { ChatEvent, SessionChangedEvent, TuiStateAccess } from "./tui-types.js";
+import type {
+  ChatEvent,
+  SessionChangedEvent,
+  SessionMessageEvent,
+  TuiStateAccess,
+} from "./tui-types.js";
 
 function hasDisplayableNonTextSessionContent(message: unknown): boolean {
   if (!message || typeof message !== "object") {
@@ -71,6 +79,17 @@ export function isIdentityOnlyTuiSessionInvalidation(event: SessionChangedEvent)
   );
 }
 
+/** Provider-local imports require a complete source or persisted—not envelope—sequence. */
+export function isReplayableTuiSessionMessage(event: SessionMessageEvent): boolean {
+  const identity = readSessionMessageIdentity(event.message, event);
+  return Boolean(
+    identity &&
+    (!identity.isImported ||
+      identity.externalSource ||
+      readSessionMessageSequence(event.message) !== null),
+  );
+}
+
 /** Scope the shared transcript projection to the TUI's actual selected session. */
 export function readTuiSessionProjectionScope(
   state: Pick<TuiStateAccess, "currentSessionKey" | "currentAgentId" | "currentSessionId">,
@@ -82,75 +101,79 @@ export function readTuiSessionProjectionScope(
   };
 }
 
-/** Public Gateway stop metadata takes precedence over legacy nested message fields. */
-export function readResolvedTuiSessionStopReason(event: ChatEvent): string | undefined {
-  const eventStopReason = (event as ChatEvent & { stopReason?: unknown }).stopReason;
-  if (typeof eventStopReason === "string") {
-    return eventStopReason;
+/** Keep event handlers, history, and optimistic sends on one selected-session projection. */
+export function getTuiSessionProjection(state: TuiStateAccess): SessionProjectionState {
+  const scope = readTuiSessionProjectionScope(state);
+  const current = state.sessionProjection;
+  if (
+    current &&
+    agentSessionKeysMatchByRequestKey(current.scope.sessionKey, scope.sessionKey) &&
+    current.scope.agentId === scope.agentId &&
+    (current.scope.sessionId === scope.sessionId ||
+      (current.scope.sessionId === undefined && scope.sessionId !== undefined))
+  ) {
+    if (
+      current.scope.sessionKey === scope.sessionKey &&
+      current.scope.sessionId === scope.sessionId
+    ) {
+      return current;
+    }
+    // First history/live identity binds an already-selected epoch; it must not
+    // discard optimistic turns, peer messages, or active run projections.
+    const projection = { ...current, scope: { ...current.scope, ...scope } };
+    state.sessionProjection = projection;
+    return projection;
   }
-  const message = event.message;
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
-  }
-  const messageStopReason = (message as Record<string, unknown>).stopReason;
-  return typeof messageStopReason === "string" ? messageStopReason : undefined;
+  const projection = createSessionProjection(scope);
+  state.sessionProjection = projection;
+  return projection;
 }
 
-/** Map Gateway run events into the canonical browser-safe session reducer. */
-export function reduceTuiSessionRunProjection(
-  current: SessionProjectionState,
+/** Apply durable facts to the same TUI-owned reducer observed by every client path. */
+export function reduceTuiSessionProjection(
+  state: TuiStateAccess,
+  event: SessionProjectionEvent,
+): SessionProjectionState {
+  const projection = reduceSessionProjection(getTuiSessionProjection(state), event);
+  state.sessionProjection = projection;
+  return projection;
+}
+
+/** Retain the assistant reply actually rendered until authoritative history adopts it. */
+export function projectTuiSessionFinal(
+  state: TuiStateAccess,
   event: ChatEvent,
-  scope: SessionProjectionScope,
-): { projection: SessionProjectionState; previousRun: SessionProjectionRun | undefined } {
-  const projection =
-    current.scope.sessionKey === scope.sessionKey &&
-    current.scope.agentId === scope.agentId &&
-    current.scope.sessionId === scope.sessionId
-      ? current
-      : createSessionProjection(scope);
-  const previousRun = projection.runs[event.runId];
-  if (event.state === "delta") {
-    return {
-      projection: reduceSessionProjection(projection, {
-        type: "runDelta",
-        runId: event.runId,
-        ...(event.message === undefined ? {} : { message: event.message }),
-        scope,
-      }),
-      previousRun,
-    };
+  finalText: string,
+  hasStreamedText: boolean,
+): void {
+  if (
+    state.sessionProjection?.runs[event.runId]?.stopReason === "error" ||
+    (!hasStreamedText &&
+      !hasDisplayableTuiSessionFinal({ ...event, errorMessage: undefined }, state.showThinking))
+  ) {
+    return;
   }
-
-  const eventRecord = event as ChatEvent & {
-    errorKind?: unknown;
-    yielded?: unknown;
-  };
-  const stopReason = readResolvedTuiSessionStopReason(event);
-  const errorKind = typeof eventRecord.errorKind === "string" ? eventRecord.errorKind : undefined;
-  const terminalStatus =
-    event.state === "aborted"
-      ? "aborted"
-      : event.state === "error"
-        ? errorKind === "timeout"
-          ? "timeout"
-          : "error"
-        : eventRecord.yielded === true && stopReason === "end_turn"
-          ? "yielded"
-          : stopReason === "error"
-            ? "error"
-            : "completed";
-
-  return {
-    projection: reduceSessionProjection(projection, {
-      type: "runTerminal",
-      runId: event.runId,
-      status: terminalStatus,
-      ...(event.message === undefined ? {} : { message: event.message }),
-      ...(stopReason === undefined ? {} : { stopReason }),
-      ...(errorKind === undefined ? {} : { errorKind }),
-      ...(event.errorMessage === undefined ? {} : { errorMessage: event.errorMessage }),
-      scope,
-    }),
-    previousRun,
-  };
+  const source =
+    event.message && typeof event.message === "object" && !Array.isArray(event.message)
+      ? (event.message as Record<string, unknown>)
+      : {};
+  const attachments = Array.isArray(source.content)
+    ? source.content.filter((block) => {
+        if (!block || typeof block !== "object") {
+          return false;
+        }
+        const type = (block as { type?: unknown }).type;
+        return type !== "text" && type !== "thinking";
+      })
+    : [];
+  reduceTuiSessionProjection(state, {
+    type: "messagePersisted",
+    message: {
+      ...source,
+      role: "assistant",
+      content: attachments.length ? [{ type: "text", text: finalText }, ...attachments] : finalText,
+    },
+    envelope: { runId: event.runId },
+    scope: readTuiSessionProjectionScope(state),
+  });
 }

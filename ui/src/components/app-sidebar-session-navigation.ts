@@ -23,6 +23,7 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
+  resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { AppSidebarBase } from "./app-sidebar-base.ts";
@@ -68,7 +69,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     getConnected: () => this.connected,
     getRows: () => this.visibleSessionPullRequestRows(),
     getSelectedAgentId: () => this.selectedAgentIdForSessions(),
-    getSnapshot: () => this.context?.gateway.snapshot,
+    getGateway: () => this.context?.gateway,
   });
 
   protected readonly compareSidebarSessionRows = (
@@ -517,7 +518,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   /** Offline routes to Settings instead of a dead chat load. */
   private openAgentConversation(agentId: string) {
     if (!this.connected) {
-      this.onNavigate?.("config");
+      this.onNavigate?.("appearance");
       return;
     }
     this.selectSession(this.agentResumeKey(agentId));
@@ -671,7 +672,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       ...rows,
       ...Object.values(this.sessionData.childSessionRowsByParent).flat(),
     ].filter((row) => {
-      const parentKey = row.spawnedBy ?? row.parentSessionKey;
+      const parentKey = resolveUiSessionNavigationParentKey(row);
       return (
         parentKey != null &&
         mainSessionKeys.has(parentKey) &&
@@ -748,7 +749,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   /** Identity-card click: the agent's rolling main session, or Settings offline. */
   readonly openMainSession = (agentId: string) => {
     if (!this.connected) {
-      this.onNavigate?.("config");
+      this.onNavigate?.("appearance");
       return;
     }
     this.clearSessionSelection();

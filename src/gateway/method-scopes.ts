@@ -1,7 +1,10 @@
 // Gateway method authorization scope resolver.
 // Maps static and plugin-defined gateway methods to operator scopes.
 import { normalizeOptionalString as normalizeSessionActionParam } from "@openclaw/normalization-core/string-coerce";
-import { isAdminOnlyNodeInvokeCommand } from "../infra/node-commands.js";
+import {
+  isAdminOnlyNodeInvokeCommand,
+  isBrowserProxyNodeInvokeCommand,
+} from "../infra/node-commands.js";
 import {
   getActivePluginHttpRouteRegistry,
   getActivePluginSessionExtensionRegistry,
@@ -22,6 +25,7 @@ import {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
+  TALK_SCOPE,
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
   isOperatorScope,
@@ -34,6 +38,7 @@ export {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
+  TALK_SCOPE,
   WRITE_SCOPE,
   type OperatorScope,
 };
@@ -193,7 +198,10 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
     const command = record?.command;
     // Invalid persistent-profile mutations must reach the handler's precise fail-closed
     // rejection instead of being disguised as an admin-scope failure.
-    if (command === "browser.proxy" && isForbiddenBrowserProxyMutation(record?.params)) {
+    if (
+      isBrowserProxyNodeInvokeCommand(command) &&
+      isForbiddenBrowserProxyMutation(record?.params)
+    ) {
       return [WRITE_SCOPE];
     }
     return isAdminOnlyNodeInvokeCommand(command) ? [ADMIN_SCOPE] : [WRITE_SCOPE];
@@ -327,6 +335,12 @@ export function authorizeOperatorScopesForRequiredScope(
       return { allowed: true };
     }
     return { allowed: false, missingScope: READ_SCOPE };
+  }
+  if (requiredScope === TALK_SCOPE) {
+    if (scopes.includes(TALK_SCOPE) || scopes.includes(WRITE_SCOPE)) {
+      return { allowed: true };
+    }
+    return { allowed: false, missingScope: TALK_SCOPE };
   }
   if (scopes.includes(requiredScope)) {
     return { allowed: true };

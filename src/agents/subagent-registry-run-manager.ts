@@ -241,8 +241,8 @@ export type RegisterSubagentRunParams = {
 export function createSubagentRunManager(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
-  persist(): void;
-  persistOrThrow(): void;
+  persist(...runIds: string[]): void;
+  persistOrThrow(...runIds: string[]): void;
   callGateway: typeof callGateway;
   getRuntimeConfig: typeof getRuntimeConfig;
   ensureListener(): void;
@@ -384,7 +384,7 @@ export function createSubagentRunManager(params: {
             endedAt: wait.endedAt,
           })
         ) {
-          params.persist();
+          params.persist(entry.runId);
         }
         return;
       }
@@ -478,7 +478,7 @@ export function createSubagentRunManager(params: {
           if (typeof entry.sessionStartedAt !== "number") {
             entry.sessionStartedAt = observedStartedAt;
           }
-          params.persist();
+          params.persist(entry.runId);
         }
         scheduleWaitRetry(
           entry,
@@ -571,7 +571,7 @@ export function createSubagentRunManager(params: {
       return true;
     }
     entry.suppressAnnounceReason = "steer-restart";
-    params.persist();
+    params.persist(entry.runId);
     return true;
   };
 
@@ -622,7 +622,7 @@ export function createSubagentRunManager(params: {
       }
     }
     entry.suppressAnnounceReason = undefined;
-    params.persist();
+    params.persist(entry.runId);
     // If the interrupted run already finished while suppression was active, retry
     // cleanup now so completion output is not lost when restart dispatch fails.
     params.resumedRuns.delete(key);
@@ -744,9 +744,14 @@ export function createSubagentRunManager(params: {
       params.runs.delete(previousRunId);
     }
     params.runs.set(nextRunId, next);
-    markOlderKillReconciliationsSuperseded(next);
+    const killReconciliationSnapshots = markOlderKillReconciliationsSuperseded(next);
+    const changedRunIds = [
+      previousRunId,
+      nextRunId,
+      ...[...killReconciliationSnapshots.keys()].map((entry) => entry.runId),
+    ];
     try {
-      params.persistOrThrow();
+      params.persistOrThrow(...changedRunIds);
     } catch (error) {
       // The gateway has already started nextRunId. Keep its in-memory owner
       // authoritative and retry best-effort persistence; rolling back here
@@ -756,7 +761,7 @@ export function createSubagentRunManager(params: {
         previousRunId,
         nextRunId,
       });
-      params.persist();
+      params.persist(...changedRunIds);
     }
     if (previousRunId !== nextRunId) {
       params.clearPendingLifecycleError(previousRunId);
@@ -866,7 +871,10 @@ export function createSubagentRunManager(params: {
     params.runs.set(runId, entry);
     const killReconciliationSnapshots = markOlderKillReconciliationsSuperseded(entry);
     try {
-      params.persistOrThrow();
+      params.persistOrThrow(
+        runId,
+        ...[...killReconciliationSnapshots.keys()].map((candidate) => candidate.runId),
+      );
     } catch (error) {
       params.runs.delete(runId);
       restoreKillReconciliationSnapshots(killReconciliationSnapshots);
@@ -971,7 +979,7 @@ export function createSubagentRunManager(params: {
       entry.swarmLaunchPending = false;
       entry.queuedLaunch = undefined;
       try {
-        params.persistOrThrow();
+        params.persistOrThrow(previousRunId, nextRunId);
         return true;
       } catch (error) {
         if (previousRunId !== nextRunId) {
@@ -1010,7 +1018,7 @@ export function createSubagentRunManager(params: {
     entry.queuedLaunch = undefined;
     let persistedRunning = false;
     try {
-      params.persistOrThrow();
+      params.persistOrThrow(previousRunId, nextRunId);
       persistedRunning = true;
       startTaskRunByRunId({
         runId: entry.taskRunId ?? entry.runId,
@@ -1034,7 +1042,7 @@ export function createSubagentRunManager(params: {
       entry.swarmLaunchPending = previousSwarmLaunchPending;
       if (persistedRunning) {
         try {
-          params.persistOrThrow();
+          params.persistOrThrow(previousRunId, nextRunId);
         } catch (rollbackError) {
           // The failure callback terminalizes this in-memory queued row next.
           log.warn("failed to persist collector start rollback", {
@@ -1073,7 +1081,7 @@ export function createSubagentRunManager(params: {
     entry.completion = { required: false, resultText: error, capturedAt: endedAt };
     updateSwarmCollectorCompletion(entry, params.getRuntimeConfig());
     try {
-      params.persistOrThrow();
+      params.persistOrThrow(entry.runId);
     } catch (persistError) {
       const target = entry as unknown as Record<string, unknown>;
       for (const property of Object.keys(target)) {
@@ -1134,7 +1142,7 @@ export function createSubagentRunManager(params: {
     };
     updateSwarmCollectorCompletion(entry, params.getRuntimeConfig());
     try {
-      params.persistOrThrow();
+      params.persistOrThrow(entry.runId);
     } catch (persistError) {
       const target = entry as unknown as Record<string, unknown>;
       for (const property of Object.keys(target)) {
@@ -1162,7 +1170,7 @@ export function createSubagentRunManager(params: {
     }
     const didDelete = params.runs.delete(runId);
     if (didDelete) {
-      params.persist();
+      params.persist(runId);
     }
     if (params.runs.size === 0) {
       params.stopSweeper();
@@ -1302,7 +1310,7 @@ export function createSubagentRunManager(params: {
       try {
         // The registry tombstone is the recovery source for the provisional
         // task marker. It must commit first so the sweeper can always finish it.
-        params.persistOrThrow();
+        params.persistOrThrow(...[...entrySnapshots.keys()].map((entry) => entry.runId));
       } catch (error) {
         for (const [entry, snapshot] of entrySnapshots) {
           const target = entry as unknown as Record<string, unknown>;

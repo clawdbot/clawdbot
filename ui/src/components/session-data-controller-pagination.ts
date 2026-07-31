@@ -24,15 +24,27 @@ type SidebarSessionPaginationOwner = {
 export type SidebarSessionPaginationState = {
   listRequestToken: symbol | null;
   pageRequestToken: symbol | null;
+  loadedScope?: {
+    agentId: string;
+    archivedFilter: SidebarSessionStatusFilter;
+    generation: number;
+  };
 };
 
 function publishSidebarSessionResult(
   owner: SidebarSessionPaginationOwner,
   agentId: string,
   result: SessionsListResult | null,
+  archivedFilter: SidebarSessionStatusFilter,
+  generation: number,
 ) {
   owner.sessionsResult = result;
   owner.sessionsAgentId = agentId;
+  owner.sidebarSessionPaginationState.loadedScope = {
+    agentId: normalizeAgentId(agentId),
+    archivedFilter,
+    generation,
+  };
   if (result) {
     owner.sessionRowsByAgent[normalizeAgentId(agentId)] = result.sessions;
     for (const row of result.sessions) {
@@ -84,10 +96,19 @@ export async function refreshSidebarSessions(
   const state = owner.sidebarSessionPaginationState;
   state.pageRequestToken = null;
   const archivedFilter = statusFilter();
+  const loadedScope = state.loadedScope;
+  const preservesVisibleScope =
+    archivedFilter !== "active" &&
+    loadedScope?.generation === owner.sessionScopeGeneration &&
+    loadedScope.archivedFilter === archivedFilter &&
+    loadedScope.agentId === normalizeAgentId(agentId) &&
+    normalizeAgentId(owner.sessionsAgentId ?? "") === loadedScope.agentId;
   const options = {
     agentId,
     archivedFilter,
-    limit: SIDEBAR_AGENT_SESSION_LIST_LIMIT,
+    limit: preservesVisibleScope
+      ? Math.max(SIDEBAR_AGENT_SESSION_LIST_LIMIT, owner.sessionsResult?.sessions.length ?? 0)
+      : SIDEBAR_AGENT_SESSION_LIST_LIMIT,
     includeGlobal: true,
     includeUnknown: true,
     configuredAgentsOnly: true,
@@ -120,7 +141,7 @@ export async function refreshSidebarSessions(
   try {
     const result = await context.sessions.list(options);
     if (isCurrent()) {
-      publishSidebarSessionResult(owner, agentId, result);
+      publishSidebarSessionResult(owner, agentId, result, archivedFilter, generation);
     }
   } catch (error) {
     if (isCurrent()) {
@@ -204,7 +225,13 @@ export async function loadMoreSidebarSessions(
 
     const page = await context.sessions.list(options);
     if (page && isCurrent()) {
-      publishSidebarSessionResult(owner, agentId, appendSidebarSessionResults(previous, page));
+      publishSidebarSessionResult(
+        owner,
+        agentId,
+        appendSidebarSessionResults(previous, page),
+        archivedFilter,
+        generation,
+      );
     }
   } catch (error) {
     if (isCurrent()) {

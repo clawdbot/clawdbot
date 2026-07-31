@@ -5,6 +5,10 @@ import { createMeetingOutputLoopbackVerifier } from "./output-loopback-verifier.
 import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 
+const NODE_OUTPUT_GENERATION_CAPABILITY = Symbol.for(
+  "openclaw.internal.meeting-node-output-generation.v1",
+);
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -32,9 +36,23 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
   let lastInputError: string | undefined;
   let fatalSignaled = false;
   let fatalHandler: (() => void) | undefined;
+  let outputGeneration = 0;
+  let outputGenerationSupported = false;
+  let legacyOutputTail = Promise.resolve();
   const outputLoopbackVerifier = createMeetingOutputLoopbackVerifier({
     audioFormat: params.audioFormat ?? "pcm16-24khz",
   });
+  const runOutputCommand = <T>(task: () => Promise<T>): Promise<T> => {
+    if (outputGenerationSupported) {
+      return task();
+    }
+    const result = legacyOutputTail.then(task, task);
+    legacyOutputTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
   const signalFatal = () => {
     if (!fatalSignaled) {
       fatalSignaled = true;
@@ -124,25 +142,55 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
       }
     },
     writeOutput: async (audio) => {
+      if (stopped) {
+        return;
+      }
+      const generation = outputGeneration;
       outputLoopbackVerifier.recordOutput(audio);
-      await params.runtime.nodes.invoke({
-        nodeId: params.nodeId,
-        command: params.commandName,
-        params: {
-          action: "pushAudio",
-          bridgeId: params.bridgeId,
-          base64: audio.toString("base64"),
-        },
-        timeoutMs: 5_000,
-      });
+      try {
+        await runOutputCommand(async () => {
+          if (stopped) {
+            return;
+          }
+          await params.runtime.nodes.invoke({
+            nodeId: params.nodeId,
+            command: params.commandName,
+            params: {
+              action: "pushAudio",
+              bridgeId: params.bridgeId,
+              base64: audio.toString("base64"),
+              ...(outputGenerationSupported ? { outputGeneration: generation } : {}),
+            },
+            timeoutMs: 5_000,
+          });
+        });
+      } catch (error) {
+        if (!stopped && generation === outputGeneration) {
+          outputLoopbackVerifier.cancelOutput();
+        }
+        throw error;
+      }
     },
     clearOutput: async () => {
+      if (stopped) {
+        return;
+      }
+      outputGeneration += 1;
       outputLoopbackVerifier.cancelOutput();
-      await params.runtime.nodes.invoke({
-        nodeId: params.nodeId,
-        command: params.commandName,
-        params: { action: "clearAudio", bridgeId: params.bridgeId },
-        timeoutMs: 5_000,
+      await runOutputCommand(async () => {
+        if (stopped) {
+          return;
+        }
+        await params.runtime.nodes.invoke({
+          nodeId: params.nodeId,
+          command: params.commandName,
+          params: {
+            action: "clearAudio",
+            bridgeId: params.bridgeId,
+            ...(outputGenerationSupported ? { outputGeneration } : {}),
+          },
+          timeoutMs: 5_000,
+        });
       });
     },
     dispose: async () => {
@@ -154,6 +202,15 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
       ...outputLoopbackVerifier.getHealth(),
     }),
   };
+
+  Object.defineProperty(transport, NODE_OUTPUT_GENERATION_CAPABILITY, {
+    get() {
+      return outputGenerationSupported;
+    },
+    set(value) {
+      outputGenerationSupported = value === true;
+    },
+  });
 
   return transport;
 }

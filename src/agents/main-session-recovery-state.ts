@@ -102,18 +102,26 @@ function validateRecoveryAdmission(
   return hasCurrentForegroundClaim(state, command.lifecycleGeneration) ? "foreground_active" : null;
 }
 
-function recordLifecycleFence(entry: SessionEntry, run: RestartRecoveryRun): void {
-  // Lifecycle fences can overlap and are consumed independently by their matching events.
-  const runs = new Map<string, RestartRecoveryRun>();
-  for (const existing of entry.restartRecoveryRuns ?? []) {
-    runs.set(`${existing.runId}\u0000${existing.lifecycleGeneration}`, existing);
+/** Keeps distinct concurrent runs while transferring each run id to its newest lifecycle owner. */
+export function normalizeMainSessionRecoveryRunFences(
+  runs: Iterable<RestartRecoveryRun>,
+): RestartRecoveryRun[] {
+  const ownersByRunId = new Map<string, RestartRecoveryRun>();
+  for (const run of runs) {
+    ownersByRunId.set(run.runId, run);
   }
-  runs.set(`${run.runId}\u0000${run.lifecycleGeneration}`, run);
-  entry.restartRecoveryRuns = [...runs.values()].toSorted((a, b) =>
-    a.runId === b.runId
-      ? a.lifecycleGeneration.localeCompare(b.lifecycleGeneration)
-      : a.runId.localeCompare(b.runId),
+  return [...ownersByRunId.values()].toSorted((left, right) =>
+    left.runId.localeCompare(right.runId),
   );
+}
+
+function recordLifecycleFence(entry: SessionEntry, run: RestartRecoveryRun): void {
+  // A resumed run keeps its id across Gateway generations. Leaving its old fence
+  // behind makes terminal settlement preserve a dead owner and blocks every later turn.
+  entry.restartRecoveryRuns = normalizeMainSessionRecoveryRunFences([
+    ...(entry.restartRecoveryRuns ?? []),
+    run,
+  ]);
 }
 
 function hasLifecycleFence(entry: SessionEntry, run: RestartRecoveryRun): boolean {

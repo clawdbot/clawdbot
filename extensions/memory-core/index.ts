@@ -39,6 +39,7 @@ type MemoryToolOptions = {
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
+  activeProjectKeys?: readonly string[];
   acquireLocalService?: MemoryCoreAcquireLocalService;
   withLease?: PluginStateLeaseRunner;
 };
@@ -239,6 +240,7 @@ function resolveMemoryToolOptions(
     sandboxed: ctx.sandboxed,
     oneShotCliRun: ctx.oneShotCliRun,
     conversationRecall: ctx.conversationRecall,
+    activeProjectKeys: ctx.activeProjectKeys,
     ...(host.acquireLocalService ? { acquireLocalService: host.acquireLocalService } : {}),
     ...(host.withLease ? { withLease: host.withLease } : {}),
   };
@@ -309,7 +311,7 @@ function registerMemoryManagerWarmup(
 
 export default definePluginEntry({
   id: "memory-core",
-  name: "Memory (Core)",
+  name: "OpenClaw Memory",
   description: "File-backed memory search tools and CLI",
   kind: "memory",
   register(api) {
@@ -384,26 +386,30 @@ export default definePluginEntry({
       }
     });
 
-    api.on("before_agent_reply", async (_event, ctx) => {
-      if (ctx.trigger !== "heartbeat" && ctx.trigger !== "cron") {
+    api.on(
+      "before_agent_reply",
+      async (_event, ctx) => {
+        if (ctx.trigger !== "heartbeat" && ctx.trigger !== "cron") {
+          return undefined;
+        }
+        try {
+          const module = await loadStandingIntentsModule();
+          const config = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
+          const { sessionAgentId: agentId } = resolveSessionAgentIds({
+            sessionKey: ctx.sessionKey,
+            config,
+            agentId: ctx.agentId,
+          });
+          module.sweepStandingIntents({ agentId });
+        } catch (error) {
+          api.logger.warn?.(
+            `memory-core: standing intent maintenance failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
         return undefined;
-      }
-      try {
-        const module = await loadStandingIntentsModule();
-        const config = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
-        const { sessionAgentId: agentId } = resolveSessionAgentIds({
-          sessionKey: ctx.sessionKey,
-          config,
-          agentId: ctx.agentId,
-        });
-        module.sweepStandingIntents({ agentId });
-      } catch (error) {
-        api.logger.warn?.(
-          `memory-core: standing intent maintenance failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-      return undefined;
-    });
+      },
+      { eligibleTriggers: ["heartbeat", "cron"] },
+    );
 
     api.registerCommand({
       name: "dreaming",

@@ -550,7 +550,7 @@ describe("SessionManager.open", () => {
     });
   });
 
-  it("persists a deduped runtime user entry before its SQLite descendants", async () => {
+  it("reuses a pre-persisted user as the canonical SQLite parent", async () => {
     const dir = await makeTempDir();
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-runtime-user-parent";
@@ -589,12 +589,18 @@ describe("SessionManager.open", () => {
     if (resumed.kind !== "page") {
       throw new Error(`expected append page, got ${resumed.kind}`);
     }
-    expect(resumed.events.map((row) => (row.event as { id?: string }).id)).toEqual([
-      runtimeUserId,
-      assistantId,
-    ]);
-    const assistantEvent = resumed.events.at(1)?.event as { parentId?: string } | undefined;
-    expect(assistantEvent?.parentId).toBe(runtimeUserId);
+    expect(runtimeUserId).toBe("pre-persisted-user");
+    expect(resumed.events.map((row) => (row.event as { id?: string }).id)).toEqual([assistantId]);
+    expect(resumed.events[0]?.event).toMatchObject({ parentId: "pre-persisted-user" });
+    expect(
+      (await loadTranscriptEvents(scope)).filter(
+        (event) =>
+          (event as { message?: { role?: string; idempotencyKey?: string } }).message?.role ===
+            "user" &&
+          (event as { message?: { idempotencyKey?: string } }).message?.idempotencyKey ===
+            userMessage.idempotencyKey,
+      ),
+    ).toHaveLength(1);
   });
 
   it("preserves root-to-leaf ordering across session branches", () => {

@@ -1,5 +1,6 @@
 // Line plugin module implements auto reply delivery behavior.
 import { HTTPFetchError, type messagingApi } from "@line/bot-sdk";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
@@ -93,6 +94,9 @@ export async function deliverLineAutoReply(params: {
       visibleReplySent = true;
       return result;
     } catch (error) {
+      if (isChannelPartialDeliveryError(error)) {
+        visibleReplySent = true;
+      }
       if (visibleReplySent) {
         throw markLineVisibleDeliveryError(error);
       }
@@ -127,7 +131,7 @@ export async function deliverLineAutoReply(params: {
           }),
         );
       } catch (error) {
-        if (typeof error === "object" && error !== null) {
+        if (!isChannelPartialDeliveryError(error) && typeof error === "object" && error !== null) {
           failedPushSegments.set(error, {
             allowFailedBatchTextRecovery,
             failedBatch: batch,
@@ -157,6 +161,10 @@ export async function deliverLineAutoReply(params: {
         });
       } catch (err) {
         deps.onReplyError?.(err);
+        // The reply is already provider-visible; replaying its batch as a push duplicates it.
+        if (isChannelPartialDeliveryError(err)) {
+          throw err;
+        }
         // A transport-failed reply may have landed; only a definitive LINE 400
         // makes text recovery after a rejected push fallback safe.
         await pushLineMessages(

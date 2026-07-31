@@ -1669,6 +1669,7 @@ describe("runMessageAction plugin dispatch", () => {
       const deliveredPayload = { ok: true, messageId: "gw-send-1" };
       mocks.callGatewayLeastPrivilege.mockResolvedValue(deliveredPayload);
       const resolveAgentRuntimeIdentityToken = vi.fn(async () => undefined);
+      const policySessionKey = "agent:main:gatewaychat:policy:user-123";
 
       await runMessageAction({
         cfg: {
@@ -1694,7 +1695,8 @@ describe("runMessageAction plugin dispatch", () => {
         sourceReplyDeliveryMode: "message_tool_only",
         sourceReplyFinal: true,
         sourceReplyToolCallId: "message-call-1",
-        sessionKey: receipt.sessionKey,
+        sessionKey: policySessionKey,
+        sourceReplySessionKey: receipt.sessionKey,
         sessionId: receipt.sessionId,
         agentId: "main",
         gateway: {

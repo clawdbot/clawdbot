@@ -90,55 +90,6 @@ describe("ChatLog run state", () => {
     );
   });
 
-  it("restores adopted historical users in their subsequent live-event order", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addUser("Historical first prompt.", {
-      messageId: "historical-first",
-      messageSeq: 1,
-    });
-    chatLog.addUser("Historical second prompt.", {
-      messageId: "historical-second",
-      messageSeq: 2,
-    });
-    chatLog.addLiveUser("Second prompt updated first.", {
-      messageId: "historical-second",
-      messageSeq: 3,
-    });
-    chatLog.addLiveUser("First prompt updated second.", {
-      messageId: "historical-first",
-      messageSeq: 4,
-    });
-
-    chatLog.clearAll({ preserveLiveUsers: true });
-    chatLog.restoreLiveUsers();
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(chatLog.children).toHaveLength(2);
-    expect(rendered.indexOf("Second prompt updated first.")).toBeLessThan(
-      rendered.indexOf("First prompt updated second."),
-    );
-  });
-
-  it("keeps the latest known live sequence when history adopts a prompt without one", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addLiveUser("Original live prompt.", {
-      messageId: "shared-user",
-      messageSeq: 3,
-    });
-    chatLog.addUser("Persisted shared prompt.", { messageId: "shared-user" });
-    chatLog.addLiveUser("Updated shared prompt.", { messageId: "shared-user" });
-
-    chatLog.clearAll({ preserveLiveUsers: true });
-    chatLog.restoreLiveUsers(3);
-    expect(chatLog.children).toHaveLength(0);
-
-    chatLog.restoreLiveUsers(4);
-    expect(chatLog.children).toHaveLength(1);
-    expect(normalizeTestText(chatLog.render(120).join("\n"))).toContain("Updated shared prompt.");
-  });
-
   it("deduplicates authoritative user events and adopts the matching pending prompt", () => {
     const chatLog = new ChatLog(40);
     chatLog.addPendingUser("shared-run", "Persisted prompt.");
@@ -203,72 +154,5 @@ describe("ChatLog run state", () => {
     // The row is now addressable by the gateway-assigned runId.
     expect(chatLog.dropPendingUser("r-accepted")).toBe(true);
     expect(chatLog.countPendingUsers()).toBe(0);
-  });
-
-  it("reconciles pending users against their persisted canonical run identity", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addPendingUser("run-1", "queued hello");
-
-    expect(
-      chatLog.reconcilePendingUsers([
-        { text: "queued hello", runId: "run-1" },
-        { text: "older", runId: "another-run" },
-      ]),
-    ).toEqual(["run-1"]);
-    expect(chatLog.countPendingUsers()).toBe(0);
-  });
-
-  it("does not consume a pending prompt when another client persists identical text", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addPendingUser("run-1", "queued hello");
-
-    expect(
-      chatLog.reconcilePendingUsers([{ text: "queued hello", runId: "another-client-run" }]),
-    ).toEqual([]);
-    expect(chatLog.countPendingUsers()).toBe(1);
-  });
-
-  it("does not adopt a same-text history row without persisted run ownership", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addPendingUser("run-1", "queued hello");
-
-    expect(chatLog.reconcilePendingUsers([{ text: "queued hello" }])).toEqual([]);
-    expect(chatLog.countPendingUsers()).toBe(1);
-  });
-
-  it("adopts the canonical run even when persisted formatting changes the prompt text", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addPendingUser("run-1", "  queued hello  ");
-
-    expect(chatLog.reconcilePendingUsers([{ text: "queued hello", runId: "run-1" }])).toEqual([
-      "run-1",
-    ]);
-    expect(chatLog.countPendingUsers()).toBe(0);
-  });
-
-  it("adopts only each independently persisted pending run", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addPendingUser("run-1", "continue");
-    chatLog.addPendingUser("run-2", "continue");
-
-    expect(chatLog.reconcilePendingUsers([{ text: "continue", runId: "run-2" }])).toEqual([
-      "run-2",
-    ]);
-    expect(chatLog.countPendingUsers()).toBe(1);
-    expect(chatLog.dropPendingUser("run-1")).toBe(true);
-  });
-
-  it("does not hide a new repeated prompt when historical ownership is missing", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.addPendingUser("run-1", "continue");
-
-    expect(chatLog.reconcilePendingUsers([{ text: "continue" }])).toStrictEqual([]);
-    expect(chatLog.countPendingUsers()).toBe(1);
   });
 });

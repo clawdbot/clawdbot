@@ -116,9 +116,11 @@ tools or Active Memory escalation, but are never injected automatically.
 
 **FTS-only mode.** Set `provider: "none"` to intentionally disable embeddings
 and search with keywords only. Leaving `provider` unset or set to `"auto"`
-also falls back to keyword-only ranking if no embedding auth is configured,
-without erroring, and so does `provider: "local"` (the GGUF/llama.cpp
-provider) when it fails.
+falls back to keyword-only ranking when embedding setup or a request fails, as
+does `provider: "local"` (the GGUF/llama.cpp provider). Creation-time fallback
+still indexes text for keyword search, and `memory_search` includes the
+redacted embedding-bootstrap reason in `debug.embeddingBootstrap` even when
+there are no matches.
 
 **Explicit provider unavailable.** If you name any other provider explicitly
 (for example `openai`, `ollama`, `gemini`) and it becomes unavailable at

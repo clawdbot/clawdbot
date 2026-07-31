@@ -52,6 +52,7 @@ export type PluginToolMcpMeta = {
   safeServerName: string;
   toolName: string;
   operation: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
+  deniedBySession?: true;
   node?: {
     id: string;
     displayName?: string;
@@ -957,7 +958,14 @@ function resolveCachedPluginTools(params: {
     const pluginTools: AnyAgentTool[] = [];
     let hasNameConflict = false;
     const localNormalizedNames = new Set<string>();
+    const availableNormalizedToolNames = new Set(availableToolNames.map(normalizeToolName));
     for (const cachedDescriptor of cached) {
+      const normalizedDescriptorName = normalizeToolName(cachedDescriptor.descriptor.name);
+      // Live auth is intentionally absent from the descriptor cache key, so re-project
+      // every cached name through current manifest availability before optional grants.
+      if (!availableNormalizedToolNames.has(normalizedDescriptorName)) {
+        continue;
+      }
       if (!hasRequiredClientCaps(cachedDescriptor.requiredClientCaps, params.clientCaps)) {
         continue;
       }
@@ -972,14 +980,6 @@ function resolveCachedPluginTools(params: {
         continue;
       }
       if (
-        !cachedDescriptor.optional &&
-        !availableToolNames.some(
-          (name) => normalizeToolName(name) === normalizeToolName(cachedDescriptor.descriptor.name),
-        )
-      ) {
-        continue;
-      }
-      if (
         cachedDescriptor.optional &&
         !isOptionalToolAllowed({
           toolName: cachedDescriptor.descriptor.name,
@@ -989,7 +989,6 @@ function resolveCachedPluginTools(params: {
       ) {
         continue;
       }
-      const normalizedDescriptorName = normalizeToolName(cachedDescriptor.descriptor.name);
       if (
         denylistBlocksPluginTool({
           pluginId: plugin.id,

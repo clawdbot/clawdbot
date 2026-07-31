@@ -449,6 +449,10 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/normalization-core/json-schema",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "json-schema.ts"),
+      },
+      {
         find: "@openclaw/normalization-core/number-coercion",
         replacement: path.join(
           repoRoot,
@@ -481,6 +485,16 @@ export const sharedVitestConfig = {
       {
         find: "@openclaw/normalization-core/result",
         replacement: path.join(repoRoot, "packages", "normalization-core", "src", "result.ts"),
+      },
+      {
+        find: "@openclaw/normalization-core/stable-node-path",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "stable-node-path.ts",
+        ),
       },
       {
         find: "@openclaw/normalization-core/string-coerce",

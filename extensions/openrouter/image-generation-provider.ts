@@ -44,50 +44,43 @@ const SUPPORTED_ASPECT_RATIOS = [
 ] as const;
 const OPENROUTER_IMAGE_MALFORMED_RESPONSE = "OpenRouter image generation response malformed";
 
-function throwMalformedOpenRouterImageResponse(message: string | undefined): never | undefined {
-  if (message) {
-    throw new Error(message);
-  }
-  return undefined;
+function throwMalformedOpenRouterImageResponse(): never {
+  throw new Error(OPENROUTER_IMAGE_MALFORMED_RESPONSE);
 }
 
-function pushDataUrlImage(
-  images: GeneratedImageAsset[],
-  dataUrl: string,
-  malformedResponseError?: string,
-): void {
+function requireOpenRouterImageRecord(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throwMalformedOpenRouterImageResponse();
+  }
+  return value;
+}
+
+function requireOpenRouterImageUrl(value: unknown): string {
+  const url = normalizeOptionalString(requireOpenRouterImageRecord(value).url);
+  if (!url) {
+    throwMalformedOpenRouterImageResponse();
+  }
+  return url;
+}
+
+function pushDataUrlImage(images: GeneratedImageAsset[], dataUrl: string, strict = true): void {
   const image = generatedImageAssetFromDataUrl({ dataUrl, index: images.length });
   if (!image) {
-    throwMalformedOpenRouterImageResponse(malformedResponseError);
+    if (strict) {
+      throwMalformedOpenRouterImageResponse();
+    }
     return;
   }
   images.push(image);
 }
 
-function extractImagesFromPart(
-  images: GeneratedImageAsset[],
-  part: unknown,
-  malformedResponseError?: string,
-): void {
-  if (!isRecord(part)) {
-    throwMalformedOpenRouterImageResponse(malformedResponseError);
-    return;
-  }
+function extractImagesFromPart(images: GeneratedImageAsset[], value: unknown): void {
+  const part = requireOpenRouterImageRecord(value);
   if (part.type === "text") {
     return;
   }
   if (part.type === "image_url") {
-    const imageUrl = part.image_url ?? part.imageUrl;
-    if (!isRecord(imageUrl)) {
-      throwMalformedOpenRouterImageResponse(malformedResponseError);
-      return;
-    }
-    const url = normalizeOptionalString(imageUrl.url);
-    if (url) {
-      pushDataUrlImage(images, url, malformedResponseError);
-      return;
-    }
-    throwMalformedOpenRouterImageResponse(malformedResponseError);
+    pushDataUrlImage(images, requireOpenRouterImageUrl(part.image_url ?? part.imageUrl));
     return;
   }
 
@@ -98,30 +91,24 @@ function extractImagesFromPart(
       images.push(image);
       return;
     }
-    throwMalformedOpenRouterImageResponse(malformedResponseError);
-    return;
+    throwMalformedOpenRouterImageResponse();
   }
   if ("b64_json" in part) {
-    throwMalformedOpenRouterImageResponse(malformedResponseError);
-    return;
+    throwMalformedOpenRouterImageResponse();
   }
 
   const inlineData = part.inlineData ?? part.inline_data;
   if (inlineData === undefined || inlineData === null) {
     return;
   }
-  if (!isRecord(inlineData)) {
-    throwMalformedOpenRouterImageResponse(malformedResponseError);
-    return;
-  }
-  const data = normalizeOptionalString(inlineData.data);
+  const inline = requireOpenRouterImageRecord(inlineData);
+  const data = normalizeOptionalString(inline.data);
   if (!data) {
-    throwMalformedOpenRouterImageResponse(malformedResponseError);
-    return;
+    throwMalformedOpenRouterImageResponse();
   }
   const mimeType =
-    normalizeOptionalString(inlineData.mimeType) ??
-    normalizeOptionalString(inlineData.mime_type) ??
+    normalizeOptionalString(inline.mimeType) ??
+    normalizeOptionalString(inline.mime_type) ??
     "image/png";
   const image = generatedImageAssetFromBase64({
     base64: data,
@@ -132,63 +119,36 @@ function extractImagesFromPart(
     images.push(image);
     return;
   }
-  throwMalformedOpenRouterImageResponse(malformedResponseError);
+  throwMalformedOpenRouterImageResponse();
 }
 
-function extractOpenRouterImagesFromResponse(
-  body: unknown,
-  options: { malformedResponseError?: string } = {},
-): GeneratedImageAsset[] {
-  if (!isRecord(body)) {
-    throwMalformedOpenRouterImageResponse(options.malformedResponseError);
-    return [];
-  }
-  const choices = body.choices;
+function extractOpenRouterImagesFromResponse(body: unknown): GeneratedImageAsset[] {
+  const payload = requireOpenRouterImageRecord(body);
+  const choices = payload.choices;
   if (choices === undefined || choices === null) {
     return [];
   }
   if (!Array.isArray(choices)) {
-    throwMalformedOpenRouterImageResponse(options.malformedResponseError);
-    return [];
+    throwMalformedOpenRouterImageResponse();
   }
 
   const images: GeneratedImageAsset[] = [];
-  for (const choice of choices) {
-    if (!isRecord(choice)) {
-      throwMalformedOpenRouterImageResponse(options.malformedResponseError);
+  for (const choiceValue of choices) {
+    const choice = requireOpenRouterImageRecord(choiceValue);
+    const messageValue = choice.message;
+    if (messageValue === undefined || messageValue === null) {
       continue;
     }
-    const message = choice.message;
-    if (message === undefined || message === null) {
-      continue;
-    }
-    if (!isRecord(message)) {
-      throwMalformedOpenRouterImageResponse(options.malformedResponseError);
-      continue;
-    }
+    const message = requireOpenRouterImageRecord(messageValue);
 
     const messageImages = message.images;
     if (messageImages !== undefined && messageImages !== null) {
       if (!Array.isArray(messageImages)) {
-        throwMalformedOpenRouterImageResponse(options.malformedResponseError);
-        continue;
+        throwMalformedOpenRouterImageResponse();
       }
-      for (const entry of messageImages) {
-        if (!isRecord(entry)) {
-          throwMalformedOpenRouterImageResponse(options.malformedResponseError);
-          continue;
-        }
-        const imageUrl = entry.image_url ?? entry.imageUrl;
-        if (!isRecord(imageUrl)) {
-          throwMalformedOpenRouterImageResponse(options.malformedResponseError);
-          continue;
-        }
-        const url = normalizeOptionalString(imageUrl.url);
-        if (!url) {
-          throwMalformedOpenRouterImageResponse(options.malformedResponseError);
-          continue;
-        }
-        pushDataUrlImage(images, url, options.malformedResponseError);
+      for (const entryValue of messageImages) {
+        const entry = requireOpenRouterImageRecord(entryValue);
+        pushDataUrlImage(images, requireOpenRouterImageUrl(entry.image_url ?? entry.imageUrl));
       }
     }
 
@@ -196,14 +156,14 @@ function extractOpenRouterImagesFromResponse(
     if (typeof content === "string" && content.length > 0) {
       const dataUrlPattern = /data:image\/[^;]+;base64,[A-Za-z0-9+/=]+/g;
       for (const match of content.matchAll(dataUrlPattern)) {
-        pushDataUrlImage(images, match[0]);
+        pushDataUrlImage(images, match[0], false);
       }
     } else if (Array.isArray(content)) {
       for (const part of content) {
-        extractImagesFromPart(images, part, options.malformedResponseError);
+        extractImagesFromPart(images, part);
       }
     } else if (content !== undefined && content !== null) {
-      throwMalformedOpenRouterImageResponse(options.malformedResponseError);
+      throwMalformedOpenRouterImageResponse();
     }
   }
   return images;
@@ -336,9 +296,7 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
             resolveGeneratedMediaMaxBytes(req.cfg, "image"),
           ),
         });
-        const images = extractOpenRouterImagesFromResponse(payload, {
-          malformedResponseError: OPENROUTER_IMAGE_MALFORMED_RESPONSE,
-        });
+        const images = extractOpenRouterImagesFromResponse(payload);
         if (images.length === 0) {
           throw new Error("OpenRouter image generation response missing image data");
         }

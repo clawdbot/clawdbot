@@ -520,6 +520,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               }
             },
             delivery: {
+              observeMessageSent: true,
               deliver: deliverReply,
               onError: (err, info) => onReplyError(err, info as Parameters<typeof onReplyError>[1]),
             },

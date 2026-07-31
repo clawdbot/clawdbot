@@ -175,7 +175,18 @@ enum ExecApprovalsMutationError: Error, Equatable, Sendable {
 }
 
 enum ExecApprovalsReadError: Error, Equatable, Sendable {
+    case migrationRequired(ExecApprovalsLegacyMigrationRequiredError)
     case unavailable
+
+    var message: String {
+        switch self {
+        case let .migrationRequired(error):
+            "Exec approvals need migration — run openclaw doctor --fix with " +
+                "OPENCLAW_STATE_DIR set to \(error.stateDirectoryURL.path)."
+        case .unavailable:
+            "Exec approvals unavailable. Retry to refresh."
+        }
+    }
 }
 
 struct ExecApprovalsResolved: Sendable {

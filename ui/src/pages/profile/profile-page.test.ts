@@ -180,6 +180,9 @@ it("renders identity before a Usage statistics link without requesting usage dat
   await waitForFast(() => expect(page.querySelector("#settings-profile-identity")).not.toBeNull());
 
   expect(request.mock.calls.map(([method]) => method)).toEqual(["users.self"]);
+  const docsLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
+  expect(docsLink?.textContent?.trim()).toBe("Learn more");
+  expect(docsLink?.href).toBe("https://docs.openclaw.ai/concepts/user-model");
   expect(page.querySelector(".profile-stats")).toBeNull();
   expect(page.querySelector(".profile-heatmap")).toBeNull();
   const usageRow = page.querySelector<HTMLButtonElement>(".settings-row--nav");
@@ -230,6 +233,44 @@ it("rerenders on connection transitions for unidentified connections", async () 
   expect(page.querySelector(".profile-hero")).not.toBeNull();
 });
 
+it("falls back to the text avatar when the hero image fails to load", async () => {
+  const request = vi.fn();
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
+  const agentsState = harness.context.agents.state as unknown as {
+    agentsList: {
+      defaultId: string;
+      agents: Array<{
+        id: string;
+        identity: { name: string; emoji: string; avatarUrl: string };
+      }>;
+    };
+  };
+  agentsState.agentsList = {
+    defaultId: "main",
+    agents: [
+      {
+        id: "main",
+        identity: { name: "Molty", emoji: "🦞", avatarUrl: "/unloadable-avatar.png" },
+      },
+    ],
+  };
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await page.updateComplete;
+  const image = page.querySelector<HTMLImageElement>(".profile-hero__avatar-image");
+  expect(image?.getAttribute("src")).toBe("/unloadable-avatar.png");
+  expect(page.querySelector(".profile-hero__avatar-text")).toBeNull();
+
+  image?.dispatchEvent(new Event("error"));
+  await page.updateComplete;
+
+  expect(page.querySelector(".profile-hero__avatar-image")).toBeNull();
+  expect(page.querySelector(".profile-hero__avatar-text")?.textContent).toBe("🦞");
+});
+
 it("retries the identity bootstrap when users.self returns no profile", async () => {
   const profile: UserProfile = {
     id: "profile-1",
@@ -274,6 +315,125 @@ it("retries the identity bootstrap when users.self returns no profile", async ()
   await waitForFast(() =>
     expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe("Ada"),
   );
+});
+
+it("keeps identity refresh single-flight and allows retry after settlement", async () => {
+  const profile: UserProfile = {
+    id: "profile-1",
+    displayName: "Ada",
+    avatarMime: null,
+    mergedInto: null,
+    createdAt: 1,
+    updatedAt: 2,
+    emails: ["ada@example.test"],
+    hasAvatar: false,
+  };
+  let rejectIdentity: ((reason: Error) => void) | undefined;
+  const firstIdentity = new Promise<never>((_resolve, reject) => {
+    rejectIdentity = reject;
+  });
+  const request = vi.fn(async (method: string) => {
+    if (method !== "users.self") {
+      throw new Error(`unexpected method: ${method}`);
+    }
+    if (request.mock.calls.length === 1) {
+      return await firstIdentity;
+    }
+    return { profile };
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: profile.id,
+    email: profile.emails[0],
+    name: profile.displayName ?? undefined,
+  });
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await waitForFast(() =>
+    expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(1),
+  );
+  await page.updateComplete;
+  const refresh = page.querySelector<HTMLButtonElement>(".profile-refresh")!;
+  expect(refresh.disabled).toBe(true);
+  expect(refresh.textContent?.trim()).toBe(t("common.refreshing"));
+
+  const pageWithIdentity = page as unknown as { loadIdentity: () => Promise<void> };
+  await Promise.all([pageWithIdentity.loadIdentity(), pageWithIdentity.loadIdentity()]);
+  expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(1);
+
+  rejectIdentity?.(new Error("identity unavailable"));
+  await waitForFast(() => expect(refresh.disabled).toBe(false));
+  expect(refresh.textContent?.trim()).toBe(t("common.refresh"));
+  expect(page.textContent).toContain("identity unavailable");
+
+  refresh.click();
+  await waitForFast(() =>
+    expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(2),
+  );
+  await waitForFast(() =>
+    expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe("Ada"),
+  );
+});
+
+it("replaces an in-flight identity request after a same-client reconnect", async () => {
+  const staleProfile: UserProfile = {
+    id: "profile-1",
+    displayName: "Stale identity",
+    avatarMime: null,
+    mergedInto: null,
+    createdAt: 1,
+    updatedAt: 2,
+    emails: ["ada@example.test"],
+    hasAvatar: false,
+  };
+  const freshProfile = { ...staleProfile, displayName: "Fresh identity", updatedAt: 3 };
+  let resolveStale: ((value: { profile: UserProfile }) => void) | undefined;
+  let resolveFresh: ((value: { profile: UserProfile }) => void) | undefined;
+  const staleRequest = new Promise<{ profile: UserProfile }>((resolve) => {
+    resolveStale = resolve;
+  });
+  const freshRequest = new Promise<{ profile: UserProfile }>((resolve) => {
+    resolveFresh = resolve;
+  });
+  const request = vi.fn(async (method: string) => {
+    if (method !== "users.self") {
+      throw new Error(`unexpected method: ${method}`);
+    }
+    return await (request.mock.calls.length === 1 ? staleRequest : freshRequest);
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: staleProfile.id,
+    email: staleProfile.emails[0],
+    name: staleProfile.displayName ?? undefined,
+  });
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await waitForFast(() => expect(request).toHaveBeenCalledTimes(1));
+  harness.emitConnected(false);
+  await page.updateComplete;
+  harness.emitConnected(true);
+  await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+
+  resolveFresh?.({ profile: freshProfile });
+  await waitForFast(() =>
+    expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
+      "Fresh identity",
+    ),
+  );
+  resolveStale?.({ profile: staleProfile });
+  await staleRequest;
+  await Promise.resolve();
+  await page.updateComplete;
+
+  expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
+    "Fresh identity",
+  );
+  expect(request).toHaveBeenCalledTimes(2);
 });
 
 it("bootstraps and refreshes the connected user's profile through users.self", async () => {

@@ -190,6 +190,14 @@ export class SessionCatalogLiveState {
     this.progressive = true;
   }
 
+  retireConnection(reset = false): void {
+    if (reset) {
+      this.resetConnection();
+      return;
+    }
+    this.clear();
+  }
+
   async requestList(
     client: GatewayBrowserClient,
     agentId: string,

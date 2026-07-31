@@ -1,3 +1,4 @@
+import { resolveCacheRetention } from "../providers/cache-retention.js";
 import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
@@ -55,6 +56,8 @@ function isLongTtlEligibleEndpoint(baseUrl: string | undefined): boolean {
   return (
     hostname === "api.anthropic.com" ||
     hostname === "aiplatform.googleapis.com" ||
+    hostname === "aiplatform.us.rep.googleapis.com" ||
+    hostname === "aiplatform.eu.rep.googleapis.com" ||
     hostname.endsWith("-aiplatform.googleapis.com")
   );
 }
@@ -64,8 +67,7 @@ export function resolveAnthropicEphemeralCacheControl(
   baseUrl: string | undefined,
   cacheRetention: AnthropicPayloadPolicyInput["cacheRetention"],
 ): AnthropicEphemeralCacheControl | undefined {
-  const retention =
-    cacheRetention ?? (process.env.OPENCLAW_CACHE_RETENTION === "long" ? "long" : "short");
+  const retention = resolveCacheRetention(cacheRetention);
   if (retention === "none") {
     return undefined;
   }

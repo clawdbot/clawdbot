@@ -127,6 +127,25 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
   });
 
+  it("canonicalizes an explicit main alias for the selected agent", () => {
+    setupMainAndMybotStorePaths();
+    mockStoresByPath({
+      [MAIN_STORE_PATH]: {},
+      [MYBOT_STORE_PATH]: {},
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: {
+        agents: { list: [{ id: "mybot", default: true }] },
+        session: { mainKey: "work" },
+      } satisfies OpenClawConfig,
+      sessionKey: "main",
+    });
+
+    expect(result.sessionKey).toBe("agent:mybot:work");
+    expect(result.storePath).toBe(MYBOT_STORE_PATH);
+  });
+
   it("does not adopt another agent's main session for a default-agent request", () => {
     setupMainAndMybotStorePaths();
     const mainStore = {

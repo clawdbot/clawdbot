@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   buildBootstrapContextForFiles,
+  buildWatchedSessionsHarnessContext,
   embeddedAgentLog,
   resolveBootstrapFilesForRun,
   type AgentMessage,
@@ -503,6 +504,7 @@ function readNonEmptyString(value: unknown): string | undefined {
 export function buildCodexOpenClawPromptContext(params: {
   params: EmbeddedRunAttemptParams;
   workspacePromptContext?: string;
+  watchedSessionsContext?: string;
 }): string | undefined {
   if (!shouldInjectCodexOpenClawPromptContext(params.params)) {
     return undefined;
@@ -511,6 +513,7 @@ export function buildCodexOpenClawPromptContext(params: {
     params.workspacePromptContext?.trim()
       ? ["## OpenClaw Workspace Context", "", params.workspacePromptContext.trim()].join("\n")
       : undefined,
+    params.watchedSessionsContext?.trim() || undefined,
   ].filter(isNonEmptyString);
   if (sections.length === 0) {
     return undefined;
@@ -521,6 +524,31 @@ export function buildCodexOpenClawPromptContext(params: {
     "",
     ...sections,
   ].join("\n");
+}
+
+/**
+ * Renders the watched-sessions block for the Codex per-turn runtime context.
+ * Codex builds its own instruction layers, so the embedded prompt's Watched
+ * Sessions section must be re-surfaced here or Codex-backed main sessions
+ * keep refusing cross-session questions (openclaw#114797).
+ */
+export function buildCodexWatchedSessionsContext(params: {
+  attempt: EmbeddedRunAttemptParams;
+  dynamicTools: readonly CodexDynamicToolSpec[];
+  sessionKey?: string;
+  sandboxed?: boolean;
+}): string | undefined {
+  if (!shouldInjectCodexOpenClawPromptContext(params.attempt)) {
+    return undefined;
+  }
+  return buildWatchedSessionsHarnessContext({
+    config: params.attempt.config,
+    sessionKey: params.sessionKey,
+    sandboxed: params.sandboxed,
+    toolNames: flattenCodexDynamicToolFunctions(params.dynamicTools).map((tool) =>
+      normalizeCodexDynamicToolName(tool.name),
+    ),
+  });
 }
 
 function shouldInjectCodexOpenClawPromptContext(params: EmbeddedRunAttemptParams): boolean {

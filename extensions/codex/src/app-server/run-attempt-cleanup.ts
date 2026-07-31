@@ -127,10 +127,14 @@ export async function cleanupCodexAttempt(
   if (!state.timedOut && !retainLiveThread) {
     // Clear first: if a newer owner won the binding, its live subscription must remain intact.
     if (bindingReleased) {
-      await unsubscribeCodexThreadBestEffort(resourceState.client, {
+      const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
         threadId: resourceState.thread.threadId,
         timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
       });
+      if (!released) {
+        // Never reuse a client whose previous thread may still publish notifications.
+        await closeCodexStartupClientBestEffort(resourceState.client);
+      }
     }
   }
   userInputBridgeRef.current?.cancelPending();

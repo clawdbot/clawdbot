@@ -10,8 +10,10 @@ import {
   classifyTransientNetworkErrorCode,
   createChannelApiRetryRunner,
   resolveRetryConfig,
+  retryAsync,
   type RetryConfig,
 } from "openclaw/plugin-sdk/retry-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { RateLimitError } from "./internal/discord.js";
 
 const DISCORD_RETRY_DEFAULTS = {
@@ -111,6 +113,7 @@ export function createDiscordRetryRunner(params: {
   retry?: RetryConfig;
   verbose?: boolean;
   isGatewayDisconnected?: () => boolean;
+  signal?: AbortSignal;
 }): DiscordRetryRunner {
   const retryConfig = resolveRetryConfig(DISCORD_RETRY_DEFAULTS, params.retry);
   // Extend only the per-request runner. A delivery may contain several REST
@@ -124,6 +127,11 @@ export function createDiscordRetryRunner(params: {
     const isRetryable = resolveDiscordRetryPredicate(options?.safety ?? "idempotent");
     let observedGatewayDisconnect = false;
     const runRequest = async () => {
+      if (params.signal?.aborted) {
+        throw params.signal.reason instanceof Error
+          ? params.signal.reason
+          : new Error("Discord request aborted");
+      }
       observedGatewayDisconnect ||= params.isGatewayDisconnected?.() === true;
       try {
         return await fn();
@@ -132,14 +140,36 @@ export function createDiscordRetryRunner(params: {
         throw err;
       }
     };
+    const shouldRetry = (err: unknown, attempt: number) =>
+      isRetryable(err) &&
+      (attempt < retryConfig.attempts ||
+        (observedGatewayDisconnect && isRetryableDiscordGatewayTransportError(err)));
+    const retryAfterMs = (err: unknown) =>
+      err instanceof RateLimitError ? err.retryAfter * 1000 : undefined;
+    const signal = params.signal;
+    if (signal) {
+      return retryAsync(runRequest, {
+        ...retryConfig,
+        attempts,
+        label,
+        shouldRetry,
+        retryAfterMs,
+        sleep: async (delayMs) => {
+          try {
+            await sleepWithAbort(delayMs, signal);
+          } catch (error) {
+            // Preserve the owner's timeout error and clear the pending retry timer
+            // when a webhook deadline expires in the middle of Discord backoff.
+            throw signal.aborted && signal.reason instanceof Error ? signal.reason : error;
+          }
+        },
+      });
+    }
     const runWithRetry = createChannelApiRetryRunner({
       retry: { ...retryConfig, attempts },
-      shouldRetry: (err, attempt) =>
-        isRetryable(err) &&
-        (attempt < retryConfig.attempts ||
-          (observedGatewayDisconnect && isRetryableDiscordGatewayTransportError(err))),
+      shouldRetry,
       strictShouldRetry: true,
-      retryAfterMs: (err) => (err instanceof RateLimitError ? err.retryAfter * 1000 : undefined),
+      retryAfterMs,
       verbose: params.verbose,
     });
     return runWithRetry(runRequest, label);

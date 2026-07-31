@@ -275,18 +275,37 @@ export function fingerprintResolvedAuthProfileCredential(params: {
   if (params.resolvedAuth && params.resolvedAuth.profileId !== params.profileId) {
     return undefined;
   }
-  const inlineValue = credential.type === "api_key" ? credential.key : credential.token;
-  const resolvedValue = params.resolvedAuth?.apiKey ?? inlineValue;
-  if (!resolvedValue) {
+  if (credential.type === "api_key") {
+    if (!credential.keyRef && !credential.key) {
+      return undefined;
+    }
+    return hashAuthBinding([
+      "resolved-profile-v2",
+      params.profileId,
+      credential.type,
+      credential.provider,
+      credential.keyRef ?? null,
+      normalizeIdentity(credential.email, true) ?? null,
+      normalizeIdentity(credential.displayName) ?? null,
+      credential.metadata ?? null,
+      params.resolvedAuth?.source ?? null,
+      params.resolvedAuth?.mode ?? null,
+    ]);
+  }
+  if (!credential.tokenRef && !credential.token) {
     return undefined;
   }
-  return fingerprintAuthProfileCredential({
-    profileId: params.profileId,
-    credential:
-      credential.type === "api_key"
-        ? { ...credential, key: resolvedValue }
-        : { ...credential, token: resolvedValue },
-  });
+  return hashAuthBinding([
+    "resolved-profile-v2",
+    params.profileId,
+    credential.type,
+    credential.provider,
+    credential.tokenRef ?? null,
+    normalizeIdentity(credential.email, true) ?? null,
+    normalizeIdentity(credential.displayName) ?? null,
+    params.resolvedAuth?.source ?? null,
+    params.resolvedAuth?.mode ?? null,
+  ]);
 }
 
 /** Fingerprint an ambient/config/env credential that was actually selected. */
@@ -296,5 +315,5 @@ export function fingerprintResolvedProviderAuth(
   if (!auth?.apiKey) {
     return undefined;
   }
-  return hashAuthBinding(["resolved", auth.profileId ?? null, auth.source, auth.mode, auth.apiKey]);
+  return hashAuthBinding(["resolved-v2", auth.profileId ?? null, auth.source, auth.mode]);
 }

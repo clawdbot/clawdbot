@@ -139,6 +139,47 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
     await server?.close();
   });
 
+  it("suggests browser-supported timezones without restricting free-form input", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "cron.list": cronListResponse([]),
+        "cron.runs": cronRunsResponse([]),
+        "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}cron`);
+      expect(response?.status()).toBe(200);
+      await page.locator('[data-test-id="cron-new-task"]').click();
+      await page.locator('[data-test-id="cron-schedule-kind-cron"]').click();
+
+      const timezone = page.locator("#cron-cron-tz");
+      await timezone.waitFor({ state: "visible" });
+      expect(await timezone.getAttribute("list")).toBe("cron-tz-suggestions");
+      const browserTimezone = await page.evaluate(
+        () => Intl.DateTimeFormat().resolvedOptions().timeZone,
+      );
+      const timezoneOptions = await page
+        .locator("#cron-tz-suggestions option")
+        .evaluateAll((options) => options.map((option) => option.getAttribute("value")));
+      expect(timezoneOptions).toContain(browserTimezone);
+      expect(timezoneOptions).toContain("UTC");
+      expect(timezoneOptions.length).toBeGreaterThan(100);
+
+      await timezone.fill("Etc/GMT+3");
+      expect(await timezone.inputValue()).toBe("Etc/GMT+3");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("sends cron job table filters through the Gateway and renders the filtered page", async () => {
     const everyOk = cronJob(
       "digest-every-ok",

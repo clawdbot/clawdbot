@@ -396,7 +396,7 @@ export async function admitChatSend(params: {
       key: `chat:${clientRunId}`,
       entry: { ts: endedAt, ok: true, payload },
     });
-    cleanupAdmittedRun({ force: true });
+    cleanupAdmittedRun();
     clearAgentRunContext(clientRunId, lifecycleGeneration);
     respond(true, payload, undefined, { runId: clientRunId });
   };

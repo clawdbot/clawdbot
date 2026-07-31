@@ -1,9 +1,28 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
+
+// The hero derives its lobster from lobsterPetSeed, which mixes in a random
+// per-load salt, so the palette (and with it sprite geometry like the sleeping
+// eye peek) varies per test process. Pin a canonical look so pose assertions
+// stay deterministic.
+vi.mock("../../components/lobster-pet.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../components/lobster-pet.ts")>();
+  return {
+    ...actual,
+    createLobsterPetLook: () =>
+      actual.canonicalLobsterLook(
+        expectDefined(actual.LOBSTER_PET_PALETTES[0], "canonical lobster palette"),
+      ),
+  };
+});
+
 import { renderMemoryOverview, type MemoryOverviewStatus } from "./memory-overview.ts";
+
+type MemoryOverviewProps = Parameters<typeof renderMemoryOverview>[0];
 
 function fixturePayload(): DoctorMemoryStatusPayload {
   const phaseBase = {
@@ -63,18 +82,20 @@ function renderOverview(
     kind: "auto",
     engineId: "memory-core",
   },
+  overrides: Partial<MemoryOverviewProps> = {},
 ) {
   const container = document.createElement("div");
   render(
     renderMemoryOverview({
       agentId: "main",
-      agents: [],
       engineSelection,
       engineDisabled: false,
       status,
-      onAgentChange: vi.fn(),
+      probingEmbeddings: false,
       onRefresh: vi.fn(),
+      onProbeEmbeddings: vi.fn(),
       onNavigate: vi.fn(),
+      ...overrides,
     }),
     container,
   );
@@ -110,7 +131,7 @@ describe("renderMemoryOverview", () => {
     expect(container.textContent).toContain("Memory is hibernating");
     expect(container.textContent).toContain("Open Settings");
     expect(container.querySelector(".memory-overview__hero--sleeping")).not.toBeNull();
-    expect(container.querySelector(".lob-eye-peek")).not.toBeNull();
+    expect(container.querySelector(".lobster-pet__svg")).not.toBeNull();
     expect(container.querySelector(".lob-reading-book")).toBeNull();
   });
 
@@ -119,12 +140,12 @@ describe("renderMemoryOverview", () => {
     render(
       renderMemoryOverview({
         agentId: "main",
-        agents: [],
         engineSelection: { kind: "pinned", engineId: "memory-core" },
         engineDisabled: true,
         status: { kind: "ready", payload: fixturePayload() },
-        onAgentChange: vi.fn(),
+        probingEmbeddings: false,
         onRefresh: vi.fn(),
+        onProbeEmbeddings: vi.fn(),
         onNavigate: vi.fn(),
       }),
       container,
@@ -153,6 +174,34 @@ describe("renderMemoryOverview", () => {
     expect(phaseRows.every((row) => !row.textContent?.includes("next "))).toBe(true);
   });
 
+  it("explains the phases in sweep order and links to the dreaming guide", () => {
+    const container = renderOverview({ kind: "ready", payload: fixturePayload() });
+    const phaseRows = [...container.querySelectorAll(".settings-row")].filter((row) =>
+      /Light phase|REM phase|Deep phase/.test(row.textContent ?? ""),
+    );
+
+    expect(
+      phaseRows.map((row) => row.querySelector(".settings-row__title")?.textContent?.trim()),
+    ).toEqual(["Light phase", "REM phase", "Deep phase"]);
+    expect(phaseRows[0]?.textContent).toContain(
+      "Sorts fresh short-term notes and stages promising candidates",
+    );
+    expect(phaseRows[1]?.textContent).toContain(
+      "Reflects on themes and recurring ideas across recent activity",
+    );
+    expect(phaseRows[2]?.textContent).toContain(
+      "promotes the keepers into long-term memory (MEMORY.md), and writes the dream diary",
+    );
+    expect(phaseRows.every((row) => row.textContent?.includes("0 3 * * *"))).toBe(true);
+
+    const docs = container.querySelector<HTMLAnchorElement>(
+      'a[href="https://docs.openclaw.ai/concepts/dreaming"]',
+    );
+    expect(docs?.textContent).toContain("Open dreaming guide");
+    expect(docs?.target).toBe("_blank");
+    expect(docs?.rel).toBe("noreferrer noopener");
+  });
+
   it("reports an enabled phase without its managed cron as not scheduled", () => {
     const payload = fixturePayload();
     if (payload.dreaming) {
@@ -166,5 +215,86 @@ describe("renderMemoryOverview", () => {
     expect(lightRow?.textContent).toContain("Not scheduled");
     expect(lightRow?.textContent).not.toContain("Enabled");
     expect(lightRow?.textContent).not.toContain("next ");
+  });
+
+  it("offers an inline embedding test before readiness has been checked", () => {
+    const payload = fixturePayload();
+    payload.embedding = {
+      ok: false,
+      checked: false,
+      error: "run `openclaw memory status --deep` to probe",
+    };
+    const onProbeEmbeddings = vi.fn();
+    const container = renderOverview({ kind: "ready", payload }, undefined, { onProbeEmbeddings });
+
+    expect(container.textContent).toContain("Embedding readiness has not been checked yet.");
+    expect(container.textContent).not.toContain("openclaw memory status --deep");
+    const testButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Test",
+    );
+    expect(testButton?.disabled).toBe(false);
+    testButton?.click();
+    expect(onProbeEmbeddings).toHaveBeenCalledOnce();
+  });
+
+  it("disables the embedding test while probing and shows the checking state", () => {
+    const payload = fixturePayload();
+    payload.embedding = { ok: false, checked: false };
+    const container = renderOverview({ kind: "ready", payload }, undefined, {
+      probingEmbeddings: true,
+    });
+    const testButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Testing…",
+    );
+
+    expect(testButton?.disabled).toBe(true);
+    expect(container.textContent).toContain("Checking…");
+  });
+
+  it("shows a checked embedding error and hides the test button", () => {
+    const payload = fixturePayload();
+    payload.embedding = { ok: false, checked: true, error: "embedding model unavailable" };
+    const container = renderOverview({ kind: "ready", payload });
+
+    expect(container.textContent).toContain("embedding model unavailable");
+    expect(
+      [...container.querySelectorAll<HTMLButtonElement>("button")].some(
+        (button) => button.textContent?.trim() === "Test",
+      ),
+    ).toBe(false);
+  });
+
+  it("hides the embedding test once readiness is healthy", () => {
+    const container = renderOverview({ kind: "ready", payload: fixturePayload() });
+
+    expect(
+      [...container.querySelectorAll<HTMLButtonElement>("button")].some(
+        (button) => button.textContent?.trim() === "Test",
+      ),
+    ).toBe(false);
+  });
+
+  it("opens the Memories tab from the overview shortcut", () => {
+    const onNavigate = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderMemoryOverview({
+        agentId: "main",
+        engineSelection: { kind: "auto", engineId: "memory-core" },
+        engineDisabled: false,
+        status: { kind: "ready", payload: fixturePayload() },
+        probingEmbeddings: false,
+        onRefresh: vi.fn(),
+        onProbeEmbeddings: vi.fn(),
+        onNavigate,
+      }),
+      container,
+    );
+
+    const shortcut = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      button.textContent?.includes("Search memories"),
+    );
+    shortcut?.click();
+    expect(onNavigate).toHaveBeenCalledWith("memories");
   });
 });

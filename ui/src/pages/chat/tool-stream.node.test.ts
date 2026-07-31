@@ -325,6 +325,101 @@ describe("app-tool-stream result blocks", () => {
     expect(content.some((block) => block.type === "toolresult" && block.text === "")).toBe(true);
   });
 
+  it.each([
+    ["omitted name", undefined],
+    ["empty name", ""],
+    ["blank name", "   "],
+    ["generic placeholder", "tool"],
+    ["conflicting name", "write"],
+  ])("preserves an established tool identity when the result has an %s", (_label, name) => {
+    const host = createHost();
+    const toolCallId = "call-preserve-name";
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        name: "read",
+        toolCallId,
+        args: { path: "/workspace/report.txt" },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "tool", {
+        phase: "result",
+        ...(name === undefined ? {} : { name }),
+        toolCallId,
+        result: "file contents",
+      }),
+    );
+
+    const entry = host.toolStreamById.get(buildToolStreamIdentity("run-1", toolCallId));
+    expect(entry?.name).toBe("read");
+    expect(entry?.message.content).toEqual([
+      { type: "toolcall", name: "read", arguments: { path: "/workspace/report.txt" } },
+      { type: "toolresult", name: "read", text: "file contents" },
+    ]);
+  });
+
+  it.each([undefined, "tool"])(
+    "applies session-status result effects when its known tool name is reported as %j",
+    (name) => {
+      const host = createHost();
+      const toolCallId = "status-preserve-name";
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 1, "tool", {
+          phase: "start",
+          name: "session_status",
+          toolCallId,
+        }),
+      );
+      handleAgentEvent(
+        host,
+        agentEvent("run-1", 2, "tool", {
+          phase: "result",
+          ...(name === undefined ? {} : { name }),
+          toolCallId,
+          result: {
+            details: {
+              changedModel: true,
+              sessionKey: "main",
+              modelOverride: "openai/gpt-5.6-luna",
+            },
+          },
+        }),
+      );
+
+      expect(host.sessions.state.modelOverrides.main).toBe("openai/gpt-5.6-luna");
+    },
+  );
+
+  it("upgrades a placeholder start name when a later event supplies the concrete name", () => {
+    const host = createHost();
+    const toolCallId = "call-upgrade-name";
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        toolCallId,
+        args: { path: "/workspace/report.txt" },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "tool", {
+        phase: "result",
+        name: "read",
+        toolCallId,
+        result: "file contents",
+      }),
+    );
+
+    expect(host.toolStreamById.get(buildToolStreamIdentity("run-1", toolCallId))?.name).toBe(
+      "read",
+    );
+  });
+
   it("keeps interleaved sibling-run calls and results under independent identities", () => {
     const host = createHost({ chatRunId: "run-foreground" });
     const toolCallId = "call-shared";

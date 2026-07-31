@@ -9,9 +9,9 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   applyAccountNameToChannelSection,
-  migrateBaseNameToDefaultAccount,
   moveSingleAccountChannelSectionToDefaultAccount,
   patchScopedAccountConfig,
+  prepareScopedSetupConfig,
 } from "openclaw/plugin-sdk/setup";
 import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup-runtime";
 import { resolveClickClackAccountConfig } from "./accounts.js";
@@ -171,21 +171,14 @@ export function applyClickClackSetupConfigPatch(params: {
           channelKey: channel,
           setupSurface: clickClackSetupAdapter,
         });
-  const namedConfig = applyAccountNameToChannelSection({
-    cfg: scopedConfig,
-    channelKey: channel,
-    accountId,
-    name: params.name,
-  });
-  const next =
-    accountId !== DEFAULT_ACCOUNT_ID
-      ? migrateBaseNameToDefaultAccount({
-          cfg: namedConfig,
-          channelKey: channel,
-        })
-      : namedConfig;
   return patchScopedAccountConfig({
-    cfg: next,
+    cfg: prepareScopedSetupConfig({
+      cfg: scopedConfig,
+      channelKey: channel,
+      accountId,
+      name: params.name,
+      migrateBaseName: accountId !== DEFAULT_ACCOUNT_ID,
+    }),
     channelKey: channel,
     accountId,
     patch: params.patch,

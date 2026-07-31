@@ -135,18 +135,10 @@ function createSlackTokenCredential(params: {
     allowEnv: ({ accountId }: { accountId: string }) =>
       Boolean(params.preferredEnvVar) && accountId === DEFAULT_ACCOUNT_ID,
     resolveAccount: ({ cfg, accountId }) => inspectSlackAccount({ cfg, accountId }),
-    resolvedValue: (account) => {
-      if (params.inputKey === "botToken") {
-        return normalizeOptionalString(account.botToken);
-      }
-      if (params.inputKey === "appToken") {
-        return normalizeOptionalString(account.appToken);
-      }
-      if (params.inputKey === "userToken") {
-        return normalizeOptionalString(account.userToken);
-      }
-      return normalizeSecretInputString(account.config.signingSecret);
-    },
+    resolvedValue: (account) =>
+      params.inputKey === "signingSecret"
+        ? normalizeSecretInputString(account.config.signingSecret)
+        : normalizeOptionalString(account[params.inputKey]),
     envValue: ({ accountId }) =>
       params.preferredEnvVar && accountId === DEFAULT_ACCOUNT_ID
         ? normalizeOptionalString(process.env[params.preferredEnvVar])

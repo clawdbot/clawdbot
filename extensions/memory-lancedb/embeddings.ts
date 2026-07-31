@@ -387,6 +387,33 @@ export function formatMemoryRecallError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export function isMemoryRecallTimeoutError(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 3 && current !== undefined; depth += 1) {
+    const record = asRecord(current);
+    const name =
+      current instanceof Error ? current.name : typeof record?.name === "string" ? record.name : "";
+    const message =
+      current instanceof Error
+        ? current.message
+        : typeof record?.message === "string"
+          ? record.message
+          : "";
+    const code = typeof record?.code === "string" ? record.code : "";
+    if (
+      name === "APIConnectionTimeoutError" ||
+      name === "TimeoutError" ||
+      code === "ETIMEDOUT" ||
+      /^UND_ERR_.*_TIMEOUT$/.test(code) ||
+      /\btimed out\b/i.test(message)
+    ) {
+      return true;
+    }
+    current = record?.cause;
+  }
+  return false;
+}
+
 export function buildMemoryRecallUnavailableResult(error: string): AgentToolResult<{
   count: number;
   disabled: true;
@@ -413,6 +440,7 @@ export class MemoryRecallEmbeddingError extends Error {
 
 export const testing = {
   isEmbeddingDimensionsRejectedError,
+  isMemoryRecallTimeoutError,
   runWithTimeout,
   truncateEmbeddingVector,
 } as const;

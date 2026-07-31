@@ -176,7 +176,7 @@ async function captureExpectedRuntimeArtifact(
     before,
     startOptions: appServer.start,
     spawnIdentity,
-    runtimeIdentity: { serverVersion: "0.143.0", userAgent: "openclaw/0.143.0 (macOS; test)" },
+    runtimeIdentity: { serverVersion: "0.146.0", userAgent: "openclaw/0.146.0 (macOS; test)" },
   });
 }
 
@@ -186,7 +186,7 @@ async function answerInitialize(harness: ClientHarness): Promise<void> {
     timeout: HARNESS_REQUEST_TIMEOUT_MS,
   });
   const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
-  harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.143.0 (macOS; test)" } });
+  harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.146.0 (macOS; test)" } });
 }
 
 async function waitForRequest(
@@ -225,7 +225,7 @@ function threadStartResult(threadId = "thread-1") {
       status: { type: "idle" },
       path: null,
       cwd: "/repo",
-      cliVersion: "0.143.0",
+      cliVersion: "0.146.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -766,6 +766,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("continues with a deny-all apps patch when plugin discovery exceeds its shared deadline", async () => {
+    vi.useFakeTimers();
     const deadlinePluginConfig = {
       appServer: { command: "codex", requestTimeoutMs: 400 },
       codexPlugins: {
@@ -782,10 +783,8 @@ describe("startCodexAttemptThread", () => {
       pluginConfig: deadlinePluginConfig,
     });
     await answerInitialize(harness);
-    const pluginList = await waitForRequest(harness, "plugin/list");
-    expect(
-      readHarnessMessages(harness.writes).find((message) => message.id === pluginList.id),
-    ).toMatchObject({ method: "plugin/list", params: {} });
+    await waitForRequest(harness, "plugin/installed");
+    await vi.advanceTimersByTimeAsync(100);
 
     const threadStart = await waitForThreadStart(harness);
     const startMessage = readHarnessMessages(harness.writes).find(

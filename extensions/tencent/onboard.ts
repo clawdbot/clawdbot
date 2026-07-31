@@ -1,8 +1,5 @@
 import { readManifestProviderDefaultModelRef } from "openclaw/plugin-sdk/provider-catalog-shared";
-import {
-  createModelCatalogPresetAppliers,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/provider-onboard";
+import { createModelCatalogPresetAppliers } from "openclaw/plugin-sdk/provider-onboard";
 import {
   TOKENHUB_BASE_URL,
   TOKENHUB_MODEL_CATALOG,
@@ -19,9 +16,9 @@ export const TOKENHUB_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(
   TOKENHUB_PROVIDER_ID,
 )!;
 
-const tokenHubPresetAppliers = createModelCatalogPresetAppliers({
+export const { applyConfig: applyTokenHubConfig } = createModelCatalogPresetAppliers<[]>({
   primaryModelRef: TOKENHUB_DEFAULT_MODEL_REF,
-  resolveParams: (_cfg: OpenClawConfig) => ({
+  resolveParams: () => ({
     providerId: TOKENHUB_PROVIDER_ID,
     api: "openai-completions",
     baseUrl: TOKENHUB_BASE_URL,
@@ -33,18 +30,14 @@ const tokenHubPresetAppliers = createModelCatalogPresetAppliers({
   }),
 });
 
-export function applyTokenHubConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return tokenHubPresetAppliers.applyConfig(cfg);
-}
-
 export const TOKENPLAN_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(
   manifest,
   TOKENPLAN_PROVIDER_ID,
 )!;
 
-const tokenPlanPresetAppliers = createModelCatalogPresetAppliers({
+export const { applyConfig: applyTokenPlanConfig } = createModelCatalogPresetAppliers<[]>({
   primaryModelRef: TOKENPLAN_DEFAULT_MODEL_REF,
-  resolveParams: (_cfg: OpenClawConfig) => ({
+  resolveParams: () => ({
     providerId: TOKENPLAN_PROVIDER_ID,
     api: "openai-completions",
     baseUrl: TOKENPLAN_BASE_URL,
@@ -52,7 +45,3 @@ const tokenPlanPresetAppliers = createModelCatalogPresetAppliers({
     aliases: [{ modelRef: TOKENPLAN_DEFAULT_MODEL_REF, alias: "Hy3 (TokenPlan)" }],
   }),
 });
-
-export function applyTokenPlanConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return tokenPlanPresetAppliers.applyConfig(cfg);
-}

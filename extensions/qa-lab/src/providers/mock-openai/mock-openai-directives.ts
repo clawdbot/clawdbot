@@ -23,16 +23,6 @@ function extractCaptures(text: string, pattern: RegExp) {
   return Array.from(text.matchAll(globalPattern), (match) => match[1]?.trim()).filter(Boolean);
 }
 
-export function extractLastMatchingUserText(texts: string[], pattern: RegExp) {
-  for (let index = texts.length - 1; index >= 0; index -= 1) {
-    const text = texts[index] ?? "";
-    if (pattern.test(text)) {
-      return text;
-    }
-  }
-  return "";
-}
-
 export function extractExactReplyDirective(text: string) {
   const backtickedMatch = extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i);
   if (backtickedMatch) {

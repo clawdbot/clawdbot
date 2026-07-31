@@ -146,6 +146,29 @@ function cancelTrackedResponse(init?: ResponseInit): {
   };
 }
 
+async function discoverSingleCatalogModel(
+  row: Record<string, unknown>,
+  options?: { contextWindow?: number },
+) {
+  const release = vi.fn(async () => undefined);
+  fetchWithSsrFGuardMock.mockResolvedValueOnce({
+    response: new Response(JSON.stringify({ data: [row] }), { status: 200 }),
+    finalUrl: "https://provider.example/v1/models",
+    release,
+  });
+
+  const models = await discoverOpenAICompatibleLocalModels({
+    baseUrl: "https://provider.example/v1",
+    label: "custom provider",
+    contextWindow: options?.contextWindow,
+    discoverRuntimeContext: false,
+    env: {},
+  });
+
+  expect(release).toHaveBeenCalledOnce();
+  return models[0];
+}
+
 describe("discoverOpenAICompatibleLocalModels", () => {
   it("retains valid models when a provider catalog contains malformed entries", async () => {
     const release = vi.fn(async () => undefined);
@@ -379,6 +402,57 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     expect(propsRelease).toHaveBeenCalledOnce();
     expect(propsResponse.wasCanceled()).toBe(true);
   });
+
+  it.each([
+    ["context_length", 200_000],
+    ["context_window", 400_000],
+    ["context_size", 1_048_576],
+  ] as const)("reads provider-advertised %s", async (field, contextWindow) => {
+    const model = await discoverSingleCatalogModel({ id: "custom-model", [field]: contextWindow });
+
+    expect(model).toMatchObject({ id: "custom-model", contextWindow });
+  });
+
+  it("keeps explicit and llama.cpp metadata ahead of top-level catalog fields", async () => {
+    const row = {
+      id: "custom-model",
+      meta: { n_ctx_train: 262_144 },
+      context_length: 200_000,
+      context_window: 100_000,
+      context_size: 50_000,
+    };
+
+    await expect(discoverSingleCatalogModel(row)).resolves.toMatchObject({
+      contextWindow: 262_144,
+    });
+
+    await expect(
+      discoverSingleCatalogModel(row, { contextWindow: 524_288 }),
+    ).resolves.toMatchObject({ contextWindow: 524_288 });
+  });
+
+  it("uses a deterministic top-level field priority", async () => {
+    const model = await discoverSingleCatalogModel({
+      id: "custom-model",
+      context_length: 300_000,
+      context_window: 200_000,
+      context_size: 100_000,
+    });
+
+    expect(model).toMatchObject({ contextWindow: 300_000 });
+  });
+
+  it.each([0, -1, "1048576", null])(
+    "ignores malformed top-level context metadata: %j",
+    async (contextSize) => {
+      const model = await discoverSingleCatalogModel({
+        id: "custom-model",
+        context_size: contextSize,
+      });
+
+      expect(model).toMatchObject({ contextWindow: 128_000 });
+    },
+  );
 
   it("cancels model discovery error bodies before falling back", async () => {
     const release = vi.fn(async () => undefined);

@@ -4,20 +4,16 @@ import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { parseOptionalDelimitedEntries } from "openclaw/plugin-sdk/channel-core";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 
 type CredentialUnavailableDiagnostic = Extract<
   ReturnType<typeof tryReadSecretFileSync>,
   { status: "configured_unavailable" }
 >["diagnostic"];
-
-const TRUTHY_ENV = new Set(["true", "1", "yes", "on"]);
 
 export type ResolvedIrcAccount = {
   accountId: string;
@@ -36,13 +32,6 @@ export type ResolvedIrcAccount = {
   credentialDiagnostics?: CredentialUnavailableDiagnostic[];
   config: IrcAccountConfig;
 };
-
-function parseTruthy(value?: string): boolean {
-  if (!value) {
-    return false;
-  }
-  return TRUTHY_ENV.has(normalizeLowercaseStringOrEmpty(value));
-}
 
 function parseIntEnv(value?: string): number | undefined {
   if (!value?.trim()) {
@@ -167,7 +156,7 @@ export function resolveIrcAccount(params: {
       typeof merged.tls === "boolean"
         ? merged.tls
         : accountId === DEFAULT_ACCOUNT_ID && process.env.IRC_TLS
-          ? parseTruthy(process.env.IRC_TLS)
+          ? isTruthyEnvValue(process.env.IRC_TLS)
           : true;
 
     const envPort =

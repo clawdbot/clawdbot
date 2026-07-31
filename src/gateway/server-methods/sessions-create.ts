@@ -12,15 +12,18 @@ import {
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { slugifyWorktreeTitle } from "../../agents/worktrees/name.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { resolveUserPath } from "../../utils.js";
 import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 import { generateDashboardSessionTitle } from "../dashboard-session-title.js";
@@ -45,6 +48,31 @@ import { resolveOperatorSessionCreation } from "./session-creation-provenance.js
 import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+async function prepareOperatorSessionDiffBaseline(params: {
+  agentId: string;
+  cfg: OpenClawConfig;
+  entry: SessionEntry;
+  sessionKey: string;
+  storePath: string;
+}): Promise<SessionEntry> {
+  const workspace = await ensureAgentWorkspace({
+    dir: resolveAgentWorkspaceDir(params.cfg, params.agentId),
+    ensureBootstrapFiles: !params.cfg.agents?.defaults?.skipBootstrap,
+    skipOptionalBootstrapFiles: params.cfg.agents?.defaults?.skipOptionalBootstrapFiles,
+  });
+  return await ensureSessionDiffBaseline({
+    cwd:
+      normalizeOptionalString(params.entry.spawnedCwd) ??
+      normalizeOptionalString(params.entry.spawnedWorkspaceDir) ??
+      workspace.dir,
+    entry: params.entry,
+    force: true,
+    isNewSession: true,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
+}
 
 export const sessionCreateHandlers: GatewayRequestHandlers = {
   "sessions.create": async ({ req, params, respond, context, client, isWebchatConnect }) => {
@@ -381,6 +409,29 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         parseAgentSessionKey(sessionKey ?? "")?.agentId ??
         resolveDefaultAgentId(cfg),
     );
+    const captureCreatedSessionBaseline = async (created: {
+      agentId: string;
+      entry: SessionEntry;
+      key: string;
+      storePath: string;
+    }) => {
+      try {
+        Object.assign(
+          created.entry,
+          await prepareOperatorSessionDiffBaseline({
+            agentId: created.agentId,
+            cfg,
+            entry: created.entry,
+            sessionKey: created.key,
+            storePath: created.storePath,
+          }),
+        );
+      } catch (error) {
+        sessionLog.warn(
+          `session diff baseline capture failed for ${created.key}: ${formatErrorMessage(error)}`,
+        );
+      }
+    };
     const created = await createGatewaySession({
       cfg,
       key: sessionKey,
@@ -417,42 +468,43 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       loadGatewayModelCatalog: () =>
         context.loadGatewayModelCatalog({ agentId: modelCatalogAgentId }),
-      afterCreate: hasInitialTurn
-        ? async ({ key, agentId, entry, storePath }) => {
-            messageSeq =
-              (await readSessionMessageCountAsync({
-                agentId,
-                sessionEntry: entry,
-                sessionId: entry.sessionId,
-                sessionKey: key,
-                storePath,
-              })) + 1;
-            await expectDefined(
-              chatHandlers["chat.send"],
-              "chat.send handler",
-            )({
-              req,
-              params: {
-                sessionKey: key,
-                ...(key === "global" ? { agentId } : {}),
-                message: initialMessage ?? "",
-                idempotencyKey: randomUUID(),
-                ...(initialAttachments ? { attachments: initialAttachments } : {}),
-              },
-              respond: (ok, payload, error, meta) => {
-                if (ok && payload && typeof payload === "object") {
-                  runPayload = payload as Record<string, unknown>;
-                } else {
-                  runError = error;
-                }
-                runMeta = meta;
-              },
-              context,
-              client,
-              isWebchatConnect,
-            });
-          }
-        : undefined,
+      afterCreate: async ({ key, agentId, entry, storePath }) => {
+        await captureCreatedSessionBaseline({ key, agentId, entry, storePath });
+        if (hasInitialTurn) {
+          messageSeq =
+            (await readSessionMessageCountAsync({
+              agentId,
+              sessionEntry: entry,
+              sessionId: entry.sessionId,
+              sessionKey: key,
+              storePath,
+            })) + 1;
+          await expectDefined(
+            chatHandlers["chat.send"],
+            "chat.send handler",
+          )({
+            req,
+            params: {
+              sessionKey: key,
+              ...(key === "global" ? { agentId } : {}),
+              message: initialMessage ?? "",
+              idempotencyKey: randomUUID(),
+              ...(initialAttachments ? { attachments: initialAttachments } : {}),
+            },
+            respond: (ok, payload, error, meta) => {
+              if (ok && payload && typeof payload === "object") {
+                runPayload = payload as Record<string, unknown>;
+              } else {
+                runError = error;
+              }
+              runMeta = meta;
+            },
+            context,
+            client,
+            isWebchatConnect,
+          });
+        }
+      },
     });
     if (!created.ok) {
       if (sessionWorktree && provisionedSessionWorktree) {
@@ -484,6 +536,18 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           `failed to release worktree for reset session ${created.key}: ${formatErrorMessage(error)}`,
         );
       }
+    }
+    if (created.resetExisting) {
+      await captureCreatedSessionBaseline({
+        key: created.key,
+        agentId: created.agentId,
+        entry: created.entry,
+        storePath: resolveGatewaySessionStoreTarget({
+          cfg,
+          key: created.key,
+          agentId: created.agentId,
+        }).storePath,
+      });
     }
     const createdWorktree = sessionWorktree
       ? {

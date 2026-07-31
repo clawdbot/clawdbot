@@ -5,6 +5,12 @@ const configMocks = vi.hoisted(() => ({
   replaceConfigFile: vi.fn(),
   resolveConfigSnapshotHash: vi.fn(),
 }));
+const secretsMocks = vi.hoisted(() => ({
+  activeSnapshot: null as {
+    sourceConfig: OpenClawConfig;
+    config: OpenClawConfig;
+  } | null,
+}));
 
 vi.mock("../../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../config/config.js")>();
@@ -15,7 +21,15 @@ vi.mock("../../config/config.js", async (importOriginal) => {
   };
 });
 
-import { commitGatewayConfigWrite } from "./config-write-flow.js";
+vi.mock("../../secrets/runtime-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../secrets/runtime-state.js")>();
+  return {
+    ...actual,
+    getActiveSecretsRuntimeSnapshot: () => secretsMocks.activeSnapshot,
+  };
+});
+
+import { commitGatewayConfigWrite, didActiveSharedGatewayAuthChange } from "./config-write-flow.js";
 
 describe("commitGatewayConfigWrite", () => {
   beforeEach(() => {
@@ -25,6 +39,7 @@ describe("commitGatewayConfigWrite", () => {
       nextConfig: {},
       persistedHash: "persisted-hash",
     });
+    secretsMocks.activeSnapshot = null;
   });
 
   it("carries a missing file revision into the lock-time compare-and-swap", async () => {
@@ -47,5 +62,81 @@ describe("commitGatewayConfigWrite", () => {
         nextConfig: {},
       }),
     );
+  });
+});
+
+describe("didActiveSharedGatewayAuthChange", () => {
+  beforeEach(() => {
+    secretsMocks.activeSnapshot = null;
+  });
+
+  it("preserves runtime-only auth fields absent from the active secrets source", () => {
+    const runtimeConfig: OpenClawConfig = {
+      gateway: { auth: { mode: "token", token: "runtime-token" } },
+    };
+    secretsMocks.activeSnapshot = {
+      sourceConfig: {},
+      config: {},
+    };
+
+    expect(
+      didActiveSharedGatewayAuthChange({ fallbackPrev: runtimeConfig, next: runtimeConfig }),
+    ).toBe(false);
+  });
+
+  it("does not trust active secret values from a stale authored source", () => {
+    secretsMocks.activeSnapshot = {
+      sourceConfig: { gateway: { auth: { mode: "token", token: "token-a" } } },
+      config: { gateway: { auth: { mode: "token", token: "token-a" } } },
+    };
+    const current: OpenClawConfig = {
+      gateway: { auth: { mode: "token", token: "token-b" } },
+    };
+
+    expect(
+      didActiveSharedGatewayAuthChange({
+        fallbackPrev: current,
+        fallbackSource: current,
+        next: { gateway: { auth: { mode: "token", token: "token-a" } } },
+      }),
+    ).toBe(true);
+  });
+
+  it("preserves runtime-only siblings beside authored shared auth fields", () => {
+    secretsMocks.activeSnapshot = {
+      sourceConfig: { gateway: { auth: { mode: "token" } } },
+      config: { gateway: { auth: { mode: "token" } } },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      gateway: { auth: { mode: "token", token: "runtime-token" } },
+    };
+
+    expect(
+      didActiveSharedGatewayAuthChange({
+        fallbackPrev: runtimeConfig,
+        fallbackSource: { gateway: { auth: { mode: "token" } } },
+        next: runtimeConfig,
+      }),
+    ).toBe(false);
+  });
+
+  it("uses active secret-expanded values when the authored source still matches", () => {
+    const tokenRef = {
+      source: "env" as const,
+      provider: "default",
+      id: "GATEWAY_TOKEN",
+    };
+    secretsMocks.activeSnapshot = {
+      sourceConfig: { gateway: { auth: { mode: "token", token: tokenRef } } },
+      config: { gateway: { auth: { mode: "token", token: "old-token" } } },
+    };
+
+    expect(
+      didActiveSharedGatewayAuthChange({
+        fallbackPrev: { gateway: { auth: { mode: "token", token: tokenRef } } },
+        fallbackSource: { gateway: { auth: { mode: "token", token: tokenRef } } },
+        next: { gateway: { auth: { mode: "token", token: "new-token" } } },
+      }),
+    ).toBe(true);
   });
 });

@@ -6,7 +6,7 @@ import {
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../../infra/event-session-routing.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
-import type { ManagedRun, RunExit } from "../../process/supervisor/types.js";
+import type { RunExit } from "../../process/supervisor/types.js";
 import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
@@ -167,12 +167,15 @@ export async function executeCliProcess(params: {
     ? createCliJsonlStreamingParser({
         backend: params.backend,
         providerId: context.backendResolved.id,
+        parseJsonlEvent: context.backendResolved.parseJsonlEvent,
         onAssistantDelta: params.events.emitCliAssistantDelta,
         onThinkingDelta: params.events.emitCliThinkingDelta,
         onThinkingProgress: params.events.emitCliThinkingProgress,
         onPlanUpdate: params.events.emitCliPlanUpdate,
         onToolUseStart: params.events.emitParsedToolUseStart,
         onToolResult: params.events.emitParsedToolResult,
+        onDisplayToolUseStart: params.events.emitCliDisplayToolUseStart,
+        onDisplayToolResult: params.events.emitCliDisplayToolResult,
         onCommentaryText:
           params.events.emitLiveEvents && runParams.emitCommentaryText
             ? params.events.emitCliCommentaryText
@@ -257,16 +260,9 @@ export async function executeCliProcess(params: {
     if (runParams.abortSignal?.aborted) {
       throw createCliAbortError();
     }
-    let activeManagedRun: ManagedRun | undefined;
     // Startup can wait behind another scoped run. Reserve cancellation under
     // the caller's run id before awaiting the child or replacement fence.
-    const abortManagedRun = () => {
-      if (activeManagedRun) {
-        activeManagedRun.cancel("manual-cancel");
-        return;
-      }
-      supervisor.cancel(runParams.runId, "manual-cancel");
-    };
+    const abortManagedRun = () => supervisor.cancel(runParams.runId, "manual-cancel");
     runParams.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
     try {
       const managedRun = await supervisor.spawn({
@@ -287,7 +283,6 @@ export async function executeCliProcess(params: {
         onStdout: consumeStdout,
         onStderr: consumeStderr,
       });
-      activeManagedRun = managedRun;
       managedRunPid = managedRun.pid;
       let replyBackendCompleted = false;
       const replyBackendHandle = runParams.replyOperation

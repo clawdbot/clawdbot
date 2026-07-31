@@ -1,10 +1,6 @@
 // Verifies canonical and provider-owned TUI session event routing.
 import { describe, expect, it } from "vitest";
-import {
-  matchesSelectedTuiSession,
-  readTuiSessionUserMessage,
-  readTuiTranscriptMessageSequence,
-} from "./tui-session-events.js";
+import { matchesSelectedTuiSession, readTuiSessionUserMessage } from "./tui-session-events.js";
 import type { SessionMessageEvent, TuiStateAccess } from "./tui-types.js";
 
 function makeState(overrides?: Partial<TuiStateAccess>): TuiStateAccess {
@@ -354,39 +350,5 @@ describe("readTuiSessionUserMessage", () => {
     expect(
       readTuiSessionUserMessage({ message: { content: "unidentified", role: "user" } }),
     ).toBeNull();
-  });
-});
-
-describe("readTuiTranscriptMessageSequence", () => {
-  it("uses the shared canonical positive transcript sequence", () => {
-    expect(
-      readTuiTranscriptMessageSequence({
-        role: "user",
-        content: "prompt",
-        __openclaw: { seq: 7 },
-      }),
-    ).toBe(7);
-  });
-
-  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "7"])(
-    "rejects invalid transcript sequence %s",
-    (seq) => {
-      expect(
-        readTuiTranscriptMessageSequence({
-          role: "user",
-          content: "prompt",
-          __openclaw: { seq },
-        }),
-      ).toBeUndefined();
-    },
-  );
-
-  it("preserves canonical ordering for hidden roleless transcript markers", () => {
-    expect(readTuiTranscriptMessageSequence({ __openclaw: { seq: 7 } })).toBe(7);
-  });
-
-  it("does not assign an ordering sequence to malformed transcript entries", () => {
-    expect(readTuiTranscriptMessageSequence(null)).toBeUndefined();
-    expect(readTuiTranscriptMessageSequence({ __openclaw: { seq: "7" } })).toBeUndefined();
   });
 });

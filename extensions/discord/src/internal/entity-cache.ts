@@ -67,9 +67,16 @@ export class DiscordEntityCache {
     const raw = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
     const channelUpdate: string = GatewayDispatchEvents.ChannelUpdate;
     const channelDelete: string = GatewayDispatchEvents.ChannelDelete;
+    const threadUpdate: string = GatewayDispatchEvents.ThreadUpdate;
+    const threadDelete: string = GatewayDispatchEvents.ThreadDelete;
     const guildUpdate: string = GatewayDispatchEvents.GuildUpdate;
     const guildMemberUpdate: string = GatewayDispatchEvents.GuildMemberUpdate;
-    if (type === channelUpdate || type === channelDelete) {
+    if (
+      type === channelUpdate ||
+      type === channelDelete ||
+      type === threadUpdate ||
+      type === threadDelete
+    ) {
       this.deleteId("channel", raw.id);
     }
     if (type === guildUpdate) {

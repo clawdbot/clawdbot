@@ -36,6 +36,7 @@ type ValidatedPackagePlugin = {
   manifestName?: string;
   version?: string;
   extensions: string[];
+  setup?: import("./manifest.js").PluginManifestSetup;
   hasRuntimeDependencies: boolean;
   peerDependencies: Record<string, string>;
 };
@@ -191,6 +192,9 @@ export async function validatePackagePluginInstallSource(params: {
       manifestName: pkgName || undefined,
       version: typeof manifest.version === "string" ? manifest.version : undefined,
       extensions,
+      ...(ocManifestResult.ok && ocManifestResult.manifest.setup
+        ? { setup: ocManifestResult.manifest.setup }
+        : {}),
       hasRuntimeDependencies: hasPackageRuntimeDependencies(manifest),
       peerDependencies: manifest.peerDependencies ?? {},
     },
@@ -323,6 +327,7 @@ async function installPluginFromInstalledPackageDirInternal(
     manifestName: validated.plugin.manifestName,
     version: validated.plugin.version,
     extensions: validated.plugin.extensions,
+    setup: validated.plugin.setup,
   });
   if (params.emitSuccessSecurityEvent !== false) {
     emitSuccessfulPluginInstallSecurityEvent(result, {

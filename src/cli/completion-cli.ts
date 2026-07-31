@@ -304,10 +304,17 @@ function generateZshArgs(cmd: Command): string {
       const name = preferredCompletionFlag(opt);
       const alternate = flags.find((flag) => flag !== name);
       const desc = escapeZshDoubleQuotedDescription(opt.description);
+      const choices = opt.argChoices
+        ?.map((choice) => escapeZshDoubleQuotedDescription(`'${choice.replaceAll("'", "'\\''")}'`))
+        .join(" ");
+      const argument =
+        opt.required || opt.optional
+          ? `${opt.optional ? "::" : ":"}${opt.attributeName()}:${choices ? `(${choices})` : ""}`
+          : "";
       if (alternate) {
-        return `"(${name} ${alternate})"{${name},${alternate}}"[${desc}]"`;
+        return `"(${name} ${alternate})"{${name},${alternate}}"[${desc}]${argument}"`;
       }
-      return `"${name}[${desc}]"`;
+      return `"${name}[${desc}]${argument}"`;
     })
     .join(" \\\n    ");
 }
@@ -391,9 +398,11 @@ function generateBashCompletion(program: Command): string {
   const rootCompletions = root.completions;
   const rootValueOptions = root.valueOptions;
   const commandPathUpdate = generateBashCommandPathUpdate(contexts);
+  const choiceCompletion = generateBashOptionChoiceCompletion([root, ...contexts]);
   return `
 _${rootCmd}_completion() {
     local cur opts command_path candidate_path value_options word flag i
+    local choice_flag choice_prefix choice_completion_prefix short_group short_flag short_index
     COMPREPLY=()
     cur="\${COMP_WORDS[COMP_CWORD]}"
     opts="${rootCompletions.join(" ")}"
@@ -419,11 +428,85 @@ _${rootCmd}_completion() {
 ${commandPathUpdate}
     done
 
+    choice_flag="\${COMP_WORDS[COMP_CWORD-1]}"
+    choice_prefix="\${cur}"
+    choice_completion_prefix=""
+    if [[ "\${cur}" == --*=* ]]; then
+        choice_flag="\${cur%%=*}"
+        choice_prefix="\${cur#*=}"
+        choice_completion_prefix="\${choice_flag}="
+    elif [[ "\${choice_flag}" == "=" ]]; then
+        choice_flag="\${COMP_WORDS[COMP_CWORD-2]}"
+    fi
+    if [[ "\${choice_flag}" == -??* && "\${choice_flag}" != --* ]]; then
+        short_group="\${choice_flag#-}"
+        for ((short_index = 0; short_index < \${#short_group}; short_index++)); do
+            short_flag="-\${short_group:short_index:1}"
+            if [[ " \${value_options} " == *" \${short_flag} "* ]]; then
+                if ((short_index == \${#short_group} - 1)); then
+                    choice_flag="\${short_flag}"
+                fi
+                break
+            fi
+        done
+    fi
+    if [[ "\${cur}" == -??* && "\${cur}" != --* ]]; then
+        short_group="\${cur#-}"
+        for ((short_index = 0; short_index < \${#short_group}; short_index++)); do
+            short_flag="-\${short_group:short_index:1}"
+            if [[ " \${value_options} " == *" \${short_flag} "* ]]; then
+                choice_flag="\${short_flag}"
+                choice_prefix="\${short_group:short_index+1}"
+                choice_completion_prefix="-\${short_group:0:short_index+1}"
+                break
+            fi
+        done
+    fi
+
+${choiceCompletion}
     COMPREPLY=( $(compgen -W "\${opts}" -- \${cur}) )
 }
 
 complete -F _${rootCmd}_completion ${rootCmd}
 `;
+}
+
+function generateBashOptionChoiceCompletion(contexts: ShellCompletionContext[]): string {
+  const cases = contexts
+    .filter(({ valueChoices }) => valueChoices.length > 0)
+    .map(({ pathVariants, valueChoices }) => {
+      const commandPaths = pathVariants.map((segments) => `"${segments.join(" ")}"`).join("|");
+      const optionCases = valueChoices
+        .map(({ flags, choices, requiresValue }) => {
+          const optionFlags = flags.map((flag) => `"${flag}"`).join("|");
+          const escapedChoices = choices
+            .map((choice) => `'${choice.replaceAll("'", "'\\''")}'`)
+            .join(" ");
+          const shouldComplete = requiresValue
+            ? "true"
+            : `[[ -n "\${choice_completion_prefix}" || "\${choice_prefix}" != -* ]]`;
+          return `            ${optionFlags})
+                if ${shouldComplete}; then
+                    local -a choice_values=(${escapedChoices})
+                    local choice
+                    for choice in "\${choice_values[@]}"; do
+                        if [[ "\${choice}" == "\${choice_prefix}"* ]]; then
+                            COMPREPLY+=("\${choice_completion_prefix}\${choice}")
+                        fi
+                    done
+                    return
+                fi
+                ;;`;
+        })
+        .join("\n");
+      return `        ${commandPaths})
+            case "\${choice_flag}" in
+${optionCases}
+            esac
+            ;;`;
+    })
+    .join("\n");
+  return cases ? `    case "\${command_path}" in\n${cases}\n    esac\n` : "";
 }
 
 function generateBashCompletionContextCases(contexts: ShellCompletionContext[]): string {
@@ -459,9 +542,11 @@ ${generateBashCompletionContextCases(contexts)}
 
 function generatePowerShellCompletion(program: Command): string {
   const rootCmd = program.name();
-  const segments: string[] = [];
+  const completionBodies: string[] = [];
   const formatPowerShellArray = (entries: string[]) =>
-    entries.length > 0 ? `@(${entries.map((entry) => `'${entry}'`).join(",")})` : "@()";
+    entries.length > 0
+      ? `@(${entries.map((entry) => `'${entry.replaceAll("'", "''")}'`).join(",")})`
+      : "@()";
   const { root, descendants: contexts } = collectShellCompletionCommandTree(program);
   const rootValueOptions = root.valueOptions;
   const commandPathCases = contexts
@@ -474,6 +559,12 @@ function generatePowerShellCompletion(program: Command): string {
       ),
     )
     .join("\n");
+  const commandPathUpdate = commandPathCases
+    ? `        $candidatePath = if ($commandPath -eq '') { $element } else { "$commandPath $element" }
+        switch ($candidatePath) {
+${commandPathCases}
+        }`
+    : "";
 
   for (const context of contexts) {
     if (context.completions.length > 0) {
@@ -483,7 +574,7 @@ function generatePowerShellCompletion(program: Command): string {
         if (fullPath.length === 0) {
           continue;
         }
-        segments.push(`
+        completionBodies.push(`
             if ($commandPath -eq '${fullPath}') {
                 $completions = ${allCompletions}
                 $completions | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
@@ -494,7 +585,36 @@ function generatePowerShellCompletion(program: Command): string {
       }
     }
   }
-  const rootBody = segments.join("");
+  const rootBody = completionBodies.join("");
+  const choiceCompletion = [root, ...contexts]
+    .filter(({ valueChoices }) => valueChoices.length > 0)
+    .flatMap(({ pathVariants, valueChoices }) =>
+      pathVariants.map((pathSegments) => {
+        const optionChoiceCases = valueChoices
+          .map(
+            ({
+              flags,
+              choices,
+              requiresValue,
+            }) => `        if ($choiceFlag -in ${formatPowerShellArray(flags)} -and (${requiresValue ? "$true" : "$choiceCompletionPrefix -ne '' -or $choicePrefix -notlike '-*'"})) {
+            $escapedChoicePrefix = [WildcardPattern]::Escape($choicePrefix)
+            ${formatPowerShellArray(choices)} | Where-Object { $_ -like "$escapedChoicePrefix*" } | ForEach-Object {
+                $completionText = "$choiceCompletionPrefix$_"
+                if ($completionText -notmatch '^[\\p{L}\\p{N}_./:=+-]+$') {
+                    $completionText = "'" + $completionText.Replace("'", "''") + "'"
+                }
+                [System.Management.Automation.CompletionResult]::new($completionText, $_, 'ParameterValue', $_)
+            }
+            return
+        }`,
+          )
+          .join("\n");
+        return `    if ($commandPath -eq '${pathSegments.join(" ").replaceAll("'", "''")}') {
+${optionChoiceCases}
+    }`;
+      }),
+    )
+    .join("\n");
 
   return `
 Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
@@ -503,6 +623,16 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
     $commandElements = $commandAst.CommandElements
     $commandPath = ""
     $valueOptions = ${formatPowerShellArray(rootValueOptions)}
+    $previousElementIndex = if ($wordToComplete -eq '') { $commandElements.Count - 1 } else { $commandElements.Count - 2 }
+    $previousElement = if ($previousElementIndex -ge 1) { $commandElements[$previousElementIndex].Extent.Text } else { '' }
+    $choiceFlag = $previousElement
+    $choicePrefix = $wordToComplete
+    $choiceCompletionPrefix = ''
+    if ($wordToComplete -match '^(--[^=]+)=(.*)$') {
+        $choiceFlag = $Matches[1]
+        $choicePrefix = $Matches[2]
+        $choiceCompletionPrefix = "$choiceFlag="
+    }
 
     # Skip option values so global and nested flags cannot hide the command path.
     for ($i = 1; $i -lt $commandElements.Count; $i++) {
@@ -516,11 +646,36 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
             continue
         }
 
-        $candidatePath = if ($commandPath -eq '') { $element } else { "$commandPath $element" }
-        switch ($candidatePath) {
-${commandPathCases}
+${commandPathUpdate}
+    }
+
+    if ($previousElement -match '^-[^-].+$') {
+        $shortGroup = $previousElement.Substring(1)
+        for ($shortIndex = 0; $shortIndex -lt $shortGroup.Length; $shortIndex++) {
+            $shortFlag = "-$($shortGroup[$shortIndex])"
+            if ($valueOptions -contains $shortFlag) {
+                if ($shortIndex -eq $shortGroup.Length - 1) {
+                    $choiceFlag = $shortFlag
+                }
+                break
+            }
         }
     }
+
+    if ($wordToComplete -match '^-[^-].+$') {
+        $shortGroup = $wordToComplete.Substring(1)
+        for ($shortIndex = 0; $shortIndex -lt $shortGroup.Length; $shortIndex++) {
+            $shortFlag = "-$($shortGroup[$shortIndex])"
+            if ($valueOptions -contains $shortFlag) {
+                $choiceFlag = $shortFlag
+                $choicePrefix = $shortGroup.Substring($shortIndex + 1)
+                $choiceCompletionPrefix = "-$($shortGroup.Substring(0, $shortIndex + 1))"
+                break
+            }
+        }
+    }
+
+${choiceCompletion}
     
     # Root command
     if ($commandPath -eq "") {
@@ -569,6 +724,8 @@ function generateFishCompletion(program: Command): string {
             condition,
             flags: completionFlags(opt),
             description: opt.description,
+            requiresValue: opt.required,
+            choices: opt.argChoices,
           }),
         );
       }

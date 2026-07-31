@@ -122,5 +122,28 @@ describe("prepareCodexAttemptConnection", () => {
     expect(readApprovalRequirements).toHaveBeenCalledOnce();
     expect(readApprovalRequirements).toHaveBeenCalledWith("untrusted");
     expect(connection.appServer.approvalPolicy).toBe("untrusted");
+    expect(connection.approvalPolicyPromotedForOpenClawToolPolicy).toBe(true);
+  });
+
+  it("does not give OpenClaw ownership of an explicit operator approval policy", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
+    );
+    const sessionFile = path.join(tempDir, "explicit-approval-policy.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-explicit-approval-policy");
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentDir = path.join(tempDir, "agent");
+    registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+
+    const connection = await prepareCodexAttemptConnection({
+      params,
+      options: {
+        bindingStore: testCodexAppServerBindingStore,
+        pluginConfig: { appServer: { approvalPolicy: "untrusted" } },
+      },
+    });
+
+    expect(connection.appServer.approvalPolicy).toBe("untrusted");
+    expect(connection.approvalPolicyPromotedForOpenClawToolPolicy).toBe(false);
   });
 });

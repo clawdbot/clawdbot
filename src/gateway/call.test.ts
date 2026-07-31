@@ -209,10 +209,14 @@ const {
   buildGatewayProbeConnectionDetails,
   callGateway,
   callGatewayCli,
+  formatGatewayAuthErrorJson,
   formatGatewayClientRequestErrorJson,
   formatGatewayTransportErrorJson,
+  GatewayCredentialsRequiredError,
+  GatewayExplicitAuthRequiredError,
   isGatewayTransportError,
 } = await import("./call.js");
+const { GatewaySecretRefUnavailableError } = await import("./credentials.js");
 
 class StubGatewayClient {
   constructor(opts: {
@@ -1801,6 +1805,39 @@ describe("callGateway error details", () => {
         }),
       ),
     ).toBeNull();
+  });
+
+  it.each([
+    [
+      "configured credentials",
+      new GatewayCredentialsRequiredError({
+        method: "health",
+        configPath: "/tmp/openclaw.json",
+      }),
+      "gateway health requires credentials before opening a websocket",
+    ],
+    [
+      "explicit URL credentials",
+      new GatewayExplicitAuthRequiredError("gateway url override requires explicit credentials"),
+      "gateway url override requires explicit credentials",
+    ],
+    [
+      "unavailable SecretRef credentials",
+      new GatewaySecretRefUnavailableError("gateway.auth.token"),
+      "gateway.auth.token is configured as a secret reference but is unavailable",
+    ],
+  ])("formats %s as the shipped auth error envelope", (_label, error, message) => {
+    expect(formatGatewayAuthErrorJson(error)).toEqual({
+      ok: false,
+      error: {
+        type: "gateway_credentials_required",
+        message: expect.stringContaining(message),
+      },
+    });
+  });
+
+  it("does not turn unrelated failures into gateway auth errors", () => {
+    expect(formatGatewayAuthErrorJson(new Error("config unavailable"))).toBeNull();
   });
 
   it("charges event-loop readiness against the wrapper timeout", async () => {

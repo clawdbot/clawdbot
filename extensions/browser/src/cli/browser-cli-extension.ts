@@ -30,12 +30,18 @@ function resolveChromeExtensionDir(pluginRoot?: string): string {
   return path.resolve(here, "..", "..", "chrome-extension");
 }
 
-function firstExtensionProfile(): { name: string; relayPort: number } | null {
-  const cfg = getRuntimeConfig();
-  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+function firstExtensionProfile(
+  resolved: ReturnType<typeof resolveBrowserConfig>,
+): { name: string; relayPort: number } | null {
   for (const [name, profile] of Object.entries(resolved.profiles)) {
     if (profile.driver === "extension") {
-      return { name, relayPort: profile.cdpPort ?? resolved.extensionRelayDefaultPort };
+      return {
+        name,
+        relayPort:
+          profile.cdpPort ??
+          resolved.extensionRelayPorts[name] ??
+          resolved.extensionRelayDefaultPort,
+      };
     }
   }
   return null;
@@ -76,7 +82,7 @@ async function buildPairingString(gatewayUrl?: string): Promise<{
   // driver yet, so pairing works on a fresh gateway or node host before the
   // relay has started. Pairing must run on the machine that hosts the browser.
   const token = await ensureExtensionRelayToken();
-  const profile = firstExtensionProfile();
+  const profile = firstExtensionProfile(resolved);
   const relayPort = profile?.relayPort ?? resolved.extensionRelayDefaultPort;
 
   const gateway = gatewayUrl?.trim();

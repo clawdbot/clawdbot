@@ -8,6 +8,7 @@ import { createSubsystemLogger, redactSensitiveText } from "./openclaw-runtime-i
 import {
   DREAMING_NARRATIVE_RUN_PREFIX,
   isDreamingNarrativeSessionStoreKey,
+  extractAgentIdFromSessionPath,
   extractAgentIdFromSessionsDir,
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
@@ -371,15 +372,6 @@ export async function listSessionFilesForAgent(agentId: string): Promise<string[
     .map((entry) => entry.sessionFile);
 }
 
-function extractAgentIdFromSessionPath(absPath: string): string | null {
-  const parts = path.normalize(path.resolve(absPath)).split(path.sep).filter(Boolean);
-  const sessionsIndex = parts.lastIndexOf("sessions");
-  if (sessionsIndex < 2 || parts[sessionsIndex - 2] !== "agents") {
-    return null;
-  }
-  return parts[sessionsIndex - 1] || null;
-}
-
 export function sessionPathForFile(absPath: string): string {
   const agentId = extractAgentIdFromSessionPath(absPath);
   return path
@@ -649,6 +641,14 @@ function classifySessionMessageOrigin(
   turnOrigin: MemoryOriginClass,
 ): MemoryOriginClass {
   if (message.role === "assistant") {
+    const openClawMetadata = message["__openclaw"];
+    if (
+      openClawMetadata &&
+      typeof openClawMetadata === "object" &&
+      (openClawMetadata as { turnTainted?: unknown }).turnTainted === true
+    ) {
+      return "untrusted";
+    }
     return turnOrigin === "owner" ? "agent" : turnOrigin;
   }
   const provenance = message.provenance as { kind?: unknown } | undefined;

@@ -134,6 +134,7 @@ export type PreparedCliRunContextOverrides = {
   cliToolAvailability?: PreparedCliRunContext["params"]["cliToolAvailability"];
   emitCommentaryText?: boolean;
   workspaceDir?: string;
+  systemPrompt?: string;
   timeoutMs?: number;
   onSuccessfulAuthBinding?: PreparedCliRunContext["params"]["onSuccessfulAuthBinding"];
   runtimeArtifact?: PreparedCliRunContext["backendResolved"]["runtimeArtifact"];
@@ -241,7 +242,7 @@ export function buildPreparedCliRunContext(
     contextEngineConfig: {},
     modelId: model,
     normalizedModel: model,
-    systemPrompt: "You are a helpful assistant.",
+    systemPrompt: overrides.systemPrompt ?? "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
     authEpochVersion: 2,

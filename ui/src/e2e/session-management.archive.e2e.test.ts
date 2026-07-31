@@ -1,8 +1,10 @@
 import { expect, it } from "vitest";
+import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
   activateMenuItem,
   captureUiProof,
   controlUiSessionPath,
+  controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
   requireRecord,
@@ -307,6 +309,78 @@ suite.define(() => {
 
       await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
       await page.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("recovers a deleted active chat without repeatedly resolving its missing session", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const routeErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error" && message.text().includes("route")) {
+        routeErrors.push(message.text());
+      }
+    });
+    const deletedKey = "agent:main:deleted-thread";
+    const mainKey = "agent:main:main";
+    const updatedAt = Date.parse("2026-07-01T16:00:00.000Z");
+    const mainSession = sessionRow(mainKey, "Main", updatedAt);
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          mainSession,
+          sessionRow(deletedKey, "Deleted thread", updatedAt - 1_000),
+        ]),
+      },
+      sessionKey: mainKey,
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, deletedKey));
+      await page
+        .locator(".agent-chat__input textarea")
+        .waitFor({ state: "visible", timeout: 10_000 });
+
+      const requestsBeforeDeletion = (await gateway.getRequests("sessions.list")).length;
+      await gateway.setMethodResponse("sessions.list", sessionsListResponse([mainSession]));
+      await gateway.emitGatewayEvent("sessions.changed", {
+        agentId: "main",
+        reason: "delete",
+        sessionKey: deletedKey,
+      });
+
+      await expect
+        .poll(() => new URL(page.url()).pathname, { timeout: 15_000 })
+        .toBe(controlUiSessionPath(mainKey));
+      await page
+        .locator(".agent-chat__input textarea")
+        .waitFor({ state: "visible", timeout: 10_000 });
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .toBeGreaterThan(requestsBeforeDeletion);
+      await expect
+        .poll(
+          async () => {
+            const count = (await gateway.getRequests("sessions.list")).length;
+            await new Promise((resolve) => {
+              setTimeout(resolve, 350);
+            });
+            return (await gateway.getRequests("sessions.list")).length - count;
+          },
+          { timeout: 5_000 },
+        )
+        .toBe(0);
+
+      const settledRequestCount = (await gateway.getRequests("sessions.list")).length;
+      await expectRequestCountStable(gateway, "sessions.list", settledRequestCount);
+      expect(routeErrors).toEqual([]);
+      await captureUiProof(page, "deleted-active-session-fallback.png");
     } finally {
       await context.close();
     }
