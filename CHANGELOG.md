@@ -56,6 +56,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Ollama runtime-selected thinking:** preserve configured thinking defaults when agent commands and cron jobs switch to runtime-discovered Ollama models, including fallback candidates, without unnecessary catalog hydration for explicit `off`. (#116584) Thanks @civiltox.
 - **Control UI dynamic deep links:** reuse the initial route loader result when publishing real agent, session, dashboard, Workboard, Memory, and Plugins paths, avoiding redundant route-loader work during startup. Thanks @shakkernerd.
 - **Linux gateway service ownership:** refuse user-scope systemd publication and activation when the same gateway unit name is already owned or cannot be verified in the system scope, including `--force`, with actionable recovery guidance instead of creating restart-looping dual managers. Fixes #116129.
 - **macOS remote tunnel lifecycle:** prevent cancelled or superseded restart backoffs from recreating SSH tunnels, and join a tunnel create that another caller started while the actor was suspended.
