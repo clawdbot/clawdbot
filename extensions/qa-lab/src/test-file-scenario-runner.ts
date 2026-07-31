@@ -438,7 +438,18 @@ function statusFromProducerEvidence(params: {
       status: blockingEntry.result.status,
     };
   }
-  if (producerEvidence.entries.every((entry) => entry.result.status === "skipped")) {
+  if (!producerEvidence.entries.some((entry) => entry.result.status === "pass")) {
+    // Allowing blocked checks does not make an entirely unexecuted producer a successful run.
+    const blockedEntry = producerEvidence.entries.find(
+      (entry) => entry.result.status === "blocked",
+    );
+    if (blockedEntry) {
+      return {
+        failureMessage:
+          blockedEntry.result.failure?.reason ?? `${blockedEntry.test.id} reported blocked`,
+        status: "blocked",
+      };
+    }
     return { status: "skipped" };
   }
   return { status: "pass" };
