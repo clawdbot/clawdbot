@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Directive tag helpers parse inline directive tags from user text.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 
 export type InlineDirectiveParseResult = {
   text: string;
@@ -47,13 +48,19 @@ function normalizeDirectiveWhitespace(text: string): string {
   const blockSentinel = createBlockSentinel(text);
   const blockPlaceholderRe = new RegExp(`${blockSentinel}(\\d+)${blockSentinel}`, "g");
   const blocks: string[] = [];
-  const masked = text.replace(
-    /(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1[^\n]*|(?:(?:^|\n)(?:    |\t)[^\n]*)+/gm,
-    (block) => {
-      blocks.push(block);
-      return `${blockSentinel}${blocks.length - 1}${blockSentinel}`;
-    },
-  );
+  const fenceSpans = text.includes("```") || text.includes("~~~") ? parseFenceSpans(text) : [];
+  let masked = "";
+  let cursor = 0;
+  // The canonical scanner keeps false closers, indented closers, and open fences intact.
+  for (const span of fenceSpans) {
+    blocks.push(text.slice(span.start, span.end));
+    masked += `${text.slice(cursor, span.start)}${blockSentinel}${blocks.length - 1}${blockSentinel}`;
+    cursor = span.end;
+  }
+  masked = `${masked}${text.slice(cursor)}`.replace(/(?:(?:^|\n)(?:    |\t)[^\n]*)+/gm, (block) => {
+    blocks.push(block);
+    return `${blockSentinel}${blocks.length - 1}${blockSentinel}`;
+  });
 
   const normalized = masked
     .replace(/\r\n/g, "\n")
