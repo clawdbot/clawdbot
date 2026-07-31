@@ -242,6 +242,7 @@ pub enum SidecarConfigurationState {
     Starting,
     AwaitingConfiguration,
     AwaitingAcknowledgement,
+    AcknowledgementPending,
     Configured,
     Failed,
 }
@@ -250,6 +251,7 @@ pub enum SidecarConfigurationState {
 /// authenticated offer/accept handshake.
 pub struct SidecarConfigurationExchange {
     role: SidecarPeerRole,
+    channel_instance_id: u64,
     selection: SidecarProtocolSelection,
     runtime_version: String,
     state: SidecarConfigurationState,
@@ -271,6 +273,9 @@ impl SidecarConfigurationExchange {
         let negotiated = handshake
             .negotiated()
             .ok_or(SidecarConfigurationError::HandshakeNotAuthenticated)?;
+        let channel_instance_id = handshake
+            .bound_channel_instance_id()
+            .ok_or(SidecarConfigurationError::HandshakeNotAuthenticated)?;
         let role = handshake.local_role();
         let runtime_version = match role {
             SidecarPeerRole::Runtime => handshake.local_peer().version.clone(),
@@ -278,6 +283,7 @@ impl SidecarConfigurationExchange {
         };
         Ok(Self {
             role,
+            channel_instance_id,
             selection: SidecarProtocolSelection::from(negotiated),
             runtime_version,
             state: match role {
@@ -295,17 +301,26 @@ impl SidecarConfigurationExchange {
         self.state
     }
 
+    /// Return the independently derived manifest after configuration has
+    /// passed validation.
+    #[must_use]
+    pub const fn validated_manifest(&self) -> Option<&SidecarRuntimeManifest> {
+        self.expected_manifest.as_ref()
+    }
+
     /// Seal the supervisor's single runtime configuration.
     ///
     /// # Errors
     ///
-    /// Every wrong role, state, channel, invalid configuration, or encoding
-    /// error retires the exchange and authenticated channel.
+    /// Every wrong role, state, invalid configuration, or encoding error
+    /// retires the exchange and authenticated channel. A replacement channel
+    /// instance is retired before processing and leaves the exchange intact.
     pub fn start(
         &mut self,
         channel: &mut crate::AuthenticatedSidecarChannel,
         configuration: &SidecarRuntimeConfiguration,
     ) -> Result<Vec<u8>, SidecarConfigurationError> {
+        self.ensure_channel(channel)?;
         if self.role != SidecarPeerRole::Supervisor {
             return self.fail(channel, SidecarConfigurationError::SupervisorMustInitiate);
         }
@@ -350,6 +365,7 @@ impl SidecarConfigurationExchange {
         channel: &mut crate::AuthenticatedSidecarChannel,
         frame: &[u8],
     ) -> Result<Option<SidecarRuntimeConfiguration>, SidecarConfigurationError> {
+        self.ensure_channel(channel)?;
         if channel.role() != self.role {
             return self.fail(channel, SidecarConfigurationError::ChannelRoleMismatch);
         }
@@ -404,6 +420,7 @@ impl SidecarConfigurationExchange {
         channel: &mut crate::AuthenticatedSidecarChannel,
         manifest: &SidecarRuntimeManifest,
     ) -> Result<Vec<u8>, SidecarConfigurationError> {
+        self.ensure_channel(channel)?;
         if self.role != SidecarPeerRole::Runtime {
             return self.fail(channel, SidecarConfigurationError::RuntimeMustAcknowledge);
         }
@@ -422,8 +439,48 @@ impl SidecarConfigurationExchange {
             Ok(frame) => frame,
             Err(error) => return self.fail(channel, SidecarConfigurationError::Frame(error)),
         };
-        self.state = SidecarConfigurationState::Configured;
+        self.state = SidecarConfigurationState::AcknowledgementPending;
         Ok(frame)
+    }
+
+    /// Commit runtime configuration after the acknowledgement frame has been
+    /// written successfully.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for the wrong channel, role, state, or a retired
+    /// channel. Bound-channel failures retire the exchange and channel; a
+    /// replacement channel is retired before processing without mutation.
+    pub fn complete_acknowledgement(
+        &mut self,
+        channel: &mut crate::AuthenticatedSidecarChannel,
+    ) -> Result<(), SidecarConfigurationError> {
+        self.ensure_channel(channel)?;
+        if self.role != SidecarPeerRole::Runtime {
+            return self.fail(channel, SidecarConfigurationError::RuntimeMustAcknowledge);
+        }
+        if channel.is_retired() {
+            return self.fail(
+                channel,
+                SidecarConfigurationError::Frame(crate::SidecarFrameError::ChannelRetired),
+            );
+        }
+        if self.state != SidecarConfigurationState::AcknowledgementPending {
+            return self.fail(channel, SidecarConfigurationError::UnexpectedMessage);
+        }
+        self.state = SidecarConfigurationState::Configured;
+        Ok(())
+    }
+
+    fn ensure_channel(
+        &self,
+        channel: &mut crate::AuthenticatedSidecarChannel,
+    ) -> Result<(), SidecarConfigurationError> {
+        if channel.instance_id() == self.channel_instance_id {
+            return Ok(());
+        }
+        channel.retire();
+        Err(SidecarConfigurationError::ChannelInstanceMismatch)
     }
 
     fn fail<T>(
@@ -489,8 +546,9 @@ impl SidecarRuntimeBridge {
     ///
     /// # Errors
     ///
-    /// Returns an error unless the exact configuration is awaiting runtime
-    /// acknowledgement, or for a command-runtime registration failure.
+    /// Returns an error unless the exact runtime configuration acknowledgement
+    /// has been delivered successfully, or for a command-runtime registration
+    /// failure.
     pub fn from_configuration<A: SidecarCapabilityAdapter + ?Sized>(
         exchange: &SidecarConfigurationExchange,
         adapter: &Arc<A>,
@@ -503,7 +561,7 @@ impl SidecarRuntimeBridge {
             .as_ref()
             .ok_or(SidecarRuntimeBridgeError::ConfigurationNotValidated)?;
         let manifest = manifest_from_configuration(configuration);
-        if exchange.state != SidecarConfigurationState::AwaitingAcknowledgement
+        if exchange.state != SidecarConfigurationState::Configured
             || exchange.expected_manifest.as_ref() != Some(&manifest)
         {
             return Err(SidecarRuntimeBridgeError::ConfigurationNotValidated);
@@ -921,6 +979,8 @@ pub enum SidecarConfigurationError {
     RuntimeMustAcknowledge,
     #[error("sidecar configuration role does not match authenticated channel role")]
     ChannelRoleMismatch,
+    #[error("sidecar configuration cannot move between authenticated channel instances")]
+    ChannelInstanceMismatch,
     #[error("sidecar configured manifest does not match the validated configuration")]
     ManifestMismatch,
     #[error("unexpected sidecar configuration message")]
@@ -967,7 +1027,7 @@ mod tests {
                 version: "1.0.0".into(),
                 artifact_identity: "sha256:test-only".into(),
             },
-            feature_bits: u64::MAX,
+            feature_bits: crate::SIDECAR_MAX_FEATURE_BITS,
             limits: SidecarLimits {
                 max_frame_bytes: 4096,
                 max_in_flight: 4,
@@ -1002,6 +1062,7 @@ mod tests {
             .receive(&mut runtime_channel, &offer_frame)
             .unwrap()
             .unwrap();
+        runtime.complete_acceptance(&mut runtime_channel).unwrap();
         supervisor
             .receive(&mut supervisor_channel, &accept_frame)
             .unwrap();
@@ -1030,6 +1091,16 @@ mod tests {
         let received = runtime_exchange
             .receive(&mut runtime_channel, &frame)
             .unwrap()
+            .unwrap();
+        let manifest = runtime_exchange.validated_manifest().unwrap().clone();
+        let acknowledgement = runtime_exchange
+            .acknowledge(&mut runtime_channel, &manifest)
+            .unwrap();
+        runtime_exchange
+            .complete_acknowledgement(&mut runtime_channel)
+            .unwrap();
+        supervisor_exchange
+            .receive(&mut supervisor_channel, &acknowledgement)
             .unwrap();
         (runtime, runtime_exchange, runtime_channel, received)
     }
@@ -1370,15 +1441,31 @@ mod tests {
             .unwrap();
         assert_eq!(received, configuration);
 
-        let adapter = Arc::new(RecordingAdapter::default());
-        let bridge = SidecarRuntimeBridge::from_configuration(&runtime_exchange, &adapter).unwrap();
+        let manifest = runtime_exchange.validated_manifest().unwrap().clone();
         let acknowledgement = runtime_exchange
-            .acknowledge(&mut runtime_channel, bridge.manifest())
+            .acknowledge(&mut runtime_channel, &manifest)
+            .unwrap();
+        assert_eq!(
+            runtime_exchange.state(),
+            SidecarConfigurationState::AcknowledgementPending
+        );
+        assert!(matches!(
+            SidecarRuntimeBridge::from_configuration(
+                &runtime_exchange,
+                &Arc::new(RecordingAdapter::default())
+            ),
+            Err(SidecarRuntimeBridgeError::ConfigurationNotValidated)
+        ));
+        runtime_exchange
+            .complete_acknowledgement(&mut runtime_channel)
             .unwrap();
         assert!(supervisor_exchange
             .receive(&mut supervisor_channel, &acknowledgement)
             .unwrap()
             .is_none());
+        let adapter = Arc::new(RecordingAdapter::default());
+        let bridge = SidecarRuntimeBridge::from_configuration(&runtime_exchange, &adapter).unwrap();
+        assert_eq!(bridge.manifest(), &manifest);
         assert_eq!(
             supervisor_exchange.state(),
             SidecarConfigurationState::Configured
@@ -1389,6 +1476,57 @@ mod tests {
         );
         assert!(!supervisor_channel.is_retired());
         assert!(!runtime_channel.is_retired());
+    }
+
+    #[test]
+    fn configuration_exchange_rejects_channel_substitution_without_mutation() {
+        let (supervisor, _runtime, mut supervisor_channel, _runtime_channel) = authenticated_pair();
+        let mut exchange = SidecarConfigurationExchange::new(&supervisor).unwrap();
+        let mut replacement = channel(SidecarPeerRole::Supervisor);
+
+        assert!(matches!(
+            exchange.start(&mut replacement, &configuration()),
+            Err(SidecarConfigurationError::ChannelInstanceMismatch)
+        ));
+        assert!(replacement.is_retired());
+        assert_eq!(exchange.state(), SidecarConfigurationState::Starting);
+        assert!(!supervisor_channel.is_retired());
+
+        assert!(exchange
+            .start(&mut supervisor_channel, &configuration())
+            .is_ok());
+        assert_eq!(
+            exchange.state(),
+            SidecarConfigurationState::AwaitingAcknowledgement
+        );
+    }
+
+    #[test]
+    fn failed_configuration_acknowledgement_delivery_is_terminal() {
+        let (supervisor, runtime, mut supervisor_channel, mut runtime_channel) =
+            authenticated_pair();
+        let mut supervisor_exchange = SidecarConfigurationExchange::new(&supervisor).unwrap();
+        let mut runtime_exchange = SidecarConfigurationExchange::new(&runtime).unwrap();
+        let frame = supervisor_exchange
+            .start(&mut supervisor_channel, &configuration())
+            .unwrap();
+        runtime_exchange
+            .receive(&mut runtime_channel, &frame)
+            .unwrap();
+        let manifest = runtime_exchange.validated_manifest().unwrap().clone();
+        runtime_exchange
+            .acknowledge(&mut runtime_channel, &manifest)
+            .unwrap();
+
+        runtime_channel.retire();
+        assert!(matches!(
+            runtime_exchange.complete_acknowledgement(&mut runtime_channel),
+            Err(SidecarConfigurationError::Frame(
+                crate::SidecarFrameError::ChannelRetired
+            ))
+        ));
+        assert_eq!(runtime_exchange.state(), SidecarConfigurationState::Failed);
+        assert!(runtime_exchange.validated_manifest().is_none());
     }
 
     #[test]
@@ -1452,6 +1590,7 @@ mod tests {
             .receive(&mut runtime_channel, &offer_frame)
             .unwrap()
             .unwrap();
+        runtime.complete_acceptance(&mut runtime_channel).unwrap();
         supervisor
             .receive(&mut supervisor_channel, &accept_frame)
             .unwrap();

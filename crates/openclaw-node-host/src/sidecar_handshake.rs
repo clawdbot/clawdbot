@@ -91,6 +91,10 @@ impl SidecarHandshake {
         &self.local_offer.peer
     }
 
+    pub(crate) const fn bound_channel_instance_id(&self) -> Option<u64> {
+        self.channel_instance_id
+    }
+
     #[must_use]
     pub const fn negotiated(&self) -> Option<&NegotiatedSidecarProtocol> {
         self.negotiated.as_ref()

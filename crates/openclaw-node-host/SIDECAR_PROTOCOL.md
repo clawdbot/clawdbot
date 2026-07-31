@@ -128,18 +128,22 @@ sequenced frames; the message corpus does not replace the frame vectors.
 
 ## Runtime bridge
 
-`SidecarRuntimeBridge` can be constructed only from the runtime side of a
-validated configuration exchange awaiting acknowledgement. It accepts one
-immutable connection manifest and requires its concurrency/input/output limits
-to remain within the negotiated sidecar envelope. Command and capability names
+`SidecarRuntimeBridge` can be constructed only from the runtime side after the
+validated configuration acknowledgement has been written successfully. The
+runtime remains `AcknowledgementPending` until that delivery is committed, so
+invocation work cannot race ahead of the supervisor-visible manifest. The
+bridge accepts one immutable connection manifest and requires its
+concurrency/input/output limits to remain within the negotiated sidecar envelope. Command and capability names
 use the shared ASCII grammar `[A-Za-z0-9._-]{1,128}`, are duplicate-free, and
 are sorted bytewise before acknowledgement; the OpenClaw-owned `system.*`
 namespace remains reserved.
 
 `SidecarConfigurationExchange` permits exactly one supervisor configuration
 followed by the runtime's acknowledgement of the independently derived
-manifest. Wrong order, channel role, malformed or unknown fields, invalid
-limits/names, and a forged acknowledgement retire the exchange and channel.
+manifest. It remains bound to the exact channel instance authenticated by the
+handshake; a replacement is retired before processing without mutating the
+bound exchange. Wrong order, channel role, malformed or unknown fields,
+invalid limits/names, and a forged acknowledgement retire the exchange and channel.
 It also proves the worst-case secret-free status envelope—including the runtime
 version from the authenticated offer—fits the lowered live-channel budget. No
 admission or invocation message is accepted by this exchange.
