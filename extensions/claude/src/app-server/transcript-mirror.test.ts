@@ -122,6 +122,32 @@ describe("buildMirrorMessages", () => {
     expect((msgs[0] as { content: string }).content).toBe("hello world");
   });
 
+  it("mirrors reasoning as a leading thinking block; text-only turns keep string content", () => {
+    const withReasoning = buildMirrorMessages({
+      threadId: "thr",
+      turnId: "t",
+      lifecycleOutcome: "started",
+      acc: acc({ assistantTexts: ["the answer"], reasoning: "chain of thought" }),
+    });
+    const content = (
+      withReasoning[0] as unknown as {
+        content: Array<{ type: string; thinking?: string; text?: string }>;
+      }
+    ).content;
+    expect(content.map((b) => b.type)).toEqual(["thinking", "text"]);
+    expect(content[0]?.thinking).toBe("chain of thought");
+    expect(content[1]?.text).toBe("the answer");
+
+    const textOnly = buildMirrorMessages({
+      threadId: "thr",
+      turnId: "t2",
+      lifecycleOutcome: "started",
+      acc: acc({ assistantTexts: ["plain"], reasoning: "  " }),
+    });
+    // Stable bytes for turns without reasoning: content stays a plain string.
+    expect((textOnly[0] as { content: string }).content).toBe("plain");
+  });
+
   it("tags lifecycleOutcome on the assistant message meta", () => {
     const msgs = buildMirrorMessages({
       threadId: "thr",

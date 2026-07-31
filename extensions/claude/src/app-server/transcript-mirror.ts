@@ -157,14 +157,22 @@ export function buildMirrorMessages(params: {
   }
 
   // Single assistant message per turn (the joined deltas + non-streaming
-  // fallback in finalize). Codex emits separate messages for reasoning
-  // vs text; we currently fold reasoning back into the accumulator but
-  // don't mirror it — the SDK transcript already preserves it via
-  // session log on the server side. Could be revisited in a follow-up.
+  // fallback in finalize). When the turn carried reasoning, mirror it as a
+  // leading {type:"thinking"} content block on the same message — the shape
+  // core already understands (message-visibility.ts skips it for display;
+  // extractAssistantThinking reads it for /reasoning on). Text-only turns
+  // keep the plain string content so existing transcript bytes are stable.
   if (params.acc.assistantTexts.length > 0) {
+    const text = params.acc.assistantTexts.join("");
+    const reasoning = params.acc.reasoning.trim();
     out.push({
       role: "assistant",
-      content: params.acc.assistantTexts.join(""),
+      content: reasoning
+        ? [
+            { type: "thinking", thinking: reasoning },
+            { type: "text", text },
+          ]
+        : text,
       meta: {
         lifecycleOutcome: params.lifecycleOutcome,
         threadId: params.threadId,

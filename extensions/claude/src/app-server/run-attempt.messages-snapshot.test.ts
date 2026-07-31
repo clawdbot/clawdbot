@@ -122,3 +122,48 @@ describe("buildMessagesSnapshot", () => {
     expect(finalMessage.stopReason).toBe("stop");
   });
 });
+
+describe("buildMessagesSnapshot thinking blocks", () => {
+  it("attaches accumulated reasoning as a thinking block on the LAST assistant message", () => {
+    const acc = {
+      assistantTexts: ["part one", "final answer"],
+      toolMetas: [],
+      reasoning: "let me reason about this",
+      itemCount: 2,
+      toolCalls: new Map(),
+      usage: { input: 10, output: 5, total: 15 },
+    };
+    const messages = buildMessagesSnapshot(acc, {
+      provider: "anthropic",
+      model: "claude-opus-5",
+    });
+    expect(messages).toHaveLength(2);
+    const first = messages[0] as unknown as { content: Array<{ type: string }> };
+    const last = messages[1] as unknown as {
+      content: Array<{ type: string; thinking?: string; text?: string }>;
+    };
+    // lastAssistant is what extractAssistantThinking reads for /reasoning on,
+    // so the thinking block must ride the final message, not an earlier one.
+    expect(first.content.map((b) => b.type)).toEqual(["text"]);
+    expect(last.content.map((b) => b.type)).toEqual(["thinking", "text"]);
+    expect(last.content[0]?.thinking).toBe("let me reason about this");
+    expect(last.content[1]?.text).toBe("final answer");
+  });
+
+  it("emits text-only content when the turn carried no reasoning", () => {
+    const acc = {
+      assistantTexts: ["plain reply"],
+      toolMetas: [],
+      reasoning: "   ",
+      itemCount: 1,
+      toolCalls: new Map(),
+      usage: { input: 0, output: 0, total: 0 },
+    };
+    const messages = buildMessagesSnapshot(acc, {
+      provider: "anthropic",
+      model: "claude-opus-5",
+    });
+    const assistant = messages[0] as unknown as { content: Array<{ type: string }> };
+    expect(assistant.content.map((b) => b.type)).toEqual(["text"]);
+  });
+});

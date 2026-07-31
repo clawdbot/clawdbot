@@ -107,6 +107,14 @@ export type RunClaudeAppServerAttemptOptions = {
   bindingStore: ClaudeAppServerBindingStore;
 };
 
+/**
+ * Deadline for the bridge's synchronous turn/start acknowledgment (NOT the
+ * turn itself — the model runs after the ack, streamed via notifications).
+ * Generous vs the sub-second healthy ack, tight vs the 5-minute stuck-session
+ * reclaim that is otherwise the first thing to notice a lost turn/start.
+ */
+const CLAUDE_TURN_START_ACK_TIMEOUT_MS = 120_000;
+
 export async function runClaudeAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: RunClaudeAppServerAttemptOptions,
@@ -1222,7 +1230,40 @@ async function runTurn(
   // trip. Server would 400 anyway; failing fast on the client side gives
   // a cleaner ClaudeAppServerProtocolError instead.
   const turnParams = assertTurnStartParams(turnParamsCandidate);
-  const rawStartResp = await client.request<unknown>("turn/start", turnParams, ac.signal);
+  // The bridge acks turn/start synchronously (handler registers the turn and
+  // returns before running it), and every turn watchdog — model.call.started,
+  // the idle timer, the progress watch — arms only AFTER this resolves. An
+  // unacknowledged turn/start is therefore invisible to all of them: seen
+  // live 2026-07-31, runs sat here silently until the 5-minute stuck-session
+  // reclaim. Bound the ack and record the anomaly while it's happening.
+  const startAckTimeout = AbortSignal.timeout(CLAUDE_TURN_START_ACK_TIMEOUT_MS);
+  const slowAckWarn = setTimeout(() => {
+    embeddedAgentLog.warn("claude-bridge: turn/start not acknowledged after 10s", {
+      threadId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+    });
+  }, 10_000);
+  slowAckWarn.unref?.();
+  let rawStartResp: unknown;
+  try {
+    rawStartResp = await client.request<unknown>(
+      "turn/start",
+      turnParams,
+      AbortSignal.any([ac.signal, startAckTimeout]),
+    );
+  } catch (err) {
+    if (startAckTimeout.aborted && !ac.signal.aborted) {
+      throw new Error(
+        `claude-bridge did not acknowledge turn/start within ${CLAUDE_TURN_START_ACK_TIMEOUT_MS}ms for thread ${threadId}. ` +
+          "The bridge process is running but not answering new turns — retry the message; if this recurs, check `/claude status` and restart the gateway.",
+        { cause: err },
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(slowAckWarn);
+  }
   // Inbound validation: schema-check the server's reply before reading
   // turn.id. Malformed responses now throw ClaudeAppServerProtocolError
   // with structured zod issues instead of producing an undefined turnId
@@ -1703,13 +1744,22 @@ export function buildMessagesSnapshot(
   // "stop" when the turn settled without a status we could map (e.g. an
   // abrupt/malformed turn/completed) — the pre-fix hardcoded value.
   const finalStopReason = acc.stopReason ?? "stop";
-  for (const text of acc.assistantTexts) {
-    if (typeof text !== "string" || text.length === 0) {
-      continue;
-    }
+  const finalTexts = acc.assistantTexts.filter(
+    (text): text is string => typeof text === "string" && text.length > 0,
+  );
+  const reasoning = acc.reasoning.trim();
+  for (const [index, text] of finalTexts.entries()) {
+    // Thinking rides on the LAST assistant message: that message becomes
+    // lastAssistant, which is what extractAssistantThinking reads to build
+    // the durable reasoning bubble (/reasoning on) — payloads.ts keys on
+    // assistantForPayload, not on earlier snapshot entries.
+    const withThinking = reasoning && index === finalTexts.length - 1;
     const assistant = {
       role: "assistant",
-      content: [{ type: "text", text }],
+      content: [
+        ...(withThinking ? [{ type: "thinking", thinking: reasoning }] : []),
+        { type: "text", text },
+      ],
       api: "messages",
       provider: modelRef.provider,
       model: modelRef.model,
