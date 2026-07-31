@@ -40,17 +40,40 @@ describe("session-delivery queue storage", () => {
   function readSessionQueueRow(
     tempDir: string,
     id: string,
-  ): { status: string; entry_json: string; last_error: string | null } | undefined {
+  ):
+    | {
+        status: string;
+        entry_json: string;
+        last_error: string | null;
+        entry_kind: string | null;
+        session_key: string | null;
+        channel: string | null;
+        target: string | null;
+        account_id: string | null;
+      }
+    | undefined {
     const { db } = openOpenClawStateDatabase({
       env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
     });
     return db
       .prepare(
-        `SELECT status, entry_json, last_error
+        `SELECT status, entry_json, last_error,
+                entry_kind, session_key, channel, target, account_id
            FROM delivery_queue_entries
           WHERE queue_name = 'session' AND id = ?`,
       )
-      .get(id) as { status: string; entry_json: string; last_error: string | null } | undefined;
+      .get(id) as
+      | {
+          status: string;
+          entry_json: string;
+          last_error: string | null;
+          entry_kind: string | null;
+          session_key: string | null;
+          channel: string | null;
+          target: string | null;
+          account_id: string | null;
+        }
+      | undefined;
   }
 
   function rewriteSessionQueueEntry(
@@ -180,12 +203,29 @@ describe("session-delivery queue storage", () => {
           },
         ];
       });
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+      });
+      db.prepare(
+        `UPDATE delivery_queue_entries
+            SET entry_kind = 'systemEvent',
+                session_key = 'agent:main:main',
+                channel = 'discord',
+                target = 'channel:private',
+                account_id = 'private-account'
+          WHERE queue_name = 'session' AND id = ?`,
+      ).run(id);
 
       await expect(loadPendingSessionDelivery(id, tempDir)).resolves.toBeNull();
       const row = readSessionQueueRow(tempDir, id);
       expect(row).toMatchObject({
         status: "failed",
         last_error: "invalid generic session delivery attachment metadata",
+        entry_kind: null,
+        session_key: null,
+        channel: null,
+        target: null,
+        account_id: null,
       });
       expect(row?.entry_json).not.toContain(secret);
     });

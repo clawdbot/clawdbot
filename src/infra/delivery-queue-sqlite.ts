@@ -680,6 +680,8 @@ export function failPendingDeliveryQueueEntry(params: {
   failedEntry?: DeliveryQueueEntryState;
   /** Persisted text to guard on when the caller cannot re-serialize the row. */
   expectedEntryJson?: string;
+  /** Clear separately indexed routing metadata when retaining only a scrubbed tombstone. */
+  clearIndexedMetadata?: boolean;
   stateDir?: string;
 }): FailPendingDeliveryQueueEntryResult {
   if (params.entry.id !== params.id) {
@@ -704,6 +706,15 @@ export function failPendingDeliveryQueueEntry(params: {
         entry_json: JSON.stringify(failedEntry),
         updated_at: now,
         failed_at: now,
+        ...(params.clearIndexedMetadata
+          ? {
+              entry_kind: null,
+              session_key: null,
+              channel: null,
+              target: null,
+              account_id: null,
+            }
+          : {}),
       })
       .where("queue_name", "=", params.queueName)
       .where("id", "=", params.id)

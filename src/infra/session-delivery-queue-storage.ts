@@ -113,6 +113,7 @@ function failInvalidSessionDelivery(params: {
     // The rejected row is never re-serialized, so guard the transition on the
     // persisted text itself and keep the terminal payload identity-only.
     expectedEntryJson: params.entryJson,
+    clearIndexedMetadata: true,
     stateDir: params.stateDir,
   });
 }
