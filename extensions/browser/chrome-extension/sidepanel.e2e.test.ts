@@ -35,6 +35,15 @@ declare const chrome: {
       }>
     >;
   };
+  storage: {
+    local: {
+      set(values: Record<string, unknown>): Promise<void>;
+    };
+    session: {
+      get(keys: string[]): Promise<Record<string, unknown>>;
+      set(values: Record<string, unknown>): Promise<void>;
+    };
+  };
   sidePanel: {
     setOptions(options: { tabId: number; enabled: boolean }): Promise<void>;
   };
@@ -58,6 +67,7 @@ type GatewayHarness = {
   chatSends: Array<Record<string, unknown>>;
   connectParams: Array<Record<string, unknown>>;
   histories: Map<string, Array<Record<string, unknown>>>;
+  labels: Map<string, string>;
   port: number;
   requests: RequestFrame[];
   close: () => Promise<void>;
@@ -120,13 +130,18 @@ function sendResponse(socket: WebSocket, id: string, payload: unknown): void {
   socket.send(JSON.stringify({ type: "res", id, ok: true, payload }));
 }
 
-function sendError(socket: WebSocket, id: string, message: string): void {
+function sendError(
+  socket: WebSocket,
+  id: string,
+  message: string,
+  { code = "UNAVAILABLE", retryable = true } = {},
+): void {
   socket.send(
     JSON.stringify({
       type: "res",
       id,
       ok: false,
-      error: { code: "UNAVAILABLE", message, retryable: true },
+      error: { code, message, retryable },
     }),
   );
 }
@@ -194,6 +209,7 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
   const wss = new WebSocketServer({ server });
   const histories = new Map<string, Array<Record<string, unknown>>>();
   const archived = new Set<string>();
+  const labels = new Map<string, string>();
   const requests: RequestFrame[] = [];
   const connectParams: Array<Record<string, unknown>> = [];
   const chatSends: Array<Record<string, unknown>> = [];
@@ -241,7 +257,21 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
       }
       const key = textValue(params.key) || textValue(params.sessionKey);
       if (frame.method === "sessions.create") {
-        histories.set(key, []);
+        const label = textValue(params.label);
+        const existingKey = labels.get(label);
+        if (label && existingKey && existingKey !== key) {
+          sendError(socket, frame.id, `label already in use: ${label}`, {
+            code: "INVALID_REQUEST",
+            retryable: false,
+          });
+          return;
+        }
+        if (label) {
+          labels.set(label, key);
+        }
+        if (!histories.has(key)) {
+          histories.set(key, []);
+        }
         sendResponse(socket, frame.id, { ok: true, key, sessionId: `id-${histories.size}` });
         return;
       }
@@ -308,6 +338,7 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
     chatSends,
     connectParams,
     histories,
+    labels,
     port,
     requests,
     disconnectClients: () => {
@@ -568,6 +599,131 @@ async function unshareTab(worker: Worker, tabId: number): Promise<void> {
 }
 
 describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
+  it("survives an unpacked-extension reload across a browser restart", async () => {
+    const gateway = await createGatewayHarness();
+    cleanups.push(gateway.close);
+    const relay = await createRelayHarness();
+    cleanups.push(relay.close);
+    const fixture = await createFixtureServer();
+    cleanups.push(fixture.close);
+    const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
+    const userDataDir = tempDirs.make("openclaw-copilot-reload-profile-");
+    const executablePath = await resolveChromiumExecutableOverride();
+    const launchOptions: Parameters<typeof chromium.launchPersistentContext>[1] = {
+      ...(executablePath ? { executablePath } : { channel: "chromium" }),
+      headless: true,
+      args: [
+        "--enable-unsafe-extension-debugging",
+        `--disable-extensions-except=${unpackedExtension}`,
+        `--load-extension=${unpackedExtension}`,
+      ],
+    };
+    const initialContext = await chromium.launchPersistentContext(userDataDir, launchOptions);
+    cleanups.push(async () => await initialContext.close());
+    const browser = initialContext.browser();
+    if (!browser) {
+      throw new Error("Chromium browser connection unavailable");
+    }
+    const browserCdp = await browser.newBrowserCDPSession();
+    const extensionId = await waitForLoadedExtensionId(browserCdp, unpackedExtension);
+    const launcher = initialContext.pages()[0] ?? (await initialContext.newPage());
+    await launcher.goto(`chrome-extension://${extensionId}/e2e-launcher.html`);
+    await launcher.evaluate(
+      async ({ gatewayPort, relayPort }) =>
+        await chrome.runtime.sendMessage({
+          type: "pair",
+          pairingString: `ws://127.0.0.1:${relayPort}/extension?gateway=${encodeURIComponent(`ws://127.0.0.1:${gatewayPort}`)}#relay-e2e-token`,
+          groupColor: "#ff7020",
+        }),
+      { gatewayPort: gateway.port, relayPort: relay.port },
+    );
+    await expect.poll(() => gateway.connectParams.length, { timeout: 10_000 }).toBe(1);
+
+    const tabId = await launcher.evaluate(async () => (await chrome.tabs.getCurrent()).id);
+    if (typeof tabId !== "number") {
+      throw new Error("Chrome did not expose the extension tab id");
+    }
+    const oldSessionKey =
+      "agent:main:main:thread:browser-copilot-11111111-1111-4111-8111-111111111111";
+    gateway.labels.set("Browser copilot", oldSessionKey);
+    gateway.histories.set(oldSessionKey, []);
+    await launcher.evaluate(
+      async ({ gatewayScope, oldSessionKey, tabId }) => {
+        await chrome.storage.local.set({
+          copilotSessionRegistryV1: {
+            sessions: {
+              [tabId]: {
+                tabId,
+                browserInstanceId: "beta-5-browser-instance",
+                gatewayScope,
+                sessionKey: oldSessionKey,
+                sessionId: "beta-5-session",
+              },
+            },
+            pendingArchives: [],
+          },
+        });
+        await chrome.storage.session.set({
+          copilotBrowserInstanceV1: "beta-5-browser-instance",
+        });
+      },
+      {
+        gatewayScope: `ws://127.0.0.1:${gateway.port}/`,
+        oldSessionKey,
+        tabId,
+      },
+    );
+
+    await initialContext.close();
+    const reloadedContext = await chromium.launchPersistentContext(userDataDir, launchOptions);
+    cleanups.push(async () => await reloadedContext.close());
+    const reloadedBrowser = reloadedContext.browser();
+    if (!reloadedBrowser) {
+      throw new Error("Reloaded Chromium browser connection unavailable");
+    }
+    const reloadedBrowserCdp = await reloadedBrowser.newBrowserCDPSession();
+    const reloadedExtensionId = await waitForLoadedExtensionId(
+      reloadedBrowserCdp,
+      unpackedExtension,
+    );
+    expect(reloadedExtensionId).toBe(extensionId);
+    const reloadedLauncher = reloadedContext.pages()[0] ?? (await reloadedContext.newPage());
+    await reloadedLauncher.goto(`chrome-extension://${reloadedExtensionId}/e2e-launcher.html`);
+    await expect.poll(() => gateway.connectParams.length, { timeout: 15_000 }).toBe(2);
+    const browserInstanceId = await reloadedLauncher.evaluate(async () => {
+      const stored = await chrome.storage.session.get(["copilotBrowserInstanceV1"]);
+      return stored.copilotBrowserInstanceV1;
+    });
+    expect(browserInstanceId).not.toBe("beta-5-browser-instance");
+
+    const panel = await openTabPanel({
+      browserCdp: reloadedBrowserCdp,
+      extensionId: reloadedExtensionId,
+      page: reloadedLauncher,
+    });
+    await reloadedLauncher.goto(`${fixture.baseUrl}/reload`);
+    await panel.click("#gate-action");
+    await expect
+      .poll(async () => !(await panel.disabled("#message-input")), { timeout: 15_000 })
+      .toBe(true);
+    await expect.poll(() => gateway.archived.has(oldSessionKey), { timeout: 10_000 }).toBe(true);
+
+    const created = gateway.requests.filter((request) => request.method === "sessions.create");
+    const fresh = created.find((request) => request.params?.key !== oldSessionKey);
+    expect(fresh?.params).toEqual({
+      key: expect.stringMatching(/:thread:browser-copilot-[0-9a-f-]{36}$/),
+      label: expect.stringMatching(/^Browser copilot [0-9a-f-]{36}$/),
+    });
+    expect(fresh?.params?.label).not.toBe("Browser copilot");
+    expect(gateway.labels.get("Browser copilot")).toBe(oldSessionKey);
+
+    await panel.fill("#message-input", "reload recovery marker");
+    await panel.click("#send-button");
+    await expect
+      .poll(async () => await panel.allText(".message.assistant"), { timeout: 10_000 })
+      .toContain("Isolated reply: reload recovery marker");
+  }, 90_000);
+
   it("returns one error response when a panel's tab disappears", async () => {
     const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
     const userDataDir = tempDirs.make("openclaw-copilot-missing-tab-profile-");
