@@ -1,4 +1,4 @@
-// Control UI tests cover LM Studio setup against a mocked Gateway.
+// Control UI tests cover llama.cpp setup against a mocked Gateway.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
@@ -18,6 +18,18 @@ const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? descri
 const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
 const prepareOptions = [
   {
+    id: "ollama",
+    brandId: "ollama",
+    label: "Ollama",
+    hint: "Connect to an Ollama server and select a cloud or local model",
+  },
+  {
+    id: "llama-cpp",
+    brandId: "llama-cpp",
+    label: "Local model (llama.cpp)",
+    hint: "Download and run a private GGUF model",
+  },
+  {
     id: "lmstudio",
     brandId: "lmstudio",
     label: "LM Studio",
@@ -30,7 +42,7 @@ const prepareOptions = [
 let browser: Browser;
 let server: ControlUiE2eServer;
 
-describeControlUiE2e("Control UI LM Studio setup mocked Gateway E2E", () => {
+describeControlUiE2e("Control UI llama.cpp setup mocked Gateway E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
@@ -44,7 +56,7 @@ describeControlUiE2e("Control UI LM Studio setup mocked Gateway E2E", () => {
     await server?.close();
   });
 
-  it("connects, retries, verifies, and keeps LM Studio visible in settings", async () => {
+  it("downloads, verifies, and keeps llama.cpp visible in settings", async () => {
     const context = await browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -59,7 +71,7 @@ describeControlUiE2e("Control UI LM Studio setup mocked Gateway E2E", () => {
       workspace: "/tmp/openclaw-e2e",
       setupComplete: false,
     };
-    const modelRef = "lmstudio/qwen3-8b-instruct";
+    const modelRef = "llama-cpp/gemma-4-e4b-it-q4_k_m";
     const gateway = await installMockGateway(page, {
       featureMethods: [
         "chat.metadata",
@@ -72,14 +84,14 @@ describeControlUiE2e("Control UI LM Studio setup mocked Gateway E2E", () => {
       methodResponses: {
         "openclaw.setup.detect": initialDetection,
         "openclaw.setup.prepare.start": {
-          sessionId: "lmstudio-prepare-session",
+          sessionId: "llama-cpp-prepare-session",
           done: false,
           status: "running",
         },
         "openclaw.setup.activate": {
           ok: true,
           modelRef,
-          latencyMs: 416,
+          latencyMs: 731,
           lines: ["Model ready"],
         },
         "wizard.next": {
@@ -88,44 +100,31 @@ describeControlUiE2e("Control UI LM Studio setup mocked Gateway E2E", () => {
               done: false,
               status: "running",
               step: {
-                id: "lmstudio-base-url",
-                type: "text",
-                message: "LM Studio base URL",
-                initialValue: "http://localhost:1234/v1",
-              },
-            },
-            {
-              done: false,
-              status: "running",
-              step: {
-                id: "lmstudio-api-key",
-                type: "text",
-                message: "LM Studio API key",
-                placeholder: "Leave blank if auth is disabled",
-                sensitive: true,
-              },
-            },
-            {
-              done: false,
-              status: "running",
-              step: {
-                id: "lmstudio-retry",
-                type: "note",
-                title: "LM Studio",
-                message: [
-                  "LM Studio could not be reached at http://localhost:1234/v1.",
-                  "Start LM Studio (or run lms server start), then continue to retry.",
-                ].join("\n"),
-              },
-            },
-            {
-              done: false,
-              status: "running",
-              step: {
-                id: "lmstudio-retry-confirm",
+                id: "llama-cpp-consent",
                 type: "confirm",
-                message: "Retry this LM Studio connection now?",
-                initialValue: true,
+                message:
+                  "Download Gemma 4 E4B IT Q4_K_M (about 5.0 GB) for local llama.cpp inference?",
+                initialValue: false,
+              },
+            },
+            {
+              done: false,
+              status: "running",
+              step: {
+                id: "llama-cpp-download-20",
+                type: "progress",
+                message: "Downloading Gemma 4 E4B… 20% (1.0/5.0 GB, 38 MB/s)",
+                executor: "gateway",
+              },
+            },
+            {
+              done: false,
+              status: "running",
+              step: {
+                id: "llama-cpp-download-100",
+                type: "progress",
+                message: "Gemma 4 E4B model downloaded",
+                executor: "gateway",
               },
             },
             { done: true, status: "done" },
@@ -137,52 +136,48 @@ describeControlUiE2e("Control UI LM Studio setup mocked Gateway E2E", () => {
     try {
       const response = await page.goto(`${server.baseUrl}settings/model-setup`);
       expect(response?.status()).toBe(200);
-      const lmStudioRow = page.locator('[data-prepare-choice="lmstudio"]');
-      await lmStudioRow.getByRole("button", { name: "Check & set up" }).waitFor();
+      const llamaCppRow = page.locator('[data-prepare-choice="llama-cpp"]');
+      await llamaCppRow.getByRole("button", { name: "Check & set up" }).waitFor();
       await expect
-        .poll(() => lmStudioRow.locator('[data-provider-icon="lmstudio"]').count())
+        .poll(() => llamaCppRow.locator('[data-provider-icon="llamacpp"]').count())
         .toBe(1);
+      await expect.poll(() => llamaCppRow.textContent()).not.toContain("Gemma");
+      await expect.poll(() => llamaCppRow.textContent()).not.toContain("GB");
+      await expect.poll(() => llamaCppRow.textContent()).not.toContain("RAM");
 
       if (artifactDir) {
         await mkdir(artifactDir, { recursive: true });
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(artifactDir, "lmstudio-offer-desktop.png"),
+          path: path.join(artifactDir, "llama-cpp-offer-desktop.png"),
         });
       }
 
-      await lmStudioRow.getByRole("button", { name: "Check & set up" }).click();
+      await llamaCppRow.getByRole("button", { name: "Check & set up" }).click();
       const start = await gateway.waitForRequest("openclaw.setup.prepare.start");
-      expect(start.params).toMatchObject({ authChoice: "lmstudio" });
-      await expect
-        .poll(() => page.getByLabel("LM Studio base URL").inputValue())
-        .toBe("http://localhost:1234/v1");
-      await page.getByRole("button", { name: "Submit" }).click();
-      await page.getByLabel("LM Studio API key").fill("");
-      await page.getByRole("button", { name: "Submit" }).click();
-      await page.getByText("LM Studio could not be reached at http://localhost:1234/v1.").waitFor();
+      expect(start.params).toMatchObject({ authChoice: "llama-cpp" });
+      await page.getByRole("heading", { name: "Set up a local model" }).waitFor();
+      await page.getByText("Download Gemma 4 E4B IT Q4_K_M").waitFor();
 
       if (artifactDir) {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(artifactDir, "lmstudio-recovery-desktop.png"),
+          path: path.join(artifactDir, "llama-cpp-confirm-desktop.png"),
         });
       }
 
-      await page.getByRole("button", { name: "Continue" }).click();
-      await page.getByText("Retry this LM Studio connection now?").waitFor();
       await gateway.setMethodResponse("openclaw.setup.detect", {
         ...initialDetection,
         candidates: [
           {
-            kind: "provider-auto:lmstudio",
-            brandId: "lmstudio",
-            label: "LM Studio",
-            detail: "qwen3-8b-instruct at http://localhost:1234/v1",
+            kind: "provider-auto:llama-cpp",
+            brandId: "llama-cpp",
+            label: "llama.cpp",
+            detail: "Gemma 4 E4B downloaded",
             modelRef,
-            recommended: false,
+            recommended: true,
             credentials: true,
           },
         ],
@@ -194,14 +189,14 @@ describeControlUiE2e("Control UI LM Studio setup mocked Gateway E2E", () => {
         .toContain(modelRef);
       await expect
         .poll(() => page.locator(".model-setup-success").textContent())
-        .toContain("Verified in 416 ms");
+        .toContain("Verified in 731 ms");
       await expect
-        .poll(() => page.locator('.model-setup-success [data-provider-icon="lmstudio"]').count())
+        .poll(() => page.locator('.model-setup-success [data-provider-icon="llamacpp"]').count())
         .toBe(1);
 
       const activate = await gateway.waitForRequest("openclaw.setup.activate");
       expect(activate.params).toEqual({
-        kind: "provider-auto:lmstudio",
+        kind: "provider-auto:llama-cpp",
         modelRef,
       });
 
@@ -209,13 +204,13 @@ describeControlUiE2e("Control UI LM Studio setup mocked Gateway E2E", () => {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(artifactDir, "lmstudio-ready-desktop.png"),
+          path: path.join(artifactDir, "llama-cpp-ready-desktop.png"),
         });
         await page.setViewportSize({ height: 844, width: 390 });
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(artifactDir, "lmstudio-ready-mobile.png"),
+          path: path.join(artifactDir, "llama-cpp-ready-mobile.png"),
         });
       }
 
@@ -230,13 +225,13 @@ describeControlUiE2e("Control UI LM Studio setup mocked Gateway E2E", () => {
       const currentConnection = page.locator(".model-setup__current");
       await currentConnection.getByText(modelRef, { exact: true }).waitFor();
       await expect
-        .poll(() => currentConnection.locator('[data-provider-icon="lmstudio"]').count())
+        .poll(() => currentConnection.locator('[data-provider-icon="llamacpp"]').count())
         .toBe(1);
       if (artifactDir) {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(artifactDir, "lmstudio-main-desktop.png"),
+          path: path.join(artifactDir, "llama-cpp-main-desktop.png"),
         });
       }
     } finally {

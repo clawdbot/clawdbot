@@ -4,6 +4,7 @@ import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import {
   hasProviderBrandIcon,
+  providerIdFromModelRef,
   renderProviderBrandIcon,
   renderProviderFallbackIcon,
 } from "../../components/provider-icon.ts";
@@ -231,31 +232,37 @@ function renderCurrentConnection(props: ModelSetupViewProps, modelRef: string) {
   // A successful verify reports the model that actually answered; prefer it over
   // the detect-time snapshot so concurrent config changes cannot mislabel the result.
   const displayRef = props.verify.phase === "ok" ? props.verify.modelRef : modelRef;
+  const providerId = providerIdFromModelRef(displayRef);
   return html`
     <section class="settings-section model-setup__current" data-verify-phase=${props.verify.phase}>
       <div class="settings-section__header">
         <h2>${t("modelSetup.verify.title")}</h2>
       </div>
       <div class="model-setup__row">
-        <div class="model-setup__row-main">
-          <strong>${displayRef}</strong>
-          ${props.verify.phase === "checking"
-            ? html`<div class="model-setup__testing" role="status">
-                ${t("modelSetup.verify.checking", { modelRef })}
-              </div>`
-            : props.verify.phase === "ok"
-              ? html`<div class="model-setup__verified" role="status">
-                  ${props.verify.latencyMs === undefined
-                    ? t("modelSetup.verify.answered")
-                    : t("modelSetup.verify.answeredIn", {
-                        latencyMs: String(props.verify.latencyMs),
-                      })}
+        <div class="model-setup__row-main model-setup__provider-copy">
+          ${providerId
+            ? renderProviderBrandIcon(providerId, { className: "model-setup__icon" })
+            : nothing}
+          <div class="model-setup__current-copy">
+            <strong>${displayRef}</strong>
+            ${props.verify.phase === "checking"
+              ? html`<div class="model-setup__testing" role="status">
+                  ${t("modelSetup.verify.checking", { modelRef })}
                 </div>`
-              : props.verify.phase === "failed"
-                ? html`<div class="callout danger" role="alert">
-                    <strong>${failureLabel(props.verify.status)}</strong> ${props.verify.error}
+              : props.verify.phase === "ok"
+                ? html`<div class="model-setup__verified" role="status">
+                    ${props.verify.latencyMs === undefined
+                      ? t("modelSetup.verify.answered")
+                      : t("modelSetup.verify.answeredIn", {
+                          latencyMs: String(props.verify.latencyMs),
+                        })}
                   </div>`
-                : nothing}
+                : props.verify.phase === "failed"
+                  ? html`<div class="callout danger" role="alert">
+                      <strong>${failureLabel(props.verify.status)}</strong> ${props.verify.error}
+                    </div>`
+                  : nothing}
+          </div>
         </div>
         ${props.canVerify
           ? html`<button
