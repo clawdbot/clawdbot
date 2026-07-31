@@ -15,7 +15,7 @@ export const WIKI_OPEN_ITEM_KINDS = [
   "low-confidence-claim",
 ] as const;
 
-export type MemoryWikiOpenItemKind = (typeof WIKI_OPEN_ITEM_KINDS)[number];
+type MemoryWikiOpenItemKind = (typeof WIKI_OPEN_ITEM_KINDS)[number];
 
 // Mirrors the low-confidence dashboard threshold in compile.ts so the tool and
 // the reports/low-confidence.md dashboard stay in agreement.
@@ -24,7 +24,7 @@ const LOW_CONFIDENCE_THRESHOLD = 0.5;
 // One competing statement inside a contradiction cluster. Carried on the item so
 // agents (and downstream resolution flows) can present the actual conflicting
 // claims instead of an opaque cluster id.
-export type MemoryWikiOpenItemVariant = {
+type MemoryWikiOpenItemVariant = {
   text: string;
   status: string;
   pagePath: string;
@@ -32,7 +32,7 @@ export type MemoryWikiOpenItemVariant = {
   confidence?: number;
 };
 
-export type MemoryWikiOpenItem = {
+type MemoryWikiOpenItem = {
   kind: MemoryWikiOpenItemKind;
   text: string;
   pagePath: string;
@@ -44,9 +44,9 @@ export type MemoryWikiOpenItem = {
   relatedPagePaths?: string[];
 };
 
-export type MemoryWikiOpenItemCounts = Record<MemoryWikiOpenItemKind, number> & { total: number };
+type MemoryWikiOpenItemCounts = Record<MemoryWikiOpenItemKind, number> & { total: number };
 
-export type MemoryWikiOpenItemsResult = {
+type MemoryWikiOpenItemsResult = {
   items: MemoryWikiOpenItem[];
   counts: MemoryWikiOpenItemCounts;
 };
@@ -74,7 +74,7 @@ export function countMemoryWikiOpenItems(items: MemoryWikiOpenItem[]): MemoryWik
  * be unit tested without touching the filesystem; the detection logic reuses the
  * same helpers that power the reports/*.md dashboards in compile.ts.
  */
-export function deriveMemoryWikiOpenItems(
+function deriveMemoryWikiOpenItems(
   pages: WikiPageSummary[],
   now?: Date,
 ): MemoryWikiOpenItemsResult {

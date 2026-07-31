@@ -428,9 +428,6 @@ const config = {
     // Mirror config parsing, redaction mapping, cap fitting, and the runner are
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
-    // Focused wiki-open-items tests exercise the pure derivation and its result
-    // contracts; production reaches the same behavior through the collector tool.
-    "extensions/memory-wiki/src/open-items.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
   },
   workspaces: {
