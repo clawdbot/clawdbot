@@ -12,6 +12,7 @@ import {
 import type { TSchema } from "typebox";
 import { cleanSchemaForGemini } from "./clean-for-gemini.js";
 import { cleanSchemaForLlamacppGbnf } from "./clean-for-llamacpp-gbnf.js";
+import { cleanSchemaForMoonshot } from "./clean-for-moonshot.js";
 import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
 
 /**
@@ -106,6 +107,10 @@ function rememberCachedToolParameterSchema(schema: object, key: string, value: T
 
 function isGeminiModelId(modelId: string): boolean {
   return /(?:^|[/:])gemini(?:$|[-/:.])/.test(modelId);
+}
+
+function isKimiModelId(modelId: string): boolean {
+  return /(?:^|[/:])kimi(?:$|[-/:.])/.test(modelId);
 }
 
 function extractEnumValues(schema: unknown): unknown[] | undefined {
@@ -817,6 +822,8 @@ function normalizeToolParameterSchemaUncached(
   //   (TypeBox root unions compile to `{ anyOf: [...] }` without `type`).
   // - Anthropic expects full JSON Schema draft 2020-12 compliance.
   // - xAI's documented tool-schema contract rejects contains-count bounds.
+  // - Moonshot's "flavored" schema validator rejects `type` declared next to
+  //   anyOf/oneOf/allOf; every branch must declare its own `type`.
   //
   // Normalize once here so callers can always pass `tools` through unchanged.
   const normalizedProvider = normalizeLowercaseStringOrEmpty(options?.modelProvider);
@@ -829,6 +836,11 @@ function normalizeToolParameterSchemaUncached(
     normalizedProvider.includes("gemini") ||
     isGeminiModelId(normalizedModelId) ||
     normalizedToolSchemaProfile === "gemini";
+  const isMoonshotProvider =
+    normalizedProvider.includes("moonshot") ||
+    normalizedProvider.includes("kimi") ||
+    isKimiModelId(normalizedModelId) ||
+    normalizedToolSchemaProfile === "moonshot";
   const isAnthropicProvider = normalizedProvider.includes("anthropic");
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
   const omitEmptyArrayItems = shouldOmitEmptyArrayItems(options?.modelCompat);
@@ -841,6 +853,9 @@ function normalizeToolParameterSchemaUncached(
       : normalizedSchema;
     if (isLlamacppGbnfProfile) {
       arrayItemsCompatibleSchema = cleanSchemaForLlamacppGbnf(arrayItemsCompatibleSchema);
+    }
+    if (isMoonshotProvider) {
+      arrayItemsCompatibleSchema = cleanSchemaForMoonshot(arrayItemsCompatibleSchema);
     }
     if (isGeminiProvider && !isAnthropicProvider) {
       const geminiCompatibleSchema = cleanSchemaForGemini(arrayItemsCompatibleSchema);
