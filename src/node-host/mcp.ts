@@ -10,6 +10,7 @@ import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/s
 import { matchesMcpToolFilterPattern } from "../agents/agent-bundle-mcp-filter.js";
 import { createMcpJsonSchemaValidator } from "../agents/mcp-json-schema-validator.js";
 import { sanitizeMcpMetadataText } from "../agents/mcp-metadata.js";
+import { collectMcpPaginatedItems } from "../agents/mcp-pagination.js";
 import { resolveMcpRequestTimeoutMs } from "../agents/mcp-transport-config.js";
 import { resolveMcpTransport } from "../agents/mcp-transport.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
@@ -38,7 +39,7 @@ type NodeHostMcpClient = {
   connect(transport: Transport): Promise<void>;
   listTools(
     params?: { cursor?: string },
-    options?: { timeout?: number },
+    options?: { timeout?: number; maxTotalTimeout?: number; signal?: AbortSignal },
   ): Promise<{ tools: Tool[]; nextCursor?: string }>;
   callTool(
     params: { name: string; arguments?: Record<string, unknown> },
@@ -266,74 +267,30 @@ async function listAllTools(
   shouldInclude: (toolName: string) => boolean,
   signal?: AbortSignal,
 ): Promise<Tool[]> {
-  const listingTimeoutMs = clampPositiveTimerTimeoutMs(timeoutMs);
-  if (listingTimeoutMs === undefined) {
-    throw new Error("MCP tool listing requires a positive timeout");
-  }
-  const tools: Tool[] = [];
-  const seenCursors = new Set<string>();
-  let listingBytes = 0;
-  let cursor: string | undefined;
-  // One absolute deadline owns the complete catalog; each SDK request receives
-  // only the remaining budget so pagination cannot multiply requestTimeoutMs.
-  const deadlineAtMs = Date.now() + listingTimeoutMs;
-  let deadlineTimer: NodeJS.Timeout | undefined;
-  const deadline = new Promise<never>((_, reject) => {
-    deadlineTimer = setTimeout(
-      () => reject(new Error(`MCP tool listing timed out after ${listingTimeoutMs}ms`)),
-      listingTimeoutMs,
-    );
-    deadlineTimer.unref?.();
+  return await collectMcpPaginatedItems({
+    label: "MCP tool listing",
+    itemLabel: "tools",
+    timeoutMs,
+    maxPages: NODE_MCP_MAX_LIST_PAGES,
+    maxItems: NODE_MCP_MAX_LISTED_TOOLS,
+    maxBytes: NODE_MCP_MAX_CATALOG_BYTES,
+    signal,
+    loadPage: async ({ cursor, timeoutMs: remainingTimeoutMs, signal: requestSignal }) => {
+      const page = await client.listTools(cursor === undefined ? undefined : { cursor }, {
+        timeout: remainingTimeoutMs,
+        maxTotalTimeout: remainingTimeoutMs,
+        signal: requestSignal,
+      });
+      return { items: page.tools, nextCursor: page.nextCursor, serializedValue: page };
+    },
+    mapItem: (tool) => {
+      const toolName = tool.name.trim();
+      if (!toolName || !shouldInclude(toolName)) {
+        return undefined;
+      }
+      return { ...tool, name: toolName };
+    },
   });
-
-  try {
-    for (let pageNumber = 0; pageNumber < NODE_MCP_MAX_LIST_PAGES; pageNumber += 1) {
-      const remainingTimeoutMs = clampPositiveTimerTimeoutMs(deadlineAtMs - Date.now());
-      if (remainingTimeoutMs === undefined) {
-        throw new Error(`MCP tool listing timed out after ${listingTimeoutMs}ms`);
-      }
-      const page = await withAbort(
-        Promise.race([
-          client.listTools(cursor === undefined ? undefined : { cursor }, {
-            timeout: remainingTimeoutMs,
-          }),
-          deadline,
-        ]),
-        signal,
-      );
-      listingBytes += Buffer.byteLength(JSON.stringify(page));
-      if (listingBytes > NODE_MCP_MAX_CATALOG_BYTES) {
-        throw new Error(`MCP tool listing exceeded ${NODE_MCP_MAX_CATALOG_BYTES} bytes`);
-      }
-
-      for (const tool of page.tools) {
-        const toolName = tool.name.trim();
-        if (!toolName || !shouldInclude(toolName)) {
-          continue;
-        }
-        if (tools.length >= NODE_MCP_MAX_LISTED_TOOLS) {
-          throw new Error(`MCP tool listing exceeded ${NODE_MCP_MAX_LISTED_TOOLS} tools`);
-        }
-        tools.push({ ...tool, name: toolName });
-      }
-
-      const nextCursor = page.nextCursor;
-      if (nextCursor === undefined) {
-        return tools;
-      }
-      if (seenCursors.has(nextCursor)) {
-        throw new Error("MCP tool listing returned a repeated pagination cursor");
-      }
-      seenCursors.add(nextCursor);
-      cursor = nextCursor;
-    }
-
-    throw new Error(`MCP tool listing exceeded ${NODE_MCP_MAX_LIST_PAGES} pages`);
-  } finally {
-    if (deadlineTimer) {
-      clearTimeout(deadlineTimer);
-    }
-  }
 }
 
 function resolveCallTimeoutMs(value: number | undefined): number {
