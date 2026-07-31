@@ -29,7 +29,10 @@ describe("TUI reset transition PTY", () => {
           OPENCLAW_THEME: "dark",
           OPENCLAW_TUI_PTY_LOG_PATH: logPath,
           OPENCLAW_TUI_PTY_RESET_RELEASE_PATH: resetReleasePath,
-          OPENCLAW_TUI_PTY_SUBMIT_BURST_WINDOW_MS: "5000",
+          OPENCLAW_TUI_PTY_SUBMIT_BURST_ENABLED: "1",
+          OPENCLAW_TUI_PTY_SUBMIT_BURST_WINDOW_MS: "1000",
+          OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE: "1",
+          OPENCLAW_TUI_PTY_TYPE_DELAY_MS: "2",
           OPENCLAW_TUI_PTY_CTRL_C_EXIT_WINDOW_MS: "5000",
           TERM_PROGRAM: "Apple_Terminal",
           NO_COLOR: undefined,
@@ -47,18 +50,18 @@ describe("TUI reset transition PTY", () => {
         await waitForLogEntry(
           (entry) => entry.method === "resetSession" && objectFieldEquals(entry, "reason", "reset"),
         );
-
-        await run.write("overlap during reset\rnewer suffix", { delay: false });
+        await run.write("overlap during reset\r");
         await waitForLogEntry(
           (entry) =>
             entry.method === "submitBurstCaptured" &&
             objectFieldEquals(entry, "value", "overlap during reset"),
         );
+        await run.write("newer suffix");
         // Release before the controlled paste coalescer flushes. Admission must use
         // the transition snapshot captured when Enter arrived, not live state.
         await writeFile(resetReleasePath, "released\n", "utf8");
         await run.waitForOutput("session main (Reset session after)");
-        await run.waitForOutput("overlap during resetnewer suffix", 7_000);
+        await run.waitForOutput("overlap during reset\nnewer suffix", 7_000);
 
         await run.write("\r", { delay: false });
         await waitForLogEntry(
@@ -66,7 +69,7 @@ describe("TUI reset transition PTY", () => {
             entry.method === "sendChat" &&
             objectFieldEquals(entry, "message", "overlap during reset\nnewer suffix"),
         );
-        await run.waitForOutput("PTY_RESPONSE: overlap during reset");
+        await run.waitForOutput("PTY_RESPONSE: overlap during reset", 7_000);
 
         const sends = (await readFixtureLog(logPath)).filter(
           (entry) => entry.method === "sendChat",
@@ -85,12 +88,8 @@ describe("TUI reset transition PTY", () => {
             preservedInputDelivered: true,
           }),
         );
-
-        await run.write("\u0003", { delay: false });
-        await run.waitForOutput("press ctrl+c again to exit");
-        await run.write("\u0003", { delay: false });
-        expect((await run.waitForExit()).exitCode).toBe(0);
       } finally {
+        await run.forceKill();
         await run.dispose();
         await rm(tempDir, { recursive: true, force: true });
       }

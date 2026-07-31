@@ -872,6 +872,7 @@ describe("TUI PTY real backends", () => {
       },
       waitForOutput: async () => output,
       waitForExit: async () => ({ exitCode: 0, signal: 0 }),
+      forceKill: async () => {},
       dispose: async () => {},
     } satisfies PtyRun;
 
