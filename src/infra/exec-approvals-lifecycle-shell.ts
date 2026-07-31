@@ -1,9 +1,5 @@
 // Splits compound shell text without treating quoted separators as commands.
 import { splitShellArgs } from "../utils/shell-argv.js";
-import { resolveCarrierCommandArgv } from "./command-carriers.js";
-import { classifyOpenClawArgv } from "./exec-approvals-lifecycle-cli.js";
-import { isOpenClawExecutablePattern } from "./exec-approvals-lifecycle-patterns.js";
-import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-runners.js";
 
 export type LifecycleShellDialect = "cmd" | "posix" | "powershell";
 
@@ -66,24 +62,6 @@ export function powerShellCalculatedInvocationRequiresApproval(command: string):
   );
 }
 
-function classifyPosixBoundInvocation(argv: readonly string[], depth = 0): boolean {
-  if (argv.length === 0 || depth >= 8) {
-    return false;
-  }
-  if (isOpenClawExecutablePattern(argv[0])) {
-    return classifyOpenClawArgv(["openclaw", ...argv.slice(1)]);
-  }
-  const runner = resolveLifecyclePackageRunnerArgv(argv);
-  if (runner.kind === "approval-required") {
-    return true;
-  }
-  if (runner.kind === "argv") {
-    return classifyPosixBoundInvocation(runner.argv, depth + 1);
-  }
-  const carried = resolveCarrierCommandArgv(argv, depth, { includeExec: true });
-  return carried?.length ? classifyPosixBoundInvocation(carried, depth + 1) : false;
-}
-
 function resolvePosixBindingArgv(
   name: string,
   bindings: ReadonlyMap<string, string>,
@@ -107,7 +85,10 @@ function resolvePosixBindingArgv(
 }
 
 /** Track POSIX alias and Bash hash bindings across compound command fragments. */
-export function posixCommandBindingRequiresApproval(command: string): boolean {
+export function posixCommandBindingRequiresApproval(
+  command: string,
+  classify: (argv: string[], raw: string) => boolean,
+): boolean {
   const aliasBindings = new Map<string, string>();
   const hashBindings = new Map<string, string>();
   const unresolvedAliases = new Set<string>();
@@ -179,10 +160,11 @@ export function posixCommandBindingRequiresApproval(command: string): boolean {
     }
     const bindings = new Map([...hashBindings, ...aliasBindings]);
     const bindingArgv = resolvePosixBindingArgv(executable, bindings);
+    const resolvedArgv = bindingArgv ? [...bindingArgv, ...argv.slice(1)] : null;
     if (
-      (bindingArgv && classifyPosixBoundInvocation([...bindingArgv, ...argv.slice(1)])) ||
+      (resolvedArgv && classify(resolvedArgv, resolvedArgv.join(" "))) ||
       ((unresolvedAliases.has(executable) || unresolvedHashes.has(executable)) &&
-        classifyOpenClawArgv(["openclaw", ...argv.slice(1)]))
+        classify(["openclaw", ...argv.slice(1)], ["openclaw", ...argv.slice(1)].join(" ")))
     ) {
       return true;
     }

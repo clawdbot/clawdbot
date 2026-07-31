@@ -23,14 +23,14 @@ import {
   matchesOpenClawUnitPattern,
 } from "./exec-approvals-lifecycle-patterns.js";
 import {
-  commandHasPowerShellLifecyclePipeline,
-  powerShellAliasLifecycleInvocationRequiresApproval,
+  commandHasPowerShellLifecyclePipeline as pipelineNeedsApproval,
+  powerShellAliasLifecycleInvocationRequiresApproval as powerShellAliasNeedsApproval,
   resolvePowerShellStartProcessOpenClawArgv,
 } from "./exec-approvals-lifecycle-powershell.js";
 import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-runners.js";
 import {
   lifecycleControlArgvRequiresApproval,
-  posixCommandBindingRequiresApproval,
+  posixCommandBindingRequiresApproval as posixBindingNeedsApproval,
   powerShellCalculatedInvocationRequiresApproval,
   splitLifecycleInlineCommands,
   stripLifecyclePosixAssignments,
@@ -427,29 +427,23 @@ function classifyArgv(
             shadowedKeys: nestedShadowedKeys,
           })
       : undefined;
+    const classifyNested = (nestedArgv: string[], nestedRaw: string) =>
+      classifyArgv(nestedArgv, nestedRaw, depth + 1, nestedShellContext, cwd, nestedEnvironment);
     if (
       nestedShellContext === "powershell" &&
       (powerShellCalculatedInvocationRequiresApproval(rawInline) ||
-        powerShellAliasLifecycleInvocationRequiresApproval(rawInline, expandNestedPowerShellArgv) ||
-        commandHasPowerShellLifecyclePipeline(
+        powerShellAliasNeedsApproval(rawInline, expandNestedPowerShellArgv, classifyNested) ||
+        pipelineNeedsApproval(
           rawInline,
           environment ? !environment.envComplete : false,
           expandNestedPowerShellArgv,
-          (nestedArgv, nestedRaw) =>
-            classifyArgv(
-              nestedArgv,
-              nestedRaw,
-              depth + 1,
-              nestedShellContext,
-              cwd,
-              nestedEnvironment,
-            ),
+          classifyNested,
         ))
     ) {
       return true;
     }
     if (
-      (nestedDialect === "posix" && posixCommandBindingRequiresApproval(rawInline)) ||
+      (nestedDialect === "posix" && posixBindingNeedsApproval(rawInline, classifyNested)) ||
       lifecycleFunctionLocalPositionalsRequireApproval(rawInline)
     ) {
       return true;
@@ -596,11 +590,13 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
       shadowedKeys,
     });
   const shellContext: ShellContext = platform === "win32" ? "powershell" : undefined;
+  const classifyTop = (argv: string[], raw: string) =>
+    classifyArgv(argv, raw, 0, shellContext, params.cwd, environment);
   if (
-    (dialect === "posix" && posixCommandBindingRequiresApproval(params.command)) ||
+    (dialect === "posix" && posixBindingNeedsApproval(params.command, classifyTop)) ||
     (dialect === "powershell" &&
-      powerShellAliasLifecycleInvocationRequiresApproval(params.command, expandPowerShellArgv)) ||
-    commandHasPowerShellLifecyclePipeline(params.command, !envComplete, expandPowerShellArgv) ||
+      powerShellAliasNeedsApproval(params.command, expandPowerShellArgv, classifyTop)) ||
+    pipelineNeedsApproval(params.command, !envComplete, expandPowerShellArgv, classifyTop) ||
     commandHasLifecycleSubstitution(params.command, 0, shellContext, params.cwd, environment)
   ) {
     return true;
@@ -633,11 +629,7 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
         const segmentCommand = segment.raw ?? params.command;
         if (
           (candidateShellContext === "powershell" &&
-            commandHasPowerShellLifecyclePipeline(
-              segmentCommand,
-              !envComplete,
-              expandPowerShellArgv,
-            )) ||
+            pipelineNeedsApproval(segmentCommand, !envComplete, expandPowerShellArgv)) ||
           commandHasLifecycleSubstitution(
             segmentCommand,
             0,

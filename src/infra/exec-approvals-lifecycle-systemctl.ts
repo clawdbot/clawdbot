@@ -61,6 +61,8 @@ const SYSTEMCTL_OPTIONS_WITH_VALUE = new Set([
   "--state",
   "--type",
 ]);
+const SHORT_SIGNAL_OPTION_RE =
+  /^-(?:[1-9][0-9]*|(?:sig)?(?:abrt|alrm|bus|chld|cont|fpe|hup|ill|int|io|kill|pipe|prof|pwr|quit|segv|stop|sys|term|trap|tstp|ttin|ttou|urg|usr1|usr2|vtalrm|winch|xcpu|xfsz))$/iu;
 
 function normalizedToken(value: string | undefined): string {
   return (value ?? "").trim().toLowerCase().replaceAll("`", "").replaceAll("^", "");
@@ -83,8 +85,8 @@ export function lifecycleArgvUsesSignalZero(argv: readonly string[]): boolean {
     } else if (lower === "-s" || lower === "--signal") {
       effectiveSignal = normalizedToken(argv[index + 1]);
       index += 1;
-    } else if (effectiveSignal !== undefined && lower.startsWith("-")) {
-      effectiveSignal = undefined;
+    } else if (SHORT_SIGNAL_OPTION_RE.test(lower)) {
+      effectiveSignal = lower.slice(1);
     }
   }
   return effectiveSignal === "0";

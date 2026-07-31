@@ -410,11 +410,31 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
       ["hash", "-p", "/usr/local/bin/openclaw", "oc", ";", "oc", "gateway", "restart"],
     ],
     [
+      "hash -p /usr/bin/systemctl ctl; ctl restart openclaw-gateway.service",
+      [
+        "hash",
+        "-p",
+        "/usr/bin/systemctl",
+        "ctl",
+        ";",
+        "ctl",
+        "restart",
+        "openclaw-gateway.service",
+      ],
+    ],
+    [
       "alias oc='openclaw'; oc gateway restart",
       ["alias", "oc=openclaw", ";", "oc", "gateway", "restart"],
     ],
   ] as Array<[string, string[]]>)("tracks POSIX command bindings: %s", (command, argv) => {
     expect(requiresApproval(command, argv)).toBe(true);
+  });
+
+  it("keeps signal-zero probes non-mutating unless a later signal overrides them", () => {
+    expect(requiresApproval("pkill -0 -x openclaw", ["pkill", "-0", "-x", "openclaw"])).toBe(false);
+    expect(requiresApproval("pkill -0 -TERM openclaw", ["pkill", "-0", "-TERM", "openclaw"])).toBe(
+      true,
+    );
   });
 
   it("fails closed for function-local argv and dynamic Corepack managers", () => {

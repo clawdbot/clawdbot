@@ -430,7 +430,7 @@ export function powerShellPipelineScriptBlocksRequireApproval(
 ): boolean {
   return extractPowerShellPipelineScriptBlocks(command).some(
     (scriptBlock) =>
-      powerShellAliasLifecycleInvocationRequiresApproval(scriptBlock) ||
+      powerShellAliasLifecycleInvocationRequiresApproval(scriptBlock, undefined, classify) ||
       splitLifecycleInlineCommands(scriptBlock, "powershell").some((part) => {
         const argv = splitShellArgs(part);
         return argv ? classify(argv, part) : false;
@@ -443,6 +443,7 @@ export function powerShellPipelineScriptBlocksRequireApproval(
 export function powerShellAliasLifecycleInvocationRequiresApproval(
   command: string,
   expandArgv?: (argv: string[]) => { argv: readonly string[]; unresolved: boolean },
+  classifyInvocation?: (argv: string[], raw: string) => boolean,
 ): boolean {
   const aliasTargets = new Map<string, string>();
   const unresolvedAliases = new Set<string>();
@@ -488,8 +489,12 @@ export function powerShellAliasLifecycleInvocationRequiresApproval(
     const aliasName = normalizeExecutableToken(invocation[0] ?? "");
     const lifecycleInvocation = classifyOpenClawArgv(["openclaw", ...invocation.slice(1)]);
     const aliasTarget = resolvePowerShellAliasTarget(aliasName, aliasTargets);
+    const resolvedInvocation = aliasTarget ? [aliasTarget, ...invocation.slice(1)] : null;
     if (
-      (aliasTarget && classifyPowerShellAliasedInvocation([aliasTarget, ...invocation.slice(1)])) ||
+      (resolvedInvocation &&
+        (classifyInvocation
+          ? classifyInvocation(resolvedInvocation, resolvedInvocation.join(" "))
+          : classifyPowerShellAliasedInvocation(resolvedInvocation))) ||
       (lifecycleInvocation && (unresolvedAliases.has(aliasName) || unresolvedAliasName))
     ) {
       return true;
