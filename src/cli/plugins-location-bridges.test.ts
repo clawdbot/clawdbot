@@ -209,6 +209,38 @@ describe("listPersistedBundledPluginLocationBridges", () => {
     },
   );
 
+  it("externalizes the shipped bundled ComfyUI plugin while preserving default enablement", async () => {
+    readPersistedInstalledPluginIndexMock.mockResolvedValue(
+      makeIndex({
+        pluginId: "comfy",
+        manifestPath: "/app/dist/extensions/comfy/openclaw.plugin.json",
+        manifestHash: "hash",
+        source: "/app/dist/extensions/comfy/index.js",
+        rootDir: "/app/dist/extensions/comfy",
+        origin: "bundled",
+        enabled: true,
+        enabledByDefault: true,
+        startup: startupInfo,
+        compat: [],
+        packageInstall: {
+          warnings: [],
+        },
+      }),
+    );
+    loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue(makeRegistry("comfy", []));
+
+    await expect(listPersistedBundledPluginLocationBridges({})).resolves.toEqual([
+      {
+        bundledPluginId: "comfy",
+        pluginId: "comfy",
+        preferredSource: "npm",
+        npmSpec: "@openclaw/comfy-provider",
+        clawhubSpec: "clawhub:@openclaw/comfy-provider",
+        enabledByDefault: true,
+      },
+    ]);
+  });
+
   it("does not create a relocation bridge without persisted or official install metadata", async () => {
     readPersistedInstalledPluginIndexMock.mockResolvedValue(
       makeIndex({

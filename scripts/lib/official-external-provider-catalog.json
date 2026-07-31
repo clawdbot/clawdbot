@@ -472,6 +472,69 @@
       }
     },
     {
+      "name": "@openclaw/comfy-provider",
+      "description": "OpenClaw ComfyUI provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "comfy",
+          "label": "ComfyUI"
+        },
+        "providers": [
+          {
+            "id": "comfy",
+            "name": "ComfyUI",
+            "docs": "/providers/comfy",
+            "categories": [
+              "local",
+              "cloud",
+              "media"
+            ],
+            "envVars": [
+              "COMFY_API_KEY",
+              "COMFY_CLOUD_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "cloud-api-key",
+                "choiceId": "comfy-cloud-api-key",
+                "choiceLabel": "Comfy Cloud API key",
+                "choiceHint": "Required for cloud workflows",
+                "groupId": "comfy",
+                "groupLabel": "ComfyUI",
+                "groupHint": "Local or cloud workflows",
+                "optionKey": "comfyApiKey",
+                "cliFlag": "--comfy-api-key",
+                "cliOption": "--comfy-api-key <key>",
+                "cliDescription": "Comfy Cloud API key",
+                "onboardingScopes": [
+                  "image-generation"
+                ]
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "imageGenerationProviders": [
+            "comfy"
+          ],
+          "musicGenerationProviders": [
+            "comfy"
+          ],
+          "videoGenerationProviders": [
+            "comfy"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/comfy-provider",
+          "npmSpec": "@openclaw/comfy-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/deepinfra-provider",
       "description": "OpenClaw DeepInfra provider plugin.",
       "source": "official",
