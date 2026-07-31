@@ -121,7 +121,16 @@ describe("collectMcpPaginatedItems", () => {
       signal: controller.signal,
       loadPage: async ({ signal }) =>
         await new Promise<never>((_resolve, reject) => {
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          signal.addEventListener(
+            "abort",
+            () =>
+              reject(
+                signal.reason instanceof Error
+                  ? signal.reason
+                  : new Error("MCP prompt listing aborted"),
+              ),
+            { once: true },
+          );
         }),
     });
 
