@@ -77,7 +77,11 @@ describe("qa scenario catalog channel contracts", () => {
     const completionWait = flow.indexOf('"saveAs":"completedFanout"');
     const storeReads = [...flow.matchAll(/readRawQaSessionStore/gu)].map((match) => match.index);
 
-    expect(flow).toContain("readSessionTranscriptSummary(env, sessionKey)");
+    expect(flow).toContain('"call":"startAgentRun"');
+    expect(flow).not.toContain('"call":"runAgentPrompt"');
+    expect(flow).toContain('"taskTracking":false');
+    expect(flow).toContain('"saveAs":"parentOutbound"');
+    expect(flow).toContain("messages.slice(parentOutboundStartIndex)");
     expect(flow).not.toContain("waitForAgentHistoryReply");
     expect(flow).not.toContain('"call":"waitForOutboundMessage"');
     expect(flow).not.toContain("childCompletionMarker");
@@ -87,7 +91,7 @@ describe("qa scenario catalog channel contracts", () => {
     );
     expect(flow).toContain("Boolean(env.mock) ? config.expectedChildCompletionMarkers[0] : 'ok'");
     expect(flow).toContain('saveAs":"timeoutEvidence');
-    expect(flow).toContain('saveAs":"recoveredParentTranscript');
+    expect(flow).toContain('saveAs":"recoveredParentOutbound');
     expect(flow).not.toContain('"value":"subagent-1: ok\\nsubagent-2: ok"');
     expect(flow).toContain("Promise.all([readSessionTranscriptSummary");
     expect(completionWait).toBeGreaterThan(-1);

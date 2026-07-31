@@ -99,6 +99,9 @@ function exerciseGuidedAdapters(): RunGuidedOnboarding {
     if (detection.unavailableCandidates[0]?.id !== "antigravity-cli") {
       throw new Error("remote detection dropped unavailable integration metadata");
     }
+    if (detection.prepareOptions !== undefined) {
+      throw new Error("remote detection replaced an omitted prepare-options field");
+    }
     const selected = detection.candidates[0];
     if (!selected) {
       throw new Error("remote detection returned no candidate");

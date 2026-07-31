@@ -12,6 +12,7 @@ import {
   buildGatewayConnectionDetails,
   buildGatewayProbeConnectionDetails,
   callGateway,
+  formatGatewayAuthErrorJson,
   formatGatewayTransportErrorJson,
   isGatewayCredentialsRequiredError,
 } from "../gateway/call.js";
@@ -240,11 +241,8 @@ export async function healthCommand(
     ) {
       return;
     }
-    if (isGatewayHealthAuthUnavailableError(error)) {
-      throw error;
-    }
     if (opts.json) {
-      const payload = formatGatewayTransportErrorJson(error);
+      const payload = formatGatewayAuthErrorJson(error) ?? formatGatewayTransportErrorJson(error);
       if (payload) {
         writeRuntimeJson(runtime, payload);
         runtime.exit(1);

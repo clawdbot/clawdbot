@@ -13,6 +13,7 @@ import {
   probeGateway,
   readBestEffortConfig,
   resetRestartHealthMocks,
+  resolveGatewayServiceProbeHosts,
   resolveGatewayProbeAuthSafeWithSecretInputs,
   restoreRestartHealthMocks,
 } from "./restart-health.test-helpers.js";
@@ -34,6 +35,27 @@ describe("restart health", () => {
 
     expect(snapshot.healthy).toBe(true);
     expect(snapshot.staleGatewayPids).toStrictEqual([]);
+    expect(inspectPortUsage).toHaveBeenCalledWith(18789, {
+      probeHosts: ["127.0.0.1"],
+    });
+  });
+
+  it("uses the configured non-loopback host for restart-health port inspection", async () => {
+    resolveGatewayServiceProbeHosts.mockResolvedValue(["192.0.2.40"]);
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 7000, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+    const service = makeGatewayService({ status: "running", pid: 7000 });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    await waitForGatewayHealthyRestart({ service, port: 18789, attempts: 1 });
+
+    expect(inspectPortUsage).toHaveBeenCalledWith(18789, {
+      probeHosts: ["192.0.2.40"],
+    });
   });
 
   it("marks non-owned gateway listener pids as stale while runtime is running", async () => {
@@ -297,5 +319,9 @@ describe("restart health", () => {
 
     expect(snapshot.healthy).toBe(true);
     expect(probeGateway).not.toHaveBeenCalled();
+    expect(resolveGatewayServiceProbeHosts).toHaveBeenCalledWith({
+      env: process.env,
+      command: null,
+    });
   });
 });

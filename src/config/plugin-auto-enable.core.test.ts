@@ -108,6 +108,54 @@ describe("applyPluginAutoEnable core", () => {
     ]);
   });
 
+  it("keeps configured channel candidates when plugin config is already present", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: {
+          discord: {
+            enabled: true,
+            accounts: { default: { token: "redacted" } },
+          },
+        },
+        plugins: {
+          entries: {
+            discord: { config: {} },
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([{ id: "discord", channels: ["discord"], origin: "global" }]),
+    });
+
+    expect(result.config.plugins?.entries?.discord).toEqual({ config: {}, enabled: true });
+    expect(result.changes).toContain("Discord configured, enabled automatically.");
+  });
+
+  it("keeps configured channel candidates under a material plugin allowlist", () => {
+    const candidates = detectPluginAutoEnableCandidates({
+      config: {
+        channels: { discord: { token: "redacted" } },
+        plugins: {
+          allow: ["existing"],
+          entries: {
+            existing: { enabled: true },
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        { id: "discord", channels: ["discord"], origin: "global" },
+        { id: "existing", channels: [], origin: "global" },
+      ]),
+    });
+
+    expect(candidates).toContainEqual({
+      pluginId: "discord",
+      kind: "channel-configured",
+      channelId: "discord",
+    });
+  });
+
   it("reuses policy-compatible current manifest registry when runtime config differs", () => {
     const manifestRegistry = makeRegistry([{ id: "custom-chat", channels: ["custom-chat"] }]);
     const snapshotConfig: OpenClawConfig = { plugins: { allow: ["existing"] } };
@@ -1272,7 +1320,7 @@ describe("applyPluginAutoEnable core", () => {
     const result = applyPluginAutoEnable({
       config: {
         channels: { slack: { botToken: "x" } },
-        plugins: { entries: { slack: { enabled: false } } },
+        plugins: { entries: { slack: { enabled: false, config: {} } } },
       },
       env,
     });

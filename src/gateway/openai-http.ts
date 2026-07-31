@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -868,6 +869,17 @@ function resolveStopSequences(value: unknown): string[] | undefined {
   return sequences.length > 0 ? sequences : undefined;
 }
 
+function resolveChatCompletionTokenCap(value: unknown, field: string): number | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  const maxTokens = asPositiveSafeInteger(value);
+  if (maxTokens === undefined) {
+    throw new Error(`${field} must be a positive safe integer`);
+  }
+  return maxTokens;
+}
+
 function resolveErrorMessage(err: unknown): string {
   if (err instanceof Error) {
     const message = err.message.trim();
@@ -913,12 +925,20 @@ export async function handleOpenAiHttpRequest(
   const streamIncludeUsage = stream && resolveIncludeUsageForStreaming(payload);
   const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;
-  const maxTokens =
-    typeof payload.max_completion_tokens === "number"
-      ? payload.max_completion_tokens
-      : typeof payload.max_tokens === "number"
-        ? payload.max_tokens
-        : undefined;
+  let maxTokens: number | undefined;
+  try {
+    const maxCompletionTokens = resolveChatCompletionTokenCap(
+      payload.max_completion_tokens,
+      "max_completion_tokens",
+    );
+    const legacyMaxTokens = resolveChatCompletionTokenCap(payload.max_tokens, "max_tokens");
+    maxTokens = maxCompletionTokens ?? legacyMaxTokens;
+  } catch (err) {
+    sendJson(res, 400, {
+      error: { message: resolveErrorMessage(err), type: "invalid_request_error" },
+    });
+    return true;
+  }
   const temperature = typeof payload.temperature === "number" ? payload.temperature : undefined;
   const topP = typeof payload.top_p === "number" ? payload.top_p : undefined;
   const frequencyPenalty =

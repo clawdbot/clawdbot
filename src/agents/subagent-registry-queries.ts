@@ -5,11 +5,13 @@
  */
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded, isLiveUnendedSubagentRun } from "./subagent-run-liveness.js";
 
-function resolveControllerSessionKey(entry: SubagentRunRecord): string {
+function resolveControllerSessionKey(
+  entry: Pick<SubagentRunRecord, "controllerSessionKey" | "requesterSessionKey">,
+): string {
   return entry.controllerSessionKey?.trim() || entry.requesterSessionKey;
 }
 
@@ -74,31 +76,31 @@ export function listRunsForControllerFromRuns(
   return results;
 }
 
-type LatestRunPair = {
+type LatestRunPair<T extends SubagentRunReadRecord = SubagentRunRecord> = {
   runId: string;
-  entry: SubagentRunRecord;
+  entry: T;
 };
 
 /** Cached read index for display, controller grouping, and descendant queries. */
-export type SubagentRunReadIndex = {
-  getDisplaySubagentRun(childSessionKey: string): SubagentRunRecord | null;
-  latestRunsByChildSessionKey: ReadonlyMap<string, SubagentRunRecord>;
+export type SubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRecord> = {
+  getDisplaySubagentRun(childSessionKey: string): T | null;
+  latestRunsByChildSessionKey: ReadonlyMap<string, T>;
   countActiveDescendantRuns(rootSessionKey: string): number;
   countPendingDescendantRuns(rootSessionKey: string): number;
   countPendingDescendantRunsExcludingRun(rootSessionKey: string, excludeRunId: string): number;
   hasDescendantRunAwaitingSettle(rootSessionKey: string, excludeRunId?: string): boolean;
-  listDescendantRunsForRequester(rootSessionKey: string): SubagentRunRecord[];
-  runsByControllerSessionKey: ReadonlyMap<string, readonly SubagentRunRecord[]>;
+  listDescendantRunsForRequester(rootSessionKey: string): T[];
+  runsByControllerSessionKey: ReadonlyMap<string, readonly T[]>;
 };
 
 export type LatestSubagentRunReadIndex = {
   getLatestSubagentRun(childSessionKey: string): SubagentRunRecord | null;
 };
 
-function rememberLatestRunEntry(
-  map: Map<string, SubagentRunRecord>,
+function rememberLatestRunEntry<T extends SubagentRunReadRecord>(
+  map: Map<string, T>,
   key: string,
-  entry: SubagentRunRecord,
+  entry: T,
 ): void {
   const existing = map.get(key);
   if (!existing || compareSubagentRunGeneration(entry, existing) > 0) {
@@ -124,11 +126,11 @@ export function buildLatestSubagentRunReadIndexFromRuns(
   };
 }
 
-function rememberLatestRunPair(
-  map: Map<string, LatestRunPair>,
+function rememberLatestRunPair<T extends SubagentRunReadRecord>(
+  map: Map<string, LatestRunPair<T>>,
   key: string,
   runId: string,
-  entry: SubagentRunRecord,
+  entry: T,
 ): void {
   const existing = map.get(key);
   if (!existing || compareSubagentRunGeneration(entry, existing.entry) > 0) {
@@ -137,19 +139,19 @@ function rememberLatestRunPair(
 }
 
 /** Builds a read index from snapshot and optional in-memory runs. */
-export function buildSubagentRunReadIndexFromRuns(params: {
-  runs: Map<string, SubagentRunRecord>;
-  inMemoryRuns?: Iterable<SubagentRunRecord>;
+export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecord>(params: {
+  runs: Map<string, T>;
+  inMemoryRuns?: Iterable<T>;
   now?: number;
-}): SubagentRunReadIndex {
+}): SubagentRunReadIndex<T> {
   const { runs } = params;
   const now = params.now ?? Date.now();
-  const inMemoryDisplayByChildSessionKey = new Map<string, SubagentRunRecord>();
-  const latestSnapshotActiveByChildSessionKey = new Map<string, SubagentRunRecord>();
-  const latestSnapshotEndedByChildSessionKey = new Map<string, SubagentRunRecord>();
-  const latestRunByChildSessionKey = new Map<string, LatestRunPair>();
-  const runsByControllerSessionKey = new Map<string, SubagentRunRecord[]>();
-  const latestRunByRequesterAndChildSessionKey = new Map<string, Map<string, LatestRunPair>>();
+  const inMemoryDisplayByChildSessionKey = new Map<string, T>();
+  const latestSnapshotActiveByChildSessionKey = new Map<string, T>();
+  const latestSnapshotEndedByChildSessionKey = new Map<string, T>();
+  const latestRunByChildSessionKey = new Map<string, LatestRunPair<T>>();
+  const runsByControllerSessionKey = new Map<string, T[]>();
+  const latestRunByRequesterAndChildSessionKey = new Map<string, Map<string, LatestRunPair<T>>>();
   const activeDescendantCountBySessionKey = new Map<string, number>();
   const pendingDescendantCountBySessionKey = new Map<string, number>();
 
@@ -188,18 +190,18 @@ export function buildSubagentRunReadIndexFromRuns(params: {
     }
     let latestByChild = latestRunByRequesterAndChildSessionKey.get(requesterSessionKey);
     if (!latestByChild) {
-      latestByChild = new Map<string, LatestRunPair>();
+      latestByChild = new Map<string, LatestRunPair<T>>();
       latestRunByRequesterAndChildSessionKey.set(requesterSessionKey, latestByChild);
     }
     rememberLatestRunPair(latestByChild, childSessionKey, runId, entry);
   }
 
-  const latestRunsByChildSessionKey = new Map<string, SubagentRunRecord>();
+  const latestRunsByChildSessionKey = new Map<string, T>();
   for (const [childSessionKey, pair] of latestRunByChildSessionKey) {
     latestRunsByChildSessionKey.set(childSessionKey, pair.entry);
   }
 
-  const getDisplaySubagentRun = (childSessionKey: string): SubagentRunRecord | null => {
+  const getDisplaySubagentRun = (childSessionKey: string): T | null => {
     const key = childSessionKey.trim();
     if (!key) {
       return null;
@@ -214,7 +216,7 @@ export function buildSubagentRunReadIndexFromRuns(params: {
 
   const forEachDescendantRun = (
     rootSessionKey: string,
-    visitor: (runId: string, entry: SubagentRunRecord) => void | boolean,
+    visitor: (runId: string, entry: T) => void | boolean,
   ): void => {
     const root = rootSessionKey.trim();
     if (!root) {
@@ -327,8 +329,8 @@ export function buildSubagentRunReadIndexFromRuns(params: {
       stopAtFirst: true,
     }) > 0;
 
-  const listDescendantRunsForRequester = (rootSessionKey: string): SubagentRunRecord[] => {
-    const descendants: SubagentRunRecord[] = [];
+  const listDescendantRunsForRequester = (rootSessionKey: string): T[] => {
+    const descendants: T[] = [];
     forEachDescendantRun(rootSessionKey, (_runId, entry) => {
       descendants.push(entry);
     });

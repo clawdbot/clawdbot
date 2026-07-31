@@ -478,22 +478,26 @@ describe("Slack live QA runtime helpers", () => {
     const cases = [
       {
         id: "slack-progress-commentary-true",
-        commentaryTs: "2.000000",
+        commentaryTs: "1.500000",
+        commentaryStyle: "lane",
         toolProgress: "absent",
       },
       {
         id: "slack-progress-commentary-false",
-        commentaryTs: undefined,
+        commentaryTs: "1.500000",
+        commentaryStyle: "headline",
         toolProgress: "absent",
       },
       {
         id: "slack-progress-commentary-omitted",
-        commentaryTs: "2.000000",
+        commentaryTs: "1.500000",
+        commentaryStyle: "headline",
         toolProgress: "draft",
       },
       {
         id: "slack-progress-commentary-verbose-dedupe",
         commentaryTs: "1.500000",
+        commentaryStyle: "standalone",
         toolProgress: "standalone",
       },
     ] as const;
@@ -519,7 +523,8 @@ describe("Slack live QA runtime helpers", () => {
           ? [
               {
                 channelId: "C123456789",
-                text: `💬 ${commentaryMarker}`,
+                text:
+                  testCase.commentaryStyle === "lane" ? `💬 ${commentaryMarker}` : commentaryMarker,
                 ts: testCase.commentaryTs,
               },
             ]
@@ -530,7 +535,7 @@ describe("Slack live QA runtime helpers", () => {
               {
                 channelId: "C123456789",
                 text: `🛠️ Exec ${toolMarker}`,
-                ts: testCase.toolProgress === "draft" ? "2.000000" : "1.750000",
+                ts: testCase.toolProgress === "draft" ? "1.500000" : "1.750000",
               },
             ]),
       ];
@@ -576,28 +581,31 @@ describe("Slack live QA runtime helpers", () => {
           messages: mutate(completeMarkers).map((text) => ({
             channelId: "C123456789",
             text,
-            ts: "2.000000",
+            ts: text.includes(completeMarkers[2]) ? "2.000000" : "1.500000",
           })),
         });
     };
 
     expect(
-      verify("slack-progress-commentary-false", ([commentary, , final]) => [commentary, final]),
-    ).toThrow("commentary to stay out");
+      verify("slack-progress-commentary-false", ([commentary, , final]) => [
+        `💬 ${commentary}`,
+        final,
+      ]),
+    ).toThrow("status headline");
     expect(
       verify("slack-progress-commentary-true", ([commentary, tool, final]) => [
-        commentary,
+        `💬 ${commentary}`,
         tool,
         final,
       ]),
     ).toThrow("tool progress to stay out");
     expect(
       verify("slack-progress-commentary-omitted", ([commentary, , final]) => [commentary, final]),
-    ).toThrow("tool progress on the progress draft");
+    ).toThrow("tool progress on the draft");
     expect(
       verify(
         "slack-progress-commentary-true",
-        ([commentary, , final]) => [`${commentary} ${final}`],
+        ([commentary, , final]) => [`💬 ${commentary} ${final}`],
         "echo",
       ),
     ).toThrow("only the final marker");
@@ -993,13 +1001,15 @@ describe("Slack live QA runtime helpers", () => {
       { type: "raw_text", text: "Row" },
       { type: "raw_text", text: "Value" },
     ]);
-    expect(probe.firstRowText).toBe("row-001\tvalue-001");
-    expect(probe.finalRowText).toBe("row-101\tvalue-101");
+    expect(probe.cellCharacterCount).toBeGreaterThan(10_000);
+    expect(probe.firstRowText).toMatch(/^row-001\tvalue-001-x{96}$/u);
+    expect(probe.finalRowText).toMatch(/^row-101\tvalue-101-x{96}$/u);
     expect(probe.fallbackText.split("\n")).toContain(probe.firstRowText);
     expect(probe.fallbackText.split("\n")).toContain(probe.finalRowText);
   });
 
   it("proves the public Slack send path stores one complete formatting-disabled fallback", async () => {
+    const probe = testing.buildSlackInvalidBlocksTableProbe();
     const invalidBlocksError = Object.assign(new Error("An API error occurred: invalid_blocks"), {
       code: "slack_webapi_platform_error",
       data: { error: "invalid_blocks", ok: false },
@@ -1060,8 +1070,8 @@ describe("Slack live QA runtime helpers", () => {
     expect(fallbackRequest).toMatchObject({ mrkdwn: false });
     const fallbackText = typeof fallbackRequest?.text === "string" ? fallbackRequest.text : "";
     expect(fallbackText).toBe(nativeRequest?.text);
-    expect(fallbackText.split("\n")).toContain("row-001\tvalue-001");
-    expect(fallbackText.split("\n")).toContain("row-101\tvalue-101");
+    expect(fallbackText.split("\n")).toContain(probe.firstRowText);
+    expect(fallbackText.split("\n")).toContain(probe.finalRowText);
     expect(result.message).toMatchObject({
       text: fallbackText,
       ts: "2.000000",

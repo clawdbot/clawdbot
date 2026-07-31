@@ -250,6 +250,24 @@ private func detectedSetupResponse(
               "label": "OpenAI API key",
               "hint": null
             }],
+            "prepareOptions": [{
+              "id": "ollama",
+              "brandId": "ollama",
+              "label": "Ollama",
+              "hint": "Connect to an Ollama server and select a cloud or local model"
+            }, {
+              "id": "llama-cpp",
+              "brandId": "llama-cpp",
+              "label": "Local model (llama.cpp)",
+              "hint": "Download and run a private GGUF model"
+            }, {
+              "id": "lmstudio",
+              "brandId": "lmstudio",
+              "label": "LM Studio",
+              "hint": "Connect to a running LM Studio server and use an already loaded model",
+              "icon": "https://cdn.simpleicons.org/lmstudio",
+              "website": "https://lmstudio.ai/download"
+            }],
             "workspace": "/tmp/openclaw-workspace",
             "configuredModel": null,
             "setupComplete": false
@@ -494,6 +512,23 @@ private func failedActivationResponse(id: String) -> Data {
         """.utf8)
 }
 
+private func successfulActivationResponse(id: String, modelRef: String, latencyMs: Int) -> Data {
+    Data(
+        """
+        {
+          "type": "res",
+          "id": "\(id)",
+          "ok": true,
+          "payload": {
+            "ok": true,
+            "modelRef": "\(modelRef)",
+            "latencyMs": \(latencyMs),
+            "lines": ["Model ready"]
+          }
+        }
+        """.utf8)
+}
+
 private func indeterminateActivationResponse(id: String) -> Data {
     Data(
         """
@@ -620,25 +655,54 @@ struct OnboardingAISetupTests {
         #expect(OnboardingAISetupModel.providerAuthRequestTimeoutMs > 15 * 60 * 1000)
     }
 
-    @Test func `prepare choices use wire presentation and hide usable local models`() throws {
-        let candidates = [OnboardingAISetupModel.Candidate(
-            kind: "provider-auto:ollama",
-            label: "Ollama",
-            detail: "available locally",
-            modelRef: "ollama/qwen3:8b",
-            credentials: true)]
-        let installs = [OnboardingAISetupModel.RecommendedInstall(
-            id: "ollama",
-            label: "Wire Ollama",
-            hint: "Wire hint",
-            website: "https://ollama.com/download",
-            icon: "https://cdn.simpleicons.org/ollama")]
+    @Test func `prepare choices use wire presentation and hide usable local models`() {
+        let candidates = [
+            OnboardingAISetupModel.Candidate(
+                kind: "provider-auto:ollama",
+                label: "Ollama",
+                detail: "available locally",
+                modelRef: "ollama/qwen3:8b",
+                credentials: true),
+            OnboardingAISetupModel.Candidate(
+                kind: "provider-auto:other-choice",
+                label: "LM Studio",
+                detail: "available locally",
+                modelRef: "lmstudio/qwen3-8b-instruct",
+                credentials: true),
+            OnboardingAISetupModel.Candidate(
+                kind: "provider-auto:llama-cpp",
+                label: "Local model (llama.cpp)",
+                detail: "credentials required",
+                modelRef: "llama-cpp/gemma-4-e4b-it-q4_k_m",
+                credentials: false),
+        ]
+        let advertised = [
+            OnboardingAISetupModel.PrepareOption(
+                id: "ollama",
+                label: "Wire Ollama",
+                hint: "Wire hint",
+                brandId: "ollama",
+                icon: "https://cdn.simpleicons.org/ollama",
+                website: "https://ollama.com/download"),
+            OnboardingAISetupModel.PrepareOption(
+                id: "llama-cpp",
+                label: "Local model (llama.cpp)",
+                hint: "Private GGUF model",
+                brandId: "llama-cpp",
+                icon: nil,
+                website: nil),
+            OnboardingAISetupModel.PrepareOption(
+                id: "lmstudio-local",
+                label: "LM Studio",
+                hint: "Running local service",
+                brandId: "lmstudio",
+                icon: "https://cdn.simpleicons.org/lmstudio",
+                website: "https://lmstudio.ai/download"),
+        ]
 
         let options = OnboardingAISetupModel.prepareOptions(
             candidates: candidates,
-            manualProviders: [],
-            authOptions: [],
-            recommendedInstalls: installs)
+            advertisedOptions: advertised)
 
         #expect(options.map(\.id) == ["llama-cpp"])
         #expect(options.first?.label == "Local model (llama.cpp)")
@@ -649,7 +713,9 @@ struct OnboardingAISetupTests {
     @Test func `prepare starts the shared wizard and polls gateway progress`() async throws {
         let recorder = AISetupRequestRecorder()
         let frames = AISetupSocketGeneration()
+        let detections = AISetupSocketGeneration()
         let completion = AISetupRequestGate()
+        let preparedModelRef = "llama-cpp/gemma-4-e4b-it-q4_k_m"
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(
                 sendHook: { task, message, sendIndex in
@@ -660,7 +726,23 @@ struct OnboardingAISetupTests {
                     await recorder.record(message)
                     switch request.method {
                     case "openclaw.setup.detect":
-                        task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id)))
+                        if detections.claim() == 0 {
+                            task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id)))
+                        } else {
+                            let response = String(decoding: detectedSetupResponse(
+                                id: request.id,
+                                kind: "provider-auto:llama-cpp",
+                                modelRef: preparedModelRef), as: UTF8.self)
+                                .replacingOccurrences(
+                                    of: #""credentials": false"#,
+                                    with: #""credentials": true"#)
+                            task.emitReceiveSuccess(.data(Data(response.utf8)))
+                        }
+                    case "openclaw.setup.activate":
+                        task.emitReceiveSuccess(.data(successfulActivationResponse(
+                            id: request.id,
+                            modelRef: preparedModelRef,
+                            latencyMs: 731)))
                     case "openclaw.setup.prepare.start":
                         let sessionID = request.params["sessionId"] as? String ?? "prepare-session"
                         task.emitReceiveSuccess(.data(wizardStartResponse(
@@ -699,7 +781,11 @@ struct OnboardingAISetupTests {
                     let id = task.snapshotConnectRequestID() ?? "connect"
                     return .data(GatewayWebSocketTestSupport.connectOkData(
                         id: id,
-                        methods: ["openclaw.setup.prepare.start"]))
+                        methods: [
+                            "openclaw.setup.prepare.start",
+                            "openclaw.setup.activate",
+                        ],
+                        capabilities: ["openclaw-setup-model-ref"]))
                 })
         })
         let url = try #require(URL(string: "ws://example.invalid"))
@@ -732,11 +818,17 @@ struct OnboardingAISetupTests {
         #expect(model.authStep?.message == "Downloading model: 80%")
 
         await completion.release()
-        for _ in 0..<200 where model.activeAuthOption != nil {
+        for _ in 0..<400 where !model.connected {
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
         #expect(model.activeAuthOption == nil)
         #expect(model.authError == nil)
+        #expect(model.connectedModelRef == preparedModelRef)
+        let completedRequests = await recorder.snapshot()
+        #expect(completedRequests.methods.suffix(2) == [
+            "openclaw.setup.detect",
+            "openclaw.setup.activate",
+        ])
     }
 
     @Test func `provider auth opens only safe external links`() {
