@@ -193,7 +193,10 @@ describeControlUiE2e("Control UI memory engine settings mocked Gateway E2E", () 
       const initialCatalogReads = (await gateway.getRequests("plugins.list")).length;
       await gateway.deferNext("plugins.setEnabled");
       await gateway.deferNext("config.get");
-      await toggle.click();
+      await page
+        .locator("wa-switch.settings-toggle")
+        .filter({ hasText: "Enable or disable Active memory" })
+        .click();
 
       const mutation = await gateway.waitForRequest("plugins.setEnabled");
       expect(mutation.params).toEqual({ pluginId: "active-memory", enabled: true });
