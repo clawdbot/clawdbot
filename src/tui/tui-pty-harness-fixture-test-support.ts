@@ -33,6 +33,9 @@ export async function writeTuiPtyFixtureScript(dir: string) {
       const actionLogPath = process.env.OPENCLAW_TUI_PTY_LOG_PATH;
       const gatewayStatus = process.env.OPENCLAW_TUI_PTY_GATEWAY_STATUS ?? "fixture gateway ok";
       const startupDelayMs = Number(process.env.OPENCLAW_TUI_PTY_STARTUP_DELAY_MS ?? 0);
+      const submitBurstWindowMs = Number(
+        process.env.OPENCLAW_TUI_PTY_SUBMIT_BURST_WINDOW_MS ?? 0,
+      );
       const footerModel = process.env.OPENCLAW_TUI_PTY_MODEL;
       const footerThinkingLevel = process.env.OPENCLAW_TUI_PTY_THINKING_LEVEL;
       let verboseLevel = process.env.OPENCLAW_TUI_PTY_VERBOSE_LEVEL;
@@ -582,6 +585,8 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           message: initialMessage,
           historyLimit: 5,
           title: "openclaw tui pty fixture",
+          submitBurstWindowMs: submitBurstWindowMs > 0 ? submitBurstWindowMs : undefined,
+          onSubmitBurstCaptured: (value) => record("submitBurstCaptured", { value }),
         });
       }
 

@@ -101,6 +101,8 @@ const SESSION_SUBSCRIPTION_RETRY_DELAY_MS = 25;
 
 type RunTuiOptions = TuiOptions & {
   backend?: TuiBackend;
+  submitBurstWindowMs?: number;
+  onSubmitBurstCaptured?: (value: string) => void;
   /** Exact pre-probed remote target for an in-process setup handoff. */
   boundGateway?: {
     url: string;
@@ -1619,6 +1621,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     submit: submitHandler,
     captureSnapshot: captureMessageAdmission,
     enabled: shouldEnableWindowsGitBashPasteFallback(),
+    burstWindowMs: opts.submitBurstWindowMs,
+    onCapture: opts.onSubmitBurstCaptured,
   });
 
   editor.onEscape = () => {

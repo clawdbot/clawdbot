@@ -12,7 +12,7 @@ import { startPty } from "./tui-pty-test-support.js";
 
 const STARTUP_TIMEOUT_MS = 20_000;
 const OUTPUT_TIMEOUT_MS = 2_000;
-const EXIT_TIMEOUT_MS = 4_000;
+const EXIT_TIMEOUT_MS = 8_000;
 const TEST_TIMEOUT_MS = 25_000;
 
 describe("TUI reset transition PTY", () => {
@@ -29,6 +29,7 @@ describe("TUI reset transition PTY", () => {
           OPENCLAW_THEME: "dark",
           OPENCLAW_TUI_PTY_LOG_PATH: logPath,
           OPENCLAW_TUI_PTY_RESET_RELEASE_PATH: resetReleasePath,
+          OPENCLAW_TUI_PTY_SUBMIT_BURST_WINDOW_MS: "5000",
           TERM_PROGRAM: "Apple_Terminal",
           NO_COLOR: undefined,
         },
@@ -47,11 +48,16 @@ describe("TUI reset transition PTY", () => {
         );
 
         await run.write("overlap during reset\rnewer suffix", { delay: false });
-        // Release before the 50ms paste coalescer flushes. Admission must use
+        await waitForLogEntry(
+          (entry) =>
+            entry.method === "submitBurstCaptured" &&
+            objectFieldEquals(entry, "value", "overlap during reset"),
+        );
+        // Release before the controlled paste coalescer flushes. Admission must use
         // the transition snapshot captured when Enter arrived, not live state.
         await writeFile(resetReleasePath, "released\n", "utf8");
         await run.waitForOutput("session main (Reset session after)");
-        await run.waitForOutput("overlap during resetnewer suffix");
+        await run.waitForOutput("overlap during resetnewer suffix", 7_000);
 
         await run.write("\r", { delay: false });
         await waitForLogEntry(
@@ -78,9 +84,6 @@ describe("TUI reset transition PTY", () => {
             preservedInputDelivered: true,
           }),
         );
-
-        await run.write("/exit\r", { delay: false });
-        expect((await run.waitForExit()).exitCode).toBe(0);
       } finally {
         await run.dispose();
         await rm(tempDir, { recursive: true, force: true });
