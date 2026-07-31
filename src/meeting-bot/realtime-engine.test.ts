@@ -100,6 +100,21 @@ async function createEngineFixture() {
       }
       pending.resolve();
     },
+    announceOutputResponse(responseId: string) {
+      callbacks.onEvent?.({
+        direction: "server",
+        responseId,
+        type: "response.created",
+      });
+    },
+    sendOutputAudio(audio: Buffer, responseId?: string) {
+      callbacks.onEvent?.({
+        direction: "server",
+        ...(responseId ? { responseId } : {}),
+        type: "response.audio.delta",
+      });
+      callbacks.onAudio(audio);
+    },
     triggerHumanBargeIn(audio = Buffer.from([1])) {
       if (!onHumanBargeIn) {
         throw new Error("Expected human barge-in monitor");
@@ -143,15 +158,23 @@ describe("meeting realtime engine output ownership", () => {
     }
   });
 
-  it("does not start an invalidated write after a same-turn clear", async () => {
+  it("accepts ordered provider output after a clear without a response owner", async () => {
     const fixture = await createEngineFixture();
     try {
-      fixture.callbacks.onAudio(Buffer.from([1, 2, 3]));
-      fixture.callbacks.onClearAudio();
-      await Promise.resolve();
+      const stale = Buffer.from([1, 2, 3]);
+      const fresh = Buffer.from([4, 5, 6]);
 
-      expect(fixture.writeOutput).not.toHaveBeenCalled();
-      expect(fixture.clearOutput).toHaveBeenCalled();
+      fixture.callbacks.onAudio(stale);
+      fixture.callbacks.onClearAudio("barge-in");
+      fixture.callbacks.onAudio(fresh);
+
+      await vi.waitFor(() => {
+        expect(fixture.writeOutput).toHaveBeenCalledOnce();
+      });
+      expect(fixture.writeOutput).toHaveBeenCalledWith(fresh);
+      expect(fixture.writeOutput).not.toHaveBeenCalledWith(stale);
+      expect(fixture.clearOutput).toHaveBeenCalledOnce();
+      fixture.releaseWrite(0);
     } finally {
       await fixture.handle.stop();
     }
@@ -162,20 +185,23 @@ describe("meeting realtime engine output ownership", () => {
     try {
       const active = Buffer.from([1]);
       const stale = Buffer.from([2]);
-      const fresh = Buffer.from([3]);
+      const late = Buffer.from([3]);
+      const fresh = Buffer.from([4]);
 
-      fixture.callbacks.onAudio(active);
+      fixture.announceOutputResponse("response-1");
+      fixture.sendOutputAudio(active);
       await vi.waitFor(() => {
         expect(fixture.writeOutput).toHaveBeenCalledTimes(1);
       });
-      fixture.callbacks.onAudio(stale);
+      fixture.sendOutputAudio(stale);
 
       expect(fixture.triggerHumanBargeIn()).toBe(true);
       await vi.waitFor(() => {
         expect(fixture.clearOutput).toHaveBeenCalledOnce();
       });
-      fixture.callbacks.onEvent?.({ direction: "server", type: "response.cancelled" });
-      fixture.callbacks.onAudio(fresh);
+      fixture.sendOutputAudio(late);
+      fixture.announceOutputResponse("response-2");
+      fixture.sendOutputAudio(fresh);
       fixture.releaseWrite(0);
 
       await vi.waitFor(() => {
@@ -183,8 +209,32 @@ describe("meeting realtime engine output ownership", () => {
       });
       expect(fixture.writeOutput).toHaveBeenLastCalledWith(fresh);
       expect(fixture.writeOutput).not.toHaveBeenCalledWith(stale);
+      expect(fixture.writeOutput).not.toHaveBeenCalledWith(late);
       expect(fixture.clearOutput).toHaveBeenCalledTimes(2);
       fixture.releaseWrite(1);
+    } finally {
+      await fixture.handle.stop();
+    }
+  });
+
+  it("rejects a cleared response whose first audio arrives after barge-in", async () => {
+    const fixture = await createEngineFixture();
+    try {
+      const stale = Buffer.from([1]);
+      const fresh = Buffer.from([2]);
+
+      fixture.announceOutputResponse("response-1");
+      fixture.callbacks.onClearAudio("barge-in");
+      fixture.callbacks.onAudio(stale);
+      fixture.announceOutputResponse("response-2");
+      fixture.callbacks.onAudio(fresh);
+
+      await vi.waitFor(() => {
+        expect(fixture.writeOutput).toHaveBeenCalledOnce();
+      });
+      expect(fixture.writeOutput).toHaveBeenCalledWith(fresh);
+      expect(fixture.writeOutput).not.toHaveBeenCalledWith(stale);
+      fixture.releaseWrite(0);
     } finally {
       await fixture.handle.stop();
     }
@@ -201,12 +251,12 @@ describe("meeting realtime engine output ownership", () => {
         const late = Buffer.from([4]);
         const fresh = Buffer.from([5]);
 
-        fixture.callbacks.onAudio(first);
+        fixture.sendOutputAudio(first, "response-1");
         await vi.waitFor(() => {
           expect(fixture.writeOutput).toHaveBeenCalledTimes(1);
         });
-        fixture.callbacks.onAudio(queued);
-        fixture.callbacks.onAudio(overflow);
+        fixture.sendOutputAudio(queued, "response-1");
+        fixture.sendOutputAudio(overflow, "response-1");
 
         await vi.waitFor(() => {
           expect(fixture.handleBargeIn).toHaveBeenCalledWith({
@@ -214,12 +264,19 @@ describe("meeting realtime engine output ownership", () => {
             force: true,
           });
         });
-        expect(fixture.clearOutput).toHaveBeenCalledOnce();
+        fixture.callbacks.onClearAudio("barge-in");
+        await vi.waitFor(() => {
+          expect(fixture.clearOutput).toHaveBeenCalledOnce();
+        });
         expect(fixture.writeOutput).toHaveBeenLastCalledWith(first);
 
-        fixture.callbacks.onAudio(late);
-        fixture.callbacks.onEvent?.({ direction: "server", type: terminalType });
-        fixture.callbacks.onAudio(fresh);
+        fixture.sendOutputAudio(late, "response-1");
+        fixture.callbacks.onEvent?.({
+          direction: "server",
+          responseId: "response-1",
+          type: terminalType,
+        });
+        fixture.sendOutputAudio(fresh, "response-2");
         fixture.releaseWrite(0);
 
         await vi.waitFor(() => {
@@ -238,15 +295,85 @@ describe("meeting realtime engine output ownership", () => {
     },
   );
 
+  it("accepts a new response owner after backpressure without the stale response terminal", async () => {
+    const fixture = await createEngineFixture();
+    try {
+      const active = Buffer.alloc(48_000, 1);
+      const queued = Buffer.alloc(48_000, 2);
+      const late = Buffer.from([3]);
+      const fresh = Buffer.from([4]);
+
+      fixture.sendOutputAudio(active, "response-1");
+      await vi.waitFor(() => {
+        expect(fixture.writeOutput).toHaveBeenCalledOnce();
+      });
+      fixture.sendOutputAudio(queued, "response-1");
+      fixture.sendOutputAudio(Buffer.from([5]), "response-1");
+      await vi.waitFor(() => {
+        expect(fixture.handleBargeIn).toHaveBeenCalledWith({
+          audioPlaybackActive: true,
+          force: true,
+        });
+      });
+
+      fixture.sendOutputAudio(late, "response-1");
+      fixture.sendOutputAudio(fresh, "response-2");
+      fixture.releaseWrite(0);
+
+      await vi.waitFor(() => {
+        expect(fixture.writeOutput).toHaveBeenCalledTimes(2);
+      });
+      expect(fixture.writeOutput).toHaveBeenLastCalledWith(fresh);
+      expect(fixture.writeOutput).not.toHaveBeenCalledWith(late);
+      fixture.releaseWrite(1);
+    } finally {
+      await fixture.handle.stop();
+    }
+  });
+
+  it("holds anonymous backpressure output until the provider clear fence", async () => {
+    const fixture = await createEngineFixture();
+    try {
+      const active = Buffer.alloc(48_000, 1);
+      const queued = Buffer.alloc(48_000, 2);
+      const late = Buffer.from([3]);
+      const fresh = Buffer.from([4]);
+
+      fixture.callbacks.onAudio(active);
+      await vi.waitFor(() => {
+        expect(fixture.writeOutput).toHaveBeenCalledOnce();
+      });
+      fixture.callbacks.onAudio(queued);
+      fixture.callbacks.onAudio(Buffer.from([5]));
+      await vi.waitFor(() => {
+        expect(fixture.handleBargeIn).toHaveBeenCalledOnce();
+      });
+
+      fixture.callbacks.onAudio(late);
+      fixture.callbacks.onClearAudio("barge-in");
+      fixture.callbacks.onAudio(fresh);
+      fixture.releaseWrite(0);
+
+      await vi.waitFor(() => {
+        expect(fixture.writeOutput).toHaveBeenCalledTimes(2);
+      });
+      expect(fixture.writeOutput).toHaveBeenLastCalledWith(fresh);
+      expect(fixture.writeOutput).not.toHaveBeenCalledWith(late);
+      fixture.releaseWrite(1);
+    } finally {
+      await fixture.handle.stop();
+    }
+  });
+
   it("bounds queued tiny-frame ownership", async () => {
     const fixture = await createEngineFixture();
     try {
-      fixture.callbacks.onAudio(Buffer.from([0]));
+      fixture.sendOutputAudio(Buffer.from([0]), "response-1");
       await vi.waitFor(() => {
         expect(fixture.writeOutput).toHaveBeenCalledTimes(1);
       });
       for (let index = 1; index < 257; index += 1) {
-        fixture.callbacks.onAudio(Buffer.from([index]));
+        fixture.sendOutputAudio(Buffer.from([index]), "response-1");
       }
 
       await vi.waitFor(() => {
@@ -265,27 +392,48 @@ describe("meeting realtime engine output ownership", () => {
   it("does not report a deferred cancellation race after response completion", async () => {
     const fixture = await createEngineFixture();
     try {
-      fixture.callbacks.onAudio(Buffer.alloc(48_000, 1));
+      const replacement = Buffer.from([4]);
+      const late = Buffer.from([5]);
+      const fresh = Buffer.from([6]);
+
+      fixture.sendOutputAudio(Buffer.alloc(48_000, 1), "response-1");
       await vi.waitFor(() => {
         expect(fixture.writeOutput).toHaveBeenCalledTimes(1);
       });
-      fixture.callbacks.onAudio(Buffer.alloc(48_000, 2));
-      fixture.callbacks.onAudio(Buffer.from([3]));
+      fixture.sendOutputAudio(Buffer.alloc(48_000, 2), "response-1");
+      fixture.sendOutputAudio(Buffer.from([3]), "response-1");
       await vi.waitFor(() => {
         expect(fixture.handleBargeIn).toHaveBeenCalledOnce();
       });
 
-      fixture.callbacks.onEvent?.({ direction: "server", type: "response.done" });
+      fixture.callbacks.onEvent?.({
+        direction: "server",
+        responseId: "response-1",
+        type: "response.done",
+      });
+      fixture.announceOutputResponse("response-2");
+      fixture.sendOutputAudio(replacement);
       fixture.callbacks.onEvent?.({
         direction: "server",
         type: "error",
         detail: "Cancellation failed: no active response found",
       });
+      expect(fixture.triggerHumanBargeIn()).toBe(true);
+      fixture.sendOutputAudio(late);
+      fixture.announceOutputResponse("response-3");
+      fixture.sendOutputAudio(fresh);
+      fixture.releaseWrite(0);
 
       expect(fixture.handle.getHealth().recentTalkEvents.map((event) => event.type)).not.toContain(
         "session.error",
       );
-      fixture.releaseWrite(0);
+      await vi.waitFor(() => {
+        expect(fixture.writeOutput).toHaveBeenCalledTimes(2);
+      });
+      expect(fixture.writeOutput).toHaveBeenLastCalledWith(fresh);
+      expect(fixture.writeOutput).not.toHaveBeenCalledWith(replacement);
+      expect(fixture.writeOutput).not.toHaveBeenCalledWith(late);
+      fixture.releaseWrite(1);
     } finally {
       await fixture.handle.stop();
     }
