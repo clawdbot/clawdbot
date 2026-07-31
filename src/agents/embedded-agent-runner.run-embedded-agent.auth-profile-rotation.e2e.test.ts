@@ -1477,10 +1477,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     delete process.env.OPENAI_API_KEY;
     try {
       await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
-        const authPath = path.join(agentDir, "auth-profiles.json");
-        const authStatePath = path.join(agentDir, "auth-state.json");
-        await fs.writeFile(authPath, JSON.stringify({ version: 1, profiles: {} }));
-        await fs.writeFile(authStatePath, JSON.stringify({ version: 1, usageStats: {} }));
+        saveAuthProfileStore({ version: 1, profiles: {}, usageStats: {} }, agentDir);
 
         await expectFailoverError(
           runEmbeddedAgentInline({
