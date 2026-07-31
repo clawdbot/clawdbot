@@ -502,6 +502,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
     this.pendingAudioBytes = 0;
     this.pendingToolResults = [];
     this.pendingUserMessages = [];
+    this.conversationId = null;
     this.resetRealtimeSessionState();
   }
 }

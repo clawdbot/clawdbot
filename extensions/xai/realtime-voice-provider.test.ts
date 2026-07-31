@@ -299,9 +299,9 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     const { connecting, socket } = await openRealtimeBridge(bridge);
     await connecting;
 
-    expect(
-      parseSent(socket).filter((event) => event.type === "input_audio_buffer.append"),
-    ).toEqual([{ type: "input_audio_buffer.append", audio: "fw==" }]);
+    expect(parseSent(socket).filter((event) => event.type === "input_audio_buffer.append")).toEqual(
+      [{ type: "input_audio_buffer.append", audio: "fw==" }],
+    );
     bridge.close();
   });
 
@@ -1407,6 +1407,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     const reconnecting = bridge.connect();
     await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(2));
     const reconnectedSocket = requireSocket(1);
+    expect(String(reconnectedSocket.args[0])).not.toContain("conversation_id=");
     reconnectedSocket.readyState = FakeWebSocket.OPEN;
     reconnectedSocket.emit("open");
     reconnectedSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
