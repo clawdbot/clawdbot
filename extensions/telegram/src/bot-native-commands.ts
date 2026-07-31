@@ -75,7 +75,10 @@ import {
   syncTelegramMenuCommands as syncTelegramMenuCommandsRuntime,
   type TelegramMenuCommand,
 } from "./bot-native-command-menu.js";
-import type { TelegramMessageProcessingResult } from "./bot-processing-outcome.js";
+import {
+  recordTelegramMessageProcessingResult,
+  type TelegramMessageProcessingResult,
+} from "./bot-processing-outcome.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import {
@@ -122,6 +125,20 @@ const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const activeTelegramCodexLoginFlows = new Map<string, { expiresAt: number }>();
 
 type TelegramNativeCommandContext = Context & { match?: string };
+
+function registerTelegramNativeCommandHandler(
+  bot: Bot,
+  command: string,
+  handler: (ctx: TelegramNativeCommandContext) => Promise<void>,
+): void {
+  bot.command(command, async (ctx: TelegramNativeCommandContext) => {
+    await handler(ctx);
+    // Native commands bypass processMessage, so their terminal outcome must be
+    // recorded here for every built-in, plugin, and direct-delivery branch.
+    recordTelegramMessageProcessingResult({ kind: "completed" });
+  });
+}
+
 type TelegramChunkMode = ReturnType<
   typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").resolveChunkMode
 >;
@@ -1210,7 +1227,7 @@ export const registerTelegramNativeCommands = ({
   if (commandsToRegister.length > 0 || pluginCatalog.commands.length > 0) {
     for (const command of nativeCommands) {
       const normalizedCommandName = normalizeTelegramCommandName(command.name);
-      bot.command(normalizedCommandName, async (ctx: TelegramNativeCommandContext) => {
+      registerTelegramNativeCommandHandler(bot, normalizedCommandName, async (ctx) => {
         const msg = ctx.message;
         if (!msg) {
           return;
@@ -1800,7 +1817,7 @@ export const registerTelegramNativeCommands = ({
     }
 
     for (const pluginCommand of pluginCatalog.commands) {
-      bot.command(pluginCommand.command, async (ctx: TelegramNativeCommandContext) => {
+      registerTelegramNativeCommandHandler(bot, pluginCommand.command, async (ctx) => {
         const msg = ctx.message;
         if (!msg) {
           return;

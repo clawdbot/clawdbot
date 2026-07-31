@@ -43,6 +43,59 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     handleCommandsMock.mockReset();
   });
 
+  it("returns native queue validation instead of discarding trailing command arguments", async () => {
+    handleCommandsMock.mockResolvedValue({ shouldContinue: true });
+
+    const body = "/queue Can you diagnose this?";
+    const typing = createTypingController();
+    const result = await maybeResolveNativeSlashCommandFastReply({
+      ctx: buildTestCtx({
+        Body: body,
+        BodyForAgent: body,
+        RawBody: body,
+        CommandBody: body,
+        CommandSource: "native",
+        CommandAuthorized: true,
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "telegram:slash:123",
+        CommandTargetSessionKey: "agent:main:telegram:123",
+        CommandTurn: {
+          kind: "native",
+          source: "native",
+          authorized: true,
+          commandName: "queue",
+          body,
+        },
+      }),
+      cfg: markCompleteReplyConfig({
+        session: {
+          store: path.join(tempDirs.make("openclaw-native-queue-"), "sessions.json"),
+        },
+      } as OpenClawConfig),
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      agentCfg: undefined,
+      commandAuthorized: true,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: { byKey: new Map(), byAlias: new Map() },
+      provider: "openai",
+      model: "gpt-5.5",
+      workspaceDir: "/tmp/workspace",
+      typing,
+    });
+
+    expect(result).toEqual({
+      handled: true,
+      reply: expect.objectContaining({
+        text: 'Unrecognized queue mode "Can". Valid modes: steer, followup, collect, interrupt.',
+      }),
+    });
+    expect(handleCommandsMock).toHaveBeenCalledOnce();
+    expect(typing.cleanup).toHaveBeenCalledOnce();
+  });
+
   it("marks native /compact terminal replies for delivery under message_tool_only (#90185)", async () => {
     handleCommandsMock.mockResolvedValueOnce({
       shouldContinue: false,

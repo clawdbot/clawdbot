@@ -1,0 +1,69 @@
+title: Telegram native queue command rejects ordinary prompt text
+
+scenario:
+  id: telegram-queue-invalid-mode
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - telegram.built-in-commands
+  regressionRefs:
+    - openclaw/openclaw#116688
+  objective: Verify a native Telegram queue command with ordinary trailing text returns its queue-mode validation error without invoking the model or synthesizing a model-failure fallback.
+  successCriteria:
+    - Telegram accepts the native queue command with its complete trailing argument text.
+    - The reply identifies the invalid queue mode and lists supported queue modes.
+    - The reply never blames the model, and a mock provider receives no request for the command.
+  codeRefs:
+    - extensions/telegram/src/bot-native-commands.ts
+    - src/auto-reply/reply/get-reply-directives.ts
+    - src/auto-reply/reply/directive-handling.queue-validation.ts
+  execution:
+    kind: flow
+    channel: telegram
+    summary: Send the reported native queue command and verify its explicit validation reply.
+    config:
+      commandText: /queue Can you diagnose this?
+      invalidModeNeedle: Unrecognized queue mode "Can"
+      validModesNeedle: "Valid modes: steer, followup, collect, interrupt."
+      falseFallbackNeedle: temporary model failure
+
+flow:
+  steps:
+    - name: invalid native queue arguments produce a visible command error
+      actions:
+        - resetTransport: true
+        - set: requestCursorBefore
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
+        - set: startIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text: { ref: config.commandText }
+            nativeCommand: { name: queue }
+        - waitForOutbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            sinceIndex: { ref: startIndex }
+            textIncludes: { ref: config.invalidModeNeedle }
+            timeoutMs: 60000
+          saveAs: reply
+        - assert:
+            expr: "reply.text.includes(config.validModesNeedle)"
+            message:
+              expr: "`queue validation reply omitted the valid modes: ${reply.text}`"
+        - assert:
+            expr: "!reply.text.includes(config.falseFallbackNeedle)"
+            message:
+              expr: "`queue validation emitted the false model fallback: ${reply.text}`"
+        - set: scenarioRequests
+          value:
+            expr: "env.mock ? await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`) : []"
+        - assert:
+            expr: "!env.mock || scenarioRequests.length === 0"
+            message:
+              expr: "`native queue validation unexpectedly invoked the model ${String(scenarioRequests.length)} time(s)`"
+      detailsExpr: reply.text

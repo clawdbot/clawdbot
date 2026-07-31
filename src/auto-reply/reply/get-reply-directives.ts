@@ -18,6 +18,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
+import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
 import type {
@@ -36,6 +37,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands-context.js";
 import { type InlineDirectives, parseInlineDirectives } from "./directive-handling.parse.js";
+import { maybeHandleQueueDirective } from "./directive-handling.queue-validation.js";
 import {
   reserveSkillCommandNames,
   resolveConfiguredDirectiveAliases,
@@ -275,6 +277,25 @@ export async function resolveReplyDirectives(params: {
     modelAliases: configuredAliases,
     allowStatusDirective,
   });
+  const commandTurn = resolveCommandTurnContext(ctx);
+  if (
+    command.isAuthorizedSender &&
+    isNativeCommandTurn(commandTurn) &&
+    commandTurn.commandName === "queue" &&
+    parsedDirectives.hasQueueDirective
+  ) {
+    // Native command arguments belong to the command, not to an inline prompt;
+    // validate them before mixed-text cleanup can erase an invalid queue mode.
+    const queueReply = maybeHandleQueueDirective({
+      directives: parsedDirectives,
+      cfg,
+      channel: command.channel,
+      sessionEntry: targetSessionEntry,
+    });
+    if (queueReply) {
+      return { kind: "reply", reply: markCommandReplyForDelivery(queueReply) };
+    }
+  }
   const hasInlineStatus =
     parsedDirectives.hasStatusDirective && parsedDirectives.cleaned.trim().length > 0;
   if (hasInlineStatus) {
