@@ -9,6 +9,7 @@ import {
   resolveToolExecutionErrorKind,
   resolveToolResultFailureKind,
 } from "../agents/tool-result-error.js";
+import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import type { McpLoopbackToolCallOutcome } from "./mcp-http.loopback-runtime.js";
 import {
   MCP_LOOPBACK_SERVER_NAME,
@@ -28,11 +29,7 @@ function stringifyMcpContent(value: unknown): string {
   return typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
 }
 
-const MCP_LOOPBACK_CONTENT_TYPES = new Set<ContentBlock["type"]>([
-  "text",
-  "image",
-  "resource",
-]);
+const MCP_LOOPBACK_CONTENT_TYPES = new Set<ContentBlock["type"]>(["text", "image", "resource"]);
 
 // Tool implementations may return MCP content blocks, plain strings, or
 // arbitrary JSON. Preserve the valid block types shared by every protocol revision
@@ -66,6 +63,8 @@ export async function handleMcpJsonRpc(params: {
   toolSchema: McpToolSchemaEntry[];
   hookContext?: HookContext;
   signal?: AbortSignal;
+  /** Revalidate short-lived client authority immediately before side effects. */
+  authorizeToolCall?: () => boolean;
   onToolCallResult?: (
     call: {
       toolName: string;
@@ -99,7 +98,17 @@ export async function handleMcpJsonRpc(params: {
     case "tools/list":
       return jsonRpcResult(id, { tools: params.toolSchema });
     case "tools/call": {
-      const toolName = typeof methodParams?.name === "string" ? methodParams.name.trim() : "";
+      const requestedToolName =
+        typeof methodParams?.name === "string" ? methodParams.name.trim() : "";
+      // "cron" is a permanently accepted inbound alias for the scheduler tool
+      // (owner decision, RFC 0026; same contract as bash -> exec). Resolve it to
+      // the published canonical tool without re-advertising it in tools/list.
+      const toolName =
+        !params.toolSchema.some((tool) => tool.name === requestedToolName) &&
+        isAutomationsToolName(requestedToolName)
+          ? (params.toolSchema.find((tool) => isAutomationsToolName(tool.name))?.name ??
+            requestedToolName)
+          : requestedToolName;
       const rawToolArgs = methodParams?.arguments;
       if (rawToolArgs !== undefined && !isRecord(rawToolArgs)) {
         return jsonRpcError(id, -32602, "Invalid params: tools/call arguments must be an object");
@@ -140,11 +149,20 @@ export async function handleMcpJsonRpc(params: {
         }
       };
       try {
+        const preparedToolArgs = tool.prepareBeforeToolCallParams
+          ? await tool.prepareBeforeToolCallParams(toolArgs, {
+              toolCallId,
+              hookContext: params.hookContext,
+              signal: params.signal,
+            })
+          : toolArgs;
+        executedToolArgs = preparedToolArgs as Record<string, unknown>;
         // Gateway before-tool hooks still run for loopback MCP calls so policy
         // and audit behavior matches native tool calls from normal chat runs.
+        // Preserve prepared params so exec can restore private workdir/env state after hooks.
         const hookResult = await runBeforeToolCallHook({
           toolName,
-          params: toolArgs,
+          params: preparedToolArgs,
           toolCallId,
           ctx: params.hookContext,
           signal: params.signal,
@@ -164,13 +182,23 @@ export async function handleMcpJsonRpc(params: {
             isError: true,
           });
         }
-        executedToolArgs = hookResult.params as Record<string, unknown>;
+        const finalizedToolArgs =
+          tool.finalizeBeforeToolCallParams?.(hookResult.params, preparedToolArgs) ??
+          hookResult.params;
+        executedToolArgs = finalizedToolArgs as Record<string, unknown>;
         try {
           params.onToolCallPrepared?.({ toolName, args: executedToolArgs });
         } catch {
           // Observability callbacks must never alter the tool result returned to the MCP client.
         }
-        const result = await tool.execute(toolCallId, hookResult.params, params.signal);
+        if (params.authorizeToolCall && !params.authorizeToolCall()) {
+          reportToolCallResult({ outcome: "blocked", deniedReason: "client-grant-revoked" });
+          return jsonRpcResult(id, {
+            content: [{ type: "text", text: "Tool call authorization expired" }],
+            isError: true,
+          });
+        }
+        const result = await tool.execute(toolCallId, finalizedToolArgs, params.signal);
         const failureKind = resolveToolResultFailureKind(result);
         reportToolCallResult(
           failureKind === "blocked"

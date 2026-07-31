@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover text direction behavior.
 import { describe, expect, it } from "vitest";
 import { detectTextDirection } from "./text-direction.ts";

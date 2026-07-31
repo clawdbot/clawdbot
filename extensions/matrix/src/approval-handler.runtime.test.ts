@@ -6,9 +6,23 @@ import type {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixApprovalNativeRuntime } from "./approval-handler.runtime.js";
 import {
-  clearMatrixApprovalReactionTargetsForTest,
-  resolveMatrixApprovalReactionTargetWithPersistence,
+  resolveMatrixApprovalReactionTargetWithPersistence as resolveMatrixApprovalReactionTargetWithPersistenceRaw,
+  unregisterMatrixApprovalReactionTargetsForApproval,
 } from "./approval-reactions.js";
+
+type ResolveTargetParams = Parameters<
+  typeof resolveMatrixApprovalReactionTargetWithPersistenceRaw
+>[0];
+
+function resolveMatrixApprovalReactionTargetWithPersistence(
+  params: Omit<ResolveTargetParams, "accountId"> & { accountId?: string },
+) {
+  const { accountId = "default", ...target } = params;
+  return resolveMatrixApprovalReactionTargetWithPersistenceRaw({
+    ...target,
+    accountId,
+  });
+}
 
 type MatrixDeliverPendingParams = Parameters<
   typeof matrixApprovalNativeRuntime.transport.deliverPending
@@ -178,8 +192,17 @@ async function buildPendingPayload(view: MatrixPendingApprovalView) {
 }
 
 describe("matrixApprovalNativeRuntime", () => {
-  beforeEach(() => {
-    clearMatrixApprovalReactionTargetsForTest();
+  beforeEach(async () => {
+    await unregisterMatrixApprovalReactionTargetsForApproval({
+      accountId: "default",
+      approvalId: "req-1",
+      approvalKind: "exec",
+    });
+    await unregisterMatrixApprovalReactionTargetsForApproval({
+      accountId: "default",
+      approvalId: "plugin:req-1",
+      approvalKind: "plugin",
+    });
   });
 
   it("sends versioned Matrix approval content with pending exec approvals", async () => {
@@ -316,6 +339,7 @@ describe("matrixApprovalNativeRuntime", () => {
         }),
       ).toEqual({
         approvalId: "req-1",
+        approvalKind: "exec",
         decision: "allow-once",
       });
     });
@@ -511,6 +535,7 @@ describe("matrixApprovalNativeRuntime", () => {
     });
 
     expect(binding).toEqual({
+      accountId: "default",
       roomId: "!room:example.org",
       eventId: "$primary",
     });
@@ -522,6 +547,7 @@ describe("matrixApprovalNativeRuntime", () => {
       }),
     ).toEqual({
       approvalId: "req-1",
+      approvalKind: "exec",
       decision: "allow-once",
     });
     expect(

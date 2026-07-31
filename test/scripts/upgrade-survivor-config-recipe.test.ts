@@ -8,6 +8,7 @@ import {
   CONFIG_COMMAND_MAX_BUFFER_BYTES,
   CONFIG_COMMAND_TIMEOUT_MS,
   isReleaseBefore,
+  resolveScenarioConfigSteps,
   resolveUpgradeSurvivorOpenClawCommand,
   runUpgradeSurvivorOpenClawStep,
 } from "../../scripts/e2e/lib/upgrade-survivor/config-recipe.mjs";
@@ -59,6 +60,22 @@ describe("upgrade survivor config recipe command resolution", () => {
       commandLabel: "openclaw config validate",
       shell: false,
     });
+  });
+
+  it("adds the Codex allowlist survival scenario", () => {
+    expect(resolveScenarioConfigSteps("codex-allowlist-survival")).toEqual([
+      {
+        argv: [
+          "config",
+          "set",
+          "plugins.allow",
+          JSON.stringify(["discord", "memory", "telegram", "whatsapp", "codex"]),
+          "--strict-json",
+        ],
+        id: "plugins-codex-allowlist",
+        intent: "codex-allowlist-survival",
+      },
+    ]);
   });
 
   it("bounds baseline config commands and reports spawn errors", () => {
@@ -154,7 +171,11 @@ process.exit(0);
         .map((line) => JSON.parse(line));
       expect(summary.skippedIntents).toContain("acpx-openclaw-tools-bridge");
       expect(loggedArgs).not.toContainEqual(
-        expect.arrayContaining(["set", "plugins", expect.stringContaining("openClawToolsMcpBridge")]),
+        expect.arrayContaining([
+          "set",
+          "plugins",
+          expect.stringContaining("openClawToolsMcpBridge"),
+        ]),
       );
     } finally {
       rmSync(root, { force: true, recursive: true });

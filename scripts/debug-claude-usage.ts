@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { normalizeOptionalString } from "../packages/normalization-core/src/string-coerce.js";
 import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "./lib/bounded-response.ts";
 import {
@@ -44,7 +45,7 @@ const parseArgs = (args = process.argv.slice(2)): Args => {
   let sessionKey: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
+    const arg = expectDefined(args[i], `Claude usage argument at index ${i}`);
     if (arg === "--agent") {
       agentId = parseNonBlankArgValue(parseRequiredArgValue(args, i, "--agent"), "--agent");
       i += 1;

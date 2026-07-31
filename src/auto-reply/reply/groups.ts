@@ -3,6 +3,8 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
+import { findChatChannelMeta, normalizeChatChannelId } from "../../channels/registry.js";
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -15,17 +17,6 @@ import type { TemplateContext } from "../templating.js";
 import { extractExplicitGroupId } from "./group-id.js";
 
 const groupsRuntimeLoader = createLazyImportLoader(() => import("./groups.runtime.js"));
-
-type DiscordGroupConfig = {
-  requireMention?: boolean;
-  slug?: string;
-  channels?: Record<string, DiscordGroupConfig>;
-};
-
-type DiscordConfigWithGuilds = {
-  accounts?: Record<string, { guilds?: Record<string, DiscordGroupConfig> }>;
-  guilds?: Record<string, DiscordGroupConfig>;
-};
 
 function loadGroupsRuntime() {
   return groupsRuntimeLoader.load();
@@ -49,99 +40,6 @@ async function resolveRuntimeChannelId(raw?: string | null): Promise<string | nu
   } catch {
     return normalized;
   }
-}
-
-function normalizeDiscordSlug(value?: string | null) {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return "";
-  }
-  return normalized
-    .replace(/^#/, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-function resolveDiscordGuilds(
-  cfg: OpenClawConfig,
-  accountId?: string | null,
-): Record<string, DiscordGroupConfig> | undefined {
-  const discord = cfg.channels?.discord as DiscordConfigWithGuilds | undefined;
-  if (!discord) {
-    return undefined;
-  }
-  const normalizedAccountId = normalizeOptionalString(accountId);
-  const accountGuilds = normalizedAccountId
-    ? discord.accounts?.[normalizedAccountId]?.guilds
-    : undefined;
-  return accountGuilds ?? discord.guilds;
-}
-
-function resolveDiscordGuildEntry(
-  guilds: Record<string, DiscordGroupConfig> | undefined,
-  groupSpace?: string | null,
-): DiscordGroupConfig | undefined {
-  if (!guilds || Object.keys(guilds).length === 0) {
-    return undefined;
-  }
-  const space = normalizeOptionalString(groupSpace) ?? "";
-  if (space && guilds[space]) {
-    return guilds[space];
-  }
-  const slug = normalizeDiscordSlug(space);
-  if (slug && guilds[slug]) {
-    return guilds[slug];
-  }
-  if (slug) {
-    const match = Object.values(guilds).find((entry) => normalizeDiscordSlug(entry?.slug) === slug);
-    if (match) {
-      return match;
-    }
-  }
-  return guilds["*"];
-}
-
-function resolveDiscordChannelEntry(
-  channels: Record<string, DiscordGroupConfig> | undefined,
-  params: { groupId?: string | null; groupChannel?: string | null },
-): DiscordGroupConfig | undefined {
-  if (!channels || Object.keys(channels).length === 0) {
-    return undefined;
-  }
-  const groupId = normalizeOptionalString(params.groupId);
-  const groupChannel = normalizeOptionalString(params.groupChannel);
-  const channelSlug = normalizeDiscordSlug(groupChannel);
-  return (
-    (groupId ? channels[groupId] : undefined) ??
-    (channelSlug ? (channels[channelSlug] ?? channels[`#${channelSlug}`]) : undefined) ??
-    (groupChannel ? channels[groupChannel] : undefined) ??
-    channels["*"]
-  );
-}
-
-function resolveDiscordRequireMentionFallback(params: {
-  cfg: OpenClawConfig;
-  channel: string;
-  groupId?: string | null;
-  groupChannel?: string | null;
-  groupSpace?: string | null;
-  accountId?: string | null;
-}): boolean | undefined {
-  if (params.channel !== "discord") {
-    return undefined;
-  }
-  const guildEntry = resolveDiscordGuildEntry(
-    resolveDiscordGuilds(params.cfg, params.accountId),
-    params.groupSpace,
-  );
-  const channelEntry = resolveDiscordChannelEntry(guildEntry?.channels, params);
-  if (typeof channelEntry?.requireMention === "boolean") {
-    return channelEntry.requireMention;
-  }
-  if (typeof guildEntry?.requireMention === "boolean") {
-    return guildEntry.requireMention;
-  }
-  return undefined;
 }
 
 /** Resolves whether a group/channel turn requires an explicit mention. */
@@ -178,17 +76,6 @@ export async function resolveGroupRequireMention(params: {
   if (typeof requireMention === "boolean") {
     return requireMention;
   }
-  const discordRequireMention = resolveDiscordRequireMentionFallback({
-    cfg,
-    channel,
-    groupId,
-    groupChannel,
-    groupSpace,
-    accountId: ctx.AccountId,
-  });
-  if (typeof discordRequireMention === "boolean") {
-    return discordRequireMention;
-  }
   return resolveChannelGroupRequireMention({
     cfg,
     channel,
@@ -210,11 +97,8 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
   if (isInternalMessageChannel(providerKey)) {
     return "WebChat";
   }
-  const labels: Record<string, string> = {
-    imessage: "iMessage",
-    whatsapp: "WhatsApp",
-  };
-  const label = labels[providerKey];
+  const channelId = normalizeChatChannelId(providerKey);
+  const label = channelId ? findChatChannelMeta(channelId)?.label : undefined;
   if (label) {
     return label;
   }
@@ -258,7 +142,10 @@ export function buildGroupChatContext(params: {
   lines.push(
     "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.",
   );
-  const tableGuidance = provider === "telegram" ? "" : " Avoid Markdown tables.";
+  const channelId = normalizeChatChannelId(provider) ?? provider ?? "";
+  const tableMode = getLoadedChannelPluginForRead(channelId)?.messaging?.defaultMarkdownTableMode;
+  const tableGuidance =
+    tableMode === "block" || tableMode === "off" ? "" : " Avoid Markdown tables.";
   lines.push(
     `Write like a human.${tableGuidance} Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.`,
   );

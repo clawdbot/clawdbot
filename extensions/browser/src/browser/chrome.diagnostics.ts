@@ -19,12 +19,14 @@ import {
   normalizeCdpHttpBaseForJsonEndpoints,
   openCdpWebSocket,
   redactCdpUrl,
+  scopeCdpPolicyToConfiguredEndpoint,
+  stripCdpUrlCredentials,
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 
 /** Machine-readable failure codes for Chrome CDP diagnostics. */
-export type ChromeCdpDiagnosticCode =
+type ChromeCdpDiagnosticCode =
   | "ssrf_blocked"
   | "http_unreachable"
   | "http_status_failed"
@@ -95,15 +97,16 @@ function failureDiagnostic(params: {
 }
 
 /** Read and validate Chrome's /json/version endpoint. */
-export async function readChromeVersion(
+async function readChromeVersion(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
   ssrfPolicy?: SsrFPolicy,
+  versionPath = "/json/version",
 ): Promise<ChromeVersion> {
   const ctrl = new AbortController();
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
-    const versionUrl = appendCdpPath(cdpUrl, "/json/version");
+    const versionUrl = appendCdpPath(cdpUrl, versionPath);
     const { response, release } = await fetchCdpChecked(
       versionUrl,
       timeoutMs,
@@ -124,8 +127,39 @@ export async function readChromeVersion(
   }
 }
 
+/** Preserve authenticated providers that expose only Playwright's trailing-slash route. */
+export async function readChromeVersionWithCredentialFallback(
+  cdpUrl: string,
+  timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
+  ssrfPolicy?: SsrFPolicy,
+): Promise<ChromeVersion> {
+  try {
+    const primaryVersion = await readChromeVersion(cdpUrl, timeoutMs, ssrfPolicy);
+    if (
+      normalizeOptionalString(primaryVersion.webSocketDebuggerUrl) ||
+      stripCdpUrlCredentials(cdpUrl) === cdpUrl
+    ) {
+      return primaryVersion;
+    }
+    try {
+      return await readChromeVersion(cdpUrl, timeoutMs, ssrfPolicy, "/json/version/");
+    } catch {
+      return primaryVersion;
+    }
+  } catch (primaryError) {
+    if (stripCdpUrlCredentials(cdpUrl) === cdpUrl) {
+      throw primaryError;
+    }
+    try {
+      return await readChromeVersion(cdpUrl, timeoutMs, ssrfPolicy, "/json/version/");
+    } catch {
+      throw primaryError;
+    }
+  }
+}
+
 type CdpHealthDiagnostic =
-  | { ok: true }
+  | { ok: true; version?: ChromeVersion }
   | {
       ok: false;
       code:
@@ -134,6 +168,25 @@ type CdpHealthDiagnostic =
         | "websocket_health_command_timeout";
       message: string;
     };
+
+function readObjectString(value: unknown, key: string): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  return normalizeOptionalString((value as Record<string, unknown>)[key]);
+}
+
+function chromeVersionFromCdpResult(result: unknown): ChromeVersion | undefined {
+  const browser = readObjectString(result, "Browser") ?? readObjectString(result, "product");
+  const userAgent = readObjectString(result, "User-Agent") ?? readObjectString(result, "userAgent");
+  if (!browser && !userAgent) {
+    return undefined;
+  }
+  return {
+    Browser: browser,
+    "User-Agent": userAgent,
+  };
+}
 
 async function diagnoseCdpHealthCommand(
   wsUrl: string,
@@ -159,7 +212,7 @@ async function diagnoseCdpHealthCommand(
         return;
       }
       if (parsed.result && typeof parsed.result === "object") {
-        finish({ ok: true });
+        finish({ ok: true, version: chromeVersionFromCdpResult(parsed.result) });
         return;
       }
       finish({
@@ -176,20 +229,12 @@ async function diagnoseCdpHealthCommand(
       settled = true;
       clearTimeout(timer);
       ws.off("message", onMessage);
-      try {
-        ws.close();
-      } catch {
-        // ignore
-      }
+      ws.close();
       resolve(value);
     };
     const timer = setTimeout(
       () => {
-        try {
-          ws.terminate();
-        } catch {
-          // ignore
-        }
+        ws.terminate();
         finish({
           ok: false,
           code: opened ? "websocket_health_command_timeout" : "websocket_handshake_failed",
@@ -310,20 +355,12 @@ async function diagnoseCdpWebSocketEndpoint(params: {
       startedAt: params.startedAt,
     });
   }
-  if (params.version) {
-    return {
-      ok: true,
-      cdpUrl: params.cdpUrl,
-      wsUrl: params.wsUrl,
-      browser: params.version.Browser,
-      userAgent: params.version["User-Agent"],
-      elapsedMs: elapsedSince(params.startedAt),
-    };
-  }
   return {
     ok: true,
     cdpUrl: params.cdpUrl,
     wsUrl: params.wsUrl,
+    browser: params.version?.Browser ?? health.version?.Browser,
+    userAgent: params.version?.["User-Agent"] ?? health.version?.["User-Agent"],
     elapsedMs: elapsedSince(params.startedAt),
   };
 }
@@ -346,6 +383,7 @@ export async function diagnoseChromeCdp(
       startedAt,
     });
   }
+  const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(cdpUrl, ssrfPolicy);
 
   if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
     return await diagnoseCdpWebSocketEndpoint({
@@ -361,7 +399,11 @@ export async function diagnoseChromeCdp(
     : cdpUrl;
   let version: ChromeVersion;
   try {
-    version = await readChromeVersion(discoveryUrl, timeoutMs, ssrfPolicy);
+    version = await readChromeVersionWithCredentialFallback(
+      discoveryUrl,
+      timeoutMs,
+      cdpControlPolicy,
+    );
   } catch (err) {
     if (isWebSocketUrl(cdpUrl)) {
       return await diagnoseCdpWebSocketEndpoint({
@@ -400,7 +442,10 @@ export async function diagnoseChromeCdp(
   }
   const wsUrl = normalizeCdpWsUrl(wsUrlRaw, discoveryUrl);
   try {
-    await assertCdpEndpointAllowed(wsUrl, ssrfPolicy, { source: "discovered" });
+    await assertCdpEndpointAllowed(wsUrl, cdpControlPolicy, {
+      source: "discovered",
+      configuredUrl: cdpUrl,
+    });
   } catch (err) {
     return failureDiagnostic({
       cdpUrl,

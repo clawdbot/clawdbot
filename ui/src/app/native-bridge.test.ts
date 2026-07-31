@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   handleChatDraftChange as applyDraftChange,
-  navigateChatInputHistory,
+  handleChatInputHistoryKey,
   type ChatInputHistoryState,
 } from "../pages/chat/input-history.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
@@ -103,7 +103,18 @@ describe("native chat drafts", () => {
       chatInputHistoryIndex: -1,
       chatDraftBeforeHistory: null,
     };
-    navigateChatInputHistory(state, "up");
+    handleChatInputHistoryKey(state, {
+      key: "ArrowUp",
+      selectionStart: 0,
+      selectionEnd: 0,
+      valueLength: 0,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      isComposing: false,
+      keyCode: 38,
+    });
     const drafts = createNativeChatDrafts();
     drafts.subscribe((text) => applyDraftChange(state, text));
 

@@ -33,8 +33,6 @@ const STORE_VERSION = 1;
 export const TELEGRAM_THREAD_BINDINGS_NAMESPACE = "telegram.thread-bindings";
 export const TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES = 5_000;
 
-let threadBindingStoreForTest: PluginStateSyncKeyedStore<TelegramThreadBindingRecord> | undefined;
-
 type TelegramBindingTargetKind = "subagent" | "acp";
 
 type TelegramThreadBindingRecord = {
@@ -128,13 +126,10 @@ function resolveStoredBindingKey(params: { accountId: string; conversationId: st
 }
 
 function openThreadBindingStore(): TelegramThreadBindingStore {
-  return (
-    threadBindingStoreForTest ??
-    getTelegramRuntime().state.openSyncKeyedStore<TelegramThreadBindingRecord>({
-      namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
-      maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
-    })
-  );
+  return getTelegramRuntime().state.openSyncKeyedStore<TelegramThreadBindingRecord>({
+    namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
+    maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
+  });
 }
 
 function toSessionBindingTargetKind(raw: TelegramBindingTargetKind): BindingTargetKind {
@@ -1008,12 +1003,6 @@ export async function resetTelegramThreadBindingsForTests() {
   getThreadBindingsState().bindingsByAccountConversation.clear();
 }
 
-export function setTelegramThreadBindingStoreForTest(
-  store: TelegramThreadBindingStore | undefined,
-): void {
-  threadBindingStoreForTest = store;
-}
-
 export function listTelegramLegacyThreadBindingEntries(params: {
   accountId: string;
   persistedPath?: string;
@@ -1030,4 +1019,4 @@ export const testing = {
   resolveBindingsPath,
   resolveStoredBindingKey,
 };
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

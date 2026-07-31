@@ -1,4 +1,6 @@
 // Covers provider usage report formatting.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   formatUsageReportLines,
@@ -107,7 +109,12 @@ describe("provider-usage.format", () => {
       ],
     };
 
-    expect(formatUsageWindowSummary(summary.providers[0], { now })).toBe("Balance ¥42.50");
+    expect(
+      formatUsageWindowSummary(
+        expectDefined(summary.providers[0], "summary.providers[0] test invariant"),
+        { now },
+      ),
+    ).toBe("Balance ¥42.50");
     expect(formatUsageSummaryLine(summary, { now })).toBe("📊 Usage: DeepSeek Balance ¥42.50");
     expect(formatUsageReportLines(summary, { now })).toEqual([
       "Usage:",
@@ -138,7 +145,12 @@ describe("provider-usage.format", () => {
       ],
     };
 
-    expect(formatUsageWindowSummary(summary.providers[0], { now })).toBe("Account balance: $64.50");
+    expect(
+      formatUsageWindowSummary(
+        expectDefined(summary.providers[0], "summary.providers[0] test invariant"),
+        { now },
+      ),
+    ).toBe("Account balance: $64.50");
     expect(formatUsageSummaryLine(summary, { now })).toBe(
       "📊 Usage: OpenRouter Account balance: $64.50",
     );

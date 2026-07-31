@@ -1,78 +1,39 @@
 // FFmpeg exec tests cover command execution wrappers and error mapping.
-import type { ChildProcess, ExecFileOptions } from "node:child_process";
-import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  parseFfprobeCodecAndSampleRate,
-  parseFfprobeCsvFields,
-  resolveFfmpegBin,
-  runFfprobe,
-} from "./ffmpeg-exec.js";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { execFileMock, resolveSystemBinMock } = vi.hoisted(() => ({
-  execFileMock: vi.fn(),
+const { runExecMock, resolveSystemBinMock } = vi.hoisted(() => ({
+  runExecMock: vi.fn(),
   resolveSystemBinMock: vi.fn(),
 }));
 
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  execFile: execFileMock,
+vi.mock("../process/exec.js", () => ({
+  runExec: runExecMock,
 }));
 
 vi.mock("../infra/resolve-system-bin.js", () => ({
   resolveSystemBin: resolveSystemBinMock,
 }));
 
-type ExecFileCallback = (
-  error: Error | null,
-  stdout: string | Buffer,
-  stderr: string | Buffer,
-) => void;
+let parseFfprobeCodecAndSampleRate: typeof import("./ffmpeg-exec.js").parseFfprobeCodecAndSampleRate;
+let resolveFfmpegBin: typeof import("./ffmpeg-exec.js").resolveFfmpegBin;
+let runFfprobe: typeof import("./ffmpeg-exec.js").runFfprobe;
 
-function createExecFileChild(): ChildProcess {
-  const child = new EventEmitter() as ChildProcess;
-  child.stdin = new PassThrough() as ChildProcess["stdin"];
-  return child;
-}
-
-function mockFfprobeExecFile(child: ChildProcess): {
-  execCallback: () => ExecFileCallback;
-} {
-  let execCallback: ExecFileCallback | undefined;
-  execFileMock.mockImplementationOnce(
-    (_file: string, _args: string[], _options: ExecFileOptions, callback: ExecFileCallback) => {
-      execCallback = callback;
-      return child;
-    },
-  );
-  return {
-    execCallback: () => {
-      if (!execCallback) {
-        throw new Error("execFile callback was not captured");
-      }
-      return execCallback;
-    },
-  };
-}
-
-beforeEach(() => {
-  execFileMock.mockReset();
-  resolveSystemBinMock.mockReset();
-  resolveSystemBinMock.mockReturnValue("/usr/bin/ffprobe");
+beforeAll(async () => {
+  vi.resetModules();
+  ({ parseFfprobeCodecAndSampleRate, resolveFfmpegBin, runFfprobe } =
+    await import("./ffmpeg-exec.js"));
 });
 
-describe("parseFfprobeCsvFields", () => {
-  function expectParsedFfprobeCsvCase(input: string, fieldCount: number, expected: string[]) {
-    expect(parseFfprobeCsvFields(input, fieldCount)).toEqual(expected);
-  }
+afterAll(() => {
+  vi.doUnmock("../process/exec.js");
+  vi.doUnmock("../infra/resolve-system-bin.js");
+  vi.resetModules();
+});
 
-  it.each([
-    { input: "opus,\n48000\n", fieldCount: 2, expected: ["opus", "48000"] },
-    { input: "opus,48000,stereo\n", fieldCount: 3, expected: ["opus", "48000", "stereo"] },
-  ] as const)("splits ffprobe csv output %#", ({ input, fieldCount, expected }) => {
-    expectParsedFfprobeCsvCase(input, fieldCount, [...expected]);
-  });
+beforeEach(() => {
+  runExecMock.mockReset();
+  resolveSystemBinMock.mockReset();
+  resolveSystemBinMock.mockReturnValue("/usr/bin/ffprobe");
 });
 
 describe("parseFfprobeCodecAndSampleRate", () => {
@@ -138,31 +99,39 @@ describe("parseFfprobeCodecAndSampleRate", () => {
 });
 
 describe("runFfprobe", () => {
-  it("handles stdin EPIPE without overriding successful ffprobe stdout", async () => {
-    const child = createExecFileChild();
-    const { execCallback } = mockFfprobeExecFile(child);
+  it("passes stdin and limits through the canonical exec wrapper", async () => {
+    const input = Buffer.from("audio");
+    runExecMock.mockResolvedValue({ stdout: "ok", stderr: "" });
 
-    const promise = runFfprobe(["pipe:0"], { input: Buffer.alloc(1024) });
+    await expect(
+      runFfprobe(["pipe:0"], { input, timeoutMs: 1234, maxBufferBytes: 5678 }),
+    ).resolves.toBe("ok");
 
-    const stdinError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
-    child.stdin?.emit("error", stdinError);
-    execCallback()(null, Buffer.from("ok"), Buffer.alloc(0));
-
-    await expect(promise).resolves.toBe("ok");
+    expect(runExecMock).toHaveBeenCalledWith("/usr/bin/ffprobe", ["pipe:0"], {
+      input,
+      logOutput: false,
+      maxBuffer: 5678,
+      timeoutMs: 1234,
+    });
   });
 
-  it("preserves the child callback error after stdin EPIPE", async () => {
-    const child = createExecFileChild();
-    const { execCallback } = mockFfprobeExecFile(child);
+  it("passes an inherited file descriptor through the canonical exec wrapper", async () => {
+    runExecMock.mockResolvedValue({ stdout: "ok", stderr: "" });
 
-    const promise = runFfprobe(["pipe:0"], { input: Buffer.alloc(1024) });
+    await expect(runFfprobe(["pipe:0"], { stdinFileDescriptor: 17 })).resolves.toBe("ok");
+    expect(runExecMock).toHaveBeenCalledWith("/usr/bin/ffprobe", ["pipe:0"], {
+      logOutput: false,
+      maxBuffer: 10 * 1024 * 1024,
+      stdinFileDescriptor: 17,
+      timeoutMs: 10_000,
+    });
+  });
 
-    const stdinError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
-    child.stdin?.emit("error", stdinError);
+  it("preserves wrapper execution errors", async () => {
     const childError = new Error("ffprobe failed");
-    execCallback()(childError, "", "");
+    runExecMock.mockRejectedValue(childError);
 
-    await expect(promise).rejects.toBe(childError);
+    await expect(runFfprobe(["pipe:0"], { input: Buffer.from("audio") })).rejects.toBe(childError);
   });
 });
 

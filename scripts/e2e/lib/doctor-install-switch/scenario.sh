@@ -59,6 +59,25 @@ update_doctor_env+=" OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=1"
 update_doctor_env+=" OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART=1"
 update_doctor_env+=" OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR=1"
 update_doctor_env+=" OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION=0"
+
+use_default_service_identity() {
+  local account_home
+  account_home="$(node -p 'require("node:os").userInfo().homedir')"
+
+  # Service mutation is intentionally restricted to the OS account home. Keep
+  # these disposable-container flows isolated without pretending a temp HOME owns it.
+  rm -rf \
+    "$account_home/.openclaw" \
+    "$account_home/.config/systemd/user/openclaw-gateway.service" \
+    "$account_home/.config/fish" \
+    "$account_home/.config/powershell" \
+    "$account_home/.local/bin/openclaw-wrapper" \
+    "$account_home/openclaw-wrapper-argv.log"
+  export HOME="$account_home"
+  export USERPROFILE="$account_home"
+  unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH
+}
+
 is_legacy_package_acceptance_compat() {
   [ "$(node scripts/e2e/lib/package-compat.mjs "$1")" = "1" ]
 }
@@ -139,6 +158,7 @@ run_flow() {
 
   echo "== Flow: $name =="
   openclaw_test_state_create "switch-${name}" empty
+  use_default_service_identity
   export USER="testuser"
 
   if ! openclaw_e2e_maybe_timeout "$command_timeout" bash -c "$install_cmd" >"$install_log" 2>&1; then
@@ -177,6 +197,84 @@ run_flow \
   "$update_doctor_env $npm_bin doctor --repair --force --yes --non-interactive" \
   "$npm_entry"
 
+plugin_binding_approval_count() {
+  local database_path="$1"
+  if [ ! -f "$database_path" ]; then
+    echo "0"
+    return
+  fi
+  node --no-warnings - "$database_path" <<'NODE'
+const { DatabaseSync } = require("node:sqlite");
+const database = new DatabaseSync(process.argv[2]);
+const table = database
+  .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+  .get("plugin_binding_approvals");
+const row = table
+  ? database.prepare("SELECT COUNT(*) AS count FROM plugin_binding_approvals").get()
+  : { count: 0 };
+database.close();
+process.stdout.write(String(row.count));
+NODE
+}
+
+run_cross_state_approval_flow() {
+  local name="cross-state-approvals"
+  local automated_log="/tmp/openclaw-doctor-switch-${name}-automated.log"
+  local direct_log="/tmp/openclaw-doctor-switch-${name}-direct.log"
+  local command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-900s}"
+
+  echo "== Flow: $name =="
+  openclaw_test_state_create "switch-${name}" empty
+  export USER="testuser"
+
+  local default_state_dir="$HOME/.openclaw"
+  local custom_state_dir="$HOME/custom-state"
+  local exec_source="$default_state_dir/exec-approvals.json"
+  local plugin_source="$default_state_dir/plugin-binding-approvals.json"
+  local state_database="$custom_state_dir/state/openclaw.sqlite"
+  mkdir -p "$default_state_dir" "$custom_state_dir"
+  printf '%s\n' '{"version":1,"socket":{"token":"legacy-token"},"defaults":{"security":"deny","ask":"always"}}' >"$exec_source"
+  printf '%s\n' '{"version":1,"approvals":[{"pluginRoot":"/plugins/codex-a","pluginId":"codex","channel":"telegram","accountId":"default","approvedAt":2345}]}' >"$plugin_source"
+  local exec_source_hash
+  local plugin_source_hash
+  exec_source_hash="$(sha256sum "$exec_source" | awk '{print $1}')"
+  plugin_source_hash="$(sha256sum "$plugin_source" | awk '{print $1}')"
+
+  if ! openclaw_e2e_maybe_timeout "$command_timeout" env \
+    OPENCLAW_STATE_DIR="$custom_state_dir" \
+    OPENCLAW_CONFIG_PATH="$custom_state_dir/openclaw.json" \
+    OPENCLAW_UPDATE_IN_PROGRESS=1 \
+    "$npm_bin" doctor --repair --yes --non-interactive >"$automated_log" 2>&1; then
+    openclaw_e2e_print_log "$automated_log"
+    exit 1
+  fi
+
+  test "$(sha256sum "$exec_source" | awk '{print $1}')" = "$exec_source_hash"
+  test "$(sha256sum "$plugin_source" | awk '{print $1}')" = "$plugin_source_hash"
+  test ! -e "$exec_source.migrated"
+  test ! -e "$plugin_source.migrated"
+  test ! -e "$custom_state_dir/exec-approvals.json"
+  test "$(plugin_binding_approval_count "$state_database")" = "0"
+
+  if ! openclaw_e2e_maybe_timeout "$command_timeout" env \
+    -u OPENCLAW_UPDATE_IN_PROGRESS \
+    OPENCLAW_STATE_DIR="$custom_state_dir" \
+    OPENCLAW_CONFIG_PATH="$custom_state_dir/openclaw.json" \
+    "$npm_bin" doctor --repair --yes --non-interactive >"$direct_log" 2>&1; then
+    openclaw_e2e_print_log "$direct_log"
+    exit 1
+  fi
+
+  test "$(sha256sum "$exec_source" | awk '{print $1}')" = "$exec_source_hash"
+  test "$(sha256sum "$plugin_source" | awk '{print $1}')" = "$plugin_source_hash"
+  test ! -e "$exec_source.migrated"
+  test ! -e "$plugin_source.migrated"
+  test ! -e "$custom_state_dir/exec-approvals.json"
+  test "$(plugin_binding_approval_count "$state_database")" = "0"
+}
+
+run_cross_state_approval_flow
+
 run_proxy_env_flow() {
   local name="proxy-env-cleanup"
   local install_log="/tmp/openclaw-doctor-switch-${name}-install.log"
@@ -185,6 +283,7 @@ run_proxy_env_flow() {
 
   echo "== Flow: $name =="
   openclaw_test_state_create "switch-${name}" empty
+  use_default_service_identity
   export USER="testuser"
 
   unit_path="$HOME/.config/systemd/user/openclaw-gateway.service"
@@ -231,6 +330,7 @@ run_wrapper_flow() {
 
   echo "== Flow: $name =="
   openclaw_test_state_create "switch-${name}" empty
+  use_default_service_identity
   export USER="testuser"
   mkdir -p "$HOME/.local/bin"
   local wrapper="$HOME/.local/bin/openclaw-wrapper"

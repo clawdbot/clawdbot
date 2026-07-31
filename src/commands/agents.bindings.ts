@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Pure helpers for parsing, adding, removing, and generating agent route bindings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -327,7 +328,11 @@ export function parseBindingSpecs(params: {
     }
     const channel = normalizeBindingChannelId(channelRaw, params.config);
     if (!channel) {
-      errors.push(formatUnknownChannelMessage({ channel: channelRaw }));
+      errors.push(
+        formatUnknownChannelMessage({
+          channel: expectDefined(channelRaw, "agents.bindings channel raw"),
+        }),
+      );
       continue;
     }
     let accountId: string | undefined = accountRaw?.trim();

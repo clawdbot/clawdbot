@@ -7,7 +7,7 @@ import type { PluginInstallSourceInfo } from "./install-source-info.js";
 import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import type { PluginPackageChannel } from "./manifest.js";
+import type { OpenClawPackageBuild, PluginPackageChannel } from "./manifest.js";
 
 /** Schema version for installed plugin index files. */
 export const INSTALLED_PLUGIN_INDEX_VERSION = 1;
@@ -113,6 +113,7 @@ export type InstalledPluginIndexRecord = {
    */
   packageInstall?: PluginInstallSourceInfo;
   packageChannel?: InstalledPluginPackageChannelInfo;
+  packageBuild?: OpenClawPackageBuild;
   manifestPath: string;
   manifestHash: string;
   manifestFile?: InstalledPluginFileSignature;

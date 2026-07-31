@@ -4,7 +4,7 @@
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CompactResult, ContextEngine } from "../../context-engine/types.js";
-import { createAbortError, mergeAbortSignals } from "../../infra/abort-signal.js";
+import { createAbortError } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../node-host/with-timeout.js";
 
 const EMBEDDED_COMPACTION_TIMEOUT_MS = 180_000;
@@ -53,7 +53,10 @@ export async function compactWithSafetyTimeout<T>(
       let externalAbortListener: (() => void) | undefined;
       let externalAbortPromise: Promise<never> | undefined;
       const abortSignal = opts?.abortSignal;
-      const composedAbortSignal = mergeAbortSignals([timeoutSignal, abortSignal]);
+      const composedAbortSignal =
+        timeoutSignal && abortSignal
+          ? AbortSignal.any([timeoutSignal, abortSignal])
+          : (timeoutSignal ?? abortSignal);
 
       if (timeoutSignal) {
         timeoutListener = () => {
@@ -77,13 +80,12 @@ export async function compactWithSafetyTimeout<T>(
       }
 
       try {
-        const compactPromise = compact(composedAbortSignal.signal);
+        const compactPromise = compact(composedAbortSignal);
         if (externalAbortPromise) {
           return await Promise.race([compactPromise, externalAbortPromise]);
         }
         return await compactPromise;
       } finally {
-        composedAbortSignal.dispose();
         if (timeoutListener) {
           timeoutSignal?.removeEventListener("abort", timeoutListener);
         }

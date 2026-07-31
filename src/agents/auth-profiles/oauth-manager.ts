@@ -1,4 +1,3 @@
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 /**
  * OAuth credential manager.
  * Resolves usable access tokens, refreshes expired credentials under global
@@ -9,6 +8,7 @@ import { normalizeSecretInputString } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { redactSensitiveText } from "../../logging/redact.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { OAUTH_REFRESH_CALL_TIMEOUT_MS, OAUTH_REFRESH_LOCK_OPTIONS, log } from "./constants.js";
 import { shouldMirrorRefreshedOAuthCredential } from "./oauth-identity.js";
@@ -19,17 +19,15 @@ import {
 } from "./oauth-refresh-lock-errors.js";
 import {
   areOAuthCredentialsEquivalent,
+  hasMatchingOAuthIdentity,
   hasUsableOAuthCredential,
   isSafeToAdoptBootstrapOAuthIdentity,
   isSafeToAdoptMainStoreOAuthIdentity,
-  isSafeToOverwriteStoredOAuthIdentity,
-  overlayRuntimeExternalOAuthProfiles,
   shouldBootstrapFromExternalCliCredential,
-  shouldPersistRuntimeExternalOAuthProfile,
   shouldReplaceStoredOAuthCredential,
-  type RuntimeExternalOAuthProfile,
 } from "./oauth-shared.js";
-import { resolveAuthStorePath, resolveOAuthRefreshLockPath } from "./paths.js";
+import { resolveOAuthRefreshLockPath } from "./paths.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreWithoutExternalProfiles,
@@ -38,7 +36,7 @@ import {
 } from "./store.js";
 import type { AuthProfileStore, OAuthCredential, OAuthCredentials } from "./types.js";
 
-export type OAuthManagerAdapter = {
+type OAuthManagerAdapter = {
   buildApiKey: (
     provider: string,
     credentials: OAuthCredential,
@@ -133,19 +131,6 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
     };
   }
 }
-
-export {
-  areOAuthCredentialsEquivalent,
-  hasUsableOAuthCredential,
-  isSafeToAdoptBootstrapOAuthIdentity,
-  isSafeToAdoptMainStoreOAuthIdentity,
-  isSafeToOverwriteStoredOAuthIdentity,
-  overlayRuntimeExternalOAuthProfiles,
-  shouldBootstrapFromExternalCliCredential,
-  shouldPersistRuntimeExternalOAuthProfile,
-  shouldReplaceStoredOAuthCredential,
-};
-export type { RuntimeExternalOAuthProfile };
 
 function hasOAuthCredentialChanged(
   previous: Pick<OAuthCredential, "access" | "refresh" | "expires">,
@@ -466,6 +451,36 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     return result !== null && saved;
   }
 
+  async function resolveOAuthCredentialAfterPersistMiss(params: {
+    agentDir?: string;
+    profileId: string;
+    refreshed: OAuthCredential;
+  }): Promise<OAuthCredential | null> {
+    // Single locked pass decides both outcomes so no relog can slip between a
+    // pre-read and the update: same identity persists the rotation, different
+    // identity adopts the stored (re-logged) credential for this call.
+    let adopted: OAuthCredential | null = null;
+    const result = await updateAuthProfileStoreWithLock({
+      agentDir: params.agentDir,
+      updater: (store) => {
+        const existing = store.profiles[params.profileId];
+        if (existing?.type !== "oauth" || existing.provider !== params.refreshed.provider) {
+          return false;
+        }
+        // Refresh tokens rotate server-side before persist. Same-identity CAS
+        // losers must win the store or the token family is bricked.
+        if (hasMatchingOAuthIdentity(existing, params.refreshed)) {
+          store.profiles[params.profileId] = { ...params.refreshed };
+          adopted = params.refreshed;
+          return true;
+        }
+        adopted = hasUsableOAuthCredential(existing) ? existing : null;
+        return false;
+      },
+    });
+    return result === null ? null : adopted;
+  }
+
   async function doRefreshOAuthTokenWithLock(params: {
     profileId: string;
     provider: string;
@@ -475,7 +490,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     attemptedCredentials?: OAuthCredential[];
   }): Promise<ResolvedOAuthAccess | null> {
     const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir(params);
-    const authPath = resolveAuthStorePath(ownerAgentDir);
+    const authPath = resolveAuthProfileDatabasePath(ownerAgentDir);
     const globalRefreshLockPath = resolveOAuthRefreshLockPath(params.provider, params.profileId);
 
     try {
@@ -617,10 +632,26 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           credential: refreshedCredentials,
         });
         if (!persisted) {
-          throw new Error("Failed to persist refreshed OAuth credential");
+          const recovered = await resolveOAuthCredentialAfterPersistMiss({
+            agentDir: ownerAgentDir,
+            profileId: params.profileId,
+            refreshed: refreshedCredentials,
+          });
+          if (!recovered) {
+            throw new Error("Failed to persist refreshed OAuth credential");
+          }
+          if (recovered !== refreshedCredentials) {
+            return {
+              apiKey: await adapter.buildApiKey(recovered.provider, recovered, {
+                cfg: params.cfg,
+                agentDir: params.agentDir,
+              }),
+              credential: recovered,
+            };
+          }
         }
         if (ownerAgentDir) {
-          const mainPath = resolveAuthStorePath(undefined);
+          const mainPath = resolveAuthProfileDatabasePath(undefined);
           if (mainPath !== authPath) {
             await mirrorRefreshedCredentialIntoMainStore({
               profileId: params.profileId,
@@ -816,3 +847,4 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     resetRefreshQueuesForTest,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

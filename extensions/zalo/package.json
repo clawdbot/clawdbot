@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/zalo",
-  "version": "2026.6.11",
+  "version": "2026.7.2",
   "description": "OpenClaw Zalo channel plugin for bot and webhook chats.",
   "repository": {
     "type": "git",
@@ -12,7 +12,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.6.11"
+    "openclaw": ">=2026.7.2"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -24,8 +24,19 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
     "channel": {
       "id": "zalo",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "ZALO_BOT_TOKEN",
+            "ZALO_WEBHOOK_SECRET"
+          ]
+        }
+      },
       "label": "Zalo",
       "selectionLabel": "Zalo (Bot API)",
       "docsPath": "/channels/zalo",
@@ -35,7 +46,28 @@
         "zl"
       ],
       "order": 80,
-      "quickstartAllowFrom": true
+      "quickstartAllowFrom": true,
+      "setup": {
+        "fields": [
+          {
+            "key": "token",
+            "kind": "string",
+            "sensitive": true,
+            "cli": { "flags": "--token <token>", "description": "Zalo bot token" }
+          },
+          {
+            "key": "tokenFile",
+            "kind": "string",
+            "sensitive": true,
+            "cli": { "flags": "--token-file <path>", "description": "Zalo bot token file" }
+          },
+          {
+            "key": "useEnv",
+            "kind": "boolean",
+            "cli": { "flags": "--use-env", "description": "Use ZALO_BOT_TOKEN" }
+          }
+        ]
+      }
     },
     "install": {
       "npmSpec": "@openclaw/zalo",
@@ -43,10 +75,10 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.6.11"
+      "pluginApi": ">=2026.7.2"
     },
     "build": {
-      "openclawVersion": "2026.6.11"
+      "openclawVersion": "2026.7.2"
     },
     "release": {
       "publishToClawHub": true,

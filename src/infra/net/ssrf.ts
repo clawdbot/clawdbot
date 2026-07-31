@@ -17,6 +17,7 @@ import {
   parseCanonicalIpAddress,
   parseLooseIpAddress,
 } from "@openclaw/net-policy/ip";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { Dispatcher } from "undici";
 import { normalizeHostname } from "./hostname.js";
@@ -425,6 +426,23 @@ function isLoopbackIpAddressIncludingEmbeddedIpv4(address: string): boolean {
   return embeddedIpv4?.range() === "loopback";
 }
 
+function isUnspecifiedIpAddressIncludingEmbeddedIpv4(address: string): boolean {
+  const parsed = parseCanonicalIpAddress(address);
+  if (!parsed) {
+    return false;
+  }
+  if (isIpv4Address(parsed)) {
+    return parsed.range() === "unspecified";
+  }
+  if (parsed.range() === "unspecified") {
+    return true;
+  }
+  if (parsed.range() === "loopback") {
+    return false;
+  }
+  return extractEmbeddedIpv4FromIpv6(parsed)?.range() === "unspecified";
+}
+
 function isExplicitLoopbackHostname(hostname: string): boolean {
   return (
     hostname === "localhost" ||
@@ -442,6 +460,7 @@ function assertAllowedTrustedHostnameResolvedAddressesOrThrow(
 
   for (const entry of results) {
     if (
+      isUnspecifiedIpAddressIncludingEmbeddedIpv4(entry.address) ||
       (!isLoopbackAllowed && isLoopbackIpAddressIncludingEmbeddedIpv4(entry.address)) ||
       isLinkLocalIpAddress(entry.address) ||
       isCloudMetadataIpAddress(entry.address)
@@ -510,13 +529,22 @@ export function createPinnedLookup(params: {
         ? records.filter((entry) => entry.family === requestedFamily)
         : automaticRecords;
     const usable = candidates.length > 0 ? candidates : automaticRecords;
+    // Match dns.lookup's asynchronous callback contract so connection errors
+    // cannot fire before the socket owner attaches its error listener.
     if (opts.all) {
-      cb(null, usable as LookupAddress[]);
+      process.nextTick(() => {
+        cb(null, usable as LookupAddress[]);
+      });
       return;
     }
-    const chosen = usable[index % usable.length];
+    const chosen = expectDefined(
+      usable[index % usable.length],
+      "usable entry at index % usable.length",
+    );
     index += 1;
-    cb(null, chosen.address, chosen.family);
+    process.nextTick(() => {
+      cb(null, chosen.address, chosen.family);
+    });
   }) as typeof dnsLookupCb;
 }
 

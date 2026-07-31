@@ -61,6 +61,7 @@ class ChatModelPickerTest {
       available = true,
       supportsVision = false,
       supportsAudio = false,
+      supportsVideo = false,
       supportsDocuments = false,
       supportsReasoning = supportsReasoning,
       contextTokens = null,

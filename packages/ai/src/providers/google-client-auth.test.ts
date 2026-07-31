@@ -32,7 +32,7 @@ import { streamGoogle } from "./google.js";
 const context = {
   messages: [{ role: "user", content: "hello", timestamp: 0 }],
 } satisfies Context;
-const sentinel = "oc-sent-v1-0123456789abcdef01234567";
+const sentinel = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
 
 function googleModel(): Model<"google-generative-ai"> {
   return {

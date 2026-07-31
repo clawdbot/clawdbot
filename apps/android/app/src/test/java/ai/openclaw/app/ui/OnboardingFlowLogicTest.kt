@@ -4,7 +4,11 @@ import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.resolveNativeText
+import ai.openclaw.app.ui.design.MascotMood
 import android.Manifest
+import androidx.compose.runtime.saveable.SaverScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
@@ -16,6 +20,43 @@ import org.junit.Test
 import java.util.Base64
 
 class OnboardingFlowLogicTest {
+  @Test
+  fun mascotMoodTracksVisibleOnboardingState() {
+    assertEquals(MascotMood.Idle, onboardingMascotMood(OnboardingStep.Welcome))
+    assertEquals(MascotMood.Curious, onboardingMascotMood(OnboardingStep.Permissions))
+    assertEquals(MascotMood.Thinking, onboardingMascotMood(OnboardingStep.NodeApproval))
+    assertEquals(
+      MascotMood.Working,
+      onboardingMascotMood(OnboardingStep.Recovery, GatewayRecoveryUiState.Finishing),
+    )
+    assertEquals(
+      MascotMood.Working,
+      onboardingMascotMood(OnboardingStep.Recovery, GatewayRecoveryUiState.TakingLonger),
+    )
+    assertEquals(
+      MascotMood.Celebrating,
+      onboardingMascotMood(OnboardingStep.Recovery, GatewayRecoveryUiState.Connected),
+    )
+    assertEquals(
+      MascotMood.Sad,
+      onboardingMascotMood(OnboardingStep.Recovery, GatewayRecoveryUiState.Failed),
+    )
+    assertEquals(
+      MascotMood.Sad,
+      onboardingMascotMood(
+        step = OnboardingStep.EnterSetupCode,
+        setupErrorCode = OnboardingErrorCode.SetupCodeRejected,
+      ),
+    )
+    assertEquals(
+      MascotMood.Sad,
+      onboardingMascotMood(
+        step = OnboardingStep.SetupCode,
+        setupScanErrorCode = OnboardingErrorCode.InvalidSetupQr,
+      ),
+    )
+  }
+
   @Test
   fun onboardingBackDestinationsMatchTheVisibleFlow() {
     assertEquals(null, onboardingBackDestination(OnboardingStep.Welcome))
@@ -139,6 +180,21 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun standardPortraitWidthKeepsOnboardingFieldsInline() {
+    assertFalse(onboardingFormUsesStackedLayout(availableWidthDp = 342f, fontScale = 1f))
+  }
+
+  @Test
+  fun narrowWidthStacksOnboardingFields() {
+    assertTrue(onboardingFormUsesStackedLayout(availableWidthDp = 320f, fontScale = 1f))
+  }
+
+  @Test
+  fun largeFontScaleStacksOnboardingFields() {
+    assertTrue(onboardingFormUsesStackedLayout(availableWidthDp = 600f, fontScale = 1.3f))
+  }
+
+  @Test
   fun cameraCapabilityStartsOffEvenWhenScannerPermissionWasGranted() {
     assertFalse(initialCameraCapabilityEnabled(savedCapabilityEnabled = false, androidCameraPermissionGranted = false))
     assertFalse(initialCameraCapabilityEnabled(savedCapabilityEnabled = false, androidCameraPermissionGranted = true))
@@ -148,9 +204,17 @@ class OnboardingFlowLogicTest {
 
   @Test
   fun cameraPermissionRowDistinguishesAndroidPermissionFromCapabilityOptIn() {
-    assertEquals("Not allowed", cameraPermissionRowStatusText(capabilityEnabled = false, androidCameraPermissionGranted = false))
-    assertEquals("Off", cameraPermissionRowStatusText(capabilityEnabled = false, androidCameraPermissionGranted = true))
-    assertEquals("Enabled", cameraPermissionRowStatusText(capabilityEnabled = true, androidCameraPermissionGranted = true))
+    assertEquals("Not allowed", cameraPermissionRowStatusText(capabilityEnabled = false, androidCameraPermissionGranted = false).resolveNativeText())
+    assertEquals("Off", cameraPermissionRowStatusText(capabilityEnabled = false, androidCameraPermissionGranted = true).resolveNativeText())
+    assertEquals("Enabled", cameraPermissionRowStatusText(capabilityEnabled = true, androidCameraPermissionGranted = true).resolveNativeText())
+  }
+
+  @Test
+  fun onboardingErrorCodeSaverRoundTripsTypedState() {
+    val saved = with(OnboardingErrorCodeSaver) { SaverScope { true }.save(OnboardingErrorCode.ManualInvalidUrl) }
+
+    assertEquals("ManualInvalidUrl", saved)
+    assertEquals(OnboardingErrorCode.ManualInvalidUrl, OnboardingErrorCodeSaver.restore(requireNotNull(saved)))
   }
 
   @Test
@@ -1074,27 +1138,45 @@ class OnboardingFlowLogicTest {
             pauseReconnect = true,
             retryable = false,
           ),
+        localizeLabel = { label -> "[$label]" },
       )
 
-    assertTrue(diagnostic.contains("OpenClaw Android gateway diagnostic"))
-    assertTrue(diagnostic.contains("Gateway: Home Gateway"))
-    assertTrue(diagnostic.contains("Status: Gateway closed: token mismatch"))
-    assertTrue(diagnostic.contains("Gateway paired: false"))
-    assertTrue(diagnostic.contains("Ready to continue: false"))
-    assertTrue(diagnostic.contains("Error code: AUTH_TOKEN_MISMATCH"))
-    assertTrue(diagnostic.contains("Reason: bad-token"))
-    assertTrue(diagnostic.contains("Request ID: request-1"))
-    assertTrue(diagnostic.contains("Next step: update_auth_credentials"))
+    assertTrue(diagnostic.contains("[OpenClaw Android gateway diagnostic]"))
+    assertTrue(diagnostic.contains("[Gateway]: Home Gateway"))
+    assertTrue(diagnostic.contains("[Status]: Gateway closed: token mismatch"))
+    assertTrue(diagnostic.contains("[Gateway paired]: false"))
+    assertTrue(diagnostic.contains("[Ready to continue]: false"))
+    assertTrue(diagnostic.contains("[Error code]: AUTH_TOKEN_MISMATCH"))
+    assertTrue(diagnostic.contains("[Reason]: bad-token"))
+    assertTrue(diagnostic.contains("[Request ID]: request-1"))
+    assertTrue(diagnostic.contains("[Next step]: update_auth_credentials"))
     assertFalse(diagnostic.contains("secret"))
+  }
+
+  @Test
+  fun recoveryDiagnosticDoesNotInventOrTranslateStatusValues() {
+    val status = "  gateway status\n"
+    val diagnostic =
+      gatewayRecoveryDiagnosticText(
+        statusText = status,
+        gatewayName = "Gateway A",
+        gatewayPaired = false,
+        gatewayPairingCanContinue = false,
+        gatewayConnectionProblem = null,
+        localizeLabel = { label -> "[$label]" },
+      )
+
+    assertTrue(diagnostic.contains("[Status]: $status"))
+    assertFalse(diagnostic.contains("Offline"))
   }
 
   @Test
   fun recoveryProgressStartsAtGatewayEndpointWhileConnecting() {
     assertEquals(
       listOf(
-        GatewayRecoveryProgressItem("Opening Gateway connection", GatewayRecoveryProgressStatus.Current),
-        GatewayRecoveryProgressItem("Checking pairing access", GatewayRecoveryProgressStatus.Pending),
-        GatewayRecoveryProgressItem("Checking node access", GatewayRecoveryProgressStatus.Pending),
+        GatewayRecoveryProgressItem(nativeText("Opening Gateway connection"), GatewayRecoveryProgressStatus.Current),
+        GatewayRecoveryProgressItem(nativeText("Checking pairing access"), GatewayRecoveryProgressStatus.Pending),
+        GatewayRecoveryProgressItem(nativeText("Checking node access"), GatewayRecoveryProgressStatus.Pending),
       ),
       gatewayRecoveryProgressItems(
         state = GatewayRecoveryUiState.Finishing,
@@ -1108,9 +1190,9 @@ class OnboardingFlowLogicTest {
   fun recoveryProgressDoesNotAdvanceToGatewayAccessJustBecauseSettlingEnds() {
     assertEquals(
       listOf(
-        GatewayRecoveryProgressItem("Opening Gateway connection", GatewayRecoveryProgressStatus.Current),
-        GatewayRecoveryProgressItem("Checking pairing access", GatewayRecoveryProgressStatus.Pending),
-        GatewayRecoveryProgressItem("Checking node access", GatewayRecoveryProgressStatus.Pending),
+        GatewayRecoveryProgressItem(nativeText("Opening Gateway connection"), GatewayRecoveryProgressStatus.Current),
+        GatewayRecoveryProgressItem(nativeText("Checking pairing access"), GatewayRecoveryProgressStatus.Pending),
+        GatewayRecoveryProgressItem(nativeText("Checking node access"), GatewayRecoveryProgressStatus.Pending),
       ),
       gatewayRecoveryProgressItems(
         state = GatewayRecoveryUiState.Finishing,
@@ -1124,9 +1206,9 @@ class OnboardingFlowLogicTest {
   fun recoveryProgressMovesDownToNodeAccessAfterGatewayConnects() {
     assertEquals(
       listOf(
-        GatewayRecoveryProgressItem("Opening Gateway connection", GatewayRecoveryProgressStatus.Complete),
-        GatewayRecoveryProgressItem("Checking pairing access", GatewayRecoveryProgressStatus.Complete),
-        GatewayRecoveryProgressItem("Checking node access", GatewayRecoveryProgressStatus.Current),
+        GatewayRecoveryProgressItem(nativeText("Opening Gateway connection"), GatewayRecoveryProgressStatus.Complete),
+        GatewayRecoveryProgressItem(nativeText("Checking pairing access"), GatewayRecoveryProgressStatus.Complete),
+        GatewayRecoveryProgressItem(nativeText("Checking node access"), GatewayRecoveryProgressStatus.Current),
       ),
       gatewayRecoveryProgressItems(
         state = GatewayRecoveryUiState.Finishing,

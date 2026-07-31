@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { redactSensitiveText } from "../logging/redact.js";
-import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import {
   looksLikeSecretSentinel,
   mintSecretSentinel,
@@ -15,15 +15,16 @@ describe("secret sentinels", () => {
     resetSecretRedactionRegistryForTest();
   });
 
-  it("mints, recognizes, resolves, and reuses sentinels by value and label", () => {
+  it("mints, recognizes, and resolves authenticated process-local sentinels", () => {
     const first = mintSecretSentinel("provider-secret-value", { label: "model-auth:openai" });
     const repeated = mintSecretSentinel("provider-secret-value", { label: "model-auth:openai" });
     const otherLabel = mintSecretSentinel("provider-secret-value", { label: "model-auth:other" });
 
-    expect(first).toMatch(/^oc-sent-v1-[0-9a-f]{24}$/);
+    expect(first).toMatch(/^oc-sent-v2\.[A-Za-z0-9_-]+\.end$/);
     expect(first.match(SECRET_SENTINEL_PATTERN)).toEqual([first]);
     expect(looksLikeSecretSentinel(first)).toBe(true);
     expect(resolveSecretSentinel(first)).toBe("provider-secret-value");
+    expect(resolveSecretSentinel(repeated)).toBe("provider-secret-value");
     expect(repeated).toBe(first);
     expect(otherLabel).not.toBe(first);
   });
@@ -41,15 +42,29 @@ describe("secret sentinels", () => {
   });
 
   it("reports unknown sentinel-shaped values without replacing them", () => {
-    const unknown = "oc-sent-v1-0123456789abcdef01234567";
+    const unknown = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
     expect(swapSecretSentinelsInText(`Bearer ${unknown}`)).toEqual({
       text: `Bearer ${unknown}`,
       unknown: [unknown],
     });
   });
 
+  it("rejects tampered sentinel ciphertext", () => {
+    const sentinel = mintSecretSentinel("tamper-resistant-secret", { label: "model-auth:test" });
+    const payloadStart = "oc-sent-v2.".length;
+    const replacement = sentinel[payloadStart] === "A" ? "B" : "A";
+    const tampered = `${sentinel.slice(0, payloadStart)}${replacement}${sentinel.slice(payloadStart + 1)}`;
+
+    expect(looksLikeSecretSentinel(tampered)).toBe(true);
+    expect(resolveSecretSentinel(tampered)).toBeUndefined();
+    expect(swapSecretSentinelsInText(`Bearer ${tampered}`)).toEqual({
+      text: `Bearer ${tampered}`,
+      unknown: [tampered],
+    });
+  });
+
   it("treats sentinel-shaped bytes inside resolved values as opaque", () => {
-    const secret = "prefix-oc-sent-v1-0123456789abcdef01234567";
+    const secret = "prefix-oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
     const sentinel = mintSecretSentinel(secret, { label: "nested-shape" });
 
     expect(swapSecretSentinelsInText(`Bearer ${sentinel}`)).toEqual({

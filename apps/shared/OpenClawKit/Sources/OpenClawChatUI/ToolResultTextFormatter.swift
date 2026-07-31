@@ -128,9 +128,7 @@ enum ToolResultTextFormatter {
         for key in keys {
             if let value = dict[key] as? String {
                 let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    return trimmed
-                }
+                if !trimmed.isEmpty { return trimmed }
             }
         }
         return nil

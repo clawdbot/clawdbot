@@ -1,6 +1,7 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.mainActivityPendingIntent
 import android.Manifest
 import android.app.Notification
@@ -69,9 +70,16 @@ private class AndroidSystemNotificationPoster(
     // to stable channel ids instead of mutating one shared channel.
     val (suffix, importance, name) =
       when (normalizedPriority) {
-        "passive" -> Triple("passive", NotificationManager.IMPORTANCE_LOW, "OpenClaw Passive")
-        "timesensitive" -> Triple("timesensitive", NotificationManager.IMPORTANCE_HIGH, "OpenClaw Time Sensitive")
-        else -> Triple("active", NotificationManager.IMPORTANCE_DEFAULT, "OpenClaw Active")
+        "passive" ->
+          Triple("passive", NotificationManager.IMPORTANCE_LOW, nativeString("OpenClaw Passive"))
+        "timesensitive" ->
+          Triple(
+            "timesensitive",
+            NotificationManager.IMPORTANCE_HIGH,
+            nativeString("OpenClaw Time Sensitive"),
+          )
+        else ->
+          Triple("active", NotificationManager.IMPORTANCE_DEFAULT, nativeString("OpenClaw Active"))
       }
     val channelId = "$NOTIFICATION_CHANNEL_BASE_ID.$suffix"
     val manager = appContext.getSystemService(NotificationManager::class.java)

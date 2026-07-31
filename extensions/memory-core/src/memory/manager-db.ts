@@ -5,12 +5,18 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
+  dropMemoryPathFtsTriggers,
   ensureDir,
+  ensureMemoryChunkProvenance,
+  ensureMemoryRecallMetadataSchema,
+  ensureMemoryPathFtsTriggers,
   loadSqliteVecExtension,
-  requireNodeSqlite,
+  MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
+  MEMORY_INDEX_PATHS_FTS_TABLE,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   ensureOpenClawAgentDatabaseSchema,
+  openNodeSqliteDatabase,
   runSqliteImmediateTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
@@ -115,6 +121,21 @@ function replaceVirtualTable(params: {
   );
 }
 
+function replaceMemoryPathFtsTable(db: DatabaseSync): void {
+  const createSql = readTableSql(db, MEMORY_REINDEX_SCHEMA, MEMORY_INDEX_PATHS_FTS_TABLE);
+  db.exec(`DROP TABLE IF EXISTS main.${MEMORY_INDEX_PATHS_FTS_TABLE}`);
+  if (!createSql) {
+    return;
+  }
+  db.exec(createSql);
+  // Bulk publication already suspends row triggers. Rebuild from the copied
+  // stable source ids so later singleton deletes remain direct rowid lookups.
+  db.exec(
+    `INSERT INTO main.${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source) ` +
+      `SELECT id, path, source FROM main.memory_index_sources`,
+  );
+}
+
 /** Publish a completed shadow memory index without replacing the shared agent database file. */
 export async function publishMemoryDatabaseTables(params: {
   targetDb: DatabaseSync;
@@ -123,6 +144,10 @@ export async function publishMemoryDatabaseTables(params: {
   expectedRevision: number;
   vectorExtensionPath?: string;
 }): Promise<void> {
+  ensureMemoryRecallMetadataSchema(params.targetDb);
+  // Existing pre-provenance databases lack the provenance table the publish
+  // below writes to; ensure it (idempotent) alongside the recall columns.
+  ensureMemoryChunkProvenance(params.targetDb);
   params.targetDb.prepare(`ATTACH DATABASE ? AS ${MEMORY_REINDEX_SCHEMA}`).run(params.sourcePath);
   try {
     if (
@@ -148,6 +173,14 @@ export async function publishMemoryDatabaseTables(params: {
             `(expected revision ${params.expectedRevision}, found ${liveRevision}); retry the full reindex.`,
         );
       }
+      const publishesPathFts = tableExists(
+        params.targetDb,
+        MEMORY_REINDEX_SCHEMA,
+        MEMORY_INDEX_PATHS_FTS_TABLE,
+      );
+      // Bulk source replacement must not fire one FTS5 scan per old row.
+      // Restore the schema-owned triggers only after the derived table is replaced.
+      dropMemoryPathFtsTriggers(params.targetDb);
       params.targetDb
         .prepare("DELETE FROM main.memory_index_meta WHERE key = ?")
         .run(params.metaKey);
@@ -160,8 +193,9 @@ export async function publishMemoryDatabaseTables(params: {
 
       params.targetDb.exec(`
         DELETE FROM main.memory_index_sources;
-        INSERT INTO main.memory_index_sources (path, source, hash, mtime, size)
-        SELECT path, source, hash, mtime, size FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_sources;
+        INSERT INTO main.memory_index_sources (id, path, source, hash, mtime, size)
+        SELECT id, path, source, hash, mtime, size
+        FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_sources;
 
         DELETE FROM main.memory_index_chunks;
         INSERT INTO main.memory_index_chunks (
@@ -170,6 +204,20 @@ export async function publishMemoryDatabaseTables(params: {
         SELECT
           id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
         FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_chunks;
+
+        DELETE FROM main.${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE};
+        INSERT INTO main.${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE} (
+          chunk_id, importance, triggers, project_key
+        )
+        SELECT chunk_id, importance, triggers, project_key
+        FROM ${MEMORY_REINDEX_SCHEMA}.${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE};
+
+        DELETE FROM main.memory_index_chunk_provenance;
+        INSERT INTO main.memory_index_chunk_provenance (
+          chunk_id, origin_class, session_kind, observed_at, supersedes_key
+        )
+        SELECT chunk_id, origin_class, session_kind, observed_at, supersedes_key
+        FROM ${MEMORY_REINDEX_SCHEMA}.memory_index_chunk_provenance;
       `);
 
       if (tableExists(params.targetDb, MEMORY_REINDEX_SCHEMA, "memory_embedding_cache")) {
@@ -188,6 +236,10 @@ export async function publishMemoryDatabaseTables(params: {
         tableName: "memory_index_chunks_fts",
         columns: "text, id, path, source, model, start_line, end_line",
       });
+      replaceMemoryPathFtsTable(params.targetDb);
+      if (publishesPathFts) {
+        ensureMemoryPathFtsTriggers(params.targetDb);
+      }
       replaceVirtualTable({
         db: params.targetDb,
         tableName: "memory_index_chunks_vec",
@@ -291,8 +343,7 @@ export function openMemoryDatabaseAtPath(
   agentId?: string,
 ): DatabaseSync {
   ensureDir(path.dirname(dbPath));
-  const { DatabaseSync } = requireNodeSqlite();
-  const db = new DatabaseSync(dbPath, { allowExtension });
+  const db = openNodeSqliteDatabase(dbPath, { allowExtension });
   try {
     configureMemorySqliteWalMaintenance(db, {
       busyTimeoutMs: 5000,

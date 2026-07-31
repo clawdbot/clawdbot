@@ -243,6 +243,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     params,
     cfg,
     accountId,
+    requesterAccountId,
     requesterSenderId,
     senderIsOwner,
     toolContext,
@@ -251,6 +252,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     mediaReadFile,
     sessionKey,
     inboundEventKind,
+    conversationReadOrigin,
   }) => {
     return await (
       await loadDiscordChannelActionsRuntime()
@@ -267,6 +269,8 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       mediaReadFile,
       ...(sessionKey ? { sessionKey } : {}),
       ...(inboundEventKind ? { inboundEventKind } : {}),
+      ...(requesterAccountId ? { requesterAccountId } : {}),
+      ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
     });
   },
 };

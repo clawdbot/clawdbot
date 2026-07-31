@@ -24,6 +24,7 @@ export interface SmokeRunOptions {
   json: boolean;
   keepServer: boolean;
   mode: Mode;
+  npmRegistry?: string;
   provider: Provider;
   snapshotHint: string;
   targetPackageSpec?: string;

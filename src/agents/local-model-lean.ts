@@ -3,16 +3,18 @@
  * Removes high-latency or channel-dependent tools for local models while
  * preserving explicitly required delivery tools.
  */
+import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery-mode.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
 const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set([
   "browser",
-  "cron",
+  AUTOMATIONS_TOOL_NAME,
   "image_generate",
   "message",
   "music_generate",
@@ -20,7 +22,6 @@ const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set([
   "tts",
   "video_generate",
 ]);
-const LOCAL_MODEL_LEAN_DIRECT_TOOL_NAMES = new Set(["exec"]);
 const LOCAL_MODEL_LEAN_TOOL_SEARCH_DEFAULTS = {
   enabled: true,
   mode: "tools",
@@ -45,7 +46,7 @@ export function resolveLocalModelLeanPreserveToolNames(params?: {
   sourceReplyDeliveryMode?: string;
 }): string[] {
   const names = [...(params?.toolNames ?? [])];
-  if (params?.forceMessageTool || params?.sourceReplyDeliveryMode === "message_tool_only") {
+  if (params && messageToolOwnsVisibleReply(params)) {
     names.push("message");
   }
   return [...new Set(names)];
@@ -106,12 +107,6 @@ export function filterLocalModelLeanTools(params: {
       !LOCAL_MODEL_LEAN_DENY_TOOL_NAMES.has(normalizedName)
     );
   });
-}
-
-// Lean mode targets coding-tuned local models; keep their familiar shell
-// primitive visible instead of requiring a catalog search to rediscover it.
-export function shouldCatalogToolForLocalModelLean(tool: AnyAgentTool): boolean {
-  return !LOCAL_MODEL_LEAN_DIRECT_TOOL_NAMES.has(normalizeToolName(tool.name));
 }
 
 export function applyLocalModelLeanToolSearchDefaults(params: {

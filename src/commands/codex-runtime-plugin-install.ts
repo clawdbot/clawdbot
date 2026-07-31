@@ -14,12 +14,19 @@ const CODEX_RUNTIME_PLUGIN_DESCRIPTOR = {
 
 const codexRuntimePluginInstall = createRuntimePluginModelSelectionHelpers({
   descriptor: CODEX_RUNTIME_PLUGIN_DESCRIPTOR,
-  shouldEnsure: ({ cfg, model }) =>
+  shouldEnsure: ({ cfg, model, agentId }) =>
     modelSelectionShouldEnsureCodexPlugin({
       config: cfg,
       model,
+      agentId,
     }),
+});
+
+const codexSupervisionPluginInstall = createRuntimePluginModelSelectionHelpers({
+  descriptor: CODEX_RUNTIME_PLUGIN_DESCRIPTOR,
+  shouldEnsure: () => true,
 });
 
 export const ensureCodexRuntimePluginForModelSelection = codexRuntimePluginInstall.ensure;
 export const repairCodexRuntimePluginInstallForModelSelection = codexRuntimePluginInstall.repair;
+export const ensureCodexRuntimePluginForSupervision = codexSupervisionPluginInstall.ensure;

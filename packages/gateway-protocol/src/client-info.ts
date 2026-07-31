@@ -16,14 +16,19 @@ function normalizeOptionalLowercaseString(raw?: string | null): string | undefin
 export const GATEWAY_CLIENT_IDS = {
   WEBCHAT_UI: "webchat-ui",
   CONTROL_UI: "openclaw-control-ui",
+  BROWSER_COPILOT: "openclaw-browser-copilot",
   TUI: "openclaw-tui",
   WEBCHAT: "webchat",
   CLI: "cli",
   GATEWAY_CLIENT: "gateway-client",
   MACOS_APP: "openclaw-macos",
+  // Native Linux UI uses the same trusted-client admission class as the macOS app.
+  LINUX_APP: "openclaw-linux",
   IOS_APP: "openclaw-ios",
+  WATCHOS_APP: "openclaw-watchos",
   ANDROID_APP: "openclaw-android",
   NODE_HOST: "node-host",
+  WORKER: "openclaw-worker",
   TEST: "test",
   FINGERPRINT: "fingerprint",
   PROBE: "openclaw-probe",
@@ -44,6 +49,7 @@ export const GATEWAY_CLIENT_MODES = {
   UI: "ui",
   BACKEND: "backend",
   NODE: "node",
+  WORKER: "worker",
   PROBE: "probe",
   TEST: "test",
 } as const;
@@ -73,7 +79,17 @@ export type GatewayClientInfo = {
 
 /** Capability flags a client may advertise during the gateway handshake. */
 export const GATEWAY_CLIENT_CAPS = {
+  AGENT_KIND: "agent-kind",
+  APPROVALS: "approvals",
+  EXEC_APPROVALS: "exec-approvals",
+  INLINE_WIDGETS: "inline-widgets",
+  RUN_TOOL_BINDINGS: "run-tool-bindings",
+  SESSION_SCOPED_EVENTS: "session-scoped-events",
+  PLUGIN_APPROVALS: "plugin-approvals",
+  TASK_SUGGESTIONS: "task-suggestions",
+  TERMINAL_OFFSET_SEQ: "terminal-offset-seq",
   TOOL_EVENTS: "tool-events",
+  UI_COMMANDS: "ui-commands",
 } as const;
 
 /** Optional capability advertised by clients during gateway handshake. */

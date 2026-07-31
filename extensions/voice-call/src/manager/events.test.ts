@@ -10,12 +10,39 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
-import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "../runtime-state.js";
+import { setVoiceCallStateRuntime } from "../runtime-state.js";
 import type { AnswerCallInput, HangupCallInput, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { processEvent } from "./events.js";
 import { speakInitialMessage } from "./outbound.js";
-import { flushPendingCallRecordWritesForTest } from "./store.js";
+
+const logSpy = vi.hoisted(() => {
+  const logEntries: string[] = [];
+  return {
+    logEntries,
+    clearLogEntries: () => {
+      logEntries.length = 0;
+    },
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (_subsystem: string) => ({
+      info: (msg: string) => {
+        logSpy.logEntries.push(msg);
+      },
+      warn: (msg: string) => {
+        logSpy.logEntries.push(msg);
+      },
+      error: (msg: string) => {
+        logSpy.logEntries.push(msg);
+      },
+    }),
+  };
+});
 
 const contexts: CallManagerContext[] = [];
 
@@ -30,6 +57,9 @@ function installStateRuntime(): void {
         createPluginStateSyncKeyedStoreForTests("voice-call", options),
       openChannelIngressQueue: (() => {
         throw new Error("openChannelIngressQueue is not used by voice-call event tests");
+      }) as never,
+      openChannelIngressDrain: (() => {
+        throw new Error("openChannelIngressDrain is not used by voice-call event tests");
       }) as never,
     },
   });
@@ -50,10 +80,8 @@ afterEach(async () => {
       clearTimeout(waiter.timeout);
     }
     ctx.transcriptWaiters.clear();
-    await flushPendingCallRecordWritesForTest();
     fs.rmSync(ctx.storePath, { recursive: true, force: true });
   }
-  clearVoiceCallStateRuntime();
   resetPluginStateStoreForTests();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -782,5 +810,104 @@ describe("processEvent (functional)", () => {
     expect(call.state).toBe("active");
     expect(Array.from(ctx.processedEventIds)).toStrictEqual([]);
     expect(call.processedEventIds).toStrictEqual([]);
+  });
+});
+
+describe("processEvent privacy assertions", () => {
+  beforeEach(() => {
+    logSpy.clearLogEntries();
+  });
+
+  function expectCallerRedacted(phone: string, ...expectedMetadata: string[]): void {
+    const logOutput = logSpy.logEntries.join(" ");
+    expect(logOutput).not.toContain(phone);
+    expect(logOutput).toContain("caller=sha256:");
+    for (const metadata of expectedMetadata) {
+      expect(logOutput).toContain(metadata);
+    }
+  }
+
+  it.each([
+    {
+      label: "acceptance",
+      phone: "+15551112222",
+      allowFrom: ["+15551112222"],
+      allowed: true,
+    },
+    {
+      label: "rejection",
+      phone: "+15559999999",
+      allowFrom: ["+15550001111"],
+      allowed: false,
+    },
+  ])("redacts caller phone numbers in allowlist $label logs", ({ phone, allowFrom, allowed }) => {
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "plivo",
+        fromNumber: "+15550000000",
+        inboundPolicy: "allowlist",
+        allowFrom,
+      }),
+      provider: createProvider(),
+    });
+
+    processEvent(
+      ctx,
+      createInboundInitiatedEvent({
+        id: `evt-privacy-${allowed ? "accept" : "reject"}`,
+        providerCallId: `prov-privacy-${allowed ? "accept" : "reject"}`,
+        from: phone,
+      }),
+    );
+
+    expectCallerRedacted(phone, `allowlisted=${allowed}`);
+  });
+
+  it("redacts caller phone numbers in call record creation logs", () => {
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "plivo",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+      }),
+    });
+    const phone = "+15554444444";
+    processEvent(
+      ctx,
+      createInboundInitiatedEvent({
+        id: "evt-privacy-create",
+        providerCallId: "prov-privacy-create",
+        from: phone,
+      }),
+    );
+
+    const call = requireFirstActiveCall(ctx);
+    expectCallerRedacted(phone, call.callId);
+  });
+
+  it("redacts caller phone numbers when rejection cannot reach a provider", () => {
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "plivo",
+        fromNumber: "+15550000000",
+        inboundPolicy: "allowlist",
+        allowFrom: ["+15550001111"],
+      }),
+      provider: null,
+    });
+    const phone = "+15559999999";
+    processEvent(
+      ctx,
+      createInboundInitiatedEvent({
+        id: "evt-privacy-no-provider",
+        providerCallId: "prov-privacy-no-provider",
+        from: phone,
+      }),
+    );
+
+    expectCallerRedacted(phone, "prov-privacy-no-provider");
   });
 });

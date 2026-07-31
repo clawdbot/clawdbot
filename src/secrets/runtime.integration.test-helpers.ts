@@ -1,20 +1,15 @@
 /** Integration-test helpers for preparing secrets runtime fixtures. */
 import { vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearPluginLoaderCache } from "../plugins/loader.js";
+import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { SecretsRuntimeEnvSnapshot } from "./runtime-openai-file-fixture.test-helper.js";
 
 /** Shared integration helpers for full secrets runtime snapshot tests. */
 export {
   asConfig,
-  createOpenAIFileRuntimeConfig,
-  createOpenAIFileRuntimeFixture,
   EMPTY_LOADABLE_PLUGIN_ORIGINS,
-  expectResolvedOpenAIRuntime,
   loadAuthStoreWithProfiles,
-  OPENAI_ENV_KEY_REF,
-  OPENAI_FILE_KEY_REF,
 } from "./runtime-openai-file-fixture.test-helper.js";
 export type { SecretsRuntimeEnvSnapshot } from "./runtime-openai-file-fixture.test-helper.js";
 import { clearSecretsRuntimeSnapshot } from "./runtime.js";

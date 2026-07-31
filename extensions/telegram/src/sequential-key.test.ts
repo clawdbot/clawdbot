@@ -286,6 +286,17 @@ describe("getTelegramSequentialKey", () => {
       {
         update: {
           callback_query: {
+            message: mockMessage({ chat: mockChat({ id: 321 }) }),
+            data: "tgq1:ask_0123456789abcdef0123456789abcdef:2",
+          },
+        },
+      },
+      "telegram:321:question",
+    ],
+    [
+      {
+        update: {
+          callback_query: {
             message: mockMessage({ chat: mockChat({ id: 123 }) }),
             data: "some-other-button",
           },

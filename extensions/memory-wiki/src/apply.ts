@@ -18,6 +18,7 @@ import {
   normalizeWikiClaims,
   type WikiClaim,
 } from "./markdown.js";
+import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import {
   readQueryableWikiPages,
   resolveQueryableWikiPageByLookup,
@@ -53,9 +54,7 @@ type UpdateMetadataMemoryWikiMutation = {
   status?: string;
 };
 
-export type ApplyMemoryWikiMutation =
-  | CreateSynthesisMemoryWikiMutation
-  | UpdateMetadataMemoryWikiMutation;
+type ApplyMemoryWikiMutation = CreateSynthesisMemoryWikiMutation | UpdateMetadataMemoryWikiMutation;
 
 type MemoryWikiMutationInputOp = ApplyMemoryWikiMutation["op"] | "synthesis" | "metadata";
 
@@ -359,7 +358,7 @@ async function applyUpdateMetadataMutation(params: {
   };
 }
 
-export async function applyMemoryWikiMutation(params: {
+async function applyMemoryWikiMutationUnlocked(params: {
   config: ResolvedMemoryWikiConfig;
   mutation: ApplyMemoryWikiMutation;
 }): Promise<ApplyMemoryWikiMutationResult> {
@@ -382,4 +381,13 @@ export async function applyMemoryWikiMutation(params: {
     ...(result.pageId ? { pageId: result.pageId } : {}),
     compile,
   };
+}
+
+export async function applyMemoryWikiMutation(params: {
+  config: ResolvedMemoryWikiConfig;
+  mutation: ApplyMemoryWikiMutation;
+}): Promise<ApplyMemoryWikiMutationResult> {
+  return await withMemoryWikiVaultMutation(params.config.vault.path, () =>
+    applyMemoryWikiMutationUnlocked(params),
+  );
 }

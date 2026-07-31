@@ -1,10 +1,9 @@
 // Comfy tests cover image generation provider plugin behavior.
+import type { LookupAddress } from "node:dns";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  setComfyFetchGuardForTesting,
-  buildComfyImageGenerationProvider,
-} from "./image-generation-provider.js";
+import { buildComfyImageGenerationProvider } from "./image-generation-provider.js";
 import {
   buildComfyConfig,
   buildLegacyComfyConfig,
@@ -12,6 +11,7 @@ import {
   mockComfyProviderApiKey,
   parseComfyJsonBody,
 } from "./test-helpers.js";
+import { setComfyFetchGuardForTesting } from "./test-support.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -21,11 +21,27 @@ type FetchGuardRequest = {
   url?: unknown;
   auditContext?: unknown;
   timeoutMs?: unknown;
+  policy?: unknown;
   init?: {
     method?: unknown;
     headers?: HeadersInit;
     body?: BodyInit | null;
   };
+};
+type RealGuardParams = Parameters<typeof fetchWithSsrFGuard>[0];
+type RealGuardFetchImpl = NonNullable<RealGuardParams["fetchImpl"]>;
+type RealGuardLookupFn = NonNullable<RealGuardParams["lookupFn"]>;
+type RealGuardHarness = {
+  fetchUrls: string[];
+  guardCalls: RealGuardParams[];
+};
+
+type RealComfyFetchOptions = {
+  dns: Record<string, string>;
+  promptId?: string;
+  redirectLocation?: string;
+  body?: Buffer;
+  contentType?: string;
 };
 
 function fetchRequest(call: number): FetchGuardRequest {
@@ -38,6 +54,167 @@ function fetchRequest(call: number): FetchGuardRequest {
 
 function parseJsonBody(call: number): Record<string, unknown> {
   return parseComfyJsonBody(fetchWithSsrFGuardMock, call);
+}
+
+function mockLocalImageResponses(promptId = "local-prompt-1") {
+  fetchWithSsrFGuardMock
+    .mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ prompt_id: promptId }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release: vi.fn(async () => {}),
+    })
+    .mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({
+          [promptId]: {
+            outputs: {
+              "9": {
+                images: [{ filename: "generated.png", subfolder: "", type: "output" }],
+              },
+            },
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+      release: vi.fn(async () => {}),
+    })
+    .mockResolvedValueOnce({
+      response: new Response(Buffer.from("png-data"), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      }),
+      release: vi.fn(async () => {}),
+    });
+}
+
+const COMFY_SERVICE_HOST_LOCAL_POLICY = {
+  allowedOrigins: ["http://comfyui:8188"],
+  hostnameAllowlist: ["comfyui"],
+};
+
+const COMFY_SERVICE_HOST_EXPLICIT_PRIVATE_NETWORK_POLICY = {
+  allowedOrigins: ["http://comfyui:8188"],
+};
+
+const COMFY_PUBLIC_LOCAL_HOST_POLICY = {
+  hostnameAllowlist: ["images.example.com"],
+};
+
+function testWorkflowConfig(config: Record<string, unknown> = {}) {
+  return {
+    workflow: {
+      "6": { inputs: { text: "" } },
+      "9": { inputs: {} },
+    },
+    promptNodeId: "6",
+    outputNodeId: "9",
+    ...config,
+  };
+}
+
+function toFetchUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  return input.url;
+}
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function generatedHistory(promptId: string) {
+  return {
+    [promptId]: {
+      outputs: {
+        "9": {
+          images: [{ filename: "generated.png", subfolder: "", type: "output" }],
+        },
+      },
+    },
+  };
+}
+
+function createLookupFn(dns: Record<string, string>): RealGuardLookupFn {
+  return (async (hostname: string, options?: unknown) => {
+    const normalized = hostname.toLowerCase().replace(/\.+$/u, "");
+    const address = dns[normalized] ?? "93.184.216.34";
+    const record: LookupAddress = {
+      address,
+      family: address.includes(":") ? 6 : 4,
+    };
+    if (
+      typeof options === "object" &&
+      options !== null &&
+      (options as { all?: unknown }).all === true
+    ) {
+      return [record];
+    }
+    return record;
+  }) as RealGuardLookupFn;
+}
+
+function installRealComfyFetchGuard(options: RealComfyFetchOptions): RealGuardHarness {
+  const promptId = options.promptId ?? "real-guard-prompt-1";
+  const body = options.body ?? Buffer.from("png-data");
+  const contentType = options.contentType ?? "image/png";
+  const fetchUrls: string[] = [];
+  const guardCalls: RealGuardParams[] = [];
+  const lookupFn = createLookupFn(options.dns);
+  const fetchImpl: RealGuardFetchImpl = async (input) => {
+    const url = toFetchUrl(input);
+    fetchUrls.push(url);
+    const parsed = new URL(url);
+    if (parsed.pathname.endsWith("/prompt")) {
+      return jsonResponse({ prompt_id: promptId });
+    }
+    if (parsed.pathname === `/api/job/${promptId}/status`) {
+      return jsonResponse({ status: "completed" });
+    }
+    if (
+      parsed.pathname === `/history/${promptId}` ||
+      parsed.pathname === `/api/history_v2/${promptId}`
+    ) {
+      return jsonResponse(generatedHistory(promptId));
+    }
+    if (parsed.pathname === "/view" || parsed.pathname === "/api/view") {
+      if (options.redirectLocation) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: options.redirectLocation },
+        });
+      }
+      return new Response(new Uint8Array(body), {
+        status: 200,
+        headers: { "content-type": contentType },
+      });
+    }
+    return new Response(new Uint8Array(body), {
+      status: 200,
+      headers: { "content-type": contentType },
+    });
+  };
+
+  setComfyFetchGuardForTesting(async (params) => {
+    guardCalls.push(params);
+    return await fetchWithSsrFGuard({
+      ...params,
+      fetchImpl,
+      lookupFn,
+    });
+  });
+  return { fetchUrls, guardCalls };
 }
 
 describe("comfy image-generation provider", () => {
@@ -202,6 +379,352 @@ describe("comfy image-generation provider", () => {
         outputNodeIds: ["9"],
       },
     });
+  });
+
+  it("honors local private-network access for service-discovery hostnames", async () => {
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockLocalImageResponses("compose-prompt-1");
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "draw a lobster",
+      cfg: buildComfyConfig({
+        baseUrl: "http://comfyui:8188",
+        workflow: {
+          "6": { inputs: { text: "" } },
+          "9": { inputs: {} },
+        },
+        promptNodeId: "6",
+        outputNodeId: "9",
+      }),
+    });
+
+    const submitRequest = fetchRequest(1);
+    expect(submitRequest.url).toBe("http://comfyui:8188/prompt");
+    expect(submitRequest.policy).toEqual(COMFY_SERVICE_HOST_LOCAL_POLICY);
+    expect(fetchRequest(2).policy).toEqual(COMFY_SERVICE_HOST_LOCAL_POLICY);
+    expect(fetchRequest(3).policy).toEqual(COMFY_SERVICE_HOST_LOCAL_POLICY);
+  });
+
+  it("keeps local public-looking hostnames strict without explicit private-network access", async () => {
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockLocalImageResponses("public-host-prompt-1");
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "draw a lobster",
+      cfg: buildComfyConfig({
+        baseUrl: "http://images.example.com:8188",
+        workflow: {
+          "6": { inputs: { text: "" } },
+          "9": { inputs: {} },
+        },
+        promptNodeId: "6",
+        outputNodeId: "9",
+      }),
+    });
+
+    expect(fetchRequest(1).url).toBe("http://images.example.com:8188/prompt");
+    expect(fetchRequest(1).policy).toEqual(COMFY_PUBLIC_LOCAL_HOST_POLICY);
+  });
+
+  it("keeps cloud service-discovery hostnames strict without explicit private-network access", async () => {
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
+      body: Buffer.from("cloud-data"),
+      contentType: "image/png",
+      filename: "cloud.png",
+      outputKind: "images",
+      promptId: "strict-cloud-job-1",
+      redirectLocation: "https://cdn.example.com/cloud.png",
+    });
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "cloud workflow prompt",
+      cfg: buildComfyConfig({
+        mode: "cloud",
+        apiKey: "comfy-test-key",
+        baseUrl: "http://comfyui:8188",
+        workflow: {
+          "6": { inputs: { text: "" } },
+          "9": { inputs: {} },
+        },
+        promptNodeId: "6",
+        outputNodeId: "9",
+      }),
+    });
+
+    expect(fetchRequest(1).url).toBe("http://comfyui:8188/api/prompt");
+    expect(fetchRequest(1).policy).toBeUndefined();
+  });
+
+  it("honors explicit cloud private-network access for service-discovery hostnames", async () => {
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
+      body: Buffer.from("cloud-data"),
+      contentType: "image/png",
+      filename: "cloud.png",
+      outputKind: "images",
+      promptId: "private-cloud-job-1",
+      redirectLocation: "https://cdn.example.com/cloud.png",
+    });
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "cloud workflow prompt",
+      cfg: buildComfyConfig({
+        mode: "cloud",
+        apiKey: "comfy-test-key",
+        baseUrl: "http://comfyui:8188",
+        allowPrivateNetwork: true,
+        workflow: {
+          "6": { inputs: { text: "" } },
+          "9": { inputs: {} },
+        },
+        promptNodeId: "6",
+        outputNodeId: "9",
+      }),
+    });
+
+    expect(fetchRequest(1).url).toBe("http://comfyui:8188/api/prompt");
+    expect(fetchRequest(1).policy).toEqual(COMFY_SERVICE_HOST_EXPLICIT_PRIVATE_NETWORK_POLICY);
+    expect(fetchRequest(2).policy).toEqual(COMFY_SERVICE_HOST_EXPLICIT_PRIVATE_NETWORK_POLICY);
+    expect(fetchRequest(3).policy).toEqual(COMFY_SERVICE_HOST_EXPLICIT_PRIVATE_NETWORK_POLICY);
+    expect(fetchRequest(4).policy).toEqual(COMFY_SERVICE_HOST_EXPLICIT_PRIVATE_NETWORK_POLICY);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("allows local single-label hostnames that resolve to RFC1918 addresses", async () => {
+    const harness = installRealComfyFetchGuard({
+      dns: { comfyui: "10.0.0.25" },
+    });
+
+    const provider = buildComfyImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "draw a lobster",
+      cfg: buildComfyConfig(
+        testWorkflowConfig({
+          baseUrl: "http://comfyui:8188",
+        }),
+      ),
+    });
+
+    expect(harness.fetchUrls).toContain("http://comfyui:8188/prompt");
+    expect(result.images[0]?.buffer).toEqual(Buffer.from("png-data"));
+  });
+
+  it("blocks local public-looking FQDNs resolving private without explicit opt-in", async () => {
+    const harness = installRealComfyFetchGuard({
+      dns: { "images.example.com": "10.0.0.25" },
+    });
+
+    const provider = buildComfyImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a lobster",
+        cfg: buildComfyConfig(
+          testWorkflowConfig({
+            baseUrl: "http://images.example.com:8188",
+          }),
+        ),
+      }),
+    ).rejects.toThrow("Blocked: resolves to private/internal/special-use IP address");
+    expect(harness.fetchUrls).toEqual([]);
+  });
+
+  it("allows local private-DNS FQDNs with explicit opt-in", async () => {
+    const harness = installRealComfyFetchGuard({
+      dns: { "comfy.private.example.com": "10.0.0.25" },
+    });
+
+    const provider = buildComfyImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "draw a lobster",
+      cfg: buildComfyConfig(
+        testWorkflowConfig({
+          baseUrl: "http://comfy.private.example.com:8188",
+          allowPrivateNetwork: true,
+        }),
+      ),
+    });
+
+    expect(harness.fetchUrls).toContain("http://comfy.private.example.com:8188/prompt");
+    expect(result.images[0]?.buffer).toEqual(Buffer.from("png-data"));
+  });
+
+  it("blocks explicit private-DNS FQDNs resolving to metadata addresses", async () => {
+    const harness = installRealComfyFetchGuard({
+      dns: { "comfy.private.example.com": "169.254.169.254" },
+    });
+
+    const provider = buildComfyImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a lobster",
+        cfg: buildComfyConfig(
+          testWorkflowConfig({
+            baseUrl: "http://comfy.private.example.com:8188",
+            allowPrivateNetwork: true,
+          }),
+        ),
+      }),
+    ).rejects.toThrow("Blocked: resolves to private/internal/special-use IP address");
+    expect(harness.fetchUrls).toEqual([]);
+  });
+
+  it.each([
+    [
+      "subdomain",
+      "http://assets.comfyui:8188/generated.png",
+      { comfyui: "10.0.0.25", "assets.comfyui": "10.0.0.26" },
+    ],
+    [
+      "different hostname",
+      "http://other-comfy:8188/generated.png",
+      { comfyui: "10.0.0.25", "other-comfy": "10.0.0.26" },
+    ],
+    [
+      "same hostname private alternate port",
+      "http://comfyui:8288/generated.png",
+      { comfyui: "10.0.0.25" },
+    ],
+    [
+      "public CDN hostname",
+      "https://cdn.example.com/generated.png",
+      { comfyui: "10.0.0.25", "cdn.example.com": "93.184.216.34" },
+    ],
+  ])("blocks local output redirects to %s", async (_label, redirectLocation, dns) => {
+    const harness = installRealComfyFetchGuard({
+      dns,
+      redirectLocation,
+    });
+
+    const provider = buildComfyImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a lobster",
+        cfg: buildComfyConfig(
+          testWorkflowConfig({
+            baseUrl: "http://comfyui:8188",
+          }),
+        ),
+      }),
+    ).rejects.toThrow("Blocked");
+    expect(harness.fetchUrls).not.toContain(redirectLocation);
+  });
+
+  it("blocks local public FQDN redirects to other public hosts", async () => {
+    const redirectLocation = "https://cdn.example.com/generated.png";
+    const harness = installRealComfyFetchGuard({
+      dns: {
+        "comfy.example.com": "93.184.216.34",
+        "cdn.example.com": "93.184.216.35",
+      },
+      redirectLocation,
+    });
+
+    const provider = buildComfyImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a lobster",
+        cfg: buildComfyConfig(
+          testWorkflowConfig({
+            baseUrl: "https://comfy.example.com",
+          }),
+        ),
+      }),
+    ).rejects.toThrow("Blocked hostname (not in allowlist)");
+    expect(harness.fetchUrls).not.toContain(redirectLocation);
+  });
+
+  it("allows explicit private cloud origins redirecting to public CDNs", async () => {
+    const harness = installRealComfyFetchGuard({
+      dns: {
+        "private-comfy.example.com": "10.0.0.25",
+        "cdn.example.com": "93.184.216.34",
+      },
+      redirectLocation: "https://cdn.example.com/generated.png",
+      body: Buffer.from("cdn-data"),
+    });
+
+    const provider = buildComfyImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "cloud workflow prompt",
+      cfg: buildComfyConfig(
+        testWorkflowConfig({
+          mode: "cloud",
+          apiKey: "comfy-test-key",
+          baseUrl: "https://private-comfy.example.com",
+          allowPrivateNetwork: true,
+        }),
+      ),
+    });
+
+    expect(harness.fetchUrls).toContain("https://cdn.example.com/generated.png");
+    expect(harness.guardCalls).toHaveLength(4);
+    expect(result.images[0]?.buffer).toEqual(Buffer.from("cdn-data"));
+  });
+
+  it.each([
+    [
+      "private DNS destination",
+      "http://other-private.example.com/generated.png",
+      {
+        "private-comfy.example.com": "10.0.0.25",
+        "other-private.example.com": "10.0.0.26",
+      },
+    ],
+    [
+      "metadata destination",
+      "http://169.254.169.254/latest/meta-data",
+      { "private-comfy.example.com": "10.0.0.25" },
+    ],
+  ])("blocks explicit private cloud redirects to %s", async (_label, redirectLocation, dns) => {
+    const harness = installRealComfyFetchGuard({
+      dns,
+      redirectLocation,
+    });
+
+    const provider = buildComfyImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "cloud workflow prompt",
+        cfg: buildComfyConfig(
+          testWorkflowConfig({
+            mode: "cloud",
+            apiKey: "comfy-test-key",
+            baseUrl: "https://private-comfy.example.com",
+            allowPrivateNetwork: true,
+          }),
+        ),
+      }),
+    ).rejects.toThrow("Blocked");
+    expect(harness.fetchUrls).not.toContain(redirectLocation);
   });
 
   it("caps oversized local workflow timeouts", async () => {
@@ -481,9 +1004,7 @@ describe("comfy image-generation provider", () => {
       "https://cloud.comfy.org/api/view?filename=cloud.png&subfolder=&type=output",
     );
     expect(viewRequest.auditContext).toBe("comfy-image-download");
-    const cdnRequest = fetchRequest(5);
-    expect(cdnRequest.url).toBe("https://cdn.example.com/cloud.png");
-    expect(cdnRequest.auditContext).toBe("comfy-image-download");
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(4);
     expect(result.metadata).toEqual({
       promptId: "cloud-job-1",
       outputNodeIds: ["9"],
@@ -564,3 +1085,4 @@ describe("comfy image-generation provider", () => {
     expect(extraData?.api_key_comfy_org).toBe("profile-key");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

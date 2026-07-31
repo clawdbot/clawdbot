@@ -1,6 +1,9 @@
 // Coverage for model-call diagnostic events around attempt stream functions.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   onInternalDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
@@ -14,13 +17,17 @@ import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-co
 import {
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
+  startDiagnosticRunActivityTracking,
 } from "../../../logging/diagnostic-run-activity.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../../plugins/hook-runner-global.js";
-import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-helpers.js";
+import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function collectModelCallEvents(run: () => Promise<void>): Promise<DiagnosticEventPayload[]> {
   // Diagnostics are emitted asynchronously; collect only public model-call
@@ -112,10 +119,29 @@ function requireMockRecordArg(
   return requireRecord(mock.mock.calls[callIndex]?.[argIndex], label);
 }
 
+async function collectProviderTimelineEvents(run: () => Promise<void>) {
+  const root = tempDirs.make("openclaw-provider-timeline-");
+  const timelinePath = join(root, "timeline.jsonl");
+  await withEnvAsync(
+    {
+      OPENCLAW_DIAGNOSTICS: "1",
+      OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
+    },
+    run,
+  );
+  return readFileSync(timelinePath, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => requireRecord(JSON.parse(line), "provider timeline event"))
+    .filter((event) => event.type === "provider.request");
+}
+
 describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
     resetDiagnosticRunActivityForTest();
+    startDiagnosticRunActivityTracking();
     resetGlobalHookRunner();
   });
 
@@ -191,6 +217,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(startedEvent.model).toBe("gpt-5.4");
     expect(startedEvent.api).toBe("openai-responses");
     expect(startedEvent.transport).toBe("http");
+    expect(startedEvent.observationUnit).toBe("request");
     expect(events[0]?.trace?.parentSpanId).toBe("00f067aa0ba902b7");
     const completedEvent = getEvent(events, 1);
     expect(completedEvent.type).toBe("model.call.completed");
@@ -202,6 +229,135 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expectNumberField(completedEvent, "responseStreamBytes");
     expectNumberField(completedEvent, "timeToFirstByteMs");
     expect(JSON.stringify(events)).not.toContain("sk-test-secret-value");
+  });
+
+  it("emits one successful provider timeline event for result and iterator completion", async () => {
+    let now = Date.parse("2026-07-09T18:30:00.000Z");
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    async function* stream() {
+      yield { type: "text", text: "ok" };
+    }
+    const originalStream = stream() as unknown as AsyncIterable<unknown> & {
+      result: () => Promise<string>;
+    };
+    originalStream.result = async () => {
+      now += 125;
+      return "kept";
+    };
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => originalStream) as unknown as StreamFn,
+      {
+        runId: "run-timeline-success",
+        provider: "openai",
+        model: "gpt-5.5",
+        api: "openai-responses",
+        transport: "http",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-timeline-success",
+      },
+    );
+
+    const events = await collectProviderTimelineEvents(async () => {
+      const returned = wrapped(
+        {} as never,
+        {} as never,
+        {} as never,
+      ) as unknown as typeof originalStream;
+      await returned.result();
+      await drain(returned);
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "provider.request",
+      name: "provider.request",
+      timestamp: "2026-07-09T18:30:00.000Z",
+      runId: "run-timeline-success",
+      spanId: "call-timeline-success",
+      durationMs: 125,
+      provider: "openai",
+      operation: "openai-responses",
+      ok: true,
+      attributes: {
+        model: "gpt-5.5",
+        api: "openai-responses",
+        transport: "http",
+      },
+    });
+  });
+
+  it("writes Unicode-safe bounded attributes to the provider timeline JSONL", async () => {
+    const modelPrefix = "m".repeat(255);
+    const exactBoundary = "b".repeat(256);
+    const events = await collectProviderTimelineEvents(async () => {
+      const cases: Array<{ callId: string; model: string }> = [
+        { callId: "call-timeline-unicode-boundary", model: `${modelPrefix}😀tail` },
+        { callId: "call-timeline-exact-boundary", model: exactBoundary },
+      ];
+      for (const { callId, model } of cases) {
+        const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+          (() => undefined) as unknown as StreamFn,
+          {
+            runId: "run-timeline-unicode-boundary",
+            provider: "openai",
+            model,
+            trace: createDiagnosticTraceContext(),
+            nextCallId: () => callId,
+          },
+        );
+        await wrapped({} as never, {} as never, {} as never);
+      }
+    });
+
+    expect(events).toHaveLength(2);
+    const splitBoundaryModel = readRecordField(events[0]!, "attributes", "attributes").model;
+    expect(splitBoundaryModel).toBe(modelPrefix);
+    expect(splitBoundaryModel).toHaveLength(255);
+    expect(splitBoundaryModel).not.toContain("�");
+    expect(splitBoundaryModel).not.toMatch(/[\uD800-\uDFFF]/u);
+    const exactBoundaryModel = readRecordField(events[1]!, "attributes", "attributes").model;
+    expect(exactBoundaryModel).toBe(exactBoundary);
+    expect(exactBoundaryModel).toHaveLength(256);
+  });
+
+  it("emits one failed provider timeline event for a thrown model call", async () => {
+    let now = Date.parse("2026-07-09T18:31:00.000Z");
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => {
+        now += 75;
+        throw new Error("provider failed");
+      }) as unknown as StreamFn,
+      {
+        runId: "run-timeline-error",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        transport: "sse",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-timeline-error",
+      },
+    );
+
+    const events = await collectProviderTimelineEvents(async () => {
+      expect(() => wrapped({} as never, {} as never, {} as never)).toThrow("provider failed");
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "provider.request",
+      name: "provider.request",
+      timestamp: "2026-07-09T18:31:00.000Z",
+      runId: "run-timeline-error",
+      spanId: "call-timeline-error",
+      durationMs: 75,
+      provider: "anthropic",
+      operation: "sse",
+      ok: false,
+      attributes: {
+        model: "claude-sonnet-4-6",
+        transport: "sse",
+      },
+    });
   });
 
   it("updates diagnostic run activity from throttled stream chunks", async () => {
@@ -854,6 +1010,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(capturedOptions[0]).not.toBe(callerOptions);
     const capturedOption = requireRecord(capturedOptions[0], "captured stream options");
     expect(capturedOption.sessionId).toBe("provider-session");
+    expect(capturedOption.requestId).toBe("call-traceparent");
     const headers = readRecordField(capturedOption, "headers", "captured stream headers");
     expect(headers["X-Custom"]).toBe("kept");
     expect(typeof headers.traceparent).toBe("string");
@@ -1062,6 +1219,44 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(JSON.stringify([started.mock.calls, ended.mock.calls])).not.toContain(secretChunk);
   });
 
+  it("keeps core model-call diagnostics while suppressing finalization plugin hooks", async () => {
+    const started = vi.fn();
+    const ended = vi.fn();
+    const { registry } = createHookRunnerWithRegistry([
+      { hookName: "model_call_started", handler: started },
+      { hookName: "model_call_ended", handler: ended },
+    ]);
+    initializeGlobalHookRunner(registry);
+    async function* stream() {
+      yield { type: "text", text: "final answer" };
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-finalization",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-finalization",
+        suppressPluginHooks: true,
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(events.map((event) => event.type)).toEqual([
+      "model.call.started",
+      "model.call.completed",
+    ]);
+    expect(started).not.toHaveBeenCalled();
+    expect(ended).not.toHaveBeenCalled();
+  });
+
   it("emits completed events when stream consumption stops early", async () => {
     async function* stream() {
       yield { type: "text", text: "first" };
@@ -1099,3 +1294,4 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(events[1]).not.toHaveProperty("errorCategory");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

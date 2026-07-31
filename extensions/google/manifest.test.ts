@@ -3,6 +3,13 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 type GoogleManifest = {
+  providerAuthChoices?: Array<{
+    provider?: string;
+    method?: string;
+    choiceLabel?: string;
+    choiceHint?: string;
+    groupHint?: string;
+  }>;
   modelIdNormalization?: {
     providers?: Record<
       string,
@@ -24,9 +31,13 @@ const RETIRED_GEMINI_CHAT_MODELS = [
   "gemini-1.5-flash",
   "gemini-1.5-flash-8b",
   "gemini-1.5-pro",
+  "gemini-2.0-flash",
+  "gemini-2.0-flash-001",
   "gemini-2.0-flash-exp",
   "gemini-2.0-flash-exp-image-generation",
   "gemini-2.0-flash-live-001",
+  "gemini-2.0-flash-lite",
+  "gemini-2.0-flash-lite-001",
   "gemini-2.0-flash-lite-preview",
   "gemini-2.0-flash-lite-preview-02-05",
   "gemini-2.0-flash-preview-image-generation",
@@ -63,6 +74,21 @@ function loadManifest(): GoogleManifest {
 }
 
 describe("google manifest model catalog", () => {
+  it("offers Google AI Studio API keys without consumer CLI OAuth", () => {
+    const choices = loadManifest().providerAuthChoices ?? [];
+
+    expect(choices).toEqual([
+      expect.objectContaining({
+        provider: "google",
+        method: "api-key",
+        choiceLabel: "Google AI Studio API key",
+        choiceHint: "Supported API-key access from aistudio.google.com/apikey",
+        groupHint: "Supported API-key setup",
+      }),
+    ]);
+    expect(choices.some((choice) => choice.provider === "google-gemini-cli")).toBe(false);
+  });
+
   it("suppresses retired Gemini chat model identifiers for all Google chat providers", () => {
     const manifest = loadManifest();
     const suppressionRefs = new Set(
@@ -86,7 +112,6 @@ describe("google manifest model catalog", () => {
       ),
     );
 
-    expect(suppressionRefs).not.toContain("google/gemini-2.0-flash");
     expect(suppressionRefs).not.toContain("google/gemini-2.5-flash");
     expect(suppressionRefs).not.toContain("google/gemini-2.5-flash-lite");
     expect(suppressionRefs).not.toContain("google/gemini-2.5-pro");

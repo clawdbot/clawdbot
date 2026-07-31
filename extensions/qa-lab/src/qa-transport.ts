@@ -22,6 +22,7 @@ export type QaTransportGatewayClient = {
     method: string,
     params?: unknown,
     options?: {
+      expectFinal?: boolean;
       timeoutMs?: number;
     },
   ) => Promise<unknown>;
@@ -60,11 +61,12 @@ export type QaTransportState = {
 type QaTransportFailureCursorSpace = "all" | "outbound";
 
 type QaTransportFailureAssertionOptions = {
+  accountId?: string;
   sinceIndex?: number;
   cursorSpace?: QaTransportFailureCursorSpace;
 };
 
-export type QaTransportOutboundMatch = {
+type QaTransportOutboundMatch = {
   conversation?: QaBusInboundMessageInput["conversation"];
   senderId?: string;
   sinceIndex?: number;
@@ -73,7 +75,7 @@ export type QaTransportOutboundMatch = {
   timeoutMs?: number;
 };
 
-export type QaTransportWaitForNoOutboundInput = {
+type QaTransportWaitForNoOutboundInput = {
   quietMs?: number;
   sinceIndex?: number;
 };
@@ -94,7 +96,7 @@ export type QaTransportOutboundSequenceMatch = {
   timeoutMs?: number;
 };
 
-export type QaTransportOutboundSequence = {
+type QaTransportOutboundSequence = {
   events: QaTransportOutboundEvent[];
   final: QaBusMessage;
 };
@@ -141,7 +143,9 @@ export function findFailureOutboundMessage(
           .slice(options?.sinceIndex ?? 0);
   return observedMessages.find(
     (message) =>
-      message.direction === "outbound" && Boolean(extractQaFailureReplyText(message.text)),
+      message.direction === "outbound" &&
+      (!options?.accountId || message.accountId === options.accountId) &&
+      Boolean(extractQaFailureReplyText(message.text)),
   );
 }
 
@@ -155,7 +159,7 @@ function assertNoFailureReplies(
   }
 }
 
-export function createFailureAwareTransportWaitForCondition(state: QaTransportState) {
+function createFailureAwareTransportWaitForCondition(state: QaTransportState, accountId: string) {
   return async function waitForTransportCondition<T>(
     check: () => T | Promise<T | null | undefined> | null | undefined,
     timeoutMs = 15_000,
@@ -165,11 +169,13 @@ export function createFailureAwareTransportWaitForCondition(state: QaTransportSt
     return await waitForQaTransportCondition(
       async () => {
         assertNoFailureReplies(state, {
+          accountId,
           sinceIndex,
           cursorSpace: "all",
         });
         const value = await check();
         assertNoFailureReplies(state, {
+          accountId,
           sinceIndex,
           cursorSpace: "all",
         });
@@ -226,7 +232,10 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
     this.supportedActions = params.supportedActions ?? [];
     this.state = params.state;
     this.assertTransportHealthy = params.assertTransportHealthy ?? (() => undefined);
-    const waitForCondition = createFailureAwareTransportWaitForCondition(this.state);
+    const waitForCondition = createFailureAwareTransportWaitForCondition(
+      this.state,
+      this.accountId,
+    );
     this.waitForCondition = async (check, timeoutMs, intervalMs) =>
       await waitForCondition(
         async () => {
@@ -273,6 +282,7 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
     await sleep(quietMs);
     this.assertTransportHealthy();
     assertNoFailureReplies(this.state, {
+      accountId: this.accountId,
       sinceIndex: input.sinceIndex,
       cursorSpace: "outbound",
     });
@@ -287,10 +297,14 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
     return await waitForQaTransportCondition(() => {
       this.assertTransportHealthy();
       assertNoFailureReplies(this.state, {
+        accountId: this.accountId,
         sinceIndex: input.sinceIndex,
         cursorSpace: "outbound",
       });
       return this.outboundSince(input.sinceIndex).find((message) => {
+        if (message.deleted) {
+          return false;
+        }
         if (input.conversation && message.conversation.id !== input.conversation.id) {
           return false;
         }
@@ -312,7 +326,8 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
     return this.state
       .getSnapshot()
       .messages.filter((message) => message.direction === "outbound")
-      .slice(sinceIndex);
+      .slice(sinceIndex)
+      .filter((message) => message.accountId === this.accountId);
   }
 }
 
@@ -348,6 +363,7 @@ export function createQaStateBackedTransportAdapter(
       params.waitForOutboundSequence ??
       (async (input: QaTransportOutboundSequenceMatch) =>
         await waitForQaTransportOutboundSequence({
+          accountId: params.accountId,
           input,
           readEvents: () => {
             params.assertTransportHealthy?.();
@@ -357,7 +373,11 @@ export function createQaStateBackedTransportAdapter(
     ...(params.createRuntimeEnvPatch
       ? { createRuntimeEnvPatch: params.createRuntimeEnvPatch }
       : {}),
+    ...(params.prepareFlow ? { prepareFlow: params.prepareFlow } : {}),
     ...(params.cleanup ? { cleanup: params.cleanup } : {}),
+    ...(params.cleanupAfterGatewayStop
+      ? { cleanupAfterGatewayStop: params.cleanupAfterGatewayStop }
+      : {}),
   });
   return adapter;
 }
@@ -382,6 +402,7 @@ function isQaTransportOutboundEvent(
 }
 
 export async function waitForQaTransportOutboundSequence(params: {
+  accountId: string;
   input: QaTransportOutboundSequenceMatch;
   readEvents: () =>
     | readonly (QaBusEvent | QaTransportOutboundEvent)[]
@@ -399,6 +420,9 @@ export async function waitForQaTransportOutboundSequence(params: {
       )
       .filter((event): event is QaTransportOutboundEvent => event !== null)
       .filter(({ message }) => {
+        if (message.accountId !== params.accountId || message.direction !== "outbound") {
+          return false;
+        }
         if (
           params.input.conversationId &&
           message.conversation.id !== params.input.conversationId
@@ -409,17 +433,23 @@ export async function waitForQaTransportOutboundSequence(params: {
       });
     const finalIndex = events.findLastIndex(
       ({ kind, message }) =>
-        kind !== "deleted" && message.text.includes(params.input.finalTextIncludes),
+        kind !== "deleted" &&
+        !message.deleted &&
+        message.text.includes(params.input.finalTextIncludes),
     );
     if (finalIndex < 0) {
       return undefined;
     }
     const candidate = events[finalIndex];
+    if (!candidate) {
+      return undefined;
+    }
     const sequenceEvents = events.filter(({ message }) => message.id === candidate.message.id);
     const latest = sequenceEvents.at(-1);
     if (
       !latest ||
       latest.kind === "deleted" ||
+      latest.message.deleted ||
       !latest.message.text.includes(params.input.finalTextIncludes)
     ) {
       stableCursor = null;

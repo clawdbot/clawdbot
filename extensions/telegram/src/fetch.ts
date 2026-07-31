@@ -3,11 +3,13 @@ import { randomUUID } from "node:crypto";
 import * as dns from "node:dns";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
   createPinnedLookup,
   hasEnvHttpProxyAgentConfigured,
+  matchesNoProxy,
   resolveEnvHttpProxyAgentOptions,
   resolveFetch,
   type PinnedDispatcherPolicy,
@@ -205,39 +207,6 @@ function buildTelegramConnectOptions(params: {
   }
 
   return connect;
-}
-
-function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
-  const noProxyValue = env.no_proxy ?? env.NO_PROXY ?? "";
-  if (!noProxyValue) {
-    return false;
-  }
-  if (noProxyValue === "*") {
-    return true;
-  }
-  const targetHostname = normalizeLowercaseStringOrEmpty(TELEGRAM_API_HOSTNAME);
-  const targetPort = 443;
-  const noProxyEntries = noProxyValue.split(/[,\s]/);
-  for (const entry of noProxyEntries) {
-    if (!entry) {
-      continue;
-    }
-    const parsed = entry.match(/^(.+):(\d+)$/);
-    const entryHostname = normalizeLowercaseStringOrEmpty(
-      (parsed ? parsed[1] : entry).replace(/^\*?\./, ""),
-    );
-    const entryPort = parsed ? Number.parseInt(parsed[2], 10) : 0;
-    if (entryPort && entryPort !== targetPort) {
-      continue;
-    }
-    if (
-      targetHostname === entryHostname ||
-      targetHostname.slice(-(entryHostname.length + 1)) === `.${entryHostname}`
-    ) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function hasEnvHttpProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -637,7 +606,7 @@ export function resolveTelegramTransport(
     proxyUrl: resolvedExplicitProxyUrl,
   });
   const defaultDispatcher = createTelegramDispatcher(defaultDispatcherResolution.policy);
-  const shouldBypassEnvProxy = shouldBypassEnvProxyForTelegramApi();
+  const shouldBypassEnvProxy = matchesNoProxy(`https://${TELEGRAM_API_HOSTNAME}`);
   const hasExplicitDnsResultOrder =
     (dnsDecision.source === "config" ||
       dnsDecision.source === `env:${TELEGRAM_DNS_RESULT_ORDER_ENV}`) &&
@@ -678,7 +647,7 @@ export function resolveTelegramTransport(
   };
 
   const getAttemptCooldownError = (attemptIndex: number): Error | null => {
-    const health = attemptHealth[attemptIndex];
+    const health = expectDefined(attemptHealth[attemptIndex], "transport attempt health index");
     if (!isFutureDateTimestampMs(health.unhealthyUntilMs)) {
       return null;
     }
@@ -689,7 +658,7 @@ export function resolveTelegramTransport(
     if (!shouldUseTelegramTransportFallback(err)) {
       return;
     }
-    const health = attemptHealth[attemptIndex];
+    const health = expectDefined(attemptHealth[attemptIndex], "transport attempt health index");
     health.consecutiveFailures += 1;
     if (health.consecutiveFailures < TELEGRAM_TRANSPORT_ATTEMPT_FAILURE_THRESHOLD) {
       return;
@@ -715,7 +684,10 @@ export function resolveTelegramTransport(
     if (nextIndex <= stickyAttemptIndex || nextIndex >= transportAttempts.length) {
       return false;
     }
-    const nextAttempt = transportAttempts[nextIndex];
+    const nextAttempt = expectDefined(
+      transportAttempts[nextIndex],
+      "validated fallback attempt index",
+    );
     if (nextAttempt.logMessage) {
       const reasonText = reason ? `, reason=${reason}` : "";
       const logLine = `${nextAttempt.logMessage} (codes=${formatErrorCodes(err)}${reasonText})`;
@@ -731,7 +703,7 @@ export function resolveTelegramTransport(
   };
 
   const recordSuccessfulAttempt = (attemptIndex: number): void => {
-    const health = attemptHealth[attemptIndex];
+    const health = expectDefined(attemptHealth[attemptIndex], "transport attempt health index");
     health.consecutiveFailures = 0;
     health.cooldownMs = TELEGRAM_TRANSPORT_ATTEMPT_INITIAL_COOLDOWN_MS;
     health.unhealthyUntilMs = 0;
@@ -811,7 +783,10 @@ export function resolveTelegramTransport(
       attemptIndex < transportAttempts.length;
       attemptIndex += 1
     ) {
-      const attempt = transportAttempts[attemptIndex];
+      const attempt = expectDefined(
+        transportAttempts[attemptIndex],
+        "transport attempt loop index",
+      );
       if (attemptIndex > startIndex) {
         promoteStickyAttempt(attemptIndex, err);
       }
@@ -886,3 +861,4 @@ export function resolveTelegramFetch(
 export function resolveTelegramApiBase(apiRoot?: string): string {
   return normalizeTelegramApiRoot(apiRoot);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

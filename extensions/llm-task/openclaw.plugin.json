@@ -17,13 +17,6 @@
       "defaultAuthProfileId": {
         "type": "string"
       },
-      "allowedModels": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        },
-        "description": "Allowlist of provider/model keys like openai/gpt-5.2."
-      },
       "maxTokens": {
         "type": "integer",
         "minimum": 1

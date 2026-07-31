@@ -22,6 +22,7 @@ describe("createQaStateBackedTransportAdapter", () => {
       label: "Live",
       accountId: "sut",
       requiredPluginIds: [],
+      prepareFlow: vi.fn(),
       supportedActions: [],
       resetTransport,
       sendInbound: async (input) => state.addInboundMessage(input),
@@ -40,6 +41,7 @@ describe("createQaStateBackedTransportAdapter", () => {
     await adapter.reset();
 
     expect(resetTransport).toHaveBeenCalledOnce();
+    expect(adapter.prepareFlow).toBeTypeOf("function");
     expect(state.getSnapshot().messages).toHaveLength(0);
   });
 });
@@ -67,6 +69,7 @@ describe("waitForQaTransportOutboundSequence", () => {
 
     await expect(
       waitForQaTransportOutboundSequence({
+        accountId: "default",
         input: {
           conversationId: "qa-room",
           finalSettleMs: 0,
@@ -102,6 +105,7 @@ describe("waitForQaTransportOutboundSequence", () => {
 
     await expect(
       waitForQaTransportOutboundSequence({
+        accountId: "default",
         input: {
           conversationId: "alice",
           finalSettleMs: 20,
@@ -130,6 +134,7 @@ describe("waitForQaTransportOutboundSequence", () => {
 
     await expect(
       waitForQaTransportOutboundSequence({
+        accountId: "default",
         input: {
           conversationId: "alice",
           finalSettleMs: 0,
@@ -140,5 +145,64 @@ describe("waitForQaTransportOutboundSequence", () => {
         readEvents: () => state.getSnapshot().events,
       }),
     ).rejects.toThrow("timed out after 20ms");
+  });
+
+  it("ignores foreign-account and inbound edit events when proving a final reply", async () => {
+    const state = createQaBusState();
+    const expected = state.addOutboundMessage({
+      accountId: "default",
+      to: "dm:alice",
+      text: "owned preview",
+    });
+    state.editMessage({
+      accountId: "default",
+      messageId: expected.id,
+      text: "final marker",
+    });
+
+    const foreign = state.addOutboundMessage({
+      accountId: "other",
+      to: "dm:alice",
+      text: "foreign preview",
+    });
+    state.editMessage({
+      accountId: "other",
+      messageId: foreign.id,
+      text: "final marker",
+    });
+
+    const inbound = state.addInboundMessage({
+      accountId: "default",
+      conversation: { id: "alice", kind: "direct" },
+      senderId: "alice",
+      text: "inbound original",
+    });
+    state.editMessage({
+      accountId: "default",
+      messageId: inbound.id,
+      text: "inbound preview",
+    });
+    state.editMessage({
+      accountId: "default",
+      messageId: inbound.id,
+      text: "final marker",
+    });
+
+    await expect(
+      waitForQaTransportOutboundSequence({
+        accountId: "default",
+        input: {
+          conversationId: "alice",
+          finalSettleMs: 0,
+          finalTextIncludes: "final marker",
+          minimumPreviewEvents: 1,
+          timeoutMs: 50,
+        },
+        readEvents: () => state.getSnapshot().events,
+      }),
+    ).resolves.toMatchObject({
+      events: [{ kind: "sent" }, { kind: "edited" }],
+      final: { accountId: "default", direction: "outbound", id: expected.id },
+    });
   });
 });

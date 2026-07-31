@@ -129,6 +129,28 @@ describe("deliverReplies", () => {
     ]);
   });
 
+  it("forwards voice-note payloads to the canonical iMessage media sender", async () => {
+    await deliverReplies({
+      cfg: IMESSAGE_TEST_CFG,
+      replies: [{ mediaUrl: "https://example.com/voice.caf", audioAsVoice: true }],
+      target: "chat_id:20",
+      accountId: "acct-2",
+      runtime,
+      maxBytes: 8192,
+      textLimit: 4000,
+    });
+
+    expect(sendMessageIMessageMock).toHaveBeenCalledWith(
+      "chat_id:20",
+      "",
+      expect.objectContaining({
+        accountId: "acct-2",
+        audioAsVoice: true,
+        mediaUrl: "https://example.com/voice.caf",
+      }),
+    );
+  });
+
   it("records durable outbound sends in the sent-message cache", async () => {
     const remember = vi.fn();
     const send = createIMessageEchoCachingSend({
@@ -228,7 +250,7 @@ describe("deliverReplies", () => {
     sendMessageIMessageMock.mockResolvedValueOnce({
       messageId: "imsg-media-1",
       sentText: "",
-      echoText: "<media:image>",
+      echoMedia: { contentType: "image/jpeg", kind: "image" },
     });
 
     await deliverReplies({
@@ -243,7 +265,7 @@ describe("deliverReplies", () => {
     });
 
     expect(remember).toHaveBeenCalledWith("acct-4:chat_id:40", {
-      text: "<media:image>",
+      media: { contentType: "image/jpeg", kind: "image" },
       messageId: "imsg-media-1",
     });
   });

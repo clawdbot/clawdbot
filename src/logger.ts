@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Provides root logger helpers and themed terminal output.
 import { theme } from "../packages/terminal-core/src/theme.js";
 import { isVerbose } from "./global-state.js";
@@ -12,7 +13,11 @@ function splitSubsystem(message: string) {
   if (!match) {
     return null;
   }
-  const [, subsystem, rest] = match;
+  const subsystem = match.at(1);
+  const rest = match.at(2);
+  if (subsystem === undefined || rest === undefined) {
+    return null;
+  }
   return { subsystem, rest };
 }
 
@@ -29,7 +34,11 @@ function logWithSubsystem(params: {
 }) {
   const parsed = params.runtime === defaultRuntime ? splitSubsystem(params.message) : null;
   if (parsed) {
-    createSubsystemLogger(parsed.subsystem)[params.subsystemMethod](parsed.rest);
+    const method = expectDefined(
+      createSubsystemLogger(parsed.subsystem)[params.subsystemMethod],
+      "subsystem logger method",
+    );
+    method(parsed.rest);
     return;
   }
   params.runtime[params.runtimeMethod](params.runtimeFormatter(params.message));

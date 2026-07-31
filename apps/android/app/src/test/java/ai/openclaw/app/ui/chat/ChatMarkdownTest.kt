@@ -1,12 +1,15 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import org.commonmark.node.BlockQuote
 import org.commonmark.node.BulletList
 import org.commonmark.node.Emphasis
 import org.commonmark.node.FencedCodeBlock
+import org.commonmark.node.HtmlBlock
 import org.commonmark.node.Paragraph
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -15,6 +18,253 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatMarkdownTest {
+  @Test
+  fun detailsFoldCollapsedAndExpandedBlocks() {
+    val collapsed =
+      parseChatMarkdownBlocks(
+        """
+        <details>
+        <summary>**Why**</summary>
+
+        Body
+
+        </details>
+        """.trimIndent(),
+      ).single() as ChatMarkdownRenderBlock.Disclosure
+    val expanded =
+      parseChatMarkdownBlocks(
+        """
+        <details open>
+        <summary>More</summary>
+
+        Body
+
+        </details>
+        """.trimIndent(),
+      ).single() as ChatMarkdownRenderBlock.Disclosure
+
+    assertEquals("**Why**", collapsed.summary)
+    assertEquals(false, collapsed.isExpanded)
+    assertTrue((collapsed.blocks.single() as ChatMarkdownRenderBlock.CommonMark).node is Paragraph)
+    val renderedSummary = buildChatInlineMarkdown(checkNotNull(collapsed.summary))
+    assertEquals("Why", renderedSummary.text)
+    assertTrue(renderedSummary.spanStyles.any { it.item.fontWeight == FontWeight.SemiBold })
+    assertEquals("More", expanded.summary)
+    assertEquals(true, expanded.isExpanded)
+  }
+
+  @Test
+  fun authoredDetailsSummaryDoesNotUseLocalizedFallback() {
+    val disclosure =
+      parseChatMarkdownBlocks("<details>\n<summary>Details</summary>\n\nBody\n\n</details>")
+        .single() as ChatMarkdownRenderBlock.Disclosure
+    var fallbackEvaluated = false
+    val rendered =
+      chatMarkdownDisclosureSummarySource(disclosure.summary) {
+        fallbackEvaluated = true
+        "Localized details"
+      }
+
+    assertEquals("Details", disclosure.summary)
+    assertEquals("Details", rendered)
+    assertEquals(false, fallbackEvaluated)
+  }
+
+  @Test
+  fun detailsWithoutSummaryUseLocalizedDefaultLabel() {
+    val disclosure =
+      parseChatMarkdownBlocks("<details>\n\nBody\n\n</details>").single() as ChatMarkdownRenderBlock.Disclosure
+
+    assertNull(disclosure.summary)
+    assertEquals(
+      "Localized details",
+      chatMarkdownDisclosureSummarySource(disclosure.summary) { "Localized details" },
+    )
+  }
+
+  @Test
+  fun emptyDetailsSummaryAfterProseUsesLocalizedDefault() {
+    val blocks =
+      parseChatMarkdownBlocks(
+        "Intro\n\n<details>\n<summary></summary>\n\nBody\n\n</details>",
+      )
+    val intro = (blocks[0] as ChatMarkdownRenderBlock.CommonMark).node as Paragraph
+    val disclosure = blocks[1] as ChatMarkdownRenderBlock.Disclosure
+
+    assertEquals("Intro", (intro.firstChild as org.commonmark.node.Text).literal)
+    assertNull(disclosure.summary)
+    assertEquals(
+      "Localized details",
+      chatMarkdownDisclosureSummarySource(disclosure.summary) { "Localized details" },
+    )
+  }
+
+  @Test
+  fun detailsBodyKeepsNativeListAndFenceBlocks() {
+    val disclosure =
+      parseChatMarkdownBlocks(
+        """
+        <details open>
+        <summary>Why</summary>
+
+        - first
+        - second
+
+        ```kotlin
+        val value = 1
+        ```
+
+        </details>
+        """.trimIndent(),
+      ).single() as ChatMarkdownRenderBlock.Disclosure
+
+    assertTrue((disclosure.blocks[0] as ChatMarkdownRenderBlock.CommonMark).node is BulletList)
+    assertTrue((disclosure.blocks[1] as ChatMarkdownRenderBlock.CommonMark).node is FencedCodeBlock)
+  }
+
+  @Test
+  fun type6HtmlBlockCannotAbsorbTheDetailsCloser() {
+    val blocks =
+      parseChatMarkdownBlocks(
+        """
+        <details>
+        <summary>X</summary>
+
+        <div>body</div>
+        </details>
+
+        Following
+        """.trimIndent(),
+      )
+    val disclosure = blocks[0] as ChatMarkdownRenderBlock.Disclosure
+    val html = (disclosure.blocks.single() as ChatMarkdownRenderBlock.CommonMark).node as HtmlBlock
+    val following = (blocks[1] as ChatMarkdownRenderBlock.CommonMark).node as Paragraph
+
+    assertTrue(html.literal.contains("body"))
+    assertEquals("Following", (following.firstChild as org.commonmark.node.Text).literal)
+  }
+
+  @Test
+  fun unsupportedNestedDetailsBalanceWithoutClosingOuterDisclosure() {
+    val blocks =
+      parseChatMarkdownBlocks(
+        """
+        <details>
+        <summary>Outer</summary>
+
+        <details class="legacy">
+
+        unsupported body
+
+        </details>
+
+        still outer
+
+        </details>
+        """.trimIndent(),
+      )
+    val outer = blocks.single() as ChatMarkdownRenderBlock.Disclosure
+    val literals = outer.blocks.filterIsInstance<ChatMarkdownRenderBlock.LiteralHtml>().map { it.source }
+
+    assertTrue(literals.contains("<details class=\"legacy\">"))
+    assertTrue(literals.contains("</details>"))
+    val paragraphText =
+      outer.blocks
+        .filterIsInstance<ChatMarkdownRenderBlock.CommonMark>()
+        .mapNotNull { it.node as? Paragraph }
+        .mapNotNull { it.firstChild as? org.commonmark.node.Text }
+        .mapNotNull { it.literal }
+    assertTrue(paragraphText.contains("still outer"))
+  }
+
+  @Test
+  fun detailsTagsInFencedAndInlineCodeStayLiteral() {
+    val fenced = parseChatMarkdownBlocks("```html\n<details>\n</details>\n```").single()
+    val inline = parseChatMarkdownBlocks("`<details>`").single()
+
+    assertTrue((fenced as ChatMarkdownRenderBlock.CommonMark).node is FencedCodeBlock)
+    assertTrue((inline as ChatMarkdownRenderBlock.CommonMark).node is Paragraph)
+  }
+
+  @Test
+  fun detailsInRawHtmlContextsStayLiteral() {
+    val commented = "<!--\n<details>\n<summary>Example</summary>\n</details>\n-->"
+    val preformatted = "<pre>\n<details>\n<summary>Example</summary>\n</details>\n</pre>"
+
+    assertTrue((parseChatMarkdownBlocks(commented).single() as ChatMarkdownRenderBlock.CommonMark).node is HtmlBlock)
+    assertTrue((parseChatMarkdownBlocks(preformatted).single() as ChatMarkdownRenderBlock.CommonMark).node is HtmlBlock)
+  }
+
+  @Test
+  fun detailsAfterHtmlCommentStillFold() {
+    val comment = "<!--\n<details>\n</details>\n-->"
+    val blocks =
+      parseChatMarkdownBlocks(
+        "$comment\n<details>\n<summary>After</summary>\n\nBody\n\n</details>",
+      )
+
+    assertEquals(2, blocks.size)
+    assertTrue((blocks[0] as ChatMarkdownRenderBlock.CommonMark).node is HtmlBlock)
+    assertEquals("After", (blocks[1] as ChatMarkdownRenderBlock.Disclosure).summary)
+  }
+
+  @Test
+  fun rawHtmlCloseMarkersInsideDetailsStayLiteral() {
+    listOf(
+      "<details>\n<summary>X</summary>\n<pre>\n</details>\n</pre>\n</details>" to "</details>",
+      "<details>\n<summary>X</summary>\n<!--\n</details>\n-->\n</details>" to "</details>",
+      "<details>\n<summary>X</summary>\n<?pi\n<details>\n?>\n</details>" to "<details>",
+      "<details>\n<summary>X</summary>\n<![CDATA[\n<details>\n]]>\n</details>" to "<details>",
+      "<details>\n<summary>X</summary>\n<!DOCTYPE\n<details>\n</details>" to "<details>",
+    ).forEach { (source, literalClose) ->
+      val blocks = parseChatMarkdownBlocks(source)
+      val disclosure = blocks.single() as ChatMarkdownRenderBlock.Disclosure
+      val rawBlock = (disclosure.blocks.single() as ChatMarkdownRenderBlock.CommonMark).node as HtmlBlock
+
+      assertTrue(rawBlock.literal.contains(literalClose))
+    }
+  }
+
+  @Test
+  fun midLineAndOverIndentedDetailsStayLiteral() {
+    val midLine = parseChatMarkdownBlocks("before <details> after").single()
+    val indented = parseChatMarkdownBlocks("    <details>\n    body\n    </details>").single()
+
+    assertTrue((midLine as ChatMarkdownRenderBlock.CommonMark).node is Paragraph)
+    val indentedNode = (indented as ChatMarkdownRenderBlock.CommonMark).node
+    assertTrue(indentedNode is org.commonmark.node.IndentedCodeBlock)
+  }
+
+  @Test
+  fun unclosedStreamingDetailsFoldAvailableBody() {
+    val disclosure =
+      parseChatMarkdownBlocks("<details open>\n<summary>Progress</summary>\n\n- first")
+        .single() as ChatMarkdownRenderBlock.Disclosure
+
+    assertEquals("Progress", disclosure.summary)
+    assertEquals(true, disclosure.isExpanded)
+    assertTrue((disclosure.blocks.single() as ChatMarkdownRenderBlock.CommonMark).node is BulletList)
+  }
+
+  @Test
+  fun detailsNestingStopsAtDepthCap() {
+    val depth = CHAT_MARKDOWN_DISCLOSURE_MAX_DEPTH + 1
+    val markdown =
+      List(depth) { "<details>" }.joinToString("\n") +
+        "\nbody\n" +
+        List(depth) { "</details>" }.joinToString("\n")
+    var blocks = parseChatMarkdownBlocks(markdown)
+    var structuralDepth = 0
+    while (blocks.singleOrNull() is ChatMarkdownRenderBlock.Disclosure) {
+      structuralDepth += 1
+      blocks = (blocks.single() as ChatMarkdownRenderBlock.Disclosure).blocks
+    }
+
+    assertEquals(CHAT_MARKDOWN_DISCLOSURE_MAX_DEPTH, structuralDepth)
+    assertTrue(blocks.filterIsInstance<ChatMarkdownRenderBlock.LiteralHtml>().any { it.source == "<details>" })
+    assertTrue(blocks.filterIsInstance<ChatMarkdownRenderBlock.LiteralHtml>().any { it.source == "</details>" })
+  }
+
   @Test
   fun displayMathSegmentsOwnLineAndSameLineDollarBlocks() {
     val sameLine = segmentChatMarkdown("before\n$$ x^2 + y^2 $$\nafter", isStreaming = false)

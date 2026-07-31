@@ -2,7 +2,7 @@
 type TraceDetails = Record<string, boolean | number | string | undefined>;
 
 /** Checks the opt-in plugin lifecycle tracing environment flag. */
-function isPluginLifecycleTraceEnabled(): boolean {
+export function isPluginLifecycleTraceEnabled(): boolean {
   const raw = process.env.OPENCLAW_PLUGIN_LIFECYCLE_TRACE?.trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes";
 }

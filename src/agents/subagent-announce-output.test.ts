@@ -8,7 +8,7 @@ import {
   buildChildCompletionFindings,
   dedupeLatestChildCompletionRows,
   readSubagentOutput,
-} from "./subagent-announce-output.js";
+} from "./subagent-announce-output.test-support.js";
 
 type CallGateway = typeof import("../gateway/call.js").callGateway;
 type GetRuntimeConfig = typeof import("./subagent-announce.runtime.js").getRuntimeConfig;
@@ -208,7 +208,7 @@ describe("readSubagentOutput", () => {
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
   });
 
-  it("reads recovered output from the private transcript before gateway history", async () => {
+  it("reads recovered output from the private SQLite transcript before gateway history", async () => {
     const deps = installOutputDeps({
       messages: [
         {
@@ -229,13 +229,20 @@ describe("readSubagentOutput", () => {
     // stale gateway-visible history after an internal completion is persisted.
     await expect(
       readSubagentOutput("agent:main:subagent:child", undefined, {
-        sessionFile: "/tmp/openclaw-internal-run.jsonl",
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "child-session",
+          sessionKey: "agent:main:subagent:child",
+          storePath: "/tmp/openclaw/agents/main/sessions/sessions.json",
+        },
       }),
     ).resolves.toBe("fresh recovered output");
     expect(deps.readSessionMessagesAsync).toHaveBeenCalledWith(
       {
-        sessionFile: "/tmp/openclaw-internal-run.jsonl",
-        sessionId: "agent:main:subagent:child",
+        agentId: "main",
+        sessionId: "child-session",
+        sessionKey: "agent:main:subagent:child",
+        storePath: "/tmp/openclaw/agents/main/sessions/sessions.json",
       },
       { mode: "recent", maxMessages: 100, maxBytes: 1024 * 1024 },
     );
@@ -255,7 +262,12 @@ describe("readSubagentOutput", () => {
 
     await expect(
       readSubagentOutput("agent:main:subagent:child", undefined, {
-        sessionFile: "/tmp/openclaw-empty-internal-run.jsonl",
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "child-session",
+          sessionKey: "agent:main:subagent:child",
+          storePath: "/tmp/openclaw/agents/main/sessions/sessions.json",
+        },
       }),
     ).resolves.toBeUndefined();
     expect(deps.callGateway).not.toHaveBeenCalled();
@@ -326,6 +338,44 @@ describe("buildChildCompletionFindings", () => {
     expect(findings).toContain("delivery payload output");
     expect(findings).not.toContain("(no output)");
   });
+
+  it("uses captured fallback output when a resumed completion returns NO_REPLY", () => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:child",
+        task: "child task",
+        createdAt: 1,
+        completion: {
+          resultText: "NO_REPLY",
+          fallbackResultText: "findings captured before the wake",
+        },
+        outcome: { status: "ok" },
+      },
+    ]);
+
+    expect(findings).toContain("findings captured before the wake");
+    expect(findings).not.toContain("NO_REPLY");
+  });
+
+  it.each(["ANNOUNCE_SKIP", "REPLY_SKIP", "HEARTBEAT_OK"])(
+    "does not override an intentional %s completion with fallback output",
+    (resultText) => {
+      const findings = buildChildCompletionFindings([
+        {
+          childSessionKey: "agent:main:subagent:silent",
+          task: "silent task",
+          createdAt: 1,
+          completion: {
+            resultText,
+            fallbackResultText: "stale findings",
+          },
+          outcome: { status: "ok" },
+        },
+      ]);
+
+      expect(findings).toBeUndefined();
+    },
+  );
 
   it("numbers findings contiguously after skipped silent completions", () => {
     const findings = buildChildCompletionFindings([

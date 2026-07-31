@@ -2,13 +2,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { splitChannelApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it } from "vitest";
-import {
-  createDiscordNativeApprovalAdapter,
-  getDiscordApprovalCapability,
-  shouldHandleDiscordApprovalRequest,
-} from "./approval-native.js";
+import { getDiscordApprovalCapability } from "./approval-native.js";
+import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 
 const STORE_PATH = path.join(os.tmpdir(), "openclaw-discord-approval-native-test.json");
 const NATIVE_APPROVAL_CFG = {
@@ -27,6 +25,10 @@ const NATIVE_DELIVERY_CFG = {
   },
 } as const;
 
+function createDiscordNativeApprovalAdapter() {
+  return splitChannelApprovalCapability(getDiscordApprovalCapability());
+}
+
 function writeStore(store: Record<string, unknown>) {
   fs.writeFileSync(STORE_PATH, `${JSON.stringify(store, null, 2)}\n`, "utf8");
   clearSessionStoreCacheForTest();
@@ -34,22 +36,30 @@ function writeStore(store: Record<string, unknown>) {
 
 describe("createDiscordNativeApprovalAdapter", () => {
   it("keeps approval availability enabled when approvers exist but native delivery is off", () => {
-    const adapter = createDiscordNativeApprovalAdapter({
-      enabled: false,
-      approvers: ["555555555"],
-      target: "channel",
-    } as never);
+    const adapter = createDiscordNativeApprovalAdapter();
+    const cfg = {
+      ...NATIVE_APPROVAL_CFG,
+      channels: {
+        discord: {
+          execApprovals: {
+            enabled: false,
+            approvers: ["555555555"],
+            target: "channel",
+          },
+        },
+      },
+    } as const;
 
     expect(
       adapter.auth?.getActionAvailabilityState?.({
-        cfg: NATIVE_APPROVAL_CFG as never,
+        cfg: cfg as never,
         accountId: "main",
         action: "approve",
       }),
     ).toEqual({ kind: "enabled" });
     expect(
       adapter.native?.describeDeliveryCapabilities({
-        cfg: NATIVE_APPROVAL_CFG as never,
+        cfg: cfg as never,
         accountId: "main",
         approvalKind: "exec",
         request: {

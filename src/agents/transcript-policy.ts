@@ -31,7 +31,6 @@ export type TranscriptPolicy = {
     allowBase64Only?: boolean;
     includeCamelCase?: boolean;
   };
-  sanitizeThinkingSignatures: boolean;
   dropThinkingBlocks: boolean;
   dropReasoningFromHistory?: boolean;
   applyGoogleTurnOrdering: boolean;
@@ -75,7 +74,6 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   repairToolUseResultPairing: true,
   preserveSignatures: false,
   sanitizeThoughtSignatures: undefined,
-  sanitizeThinkingSignatures: false,
   dropThinkingBlocks: false,
   dropReasoningFromHistory: false,
   applyGoogleTurnOrdering: false,
@@ -189,6 +187,8 @@ const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "kimi-k2.5",
   "kimi-k2.6",
   "kimi-k2.7-code",
+  "kimi-k2.7-code-highspeed",
+  "kimi-k3",
   "kimi-k2-thinking",
   "kimi-k2-thinking-turbo",
   "mimo-v2-pro",

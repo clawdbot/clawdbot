@@ -104,7 +104,7 @@ describe("uploadBatchJsonlFile", () => {
         streamingTextResponse({
           body: '{"id":"file_123"}',
           status: 200,
-          headers: { "content-length": "64" },
+          headers: { "content-length": "00064" },
           onCancel: () => {
             canceled = true;
           },
@@ -124,6 +124,29 @@ describe("uploadBatchJsonlFile", () => {
       }),
     ).rejects.toThrow("file upload failed: response body too large: 64 bytes (limit: 8 bytes)");
     expect(canceled).toBe(true);
+  });
+
+  it("accepts leading-zero content-length values on successful file-upload JSON", async () => {
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(
+        new Response('{"id":"file_123"}', {
+          status: 200,
+          headers: { "content-length": "00017" },
+        }),
+      );
+    });
+
+    await expect(
+      uploadBatchJsonlFile({
+        client: {
+          baseUrl: "https://memory.example/v1",
+          headers: { Authorization: "Bearer test" },
+        },
+        requests: [{ input: "one" }],
+        errorPrefix: "file upload failed",
+        maxResponseBytes: 32,
+      }),
+    ).resolves.toBe("file_123");
   });
 
   it("passes caller abort signals through non-ok file-upload response snippets", async () => {

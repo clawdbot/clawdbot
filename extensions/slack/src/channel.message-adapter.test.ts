@@ -1,5 +1,6 @@
 // Slack tests cover channel.message adapter plugin behavior.
 import {
+  createMessageReceiptFromOutboundResults,
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageLiveCapabilityAdapterProofs,
   verifyChannelMessageLiveFinalizerProofs,
@@ -106,6 +107,7 @@ describe("slack channel message adapter", () => {
 
     const proveMedia = async () => {
       sendSlack.mockClear();
+      const onPlatformSendDispatch = vi.fn();
       const result = await sendMedia({
         cfg,
         to: "C123",
@@ -114,6 +116,7 @@ describe("slack channel message adapter", () => {
         mediaLocalRoots: ["/tmp/media"],
         accountId: "default",
         deliveryQueueId: "queue-1",
+        onPlatformSendDispatch,
         deps: { sendSlack },
       });
       const [to, text, options] = expectLastSendSlackCall();
@@ -123,6 +126,7 @@ describe("slack channel message adapter", () => {
       expect(options.mediaUrl).toBe("https://example.com/a.png");
       expect(options.mediaLocalRoots).toEqual(["/tmp/media"]);
       expect(options.deliveryQueueId).toBeUndefined();
+      expect(options.onPlatformSendDispatch).toBe(onPlatformSendDispatch);
       expect(result.receipt.parts[0]?.kind).toBe("media");
     };
 
@@ -202,6 +206,14 @@ describe("slack channel message adapter", () => {
   });
 
   it("renders portable presentations through the facade as card receipts (#95440)", async () => {
+    sendSlack.mockResolvedValueOnce({
+      messageId: "msg-1",
+      channelId: "C123",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "slack", messageId: "msg-1", channelId: "C123" }],
+        kind: "card",
+      }),
+    });
     const outbound = slackPlugin.outbound;
     const renderPresentation = outbound?.renderPresentation;
     if (!renderPresentation) {
@@ -236,11 +248,11 @@ describe("slack channel message adapter", () => {
 
     const [to, text, options] = expectLastSendSlackCall();
     expect(to).toBe("C123");
-    expect(text).toBe("Fallback");
+    expect(text).toBe("Fallback\n\nStatus");
     expect(options.blocks).toEqual([
       {
         type: "section",
-        text: { type: "mrkdwn", text: "Fallback" },
+        text: { type: "mrkdwn", text: "Fallback", verbatim: true },
       },
       {
         type: "header",

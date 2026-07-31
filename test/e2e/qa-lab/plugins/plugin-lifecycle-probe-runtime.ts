@@ -1,5 +1,6 @@
 // Plugin Lifecycle Probe tests cover QA Lab plugin lifecycle evidence.
 import { spawn, spawnSync } from "node:child_process";
+/* oxlint-disable eslint/no-shadow, eslint/prefer-const, eslint/no-promise-executor-return, typescript/restrict-template-expressions, typescript/no-base-to-string -- QA probe intentionally validates loosely typed external JSON and mirrors child-process callback shapes. */
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -25,9 +26,9 @@ const tempDirs = (() => {
   };
 })();
 
-type ProbeEnv = Pick<NodeJS.ProcessEnv, "HOME" | "OPENCLAW_CONFIG_PATH" | "OPENCLAW_STATE_DIR">;
+type ProbeEnv = NodeJS.ProcessEnv;
 
-type MatrixEnv = NodeJS.ProcessEnv & ProbeEnv;
+type MatrixEnv = NodeJS.ProcessEnv;
 
 interface CommandOptions {
   env?: NodeJS.ProcessEnv;
@@ -553,7 +554,7 @@ async function runPluginLifecycleMatrix() {
       summaryTsv,
       "install-v1",
       "node",
-      [entry, "plugins", "install", `npm:${packageName}@1.0.0`],
+      [entry, "plugins", "install", `npm:${packageName}@1.0.0`, "--force"],
       runEnv,
     );
     assertVersion(pluginId, "1.0.0", runEnv);

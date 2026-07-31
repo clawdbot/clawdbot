@@ -1,5 +1,6 @@
 // Rotates config backup files while preserving recent recovery points.
 import path from "node:path";
+import { logVerbose } from "../globals.js";
 
 const CONFIG_BACKUP_COUNT = 5;
 
@@ -20,10 +21,7 @@ interface BackupMaintenanceFs extends BackupRotationFs {
  * Missing slots are ignored so interrupted writes or first-run configs do not
  * block the next config write.
  */
-export async function rotateConfigBackups(
-  configPath: string,
-  ioFs: BackupRotationFs,
-): Promise<void> {
+async function rotateConfigBackups(configPath: string, ioFs: BackupRotationFs): Promise<void> {
   if (CONFIG_BACKUP_COUNT <= 1) {
     return;
   }
@@ -48,10 +46,7 @@ export async function rotateConfigBackups(
  * Backups are copied on mixed filesystems, so copy mode preservation is not a
  * portable security guarantee.
  */
-export async function hardenBackupPermissions(
-  configPath: string,
-  ioFs: BackupRotationFs,
-): Promise<void> {
+async function hardenBackupPermissions(configPath: string, ioFs: BackupRotationFs): Promise<void> {
   if (!ioFs.chmod) {
     return;
   }
@@ -67,10 +62,7 @@ export async function hardenBackupPermissions(
 }
 
 /** Prunes stale `.bak.*` files that are outside the managed numbered ring. */
-export async function cleanOrphanBackups(
-  configPath: string,
-  ioFs: BackupRotationFs,
-): Promise<void> {
+async function cleanOrphanBackups(configPath: string, ioFs: BackupRotationFs): Promise<void> {
   if (!ioFs.readdir) {
     return;
   }
@@ -86,8 +78,11 @@ export async function cleanOrphanBackups(
   let entries: string[];
   try {
     entries = await ioFs.readdir(dir);
-  } catch {
-    return; // best-effort
+  } catch (error) {
+    // best-effort: surface the reason so operators can see why orphan cleanup
+    // did not run instead of silently accumulating backups (#105199).
+    logVerbose(`config orphan backup cleanup skipped: cannot read ${dir}: ${String(error)}`);
+    return;
   }
 
   for (const entry of entries) {
@@ -98,8 +93,11 @@ export async function cleanOrphanBackups(
     if (validSuffixes.has(suffix)) {
       continue;
     }
-    await ioFs.unlink(path.join(dir, entry)).catch(() => {
-      // best-effort
+    const orphanPath = path.join(dir, entry);
+    await ioFs.unlink(orphanPath).catch((error: unknown) => {
+      // best-effort: log so a locked/undeletable orphan does not accumulate
+      // silently and slowly exhaust disk without any operator signal (#105199).
+      logVerbose(`config orphan backup cleanup failed to remove ${orphanPath}: ${String(error)}`);
     });
   }
 }
@@ -133,7 +131,7 @@ export async function createPreUpdateConfigSnapshot(params: {
   if (preUpdateConfigSnapshotsWritten.has(snapshotKey)) {
     return;
   }
-  // Mark before I/O so a failed best-effort write cannot loop on every later write.
+  // Mark before I/O so concurrent callers coalesce onto the in-flight snapshot attempt.
   preUpdateConfigSnapshotsWritten.add(snapshotKey);
   const snapshotPath = `${params.configPath}.pre-update`;
   try {
@@ -144,7 +142,8 @@ export async function createPreUpdateConfigSnapshot(params: {
       flag: "w",
     });
   } catch {
-    // best-effort, do not block update
+    // Best-effort: let the update continue, but allow its later snapshot pass to retry.
+    preUpdateConfigSnapshotsWritten.delete(snapshotKey);
   }
 }
 

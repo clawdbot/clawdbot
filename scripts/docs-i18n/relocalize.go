@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -24,13 +26,24 @@ func postprocessLocalizedDocs(docsRoot, targetLang string, localizedFiles []stri
 		frontMatter, body := splitFrontMatter(string(content))
 		rewrittenBody := routes.localizeBodyLinks(body)
 		updatedFrontMatter := setPostprocessVersion(frontMatter, localizedLinkPostprocessVersion)
-		if rewrittenBody == body && updatedFrontMatter == frontMatter {
-			continue
-		}
-
 		output := rewrittenBody
 		if updatedFrontMatter != "" {
 			output = "---\n" + updatedFrontMatter + "\n---\n\n" + rewrittenBody
+		}
+		sourcePath, err := localizedSourcePath(docsRoot, targetLang, path)
+		if err != nil {
+			return err
+		}
+		source, err := os.ReadFile(sourcePath)
+		if err != nil {
+			return err
+		}
+		if !sameI18NProtocolMarkers(string(source), output) {
+			return fmt.Errorf("protocol token leaked after localized link postprocess: %s", path)
+		}
+
+		if rewrittenBody == body && updatedFrontMatter == frontMatter {
+			continue
 		}
 
 		if err := os.WriteFile(path, []byte(output), 0o644); err != nil {
@@ -39,6 +52,25 @@ func postprocessLocalizedDocs(docsRoot, targetLang string, localizedFiles []stri
 	}
 
 	return nil
+}
+
+func localizedSourcePath(docsRoot, targetLang, localizedPath string) (string, error) {
+	localizedRoot, err := filepath.Abs(filepath.Join(docsRoot, targetLang))
+	if err != nil {
+		return "", err
+	}
+	absPath, err := filepath.Abs(localizedPath)
+	if err != nil {
+		return "", err
+	}
+	relPath, err := filepath.Rel(localizedRoot, absPath)
+	if err != nil {
+		return "", err
+	}
+	if relPath == "." || filepath.IsAbs(relPath) || relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("localized file %s not under locale root %s", absPath, localizedRoot)
+	}
+	return filepath.Join(docsRoot, relPath), nil
 }
 
 func setPostprocessVersion(frontMatter, version string) string {

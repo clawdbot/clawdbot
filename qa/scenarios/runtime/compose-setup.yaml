@@ -2,11 +2,11 @@ title: Docker Compose setup evidence
 
 scenario:
   id: compose-setup
-  surface: docker-podman-hosting
-  category: docker-podman-hosting.container-setup
+  surface: containers
+  category: containers.container-setup
   coverage:
     secondary:
-      - docker.compose
+      - containers.docker-compose-mounts-and-secrets
   objective: Launch the documented Docker Compose topology from the package-backed functional image and record the exact package, image, and service container identities.
   successCriteria:
     - The scheduler builds the real package artifact and package-backed functional image through the canonical Docker planner.

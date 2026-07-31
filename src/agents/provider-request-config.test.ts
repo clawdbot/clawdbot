@@ -4,18 +4,48 @@ import type { ConfiguredProviderRequest } from "../config/types.provider-request
 import type { SecretRef } from "../config/types.secrets.js";
 import {
   applyPreparedRuntimeAuthToModel,
+  attachModelProviderMetadataOwners,
   buildProviderRequestDispatcherPolicy,
+  getModelProviderMetadataOwners,
+  inheritModelProviderMetadataOwners,
   mergeModelProviderRequestOverrides,
-  mergeProviderRequestOverrides,
   resolveProviderRequestPolicyConfig,
   resolveProviderRequestConfig,
   resolveProviderRequestHeaders,
   sanitizeConfiguredModelProviderRequest,
   sanitizeConfiguredProviderRequest,
-  sanitizeRuntimeProviderRequestOverrides,
 } from "./provider-request-config.js";
 
 describe("provider request config", () => {
+  it("carries lifecycle plugin metadata ownership through model projections", () => {
+    const owners = {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+      providerEndpoints: [],
+      providerRequests: new Map([["prepared", { family: "prepared-family" }]]),
+    };
+    const prepared = attachModelProviderMetadataOwners({ id: "prepared-model" }, owners);
+    const projected = inheritModelProviderMetadataOwners(prepared, {
+      ...prepared,
+      id: "projected-model",
+    });
+
+    expect(getModelProviderMetadataOwners(prepared)).toBe(owners);
+    expect(getModelProviderMetadataOwners(projected)).toBe(owners);
+    expect(
+      resolveProviderRequestPolicyConfig({
+        provider: "prepared",
+        providerMetadataOwners: getModelProviderMetadataOwners(projected),
+      }).policy.knownProviderFamily,
+    ).toBe("prepared-family");
+  });
+
   it("applies prepared runtime auth without retaining stale credential headers", () => {
     const model = {
       provider: "microsoft-foundry",
@@ -269,15 +299,17 @@ describe("provider request config", () => {
 
   it("rejects proxy and tls runtime auth overrides", () => {
     expect(() =>
-      sanitizeRuntimeProviderRequestOverrides({
-        headers: {
-          "X-Tenant": "acme",
+      applyPreparedRuntimeAuthToModel(
+        { provider: "custom-openai" },
+        {
+          request: {
+            proxy: {
+              mode: "explicit-proxy",
+              url: "http://proxy.internal:8443",
+            },
+          },
         },
-        proxy: {
-          mode: "explicit-proxy",
-          url: "http://proxy.internal:8443",
-        },
-      }),
+      ),
     ).toThrow(/runtime auth request overrides do not allow proxy or tls/i);
   });
 
@@ -412,7 +444,7 @@ describe("provider request config", () => {
 
   it("merges configured request overrides with later entries winning", () => {
     expect(
-      mergeProviderRequestOverrides(
+      mergeModelProviderRequestOverrides(
         {
           headers: {
             "X-Provider": "1",

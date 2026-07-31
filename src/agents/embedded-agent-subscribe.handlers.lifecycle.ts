@@ -20,6 +20,7 @@ import {
   hasAttemptTerminalState,
   isIncompleteTerminalAssistantTurn,
 } from "./embedded-agent-runner/run/incomplete-turn.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
   consumePendingToolMediaReply,
   hasAssistantVisibleReply,
@@ -51,9 +52,14 @@ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
       startedAt: Date.now(),
     },
   });
-  void ctx.params.onAgentEvent?.({
-    stream: "lifecycle",
-    data: { phase: "start" },
+  runBestEffortCallback({
+    label: "lifecycle agent event",
+    log: ctx.log,
+    callback: () =>
+      ctx.params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: { phase: "start" },
+      }),
   });
 }
 
@@ -85,9 +91,11 @@ export function handleAgentEnd(
     toolAudioAsVoice:
       ctx.state.pendingToolAudioAsVoice ||
       ctx.state.deferredBlockReplies.some((payload) => payload.audioAsVoice),
-    toolTrustedLocalMedia:
-      ctx.state.pendingToolTrustedLocalMedia ||
-      ctx.state.deferredBlockReplies.some((payload) => payload.trustedLocalMedia),
+    toolTrustedLocalMedia: resolveTerminalToolMediaTrust({
+      pendingMediaUrls: ctx.state.pendingToolMediaUrls,
+      pendingTrustByUrl: ctx.state.pendingToolMediaTrustByUrl,
+      deferredReplies: ctx.state.deferredBlockReplies,
+    }),
     hasToolMediaBlockReply: ctx.state.hasToolMediaBlockReply,
     didDeliverSourceReplyViaMessageTool:
       ctx.state.messageToolOnlySourceReplyDelivered ||
@@ -213,15 +221,20 @@ export function handleAgentEnd(
         endedAt: Date.now(),
       },
     });
-    void ctx.params.onAgentEvent?.({
-      stream: "lifecycle",
-      data: {
-        phase,
-        ...errorData,
-        ...terminalMeta,
-        ...(livenessState ? { livenessState } : {}),
-        ...(replayInvalid ? { replayInvalid } : {}),
-      },
+    runBestEffortCallback({
+      label: "lifecycle agent event",
+      log: ctx.log,
+      callback: () =>
+        ctx.params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: {
+            phase,
+            ...errorData,
+            ...terminalMeta,
+            ...(livenessState ? { livenessState } : {}),
+            ...(replayInvalid ? { replayInvalid } : {}),
+          },
+        }),
     });
   };
 
@@ -276,6 +289,7 @@ export function handleAgentEnd(
     const result = ctx.params.onBeforeTerminalDelivery?.({
       messages: evt?.messages ?? [],
       willRetry: evt?.willRetry === true,
+      ...(evt?.assistantEntryId ? { assistantEntryId: evt.assistantEntryId } : {}),
       ...(lastAssistant ? { lastAssistant } : {}),
       assistantTexts: ctx.state.assistantTexts,
       hasAssistantVisibleText,
@@ -390,3 +404,19 @@ export function handleAgentEnd(
   }
   return deliverTerminalWithLifecycleErrorFallback();
 }
+function resolveTerminalToolMediaTrust(params: {
+  pendingMediaUrls: readonly string[];
+  pendingTrustByUrl: ReadonlyMap<string, boolean>;
+  deferredReplies: readonly { mediaUrls?: string[]; trustedLocalMedia?: boolean }[];
+}): boolean {
+  const trust = [
+    ...params.pendingMediaUrls.map((url) => params.pendingTrustByUrl.get(url.trim()) === true),
+    ...params.deferredReplies.flatMap((payload) =>
+      (payload.mediaUrls ?? []).map(() => payload.trustedLocalMedia === true),
+    ),
+  ];
+  return trust.length > 0 && trust.every(Boolean);
+}
+
+const testing = { resolveTerminalToolMediaTrust };
+export { testing as __testing };

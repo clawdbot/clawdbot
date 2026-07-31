@@ -8,13 +8,32 @@ enum LaunchAgentManager {
 
     static func status() async -> Bool {
         guard FileManager().fileExists(atPath: self.plistURL.path) else { return false }
+        return await self.isLoaded()
+    }
+
+    private static func isLoaded() async -> Bool {
         let result = await self.runLaunchctl(["print", "gui/\(getuid())/\(launchdLabel)"])
         return result == 0
     }
 
-    static func set(enabled: Bool, bundlePath: String) async {
+    @discardableResult
+    static func set(
+        enabled: Bool,
+        bundlePath: String,
+        loaded: Bool? = nil,
+        writePlist: ((String) -> Void)? = nil) async -> Bool
+    {
         if enabled {
-            self.writePlist(bundlePath: bundlePath)
+            let persist = writePlist ?? { self.writePlist(bundlePath: $0) }
+            persist(bundlePath)
+            let alreadyLoaded = if let loaded {
+                loaded
+            } else {
+                await self.isLoaded()
+            }
+            // Startup hydrates the toggle from launchd. Reinstalling the active job here
+            // would boot out the app that is still responsible for bootstrapping it again.
+            guard !alreadyLoaded else { return false }
             _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(launchdLabel)"])
             _ = await self.runLaunchctl(["bootstrap", "gui/\(getuid())", self.plistURL.path])
             _ = await self.runLaunchctl(["kickstart", "-k", "gui/\(getuid())/\(launchdLabel)"])
@@ -23,6 +42,7 @@ enum LaunchAgentManager {
             // bootout would terminate the launchd job immediately (and crash the app if launched via agent).
             try? FileManager().removeItem(at: self.plistURL)
         }
+        return true
     }
 
     private static func writePlist(bundlePath: String) {
@@ -30,8 +50,13 @@ enum LaunchAgentManager {
         try? plist.write(to: self.plistURL, atomically: true, encoding: .utf8)
     }
 
-    static func plistContents(bundlePath: String) -> String {
-        """
+    static func plistContents(
+        bundlePath: String,
+        preferredPaths: [String] = CommandResolver.preferredPaths()) -> String
+    {
+        let path = self.escapePlistText(preferredPaths.joined(separator: ":"))
+        let profileEnvironment = self.profileEnvironmentPlistEntries()
+        return """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0">
@@ -49,7 +74,7 @@ enum LaunchAgentManager {
           <key>EnvironmentVariables</key>
           <dict>
             <key>PATH</key>
-            <string>\(CommandResolver.preferredPaths().joined(separator: ":"))</string>
+            <string>\(path)</string>\(profileEnvironment)
           </dict>
           <key>StandardOutPath</key>
           <string>\(LogLocator.launchdLogPath)</string>
@@ -60,21 +85,35 @@ enum LaunchAgentManager {
         """
     }
 
+    private static func profileEnvironmentPlistEntries() -> String {
+        ["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"].compactMap { key in
+            guard let value = OpenClawEnv.path(key) else { return nil }
+            return """
+
+                        <key>\(key)</key>
+                        <string>\(self.escapePlistText(value))</string>
+            """
+        }.joined()
+    }
+
+    private static func escapePlistText(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
+    }
+
     @discardableResult
     private static func runLaunchctl(_ args: [String]) async -> Int32 {
-        await Task.detached(priority: .utility) { () -> Int32 in
-            let process = Process()
-            process.launchPath = "/bin/launchctl"
-            process.arguments = args
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = pipe
-            do {
-                _ = try process.runAndReadToEnd(from: pipe)
-                return process.terminationStatus
-            } catch {
-                return -1
-            }
-        }.value
+        do {
+            return try await BoundedProcess.run(
+                path: "/bin/launchctl",
+                arguments: args,
+                timeout: 5).terminationStatus
+        } catch {
+            return -1
+        }
     }
 }

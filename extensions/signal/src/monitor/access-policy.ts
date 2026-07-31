@@ -97,11 +97,13 @@ const signalIngressIdentity = defineStableChannelIngressIdentity({
 });
 
 function signalSubjectInput(params: { sender: SignalSender; groupId?: string }) {
+  // signal-cli may learn a phone/UUID mapping after pairing. Keep both
+  // identifiers on the shared ingress subject or the existing entry stops matching.
   return {
     stableId: formatSignalSenderId(params.sender),
     aliases: {
-      phone: params.sender.kind === "phone" ? params.sender.e164 : undefined,
-      uuid: params.sender.kind === "uuid" ? params.sender.raw : undefined,
+      phone: params.sender.kind === "phone" ? params.sender.e164 : params.sender.aliases?.e164,
+      uuid: params.sender.kind === "uuid" ? params.sender.raw : params.sender.aliases?.uuid,
       group: params.groupId,
     },
   };

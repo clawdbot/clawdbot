@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/proxy-capture";
 import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import * as ws from "ws";
 import * as discordGateway from "../internal/gateway.js";
 import { createDiscordDnsLookup } from "../network-config.js";
@@ -24,11 +25,6 @@ import {
   resolveGatewayInfoWithFallback,
   type DiscordGatewayFetch,
   type DiscordGatewayFetchInit,
-} from "./gateway-metadata.js";
-
-export {
-  parseDiscordGatewayInfoBody,
-  resolveDiscordGatewayInfoTimeoutMs,
 } from "./gateway-metadata.js";
 
 const DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS = 30_000;
@@ -110,7 +106,7 @@ function formatDiscordGatewayCloseReason(reason: Buffer): string {
   if (text.length <= DISCORD_GATEWAY_CLOSE_REASON_LOG_MAX_CHARS) {
     return text;
   }
-  return `${text.slice(0, DISCORD_GATEWAY_CLOSE_REASON_LOG_MAX_CHARS)}...`;
+  return `${truncateUtf16Safe(text, DISCORD_GATEWAY_CLOSE_REASON_LOG_MAX_CHARS)}...`;
 }
 
 function formatDiscordGatewayTransportErrorLog(params: {
@@ -393,7 +389,6 @@ export function createDiscordGatewayPlugin(params: {
   const proxy = resolveEffectiveDebugProxyUrl(params.discordConfig?.proxy);
   const debugProxySettings = resolveDebugProxySettings();
   const gatewayInfoTimeoutMs = resolveDiscordGatewayInfoTimeoutMs({
-    configuredTimeoutMs: params.discordConfig?.gatewayInfoTimeoutMs,
     env: process.env,
   });
   let fetchImpl = createDiscordGatewayMetadataFetch(debugProxySettings.enabled);

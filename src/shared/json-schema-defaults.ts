@@ -1,10 +1,12 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // JSON schema default helpers fill object values from TypeBox schema defaults.
+import {
+  normalizeJsonSchemaForTypeBox,
+  type JsonSchemaValue,
+} from "@openclaw/normalization-core/json-schema";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Compile } from "typebox/compile";
-import type { JsonSchemaObject } from "./json-schema.types.js";
-import { parseConfigPathArrayIndex } from "./path-array-index.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
-type JsonSchemaValue = JsonSchemaObject | boolean;
 type LocalRefResolution =
   | {
       found: true;
@@ -79,6 +81,7 @@ const schemaIntegerKeywords = new Set([
   "minProperties",
 ]);
 const schemaBooleanKeywords = new Set(["deprecated", "readOnly", "uniqueItems", "writeOnly"]);
+const JSON_POINTER_ARRAY_INDEX_SEGMENT = /^(0|[1-9]\d*)$/;
 
 function schemaTypeIncludes(schema: Record<string, unknown>, type: string): boolean {
   return schema.type === type || (Array.isArray(schema.type) && schema.type.includes(type));
@@ -98,135 +101,6 @@ function schemaResourceRefKey(
     schemaResourceIds.set(resourceRoot, id);
   }
   return `schema:${id}:${baseId ?? ""}:${ref}`;
-}
-
-function normalizeSchemaMap(value: unknown): unknown {
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, normalizeJsonSchemaNode(entry)]),
-  );
-}
-
-function compilesUnicodePattern(pattern: string): boolean {
-  try {
-    const probe = new RegExp(pattern, "u");
-    void probe;
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Repair JSON Schema regex patterns that fail TypeBox's unicode RegExp compile. */
-function repairJsonSchemaPatternForUnicodeRegExp(pattern: string): string {
-  if (compilesUnicodePattern(pattern)) {
-    return pattern;
-  }
-  const repaired = pattern.replace(/\\([^\\])/g, (match, ch: string) => {
-    if (ch === ":" || ch === "/") {
-      return ch;
-    }
-    return match;
-  });
-  return compilesUnicodePattern(repaired) ? repaired : pattern;
-}
-
-function normalizeSchemaDependencies(value: unknown): unknown {
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [
-      key,
-      isStringArray(entry) ? entry : normalizeJsonSchemaNode(entry),
-    ]),
-  );
-}
-
-function normalizePatternProperties(value: Record<string, unknown>): Record<string, unknown> {
-  const normalized = new Map<string, unknown>();
-  for (const [pattern, propertySchema] of Object.entries(value)) {
-    const repairedPattern = repairJsonSchemaPatternForUnicodeRegExp(pattern);
-    const repairedSchema = normalizeJsonSchemaNode(propertySchema);
-    const existingSchema = normalized.get(repairedPattern);
-    normalized.set(
-      repairedPattern,
-      existingSchema === undefined ? repairedSchema : { allOf: [existingSchema, repairedSchema] },
-    );
-  }
-  return Object.fromEntries(normalized);
-}
-
-function expandJsonSchemaTypeArray(schema: Record<string, unknown>): Record<string, unknown> {
-  const { nullable, type, ...rest } = schema;
-  const types = Array.isArray(type) ? [...type] : typeof type === "string" ? [type] : null;
-  if (!types) {
-    return schema;
-  }
-  if (nullable === true && !types.includes("null")) {
-    types.push("null");
-  }
-  if (types.length === 1 && !Array.isArray(type)) {
-    return schema;
-  }
-  return {
-    anyOf: types.map((entry) => Object.assign({}, rest, { type: entry })),
-  };
-}
-
-function normalizeAdditionalPropertiesSchema(
-  schema: Record<string, unknown>,
-): Record<string, unknown> {
-  if (
-    !isRecord(schema.additionalProperties) ||
-    isRecord(schema.properties) ||
-    isRecord(schema.patternProperties)
-  ) {
-    return schema;
-  }
-  const { additionalProperties, ...rest } = schema;
-  return {
-    ...rest,
-    patternProperties: {
-      ".*": additionalProperties,
-    },
-    additionalProperties: false,
-  };
-}
-
-function normalizeJsonSchemaNode(schema: unknown): unknown {
-  if (Array.isArray(schema)) {
-    return schema.map((entry) => normalizeJsonSchemaNode(entry));
-  }
-  if (!isRecord(schema)) {
-    return schema;
-  }
-  const normalizedSchema = normalizeAdditionalPropertiesSchema(expandJsonSchemaTypeArray(schema));
-  return Object.fromEntries(
-    Object.entries(normalizedSchema).map(([key, value]) => {
-      if (key === "$dynamicRef" && normalizedSchema.$ref === undefined) {
-        return ["$ref", value];
-      }
-      if (key === "pattern" && typeof value === "string") {
-        return [key, repairJsonSchemaPatternForUnicodeRegExp(value)];
-      }
-      if (key === "patternProperties" && isRecord(value)) {
-        return [key, normalizePatternProperties(value)];
-      }
-      if (schemaMapKeywords.has(key)) {
-        return [key, normalizeSchemaMap(value)];
-      }
-      if (key === "dependencies") {
-        return [key, normalizeSchemaDependencies(value)];
-      }
-      if (schemaValueKeywords.has(key) || schemaArrayKeywords.has(key)) {
-        return [key, normalizeJsonSchemaNode(value)];
-      }
-      return [key, value];
-    }),
-  );
 }
 
 function validateTypeKeyword(type: unknown, path: string): string | undefined {
@@ -253,6 +127,14 @@ function decodePointerSegment(segment: string): string {
     decodedSegment = segment;
   }
   return decodedSegment.replace(/~1/g, "/").replace(/~0/g, "~");
+}
+
+function parseJsonPointerArrayIndex(segment: string): number | undefined {
+  if (!JSON_POINTER_ARRAY_INDEX_SEGMENT.test(segment)) {
+    return undefined;
+  }
+  const index = Number(segment);
+  return Number.isSafeInteger(index) ? index : undefined;
 }
 
 function resolveLocalAnchor(
@@ -347,7 +229,7 @@ function resolveLocalRef(
     let currentResourceBaseId = resourceBaseId;
     for (const segment of ref.slice(2).split("/").map(decodePointerSegment)) {
       if (Array.isArray(current)) {
-        const index = parseConfigPathArrayIndex(segment);
+        const index = parseJsonPointerArrayIndex(segment);
         if (index === undefined) {
           return { found: false };
         }
@@ -495,11 +377,6 @@ function resolveSchemaRef(
 ): LocalRefResolution {
   const localTarget = resolveLocalRef(resourceRoot, ref, baseId);
   return localTarget.found ? localTarget : resolveSchemaResourceRef(root, ref, baseId);
-}
-
-/** Normalize JSON Schema constructs into the TypeBox compiler subset used by plugin validators. */
-export function normalizeJsonSchemaForTypeBox(schema: JsonSchemaValue): JsonSchemaValue {
-  return normalizeJsonSchemaNode(schema) as JsonSchemaValue;
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -918,6 +795,9 @@ function applyObjectPropertyDefaults(
 ): Record<string, unknown> {
   const properties = isRecord(schema.properties) ? schema.properties : {};
   for (const [key, propertySchema] of Object.entries(properties)) {
+    if (isBlockedObjectKey(key)) {
+      continue;
+    }
     const currentValue = value[key];
     const defaultedValue = applySchemaDefaults(
       propertySchema as JsonSchemaValue,
@@ -943,7 +823,7 @@ function applyObjectPropertyDefaults(
         continue;
       }
       for (const key of Object.keys(value)) {
-        if (!regex.test(key)) {
+        if (isBlockedObjectKey(key) || !regex.test(key)) {
           continue;
         }
         patternMatchedKeys.add(key);
@@ -961,7 +841,11 @@ function applyObjectPropertyDefaults(
   if (isRecord(schema.additionalProperties)) {
     const additionalSchema = schema.additionalProperties as JsonSchemaValue;
     for (const key of Object.keys(value)) {
-      if (Object.hasOwn(properties, key) || patternMatchedKeys.has(key)) {
+      if (
+        isBlockedObjectKey(key) ||
+        Object.hasOwn(properties, key) ||
+        patternMatchedKeys.has(key)
+      ) {
         continue;
       }
       value[key] = applySchemaDefaults(
@@ -1309,3 +1193,4 @@ function applySchemaDefaults(
 export function applyJsonSchemaDefaults<T>(schema: JsonSchemaValue, value: T): T {
   return applySchemaDefaults(schema, value) as T;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

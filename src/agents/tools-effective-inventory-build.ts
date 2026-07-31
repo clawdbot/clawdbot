@@ -41,7 +41,7 @@ function resolveEffectiveToolSource(
   const pluginMeta =
     getPluginToolMeta(tool) ?? (fallbackTool ? getPluginToolMeta(fallbackTool) : undefined);
   if (pluginMeta) {
-    if (pluginMeta.pluginId === "bundle-mcp") {
+    if (pluginMeta.mcp || pluginMeta.pluginId === "bundle-mcp") {
       return { source: "mcp", pluginId: pluginMeta.pluginId };
     }
     return { source: "plugin", pluginId: pluginMeta.pluginId };
@@ -119,8 +119,10 @@ export function buildReadableToolsByName(
   }
   for (let index = 0; index < toolCount; index += 1) {
     try {
-      const tool = tools[index];
-      toolsByName.set(tool.name, tool);
+      const tool = tools.at(index);
+      if (tool) {
+        toolsByName.set(tool.name, tool);
+      }
     } catch {
       // Unreadable entries are reported by the schema projection diagnostics.
     }

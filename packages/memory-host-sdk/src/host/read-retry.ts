@@ -1,5 +1,5 @@
 // Memory Host SDK module implements read retry behavior.
-import { retryAsync } from "./retry-utils.js";
+import { retryAsync } from "@openclaw/retry";
 
 // Retry helper for transient filesystem reads observed on memory stores.
 

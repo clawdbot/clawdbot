@@ -9,7 +9,7 @@ function toMessageSidPart(value?: string | number | null): string {
   return "";
 }
 
-export function parseZalouserMessageSidFull(
+function parseZalouserMessageSidFull(
   value?: string | number | null,
 ): { msgId: string; cliMsgId: string } | null {
   const raw = toMessageSidPart(value);

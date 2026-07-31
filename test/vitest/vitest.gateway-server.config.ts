@@ -9,7 +9,7 @@ const gatewayServerBackedHttpTests = [
   "src/gateway/probe.auth.integration.test.ts",
 ];
 
-function createGatewayServerVitestConfig(env?: Record<string, string | undefined>) {
+export function createGatewayServerVitestConfig(env?: Record<string, string | undefined>) {
   return createScopedVitestConfig(
     ["src/gateway/**/*server*.test.ts", ...gatewayServerBackedHttpTests],
     {
@@ -22,6 +22,8 @@ function createGatewayServerVitestConfig(env?: Record<string, string | undefined
         "src/gateway/sessions-history-http.test.ts",
       ],
       fileParallelism: false,
+      // Gateway child projects share one include file; preserve this project's ownership.
+      intersectIncludeFile: true,
       isolate: false,
       name: "gateway-server",
     },

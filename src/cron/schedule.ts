@@ -77,9 +77,9 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     return anchor + steps * everyMs;
   }
 
-  if (schedule.kind === "on-exit") {
+  if (schedule.kind === "on-exit" || schedule.kind === "stream") {
     // Event-driven trigger: never time-due. The gateway watcher calls
-    // enqueueRun when the watched command exits.
+    // enqueueRun when the watched command exits or a stream batch closes.
     return undefined;
   }
 
@@ -87,12 +87,8 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
   if (!cron) {
     return undefined;
   }
-  const next = cron.nextRun(new Date(nowMs));
-  if (!next) {
-    return undefined;
-  }
-  const nextMs = next.getTime();
-  if (!Number.isFinite(nextMs)) {
+  const nextMs = cron.nextRun(new Date(nowMs))?.getTime();
+  if (nextMs === undefined) {
     return undefined;
   }
 
@@ -102,21 +98,15 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
   // future.
   if (nextMs <= nowMs) {
     const nextSecondMs = Math.floor(nowMs / 1000) * 1000 + 1000;
-    const retry = cron.nextRun(new Date(nextSecondMs));
-    if (retry) {
-      const retryMs = retry.getTime();
-      if (Number.isFinite(retryMs) && retryMs > nowMs) {
-        return retryMs;
-      }
+    const retryMs = cron.nextRun(new Date(nextSecondMs))?.getTime();
+    if (retryMs !== undefined && retryMs > nowMs) {
+      return retryMs;
     }
     // Still in the past — try from start of tomorrow (UTC) as a broader reset.
     const tomorrowMs = new Date(nowMs).setUTCHours(24, 0, 0, 0);
-    const retry2 = cron.nextRun(new Date(tomorrowMs));
-    if (retry2) {
-      const retry2Ms = retry2.getTime();
-      if (Number.isFinite(retry2Ms) && retry2Ms > nowMs) {
-        return retry2Ms;
-      }
+    const retry2Ms = cron.nextRun(new Date(tomorrowMs))?.getTime();
+    if (retry2Ms !== undefined && retry2Ms > nowMs) {
+      return retry2Ms;
     }
     return undefined;
   }
@@ -133,37 +123,38 @@ export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): n
   if (!cron) {
     return undefined;
   }
-  const previousRuns = cron.previousRuns(1, new Date(nowMs));
-  const previous = previousRuns[0];
-  if (!previous) {
-    return undefined;
-  }
-  const previousMs = previous.getTime();
-  if (!Number.isFinite(previousMs)) {
-    return undefined;
-  }
-  if (previousMs >= nowMs) {
+  const previousMs = cron.previousRuns(1, new Date(nowMs))[0]?.getTime();
+  if (previousMs === undefined || previousMs >= nowMs) {
     return undefined;
   }
   return previousMs;
 }
 
 /** Clears the Croner expression cache for deterministic tests. */
-export function clearCronScheduleCacheForTest(): void {
+function clearCronScheduleCacheForTest(): void {
   cronEvalCache.clear();
 }
 
 /** Returns the Croner expression cache size for tests. */
-export function getCronScheduleCacheSizeForTest(): number {
+function getCronScheduleCacheSizeForTest(): number {
   return cronEvalCache.size;
 }
 
 /** Returns the Croner expression cache capacity for tests. */
-export function getCronScheduleCacheMaxForTest(): number {
+function getCronScheduleCacheMaxForTest(): number {
   return CRON_EVAL_CACHE_MAX;
 }
 
 /** Returns whether an expression/timezone pair is present in the Croner cache for tests. */
-export function hasCronInCacheForTest(expr: string, tz: string): boolean {
+function hasCronInCacheForTest(expr: string, tz: string): boolean {
   return cronEvalCache.has(`${tz}\u0000${expr}`);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cronScheduleTestApi")] = {
+    clearCronScheduleCacheForTest,
+    getCronScheduleCacheSizeForTest,
+    getCronScheduleCacheMaxForTest,
+    hasCronInCacheForTest,
+  };
 }

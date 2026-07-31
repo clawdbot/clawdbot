@@ -94,6 +94,38 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunker.bufferedText).toBe("KLMNOP");
   });
 
+  it("keeps forced maxChars chunks valid at UTF-16 boundaries", () => {
+    const plainChunker = new EmbeddedBlockChunker({
+      minChars: 1,
+      maxChars: 20,
+      breakPreference: "paragraph",
+    });
+    plainChunker.append(`${"x".repeat(19)}😀tail`);
+
+    expect(drainChunks(plainChunker)).toEqual(["x".repeat(19)]);
+    expect(plainChunker.bufferedText).toBe("😀tail");
+
+    const tinyChunker = new EmbeddedBlockChunker({
+      minChars: 1,
+      maxChars: 1,
+      breakPreference: "paragraph",
+    });
+    tinyChunker.append("😀tail");
+
+    expect(drainChunks(tinyChunker)).toEqual(["😀", "t", "a", "i", "l"]);
+    expect(tinyChunker.bufferedText).toBe("");
+
+    const fencedChunker = new EmbeddedBlockChunker({
+      minChars: 10,
+      maxChars: 20,
+      breakPreference: "paragraph",
+    });
+    fencedChunker.append(`\`\`\`txt\n${"x".repeat(12)}😀tail`);
+
+    expect(drainChunks(fencedChunker)).toEqual([`\`\`\`txt\n${"x".repeat(12)}\n\`\`\`\n`]);
+    expect(fencedChunker.bufferedText).toBe("```txt\n😀tail");
+  });
+
   it("clamps long paragraphs to maxChars when flushOnParagraph is set", () => {
     const chunker = new EmbeddedBlockChunker({
       minChars: 1,

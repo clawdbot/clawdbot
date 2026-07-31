@@ -1,7 +1,7 @@
 // Slack tests cover sent thread cache plugin behavior.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearSlackRuntime, setSlackRuntime } from "./runtime.js";
+import { setSlackRuntime } from "./runtime.js";
 import {
   clearSlackThreadParticipationCache,
   hasSlackThreadParticipation,
@@ -12,7 +12,7 @@ import {
 describe("slack sent-thread-cache", () => {
   afterEach(() => {
     clearSlackThreadParticipationCache();
-    clearSlackRuntime();
+    setSlackRuntime(null as never);
     vi.restoreAllMocks();
   });
 

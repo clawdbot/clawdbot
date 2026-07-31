@@ -229,6 +229,18 @@ describe("exec authorization planner", () => {
     ]);
   });
 
+  it("treats escaped word-boundary newlines as unanalyzable shell topology", async () => {
+    const plan = await planShellAuthorization({ command: "tr x\n\\id" });
+
+    expect(plan).toEqual(
+      expect.objectContaining({
+        ok: false,
+        dialect: "posix-shell",
+        reason: "line-continuation",
+      }),
+    );
+  });
+
   it("does not promote path-scoped shell-wrapper payloads into reusable inner candidates", async () => {
     await expectSingleShellCandidate("sh -c './scripts/run.sh'", {
       sourceSegment: expect.objectContaining({ argv: ["sh", "-c", "./scripts/run.sh"] }),
@@ -303,7 +315,7 @@ describe("exec authorization planner", () => {
   });
 
   it("does not promote positional shell carriers with outer shell substitutions", async () => {
-    await expectSingleShellCandidate("sh -c '$0 \"$@\"' touch \"$(id)\"", {
+    await expectSingleShellCandidate('sh -c \'$0 "$@"\' touch "$(id)"', {
       sourceSegment: expect.objectContaining({
         argv: ["sh", "-c", '$0 "$@"', "touch", "$(id)"],
       }),

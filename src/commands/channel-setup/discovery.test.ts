@@ -30,7 +30,6 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 }));
 
 vi.mock("../../channels/plugins/catalog.js", () => ({
-  listChannelPluginCatalogEntries: (_args?: unknown) => listChannelPluginCatalogEntries(),
   listRawChannelPluginCatalogEntries: (_args?: unknown) => listChannelPluginCatalogEntries(),
 }));
 

@@ -1,8 +1,11 @@
 // Doctor security tests cover security audit checks, config findings, and repair output.
-import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.js";
+import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -21,18 +24,24 @@ vi.mock("../channels/read-only-account-inspect.js", () => ({
   inspectReadOnlyChannelAccount: vi.fn(async () => null),
 }));
 
+// These doctor assertions cover core secret fields. Registry integration tests
+// own plugin-derived targets, so avoid compiling every bundled plugin here.
+vi.mock("../secrets/target-registry-data.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../secrets/target-registry-data.js")>();
+  return {
+    ...actual,
+    getSecretTargetRegistry: actual.getCoreSecretTargetRegistry,
+  };
+});
+
 import { noteSecurityWarnings } from "./doctor-security.js";
 
 describe("noteSecurityWarnings gateway exposure", () => {
   let prevToken: string | undefined;
   let prevPassword: string | undefined;
   let prevHome: string | undefined;
+  let prevStateDir: string | undefined;
   let prevServiceKind: string | undefined;
-
-  beforeAll(async () => {
-    listReadOnlyChannelPluginsForConfigMock.mockReturnValue([]);
-    await noteSecurityWarnings({ gateway: { bind: "loopback" } } as OpenClawConfig);
-  });
 
   beforeEach(() => {
     note.mockClear();
@@ -42,6 +51,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     prevPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
     prevHome = process.env.HOME;
+    prevStateDir = process.env.OPENCLAW_STATE_DIR;
     prevServiceKind = process.env.OPENCLAW_SERVICE_KIND;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
@@ -64,6 +74,11 @@ describe("noteSecurityWarnings gateway exposure", () => {
     } else {
       process.env.HOME = prevHome;
     }
+    if (prevStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = prevStateDir;
+    }
     if (prevServiceKind === undefined) {
       delete process.env.OPENCLAW_SERVICE_KIND;
     } else {
@@ -79,12 +94,16 @@ describe("noteSecurityWarnings gateway exposure", () => {
   ): Promise<void> {
     await withTempDir({ prefix: "openclaw-doctor-security-" }, async (home) => {
       process.env.HOME = home;
-      await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
-      await fs.writeFile(
-        path.join(home, ".openclaw", "exec-approvals.json"),
-        JSON.stringify(file, null, 2),
-      );
-      await run();
+      process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
+      closeOpenClawStateDatabaseForTest();
+      execApprovalsStoreTesting.reset();
+      saveExecApprovals(file as ExecApprovalsFile);
+      try {
+        await run();
+      } finally {
+        closeOpenClawStateDatabaseForTest();
+        execApprovalsStoreTesting.reset();
+      }
     });
   }
 
@@ -109,24 +128,24 @@ describe("noteSecurityWarnings gateway exposure", () => {
       async () => {
         await noteSecurityWarnings({
           agents: {
-            list: [
-              {
-                id: "runner",
+            entries: {
+              runner: {
                 tools: {
                   exec: {
-                    security: "full",
-                    ask: "off",
+                    mode: "full",
                   },
                 },
               },
-            ],
+            },
           },
         } as OpenClawConfig);
       },
     );
 
     const message = lastMessage();
-    expect(message).toContain("agents.list.runner.tools.exec is broader than the host exec policy");
+    expect(message).toContain(
+      "agents.entries.runner.tools.exec is broader than the host exec policy",
+    );
     expect(message).toContain(`agents.${agentKey}.security="allowlist"`);
     expect(message).toContain(`agents.${agentKey}.ask="always"`);
   }
@@ -139,6 +158,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("without authentication");
     expect(message).toContain("Safer remote access");
     expect(message).toContain("ssh -N -L 18789:127.0.0.1:18789");
+    expect(message).toContain("openclaw security audit --deep");
   });
 
   it("uses env token to avoid critical warning", async () => {
@@ -178,7 +198,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
     expect(message).toContain("OPENCLAW_GATEWAY_TOKEN conflicts with gateway.auth.token");
-    expect(message).toContain("Direct local Gateway clients commonly prefer the env token");
+    expect(message).toContain("Configured local Gateway clients");
     expect(message).toContain("~/.openclaw/.env");
   });
 
@@ -242,17 +262,13 @@ describe("noteSecurityWarnings gateway exposure", () => {
   it("skips warning for loopback bind", async () => {
     const cfg = { gateway: { bind: "loopback" } } as OpenClawConfig;
     await noteSecurityWarnings(cfg);
-    const message = lastMessage();
-    expect(message).toContain("No channel security warnings detected");
-    expect(message).not.toContain("Gateway bound");
+    expect(note).not.toHaveBeenCalled();
   });
 
   it("treats unset bind as loopback for host-side doctor checks", async () => {
     const cfg = { gateway: {} } as OpenClawConfig;
     await noteSecurityWarnings(cfg);
-    const message = lastMessage();
-    expect(message).toContain("No channel security warnings detected");
-    expect(message).not.toContain("Gateway bound");
+    expect(note).not.toHaveBeenCalled();
   });
 
   it("shows explicit dmScope config command for multi-user DMs", async () => {
@@ -298,7 +314,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
     expect(message).toContain("disables approval forwarding only");
-    expect(message).toContain("exec-approvals.json");
+    expect(message).toContain("state/openclaw.sqlite#exec_approvals_config");
     expect(message).toContain("openclaw approvals get --gateway");
   });
 
@@ -445,8 +461,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
         await noteSecurityWarnings({
           tools: {
             exec: {
-              security: "full",
-              ask: "off",
+              mode: "full",
             },
           },
         } as OpenClawConfig);
@@ -455,7 +470,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
 
     const message = lastMessage();
     expect(message).toContain("tools.exec is broader than the host exec policy");
-    expect(message).toContain('security="full"');
+    expect(message).toContain('tools.exec.mode="full"');
     expect(message).toContain('defaults.security="allowlist"');
     expect(message).toContain("stricter side wins");
   });
@@ -501,17 +516,14 @@ describe("noteSecurityWarnings gateway exposure", () => {
         await noteSecurityWarnings({
           tools: {
             exec: {
-              security: "allowlist",
-              ask: "on-miss",
+              mode: "ask",
             },
           },
         } as OpenClawConfig);
       },
     );
 
-    const message = lastMessage();
-    expect(message).toContain("No channel security warnings detected");
-    expect(message).not.toContain('security="deny"');
+    expect(note).not.toHaveBeenCalled();
   });
 
   it("does not invent an on-miss host ask policy when exec-approvals defaults.ask is unset", async () => {
@@ -524,16 +536,14 @@ describe("noteSecurityWarnings gateway exposure", () => {
         await noteSecurityWarnings({
           tools: {
             exec: {
-              ask: "always",
+              mode: "ask",
             },
           },
         } as OpenClawConfig);
       },
     );
 
-    const message = lastMessage();
-    expect(message).toContain("No channel security warnings detected");
-    expect(message).not.toContain('ask="on-miss"');
+    expect(note).not.toHaveBeenCalled();
   });
 
   it("warns when a per-agent exec policy is broader than the matching host agent policy", async () => {
@@ -555,26 +565,26 @@ describe("noteSecurityWarnings gateway exposure", () => {
         await noteSecurityWarnings({
           tools: {
             exec: {
-              security: "full",
-              ask: "off",
+              mode: "full",
             },
           },
           agents: {
-            list: [{ id: "runner" }],
+            entries: { runner: {} },
           },
         } as OpenClawConfig);
       },
     );
 
     const message = lastMessage();
-    expect(message).toContain("agents.list.runner.tools.exec is broader than the host exec policy");
-    expect(message).toContain('tools.exec.security="full"');
-    expect(message).toContain('tools.exec.ask="off"');
+    expect(message).toContain(
+      "agents.entries.runner.tools.exec is broader than the host exec policy",
+    );
+    expect(message).toContain('tools.exec.mode="full"');
     expect(message).toContain('agents.runner.security="allowlist"');
     expect(message).toContain('agents.runner.ask="always"');
   });
 
-  it("ignores malformed host policy fields when attributing doctor conflicts", async () => {
+  it("fails closed on malformed persisted host policy instead of attributing partial fields", async () => {
     await withExecApprovalsFile(
       {
         version: 1,
@@ -591,19 +601,22 @@ describe("noteSecurityWarnings gateway exposure", () => {
         await noteSecurityWarnings({
           tools: {
             exec: {
-              ask: "off",
+              mode: "full",
             },
           },
           agents: {
-            list: [{ id: "runner" }],
+            entries: { runner: {} },
           },
         } as OpenClawConfig);
       },
     );
 
     const message = lastMessage();
-    expect(message).toContain("agents.list.runner.tools.exec is broader than the host exec policy");
-    expect(message).toContain('defaults.ask="always"');
+    expect(message).toContain(
+      "agents.entries.runner.tools.exec is broader than the host exec policy",
+    );
+    expect(message).toContain('defaults.security="deny"');
+    expect(message).not.toContain('defaults.ask="always"');
     expect(message).not.toContain('agents.runner.ask="foo"');
   });
 
@@ -629,7 +642,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
         await noteSecurityWarnings({
           tools: {
             exec: {
-              ask: "always",
+              mode: "ask",
             },
           },
         } as OpenClawConfig);

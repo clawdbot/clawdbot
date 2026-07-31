@@ -68,7 +68,7 @@ async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
     if (existsSync(filePath)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`timeout waiting for ${filePath}`);
 }
@@ -79,7 +79,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
     if (!isProcessAlive(pid)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`process still alive: ${pid}`);
 }
@@ -109,6 +109,17 @@ afterEach(async () => {
 });
 
 describe("resolve-openclaw-package-candidate", () => {
+  it("allows Unreleased notes when packaging an exact ref candidate", () => {
+    const script = readFileSync("scripts/resolve-openclaw-package-candidate.mjs", "utf8");
+    const refPackageBuild = script.slice(
+      script.indexOf('if (options.source === "ref")'),
+      script.indexOf('} else if (options.source === "npm")'),
+    );
+
+    expect(refPackageBuild).toContain('"scripts/package-openclaw-for-docker.mjs"');
+    expect(refPackageBuild).toContain('"--allow-unreleased-changelog"');
+  });
+
   it("accepts only OpenClaw release package specs for npm candidates", () => {
     for (const spec of [
       "openclaw@beta",

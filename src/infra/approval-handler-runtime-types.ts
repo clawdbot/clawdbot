@@ -38,7 +38,11 @@ export type ChannelApprovalNativeFinalAction<TPayload> =
 export type ChannelApprovalNativeAvailabilityAdapter = {
   isConfigured: (params: ChannelApprovalCapabilityHandlerContext) => boolean;
   shouldHandle: (
-    params: ChannelApprovalCapabilityHandlerContext & { request: ApprovalRequest },
+    params: ChannelApprovalCapabilityHandlerContext & {
+      request: ApprovalRequest;
+      /** Payload-derived owner; channel adapters must not infer ownership from the id. */
+      approvalKind: ChannelApprovalKind;
+    },
   ) => boolean;
 };
 
@@ -232,6 +236,10 @@ export type ChannelApprovalNativeRuntimeAdapter<
   TFinalPayload = unknown,
 > = {
   eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
+  /**
+   * Trusted legacy ownership override retained for compatibility.
+   * @deprecated Omit this so core derives approval ownership from the request payload.
+   */
   resolveApprovalKind?: (request: ApprovalRequest) => ChannelApprovalKind;
   availability: ChannelApprovalNativeAvailabilityAdapter;
   presentation: ChannelApprovalNativePresentationAdapter<TPendingPayload, TFinalPayload>;
@@ -257,6 +265,10 @@ export type ChannelApprovalNativeRuntimeSpec<
   TExpiredView extends ExpiredApprovalView = ExpiredApprovalView,
 > = {
   eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
+  /**
+   * Trusted legacy ownership override retained for compatibility.
+   * @deprecated Omit this so core derives approval ownership from the request payload.
+   */
   resolveApprovalKind?: (request: ApprovalRequest) => ChannelApprovalKind;
   availability: ChannelApprovalNativeAvailabilityAdapter;
   presentation: {

@@ -27,7 +27,7 @@ on:
 permissions:
   actions: read
   contents: read
-  packages: write
+  packages: read
   pull-requests: read
 
 jobs:
@@ -42,5 +42,7 @@ jobs:
       docker_lanes: update-migration
       published_upgrade_survivor_baselines: ${{ inputs.baselines }}
       published_upgrade_survivor_scenarios: ${{ inputs.scenarios }}
+      shared_image_artifact_namespace: update-migration
+      shared_image_policy: no-push-artifact
       telegram_mode: none
     secrets: inherit # zizmor: ignore[secrets-inherit] Maintainer-dispatched package acceptance lane intentionally forwards its declared live-test secret matrix.

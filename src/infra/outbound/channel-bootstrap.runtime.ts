@@ -2,6 +2,7 @@
 // when only setup-shell metadata is active.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveRuntimePluginRegistry } from "../../plugins/loader.js";
 import type { PluginChannelRegistration } from "../../plugins/registry-types.js";
@@ -13,11 +14,44 @@ import {
 } from "../../plugins/runtime.js";
 import type { DeliverableMessageChannel } from "../../utils/message-channel.js";
 
-const bootstrapAttempts = new Set<string>();
+const MAX_BOOTSTRAP_CONFIG_GENERATIONS = 64;
+let bootstrapRegistryGeneration: string | undefined;
+const bootstrapAttemptedChannelsByConfig = new Map<string, Set<DeliverableMessageChannel>>();
 
-/** Clears the per-registry channel bootstrap retry guard for isolated tests. */
+function resolveBootstrapRegistryGeneration(): string {
+  return `${getActivePluginChannelRegistryVersion()}:${getActivePluginRegistryVersion()}`;
+}
+
+function resolveBootstrapAttemptedChannels(cfg: OpenClawConfig): Set<DeliverableMessageChannel> {
+  const registryGeneration = resolveBootstrapRegistryGeneration();
+  if (registryGeneration !== bootstrapRegistryGeneration) {
+    bootstrapRegistryGeneration = registryGeneration;
+    bootstrapAttemptedChannelsByConfig.clear();
+  }
+  const configKey = resolveRuntimeConfigCacheKey(cfg);
+  const existing = bootstrapAttemptedChannelsByConfig.get(configKey);
+  if (existing) {
+    bootstrapAttemptedChannelsByConfig.delete(configKey);
+    bootstrapAttemptedChannelsByConfig.set(configKey, existing);
+    return existing;
+  }
+  // Agent-scoped configs may interleave within one registry generation. Keep a
+  // bounded LRU so one caller cannot evict another on every delivery attempt.
+  if (bootstrapAttemptedChannelsByConfig.size >= MAX_BOOTSTRAP_CONFIG_GENERATIONS) {
+    const oldestConfigKey = bootstrapAttemptedChannelsByConfig.keys().next().value;
+    if (oldestConfigKey !== undefined) {
+      bootstrapAttemptedChannelsByConfig.delete(oldestConfigKey);
+    }
+  }
+  const attemptedChannels = new Set<DeliverableMessageChannel>();
+  bootstrapAttemptedChannelsByConfig.set(configKey, attemptedChannels);
+  return attemptedChannels;
+}
+
+/** Clears the per-generation channel bootstrap retry guard for isolated tests. */
 export function resetOutboundChannelBootstrapStateForTests(): void {
-  bootstrapAttempts.clear();
+  bootstrapRegistryGeneration = undefined;
+  bootstrapAttemptedChannelsByConfig.clear();
 }
 
 function channelEntryCanSend(entry: PluginChannelRegistration | undefined): boolean {
@@ -59,13 +93,11 @@ export function bootstrapOutboundChannelPlugin(params: {
     return;
   }
 
-  const attemptKey = `${getActivePluginChannelRegistryVersion()}:${getActivePluginRegistryVersion()}:${params.channel}`;
-  if (bootstrapAttempts.has(attemptKey)) {
+  const attemptedChannels = resolveBootstrapAttemptedChannels(cfg);
+  if (attemptedChannels.has(params.channel)) {
     return;
   }
-  // Retry once per registry version/channel; failed loads clear the guard below
-  // so config fixes in the same process can try again.
-  bootstrapAttempts.add(attemptKey);
+  attemptedChannels.add(params.channel);
 
   const autoEnabled = applyPluginAutoEnable({ config: cfg });
   const defaultAgentId = resolveDefaultAgentId(autoEnabled.config);
@@ -80,10 +112,16 @@ export function bootstrapOutboundChannelPlugin(params: {
         allowGatewaySubagentBinding: true,
       },
     });
-    if (!canResolveSendCapableChannel(params.channel)) {
-      bootstrapAttempts.delete(attemptKey);
-    }
   } catch {
-    bootstrapAttempts.delete(attemptKey);
+    // Best-effort bootstrap; the caller reports the unavailable channel.
+  }
+  // A bootstrap can replace the registry itself. Adopt that generation without
+  // forgetting failures for interleaved configs; external replacements observed
+  // before the next attempt still clear the guard above.
+  bootstrapRegistryGeneration = resolveBootstrapRegistryGeneration();
+  if (!canResolveSendCapableChannel(params.channel)) {
+    // Loading can replace the active registry without making this channel usable.
+    // Carry the failure forward so polling callers wait for config or registry reload.
+    resolveBootstrapAttemptedChannels(cfg).add(params.channel);
   }
 }

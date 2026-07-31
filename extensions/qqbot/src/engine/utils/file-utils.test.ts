@@ -27,7 +27,6 @@ vi.mock("../adapter/index.js", () => ({
 }));
 
 import {
-  QQBOT_MEDIA_SSRF_POLICY,
   checkFileSize,
   downloadFile,
   fileExistsAsync,
@@ -94,20 +93,20 @@ describe("qqbot file-utils downloadFile", () => {
     expect(adapterMocks.fetchMedia).toHaveBeenCalledWith({
       url: "https://media.qq.com/assets/photo.png",
       filePathHint: "photo.png",
-      ssrfPolicy: QQBOT_MEDIA_SSRF_POLICY,
-    });
-    expect(QQBOT_MEDIA_SSRF_POLICY).toEqual({
-      hostnameAllowlist: [
-        "*.qpic.cn",
-        "*.qq.com",
-        "*.weiyun.com",
-        "*.qq.com.cn",
-        "*.ugcimg.cn",
-        "*.myqcloud.com",
-        "*.tencentcos.cn",
-        "*.tencentcos.com",
-      ],
-      allowRfc2544BenchmarkRange: true,
+      ssrfPolicy: {
+        hostnameAllowlist: [
+          "*.qpic.cn",
+          "*.qq.com",
+          "*.weiyun.com",
+          "*.qq.com.cn",
+          "*.ugcimg.cn",
+          "*.myqcloud.com",
+          "*.tencentcos.cn",
+          "*.tencentcos.com",
+        ],
+        allowRfc2544BenchmarkRange: true,
+      },
+      responseHeaderTimeoutMs: 120_000,
     });
   });
 

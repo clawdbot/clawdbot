@@ -103,6 +103,7 @@ describe("AcpSessionManager backend failover", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: harness.cfg,
       sessionKey: harness.sessionKey,
       text: "use primary",
@@ -127,6 +128,7 @@ describe("AcpSessionManager backend failover", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: harness.cfg,
       sessionKey: harness.sessionKey,
       text: "use fallback",
@@ -138,6 +140,7 @@ describe("AcpSessionManager backend failover", () => {
 
     harness.fallbackRuntime.close.mockClear();
     await manager.runTurn({
+      provenance: "system",
       cfg: harness.cfg,
       sessionKey: harness.sessionKey,
       text: "return to primary",
@@ -166,6 +169,7 @@ describe("AcpSessionManager backend failover", () => {
     const manager = new AcpSessionManager();
     await expect(
       manager.runTurn({
+        provenance: "system",
         cfg: harness.cfg,
         sessionKey: harness.sessionKey,
         text: "fallback",
@@ -193,6 +197,7 @@ describe("AcpSessionManager backend failover", () => {
     const manager = new AcpSessionManager();
     await expect(
       manager.runTurn({
+        provenance: "system",
         cfg: harness.cfg,
         sessionKey: harness.sessionKey,
         text: "fallback",
@@ -218,6 +223,7 @@ describe("AcpSessionManager backend failover", () => {
     const manager = new AcpSessionManager();
     await expect(
       manager.runTurn({
+        provenance: "system",
         cfg: harness.cfg,
         sessionKey: harness.sessionKey,
         text: "fallback",
@@ -241,6 +247,7 @@ describe("AcpSessionManager backend failover", () => {
     const manager = new AcpSessionManager();
     await expect(
       manager.runTurn({
+        provenance: "system",
         cfg: harness.cfg,
         sessionKey: harness.sessionKey,
         text: "do not duplicate",

@@ -15,7 +15,10 @@ const optionalBundledClusters = [
   "zalouser",
 ];
 
-/** Bundled plugin clusters that may be excluded from size-sensitive build lanes. */
+/**
+ * Bundled plugin clusters that may be excluded from size-sensitive build lanes.
+ * @internal Shared repository-script contract.
+ */
 export const optionalBundledClusterSet = new Set(optionalBundledClusters);
 
 const OPTIONAL_BUNDLED_BUILD_ENV = "OPENCLAW_INCLUDE_OPTIONAL_BUNDLED";

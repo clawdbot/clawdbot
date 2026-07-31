@@ -171,15 +171,34 @@ export function formatComputerUseStatus(status: CodexComputerUseStatus): string 
     `Plugin: ${formatCodexDisplayText(status.pluginName)} (${computerUsePluginState(status)})`,
   );
   lines.push(
+    `Installation: ${formatCodexDisplayText(status.installation.status)} (${status.installation.ok ? "ok" : "not ok"})`,
+  );
+  lines.push(
     `MCP server: ${formatCodexDisplayText(status.mcpServerName)}${
       status.mcpServerAvailable ? ` (${status.tools.length} tools)` : " (unavailable)"
     }`,
   );
+  lines.push(
+    `Exposure: ${formatCodexDisplayText(status.exposure.status)} (${status.exposure.ok ? "ok" : "not ok"})`,
+  );
+  lines.push(
+    `Live test: ${formatCodexDisplayText(status.liveTest.status)} (${status.liveTest.attempted ? `${status.liveTest.attempts} attempt${status.liveTest.attempts === 1 ? "" : "s"}, ${status.liveTest.timeoutMs}ms` : "not run"})`,
+  );
+  if (status.liveTest.retried || status.liveTest.repaired) {
+    lines.push(
+      `Live test recovery: retried=${status.liveTest.retried ? "yes" : "no"}, repaired=${
+        status.liveTest.repaired ? "yes" : "no"
+      }`,
+    );
+  }
   if (status.marketplaceName) {
     lines.push(`Marketplace: ${formatCodexDisplayText(status.marketplaceName)}`);
   }
   if (status.tools.length > 0) {
     lines.push(`Tools: ${status.tools.slice(0, 8).map(formatCodexDisplayText).join(", ")}`);
+  }
+  for (const warning of status.warnings) {
+    lines.push(`Warning: ${formatCodexDisplayText(warning)}`);
   }
   lines.push(formatCodexDisplayText(status.message));
   return lines.join("\n");
@@ -359,6 +378,7 @@ export function buildHelp(): string {
     "- /codex status",
     "- /codex models",
     "- /codex threads [filter]",
+    "- /codex goal [status|set <objective>|pause|resume|block|complete|clear]",
     "- /codex sessions --host <node> [filter]",
     "- /codex resume <thread-id>",
     "- /codex resume <session-id> --host <node> --bind here",

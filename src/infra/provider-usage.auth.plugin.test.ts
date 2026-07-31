@@ -66,7 +66,6 @@ vi.mock("../secrets/provider-env-vars.js", () => ({
     "MINIMAX_CODE_PLAN_KEY",
     "OPENAI_API_KEY",
   ],
-  resolveProviderAuthEvidence: () => ({}),
   resolveProviderAuthEnvVarCandidates: () => ({
     anthropic: ["ANTHROPIC_API_KEY"],
     minimax: ["MINIMAX_CODE_PLAN_KEY"],

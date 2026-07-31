@@ -137,6 +137,19 @@ describe("DebugProxyCaptureStore", () => {
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'capture_blobs'")
         .get(),
     ).toBeUndefined();
+    expect(
+      lease.store.db
+        .prepare(
+          `SELECT name, strict FROM pragma_table_list
+           WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%'
+           ORDER BY name`,
+        )
+        .all(),
+    ).toEqual([
+      { name: "capture_events", strict: 1 },
+      { name: "capture_sessions", strict: 1 },
+    ]);
+    expect(lease.store.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
     expect(lease.store.deleteSessions(["legacy-sdk-session"])).toEqual({
       sessions: 1,
       events: 1,
@@ -265,6 +278,17 @@ describe("DebugProxyCaptureStore", () => {
     expect(duplicateRows[0]?.method).toBe("POST");
     expect(duplicateRows[0]?.duplicateCount).toBe(2);
     expect(store.readBlob(firstPayload.dataBlobId ?? "")).toContain('"ok":true');
+  });
+
+  it("keeps byte-limited UTF-8 previews on a complete character boundary", () => {
+    const store = makeStore();
+    const data = `${"x".repeat(8191)}étail`;
+
+    const payload = persistEventPayload(store, { data });
+
+    expect(payload.dataText).toBe("x".repeat(8191));
+    expect(Buffer.byteLength(payload.dataText ?? "", "utf8")).toBeLessThanOrEqual(8192);
+    expect(store.readBlob(payload.dataBlobId ?? "")).toBe(data);
   });
 
   it("creates and later upgrades an implicit session for direct event capture", () => {

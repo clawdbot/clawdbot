@@ -173,8 +173,8 @@ export async function cleanupRetainedManagedNpmInstallGenerations(
     onError?: (error: unknown, projectRoot: string) => void;
   } = {},
 ): Promise<number> {
-  // Callers run this after the previous gateway server has closed and before
-  // the next one loads plugins, so retired module graphs no longer need these trees.
+  // Callers run this only after the previous gateway server has closed and preserve
+  // every active install path, so retired module graphs no longer need these trees.
   const npmDir = params.npmDir ?? resolveDefaultPluginNpmDir(params.env);
   const projectsDir = resolvePluginNpmProjectsDir(npmDir);
   const activeInstallPaths = Array.from(params.activeInstallPaths ?? [], (installPath) =>

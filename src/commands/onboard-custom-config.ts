@@ -83,11 +83,6 @@ export function resolveCustomModelImageInputInference(
   return { supportsImageInput: false, confidence: "unknown" };
 }
 
-/** Returns whether a custom model id is known to support image input. */
-export function inferCustomModelSupportsImageInput(modelId: string): boolean {
-  return resolveCustomModelImageInputInference(modelId).supportsImageInput;
-}
-
 function resolveCustomModelSupportsImageInput(params: {
   modelId: string;
   explicit?: boolean;

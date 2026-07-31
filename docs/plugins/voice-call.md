@@ -156,7 +156,7 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
             defaultMode: "notify", // notify | conversation
           },
 
-          streaming: { enabled: true /* see Streaming transcription */ },
+          streaming: { enabled: true /* Twilio only; see Streaming transcription */ },
           realtime: { enabled: false /* see Realtime voice conversations */ },
         },
       },
@@ -169,24 +169,24 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
 
 Top-level keys under `plugins.entries.voice-call.config` not shown above:
 
-| Key                             | Default      | Notes                                                                                  |
-| ------------------------------- | ------------ | -------------------------------------------------------------------------------------- |
-| `enabled`                       | `false`      | Master on/off switch.                                                                  |
-| `inboundPolicy`                 | `"disabled"` | `disabled` \| `allowlist` \| `pairing` \| `open`. See [Inbound calls](#inbound-calls). |
-| `allowFrom`                     | `[]`         | E.164 allowlist for `inboundPolicy: "allowlist"`.                                      |
-| `maxDurationSeconds`            | `300`        | Hard per-call duration cap, enforced regardless of answered state.                     |
-| `staleCallReaperSeconds`        | `120`        | See [Stale call reaper](#stale-call-reaper). `0` disables it.                          |
-| `silenceTimeoutMs`              | `800`        | End-of-speech silence detection for the classic (non-realtime) flow.                   |
-| `transcriptTimeoutMs`           | `180000`     | Max wait for a caller transcript before giving up on a turn.                           |
-| `ringTimeoutMs`                 | `30000`      | Ring timeout for outbound calls.                                                       |
-| `maxConcurrentCalls`            | `1`          | Outbound calls beyond this limit are rejected.                                         |
-| `outbound.notifyHangupDelaySec` | `3`          | Seconds to wait after TTS before auto-hangup in notify mode.                           |
-| `skipSignatureVerification`     | `false`      | Local testing only; never enable in production.                                        |
-| `store`                         | unset        | Overrides the default `~/.openclaw/voice-calls` call-log path.                         |
-| `agentId`                       | `"main"`     | Agent used for response generation and session storage.                                |
-| `responseModel`                 | unset        | Overrides the default model for classic (non-realtime) responses.                      |
-| `responseSystemPrompt`          | generated    | Custom system prompt for classic responses.                                            |
-| `responseTimeoutMs`             | `30000`      | Timeout for classic response generation (ms).                                          |
+| Key                             | Default      | Notes                                                                                              |
+| ------------------------------- | ------------ | -------------------------------------------------------------------------------------------------- |
+| `enabled`                       | `false`      | Master on/off switch.                                                                              |
+| `inboundPolicy`                 | `"disabled"` | `disabled` \| `allowlist` \| `pairing` \| `open`. See [Inbound calls](#inbound-calls).             |
+| `allowFrom`                     | `[]`         | E.164 allowlist for `inboundPolicy: "allowlist"`.                                                  |
+| `maxDurationSeconds`            | `300`        | Hard per-call duration cap, enforced regardless of answered state.                                 |
+| `staleCallReaperSeconds`        | `120`        | See [Stale call reaper](#stale-call-reaper). `0` disables it.                                      |
+| `silenceTimeoutMs`              | `800`        | End-of-speech silence detection for the classic (non-realtime) flow.                               |
+| `transcriptTimeoutMs`           | `180000`     | Max wait for a caller transcript before giving up on a turn.                                       |
+| `ringTimeoutMs`                 | `30000`      | Ring timeout for outbound calls.                                                                   |
+| `maxConcurrentCalls`            | `1`          | Outbound calls beyond this limit are rejected.                                                     |
+| `outbound.notifyHangupDelaySec` | `3`          | Seconds to wait after TTS before auto-hangup in notify mode.                                       |
+| `skipSignatureVerification`     | `false`      | Local testing only; never enable in production.                                                    |
+| `store`                         | unset        | Overrides the default `$OPENCLAW_STATE_DIR/voice-calls` path (normally `~/.openclaw/voice-calls`). |
+| `agentId`                       | `"main"`     | Agent used for response generation and session storage.                                            |
+| `responseModel`                 | unset        | Overrides the default model for classic (non-realtime) responses.                                  |
+| `responseSystemPrompt`          | generated    | Custom system prompt for classic responses.                                                        |
+| `responseTimeoutMs`             | `30000`      | Timeout for classic response generation (ms).                                                      |
 
 Twilio defaults to its US1 REST endpoint. To process calls in a supported
 non-US Region, set `twilio.region` to `ie1` or `au1` and use credentials from
@@ -328,7 +328,7 @@ for tool work, current information, memory lookups, or workspace state.
 <Tabs>
   <Tab title="Google Gemini Live">
     Defaults: API key from `realtime.providers.google.apiKey`, `GEMINI_API_KEY`,
-    or `GOOGLE_API_KEY`; model `gemini-2.5-flash-native-audio-preview-12-2025`;
+    or `GOOGLE_API_KEY`; model `gemini-3.1-flash-live-preview`;
     voice `Kore`. `sessionResumption` and `contextWindowCompression` default on
     for longer, reconnectable calls. Use `silenceDurationMs`,
     `startSensitivity`, and `endSensitivity` to tune faster turn-taking on
@@ -355,7 +355,7 @@ for tool work, current information, memory lookups, or workspace state.
                 providers: {
                   google: {
                     apiKey: "${GEMINI_API_KEY}",
-                    model: "gemini-2.5-flash-native-audio-preview-12-2025",
+                    model: "gemini-3.1-flash-live-preview",
                     speakerVoice: "Kore",
                     silenceDurationMs: 500,
                     startSensitivity: "high",
@@ -399,7 +399,10 @@ options.
 
 ## Streaming transcription
 
-`streaming` selects a realtime transcription provider for live call audio.
+`streaming` connects Twilio Media Streams to a realtime transcription provider.
+The classic streaming path requires `provider: "twilio"`; configuration with
+Telnyx, Plivo, or mock is rejected. Telnyx live audio uses the separately
+authenticated `realtime.enabled` path instead.
 
 Current runtime behavior:
 
@@ -480,9 +483,9 @@ Current runtime behavior:
 
 ## TTS for calls
 
-Voice Call uses the core `messages.tts` configuration for streaming speech on
+Voice Call uses the core `tts` configuration for streaming speech on
 calls. You can override it under the plugin config with the **same shape** —
-it deep-merges with `messages.tts`.
+it deep-merges with `tts`.
 
 ```json5
 {
@@ -519,12 +522,10 @@ Behavior notes:
   <Tab title="Core TTS only">
 ```json5
 {
-  messages: {
-    tts: {
-      provider: "openai",
-      providers: {
-        openai: { speakerVoice: "alloy" },
-      },
+  tts: {
+    provider: "openai",
+    providers: {
+      openai: { speakerVoice: "alloy" },
     },
   },
 }
@@ -904,7 +905,7 @@ openclaw logs --follow
 
 Common causes:
 
-- `publicUrl` points at a different path than `serve.path`.
+- `publicUrl` does not match the public webhook URL configured with the provider. A reverse proxy may map that public path to a different `serve.path`, but `publicUrl` must remain the provider-facing URL.
 - The tunnel URL changed after the Gateway started.
 - A proxy forwards the request but strips or rewrites host/proto headers.
 - Firewall or DNS routes the public hostname somewhere other than the Gateway.
@@ -918,8 +919,10 @@ under your control.
 
 ### Signature verification fails
 
-Provider signatures are checked against the public URL OpenClaw reconstructs
-from the incoming request. If signatures fail:
+Twilio and Plivo URL signatures use `publicUrl` when it is configured: its
+scheme, host, and path are preserved, while the request query is applied.
+Without `publicUrl`, OpenClaw reconstructs the URL from the request. Telnyx
+signatures do not include the request URL. If signatures fail:
 
 - Confirm the provider webhook URL exactly matches `publicUrl`, including scheme, host, and path.
 - For ngrok free-tier URLs, update `publicUrl` when the tunnel hostname changes.

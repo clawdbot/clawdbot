@@ -58,6 +58,16 @@ function requireScopedCdpClientOptions(): ScopedCdpClientOptions {
   return options as ScopedCdpClientOptions;
 }
 
+function makeAriaSnapshotPage(ariaSnapshot: ReturnType<typeof vi.fn>) {
+  const mainFrame = { id: "main-frame" };
+  return {
+    ariaSnapshot,
+    mainFrame: () => mainFrame,
+    on: vi.fn(),
+    off: vi.fn(),
+  };
+}
+
 describe("pw-tools-core aria snapshot storage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -149,7 +159,7 @@ describe("pw-tools-core aria snapshot storage", () => {
 
   it("forwards an explicit timeoutMs into the role-aria Playwright ariaSnapshot call", async () => {
     const ariaSnapshotMock = vi.fn().mockResolvedValue("");
-    const page = { ariaSnapshot: ariaSnapshotMock };
+    const page = makeAriaSnapshotPage(ariaSnapshotMock);
     getPageForTargetId.mockResolvedValue(page);
 
     const mod = await import("./pw-tools-core.snapshot.js");
@@ -165,7 +175,7 @@ describe("pw-tools-core aria snapshot storage", () => {
 
   it("uses the default snapshot timeout for non-finite role-aria timeouts", async () => {
     const ariaSnapshotMock = vi.fn().mockResolvedValue("");
-    const page = { ariaSnapshot: ariaSnapshotMock };
+    const page = makeAriaSnapshotPage(ariaSnapshotMock);
     getPageForTargetId.mockResolvedValue(page);
 
     const mod = await import("./pw-tools-core.snapshot.js");
@@ -179,9 +189,112 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(ariaSnapshotMock).toHaveBeenCalledWith({ mode: "ai", timeout: 5000 });
   });
 
+  it("rejects page-wide refs when a subframe navigates during capture", async () => {
+    const mainFrame = { id: "main-frame" };
+    const subframe = { id: "subframe" };
+    const handlers = new Map<string, (frame: unknown) => void>();
+    const page = {
+      ariaSnapshot: vi.fn(async () => {
+        handlers.get("framenavigated")?.(subframe);
+        return '- button "Save"';
+      }),
+      mainFrame: () => mainFrame,
+      on: vi.fn((event: string, handler: (frame: unknown) => void) => {
+        handlers.set(event, handler);
+      }),
+      off: vi.fn(),
+    };
+    getPageForTargetId.mockResolvedValue(page);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    await expect(
+      mod.snapshotRoleViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
+        refsMode: "aria",
+      }),
+    ).rejects.toThrow("Frame changed while its browser snapshot was being captured");
+
+    expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
+  });
+
+  it("stores frame-scoped refs with the exact captured frame", async () => {
+    const ariaSnapshot = vi.fn(async () => '- button "Save"');
+    const frame = { id: "frame-1", locator: vi.fn(() => ({ ariaSnapshot })) };
+    const page = {
+      locator: vi.fn(() => ({
+        elementHandle: vi.fn(async () => ({
+          contentFrame: vi.fn(async () => frame),
+          dispose: vi.fn(async () => {}),
+        })),
+      })),
+      on: vi.fn(),
+      off: vi.fn(),
+    };
+    getPageForTargetId.mockResolvedValue(page);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    await mod.snapshotRoleViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      frameSelector: "iframe#content",
+    });
+
+    expect(storeRoleRefsForTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        page,
+        frameSelector: "iframe#content",
+        frame,
+      }),
+    );
+    expect(page.off).toHaveBeenCalledWith("framenavigated", expect.any(Function));
+  });
+
+  it.each(["framenavigated", "framedetached"] as const)(
+    "rejects frame-scoped refs when that frame emits %s during capture",
+    async (event) => {
+      const handlers = new Map<string, (frame: unknown) => void>();
+      const frame = {
+        id: "frame-1",
+        locator: vi.fn(() => ({
+          ariaSnapshot: vi.fn(async () => {
+            handlers.get(event)?.(frame);
+            return '- button "Save"';
+          }),
+        })),
+      };
+      const page = {
+        locator: vi.fn(() => ({
+          elementHandle: vi.fn(async () => ({
+            contentFrame: vi.fn(async () => frame),
+            dispose: vi.fn(async () => {}),
+          })),
+        })),
+        on: vi.fn((eventName: string, handler: (frame: unknown) => void) => {
+          handlers.set(eventName, handler);
+        }),
+        off: vi.fn(),
+      };
+      getPageForTargetId.mockResolvedValue(page);
+
+      const mod = await import("./pw-tools-core.snapshot.js");
+      await expect(
+        mod.snapshotRoleViaPlaywright({
+          cdpUrl: "http://127.0.0.1:9222",
+          targetId: "tab-1",
+          frameSelector: "iframe#content",
+        }),
+      ).rejects.toThrow("Frame changed while its browser snapshot was being captured");
+
+      expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
+      expect(page.off).toHaveBeenCalledWith("framenavigated", expect.any(Function));
+      expect(page.off).toHaveBeenCalledWith("framedetached", expect.any(Function));
+    },
+  );
+
   it("uses the default snapshot timeout for non-finite ai snapshot timeouts", async () => {
     const ariaSnapshotMock = vi.fn().mockResolvedValue("");
-    const page = { ariaSnapshot: ariaSnapshotMock };
+    const page = makeAriaSnapshotPage(ariaSnapshotMock);
     getPageForTargetId.mockResolvedValue(page);
 
     const mod = await import("./pw-tools-core.snapshot.js");
@@ -194,21 +307,56 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(ariaSnapshotMock).toHaveBeenCalledWith({ mode: "ai", timeout: 5000 });
   });
 
-  it("does not split a surrogate pair when truncating ai snapshots", async () => {
-    const prefix = `- button "${"A".repeat(18)}`;
-    const ariaSnapshotMock = vi.fn().mockResolvedValue(`${prefix}🙂"`);
-    const page = { ariaSnapshot: ariaSnapshotMock };
+  it("stores only complete refs after truncating ai snapshots", async () => {
+    const first = '- button "Visible" [ref=e1]';
+    const second = `- button "Hidden ${"X".repeat(100)} 🙂" [ref=e2]`;
+    const marker = "[...TRUNCATED - page too large]";
+    const ariaSnapshotMock = vi.fn().mockResolvedValue(`${first}\n${second}`);
+    const page = makeAriaSnapshotPage(ariaSnapshotMock);
     getPageForTargetId.mockResolvedValue(page);
 
     const mod = await import("./pw-tools-core.snapshot.js");
     const result = await mod.snapshotAiViaPlaywright({
       cdpUrl: "http://127.0.0.1:9222",
       targetId: "tab-1",
-      maxChars: prefix.length + 1,
+      maxChars: first.length + 2 + marker.length,
     });
 
-    expect(result.snapshot).toBe(`${prefix}\n\n[...TRUNCATED - page too large]`);
+    expect(result.snapshot).toBe(`${first}\n\n${marker}`);
     expect(result.truncated).toBe(true);
+    expect(result.refs).toEqual({ e1: { role: "button", name: "Visible" } });
+    expect(storeRoleRefsForTarget).toHaveBeenLastCalledWith({
+      page,
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      refs: { e1: { role: "button", name: "Visible" } },
+      mode: "aria",
+    });
+  });
+
+  it("caps filtered role snapshots before storing refs", async () => {
+    const first = '- button "Visible" [ref=e1]';
+    const marker = "[...TRUNCATED - page too large]";
+    const ariaSnapshotMock = vi
+      .fn()
+      .mockResolvedValue(`${first}\n- button "Hidden ${"X".repeat(100)}" [ref=e2]`);
+    const page = makeAriaSnapshotPage(ariaSnapshotMock);
+    getPageForTargetId.mockResolvedValue(page);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const result = await mod.snapshotRoleViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      refsMode: "aria",
+      maxChars: first.length + 2 + marker.length,
+    });
+
+    expect(result.snapshot).toBe(`${first}\n\n${marker}`);
+    expect(result.refs).toEqual({ e1: { role: "button", name: "Visible" } });
+    expect(result.stats.refs).toBe(1);
+    expect(storeRoleRefsForTarget).toHaveBeenLastCalledWith(
+      expect.objectContaining({ refs: { e1: { role: "button", name: "Visible" } } }),
+    );
   });
 
   it("uses the default navigation timeout for non-finite timeouts", async () => {

@@ -134,11 +134,3 @@ export function getActiveManagedProxyUrl(): ActiveManagedProxyUrl | undefined {
 export function getActiveManagedProxyTlsOptions(): ManagedProxyTlsOptions | undefined {
   return activeProxyTlsOptions;
 }
-
-/** Clears process-local proxy state for tests that share a worker process. */
-export function resetActiveManagedProxyStateForTests(): void {
-  activeProxyUrl = undefined;
-  activeProxyLoopbackMode = undefined;
-  activeProxyTlsOptions = undefined;
-  activeProxyRegistrationCount = 0;
-}

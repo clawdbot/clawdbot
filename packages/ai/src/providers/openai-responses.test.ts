@@ -2,12 +2,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
 
-const openAiMockState = vi.hoisted(() => ({ configs: [] as unknown[] }));
+const openAiMockState = vi.hoisted(() => ({
+  configs: [] as unknown[],
+  params: [] as unknown[],
+  requestOptions: [] as unknown[],
+}));
 
 vi.mock("openai", () => ({
   default: class MockOpenAI {
     responses = {
-      create: vi.fn(() => {
+      create: vi.fn((params: unknown, requestOptions: unknown) => {
+        openAiMockState.params.push(params);
+        openAiMockState.requestOptions.push(requestOptions);
         throw new Error("stop after constructor");
       }),
     };
@@ -43,6 +49,8 @@ function model(overrides: Partial<Model<"openai-responses">> = {}) {
 describe("OpenAI Responses provider", () => {
   afterEach(() => {
     openAiMockState.configs = [];
+    openAiMockState.params = [];
+    openAiMockState.requestOptions = [];
     configureAiTransportHost({});
   });
 
@@ -69,7 +77,7 @@ describe("OpenAI Responses provider", () => {
         baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/openai",
       }),
       context,
-      { apiKey: "oc-sent-v1-0123456789abcdef01234567" },
+      { apiKey: "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end" },
     ).result();
 
     const config = openAiMockState.configs[0] as {
@@ -77,10 +85,21 @@ describe("OpenAI Responses provider", () => {
       defaultHeaders?: Record<string, string | null>;
       fetch?: unknown;
     };
-    expect(config.apiKey).toBe("oc-sent-v1-0123456789abcdef01234567");
+    expect(config.apiKey).toBe("oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end");
     expect(config.defaultHeaders?.["cf-aig-authorization"]).toBe(
-      "Bearer oc-sent-v1-0123456789abcdef01234567",
+      "Bearer oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end",
     );
     expect(config.fetch).toBe(hostFetch);
+  });
+
+  it("clamps small output limits and disables implicit SDK retries", async () => {
+    const result = await streamOpenAIResponses(model(), context, {
+      apiKey: String(1),
+      maxTokens: 1,
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(openAiMockState.params[0]).toMatchObject({ max_output_tokens: 16, store: false });
+    expect(openAiMockState.requestOptions[0]).toMatchObject({ maxRetries: 0 });
   });
 });

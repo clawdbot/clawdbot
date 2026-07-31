@@ -1,4 +1,5 @@
 // Telegram plugin module implements account throttler behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { apiThrottler } from "./bot.runtime.js";
 
@@ -71,7 +72,10 @@ class GroupFairQueue {
   private takeNext(): QueuedApiRequest<unknown> | undefined {
     for (let remaining = this.laneOrder.length; remaining > 0; remaining -= 1) {
       this.nextLaneIndex %= this.laneOrder.length;
-      const laneKey = this.laneOrder[this.nextLaneIndex];
+      const laneKey = expectDefined(
+        this.laneOrder[this.nextLaneIndex],
+        "non-empty Telegram throttle lane order",
+      );
       const queue = this.lanes.get(laneKey);
       if (!queue || queue.length === 0) {
         this.lanes.delete(laneKey);
@@ -91,7 +95,20 @@ class GroupFairQueue {
   }
 }
 
-const throttlerByToken = new Map<string, ApiThrottlerTransformer>();
+const TELEGRAM_ACCOUNT_THROTTLERS_KEY = Symbol.for("openclaw.telegram.accountThrottlers");
+
+function getAccountThrottlers(): Map<string, ApiThrottlerTransformer> {
+  const globalRecord = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalRecord[TELEGRAM_ACCOUNT_THROTTLERS_KEY] as
+    | Map<string, ApiThrottlerTransformer>
+    | undefined;
+  if (existing) {
+    return existing;
+  }
+  const created = new Map<string, ApiThrottlerTransformer>();
+  globalRecord[TELEGRAM_ACCOUNT_THROTTLERS_KEY] = created;
+  return created;
+}
 
 function readNumericId(value: unknown): number | undefined {
   return parseStrictInteger(value);
@@ -122,7 +139,7 @@ function resolveForumLaneKey(payload: TelegramApiPayload): string {
   return "main";
 }
 
-export function createTelegramAccountThrottler(
+function createTelegramAccountThrottler(
   createThrottler: () => ApiThrottlerTransformer = apiThrottler,
 ): ApiThrottlerTransformer {
   const baseThrottler = createThrottler();
@@ -150,14 +167,11 @@ export function getOrCreateAccountThrottler(
   token: string,
   createThrottler: () => ApiThrottlerTransformer = apiThrottler,
 ): ApiThrottlerTransformer {
+  const throttlerByToken = getAccountThrottlers();
   let throttler = throttlerByToken.get(token);
   if (!throttler) {
     throttler = createTelegramAccountThrottler(createThrottler);
     throttlerByToken.set(token, throttler);
   }
   return throttler;
-}
-
-export function clearAccountThrottlersForTest(): void {
-  throttlerByToken.clear();
 }

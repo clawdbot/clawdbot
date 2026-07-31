@@ -49,7 +49,7 @@ function resolveRawHomeDir(
   const explicitHome = normalize(env.OPENCLAW_HOME);
   if (explicitHome) {
     const fallbackHome = resolveRawOsHomeDir(env, homedir);
-    return fallbackHome ? explicitHome.replace(/^~(?=$|[\\/])/, fallbackHome) : explicitHome;
+    return fallbackHome ? explicitHome.replace(/^~(?=$|[\\/])/, () => fallbackHome) : explicitHome;
   }
   return resolveRawOsHomeDir(env, homedir);
 }
@@ -89,12 +89,12 @@ function replaceHomePath(input: string, display: { home: string; prefix: string 
     const after = input[homeEnd];
     const startsToken = before === undefined || /[\s("'`:=[{,]/u.test(before);
     let punctuationEnd = homeEnd;
-    while (punctuationEnd < input.length && /[)"'`:,;.\]}]/u.test(input[punctuationEnd])) {
+    while (punctuationEnd < input.length && /[)"'`:,;.\]}]/u.test(input.charAt(punctuationEnd))) {
       punctuationEnd += 1;
     }
     const punctuationEndsToken =
       punctuationEnd > homeEnd &&
-      (punctuationEnd === input.length || /\s/u.test(input[punctuationEnd]));
+      (punctuationEnd === input.length || /\s/u.test(input.charAt(punctuationEnd)));
     const endsTokenOrContinuesPath =
       after === undefined || after === "/" || after === "\\" || punctuationEndsToken;
     if (startsToken && endsTokenOrContinuesPath) {

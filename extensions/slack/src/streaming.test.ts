@@ -3,8 +3,6 @@ import { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   appendSlackStream,
-  extractSlackErrorCode,
-  isBenignSlackFinalizeError,
   markSlackStreamFallbackDelivered,
   SlackStreamNotDeliveredError,
   startSlackStream,
@@ -415,50 +413,5 @@ describe("stopSlackStream finalize error handling", () => {
       ts: "1700000000.500300",
       chunks: [],
     });
-  });
-});
-
-describe("error classification", () => {
-  it("isBenignSlackFinalizeError matches each allowlisted code", () => {
-    for (const code of [
-      "user_not_found",
-      "team_not_found",
-      "missing_recipient_user_id",
-      "method_not_supported_for_channel_type",
-    ]) {
-      expect(isBenignSlackFinalizeError(slackApiError(code))).toBe(true);
-    }
-  });
-
-  it("isBenignSlackFinalizeError rejects non-listed codes", () => {
-    for (const code of [
-      "not_authed",
-      "ratelimited",
-      "channel_not_found",
-      "internal_error",
-      "fatal_error",
-    ]) {
-      expect(isBenignSlackFinalizeError(slackApiError(code))).toBe(false);
-    }
-  });
-
-  it("extractSlackErrorCode handles data.error, message fallback, and junk shapes", () => {
-    // Canonical SDK shape
-    expect(extractSlackErrorCode(slackApiError("user_not_found"))).toBe("user_not_found");
-    // message-regex fallback when data is absent
-    expect(extractSlackErrorCode(new Error("An API error occurred: rate_limited"))).toBe(
-      "rate_limited",
-    );
-    // data.error not a string - falls through to message parse
-    const wrongShape = new Error("plain message");
-    (wrongShape as unknown as { data: unknown }).data = { error: 42 };
-    expect(extractSlackErrorCode(wrongShape)).toBeUndefined();
-    // data.error null - falls through
-    (wrongShape as unknown as { data: unknown }).data = null;
-    expect(extractSlackErrorCode(wrongShape)).toBeUndefined();
-    // Non-object error
-    expect(extractSlackErrorCode("raw string")).toBeUndefined();
-    expect(extractSlackErrorCode(null)).toBeUndefined();
-    expect(extractSlackErrorCode(undefined)).toBeUndefined();
   });
 });

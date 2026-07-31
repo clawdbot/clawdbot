@@ -81,19 +81,14 @@ export function expectDashscopeVideoTaskPoll(
   params: {
     baseUrl?: string;
     taskId?: string;
-    timeoutMs?: number;
   } = {},
 ): void {
-  const {
-    baseUrl = "https://dashscope-intl.aliyuncs.com",
-    taskId = "task-1",
-    timeoutMs = 120_000,
-  } = params;
+  const { baseUrl = "https://dashscope-intl.aliyuncs.com", taskId = "task-1" } = params;
   expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
     1,
     `${baseUrl}/api/v1/tasks/${taskId}`,
     expect.objectContaining({ method: "GET" }),
-    timeoutMs,
+    expect.any(Number),
     fetch,
   );
 }

@@ -7,7 +7,7 @@ import { die, run } from "./host-command.ts";
 import type { Mode, Platform, Provider, ProviderAuth } from "./types.ts";
 
 type ResolveLatestVersionDeps = {
-  createTempDir?: typeof mkdtempSync;
+  createTempDir?: (prefix: string) => string;
   removeDir?: typeof rmSync;
   runCommand?: typeof run;
   tempDir?: typeof tmpdir;
@@ -40,6 +40,7 @@ export function resolveProviderAuth(input: {
         input.modelId ||
         process.env.OPENCLAW_PARALLELS_ANTHROPIC_MODEL ||
         "anthropic/claude-sonnet-4-6",
+      tokenProvider: "anthropic",
     },
     minimax: {
       apiKeyEnv: input.apiKeyEnv || "MINIMAX_API_KEY",
@@ -50,9 +51,11 @@ export function resolveProviderAuth(input: {
     },
     openai: {
       apiKeyEnv: input.apiKeyEnv || "OPENAI_API_KEY",
-      authChoice: "openai-api-key",
+      authChoice: "apiKey",
       authKeyFlag: "openai-api-key",
-      modelId: input.modelId || process.env.OPENCLAW_PARALLELS_OPENAI_MODEL || "openai/gpt-5.5",
+      modelId:
+        input.modelId || process.env.OPENCLAW_PARALLELS_OPENAI_MODEL || "openai/gpt-5.6-luna",
+      tokenProvider: "openai",
     },
   };
   const resolved = providerDefaults[input.provider];
@@ -79,7 +82,7 @@ export function resolveWindowsProviderAuth(input: {
   if (process.env.OPENCLAW_PARALLELS_OPENAI_MODEL?.trim()) {
     return auth;
   }
-  return { ...auth, modelId: "openai/gpt-5.5" };
+  return { ...auth, modelId: "openai/gpt-5.6-luna" };
 }
 
 export function providerIdFromModelId(modelId: string): string {

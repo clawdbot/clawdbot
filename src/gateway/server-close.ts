@@ -6,6 +6,7 @@ import type { WebSocketServer } from "ws";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
+import { clearSessionSuspensionTimers } from "../agents/session-suspension.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -42,6 +43,7 @@ const HTTP_CLOSE_GRACE_MS = 1_000;
 const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
 const MCP_RUNTIME_CLOSE_GRACE_MS = 5_000;
 const LSP_RUNTIME_CLOSE_GRACE_MS = 5_000;
+const EMBEDDING_PROVIDER_CLOSE_GRACE_MS = 5_000;
 const RESTART_REPLY_DRAIN_POLL_MS = 100;
 const RESTART_REPLY_POST_ABORT_DRAIN_TIMEOUT_MS = 1_000;
 const RESTART_REPLY_POST_ABORT_DRAIN_POLL_MS = 50;
@@ -428,7 +430,7 @@ function abortActiveRunsForRestart(params: RestartRunAbortParams): number {
       entry.abortStopReason = "restart";
       entry.controller.abort(createAgentRunRestartAbortError());
       removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
-      params.chatRunState.abortedRuns.set(runId, createChatAbortMarker());
+      params.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker();
       params.chatRunState.clearRun(runId);
       const removed = params.removeChatRun(runId, runId, entry.sessionKey);
       params.agentRunSeq.delete(runId);
@@ -438,14 +440,11 @@ function abortActiveRunsForRestart(params: RestartRunAbortParams): number {
       aborted += 1;
       continue;
     }
-    const result = abortTrackedChatRunById(
-      { ...params, chatRunBuffers: params.chatRunState.buffers },
-      {
-        runId,
-        sessionKey: entry.sessionKey,
-        stopReason: "restart",
-      },
-    );
+    const result = abortTrackedChatRunById(params, {
+      runId,
+      sessionKey: entry.sessionKey,
+      stopReason: "restart",
+    });
     if (result.aborted) {
       aborted += 1;
     }
@@ -576,7 +575,7 @@ async function triggerGatewayLifecycleHookWithTimeout(params: {
 }
 
 async function disposeRuntimeWithShutdownGrace(params: {
-  label: "bundle-mcp" | "bundle-lsp";
+  label: "plugin-services" | "bundle-mcp" | "bundle-lsp" | "embedding-providers";
   dispose: () => Promise<void>;
   graceMs: number;
   warnings: string[];
@@ -602,6 +601,11 @@ async function disposeAllBundleLspRuntimesOnDemand(): Promise<void> {
   await disposeAllBundleLspRuntimes();
 }
 
+async function drainRetainedEmbeddingProvidersOnDemand(): Promise<void> {
+  const { drainRetainedOpenAiEmbeddingProviders } = await import("./embeddings-http.js");
+  await drainRetainedOpenAiEmbeddingProviders();
+}
+
 async function stopGmailWatcherOnDemand(): Promise<void> {
   const { stopGmailWatcher } = await import("../hooks/gmail-watcher.js");
   await stopGmailWatcher();
@@ -613,10 +617,8 @@ export async function runGatewayClosePrelude(params: {
   skillsChangeUnsub?: () => void;
   disposeAuthRateLimiter?: () => void;
   disposeBrowserAuthRateLimiter: () => void;
-  stopModelPricingRefresh?: () => void;
-  stopChannelHealthMonitor?: () => void;
+  stopChannelHealthMonitor?: () => Promise<void>;
   stopReadinessEventLoopHealth?: () => void;
-  clearSecretsRuntimeSnapshot?: () => void;
   closeMcpServer?: () => Promise<void>;
 }): Promise<void> {
   params.stopDiagnostics?.();
@@ -624,10 +626,8 @@ export async function runGatewayClosePrelude(params: {
   params.skillsChangeUnsub?.();
   params.disposeAuthRateLimiter?.();
   params.disposeBrowserAuthRateLimiter();
-  params.stopModelPricingRefresh?.();
-  params.stopChannelHealthMonitor?.();
+  await params.stopChannelHealthMonitor?.();
   params.stopReadinessEventLoopHealth?.();
-  params.clearSecretsRuntimeSnapshot?.();
   await params.closeMcpServer?.().catch(() => {});
 }
 
@@ -672,13 +672,14 @@ export function createGatewayCloseHandler(
     bonjourStop: (() => Promise<void>) | null;
     tailscaleCleanup: (() => Promise<void>) | null;
     releasePluginRouteRegistry?: (() => void) | null;
+    clearSecretsRuntimeSnapshot?: (() => void) | null;
     channelIds?: readonly ChannelId[];
     stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
     pluginServices: PluginServicesHandle | null;
     postReadySidecars?: readonly GatewayPostReadySidecarHandle[];
     disposeSessionMcpRuntimes?: () => Promise<void>;
     disposeBundleLspRuntimes?: () => Promise<void>;
-    cron: { stop: () => void };
+    cron: { stop: () => void; stopAndDrain?: () => Promise<void> };
     heartbeatRunner: HeartbeatRunner;
     updateCheckStop?: (() => void) | null;
     stopTaskRegistryMaintenance?: (() => Promise<void> | void) | null;
@@ -695,7 +696,10 @@ export function createGatewayCloseHandler(
     lifecycleUnsub: (() => void) | null;
     taskUnsub: (() => void) | null;
     getPendingReplyCount?: () => number;
-    clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
+    clients: Set<{
+      connectionKind?: "gateway" | "worker";
+      socket: { close: (code: number, reason: string) => void };
+    }>;
     configReloader: { stop: () => Promise<void> };
     wss: WebSocketServer;
     httpServer: HttpServer;
@@ -722,8 +726,16 @@ export function createGatewayCloseHandler(
     const measureCloseStep = <T>(name: string, run: () => Promise<T> | T) =>
       measureGatewayRestartTrace(`restart.close.${name}`, run, [["reason", reason]]);
     try {
-      shutdownLog.info(`shutdown started: ${reason}`);
+      // Fence lane auto-resume timers before the first awaited shutdown step;
+      // later teardown can stall long enough for a TTL callback to mutate queues.
+      clearSessionSuspensionTimers();
+      // Debug-level: the signal handler already announced the stop/restart at
+      // info, and the completion line below reports duration and outcome.
+      shutdownLog.debug(`shutdown started: ${reason}`);
 
+      await measureCloseStep("config-reloader", () =>
+        shutdownStep("config-reloader", () => params.configReloader.stop(), warnings),
+      );
       await measureCloseStep("gateway-shutdown-hook", () =>
         shutdownStep(
           "gateway:shutdown",
@@ -841,7 +853,13 @@ export function createGatewayCloseHandler(
       }
       if (params.pluginServices) {
         await measureCloseStep("plugin-services", () =>
-          shutdownStep("plugin-services", () => params.pluginServices!.stop(), warnings),
+          // A stalled plugin must not prevent later runtime and child-process cleanup.
+          disposeRuntimeWithShutdownGrace({
+            label: "plugin-services",
+            dispose: () => params.pluginServices!.stop(),
+            graceMs: MCP_RUNTIME_CLOSE_GRACE_MS,
+            warnings,
+          }),
         );
       }
       await measureCloseStep("channels", async () => {
@@ -850,6 +868,16 @@ export function createGatewayCloseHandler(
           await shutdownStep(`channel/${channelId}`, () => params.stopChannel(channelId), warnings);
         }
       });
+      // Load the bridge only at shutdown; eager imports boot the subagent registry at startup.
+      // Cancel parked calls before their agent harnesses and MCP transports disappear.
+      await shutdownStep(
+        "code-mode-runs",
+        async () => {
+          const { disposeAllCodeModeRuns } = await import("../agents/code-mode-state.js");
+          return disposeAllCodeModeRuns();
+        },
+        warnings,
+      );
       await shutdownStep("agent-harnesses", () => disposeRegisteredAgentHarnesses(), warnings);
       await measureCloseStep("bundle-runtimes", async () => {
         await Promise.all([
@@ -868,14 +896,15 @@ export function createGatewayCloseHandler(
         ]);
       });
       await shutdownStep("plugin-state-store", () => closePluginStateDatabase(), warnings);
-      await measureCloseStep("config-reloader", () =>
-        shutdownStep("config-reloader", () => params.configReloader.stop(), warnings),
-      );
       await measureCloseStep("gmail-watcher", () =>
         shutdownStep("gmail-watcher", () => stopGmailWatcherOnDemand(), warnings),
       );
-      params.cron.stop();
-      params.heartbeatRunner.stop();
+      await shutdownStep(
+        "cron",
+        () => (params.cron.stopAndDrain ? params.cron.stopAndDrain() : params.cron.stop()),
+        warnings,
+      );
+      await shutdownStep("heartbeat-runner", () => params.heartbeatRunner.stop(), warnings);
       await shutdownStep(
         "task-registry-maintenance",
         () => params.stopTaskRegistryMaintenance?.(),
@@ -919,7 +948,10 @@ export function createGatewayCloseHandler(
       let clientCloseFailures = 0;
       for (const c of params.clients) {
         try {
-          c.socket.close(1012, "service restart");
+          c.socket.close(
+            1012,
+            c.connectionKind === "worker" ? "gateway-shutdown" : "service restart",
+          );
         } catch {
           clientCloseFailures++;
         }
@@ -1014,9 +1046,22 @@ export function createGatewayCloseHandler(
           }
         }
       });
+      await disposeRuntimeWithShutdownGrace({
+        label: "embedding-providers",
+        dispose: drainRetainedEmbeddingProvidersOnDemand,
+        graceMs: EMBEDDING_PROVIDER_CLOSE_GRACE_MS,
+        warnings,
+      });
     } finally {
       try {
         params.releasePluginRouteRegistry?.();
+      } catch {
+        /* ignore */
+      }
+      // Channel and plugin teardown still resolve account credentials. Keep the
+      // active snapshot until every teardown owner is done, then always scrub it.
+      try {
+        params.clearSecretsRuntimeSnapshot?.();
       } catch {
         /* ignore */
       }
@@ -1039,3 +1084,4 @@ export function createGatewayCloseHandler(
     return { durationMs, warnings };
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

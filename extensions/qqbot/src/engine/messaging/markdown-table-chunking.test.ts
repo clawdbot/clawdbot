@@ -1,16 +1,199 @@
 // QQ Bot Markdown chunking tests cover message-boundary table repair.
 import { describe, expect, it } from "vitest";
-import {
-  chunkQQBotMarkdownText,
-  createQQBotMarkdownChunker,
-  testing,
-  type QQBotBaseMarkdownChunker,
-} from "./markdown-table-chunking.js";
+import { chunkQQBotMarkdownText, createQQBotMarkdownChunker } from "./markdown-table-chunking.js";
 
-const baseChunker: QQBotBaseMarkdownChunker = (text, limit) =>
+const baseChunker = (text: string, limit: number): string[] =>
   text.length <= limit ? [text] : [text.slice(0, limit), text.slice(limit)];
 
 describe("chunkQQBotMarkdownText", () => {
+  it("falls unsupported inline code back to plain text", () => {
+    expect(chunkQQBotMarkdownText("Run `openclaw status` now.", 120, baseChunker)).toEqual([
+      "Run openclaw status now.",
+    ]);
+  });
+
+  it("preserves transport-owned markdown images beside fallback code", () => {
+    const image = "![chart #800px #600px](https://example.com/chart.png)";
+    expect(chunkQQBotMarkdownText(`Run \`status\`.\n\n${image}`, 200, baseChunker)).toEqual([
+      `Run status.\n\n${image}`,
+    ]);
+  });
+
+  it("preserves transport-owned image URLs with balanced parentheses", () => {
+    const image = "![plot](https://example.com/chart_(final).png)";
+    expect(chunkQQBotMarkdownText(`Run \`status\`.\n\n${image}`, 200, baseChunker)).toEqual([
+      `Run status.\n\n${image}`,
+    ]);
+  });
+
+  it("preserves images containing nested opener text", () => {
+    const image = "![plot](https://example.com/a![b].png)";
+    expect(chunkQQBotMarkdownText(image, 200, baseChunker)).toEqual([image]);
+  });
+
+  it("keeps BMP protected image tokens atomic at the chunk boundary", () => {
+    const image = "![x](https://example.com/x.png)";
+    const output = chunkQQBotMarkdownText(`${"A".repeat(3_597)}${image}`, 3_600, baseChunker);
+    expect(output.join("")).toBe(`${"A".repeat(3_597)}${image}`);
+    expect(output.every((chunk) => !chunk.includes("�"))).toBe(true);
+  });
+
+  it("keeps escaped images atomic at the chunk boundary", () => {
+    const image = String.raw`\![x](https://example.com/x.png)`;
+    const chunks = chunkQQBotMarkdownText(`${"A".repeat(3_599)}${image}`, 3_600, baseChunker);
+    expect(chunks.join("")).toBe(`${"A".repeat(3_599)}${image}`);
+    expect(chunks.some((chunk) => chunk.startsWith("!["))).toBe(false);
+  });
+
+  it("falls protected images back when final quote context exceeds the limit", () => {
+    const image = `![x](https://example.com/${"a".repeat(3_400)}.png)`;
+    const chunks = chunkQQBotMarkdownText(`${"> ".repeat(40)}${image}`, 3_600, baseChunker);
+    expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 3_600)).toBe(true);
+    expect(chunks.join("")).toContain("![x]");
+  });
+
+  it("does not hide later code behind malformed images", () => {
+    const output = chunkQQBotMarkdownText("![x](bad\n\n`code`\n)", 200, baseChunker).join("");
+    expect(output).toContain("code");
+    expect(output).not.toContain("`code`");
+  });
+
+  it("does not let nested images complete malformed outer candidates", () => {
+    const output = chunkQQBotMarkdownText(
+      "![broken `code` ![x](https://e.test/x.png)",
+      200,
+      baseChunker,
+    ).join("");
+    expect(output).not.toContain("`code`");
+    expect(output).toContain("![x](https://e.test/x.png)");
+  });
+
+  it("continues image protection after many malformed candidates", () => {
+    const image = "![plot](https://example.com/chart.png)";
+    const chunks = chunkQQBotMarkdownText(`${"![".repeat(81)}${image}`, 500, baseChunker);
+    expect(chunks.join("")).toContain(image);
+  });
+
+  it("does not restore forged protected tokens decoded from character references", () => {
+    const image = "![x](https://example.com/x.png)";
+    const output = chunkQQBotMarkdownText(`&#xF0000; ${image}`, 200, baseChunker).join("");
+    expect(output.startsWith("&#xF0000; ")).toBe(true);
+    expect(output.match(/!\[x\]/gu)).toHaveLength(1);
+  });
+
+  it("preserves entity-encoded markdown literals", () => {
+    const source = "&#42;&#42;literal&#42;&#42;";
+    expect(chunkQQBotMarkdownText(source, 200, baseChunker)).toEqual([source]);
+  });
+
+  it("restores entities nested inside protected images", () => {
+    const image = "![x](https://e.test/a?x=1&amp;y=2)";
+    expect(chunkQQBotMarkdownText(image, 200, baseChunker)).toEqual([image]);
+  });
+
+  it("keeps oversized entities chunkable", () => {
+    const source = `&#${"1".repeat(300)};`;
+    const chunks = chunkQQBotMarkdownText(source, 100, baseChunker);
+    expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 100)).toBe(true);
+  });
+
+  it("falls oversized images back to chunkable plain content", () => {
+    const image = `![x](https://example.com/${"a".repeat(4_000)}.png)`;
+    const chunks = chunkQQBotMarkdownText(image, 3_600, baseChunker);
+    expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 3_600)).toBe(true);
+    expect(chunks.join("")).toBe("x");
+  });
+
+  it("falls oversized links back to chunkable plain content", () => {
+    const href = `https://example.com/${"a".repeat(4_000)}`;
+    const escapedHref = href.replaceAll(".", "\\.");
+    const chunks = chunkQQBotMarkdownText(`[x](${href})`, 3_600, baseChunker);
+    expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 3_600)).toBe(true);
+    expect(chunks.join("")).toBe(`x (${escapedHref})`);
+  });
+
+  it("removes only the oversized occurrence when link destinations repeat", () => {
+    const href = `https://e.co/${"a".repeat(3_575)}`;
+    const escapedHref = href.replaceAll(".", "\\.");
+    const source = `[x](${href})\n[${"long".repeat(8)}](${href})`;
+    const output = chunkQQBotMarkdownText(source, 3_600, baseChunker).join("");
+    expect(output).toContain(`[x](<${href}>)`);
+    expect(output).toContain(`${"long".repeat(8)} (${escapedHref})`);
+  });
+
+  it("supports more authored escapes than the BMP private-use block", () => {
+    const source = "\\*".repeat(6_401);
+    expect(chunkQQBotMarkdownText(source, 3_600, baseChunker).join("")).toBe(source);
+  });
+
+  it("escapes markdown-looking inline code after removing code markers", () => {
+    expect(chunkQQBotMarkdownText("`![x](https://example.com/x.png)`", 200, baseChunker)).toEqual([
+      String.raw`\!\[x\]\(https://example\.com/x\.png\)`,
+    ]);
+  });
+
+  it("matches equal-length inline delimiters around shorter backtick runs", () => {
+    expect(
+      chunkQQBotMarkdownText("``a `![x](https://example.com/x.png)` b``", 200, baseChunker),
+    ).toEqual([String.raw`a \`\!\[x\]\(https://example\.com/x\.png\)\` b`]);
+  });
+
+  it("preserves escaped literal backticks", () => {
+    expect(chunkQQBotMarkdownText(String.raw`\`literal\``, 200, baseChunker)).toEqual([
+      String.raw`\`literal\``,
+    ]);
+  });
+
+  it("re-escapes protected backslashes inside fallback code", () => {
+    expect(chunkQQBotMarkdownText("`\\*`", 200, baseChunker)).toEqual([String.raw`\\\*`]);
+  });
+
+  it("serializes link destinations with angle brackets", () => {
+    expect(chunkQQBotMarkdownText("[x](https://host/a)", 200, baseChunker)).toEqual([
+      "[x](<https://host/a>)",
+    ]);
+  });
+
+  it("keeps every paragraph inside a blockquote", () => {
+    expect(chunkQQBotMarkdownText("> one\n>\n> two", 200, baseChunker)).toEqual([
+      "> one\n> \n> two",
+    ]);
+  });
+
+  it("stops blockquote prefixes before following text", () => {
+    expect(chunkQQBotMarkdownText("> quoted\n\noutside", 200, baseChunker)).toEqual([
+      "> quoted\n\noutside",
+    ]);
+  });
+
+  it("prefixes every chunk of a long blockquote", () => {
+    const chunks = chunkQQBotMarkdownText(`> ${"a".repeat(5_000)}`, 200, baseChunker);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.startsWith("> "))).toBe(true);
+  });
+
+  it("does not duplicate blockquote prefixes at continuation boundaries", () => {
+    const chunks = chunkQQBotMarkdownText(`> ${"a".repeat(3_597)}\n> second`, 3_600, baseChunker);
+    expect(chunks.some((chunk) => chunk.startsWith("> > "))).toBe(false);
+    expect(chunks.join("")).toContain("> second");
+  });
+
+  it("keeps fallback code lines inside a blockquote", () => {
+    expect(chunkQQBotMarkdownText("> ```\n> one\n> two\n> ```", 200, baseChunker)).toEqual([
+      "> one\n> two",
+    ]);
+  });
+
+  it("does not linkify plain filenames", () => {
+    expect(chunkQQBotMarkdownText("See README.md", 200, baseChunker)).toEqual(["See README.md"]);
+  });
+
+  it("keeps nested list indentation out of code fallback", () => {
+    expect(chunkQQBotMarkdownText("- parent\n    - child", 200, baseChunker)).toEqual([
+      "• parent\n  • child",
+    ]);
+  });
+
   it("prefixes continuation chunks with the active table header", () => {
     const text = [
       "| Id | Value |",
@@ -92,6 +275,16 @@ describe("chunkQQBotMarkdownText", () => {
     );
   });
 
+  it("keeps escaped pipes inside oversized table cells", () => {
+    const value = "long value ".repeat(12);
+    const text = ["| Label | Value |", "|---|---|", `| a \\| b | ${value} |`].join("\n");
+
+    const chunks = chunkQQBotMarkdownText(text, 80, baseChunker);
+
+    expect(chunks.join("\n")).toContain("Label: a | b");
+    expect(chunks.join("\n")).toContain("Value: long value");
+  });
+
   it("buffers a table row fragment across streaming block flushes", () => {
     const chunker = createQQBotMarkdownChunker((text) => [text]);
 
@@ -157,12 +350,39 @@ describe("chunkQQBotMarkdownText", () => {
     expect(chunker.flushPendingText(160)).toEqual(["5 reportbuilder.ts generatemonthly_sales"]);
   });
 
-  it("keeps fenced code blocks self-contained across streaming block flushes", () => {
+  it("falls fenced code blocks back to plain text across streaming block flushes", () => {
     const chunker = createQQBotMarkdownChunker((text) => [text]);
 
     expect(chunker.chunkText(["```ts", "const a = 1;"].join("\n"), 200)).toEqual([]);
     expect(chunker.chunkText(["const b = 2;", "```"].join("\n"), 200)).toEqual([
-      ["```ts", "const a = 1;", "const b = 2;", "```"].join("\n"),
+      ["const a = 1;", "const b = 2;"].join("\n"),
+    ]);
+  });
+
+  it("keeps streamed template-literal backticks as escaped plain text", () => {
+    const chunker = createQQBotMarkdownChunker((text) => [text]);
+
+    expect(chunker.chunkText(["```ts", "const value = `hello`;"].join("\n"), 200)).toEqual([]);
+    expect(chunker.chunkText("```", 200)).toEqual([String.raw`const value = \`hello\`;`]);
+  });
+
+  it("keeps markdown-looking streamed fence bodies in code fallback", () => {
+    const chunker = createQQBotMarkdownChunker((text) => [text]);
+    expect(chunker.chunkText(["```", "**literal**"].join("\n"), 200)).toEqual([]);
+    expect(chunker.chunkText("```", 200)).toEqual([String.raw`\*\*literal\*\*`]);
+  });
+
+  it("handles longer fences containing shorter fence examples", () => {
+    const markdown = ["````md", "```", "inside", "```", "````   "].join("\n");
+    expect(chunkQQBotMarkdownText(markdown, 200, baseChunker)).toEqual([
+      [String.raw`\`\`\``, "inside", String.raw`\`\`\``].join("\n"),
+    ]);
+  });
+
+  it("escapes markdown-looking indented code after fallback", () => {
+    const markdown = ["    **literal**", "    ![x](https://example.com/x.png)"].join("\n");
+    expect(chunkQQBotMarkdownText(markdown, 200, baseChunker)).toEqual([
+      [String.raw`\*\*literal\*\*`, String.raw`\!\[x\]\(https://example\.com/x\.png\)`].join("\n"),
     ]);
   });
 
@@ -175,13 +395,14 @@ describe("chunkQQBotMarkdownText", () => {
     expect(
       chunker.chunkText(["0", "    def get_dsn(self) -> str:", "```"].join("\n"), 200),
     ).toEqual([
-      ["```python", "    pool_timeout: float = 30.0", "    def get_dsn(self) -> str:", "```"].join(
-        "\n",
-      ),
+      [
+        String.raw`    pool\_timeout: float = 30\.0`,
+        String.raw`    def get\_dsn\(self\) \-\> str:`,
+      ].join("\n"),
     ]);
   });
 
-  it("keeps long fenced chunks under the QQ markdown byte safety limit", () => {
+  it("keeps long fallback code chunks under the QQ markdown byte safety limit", () => {
     const lines = Array.from(
       { length: 90 },
       (_, index) =>
@@ -193,9 +414,24 @@ describe("chunkQQBotMarkdownText", () => {
     expect(chunks.length).toBeGreaterThan(1);
     for (const chunk of chunks) {
       expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(3600);
-      expect(chunk.startsWith("```python\n")).toBe(true);
-      expect(chunk.endsWith("\n```")).toBe(true);
+      expect(chunk).not.toContain("```");
     }
+  });
+
+  it("does not split generated markdown escape pairs across byte chunks", () => {
+    const chunks = chunkQQBotMarkdownText(
+      ["```", "*".repeat(5_000), "```"].join("\n"),
+      3_600,
+      baseChunker,
+    );
+    expect(chunks.join("")).toBe("\\*".repeat(5_000));
+    expect(chunks.every((chunk) => !/(^|[^\\])(?:\\\\)*\\$/u.test(chunk))).toBe(true);
+  });
+
+  it("keeps generated markdown escape pairs atomic at odd byte limits", () => {
+    const chunks = chunkQQBotMarkdownText(["```", "***", "```"].join("\n"), 3, baseChunker);
+    expect(chunks.join("")).toBe("\\*".repeat(3));
+    expect(chunks.every((chunk) => !chunk.endsWith("\\"))).toBe(true);
   });
 
   it("allows ASCII fenced chunks past the old 1800 character fallback", () => {
@@ -209,17 +445,16 @@ describe("chunkQQBotMarkdownText", () => {
     expect(chunks.some((chunk) => chunk.length > 1800)).toBe(true);
     for (const chunk of chunks) {
       expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(3600);
-      expect(chunk.startsWith("```python\n")).toBe(true);
-      expect(chunk.endsWith("\n```")).toBe(true);
+      expect(chunk).not.toContain("```");
     }
   });
 
-  it("keeps fenced formula blocks self-contained across streaming block flushes", () => {
+  it("falls fenced formula blocks back to plain text across streaming block flushes", () => {
     const chunker = createQQBotMarkdownChunker((text) => [text]);
 
     expect(chunker.chunkText(["```math", "E = mc^2"].join("\n"), 200)).toEqual([]);
     expect(chunker.chunkText(["a^2 + b^2 = c^2", "```"].join("\n"), 200)).toEqual([
-      ["```math", "E = mc^2", "a^2 + b^2 = c^2", "```"].join("\n"),
+      ["E = mc^2", String.raw`a^2 \+ b^2 = c^2`].join("\n"),
     ]);
   });
 
@@ -236,10 +471,7 @@ describe("chunkQQBotMarkdownText", () => {
         ...chunker.flushPendingText(limit),
       ];
 
-      expect(chunks).toEqual([
-        ["```ts", firstLine, "```"].join("\n"),
-        ["```ts", secondLine, "```"].join("\n"),
-      ]);
+      expect(chunks).toEqual([firstLine, secondLine]);
     }
   });
 
@@ -264,22 +496,29 @@ describe("chunkQQBotMarkdownText", () => {
 });
 
 describe("table-cell splitting", () => {
-  it("treats a backslash-escaped pipe as literal cell content, not a delimiter", () => {
-    // GFM: `\|` inside a cell is a literal "|", so this row has two cells, not
-    // three. Splitting on every "|" previously mis-counted columns, so the
-    // oversized-row fallback rendered the trailing content under the wrong header.
-    expect(testing.splitTableCells("| a \\| b | c |")).toEqual(["a | b", "c"]);
+  it("preserves a literal backslash before an oversized cell delimiter", () => {
+    const text = [
+      "| First | Second |",
+      "|---|---|",
+      `| a \\\\ | ${"long value ".repeat(12)} |`,
+    ].join("\n");
+
+    const chunks = chunkQQBotMarkdownText(text, 80, baseChunker);
+
+    expect(chunks.join("\n")).toContain("First: a \\");
+    expect(chunks.join("\n")).toContain("Second: long value");
   });
 
-  it("leaves ordinary rows unchanged", () => {
-    expect(testing.splitTableCells("| a | b |")).toEqual(["a", "b"]);
-  });
+  it("unescapes pipes when flushing a partial row in an active table", () => {
+    const chunker = createQQBotMarkdownChunker(baseChunker);
+    expect(
+      chunker.chunkText(
+        ["| First | Second |", "|---|---|", "| ready | complete |"].join("\n"),
+        200,
+      ),
+    ).toEqual([["| First | Second |", "|---|---|", "| ready | complete |"].join("\n")]);
 
-  it("unescapes a literal backslash and still splits on the following pipe", () => {
-    expect(testing.splitTableCells("| a \\\\ | b |")).toEqual(["a \\", "b"]);
-  });
-
-  it("handles escaped pipes in partial (unterminated) rows", () => {
-    expect(testing.splitPartialTableCells("| a \\| b")).toEqual(["a | b"]);
+    expect(chunker.chunkText("| a \\| b | c", 200)).toEqual([]);
+    expect(chunker.flushPendingText(200)).toEqual([["First: a | b", "Second: c"].join("\n")]);
   });
 });

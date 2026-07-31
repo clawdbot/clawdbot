@@ -1,14 +1,17 @@
 // Skill security scanner inspects skill files and manifests for unsafe patterns.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../infra/errors.js";
 import { isPathInside } from "../../security/scan-paths.js";
+import { formatScanEvidence, LITERAL_SECRET_SKILL_CONTENT_RULE } from "./scan-evidence.js";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export type SkillScanSeverity = "info" | "warn" | "critical";
+type SkillScanSeverity = "info" | "warn" | "critical";
 
 export type SkillScanFinding = {
   ruleId: string;
@@ -19,7 +22,7 @@ export type SkillScanFinding = {
   evidence: string;
 };
 
-export type SkillScanSummary = {
+type SkillScanSummary = {
   scannedFiles: number;
   critical: number;
   warn: number;
@@ -56,6 +59,7 @@ const SCANNABLE_EXTENSIONS = new Set([
 
 const DEFAULT_MAX_SCAN_FILES = 500;
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
+const MAX_LINE_RULE_FINDINGS_PER_RULE = 32;
 const FILE_SCAN_CACHE_MAX = 5000;
 const DIR_ENTRY_CACHE_MAX = 5000;
 const TEST_DIRECTORY_NAMES = new Set(["__fixtures__", "__mocks__", "__tests__", "test", "tests"]);
@@ -222,6 +226,7 @@ const SOURCE_RULES: SourceRule[] = [
 ];
 
 const SKILL_CONTENT_RULES: SourceRule[] = [
+  LITERAL_SECRET_SKILL_CONTENT_RULE,
   {
     ruleId: "prompt-injection-ignore-instructions",
     severity: "critical",
@@ -270,13 +275,6 @@ const SKILL_CONTENT_RULES: SourceRule[] = [
 // ---------------------------------------------------------------------------
 // Core scanner
 // ---------------------------------------------------------------------------
-
-function truncateEvidence(evidence: string, maxLen = 120): string {
-  if (evidence.length <= maxLen) {
-    return evidence;
-  }
-  return `${evidence.slice(0, maxLen)}…`;
-}
 
 function isBenignMemberExecMatch(line: string, match: RegExpExecArray): boolean {
   const command = match[1];
@@ -387,7 +385,7 @@ function findSourceRuleMatch(params: {
     return null;
   }
 
-  return { line: 1, evidence: params.source.slice(0, 120) };
+  return { line: 1, evidence: truncateUtf16Safe(params.source, 120) };
 }
 
 export function scanSource(source: string, filePath: string): SkillScanFinding[] {
@@ -395,48 +393,65 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   const lines = source.split("\n");
   const heuristicSource = stripCommentsForHeuristics(source);
   const heuristicLines = heuristicSource.split("\n");
-  const matchedLineRules = new Set<string>();
 
   // --- Line rules ---
   for (const rule of LINE_RULES) {
-    if (matchedLineRules.has(rule.ruleId)) {
-      continue;
-    }
-
     // Skip rule entirely if context requirement not met
     if (rule.requiresContext && !rule.requiresContext.test(source)) {
       continue;
     }
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const match = rule.pattern.exec(line);
-      if (!match) {
-        continue;
-      }
-
-      if (rule.ruleId === "dangerous-exec" && isBenignMemberExecMatch(line, match)) {
-        continue;
-      }
-
-      // Special handling for suspicious-network: check port
-      if (rule.ruleId === "suspicious-network") {
-        const port = Number.parseInt(match[1], 10);
-        if (STANDARD_PORTS.has(port)) {
+    let acceptedMatches = 0;
+    let omittedMatches = 0;
+    let lastOmittedLine: number | undefined;
+    for (const [i, line] of lines.entries()) {
+      const matches = line.matchAll(
+        new RegExp(
+          rule.pattern.source,
+          rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`,
+        ),
+      );
+      for (const match of matches) {
+        if (rule.ruleId === "dangerous-exec" && isBenignMemberExecMatch(line, match)) {
           continue;
         }
-      }
 
+        // Special handling for suspicious-network: check port
+        if (rule.ruleId === "suspicious-network") {
+          const port = Number.parseInt(expectDefined(match[1], "scanner regex capture 1"), 10);
+          if (STANDARD_PORTS.has(port)) {
+            continue;
+          }
+        }
+
+        if (acceptedMatches >= MAX_LINE_RULE_FINDINGS_PER_RULE) {
+          omittedMatches += 1;
+          lastOmittedLine = i + 1;
+          continue;
+        }
+
+        // Retain distinct calls up to the cap, then aggregate every remaining match.
+        // This keeps hostile output bounded without hiding that later sites exist.
+        findings.push({
+          ruleId: rule.ruleId,
+          severity: rule.severity,
+          file: filePath,
+          line: i + 1,
+          message: rule.message,
+          evidence: formatScanEvidence(line),
+        });
+        acceptedMatches += 1;
+      }
+    }
+    if (lastOmittedLine !== undefined) {
       findings.push({
-        ruleId: rule.ruleId,
+        ruleId: `${rule.ruleId}-truncated`,
         severity: rule.severity,
         file: filePath,
-        line: i + 1,
-        message: rule.message,
-        evidence: truncateEvidence(line.trim()),
+        line: lastOmittedLine,
+        message: `${omittedMatches} additional ${rule.ruleId} matches omitted after ${MAX_LINE_RULE_FINDINGS_PER_RULE} findings`,
+        evidence: `[${omittedMatches} additional matches omitted after ${MAX_LINE_RULE_FINDINGS_PER_RULE} findings]`,
       });
-      matchedLineRules.add(rule.ruleId);
-      break; // one finding per line-rule per file
     }
   }
 
@@ -465,7 +480,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       file: filePath,
       line: match.line,
       message: rule.message,
-      evidence: truncateEvidence(lines[match.line - 1]?.trim() ?? match.evidence.trim()),
+      evidence: formatScanEvidence(lines[match.line - 1] ?? match.evidence),
     });
     matchedSourceRules.add(ruleKey);
   }
@@ -496,7 +511,11 @@ export function scanSkillContent(content: string, filePath: string): SkillScanFi
       file: filePath,
       line: match.line,
       message: rule.message,
-      evidence: truncateEvidence(lines[match.line - 1]?.trim() ?? match.evidence.trim()),
+      // Scanner output is user-visible; redact the whole evidence line if any rule sees a key.
+      evidence:
+        rule.ruleId === "literal-secret"
+          ? "[REDACTED CREDENTIAL]"
+          : formatScanEvidence(lines[match.line - 1] ?? match.evidence),
     });
     matchedRules.add(rule.ruleId);
   }
@@ -813,3 +832,4 @@ export async function scanDirectoryWithSummary(
     findings: allFindings,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

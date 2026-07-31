@@ -6,7 +6,7 @@ import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { isGpt5ModelId } from "../gpt5-prompt-overlay.js";
-import type { ModelFallbackResultClassification } from "../model-fallback.js";
+import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import {
   hasCommittedOutboundDeliveryEvidence,
   hasVisibleAgentPayload,
@@ -110,6 +110,7 @@ function classifyGenericExternalRunFailurePayload(params: {
     payload?.isReasoning === true ||
     typeof text !== "string" ||
     text.trim() !== GENERIC_EXTERNAL_RUN_FAILURE_TEXT ||
+    !payload ||
     hasNonTextVisiblePayloadContent(payload)
   ) {
     return null;

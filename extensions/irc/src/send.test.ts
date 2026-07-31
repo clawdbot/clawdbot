@@ -1,9 +1,9 @@
 // Irc tests cover send plugin behavior.
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { createSendCfgThreadingRuntime } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IrcClient } from "./client.js";
-import { clearIrcRuntime, setIrcRuntime } from "./runtime.js";
+import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
 const hoisted = vi.hoisted(() => {
@@ -95,10 +95,6 @@ describe("sendMessageIrc cfg threading", () => {
     setIrcRuntime(createSendCfgThreadingRuntime(hoisted) as never);
   });
 
-  afterEach(() => {
-    clearIrcRuntime();
-  });
-
   it("uses explicitly provided cfg without loading runtime config", async () => {
     const providedCfg = {
       channels: {
@@ -178,7 +174,7 @@ describe("sendMessageIrc cfg threading", () => {
     expect(hoisted.record).not.toHaveBeenCalled();
   });
 
-  it("sends with provided cfg even when the runtime store is not initialized", async () => {
+  it("sends with provided cfg when runtime activity recording is unavailable", async () => {
     const providedCfg = {
       channels: {
         irc: {

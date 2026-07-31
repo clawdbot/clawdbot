@@ -19,8 +19,8 @@ export async function statusJsonCommand(
     opts,
     runtime,
     scanStatusJsonFast,
-    // `--all` is the opt-in path for heavier security audit fields in JSON output.
-    includeSecurityAudit: opts.all === true,
+    includeSecurityAudit: opts.all === true || opts.deep === true,
+    includePluginCompatibility: opts.all === true,
     suppressHealthErrors: true,
   });
 }

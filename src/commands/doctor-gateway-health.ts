@@ -1,5 +1,7 @@
 /** Gateway health probes used by doctor before deeper daemon and memory diagnostics. */
 import { note } from "../../packages/terminal-core/src/note.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -9,10 +11,15 @@ import {
   isGatewayCredentialsRequiredError,
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
-import type { DoctorMemoryStatusPayload } from "../gateway/server-methods/doctor.js";
+import type {
+  DoctorMemoryEmbeddingRuntimePayload,
+  DoctorMemoryStatusPayload,
+} from "../gateway/server-methods/doctor.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { redactSecretDegradationReason } from "../secrets/runtime-degraded-state.js";
+import type { StatusSummary } from "../status/types.js";
 import { VERSION } from "../version.js";
 import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
@@ -20,12 +27,12 @@ import {
   gatewayProbeResultSawGateway,
 } from "./gateway-health-auth-diagnostic.js";
 import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
-import type { StatusSummary } from "./status.types.js";
 
 type GatewayMemoryProbe = {
   checked: boolean;
   ready: boolean;
   error?: string;
+  runtimeFacts?: DoctorMemoryEmbeddingRuntimePayload;
   /**
    * True when the probe was intentionally skipped by the gateway (probe: false
    * path). Distinct from checked: false caused by a network timeout or
@@ -82,11 +89,35 @@ export async function checkGatewayHealth(params: {
     });
     healthOk = true;
     noteCliGatewayVersionSkew(status);
+    if (status.degradedSecretOwners && status.degradedSecretOwners.length > 0) {
+      note(
+        status.degradedSecretOwners
+          .map(
+            (owner) =>
+              `- ${owner.degradationState ?? "cold"} ${owner.ownerKind}:${owner.ownerId} (${owner.paths.join(", ")}): ${redactSecretDegradationReason(owner.reason)}` +
+              "\n  Retry: openclaw secrets reload",
+          )
+          .join("\n"),
+        "Secret runtime degradation",
+      );
+    }
+    if (status.degradedPlugins && status.degradedPlugins.length > 0) {
+      note(
+        status.degradedPlugins
+          .map(
+            (plugin) =>
+              `- ${plugin.pluginId} (${plugin.diagnostic.reason}): ${plugin.diagnostic.detail}`,
+          )
+          .join("\n"),
+        "Plugins configured unavailable",
+      );
+    }
     try {
       const statusLocal = await callGateway({
         method: "channels.status",
         params: { probe: true, timeoutMs: 5000 },
         timeoutMs: 6000,
+        config: params.cfg,
       });
       const issues = collectChannelStatusIssues(statusLocal);
       if (issues.length > 0) {
@@ -102,8 +133,14 @@ export async function checkGatewayHealth(params: {
           "Channel warnings",
         );
       }
-    } catch {
-      // ignore: doctor already reported gateway health
+    } catch (error) {
+      note(
+        [
+          `Channel status probe failed: ${sanitizeTerminalText(formatErrorMessage(error))}`,
+          `Retry: ${formatCliCommand("openclaw channels status --probe")}`,
+        ].join("\n"),
+        "Channel warnings",
+      );
     }
     return { healthOk, authenticated: true, status };
   } catch (err) {
@@ -170,6 +207,7 @@ export async function probeGatewayMemoryStatus(params: {
       checked: gatewayChecked,
       ready: payload.embedding.ok,
       error: payload.embedding.error,
+      ...(payload.embeddingRuntime ? { runtimeFacts: payload.embeddingRuntime } : {}),
       skipped: !gatewayChecked,
     };
   } catch (err) {

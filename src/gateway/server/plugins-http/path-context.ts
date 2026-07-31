@@ -46,6 +46,11 @@ export function isProtectedPluginRoutePathFromContext(context: PluginRoutePathCo
   ) {
     return true;
   }
+  // An unresolved decode chain could still reveal a protected prefix on a later pass.
+  // Require auth rather than treating an intentionally over-encoded route as public.
+  if (context.decodePassLimitReached) {
+    return true;
+  }
   if (!context.malformedEncoding) {
     return false;
   }

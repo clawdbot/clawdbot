@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/internal/openai";
 /**
  * Cache-stability gate for the prompt-cache bust fix (issue #3658).
@@ -19,9 +22,18 @@ import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/int
  * Self-contained: no gateway, no provider, no live session.
  */
 import { describe, expect, it } from "vitest";
+import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
+import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import type { Context, Model } from "../../../llm/types.js";
+import {
+  buildLateMediaAttachedProjection,
+  createUserTurnTranscriptRecorder,
+  mergePreparedUserTurnMessageForRuntime,
+  type UserTurnInput,
+} from "../../../sessions/user-turn-transcript.js";
+import { persistUserTurnTranscript } from "../../../sessions/user-turn-transcript.test-support.js";
 import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   relocateCurrentRuntimeContextCarrierToTail,
@@ -338,8 +350,7 @@ describe("prompt-cache byte-identity (issue #3658)", () => {
     // Historical user turns get their inbound-metadata blocks stripped (same as
     // the original boundary behaviour), then stamped. The current turn keeps its
     // metadata. We only assert the historical strip+stamp here.
-    const metaBlock =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord"}\n```\n\n';
+    const metaBlock = `${markInboundContextLabel("Conversation info:")}\n\`\`\`json\n{"channel":"discord"}\n\`\`\`\n\n`;
     const userText = "What is 2+2?";
     const stored = `${metaBlock}${userText}`;
 
@@ -355,6 +366,122 @@ describe("prompt-cache byte-identity (issue #3658)", () => {
     // Metadata stripped, then stamped from the message's own timestamp.
     const expectedStrippedBare = stripInboundMetadata(stored); // "What is 2+2?"
     expect(output[0]?.content).toBe(`${EXPECTED_PREFIX_TURN1}${expectedStrippedBare}`);
+  });
+});
+
+describe("append-only late media (issue #99495)", () => {
+  it("keeps every sent fingerprint stable and appends one late-media turn", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-99495-boundary-"));
+    const target = {
+      agentId: "main",
+      cwd: dir,
+      sessionEntry: undefined,
+      sessionId: "session-99495",
+      sessionKey: "agent:main:cache-99495",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    const admittedInput = {
+      text: "describe this",
+      timestamp: TS_TURN1,
+      idempotencyKey: "cache-99495:user",
+    };
+    let resolveMedia!: (input: UserTurnInput) => void;
+    let markResolverStarted!: () => void;
+    const resolverStarted = new Promise<void>((resolve) => {
+      markResolverStarted = resolve;
+    });
+    const mediaInput = new Promise<UserTurnInput>((resolve) => {
+      resolveMedia = resolve;
+    });
+    try {
+      const recorder = createUserTurnTranscriptRecorder({
+        input: admittedInput,
+        resolveInput: async () => {
+          markResolverStarted();
+          return await mediaInput;
+        },
+        target,
+      });
+      const persistence = recorder.persistFallback();
+      await resolverStarted;
+      await persistUserTurnTranscript({
+        ...target,
+        input: admittedInput,
+      });
+      recorder.markRuntimePersisted(recorder.message);
+      const admittedRuntimeMessage = mergePreparedUserTurnMessageForRuntime({
+        runtimeMessage: currentUserMsg(admittedInput.text, admittedInput.timestamp),
+        preparedMessage: recorder.message,
+      });
+      const sent = normalizeMessagesForLlmBoundary([admittedRuntimeMessage], { timezone: TZ });
+      recorder.markSentToProvider?.();
+      resolveMedia({
+        ...admittedInput,
+        media: [{ path: path.join(dir, "image.png"), contentType: "image/png" }],
+      });
+      await persistence;
+      const persisted = (await loadTranscriptEvents(target))
+        .map((entry) => entry as { message?: AgentMsg })
+        .flatMap((entry) => (entry.message ? [entry.message] : []));
+      const next = normalizeMessagesForLlmBoundary(persisted, { timezone: TZ });
+      const persistedOutput = persisted as unknown as Array<{
+        content?: unknown;
+        __openclaw?: { lateMedia?: unknown };
+      }>;
+      const providerOutput = next as unknown as Array<{ content?: unknown }>;
+      const latePersisted = persistedOutput.at(-1);
+      const lateProvider = providerOutput.at(-1);
+      expect(next).toHaveLength(sent.length + 1);
+      expect(next.slice(0, sent.length)).toEqual(sent);
+      expect(latePersisted?.content).toBe("");
+      expect(latePersisted?.["__openclaw"]?.lateMedia).toBe(true);
+      expect(lateProvider?.content).toBe(
+        `${EXPECTED_PREFIX_TURN1}[media attached: ${path.join(dir, "image.png")}]`,
+      );
+      const lateProjection = buildLateMediaAttachedProjection(latePersisted as AgentMsg);
+      expect(lateProjection.text).toBe(`[media attached: ${path.join(dir, "image.png")}]`);
+      expect(lateProjection.media).toEqual([
+        expect.objectContaining({
+          path: path.join(dir, "image.png"),
+          contentType: "image/png",
+          kind: "image",
+        }),
+      ]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps media inline when resolution finishes before serialization", async () => {
+    const prepared = createUserTurnTranscriptRecorder({
+      input: { text: "describe this", timestamp: TS_TURN1 },
+      resolveInput: async () => ({
+        text: "describe this",
+        timestamp: TS_TURN1,
+        media: [{ path: "media://inbound/image.jpg", contentType: "image/jpeg" }],
+      }),
+      target: {
+        agentId: "main",
+        sessionEntry: undefined,
+        sessionId: "unused-session",
+        sessionKey: "agent:main:unused",
+        storePath: "/tmp/openclaw-unused-sessions.json",
+      },
+    });
+    const resolved = await prepared.resolveMessage();
+    const merged = mergePreparedUserTurnMessageForRuntime({
+      runtimeMessage: currentUserMsg("describe this", TS_TURN1),
+      preparedMessage: resolved,
+    });
+    prepared.markSentToProvider?.();
+    const normalized = normalizeMessagesForLlmBoundary([merged], { timezone: TZ });
+
+    expect(normalized).toHaveLength(1);
+    expect(merged).toMatchObject({
+      __openclaw: {
+        media: [expect.objectContaining({ path: "media://inbound/image.jpg" })],
+      },
+    });
   });
 });
 
@@ -397,7 +524,7 @@ describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", 
       normalizeMessagesForLlmBoundary(messages, { timezone: TZ }),
     ) as unknown as Array<Record<string, unknown>>;
 
-  const META = "Conversation info (untrusted metadata):\nsender=Bob";
+  const META = "Conversation info:\nsender=Bob";
 
   it("keeps the active user turn bare, tail-places the carrier, and drops it from replayed history", () => {
     // The runner installs the carrier immediately BEFORE the active user turn;
@@ -487,5 +614,47 @@ describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", 
     expect(JSON.stringify(cur[0]?.content)).toBe(JSON.stringify(hist[0]?.content));
     // ...and the room context is preserved in both (the strip does not touch it).
     expect(JSON.stringify(hist[0]?.content)).toContain("inbound_event_kind: room_event");
+  });
+
+  it("keeps persisted group sender context byte-stable from active to historical replay", () => {
+    const activeGroupTurn = currentUserMsg("The launch is Friday", TS_TURN1);
+    const persistedGroupTurn = {
+      ...storedUserMsg("The launch is Friday", TS_TURN1),
+      __openclaw: {
+        senderId: "alice-id",
+        senderName: "Alice",
+        senderUsername: "alice",
+      },
+    } as unknown as AgentMsg;
+    const asCurrent = normalizeMessagesForLlmBoundary([activeGroupTurn], {
+      timezone: TZ,
+      userTranscriptContexts: [
+        {
+          runtimeMessage: activeGroupTurn,
+          transcriptMessage: persistedGroupTurn,
+        },
+      ],
+    });
+    const asHistorical = normalizeMessagesForLlmBoundary(
+      [persistedGroupTurn, ASSISTANT_MSG, currentUserMsg("Who said that?", TS_TURN2)],
+      { timezone: TZ },
+    );
+
+    const currentContent = (asCurrent[0] as { content?: unknown } | undefined)?.content;
+    const historicalContent = (asHistorical[0] as { content?: unknown } | undefined)?.content;
+    expect(JSON.stringify(currentContent)).toBe(JSON.stringify(historicalContent));
+    expect(typeof currentContent).toBe("string");
+    expect(currentContent).toContain('"name":"Alice"');
+    expect(
+      normalizeMessagesForLlmBoundary(asCurrent, {
+        timezone: TZ,
+        userTranscriptContexts: [
+          {
+            runtimeMessage: activeGroupTurn,
+            transcriptMessage: persistedGroupTurn,
+          },
+        ],
+      }),
+    ).toEqual(asCurrent);
   });
 });

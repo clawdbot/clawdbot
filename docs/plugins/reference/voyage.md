@@ -12,8 +12,8 @@ Adds memory embedding provider support.
 ## Distribution
 
 - Package: `@openclaw/voyage-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/voyage-provider`
 
 ## Surface
 
-contracts: memoryEmbeddingProviders
+contracts: `memoryEmbeddingProviders`

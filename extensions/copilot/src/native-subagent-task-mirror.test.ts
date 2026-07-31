@@ -2,12 +2,21 @@ import type { SessionEvent } from "@github/copilot-sdk";
 import type {
   AgentHarnessTaskRecord,
   AgentHarnessTaskRuntime,
+  AgentHarnessTaskRuntimeScope,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { describe, expect, it, vi } from "vitest";
-import {
-  CopilotNativeSubagentTaskMirror,
-  createCopilotNativeSubagentTaskMirror,
-} from "./native-subagent-task-mirror.js";
+import { createCopilotNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
+
+const taskRuntimeMocks = vi.hoisted(() => ({ runtime: undefined as unknown }));
+
+vi.mock("openclaw/plugin-sdk/agent-harness-task-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-task-runtime")>();
+  return {
+    ...actual,
+    createAgentHarnessTaskRuntime: vi.fn(() => taskRuntimeMocks.runtime),
+  };
+});
 
 type NativeSubagentEventType = "subagent.started" | "subagent.completed" | "subagent.failed";
 
@@ -38,6 +47,21 @@ function createRuntime() {
   >;
 }
 
+function createMirror(
+  runtime: ReturnType<typeof createRuntime>,
+  params: { agentId?: string; now?: () => number } = {},
+) {
+  taskRuntimeMocks.runtime = runtime;
+  const mirror = createCopilotNativeSubagentTaskMirror({
+    ...params,
+    scope: {} as AgentHarnessTaskRuntimeScope,
+  });
+  if (!mirror) {
+    throw new Error("expected Copilot native subagent task mirror");
+  }
+  return mirror;
+}
+
 describe("CopilotNativeSubagentTaskMirror", () => {
   it("does not create a mirror without a host-issued task scope", () => {
     expect(createCopilotNativeSubagentTaskMirror({})).toBeUndefined();
@@ -45,10 +69,7 @@ describe("CopilotNativeSubagentTaskMirror", () => {
 
   it("mirrors start and completion using agentId with toolCallId fallback", () => {
     const runtime = createRuntime();
-    const mirror = new CopilotNativeSubagentTaskMirror(
-      { agentId: "parent-agent", now: () => 100 },
-      runtime,
-    );
+    const mirror = createMirror(runtime, { agentId: "parent-agent", now: () => 100 });
 
     mirror.handleEvent(
       makeEvent(
@@ -101,7 +122,7 @@ describe("CopilotNativeSubagentTaskMirror", () => {
 
   it("uses toolCallId when the SDK omits agentId", () => {
     const runtime = createRuntime();
-    const mirror = new CopilotNativeSubagentTaskMirror({ now: () => 200 }, runtime);
+    const mirror = createMirror(runtime, { now: () => 200 });
 
     mirror.handleEvent(
       makeEvent("subagent.started", {
@@ -131,7 +152,7 @@ describe("CopilotNativeSubagentTaskMirror", () => {
 
   it("keeps parallel subagents distinct when they share a parent tool call", () => {
     const runtime = createRuntime();
-    const mirror = new CopilotNativeSubagentTaskMirror({ now: () => 250 }, runtime);
+    const mirror = createMirror(runtime, { now: () => 250 });
 
     for (const agentId of ["child-1", "child-2"]) {
       mirror.handleEvent(
@@ -175,7 +196,7 @@ describe("CopilotNativeSubagentTaskMirror", () => {
 
   it("finalizes active tasks when the parent attempt tears down", () => {
     const runtime = createRuntime();
-    const mirror = new CopilotNativeSubagentTaskMirror({ now: () => 300 }, runtime);
+    const mirror = createMirror(runtime, { now: () => 300 });
 
     mirror.handleEvent(
       makeEvent("subagent.started", {

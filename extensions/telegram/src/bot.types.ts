@@ -20,6 +20,8 @@ export type TelegramBotOptions = {
   botInfo?: TelegramBotInfo;
   /** Signal to abort in-flight Telegram API fetch requests (e.g. getUpdates) on shutdown. */
   fetchAbortSignal?: AbortSignal;
+  /** Signal to abort inbound media resolution without cancelling adopted-turn Bot API calls. */
+  mediaAbortSignal?: AbortSignal;
   /** Minimum grammY client timeout when timeoutSeconds is configured on long-polling bots. */
   minimumClientTimeoutSeconds?: number;
   updateOffset?: {

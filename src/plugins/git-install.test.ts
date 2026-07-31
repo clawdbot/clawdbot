@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DiagnosticSecurityEvent } from "../infra/diagnostic-events.js";
@@ -130,6 +131,11 @@ describe("parseGitPluginSpec", () => {
     expect(parsed.ref).toBe("feature/foo");
     expect(parsed.label).toBe("git@github.com:acme/demo");
   });
+
+  it("rejects option-injection specs whose url would start with a dash", () => {
+    expect(parseGitPluginSpec("git:--upload-pack=/tmp/pwn.git")).toBeNull();
+    expect(parseGitPluginSpec("git:-oProxyCommand=payload@example.com:acme/demo.git")).toBeNull();
+  });
 });
 
 describe("isImmutableGitCommitRef", () => {
@@ -168,6 +174,19 @@ describe("installPluginFromGitSpec", () => {
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
+  });
+
+  it("rejects option-leading clone sources before invoking git", async () => {
+    const result = await installPluginFromGitSpec({
+      spec: "git:--upload-pack=/tmp/pwn.git",
+      dryRun: true,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "unsupported git: plugin spec: git:--upload-pack=/tmp/pwn.git",
+    });
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
 
   it("clones, checks out refs, installs from the clone, and returns commit metadata", async () => {
@@ -209,8 +228,13 @@ describe("installPluginFromGitSpec", () => {
     expect(result.git.ref).toBe("v1.2.3");
     expect(result.git.commit).toBe("abc123");
     const cloneArgv = commandArgvAt(0);
-    expect(cloneArgv.slice(0, 3)).toEqual(["git", "clone", "https://github.com/acme/demo.git"]);
-    expect(cloneArgv[3]).toContain("/repo");
+    expect(cloneArgv.slice(0, 4)).toEqual([
+      "git",
+      "clone",
+      "--",
+      "https://github.com/acme/demo.git",
+    ]);
+    expect(cloneArgv[4]).toContain("/repo");
     expect(commandArgvAt(1)).toEqual(["git", "switch", "--detach", "--", "v1.2.3"]);
     expect(commandArgvAt(3)).toEqual([
       "npm",
@@ -313,14 +337,15 @@ describe("installPluginFromGitSpec", () => {
     }
 
     const cloneArgv = commandArgvAt(0);
-    expect(cloneArgv.slice(0, 5)).toEqual([
+    expect(cloneArgv.slice(0, 6)).toEqual([
       "git",
       "clone",
       "--depth",
       "1",
+      "--",
       "https://github.com/acme/demo.git",
     ]);
-    expect(cloneArgv[5]).toContain("/repo");
+    expect(cloneArgv[6]).toContain("/repo");
   });
 
   it("runs install policy preflight before npm installs git dependencies", async () => {
@@ -350,11 +375,12 @@ describe("installPluginFromGitSpec", () => {
       expect(result.error).toContain("git installs disabled");
     }
     expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
-    expect(commandArgvAt(0).slice(0, 5)).toEqual([
+    expect(commandArgvAt(0).slice(0, 6)).toEqual([
       "git",
       "clone",
       "--depth",
       "1",
+      "--",
       "https://github.com/acme/demo.git",
     ]);
     expect(commandArgvAt(1)).toEqual(["git", "rev-parse", "HEAD"]);
@@ -519,7 +545,10 @@ describe("installPluginFromGitSpec", () => {
       }
 
       const cloneArgv = commandArgvAt(0);
-      const cloneDest = cloneArgv[cloneArgv.length - 1];
+      const cloneDest = expectDefined(
+        cloneArgv[cloneArgv.length - 1],
+        "cloneArgv[cloneArgv.length - 1] test invariant",
+      );
       const persistentRepoDir = expectedGitRepoDir({
         gitDir,
         normalizedSpec: "git:https://github.com/acme/demo.git",
@@ -568,11 +597,13 @@ describe("installPluginFromGitSpec", () => {
         gitDir,
         normalizedSpec: "git:https://github.com/acme/demo.git",
       });
-      expect(path.dirname(targetPrefix)).toBe(await fs.realpath(path.dirname(persistentRepoDir)));
+      expect(path.dirname(expectDefined(targetPrefix, "targetPrefix test invariant"))).toBe(
+        await fs.realpath(path.dirname(persistentRepoDir)),
+      );
       // withTempDir roots fallback staging at resolvePreferredOpenClawTmpDir(), which
       // prefers /tmp/openclaw and only degrades to a uid-scoped os.tmpdir path when
       // that is unsafe. Recompute it here so the assertion holds on every host.
-      expect(path.dirname(fallbackPrefix)).toBe(
+      expect(path.dirname(expectDefined(fallbackPrefix, "fallbackPrefix test invariant"))).toBe(
         await fs.realpath(resolvePreferredOpenClawTmpDir()),
       );
       expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(3);
@@ -606,7 +637,12 @@ describe("installPluginFromGitSpec", () => {
 
       expect(result.ok).toBe(true);
       const cloneArgv = commandArgvAt(0);
-      const cloneDest = path.resolve(cloneArgv[cloneArgv.length - 1]);
+      const cloneDest = path.resolve(
+        expectDefined(
+          cloneArgv[cloneArgv.length - 1],
+          "cloneArgv[cloneArgv.length - 1] test invariant",
+        ),
+      );
       expect(path.relative(gitDir, cloneDest).split(path.sep)[0]).toBe("..");
       await expect(fs.access(gitDir)).rejects.toThrow();
     } finally {

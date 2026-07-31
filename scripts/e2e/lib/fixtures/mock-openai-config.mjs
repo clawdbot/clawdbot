@@ -21,8 +21,8 @@ export function parseMockOpenAiPort(value, label = "mock OpenAI port") {
 
 export function applyMockOpenAiModelConfig(cfg, params) {
   const mockPort = parseMockOpenAiPort(params.mockPort);
-  const modelRef = params.modelRef ?? "openai/gpt-5.5";
-  const modelId = modelRef.split("/").at(-1) ?? "gpt-5.5";
+  const modelRef = params.modelRef ?? "openai/gpt-5.6-luna";
+  const modelId = modelRef.split("/").at(-1) ?? "gpt-5.6-luna";
   const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   cfg.models = {
     ...cfg.models,
@@ -61,7 +61,10 @@ export function applyMockOpenAiModelConfig(cfg, params) {
       ...(params.includeImageDefaults
         ? {
             imageModel: { primary: modelRef, timeoutMs: 30_000 },
-            imageGenerationModel: { primary: "openai/gpt-image-1", timeoutMs: 30_000 },
+            mediaModels: {
+              ...cfg.agents?.defaults?.mediaModels,
+              image: { primary: "openai/gpt-image-1", timeoutMs: 30_000 },
+            },
           }
         : {}),
       models: {
@@ -72,24 +75,32 @@ export function applyMockOpenAiModelConfig(cfg, params) {
         },
       },
     },
-    ...(Array.isArray(cfg.agents?.list)
+    ...(cfg.agents?.entries
       ? {
-          list: cfg.agents.list.map((agent) => ({
-            ...agent,
-            model: { ...agent.model, primary: modelRef },
-            models: {
-              ...agent.models,
-              [modelRef]: {
-                ...agent.models?.[modelRef],
-                agentRuntime: { id: "openclaw" },
-                params: {
-                  ...agent.models?.[modelRef]?.params,
-                  transport: "sse",
-                  openaiWsWarmup: false,
+          entries: Object.fromEntries(
+            Object.entries(cfg.agents.entries).map(([agentId, agent]) => [
+              agentId,
+              {
+                ...agent,
+                model: {
+                  ...(typeof agent.model === "object" && agent.model !== null ? agent.model : {}),
+                  primary: modelRef,
+                },
+                models: {
+                  ...agent.models,
+                  [modelRef]: {
+                    ...agent.models?.[modelRef],
+                    agentRuntime: { id: "openclaw" },
+                    params: {
+                      ...agent.models?.[modelRef]?.params,
+                      transport: "sse",
+                      openaiWsWarmup: false,
+                    },
+                  },
                 },
               },
-            },
-          })),
+            ]),
+          ),
         }
       : {}),
   };

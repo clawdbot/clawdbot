@@ -37,7 +37,6 @@ function normalizePairedNode(row: PairedNode): PairedNode | null {
   return {
     ...row,
     nodeId,
-    token: normalizeOptionalString(row.token),
     displayName: normalizeOptionalString(row.displayName),
     platform: normalizeOptionalString(row.platform),
     version: normalizeOptionalString(row.version),

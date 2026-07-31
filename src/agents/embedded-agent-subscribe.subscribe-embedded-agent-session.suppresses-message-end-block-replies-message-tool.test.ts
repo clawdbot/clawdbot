@@ -15,6 +15,7 @@ function createBlockReplyHarness(
   options: {
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     hasDeliveredMessageToolOnlySourceReply?: () => boolean;
+    onDeliveredMessageToolOnlySourceReply?: () => void;
     reasoningMode?: "off" | "on" | "stream";
     onReasoningEnd?: () => void;
     onReasoningStream?: (payload: { text?: string }) => void;
@@ -38,6 +39,7 @@ function createBlockReplyHarness(
     reasoningMode: options.reasoningMode,
     sourceReplyDeliveryMode: options.sourceReplyDeliveryMode,
     hasDeliveredMessageToolOnlySourceReply: options.hasDeliveredMessageToolOnlySourceReply,
+    onDeliveredMessageToolOnlySourceReply: options.onDeliveredMessageToolOnlySourceReply,
   });
   return { emit, onAgentEvent, onBlockReply, onPartialReply, subscription };
 }
@@ -126,6 +128,24 @@ describe("subscribeEmbeddedAgentSession", () => {
     await Promise.resolve();
 
     expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("reports bridged message-tool-only source delivery to the attempt", async () => {
+    const onDeliveredMessageToolOnlySourceReply = vi.fn();
+    const { emit } = createBlockReplyHarness("message_end", {
+      sourceReplyDeliveryMode: "message_tool_only",
+      onDeliveredMessageToolOnlySourceReply,
+    });
+
+    await emitMessageToolLifecycle({
+      emit,
+      toolCallId: "tool-message-bridged-source-reply",
+      message: "Visible source reply from Code Mode.",
+      to: null,
+      result: { details: { deliveryStatus: "sent" } },
+    });
+
+    expect(onDeliveredMessageToolOnlySourceReply).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses later text_end block replies after message-tool-only delivery", async () => {

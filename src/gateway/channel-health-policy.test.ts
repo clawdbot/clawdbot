@@ -64,6 +64,16 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "unmanaged" });
   });
 
+  it("treats explicitly unlinked accounts as healthy unmanaged", () => {
+    const evaluation = evaluateHealth({
+      running: false,
+      enabled: true,
+      configured: true,
+      linked: false,
+    });
+    expect(evaluation).toEqual({ healthy: true, reason: "unmanaged" });
+  });
+
   it("uses channel connect grace before flagging disconnected", () => {
     const evaluation = evaluateHealth(
       runningAccount({
@@ -84,6 +94,53 @@ describe("evaluateChannelHealth", () => {
     const now = 100_000;
     const evaluation = evaluateHealth(activeRunAccount(now - 26 * 60_000), { now });
     expect(evaluation).toEqual({ healthy: false, reason: "stuck" });
+  });
+
+  it("flags a hung run masking a disconnected transport as stuck despite a fresh heartbeat", () => {
+    const now = 30 * 60_000;
+    const evaluation = evaluateHealth(
+      activeRunAccount(now - 1_000, {
+        connected: false,
+        activeRunStartedAt: now - 26 * 60_000,
+      }),
+      { now },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "stuck" });
+  });
+
+  it("keeps a connected run healthy past the threshold while its heartbeat stays fresh", () => {
+    const now = 30 * 60_000;
+    const evaluation = evaluateHealth(
+      activeRunAccount(now - 1_000, {
+        connected: true,
+        activeRunStartedAt: now - 26 * 60_000,
+      }),
+      { now },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "busy" });
+  });
+
+  it("keeps a run without transport reporting healthy past the threshold while its heartbeat stays fresh", () => {
+    const now = 30 * 60_000;
+    const evaluation = evaluateHealth(
+      activeRunAccount(now - 1_000, {
+        connected: undefined,
+        activeRunStartedAt: now - 26 * 60_000,
+      }),
+      { now },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "busy" });
+  });
+
+  it("keeps a short-lived run healthy when both start and activity are recent", () => {
+    const now = 30 * 60_000;
+    const evaluation = evaluateHealth(
+      activeRunAccount(now - 1_000, {
+        activeRunStartedAt: now - 5_000,
+      }),
+      { now },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "busy" });
   });
 
   it("ignores inherited busy flags until current lifecycle reports run activity", () => {
@@ -206,6 +263,84 @@ describe("evaluateChannelHealth", () => {
       evaluateHealth({ enabled: true, configured: true, ...snapshot }, { channelId: "whatsapp" }),
     ).toEqual(expected);
   });
+
+  describe("inbound ingress dimension", () => {
+    it("flags a channel whose ingress monitor failed to start, despite a live transport", () => {
+      // The 26h production case: outbound fine, socket connected, zero inbound admitted.
+      const evaluation = evaluateHealth(
+        connectedAccount({
+          ingressUnavailable: true,
+          lastStartAt: 0,
+          lastTransportActivityAt: 99_000,
+        }),
+        { channelId: "slack" },
+      );
+      expect(evaluation).toEqual({ healthy: false, reason: "ingress-unavailable" });
+    });
+
+    it("outranks the startup connect grace so dead ingress is never masked", () => {
+      const evaluation = evaluateHealth(
+        connectedAccount({ ingressUnavailable: true, lastStartAt: 99_000 }),
+        { channelId: "slack" },
+      );
+      expect(evaluation).toEqual({ healthy: false, reason: "ingress-unavailable" });
+    });
+
+    it("keeps the ingress reason for the stopped state a failed start lands in", () => {
+      // server-channels records the verdict only after the start task rejects, so
+      // this is the shape the real failure has. Collapsing it into not-running
+      // would throw the cause away exactly where it matters.
+      const evaluation = evaluateHealth({
+        running: false,
+        enabled: true,
+        configured: true,
+        restartPending: true,
+        ingressUnavailable: true,
+      });
+      expect(evaluation).toEqual({ healthy: false, reason: "ingress-unavailable" });
+    });
+
+    it("outranks a busy short-circuit so an in-flight run cannot hide dead ingress", () => {
+      const evaluation = evaluateHealth(
+        connectedAccount({ ingressUnavailable: true, activeRuns: 1, lastRunActivityAt: 99_000 }),
+        { channelId: "slack" },
+      );
+      expect(evaluation).toEqual({ healthy: false, reason: "ingress-unavailable" });
+    });
+
+    it("keeps a quiet channel with no traffic and no ingress signal healthy", () => {
+      // Guards against a staleness heuristic sneaking in: a genuinely idle channel
+      // must never be restarted merely for having admitted nothing.
+      const evaluation = evaluateHealth(
+        connectedAccount({
+          lastStartAt: 0,
+          lastEventAt: 0,
+          lastInboundAt: null,
+          lastMessageAt: null,
+        }),
+        { now: 10_000_000, channelId: "slack" },
+      );
+      expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+    });
+
+    it("leaves the 17 socketless channels that publish no connectivity untouched", () => {
+      const evaluation = evaluateHealth(runningAccount({ lastStartAt: 0 }), {
+        now: 10_000_000,
+        channelId: "imessage",
+      });
+      expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+    });
+
+    it("stays healthy for a disabled account so unmanaged still wins", () => {
+      const evaluation = evaluateHealth({
+        running: false,
+        enabled: false,
+        configured: true,
+        ingressUnavailable: true,
+      });
+      expect(evaluation).toEqual({ healthy: true, reason: "unmanaged" });
+    });
+  });
 });
 
 describe("resolveChannelRestartReason", () => {
@@ -218,6 +353,14 @@ describe("resolveChannelRestartReason", () => {
       { healthy: false, reason: "not-running" },
     );
     expect(reason).toBe("gave-up");
+  });
+
+  it("maps dead ingress to its own reason instead of stuck", () => {
+    const reason = resolveChannelRestartReason(
+      runningAccount({ connected: true, ingressUnavailable: true }),
+      { healthy: false, reason: "ingress-unavailable" },
+    );
+    expect(reason).toBe("ingress-unavailable");
   });
 
   it("maps disconnected to disconnected instead of stuck", () => {

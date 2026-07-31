@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Sanitizes command text before it is displayed in approval prompts.
 import {
@@ -119,7 +120,10 @@ function sanitizeExecApprovalDisplayTextInternal(
   const strippedMask = computeSensitiveRedactionBitmap(stripped, redaction);
   let bypassDetected = false;
   for (let i = 0; i < strippedMask.length; i++) {
-    if (strippedMask[i] && !rawMask[strippedToOrig[i]]) {
+    if (
+      strippedMask[i] &&
+      !rawMask[expectDefined(strippedToOrig[i], "stripped to orig entry at i")]
+    ) {
       bypassDetected = true;
       break;
     }
@@ -137,7 +141,7 @@ function sanitizeExecApprovalDisplayTextInternal(
   const unionMask = rawMask.slice();
   for (let i = 0; i < strippedMask.length; i++) {
     if (strippedMask[i]) {
-      unionMask[strippedToOrig[i]] = true;
+      unionMask[expectDefined(strippedToOrig[i], "stripped to orig entry at i")] = true;
     }
   }
   let out = "";
@@ -183,10 +187,17 @@ export function sanitizeExecApprovalDisplayTextWithStatus(
  * Sanitizes warning prose for approval UI while preserving real line boundaries.
  */
 export function sanitizeExecApprovalWarningText(warningText: string): string {
+  return sanitizeExecApprovalWarningTextWithStatus(warningText).text;
+}
+
+/** Sanitizes warning prose and reports whether display bounds suppressed any content. */
+export function sanitizeExecApprovalWarningTextWithStatus(
+  warningText: string,
+): SanitizedExecApprovalDisplayText {
   return sanitizeExecApprovalDisplayTextInternal(normalizeDisplayLineBreaks(warningText), {
     preserveLineBreaks: true,
     oversizedMarker: EXEC_APPROVAL_WARNING_OVERSIZED_MARKER,
-  }).text;
+  });
 }
 
 function normalizePreview(commandText: string, commandPreview?: string | null): string | null {

@@ -29,6 +29,7 @@ import {
   finalizeTransportStream,
   mergeTransportHeaders,
   sanitizeTransportPayloadText,
+  sortPromptCacheToolsByName,
   stripSystemPromptCacheBoundary,
   transformTransportMessages,
   type WritableTransportStream,
@@ -129,6 +130,10 @@ const GOOGLE_VERTEX_DEFAULT_API_VERSION = "v1";
 
 type GoogleSseChunk = {
   responseId?: string;
+  promptFeedback?: {
+    blockReason?: string;
+    blockReasonMessage?: string;
+  };
   candidates?: Array<{
     content?: {
       parts?: Array<{
@@ -143,12 +148,14 @@ type GoogleSseChunk = {
       }>;
     };
     finishReason?: string;
+    finishMessage?: string;
   }>;
   usageMetadata?: {
     promptTokenCount?: number;
     cachedContentTokenCount?: number;
     candidatesTokenCount?: number;
     thoughtsTokenCount?: number;
+    toolUsePromptTokenCount?: number;
     totalTokenCount?: number;
   };
 };
@@ -165,7 +172,7 @@ function requiresToolCallThoughtSignature(modelId: string): boolean {
 }
 
 function supportsMultimodalFunctionResponse(modelId: string): boolean {
-  const match = normalizeLowercaseStringOrEmpty(modelId).match(/^gemini(?:-live)?-(\d+)/);
+  const match = normalizeLowercaseStringOrEmpty(modelId).match(/(?:^|\/)gemini(?:-live)?-(\d+)/);
   if (!match) {
     return true;
   }
@@ -367,10 +374,7 @@ function resolveGoogleVertexLocation(options: GoogleTransportOptions | undefined
   return location;
 }
 
-export function resolveGoogleVertexBaseOrigin(
-  model: GoogleTransportModel,
-  location: string,
-): string {
+function resolveGoogleVertexBaseOrigin(model: GoogleTransportModel, location: string): string {
   const configured = normalizeOptionalString(model.baseUrl);
   if (configured && !configured.includes("{location}")) {
     try {
@@ -661,7 +665,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
       const imageContent = model.input.includes("image")
         ? msg.content.filter(
             (item): item is Extract<(typeof msg.content)[number], { type: "image" }> =>
-              item.type === "image",
+              item.type === "image" && describeToolResultMediaPlaceholder([item]) !== undefined,
           )
         : [];
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
@@ -712,7 +716,7 @@ function convertGoogleTools(tools: NonNullable<Context["tools"]>) {
   }
   return [
     {
-      functionDeclarations: tools.map((tool) => ({
+      functionDeclarations: sortPromptCacheToolsByName(tools).map((tool) => ({
         name: tool.name,
         description: tool.description,
         parametersJsonSchema: tool.parameters,
@@ -884,7 +888,7 @@ function isOfficialGoogleGenerativeAiBaseUrl(baseUrl: string | undefined): boole
   }
 }
 
-export function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
+function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
   const raw = env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
   if (raw === undefined || raw.trim() === "") {
     return GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
@@ -922,7 +926,7 @@ function cloneGoogleGenerateContentRequest(
   return JSON.parse(serialized) as GoogleGenerateContentRequest;
 }
 
-export function buildGoogleGemini3FirstResponseRetryParams(params: {
+function buildGoogleGemini3FirstResponseRetryParams(params: {
   model: GoogleTransportModel;
   request: GoogleGenerateContentRequest;
 }): GoogleGenerateContentRequest | undefined {
@@ -1230,12 +1234,14 @@ function updateUsage(
   }
   const promptTokens = usage.promptTokenCount || 0;
   const cacheRead = usage.cachedContentTokenCount || 0;
+  const toolUsePromptTokens = usage.toolUsePromptTokenCount || 0;
+  const outputTokens = (usage.candidatesTokenCount || 0) + (usage.thoughtsTokenCount || 0);
   output.usage = {
-    input: Math.max(0, promptTokens - cacheRead),
-    output: (usage.candidatesTokenCount || 0) + (usage.thoughtsTokenCount || 0),
+    input: Math.max(0, promptTokens - cacheRead) + toolUsePromptTokens,
+    output: outputTokens,
     cacheRead,
     cacheWrite: 0,
-    totalTokens: usage.totalTokenCount || 0,
+    totalTokens: usage.totalTokenCount ?? promptTokens + outputTokens + toolUsePromptTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
   calculateCost(model, output.usage);
@@ -1330,6 +1336,8 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
             : await openSse(apiKey);
         stream.push({ type: "start", partial: output as never });
         let currentBlockIndex = -1;
+        let sawTerminalReason = false;
+        let terminalGenerationError: Error | undefined;
         const toolCallBlocksById = new Map<
           string,
           Extract<GoogleTransportContentBlock, { type: "toolCall" }>
@@ -1345,6 +1353,17 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           output.responseId ||= chunk.responseId;
           updateUsage(output, model, chunk);
           const candidate = chunk.candidates?.[0];
+          const promptFeedback = chunk.promptFeedback;
+          if (!candidate && promptFeedback) {
+            const blockReason =
+              normalizeOptionalString(promptFeedback.blockReason) ?? "PROMPT_BLOCKED";
+            const blockMessage = normalizeOptionalString(promptFeedback.blockReasonMessage);
+            const message = `Google prompt blocked (${blockReason})${blockMessage ? `: ${blockMessage}` : ""}`;
+            throw Object.assign(new Error(message), {
+              code: blockReason,
+              type: "google_prompt_blocked",
+            });
+          }
           if (candidate?.content?.parts) {
             for (const part of candidate.content.parts) {
               const hasThoughtSignature =
@@ -1467,7 +1486,17 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
             }
           }
           if (typeof candidate?.finishReason === "string") {
+            sawTerminalReason = true;
             output.stopReason = mapStopReasonString(candidate.finishReason);
+            if (output.stopReason === "error") {
+              const finishMessage = normalizeOptionalString(candidate.finishMessage);
+              terminalGenerationError = Object.assign(
+                new Error(
+                  `Google generation stopped (${candidate.finishReason})${finishMessage ? `: ${finishMessage}` : ""}`,
+                ),
+                { code: candidate.finishReason, type: "google_generation_failed" },
+              );
+            }
             // MAX_TOKENS can leave a complete-looking partial call. Only a normal
             // Google stop may promote parsed calls into an executable tool-use turn.
             if (
@@ -1480,6 +1509,15 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
         }
         if (currentBlockIndex >= 0) {
           pushTextBlockEnd(stream, output, currentBlockIndex);
+        }
+        if (terminalGenerationError && !options?.signal?.aborted) {
+          throw terminalGenerationError;
+        }
+        if (!sawTerminalReason && !options?.signal?.aborted) {
+          throw Object.assign(new Error("Google stream ended before a terminal finish reason"), {
+            code: "STREAM_INCOMPLETE",
+            type: "google_incomplete_stream",
+          });
         }
         finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error) {
@@ -1497,3 +1535,4 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
 export function createGoogleVertexTransportStreamFn(): StreamFn {
   return createGoogleTransportStreamFn("google-vertex");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,6 +1,5 @@
 // Agent consult tool tests cover tool payload validation for consult requests.
 import { describe, expect, it } from "vitest";
-import type { RealtimeVoiceTool } from "./provider-types.js";
 import {
   buildRealtimeVoiceAgentConsultChatMessage,
   buildRealtimeVoiceAgentConsultPrompt,
@@ -12,6 +11,7 @@ import {
   resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
 } from "./agent-consult-tool.js";
+import type { RealtimeVoiceTool } from "./provider-types.js";
 
 describe("realtime voice agent consult tool", () => {
   it("normalizes shared tool arguments for browser chat forwarding", () => {
@@ -28,6 +28,20 @@ describe("realtime voice agent consult tool", () => {
     expect(() => parseRealtimeVoiceAgentConsultArgs({ context: "missing" })).toThrow(
       "question required",
     );
+  });
+
+  it("normalizes a server-issued spoken confirmation id", () => {
+    expect(
+      parseRealtimeVoiceAgentConsultArgs({
+        question: "Send it now",
+        confirmationId: " confirm-123 ",
+      }),
+    ).toStrictEqual({
+      question: "Send it now",
+      context: undefined,
+      responseStyle: undefined,
+      confirmationId: "confirm-123",
+    });
   });
 
   it("accepts provider question aliases from realtime tool calls", () => {

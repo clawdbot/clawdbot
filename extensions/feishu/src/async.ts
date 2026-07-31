@@ -101,10 +101,7 @@ export function waitForAbortableDelay(
       return;
     }
 
-    timer = setTimeout(
-      () => finish(true),
-      resolveTimerTimeoutMs(delayMs, 1),
-    );
+    timer = setTimeout(() => finish(true), resolveTimerTimeoutMs(delayMs, 1));
     timer.unref?.();
   });
 }
