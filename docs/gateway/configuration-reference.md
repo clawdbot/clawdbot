@@ -761,9 +761,7 @@ See [Multiple Gateways](/gateway/multiple-gateways).
 {
   gateway: {
     reload: {
-      mode: "hybrid", // off | restart | hot | hybrid
-      debounceMs: 500,
-      deferralTimeoutMs: 300000,
+      mode: "hybrid", // off | hybrid
     },
   },
 }
@@ -771,11 +769,11 @@ See [Multiple Gateways](/gateway/multiple-gateways).
 
 - `mode`: controls how config edits are applied at runtime.
   - `"off"`: ignore live edits; changes require an explicit restart.
-  - `"restart"`: always restart the gateway process on config change.
-  - `"hot"`: apply changes in-process without restarting.
-  - `"hybrid"` (default): try hot reload first; fall back to restart if required.
-- `debounceMs`: debounce window in ms before config changes are applied (non-negative integer; default: `300`).
-- `deferralTimeoutMs`: optional maximum time in ms to wait for in-flight operations before forcing a restart or channel hot reload. Omit it to use the default bounded wait (`300000`); set `0` to wait indefinitely and log periodic still-pending warnings.
+  - `"hybrid"` (default): apply hot-safe changes in-process, then restart when a change requires it.
+
+The earlier `"restart"` and `"hot"` values are retired; [`openclaw doctor --fix`](/cli/doctor) maps both to `"hybrid"`.
+
+Reload debounce and in-flight operation deferral are no longer configurable and run behind built-in defaults. [`openclaw doctor --fix`](/cli/doctor) removes the retired `debounceMs` and `deferralTimeoutMs` keys from older config files.
 
 ---
 
