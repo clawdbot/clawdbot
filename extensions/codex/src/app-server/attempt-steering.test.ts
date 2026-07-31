@@ -95,6 +95,33 @@ describe("Codex app-server steering queue", () => {
     harness.client.close();
   });
 
+  it("aborts the in-flight steer request and removes its client pending entry", async () => {
+    const harness = createClientHarness();
+    const controller = new AbortController();
+    const queue = createCodexSteeringQueue({
+      client: harness.client,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      requestTimeoutMs: 60_000,
+      claimPendingUserInput: () => undefined,
+      signal: controller.signal,
+    });
+    const pendingRequests = (
+      harness.client as unknown as { pending: Map<number | string, unknown> }
+    ).pending;
+
+    const queued = queue.queue("steer me", { debounceMs: 0 });
+    const rejected = expect(queued).rejects.toThrow("steering queue aborted");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pendingRequests.size).toBe(1);
+
+    controller.abort();
+
+    await rejected;
+    expect(pendingRequests.size).toBe(0);
+    harness.client.close();
+  });
+
   it("handles user-message completion before the steer response", async () => {
     let acceptSteer: (() => void) | undefined;
     const steerAccepted = new Promise<void>((resolve) => {
