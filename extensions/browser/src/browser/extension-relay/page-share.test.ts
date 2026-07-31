@@ -8,12 +8,21 @@ import {
 function createSink() {
   const enqueueSystemEvent = vi.fn();
   const requestHeartbeat = vi.fn();
+  const resolveDefaultAgentId = vi.fn(() => "main");
+  const resolveMainSessionKey = vi.fn(() => "agent:main:main");
   const sink = {
     enqueueSystemEvent,
     requestHeartbeat,
-    resolveMainSessionKey: () => "agent:main:main",
+    resolveDefaultAgentId,
+    resolveMainSessionKey,
   };
-  return { enqueueSystemEvent, requestHeartbeat, sink };
+  return {
+    enqueueSystemEvent,
+    requestHeartbeat,
+    resolveDefaultAgentId,
+    resolveMainSessionKey,
+    sink,
+  };
 }
 
 afterEach(() => {
@@ -22,7 +31,13 @@ afterEach(() => {
 
 describe("page share delivery", () => {
   it("formats metadata, keeps the note trusted, and wraps selected page text", async () => {
-    const { enqueueSystemEvent, requestHeartbeat, sink } = createSink();
+    const {
+      enqueueSystemEvent,
+      requestHeartbeat,
+      resolveDefaultAgentId,
+      resolveMainSessionKey,
+      sink,
+    } = createSink();
     setPageShareSink(sink);
 
     await deliverPageShare({
@@ -34,6 +49,8 @@ describe("page share delivery", () => {
     });
 
     expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+    expect(resolveDefaultAgentId).toHaveBeenCalledOnce();
+    expect(resolveMainSessionKey).toHaveBeenCalledOnce();
     const [text, options] = enqueueSystemEvent.mock.calls[0] as [string, { sessionKey: string }];
     expect(options).toEqual({ sessionKey: "agent:main:main" });
     expect(text).toContain(
@@ -50,10 +67,13 @@ describe("page share delivery", () => {
     const boundaryStart = text.indexOf("<<<EXTERNAL_UNTRUSTED_CONTENT");
     expect(text.indexOf("Title: Example article")).toBeGreaterThan(boundaryStart);
     expect(text.indexOf("URL: https://example.com/article")).toBeGreaterThan(boundaryStart);
-    expect(requestHeartbeat).toHaveBeenCalledWith({
-      source: "other",
+    expect(requestHeartbeat).toHaveBeenCalledExactlyOnceWith({
+      source: "notifications-event",
       intent: "immediate",
-      reason: "browser-page-share",
+      reason: "wake",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      heartbeat: { target: "last" },
     });
   });
 
