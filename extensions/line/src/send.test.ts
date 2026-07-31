@@ -560,6 +560,37 @@ describe("LINE send helpers", () => {
       provider.mockResolvedValueOnce({ sentMessages: [] });
 
       await expect(send()).rejects.toThrow(/sent message id/i);
+      expect(recordChannelActivityMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      label: "push",
+      send: () =>
+        sendModule.pushMessagesLine("U123", [{ type: "text", text: "Hello" }], {
+          cfg: LINE_TEST_CFG,
+        }),
+      provider: pushMessageMock,
+    },
+    {
+      label: "reply",
+      send: () =>
+        sendModule.sendMessageLine("U123", "Hello", {
+          cfg: LINE_TEST_CFG,
+          replyToken: "reply-token",
+        }),
+      provider: replyMessageMock,
+    },
+  ])(
+    "rejects a partially invalid $label provider receipt without recording delivery",
+    async ({ send, provider }) => {
+      provider.mockResolvedValueOnce({
+        sentMessages: [{ id: "line-provider-delivered" }, { id: "   " }],
+      });
+
+      await expect(send()).rejects.toThrow(/sent message id/i);
+      expect(recordChannelActivityMock).not.toHaveBeenCalled();
     },
   );
 
