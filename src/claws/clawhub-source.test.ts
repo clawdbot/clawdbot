@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   search: vi.fn(),
@@ -42,6 +42,7 @@ import {
 } from "./clawhub-source.js";
 
 const digest = "a".repeat(64);
+const mockArchivePath = path.join(os.tmpdir(), `openclaw-clawhub-source-${process.pid}.tgz`);
 
 function packageEntry(family: "claw" | "plugin" = "claw") {
   return {
@@ -61,8 +62,9 @@ function packageEntry(family: "claw" | "plugin" = "claw") {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
+  await fs.writeFile(mockArchivePath, Buffer.alloc(321));
   mocks.trust.mockResolvedValue({
     ok: true,
     trustInstallRecordFields: {
@@ -71,7 +73,7 @@ beforeEach(() => {
     },
   });
   mocks.download.mockResolvedValue({
-    archivePath: "/tmp/claw.tgz",
+    archivePath: mockArchivePath,
     sha256Hex: digest,
     cleanup: vi.fn(),
   });
@@ -82,6 +84,10 @@ beforeEach(() => {
     source: { kind: "package", name: "financial-analyst", version: "1.2.0" },
     diagnostics: [],
   });
+});
+
+afterAll(async () => {
+  await fs.rm(mockArchivePath, { force: true });
 });
 
 describe("ClawHub Claw source resolution", () => {
@@ -397,6 +403,8 @@ describe("ClawHub Claw source resolution", () => {
       expect(apply.value.integrityKind).toBe("artifact");
       expect(preview.value.integrity).toBe(`sha256:${digest}`);
       expect(apply.value.integrity).toBe(preview.value.integrity);
+      expect(preview.value.byteLength).toBe(321);
+      expect(apply.value.byteLength).toBe(preview.value.byteLength);
     } finally {
       await fs.rm(temp, { recursive: true, force: true });
     }

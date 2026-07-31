@@ -87,7 +87,20 @@ export function sealClawLifecyclePlan(
   return { schemaVersion: PLAN_SCHEMA_VERSION, planIntegrity, ...plan };
 }
 
-export function projectClawAddPlan(plan: ClawAddPlan): ClawLifecyclePlanResult {
+function sourceStablePlanIntegrity(plan: { planIntegrity: string }, sourceRoot?: string): string {
+  if (!sourceRoot) {
+    return plan.planIntegrity;
+  }
+  const { planIntegrity: _planIntegrity, ...content } = plan;
+  return `sha256:${createHash("sha256")
+    .update(stableStringify(canonicalizeClawSourcePlan(content, sourceRoot)))
+    .digest("hex")}`;
+}
+
+export function projectClawAddPlan(
+  plan: ClawAddPlan,
+  sourceRoot?: string,
+): ClawLifecyclePlanResult {
   return sealClawLifecyclePlan(
     {
       operation: "add",
@@ -105,11 +118,11 @@ export function projectClawAddPlan(plan: ClawAddPlan): ClawLifecyclePlanResult {
         requirements: plan.readiness.requirements.map(projectReadinessRequirement),
       },
     },
-    plan.planIntegrity,
+    sourceStablePlanIntegrity(plan, sourceRoot),
   );
 }
 
-function projectUpdatePlan(plan: ClawUpdatePlan): ClawLifecyclePlanResult {
+function projectUpdatePlan(plan: ClawUpdatePlan, sourceRoot?: string): ClawLifecyclePlanResult {
   return sealClawLifecyclePlan(
     {
       operation: "update",
@@ -124,7 +137,7 @@ function projectUpdatePlan(plan: ClawUpdatePlan): ClawLifecyclePlanResult {
       blockers: plan.blockers.map(safeBlocker),
       riskAcknowledgementRequired: false,
     },
-    plan.planIntegrity,
+    sourceStablePlanIntegrity(plan, sourceRoot),
   );
 }
 
@@ -299,7 +312,10 @@ export async function planClawAddFromCatalog(params: {
     coordinate: params.source,
     mode: "preview",
     run: async (loaded, trust) =>
-      bindClawLifecycleTrust(projectClawAddPlan(await buildAdd({ ...params, loaded })), trust),
+      bindClawLifecycleTrust(
+        projectClawAddPlan(await buildAdd({ ...params, loaded }), loaded.source.packageRoot),
+        trust,
+      ),
   });
   return resolved.value;
 }
@@ -318,8 +334,8 @@ export async function applyClawAddFromCatalog(params: {
     run: async (loaded, trust, persistSource) => {
       const previewPlan = await buildAdd({ ...params, loaded });
       if (
-        bindClawLifecycleTrust(projectClawAddPlan(previewPlan), trust).planIntegrity !==
-        params.planIntegrity
+        bindClawLifecycleTrust(projectClawAddPlan(previewPlan, loaded.source.packageRoot), trust)
+          .planIntegrity !== params.planIntegrity
       ) {
         throw new Error("The Claw add plan changed; preview it again.");
       }
@@ -393,7 +409,7 @@ export async function planClawUpdate(params: {
     mode: "preview",
     run: async (loaded, trust) => {
       const { plan } = await buildUpdate({ ...params, loaded });
-      return bindClawLifecycleTrust(projectUpdatePlan(plan), trust);
+      return bindClawLifecycleTrust(projectUpdatePlan(plan, loaded.source.packageRoot), trust);
     },
   });
   return resolved.value;
@@ -412,8 +428,8 @@ export async function applyClawUpdate(params: {
     run: async (loaded, trust, persistSource) => {
       const preview = await buildUpdate({ ...params, loaded });
       if (
-        bindClawLifecycleTrust(projectUpdatePlan(preview.plan), trust).planIntegrity !==
-        params.planIntegrity
+        bindClawLifecycleTrust(projectUpdatePlan(preview.plan, loaded.source.packageRoot), trust)
+          .planIntegrity !== params.planIntegrity
       ) {
         throw new Error("The Claw update plan changed; preview it again.");
       }

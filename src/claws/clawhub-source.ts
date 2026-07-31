@@ -210,6 +210,7 @@ async function readVerifiedArtifactSource(params: {
   packageName: string;
   version: string;
   artifactSha256: string;
+  artifactByteLength: number;
 }): Promise<ResolvedClawHubSource> {
   const loaded = await readClawManifestFile(params.sourceRoot);
   if (!loaded.ok) {
@@ -230,6 +231,7 @@ async function readVerifiedArtifactSource(params: {
       ...loaded.source,
       integrityKind: "artifact",
       integrity: `sha256:${params.artifactSha256}`,
+      byteLength: params.artifactByteLength,
     },
   };
 }
@@ -305,6 +307,7 @@ export async function withResolvedClawHubSource<T>(params: {
         "ClawHub artifact digest changed during download.",
       );
     }
+    const artifactByteLength = (await fs.stat(download.archivePath)).size;
     const extracted = await withExtractedArchiveRoot({
       archivePath: download.archivePath,
       tempDirPrefix: "openclaw-claw-source-",
@@ -316,6 +319,7 @@ export async function withResolvedClawHubSource<T>(params: {
           packageName,
           version,
           artifactSha256: expectedSha256,
+          artifactByteLength,
         });
         let persistedSource: Promise<ResolvedClawHubSource> | undefined;
         const persistSource: PersistClawHubSource = async () => {
@@ -336,6 +340,7 @@ export async function withResolvedClawHubSource<T>(params: {
               packageName,
               version,
               artifactSha256: expectedSha256,
+              artifactByteLength,
             });
           })();
           return await persistedSource;

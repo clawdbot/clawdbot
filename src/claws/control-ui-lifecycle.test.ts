@@ -79,6 +79,38 @@ describe("sealClawLifecyclePlan", () => {
     ).toBe(false);
   });
 
+  it("keeps catalog consent stable across verified extraction roots", () => {
+    const previewRoot = path.resolve("tmp", "first-extraction");
+    const applyRoot = path.resolve("tmp", "second-extraction");
+    const buildPlan = (sourceRoot: string, digest = "same") =>
+      ({
+        schemaVersion: "openclaw.clawAddPlan.v1",
+        planIntegrity: `sha256:${sourceRoot}`,
+        claw: { name: "analyst", version: "1.0.0", integrity: "sha256:package" },
+        agent: { finalId: "analyst" },
+        actions: [
+          {
+            kind: "workspaceFile",
+            id: "SOUL.md",
+            action: "add",
+            blocked: false,
+            source: path.join(sourceRoot, "workspace", "SOUL.md"),
+            digest,
+          },
+        ],
+        capabilityChanges: [],
+        blockers: [],
+        readiness: { ready: true, requirements: [] },
+      }) as unknown as ClawAddPlan;
+
+    const preview = projectClawAddPlan(buildPlan(previewRoot), previewRoot);
+    const apply = projectClawAddPlan(buildPlan(applyRoot), applyRoot);
+    const changed = projectClawAddPlan(buildPlan(applyRoot, "changed"), applyRoot);
+
+    expect(preview.planIntegrity).toBe(apply.planIntegrity);
+    expect(changed.planIntegrity).not.toBe(preview.planIntegrity);
+  });
+
   it("invalidates consent when the displayed trust disclosure changes", () => {
     const base = sealClawLifecyclePlan(projected, "sha256:canonical-content");
     const reviewed = bindClawLifecycleTrust(base, {
