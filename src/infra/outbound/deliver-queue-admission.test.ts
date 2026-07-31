@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { stageAndEnqueueOutboundDelivery } from "./deliver-queue-admission.js";
-import type { StableDeliveryPreparation } from "./delivery-queue-preparation.js";
+import type { StableDeliveryIntentFence } from "./delivery-intent-fence.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./prepared-batch.js";
 
 const mocks = vi.hoisted(() => ({
@@ -29,15 +29,12 @@ vi.mock("./delivery-queue.js", () => ({
   enqueuePreparedDeliveryOnce: mocks.enqueuePreparedDeliveryOnce,
 }));
 
-function preparation(id: string, preparationLeaseExpiresAt: number): StableDeliveryPreparation {
+function intentFence(id: string): StableDeliveryIntentFence {
   return {
     id,
     enqueuedAt: 1,
     retryCount: 0,
     attemptCount: 0,
-    preparationState: "prepared",
-    preparationOwnerId: "owner-1",
-    preparationLeaseExpiresAt,
   };
 }
 
@@ -47,7 +44,7 @@ describe("stageAndEnqueueOutboundDelivery", () => {
     mocks.loadPendingDelivery.mockResolvedValue(null);
   });
 
-  it("reads the stable preparation after asynchronous media staging", async () => {
+  it("publishes the prepared batch from the stable intent fence after media staging", async () => {
     let finishStaging: (() => void) | undefined;
     mocks.stageQueuePayloadMedia.mockImplementationOnce(
       async () =>
@@ -64,8 +61,7 @@ describe("stageAndEnqueueOutboundDelivery", () => {
       id: "stable-1",
       created: true,
     });
-    let current = preparation("stable-1", 100);
-    const getStablePreparation = vi.fn(() => current);
+    const fence = intentFence("stable-1");
     const payloads = [{ text: "prepared" }];
 
     const pending = stageAndEnqueueOutboundDelivery(
@@ -78,20 +74,17 @@ describe("stageAndEnqueueOutboundDelivery", () => {
         deliveryIntentId: "stable-1",
       },
       createUnmodifiedPreparedOutboundBatch(payloads),
-      { getStablePreparation },
+      { intentFence: fence },
     );
 
     await vi.waitFor(() => expect(mocks.stageQueuePayloadMedia).toHaveBeenCalledOnce());
-    expect(getStablePreparation).not.toHaveBeenCalled();
-    current = preparation("stable-1", 200);
     finishStaging?.();
 
     await expect(pending).resolves.toEqual({ id: "stable-1", created: true });
-    expect(getStablePreparation).toHaveBeenCalledOnce();
     expect(mocks.enqueuePreparedDeliveryOnce).toHaveBeenCalledWith(
       expect.any(Object),
       "stable-1",
-      current,
+      fence,
       undefined,
       undefined,
     );

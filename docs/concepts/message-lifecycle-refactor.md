@@ -104,6 +104,20 @@ fall back to `unknown_after_send` state (`src/channels/message/state.ts`,
 replay only if duplicate visible messages are an acceptable, documented
 tradeoff for that channel.
 
+### Outbound queue upgrade behavior
+
+The prepared outbound queue stores only the final post-policy batch. Modifying
+hooks run before queue admission, and restart recovery delivers that prepared
+batch without running those hooks again.
+
+Pending outbound messages from before this upgrade may be discarded. This can
+include older retry or backoff entries, not only messages active when the
+Gateway upgrades. OpenClaw does not replay an ambiguous or partially sent
+legacy entry: any provider-visible portion stays as-is, and the unsent remainder
+is discarded. Completed receipts, failed terminal records, acknowledged
+provider messages, sessions, transcripts, schedules, and configuration are not
+part of this retirement.
+
 ### Receive context
 
 `createMessageReceiveContext` tracks ack/nack state per inbound event with an

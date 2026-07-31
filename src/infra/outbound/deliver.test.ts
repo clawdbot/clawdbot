@@ -78,7 +78,7 @@ const queueMocks = vi.hoisted(() => ({
   loadPendingDelivery: vi.fn(async () => null),
   findDeliveryIntentOwner: vi.fn<
     () => {
-      namespace: "prepared" | "preparing" | "migration" | "legacy-preparing" | "legacy";
+      namespace: "prepared" | "intent-fence" | "legacy";
       status: "pending" | "failed" | "completed";
     } | null
   >(() => null),
@@ -95,7 +95,7 @@ const queueMocks = vi.hoisted(() => ({
       fn: () => Promise<unknown>,
     ) => Promise<{ status: "claimed"; value: unknown } | { status: "claimed-by-other-owner" }>
   >(async (_entryId, fn) => ({ status: "claimed", value: await fn() })),
-  withStableDeliveryPreparation: vi.fn(),
+  withStableDeliveryIntentFence: vi.fn(),
 }));
 const completionMocks = vi.hoisted(() => ({
   completeDurableDelivery: vi.fn(),
@@ -145,9 +145,9 @@ vi.mock("./delivery-queue-storage.js", () => ({
   loadPendingDelivery: queueMocks.loadPendingDelivery,
   findDeliveryIntentOwner: queueMocks.findDeliveryIntentOwner,
 }));
-vi.mock("./delivery-queue-preparation.js", () => ({
-  StableDeliveryPreparationLostError: class StableDeliveryPreparationLostError extends Error {},
-  withStableDeliveryPreparation: queueMocks.withStableDeliveryPreparation,
+vi.mock("./delivery-intent-fence.js", () => ({
+  StableDeliveryIntentFenceLostError: class StableDeliveryIntentFenceLostError extends Error {},
+  withStableDeliveryIntentFence: queueMocks.withStableDeliveryIntentFence,
 }));
 vi.mock("./delivery-queue.js", () => ({
   enqueueDelivery: queueMocks.enqueueDelivery,
@@ -436,14 +436,12 @@ describe("deliverOutboundPayloads", () => {
     queueMocks.loadPendingDelivery.mockResolvedValue(null);
     queueMocks.findDeliveryIntentOwner.mockClear();
     queueMocks.findDeliveryIntentOwner.mockReturnValue(null);
-    queueMocks.withStableDeliveryPreparation.mockReset();
-    queueMocks.withStableDeliveryPreparation.mockImplementation(
+    queueMocks.withStableDeliveryIntentFence.mockReset();
+    queueMocks.withStableDeliveryIntentFence.mockImplementation(
       async (params: {
         id: string;
         run: (owner: {
-          current: () => Record<string, unknown>;
-          beforeFirstModifier: () => void;
-          markPrepared: () => void;
+          fence: Record<string, unknown>;
           markPublished: () => void;
         }) => Promise<unknown>;
       }) => {
@@ -455,18 +453,11 @@ describe("deliverOutboundPayloads", () => {
           enqueuedAt: 0,
           retryCount: 0,
           attemptCount: 0,
-          preparationState: "claimed",
         };
         return {
           status: "claimed",
           value: await params.run({
-            current: () => entry,
-            beforeFirstModifier: () => {
-              entry.preparationState = "modifiers_started";
-            },
-            markPrepared: () => {
-              entry.preparationState = "prepared";
-            },
+            fence: entry,
             markPublished: () => {},
           }),
         };
@@ -943,8 +934,8 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMatrix).not.toHaveBeenCalled();
   });
 
-  it("never falls back to fresh modifiers after another preparation owner wins", async () => {
-    queueMocks.withStableDeliveryPreparation.mockResolvedValueOnce({ status: "existing" });
+  it("never falls back to fresh modifiers after another intent-fence owner wins", async () => {
+    queueMocks.withStableDeliveryIntentFence.mockResolvedValueOnce({ status: "existing" });
     queueMocks.loadPendingDelivery.mockResolvedValueOnce(null);
     queueMocks.findDeliveryIntentOwner.mockReturnValueOnce(null);
     hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sending");

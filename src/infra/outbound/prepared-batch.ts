@@ -58,17 +58,6 @@ export function createUnmodifiedPreparedOutboundBatch(
   };
 }
 
-/** Retains terminal legacy cardinality without copying unavailable pre-policy content. */
-export function createUnavailablePreparedOutboundBatch(
-  sourcePayloadCount: number,
-): PreparedOutboundBatch {
-  return {
-    schemaVersion: PREPARED_OUTBOUND_BATCH_SCHEMA_VERSION,
-    sourcePayloadCount,
-    entries: [],
-  };
-}
-
 export function acceptedPreparedOutboundEntries(
   batch: PreparedOutboundBatch,
 ): PreparedOutboundAcceptedEntry[] {

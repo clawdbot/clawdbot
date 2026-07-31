@@ -2,10 +2,7 @@
 // platform-send recovery state in the shared SQLite queue.
 import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import type {
-  ChannelMessageUnknownSendReconciliationResult,
-  RenderedMessageBatchPlanItem,
-} from "../../channels/message/types.js";
+import type { RenderedMessageBatchPlanItem } from "../../channels/message/types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
 import {
@@ -15,7 +12,7 @@ import {
 } from "../delivery-queue-sqlite-claim.js";
 import {
   commitStagedDeliveryQueueEntryOnceAcrossNamespaces,
-  movePendingDeliveryQueueEntryNamespace,
+  publishDeliveryQueueEntryFromIntentFence,
   upsertDeliveryQueueEntryOnceAcrossNamespaces,
 } from "../delivery-queue-sqlite-namespace.js";
 import {
@@ -31,22 +28,21 @@ import {
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
   type DeliveryQueueCompletionRetention,
+  type DeliveryQueueEntryState,
 } from "../delivery-queue-sqlite.js";
 import { generateSecureUuid } from "../secure-random.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
+import {
+  StableDeliveryIntentFenceLostError,
+  type StableDeliveryIntentFence,
+} from "./delivery-intent-fence.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {
   DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
-  OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
-  OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
+  OUTBOUND_DELIVERY_INTENT_FENCE_QUEUE_NAME,
   OUTBOUND_DELIVERY_QUEUE_NAME,
-  OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
 } from "./delivery-queue-media-staging.js";
-import {
-  StableDeliveryPreparationLostError,
-  type StableDeliveryPreparation,
-} from "./delivery-queue-preparation.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { DeliveryMirror } from "./mirror.js";
@@ -114,45 +110,19 @@ export type QueuedDeliveryPayload = {
   deliveryCompletion?: DurableDeliveryCompletion;
   /** Retain a terminal receipt when the producer may replay this stable intent indefinitely. */
   completionRetention?: DeliveryQueueCompletionRetention;
-  /** One-time pre-D4 provider verdict captured before legacy policy migration. */
-  legacyUnknownSendReconciliation?: Exclude<
-    ChannelMessageUnknownSendReconciliationResult,
-    { status: "unresolved" }
-  >;
-  /** Legacy sent rows lack trustworthy post-policy content for observer replay. */
-  legacyPreparedContentUnavailable?: true;
   /** Producer-specific retry budget; omitted entries use the queue default. */
   maxRetries?: number;
 };
 
-/** Pre-D4 row shape read only by the one-time startup migration. */
-type LegacyQueuedDeliveryPayload = Omit<QueuedDeliveryPayload, "preparedBatch" | "payloads"> & {
-  payloads: ReplyPayload[];
-  replyPayloadSendingHook?: QueuedReplyPayloadSendingHook;
-};
-
-export interface LegacyQueuedDelivery extends LegacyQueuedDeliveryPayload {
+/** Pre-D4 pending row shape read only by bounded startup retirement. */
+export interface LegacyQueuedDelivery extends DeliveryQueueEntryState {
   id: string;
   enqueuedAt: number;
   retryCount: number;
   attemptCount: number;
-  availableAt?: number;
-  producerClaimId?: string;
-  lastAttemptAt?: number;
-  lastError?: string;
-  platformSendAttemptId?: string;
-  platformSendStartedAt?: number;
-  effectiveReplyToId?: string | null;
-  recoveryState?: "producer_claimed" | "send_attempt_started" | "unknown_after_send";
+  payloads?: ReplyPayload[];
+  deliveryCompletion?: DurableDeliveryCompletion;
 }
-
-export type LegacyQueuedDeliveryPreparation = LegacyQueuedDelivery & {
-  legacyPreparationState: "claimed" | "modifiers_started";
-  /** Cross-process owner of the fallible pre-publication policy pass. */
-  legacyPreparationOwnerId?: string;
-  /** Renewable wall-clock lease; an unexpired owner must never be dead-lettered. */
-  legacyPreparationLeaseExpiresAt?: number;
-};
 
 export type QueuedDelivery = Omit<QueuedDeliveryPayload, "preparedBatch" | "payloads"> & {
   preparedBatch: PreparedOutboundBatch;
@@ -211,8 +181,6 @@ function createQueuedDelivery(params: QueuedDeliveryPayload, id: string): Queued
     preparedMessageId: params.preparedMessageId,
     deliveryCompletion: params.deliveryCompletion,
     completionRetention: params.completionRetention,
-    legacyUnknownSendReconciliation: params.legacyUnknownSendReconciliation,
-    legacyPreparedContentUnavailable: params.legacyPreparedContentUnavailable,
     maxRetries: params.maxRetries,
     retryCount: 0,
     attemptCount: 0,
@@ -272,9 +240,7 @@ export async function enqueueDeliveryOnce(
           stagingId: mediaStageId,
           stagingQueueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
           conflictQueueNames: [
-            OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
-            OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
-            OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+            OUTBOUND_DELIVERY_INTENT_FENCE_QUEUE_NAME,
             LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
           ],
           stateDir,
@@ -287,9 +253,7 @@ export async function enqueueDeliveryOnce(
     : upsertDeliveryQueueEntryOnceAcrossNamespaces({
         queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
         conflictQueueNames: [
-          OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
-          OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
-          OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+          OUTBOUND_DELIVERY_INTENT_FENCE_QUEUE_NAME,
           LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
         ],
         entry,
@@ -298,28 +262,24 @@ export async function enqueueDeliveryOnce(
   return { id: normalizedId, created };
 }
 
-/** Atomically replaces a payload-free stable preparation owner with prepared custody. */
+/** Atomically publishes prepared custody while retaining its payload-free stable-id fence. */
 export async function enqueuePreparedDeliveryOnce(
   params: QueuedDeliveryPayload,
   id: string,
-  preparation: StableDeliveryPreparation,
+  intentFence: StableDeliveryIntentFence,
   stateDir?: string,
   mediaStageId?: string,
 ): Promise<{ id: string; created: boolean }> {
   const normalizedId = id.trim();
-  if (!normalizedId || normalizedId !== preparation.id) {
-    throw new Error("Stable delivery preparation id is invalid");
+  if (!normalizedId || normalizedId !== intentFence.id) {
+    throw new Error("Stable delivery intent fence id is invalid");
   }
   const entry = createQueuedDelivery(params, normalizedId);
-  const result = movePendingDeliveryQueueEntryNamespace({
-    sourceQueueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
+  const result = publishDeliveryQueueEntryFromIntentFence({
+    fenceQueueName: OUTBOUND_DELIVERY_INTENT_FENCE_QUEUE_NAME,
     destinationQueueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-    conflictQueueNames: [
-      OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
-      OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
-      LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
-    ],
-    expectedSourceEntry: preparation,
+    conflictQueueNames: [LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME],
+    id: normalizedId,
     destinationEntry: entry,
     ...(mediaStageId
       ? {
@@ -332,8 +292,8 @@ export async function enqueuePreparedDeliveryOnce(
   if (result === "staging-missing") {
     throw new Error(`Delivery queue media stage expired before enqueue: ${mediaStageId}`);
   }
-  if (result !== "moved") {
-    throw new StableDeliveryPreparationLostError(normalizedId);
+  if (result !== "created") {
+    throw new StableDeliveryIntentFenceLostError(normalizedId);
   }
   return { id: normalizedId, created: true };
 }
@@ -624,36 +584,20 @@ export function findDeliveryIntentOwner(
   id: string,
   stateDir?: string,
 ): {
-  namespace: "prepared" | "preparing" | "migration" | "legacy-preparing" | "legacy";
+  namespace: "prepared" | "intent-fence" | "legacy";
   status: "pending" | "failed" | "completed";
 } | null {
   const preparedStatus = getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
   if (preparedStatus) {
     return { namespace: "prepared", status: preparedStatus };
   }
-  const preparationStatus = getDeliveryQueueEntryStatus(
-    OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
+  const fenceStatus = getDeliveryQueueEntryStatus(
+    OUTBOUND_DELIVERY_INTENT_FENCE_QUEUE_NAME,
     id,
     stateDir,
   );
-  if (preparationStatus) {
-    return { namespace: "preparing", status: preparationStatus };
-  }
-  const migrationStatus = getDeliveryQueueEntryStatus(
-    OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
-    id,
-    stateDir,
-  );
-  if (migrationStatus) {
-    return { namespace: "migration", status: migrationStatus };
-  }
-  const legacyPreparationStatus = getDeliveryQueueEntryStatus(
-    OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
-    id,
-    stateDir,
-  );
-  if (legacyPreparationStatus) {
-    return { namespace: "legacy-preparing", status: legacyPreparationStatus };
+  if (fenceStatus) {
+    return { namespace: "intent-fence", status: fenceStatus };
   }
   const legacyStatus = getDeliveryQueueEntryStatus(
     LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
@@ -668,30 +612,12 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
   return loadDeliveryQueueEntries(OUTBOUND_DELIVERY_QUEUE_NAME, stateDir) as QueuedDelivery[];
 }
 
-/** One-time migration inventory; normal recovery never reads the legacy namespace. */
+/** One-time retirement inventory; normal recovery never reads the legacy namespace. */
 export function loadLegacyPendingDeliveries(stateDir?: string): LegacyQueuedDelivery[] {
   return loadDeliveryQueueEntries(
     LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
     stateDir,
   ) as LegacyQueuedDelivery[];
-}
-
-/** Prepared legacy rows awaiting media staging and canonical publication. */
-export function loadPendingDeliveryMigrations(stateDir?: string): QueuedDelivery[] {
-  return loadDeliveryQueueEntries(
-    OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
-    stateDir,
-  ) as QueuedDelivery[];
-}
-
-/** Claimed pre-D4 rows whose modifying policy has not safely published yet. */
-export function loadPendingLegacyDeliveryPreparations(
-  stateDir?: string,
-): LegacyQueuedDeliveryPreparation[] {
-  return loadDeliveryQueueEntries(
-    OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
-    stateDir,
-  ) as LegacyQueuedDeliveryPreparation[];
 }
 
 /** Move a queue entry out of the pending retry set. */

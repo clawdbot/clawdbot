@@ -168,9 +168,6 @@ function emitRecoveredTerminalFailure(
   error: string,
   collected: readonly IndexedMessageSentEvent[] = [],
 ): void {
-  if (entry.legacyPreparedContentUnavailable) {
-    return;
-  }
   const fallbackEvents = queuedTerminalFailureEvents(entry, error);
   // Rendering can suppress an accepted payload before later payloads settle.
   // Reconcile by source index so a gap cannot duplicate or misattribute events.
@@ -184,9 +181,6 @@ function emitRecoveredTerminalFailure(
 }
 
 function emitRecoveredTerminalSuccess(entry: QueuedDelivery, result: OutboundDeliveryResult): void {
-  if (entry.legacyPreparedContentUnavailable) {
-    return;
-  }
   const preparedEntries = acceptedPreparedOutboundEntries(entry.preparedBatch);
   if (preparedEntries.length === 0) {
     return;
@@ -453,9 +447,6 @@ async function runReconciledSentCommitHooks(params: {
   reconciliation: Extract<ChannelMessageUnknownSendReconciliationResult, { status: "sent" }>;
   log: RecoveryLogger;
 }): Promise<void> {
-  if (params.entry.legacyPreparedContentUnavailable) {
-    return;
-  }
   const adapter = resolveOutboundChannelMessageAdapter({
     channel: params.entry.channel,
     cfg: params.cfg,
@@ -699,14 +690,12 @@ async function drainQueuedEntry(opts: {
   if (needsUnknownSendReconciliation(entry)) {
     // A crash after platform send start cannot be blindly replayed; adapters
     // must reconcile whether the platform already committed the message.
-    const reconciliation =
-      entry.legacyUnknownSendReconciliation ??
-      (await reconcileUnknownQueuedDelivery({
-        entry,
-        payloads: queuedPayloads(entry),
-        cfg: opts.cfg,
-        warn: (message) => opts.log.warn(message),
-      }));
+    const reconciliation = await reconcileUnknownQueuedDelivery({
+      entry,
+      payloads: queuedPayloads(entry),
+      cfg: opts.cfg,
+      warn: (message) => opts.log.warn(message),
+    });
     if (reconciliation?.status === "sent") {
       try {
         const result = buildReconciledSentResult(entry, reconciliation);
@@ -1257,9 +1246,8 @@ export async function recoverPendingDeliveries(opts: {
   /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next startup. Default: 60 000. */
   maxRecoveryMs?: number;
 }): Promise<DeliveryRecoverySummary> {
-  const { migrateLegacyPendingOutboundDeliveries } = await import("./delivery-queue-migration.js");
-  await migrateLegacyPendingOutboundDeliveries({
-    cfg: opts.cfg,
+  const { retireLegacyPendingOutboundDeliveries } = await import("./delivery-queue-retirement.js");
+  await retireLegacyPendingOutboundDeliveries({
     log: opts.log,
     stateDir: opts.stateDir,
   });

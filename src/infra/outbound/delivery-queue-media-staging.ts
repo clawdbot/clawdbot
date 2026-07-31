@@ -9,9 +9,7 @@ import {
 import { generateSecureUuid } from "../secure-random.js";
 
 export const LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME = "outbound";
-export const OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME = "outbound-legacy-preparing-v1";
-export const OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME = "outbound-preparing-v1";
-export const OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME = "outbound-prepared-migration-v1";
+export const OUTBOUND_DELIVERY_INTENT_FENCE_QUEUE_NAME = "outbound-intent-fence-v1";
 export const OUTBOUND_DELIVERY_QUEUE_NAME = "outbound-prepared-v1";
 export const DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME = "outbound-media-staging";
 
@@ -98,12 +96,7 @@ export function loadDeliveryQueueMediaRetentionSnapshot(params: {
   stateDir?: string;
 }): { payloads: ReplyPayload[][]; stagedArtifacts: string[] } {
   const snapshot = expireStagingAndLoadDeliveryQueueEntries({
-    queueNames: [
-      OUTBOUND_DELIVERY_QUEUE_NAME,
-      LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
-      OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
-      OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
-    ],
+    queueNames: [OUTBOUND_DELIVERY_QUEUE_NAME, LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME],
     stagingQueueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
     expireBeforeMs: params.expireBeforeMs,
     stateDir: params.stateDir,

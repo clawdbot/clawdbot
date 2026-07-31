@@ -14,9 +14,9 @@ import type { OutboundDeliveryResult } from "../infra/outbound/deliver-types.js"
 import { deliverOutboundPayloadsInternal } from "../infra/outbound/deliver.js";
 import { runOutboundDeliveryCommitHooks } from "../infra/outbound/delivery-commit-hooks.js";
 import {
-  withStableDeliveryPreparation,
-  type StableDeliveryPreparationOwner,
-} from "../infra/outbound/delivery-queue-preparation.js";
+  withStableDeliveryIntentFence,
+  type StableDeliveryIntentFenceOwner,
+} from "../infra/outbound/delivery-intent-fence.js";
 import {
   failPendingDelivery,
   findDeliveryIntentOwner,
@@ -94,8 +94,9 @@ async function enqueueRestartSentinelNoticeOwned(
   deliveryIntentId: string,
 ): Promise<RestartSentinelNoticeEnqueueResult> {
   const claim = await withActiveDeliveryClaim(deliveryIntentId, async () => {
-    const preparation = await withStableDeliveryPreparation({
+    const preparation = await withStableDeliveryIntentFence({
       id: deliveryIntentId,
+      completionRetention: "permanent",
       run: async (owner) =>
         await enqueueRestartSentinelNoticeClaimed(params, deliveryIntentId, owner),
     });
@@ -124,7 +125,7 @@ async function enqueueRestartSentinelNoticeClaimed(
     revision: number;
   },
   deliveryIntentId: string,
-  preparationOwner: StableDeliveryPreparationOwner,
+  intentFenceOwner: StableDeliveryIntentFenceOwner,
 ): Promise<RestartSentinelNoticeEnqueueResult> {
   const delivery = {
     cfg: params.cfg,
@@ -141,17 +142,14 @@ async function enqueueRestartSentinelNoticeClaimed(
     maxRetries: RESTART_NOTICE_MAX_ATTEMPTS,
     deliveryIntentId,
   };
-  const preparedBatch = await prepareOutboundPayloadBatch(delivery, {
-    onBeforeFirstModifier: preparationOwner.beforeFirstModifier,
-  });
-  preparationOwner.markPrepared();
+  const preparedBatch = await prepareOutboundPayloadBatch(delivery);
   const queued = await stageAndEnqueueOutboundDelivery(delivery, preparedBatch, {
-    getStablePreparation: preparationOwner.current,
+    intentFence: intentFenceOwner.fence,
   });
   if (!queued?.created) {
     throw new Error("Restart sentinel notice could not acquire durable queue custody");
   }
-  preparationOwner.markPublished();
+  intentFenceOwner.markPublished();
   return queued;
 }
 

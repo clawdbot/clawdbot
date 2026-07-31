@@ -16,10 +16,10 @@ import {
 import { deliverOutboundPayloadsWithQueueCleanup } from "./deliver-queue-execute.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import {
-  StableDeliveryPreparationLostError,
-  withStableDeliveryPreparation,
-  type StableDeliveryPreparationOwner,
-} from "./delivery-queue-preparation.js";
+  StableDeliveryIntentFenceLostError,
+  withStableDeliveryIntentFence,
+  type StableDeliveryIntentFenceOwner,
+} from "./delivery-intent-fence.js";
 import { findDeliveryIntentOwner, loadPendingDelivery } from "./delivery-queue-storage.js";
 import { claimDeliveryPlatformSendAttempt, withActiveDeliveryClaim } from "./delivery-queue.js";
 import { createMessageSentEmitter } from "./message-sent-hook.js";
@@ -44,8 +44,9 @@ export async function runOutboundDeliveryInternal(
     // Serializing preparation prevents concurrent producers from running
     // stateful modifiers before SQLite chooses the stable delivery owner.
     const claim = await withActiveDeliveryClaim(stableIntentId, async () => {
-      const preparation = await withStableDeliveryPreparation({
+      const preparation = await withStableDeliveryIntentFence({
         id: stableIntentId,
+        completionRetention: stableParams.completionRetention,
         run: async (owner) => await runOutboundDeliveryWithQueue(stableParams, true, owner),
       });
       return preparation.status === "claimed"
@@ -63,7 +64,7 @@ export async function runOutboundDeliveryInternal(
 async function runOutboundDeliveryWithQueue(
   params: DeliverOutboundPayloadsParams,
   stableIntentClaimHeld: boolean,
-  stablePreparationOwner?: StableDeliveryPreparationOwner,
+  stableIntentFenceOwner?: StableDeliveryIntentFenceOwner,
   allowFreshPreparation = true,
 ): Promise<OutboundDeliveryResult[]> {
   const auditStartedAt = Date.now();
@@ -106,14 +107,10 @@ async function runOutboundDeliveryWithQueue(
   const existingStableDelivery = params.deliveryIntentId
     ? await loadPendingDelivery(params.deliveryIntentId)
     : null;
-  if (params.deliveryIntentId && !existingStableDelivery && !stablePreparationOwner) {
+  if (params.deliveryIntentId && !existingStableDelivery && !stableIntentFenceOwner) {
     const owner = findDeliveryIntentOwner(params.deliveryIntentId);
     if (owner) {
-      throw new Error(
-        owner.namespace === "legacy"
-          ? `Stable delivery intent is awaiting queue migration: ${params.deliveryIntentId}`
-          : `Stable delivery intent is already queued: ${params.deliveryIntentId}`,
-      );
+      throw new Error(`Stable delivery intent is already queued: ${params.deliveryIntentId}`);
     }
   }
   if (params.deliveryIntentId && !existingStableDelivery && !allowFreshPreparation) {
@@ -130,10 +127,7 @@ async function runOutboundDeliveryWithQueue(
     preparedBatch =
       existingStableDelivery?.preparedBatch ??
       params.preparedBatch ??
-      (await prepareOutboundPayloadBatch(params, {
-        onBeforeFirstModifier: stablePreparationOwner?.beforeFirstModifier,
-      }));
-    stablePreparationOwner?.markPrepared();
+      (await prepareOutboundPayloadBatch(params));
   } catch (error) {
     emitPreQueueFailure();
     const failedPayload =
@@ -207,11 +201,9 @@ async function runOutboundDeliveryWithQueue(
       : await stageAndEnqueueOutboundDelivery(
           deliveryParams,
           preparedBatch,
-          stablePreparationOwner
-            ? { getStablePreparation: stablePreparationOwner.current }
-            : undefined,
+          stableIntentFenceOwner ? { intentFence: stableIntentFenceOwner.fence } : undefined,
         ).catch((err: unknown) => {
-          if (queuePolicy === "required" || err instanceof StableDeliveryPreparationLostError) {
+          if (queuePolicy === "required" || err instanceof StableDeliveryIntentFenceLostError) {
             emitPreQueueFailure();
             throw err;
           }
@@ -219,8 +211,8 @@ async function runOutboundDeliveryWithQueue(
         }); // Best-effort delivery falls back to direct send if staging or the queue write fails.
 
   const queueId = queued?.id ?? null;
-  if (queued?.created && stablePreparationOwner) {
-    stablePreparationOwner.markPublished();
+  if (queued?.created && stableIntentFenceOwner) {
+    stableIntentFenceOwner.markPublished();
   }
   if (queueId) {
     params.onDeliveryIntent?.({

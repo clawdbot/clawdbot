@@ -122,7 +122,7 @@ const mocks = vi.hoisted(() => {
     enqueueDeliveryOnce: vi.fn(async (_payload: unknown, id: string) => ({ id, created: true })),
     findDeliveryIntentOwner: vi.fn<
       () => {
-        namespace: "prepared" | "preparing" | "migration" | "legacy-preparing" | "legacy";
+        namespace: "prepared" | "intent-fence" | "legacy";
         status: "pending" | "failed" | "completed";
       } | null
     >(() => null),
@@ -141,7 +141,7 @@ const mocks = vi.hoisted(() => {
       status: "claimed" as const,
       value: await fn(),
     })),
-    withStableDeliveryPreparation: vi.fn(),
+    withStableDeliveryIntentFence: vi.fn(),
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
     enqueueSessionDelivery: vi.fn(async (payload: Record<string, unknown>) => {
@@ -390,8 +390,8 @@ vi.mock("../infra/outbound/delivery-queue-storage.js", () => ({
   reserveDeliveryAttempt: mocks.reserveDeliveryAttempt,
 }));
 
-vi.mock("../infra/outbound/delivery-queue-preparation.js", () => ({
-  withStableDeliveryPreparation: mocks.withStableDeliveryPreparation,
+vi.mock("../infra/outbound/delivery-intent-fence.js", () => ({
+  withStableDeliveryIntentFence: mocks.withStableDeliveryIntentFence,
 }));
 
 vi.mock("../infra/outbound/deliver-prepare.js", () => ({
@@ -661,22 +661,18 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.enqueueDeliveryOnce.mockImplementation(async (_payload, id) => ({ id, created: true }));
     mocks.findDeliveryIntentOwner.mockReset();
     mocks.findDeliveryIntentOwner.mockReturnValue(null);
-    mocks.withStableDeliveryPreparation.mockReset();
-    mocks.withStableDeliveryPreparation.mockImplementation(
+    mocks.withStableDeliveryIntentFence.mockReset();
+    mocks.withStableDeliveryIntentFence.mockImplementation(
       async (params: {
         id: string;
         run: (owner: {
-          current: () => Record<string, unknown>;
-          beforeFirstModifier: () => void;
-          markPrepared: () => void;
+          fence: Record<string, unknown>;
           markPublished: () => void;
         }) => Promise<unknown>;
       }) => ({
         status: "claimed",
         value: await params.run({
-          current: () => ({ id: params.id }),
-          beforeFirstModifier: () => {},
-          markPrepared: () => {},
+          fence: { id: params.id },
           markPublished: () => {},
         }),
       }),
@@ -807,7 +803,7 @@ describe("scheduleRestartSentinelWake", () => {
   });
 
   it("does not resend a restart notice whose stable queue id is already owned", async () => {
-    mocks.withStableDeliveryPreparation.mockResolvedValueOnce({ status: "existing" });
+    mocks.withStableDeliveryIntentFence.mockResolvedValueOnce({ status: "existing" });
     mocks.findDeliveryIntentOwner.mockReturnValueOnce({
       namespace: "prepared",
       status: "pending",

@@ -7,9 +7,9 @@ import {
   resolveOutboundMediaAccessForSend,
   stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
+import type { StableDeliveryIntentFence } from "./delivery-intent-fence.js";
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { cancelDeliveryQueueMediaStage } from "./delivery-queue-media-staging.js";
-import type { StableDeliveryPreparation } from "./delivery-queue-preparation.js";
 import { loadPendingDelivery, type QueuedDelivery } from "./delivery-queue-storage.js";
 import {
   enqueueDelivery,
@@ -43,8 +43,6 @@ export function restoreQueuedDeliveryCustody(
     effectiveReplyToId: _effectiveReplyToId,
     recoveryState: _recoveryState,
     maxRetries: _maxRetries,
-    legacyUnknownSendReconciliation: _legacyUnknownSendReconciliation,
-    legacyPreparedContentUnavailable: _legacyPreparedContentUnavailable,
     ...custody
   } = entry;
   const payloads = acceptedPreparedOutboundEntries(custody.preparedBatch).map(
@@ -57,7 +55,7 @@ export function restoreQueuedDeliveryCustody(
 export async function stageAndEnqueueOutboundDelivery(
   params: DeliverOutboundPayloadsParams,
   preparedBatch: PreparedOutboundBatch,
-  options?: { getStablePreparation?: () => StableDeliveryPreparation },
+  options?: { intentFence?: StableDeliveryIntentFence },
 ): Promise<{ id: string; created: boolean } | null> {
   const { channel, to } = params;
   const queuePolicy = params.queuePolicy ?? "best_effort";
@@ -135,11 +133,11 @@ export async function stageAndEnqueueOutboundDelivery(
       deliveryCompletion: params.deliveryCompletion,
     };
     if (params.deliveryIntentId) {
-      const queued = options?.getStablePreparation
+      const queued = options?.intentFence
         ? await enqueuePreparedDeliveryOnce(
             delivery,
             params.deliveryIntentId,
-            options.getStablePreparation(),
+            options.intentFence,
             undefined,
             staged.mediaStageId,
           )
