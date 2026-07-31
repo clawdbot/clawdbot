@@ -118,11 +118,13 @@ export function buildProjectedMcpToolNames(params: {
   tools: ReadonlyMap<string, string>;
   utilities: ReadonlyMap<string, string>;
 } {
-  const reservedNames = new Set<string>();
+  const toolNames = [...new Set(params.toolNames.map((name) => name.trim()).filter(Boolean))];
+  const utilityNames = [...new Set(params.utilityNames ?? [])];
+  // Raw names remain valid filter inputs. Reserve them before projection so a
+  // projected name can never identify a different raw tool or utility.
+  const reservedNames = normalizeReservedToolNames([...toolNames, ...utilityNames]);
   const tools = new Map<string, string>();
-  for (const toolName of [
-    ...new Set(params.toolNames.map((name) => name.trim()).filter(Boolean)),
-  ].toSorted((left, right) => left.localeCompare(right))) {
+  for (const toolName of toolNames.toSorted((left, right) => left.localeCompare(right))) {
     tools.set(
       toolName,
       reserveProjectedMcpToolName({
@@ -133,7 +135,7 @@ export function buildProjectedMcpToolNames(params: {
     );
   }
   const utilities = new Map<string, string>();
-  for (const utilityName of params.utilityNames ?? []) {
+  for (const utilityName of utilityNames) {
     utilities.set(
       utilityName,
       reserveProjectedMcpToolName({

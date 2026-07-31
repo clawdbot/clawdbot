@@ -86,4 +86,17 @@ describe("agent bundle MCP names", () => {
     expect(names.utilities.get("resources_list")).toBe("duck-data__resources_list-2");
     expect(names.utilities.get("resources_read")).toBe("duck-data__resources_read");
   });
+
+  it("keeps projected names distinct from every raw tool and utility name", () => {
+    const names = buildProjectedMcpToolNames({
+      serverName: "demo",
+      toolNames: ["query", "demo__query", "demo__resources_list"],
+      utilityNames: ["resources_list"],
+    });
+
+    expect(names.tools.get("query")).toBe("demo__query-2");
+    expect(names.tools.get("demo__query")).toBe("demo__demo__query");
+    expect(names.tools.get("demo__resources_list")).toBe("demo__demo__resources_list");
+    expect(names.utilities.get("resources_list")).toBe("demo__resources_list-2");
+  });
 });

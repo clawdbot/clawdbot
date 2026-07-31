@@ -1416,7 +1416,7 @@ describe("session MCP runtime", () => {
     }
   });
 
-  it("fails closed when an exact include identifies different raw and projected tools", async () => {
+  it("preserves exact raw filters while projected names avoid cross-tool collisions", async () => {
     const tempDir = tempDirTracker.make("bundle-mcp-ambiguous-tool-filter-");
     const serverPath = path.join(tempDir, "ambiguous-tool-filter.mjs");
     const logPath = path.join(tempDir, "server.log");
@@ -1434,36 +1434,92 @@ describe("session MCP runtime", () => {
       ],
     });
 
-    const runtime = createSessionMcpRuntime({
-      sessionId: "session-ambiguous-filter",
-      workspaceDir: tempDir,
-      cfg: {
-        mcp: {
-          servers: {
-            demo: {
-              command: process.execPath,
-              args: [serverPath],
-              toolFilter: { include: ["demo__query", "demo__resources_list"] },
+    const createRuntime = (sessionId: string, include?: string[]) =>
+      createSessionMcpRuntime({
+        sessionId,
+        workspaceDir: tempDir,
+        cfg: {
+          mcp: {
+            servers: {
+              demo: {
+                command: process.execPath,
+                args: [serverPath],
+                ...(include ? { toolFilter: { include } } : {}),
+              },
             },
           },
         },
-      },
-    });
+      });
+
+    const probeRuntime = createRuntime("session-collision-probe");
+    const probeTools = await materializeBundleMcpToolsForRun({ runtime: probeRuntime });
+    const projectedQueryName = expectDefined(
+      probeTools.tools.find((tool) => getPluginToolMeta(tool)?.mcp?.toolName === "query")?.name,
+      "projected query tool name",
+    );
+    const projectedRawCollisionName = expectDefined(
+      probeTools.tools.find((tool) => getPluginToolMeta(tool)?.mcp?.toolName === "demo__query")
+        ?.name,
+      "projected raw collision tool name",
+    );
+    const projectedRawUtilityCollisionName = expectDefined(
+      probeTools.tools.find(
+        (tool) => getPluginToolMeta(tool)?.mcp?.toolName === "demo__resources_list",
+      )?.name,
+      "projected raw utility collision tool name",
+    );
+    const projectedUtilityName = expectDefined(
+      probeTools.tools.find((tool) => getPluginToolMeta(tool)?.mcp?.operation === "resources_list")
+        ?.name,
+      "projected resource utility name",
+    );
+    expect(projectedQueryName).not.toBe("demo__query");
+    expect(projectedUtilityName).not.toBe("demo__resources_list");
+    await probeTools.dispose();
+    await probeRuntime.dispose();
+
+    const rawFilterRuntime = createRuntime("session-raw-collision-filter", [
+      "demo__query",
+      "demo__resources_list",
+    ]);
 
     try {
-      const catalog = await runtime.getCatalog();
-      expect(catalog.tools).toEqual([]);
-      expect(catalog.servers.demo?.toolCount).toBe(0);
-      expect(catalog.servers.demo?.tools?.filteredCount).toBe(3);
-      expect(catalog.servers.demo?.ambiguousToolFilterIncludes).toEqual([
+      const catalog = await rawFilterRuntime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName).toSorted()).toEqual([
         "demo__query",
         "demo__resources_list",
       ]);
-      const materialized = await materializeBundleMcpToolsForRun({ runtime });
-      expect(materialized.tools).toEqual([]);
+      expect(catalog.servers.demo?.toolCount).toBe(2);
+      expect(catalog.servers.demo?.tools?.filteredCount).toBe(1);
+      expect(catalog.servers.demo?.ambiguousToolFilterIncludes).toBeUndefined();
+      const materialized = await materializeBundleMcpToolsForRun({ runtime: rawFilterRuntime });
+      expect(materialized.tools.map((tool) => tool.name).toSorted()).toEqual(
+        [projectedRawCollisionName, projectedRawUtilityCollisionName].toSorted(),
+      );
       await materialized.dispose();
     } finally {
-      await runtime.dispose();
+      await rawFilterRuntime.dispose();
+    }
+
+    const projectedFilterRuntime = createRuntime("session-projected-collision-filter", [
+      projectedQueryName,
+      projectedUtilityName,
+    ]);
+    try {
+      const catalog = await projectedFilterRuntime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["query"]);
+      expect(catalog.servers.demo?.toolCount).toBe(1);
+      expect(catalog.servers.demo?.tools?.filteredCount).toBe(2);
+      expect(catalog.servers.demo?.ambiguousToolFilterIncludes).toBeUndefined();
+      const materialized = await materializeBundleMcpToolsForRun({
+        runtime: projectedFilterRuntime,
+      });
+      expect(materialized.tools.map((tool) => tool.name).toSorted()).toEqual(
+        [projectedQueryName, projectedUtilityName].toSorted(),
+      );
+      await materialized.dispose();
+    } finally {
+      await projectedFilterRuntime.dispose();
     }
   });
 
