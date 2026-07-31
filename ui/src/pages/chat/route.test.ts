@@ -215,6 +215,60 @@ describe("loadChatRoute", () => {
     expect(list).toHaveBeenCalledTimes(5);
   });
 
+  it("stops paginating once the route navigation is aborted", async () => {
+    const { context, list } = contextFor(result([]));
+    const navigation = new AbortController();
+    list.mockImplementation(async (options) => {
+      navigation.abort();
+      return result([], {
+        hasMore: true,
+        nextOffset: (options?.offset ?? 0) + 20,
+      });
+    });
+
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/chat/main/deadbeef", search: "", hash: "" },
+        "chat",
+        navigation.signal,
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(list).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a shared session lookup alive while another navigation still owns it", async () => {
+    const matching = row({
+      key: "agent:main:dashboard:deadbeef-0000-4000-8000-000000000001",
+      displayName: "Shared lookup",
+    });
+    const { context, list } = contextFor(result([]));
+    let releaseLookup: ((value: SessionsListResult) => void) | undefined;
+    list.mockImplementation(
+      () =>
+        new Promise<SessionsListResult>((resolve) => {
+          releaseLookup = resolve;
+        }),
+    );
+    const staleNavigation = new AbortController();
+    const activeNavigation = new AbortController();
+    const location = { pathname: "/chat/main/deadbeef", search: "", hash: "" };
+    const stale = loadChatRoute(context, location, "chat", staleNavigation.signal);
+    const active = loadChatRoute(context, location, "chat", activeNavigation.signal);
+    await vi.waitFor(() => expect(list).toHaveBeenCalledOnce());
+
+    staleNavigation.abort();
+    releaseLookup?.(result([matching]));
+
+    await expect(stale).rejects.toMatchObject({ name: "AbortError" });
+    await expect(active).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: matching.key,
+      face: "chat",
+    });
+    expect(list).toHaveBeenCalledOnce();
+  });
+
   it("stops after one unavailable session-list result", async () => {
     const { context, list } = contextFor(null);
     await expect(
