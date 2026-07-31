@@ -2,8 +2,8 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ProtocolSchemas } from "../packages/gateway-protocol/src/schema/protocol-schemas.js";
 import { stripInternalProtocolFields } from "../packages/gateway-protocol/src/schema/internal-fields.js";
+import { ProtocolSchemas } from "../packages/gateway-protocol/src/schema/protocol-schemas.js";
 import { listCoreGatewayMethodMetadata } from "../src/gateway/methods/core-descriptors.js";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));

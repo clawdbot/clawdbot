@@ -253,7 +253,8 @@ beforeEach(() => {
         const patch = update(entry);
         return patch ? { ...entry, ...patch } : null;
       },
-    );  updateSessionEntryMock
+    );
+  updateSessionEntryMock
     .mockReset()
     .mockImplementation(
       async (

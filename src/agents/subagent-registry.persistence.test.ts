@@ -1024,5 +1024,4 @@ describe("subagent registry persistence", () => {
     });
     expect(resolved?.endedAt).toBe(220);
   });
-
 });

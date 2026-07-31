@@ -1,3 +1,4 @@
+import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 /**
  * Transcript recorder for CLI-dispatched embedded runs.
  *
@@ -10,7 +11,6 @@
  * stream, and the final assistant snapshot at run end.
  */
 import { appendTranscriptMessage } from "../../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { AgentMessage } from "../runtime/index.js";

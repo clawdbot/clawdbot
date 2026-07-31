@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { readSessionTranscriptRawDelta } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
+import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { createCliDispatchTranscriptRecorder } from "./cli-backend-dispatch-transcript.js";
 
 const tempPaths: string[] = [];
