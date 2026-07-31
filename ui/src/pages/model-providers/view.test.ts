@@ -38,7 +38,9 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     defaultModels: { primary: "openai/gpt-5", fallbacks: [], utilityModel: null },
     defaultModelsDirty: false,
     thinkingLevel: "off",
+    thinkingOverridden: true,
     fastMode: false,
+    fastModeOverridden: true,
     configBusy: false,
     unconfiguredProviders: [{ id: "anthropic", displayName: "Anthropic" }],
     canMutate: true,
@@ -74,7 +76,9 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     onDefaultModelsSave: () => undefined,
     onDefaultModelsReset: () => undefined,
     onThinkingChange: () => undefined,
+    onThinkingReset: () => undefined,
     onFastModeChange: () => undefined,
+    onFastModeReset: () => undefined,
     onOpenModelSetup: () => undefined,
     ...overrides,
   };
@@ -147,6 +151,7 @@ describe("renderModelProviders", () => {
     expect(thinking?.value).toBe("low");
     expect(fastMode?.value).toBe("auto");
     expect([...fastMode!.querySelectorAll("wa-radio")].map((entry) => text(entry))).toEqual([
+      "Default",
       "Auto",
       "Fast",
       "Standard",
@@ -156,6 +161,125 @@ describe("renderModelProviders", () => {
     selectSegment(fastMode!, "off");
     expect(onThinkingChange).toHaveBeenCalledWith("high", expect.any(HTMLElement));
     expect(onFastModeChange).toHaveBeenCalledWith(false);
+  });
+
+  it("shows inherited model policy, restores overrides, and preserves advanced thinking", () => {
+    const onThinkingReset = vi.fn();
+    const onFastModeReset = vi.fn();
+    const container = mount(
+      props({
+        thinkingLevel: "adaptive",
+        fastMode: true,
+        onThinkingReset,
+        onFastModeReset,
+      }),
+    );
+    const behavior = container.querySelector("#settings-model-behavior")!;
+    const thinkingRow = settingsRow(behavior, "Thinking");
+    const fastRow = settingsRow(behavior, "Fast mode");
+
+    expect(thinkingRow.querySelector<SegmentedGroup>("wa-radio-group")?.value).toBe("adaptive");
+    expect(text(thinkingRow)).toContain("Adaptive");
+    expect(text(thinkingRow)).toContain("Default: Model policy");
+    expect(text(fastRow)).toContain("Default: Model policy");
+
+    thinkingRow.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
+    fastRow.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
+    expect(onThinkingReset).toHaveBeenCalledOnce();
+    expect(onFastModeReset).toHaveBeenCalledOnce();
+
+    selectSegment(thinkingRow.querySelector<SegmentedGroup>("wa-radio-group")!, "");
+    selectSegment(fastRow.querySelector<SegmentedGroup>("wa-radio-group")!, "");
+    expect(onThinkingReset).toHaveBeenCalledTimes(2);
+    expect(onFastModeReset).toHaveBeenCalledTimes(2);
+
+    render(
+      renderModelProviders(
+        props({
+          thinkingLevel: undefined,
+          thinkingOverridden: false,
+          fastMode: undefined,
+          fastModeOverridden: false,
+        }),
+      ),
+      container,
+    );
+    const inheritedBehavior = container.querySelector("#settings-model-behavior")!;
+    const inheritedThinking = settingsRow(inheritedBehavior, "Thinking");
+    const inheritedFast = settingsRow(inheritedBehavior, "Fast mode");
+    expect(inheritedThinking.querySelector<SegmentedGroup>("wa-radio-group")?.value).toBe("");
+    expect(inheritedFast.querySelector<SegmentedGroup>("wa-radio-group")?.value).toBe("");
+    expect(
+      (
+        inheritedThinking.querySelector('wa-radio[value=""]') as HTMLElement & {
+          checked: boolean;
+        }
+      ).checked,
+    ).toBe(true);
+    expect(
+      (inheritedFast.querySelector('wa-radio[value=""]') as HTMLElement & { checked: boolean })
+        .checked,
+    ).toBe(true);
+    expect(text(inheritedThinking)).toContain("Using default: Model policy");
+    expect(text(inheritedFast)).toContain("Using default: Model policy");
+    expect(
+      inheritedBehavior.querySelectorAll('button[aria-label="Reset to default"]'),
+    ).toHaveLength(0);
+  });
+
+  it("keeps invalid explicit model behavior values resettable", () => {
+    const onThinkingReset = vi.fn();
+    const onFastModeReset = vi.fn();
+    const container = mount(
+      props({
+        thinkingLevel: undefined,
+        thinkingOverridden: true,
+        fastMode: undefined,
+        fastModeOverridden: true,
+        onThinkingReset,
+        onFastModeReset,
+      }),
+    );
+    const behavior = container.querySelector("#settings-model-behavior")!;
+    const thinking = settingsRow(behavior, "Thinking");
+    const fast = settingsRow(behavior, "Fast mode");
+
+    expect(text(thinking)).toContain("Default: Model policy");
+    expect(text(fast)).toContain("Default: Model policy");
+    thinking.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
+    fast.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
+    expect(onThinkingReset).toHaveBeenCalledOnce();
+    expect(onFastModeReset).toHaveBeenCalledOnce();
+  });
+
+  it("restores controlled model behavior when a reset is rejected", () => {
+    const viewProps = props({
+      thinkingLevel: "high",
+      fastMode: true,
+    });
+    const container = mount(viewProps);
+    const behavior = container.querySelector("#settings-model-behavior")!;
+    const thinking = settingsRow(behavior, "Thinking").querySelector<SegmentedGroup>(
+      "wa-radio-group",
+    )!;
+    const fastMode = settingsRow(behavior, "Fast mode").querySelector<SegmentedGroup>(
+      "wa-radio-group",
+    )!;
+
+    selectSegment(thinking, "");
+    selectSegment(fastMode, "");
+    render(renderModelProviders(viewProps), container);
+
+    expect(thinking.value).toBe("high");
+    expect(fastMode.value).toBe("on");
+    expect(
+      (thinking.querySelector('wa-radio[value="high"]') as HTMLElement & { checked: boolean })
+        .checked,
+    ).toBe(true);
+    expect(
+      (fastMode.querySelector('wa-radio[value="on"]') as HTMLElement & { checked: boolean })
+        .checked,
+    ).toBe(true);
   });
 
   it("locks model behavior while shared config work is pending", () => {

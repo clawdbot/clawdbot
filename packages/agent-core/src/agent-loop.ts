@@ -724,6 +724,25 @@ async function executeToolCallsSequential(
     messages.push(toolResultMessage);
 
     if (signal?.aborted) {
+      // Complete the skipped tail through the normal lifecycle and outcome hook
+      // so the committed tool-call turn stays paired and subscriber-safe.
+      for (let i = finalizedCalls.length; i < toolCalls.length; i++) {
+        const skippedToolCall = toolCalls[i];
+        if (!skippedToolCall) {
+          continue;
+        }
+        const completed = await completeAbortedToolCall(
+          currentContext,
+          assistantMessage,
+          skippedToolCall,
+          resolvedToolCalls,
+          config,
+          signal,
+          emit,
+        );
+        finalizedCalls.push(completed.finalized);
+        messages.push(completed.message);
+      }
       break;
     }
   }
@@ -825,6 +844,28 @@ async function executeToolCallsParallel(
     const toolResultMessage = createToolResultMessage(finalized);
     await emitToolResultMessage(toolResultMessage, emit);
     messages.push(toolResultMessage);
+  }
+
+  // Complete calls skipped before queueing through the same lifecycle contract
+  // as the sequential path.
+  if (signal?.aborted && orderedFinalizedCalls.length < toolCalls.length) {
+    for (let i = orderedFinalizedCalls.length; i < toolCalls.length; i++) {
+      const skippedToolCall = toolCalls[i];
+      if (!skippedToolCall) {
+        continue;
+      }
+      const completed = await completeAbortedToolCall(
+        currentContext,
+        assistantMessage,
+        skippedToolCall,
+        resolvedToolCalls,
+        config,
+        signal,
+        emit,
+      );
+      orderedFinalizedCalls.push(completed.finalized);
+      messages.push(completed.message);
+    }
   }
 
   return {
@@ -1219,6 +1260,47 @@ async function finalizeToolCallOutcome(
       isError: true,
     };
   }
+}
+
+async function completeAbortedToolCall(
+  currentContext: AgentContext,
+  assistantMessage: AssistantMessage,
+  toolCall: AgentToolCall,
+  resolvedToolCalls: Map<AgentToolCall, ResolvedToolCallOutcome>,
+  config: AgentLoopConfig,
+  signal: AbortSignal | undefined,
+  emit: AgentEventSink,
+): Promise<{ finalized: FinalizedToolCallOutcome; message: ToolResultMessage }> {
+  const hideFromChannelProgress = hidesToolCallFromChannelProgress(
+    currentContext,
+    toolCall,
+    resolvedToolCalls,
+  );
+  await emit({
+    type: "tool_execution_start",
+    toolCallId: toolCall.id,
+    toolName: toolCall.name,
+    args: toolCall.arguments,
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+  });
+  const finalized = await finalizeToolCallOutcome(
+    currentContext,
+    assistantMessage,
+    {
+      toolCall,
+      result: createErrorToolResult("Operation aborted"),
+      isError: true,
+      executionStarted: false,
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+    },
+    toolCall.arguments,
+    config,
+    signal,
+  );
+  await emitToolExecutionEnd(finalized, emit);
+  const message = createToolResultMessage(finalized);
+  await emitToolResultMessage(message, emit);
+  return { finalized, message };
 }
 
 function createErrorToolResult(message: string): AgentToolResult<unknown> {

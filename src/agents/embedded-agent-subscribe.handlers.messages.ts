@@ -15,6 +15,7 @@ import {
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { AssistantMessage } from "../llm/types.js";
+import { splitMediaFromOutput } from "../media/parse.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
 import {
   parseAssistantTextSignature,
@@ -1314,9 +1315,7 @@ export function handleMessageEnd(
       : "";
   const trimmedReasoning = rawThinking ? rawThinking.trim() : "";
   const trimmedText = text.trim();
-  const parsedText = trimmedText
-    ? parseReplyDirectives(splitTrailingDirective(trimmedText, { final: true }).text)
-    : null;
+  const parsedText = trimmedText ? parseReplyDirectives(trimmedText) : null;
   const cleanedText = parsedText?.text ?? "";
   const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
 
@@ -1450,6 +1449,27 @@ export function handleMessageEnd(
     }
   };
 
+  const consumeFinalReplyDirectives = () => {
+    const bufferedResult = ctx.consumeReplyDirectives("", { final: true });
+    if (!hasMedia || !parsedText) {
+      return bufferedResult;
+    }
+    const bufferedRawText = bufferedResult?.text ?? "";
+    const leadingWhitespace = bufferedRawText.match(/^\s+/u)?.[0] ?? "";
+    const strippedBufferedText = bufferedRawText ? splitMediaFromOutput(bufferedRawText).text : "";
+    const bufferedText =
+      leadingWhitespace &&
+      strippedBufferedText &&
+      !strippedBufferedText.startsWith(leadingWhitespace)
+        ? `${leadingWhitespace}${strippedBufferedText}`
+        : strippedBufferedText;
+    return {
+      ...bufferedResult,
+      ...parsedText,
+      text: bufferedText,
+    };
+  };
+
   const hasBufferedBlockReply = ctx.blockChunker
     ? ctx.blockChunker.hasBuffered()
     : ctx.state.blockBuffer.length > 0;
@@ -1478,14 +1498,7 @@ export function handleMessageEnd(
       // Final-flush the streaming directive accumulator so any partial
       // inline reply/audio tag held back by splitTrailingDirective gets
       // emitted on the message_end / blockReplyChunking path.
-      emitSplitResultAsBlockReply(
-        hasMedia && parsedText
-          ? {
-              ...parsedText,
-              text: "",
-            }
-          : ctx.consumeReplyDirectives("", { final: true }),
-      );
+      emitSplitResultAsBlockReply(consumeFinalReplyDirectives());
     } else if (text !== ctx.state.lastBlockReplyText || hasMedia) {
       // Guard: for text_end channels, if text_end already delivered content
       // (lastBlockReplyText is set), skip this safety send. The text comparison

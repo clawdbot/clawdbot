@@ -1,7 +1,7 @@
 // @vitest-environment node
 // Control UI tests cover config behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createRuntimeConfigCapability, findAgentConfigEntryIndex } from "./index.ts";
@@ -215,6 +215,52 @@ describe("createRuntimeConfigCapability", () => {
       enabled: true,
       tags: [7],
     });
+    runtimeConfig.dispose();
+  });
+
+  it("removes a restored optional override from config.set while preserving siblings", async () => {
+    const submitted: Array<{ method: string; params: unknown }> = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        return {
+          config: { runtime: { keep: true, mode: "custom" } },
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method === "config.schema") {
+        return {
+          schema: {
+            type: "object",
+            properties: {
+              runtime: {
+                type: "object",
+                properties: {
+                  keep: { type: "boolean" },
+                  mode: { type: "string", default: "balanced" },
+                },
+              },
+            },
+          },
+          uiHints: {},
+        };
+      }
+      submitted.push({ method, params });
+      return { hash: "hash-2" };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+
+    await Promise.all([runtimeConfig.ensureLoaded(), runtimeConfig.ensureSchemaLoaded()]);
+    runtimeConfig.removeFormValue(["runtime", "mode"]);
+
+    await expect(runtimeConfig.save()).resolves.toBe(true);
+    const submission = submitted.find((entry) => entry.method === "config.set");
+    const raw = (submission?.params as { raw?: unknown } | undefined)?.raw;
+    expect(typeof raw).toBe("string");
+    expect(JSON.parse(raw as string)).toEqual({ runtime: { keep: true } });
     runtimeConfig.dispose();
   });
 
@@ -1977,6 +2023,46 @@ describe("config form auto-save", () => {
       refresh: { ok: false, error: "Error: refresh unavailable" },
     });
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-1");
+    runtimeConfig.dispose();
+  });
+
+  it("distinguishes definitive external mutation rejections from transient errors", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        };
+      }
+      return {};
+    });
+    const { runtimeConfig } = createHarness(request as GatewayBrowserClient["request"]);
+    await runtimeConfig.ensureLoaded();
+
+    await expect(
+      runtimeConfig.runExternalMutation(async () => {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "invalid config",
+        });
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "rejected",
+      error: "invalid config",
+    });
+    await expect(
+      runtimeConfig.runExternalMutation(async () => {
+        throw new Error("socket closed");
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "error",
+      error: "socket closed",
+    });
     runtimeConfig.dispose();
   });
 

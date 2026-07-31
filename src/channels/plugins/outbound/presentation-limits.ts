@@ -7,6 +7,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   renderMessagePresentationChartFallbackText,
+  renderMessagePresentationControlFallbackLabel,
   renderMessagePresentationTableFallbackText,
   resolveMessagePresentationActionValue,
   resolveMessagePresentationButtonAction,
@@ -147,17 +148,6 @@ function fallbackListBlocks(params: {
     text: `${params.heading}:\n${labels.map((label) => `- ${label}`).join("\n")}`,
     limits: params.limits,
   });
-}
-
-function buttonFallbackLabel(button: MessagePresentationButton): string {
-  const label = button.label;
-  if (button.disabled) {
-    return label;
-  }
-  const action = resolveMessagePresentationButtonAction(button);
-  return action?.type === "url" || (action?.type === "web-app" && action.url)
-    ? `${label}: ${action.url}`
-    : label;
 }
 
 function actionCapacity(limits: ActionLimits | undefined): number | undefined {
@@ -321,7 +311,7 @@ function adaptButtonsBlock(
   const buttons = selectedCandidates.map((candidate) => candidate.adapted);
   const droppedLabels = candidates
     .filter((candidate) => !candidate.adapted || !selected.has(candidate))
-    .map((candidate) => buttonFallbackLabel(candidate.original));
+    .map((candidate) => renderMessagePresentationControlFallbackLabel(candidate.original));
   consumeButtonBudget(budget, buttons.length);
   const fallback = fallbackListBlocks({
     blockType: fallbackBlockType,
@@ -409,7 +399,7 @@ function adaptSelectBlock(
     labels: (canRenderSelect
       ? candidates.filter((candidate) => !candidate.adapted || !selected.has(candidate))
       : candidates
-    ).map((candidate) => candidate.original.label),
+    ).map((candidate) => renderMessagePresentationControlFallbackLabel(candidate.original)),
     limits: textLimits,
   });
   if (!canRenderSelect) {
@@ -570,7 +560,7 @@ export function adaptMessagePresentationForChannel(params: {
           ...fallbackListBlocks({
             blockType: fallbackBlockType,
             heading: "Actions",
-            labels: block.buttons.map((button) => buttonFallbackLabel(button)),
+            labels: block.buttons.map(renderMessagePresentationControlFallbackLabel),
             limits: limits?.text,
           }),
         );
@@ -593,7 +583,7 @@ export function adaptMessagePresentationForChannel(params: {
           ...fallbackListBlocks({
             blockType: fallbackBlockType,
             heading: block.placeholder ?? "Options",
-            labels: block.options.map((option) => option.label),
+            labels: block.options.map(renderMessagePresentationControlFallbackLabel),
             limits: limits?.text,
           }),
         );

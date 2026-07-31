@@ -241,6 +241,38 @@ describe("matrixOutbound cfg threading", () => {
     });
   });
 
+  it("keeps typed select commands actionable in Matrix fallback content", async () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "select" as const,
+          placeholder: "Environment",
+          options: [
+            {
+              label: "Production",
+              action: { type: "command" as const, command: "/deploy production" },
+            },
+            {
+              label: "Opaque",
+              action: { type: "callback" as const, value: "private-callback-token" },
+            },
+          ],
+        },
+      ],
+    };
+
+    const rendered = await matrixOutbound.renderPresentation!({
+      payload: { text: "Choose", presentation },
+      presentation,
+      ctx: {} as never,
+    });
+
+    expect(rendered?.text).toBe(
+      "Choose\n\nEnvironment:\n- Production: `/deploy production`\n- Opaque",
+    );
+    expect(rendered?.text).not.toContain("private-callback-token");
+  });
+
   it("passes Matrix presentation metadata through sendPayload extraContent", async () => {
     const cfg = {
       channels: {

@@ -1,5 +1,6 @@
 // Control UI runtime config capability and shared config-domain mutations.
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { ErrorCodes } from "@openclaw/gateway-client/browser";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { coerceConfigFormNumberString } from "../../components/config-form.numeric.ts";
@@ -26,7 +27,7 @@ type RuntimeConfigExternalMutationResult<T> =
     }
   | {
       ok: false;
-      reason: "conflict" | "error" | "suspended" | "unavailable";
+      reason: "conflict" | "error" | "rejected" | "suspended" | "unavailable";
       error: string;
     };
 
@@ -49,6 +50,13 @@ function readAckHash(ack: unknown): string | null {
 function isConfigBaseHashConflictError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   return message.includes("config changed since last load");
+}
+
+function isDefinitiveConfigMutationRejection(err: unknown): boolean {
+  return (
+    err instanceof GatewayRequestError &&
+    (err.gatewayCode === ErrorCodes.INVALID_REQUEST || err.gatewayCode === ErrorCodes.FORBIDDEN)
+  );
 }
 
 type ConfigState = {
@@ -1906,7 +1914,11 @@ export function createRuntimeConfigCapability(
               }
               return {
                 ok: false,
-                reason: isConfigBaseHashConflictError(error) ? "conflict" : "error",
+                reason: isConfigBaseHashConflictError(error)
+                  ? "conflict"
+                  : isDefinitiveConfigMutationRejection(error)
+                    ? "rejected"
+                    : "error",
                 error: message,
               };
             }

@@ -117,6 +117,71 @@ describe("extractMentionedJids", () => {
         },
       },
     },
+    {
+      name: "shared contacts",
+      message: {
+        contactMessage: {
+          displayName: "Alice",
+          contextInfo: { mentionedJid: [botJid] },
+        },
+      },
+    },
+    {
+      name: "shared contact collections",
+      message: {
+        contactsArrayMessage: {
+          contacts: [{ displayName: "Alice" }],
+          contextInfo: { mentionedJid: [botJid] },
+        },
+      },
+    },
+    {
+      name: "location pins",
+      message: {
+        locationMessage: {
+          degreesLatitude: 1,
+          degreesLongitude: 2,
+          contextInfo: { mentionedJid: [botJid] },
+        },
+      },
+    },
+    {
+      name: "live locations",
+      message: {
+        liveLocationMessage: {
+          degreesLatitude: 1,
+          degreesLongitude: 2,
+          contextInfo: { mentionedJid: [botJid] },
+        },
+      },
+    },
+    {
+      name: "interactive button prompts",
+      message: {
+        buttonsMessage: {
+          contentText: "Choose one",
+          contextInfo: { mentionedJid: [botJid] },
+        },
+      },
+    },
+    {
+      name: "interactive lists",
+      message: {
+        listMessage: {
+          title: "Choose one",
+          contextInfo: { mentionedJid: [botJid] },
+        },
+      },
+    },
+    {
+      name: "native interactive prompts",
+      message: {
+        interactiveMessage: {
+          body: { text: "Choose one" },
+          contextInfo: { mentionedJid: [botJid] },
+        },
+      },
+    },
   ])("preserves direct bot mentions from $name", ({ message }) => {
     expect(extractMentionedJids(message as proto.IMessage)).toEqual([botJid]);
   });

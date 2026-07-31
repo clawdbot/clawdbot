@@ -7,13 +7,19 @@ import "./test-helpers/agent-session-token-mock.js";
 
 let estimateMessagesTokens: typeof import("./compaction-planning.js").estimateMessagesTokens;
 let buildHistoryPrunePlan: typeof import("./compaction-planning.js").buildHistoryPrunePlan;
+let buildOversizedFallbackPlan: typeof import("./compaction-planning.js").buildOversizedFallbackPlan;
 let buildStageSplitPlan: typeof import("./compaction-planning.js").buildStageSplitPlan;
 let buildSummaryChunks: typeof import("./compaction-planning.js").buildSummaryChunks;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ buildHistoryPrunePlan, buildStageSplitPlan, buildSummaryChunks, estimateMessagesTokens } =
-    await import("./compaction-planning.js"));
+  ({
+    buildHistoryPrunePlan,
+    buildOversizedFallbackPlan,
+    buildStageSplitPlan,
+    buildSummaryChunks,
+    estimateMessagesTokens,
+  } = await import("./compaction-planning.js"));
 });
 
 function splitMessagesByTokenShare(messages: AgentMessage[], parts: number): AgentMessage[][] {
@@ -313,6 +319,96 @@ describe("buildSummaryChunks", () => {
     const chunks = buildSummaryChunks({ messages, maxChunkTokens: 700 });
 
     expect(chunks.map((chunk) => chunk.map((message) => message.timestamp))).toEqual([[1], [2]]);
+  });
+});
+
+describe("buildOversizedFallbackPlan", () => {
+  it("drops a small result when its oversized assistant is omitted", () => {
+    const latestUser = makeMessage(3, 100);
+    const plan = buildOversizedFallbackPlan({
+      messages: [
+        makeAssistantToolCall(1, "call_large_assistant", "x".repeat(12_000)),
+        makeToolResult(2, "call_large_assistant", "small result"),
+        latestUser,
+      ],
+      contextWindow: 2_000,
+    });
+
+    expect(plan.smallMessages).toEqual([latestUser]);
+    expect(plan.smallMessages[0]).toBe(latestUser);
+    expect(plan.oversizedNotes).toEqual([expect.stringContaining("Large assistant")]);
+  });
+
+  it("drops a small assistant when its oversized result is omitted", () => {
+    const firstUser = makeMessage(1, 100);
+    const latestUser = makeMessage(4, 100);
+    const plan = buildOversizedFallbackPlan({
+      messages: [
+        firstUser,
+        makeAssistantToolCall(2, "call_large_result", "small assistant"),
+        makeToolResult(3, "call_large_result", "x".repeat(12_000)),
+        latestUser,
+      ],
+      contextWindow: 2_000,
+    });
+
+    expect(plan.smallMessages).toEqual([firstUser, latestUser]);
+    expect(plan.smallMessages[0]).toBe(firstUser);
+    expect(plan.smallMessages[1]).toBe(latestUser);
+    expect(plan.oversizedNotes).toEqual([expect.stringContaining("Large toolResult")]);
+  });
+
+  it("drops every result in an oversized multi-tool batch while preserving displaced users", () => {
+    const displacedUser = makeMessage(3, 100);
+    const latestUser = makeMessage(6, 100);
+    const assistant = makeAgentAssistantMessage({
+      content: [
+        { type: "toolCall", id: "call_first", name: "first", arguments: {} },
+        { type: "toolCall", id: "call_second", name: "second", arguments: {} },
+      ],
+      model: "gpt-5.6-luna",
+      stopReason: "stop",
+      timestamp: 1,
+    });
+    const plan = buildOversizedFallbackPlan({
+      messages: [
+        assistant,
+        makeToolResult(2, "call_first", "x".repeat(12_000)),
+        displacedUser,
+        makeToolResult(4, "call_second", "small result"),
+        latestUser,
+      ],
+      contextWindow: 2_000,
+    });
+
+    expect(plan.smallMessages).toEqual([displacedUser, latestUser]);
+    expect(plan.smallMessages[0]).toBe(displacedUser);
+    expect(plan.smallMessages[1]).toBe(latestUser);
+  });
+
+  it("keeps a valid tool batch when only a displaced user message is oversized", () => {
+    const assistant = makeAssistantToolCall(1, "call_valid", "small assistant");
+    const result = makeToolResult(3, "call_valid", "small result");
+    const latestUser = makeMessage(4, 100);
+    const plan = buildOversizedFallbackPlan({
+      messages: [assistant, makeMessage(2, 12_000), result, latestUser],
+      contextWindow: 2_000,
+    });
+
+    expect(plan.smallMessages).toEqual([assistant, result, latestUser]);
+    expect(plan.smallMessages[0]).toBe(assistant);
+    expect(plan.smallMessages[1]).toBe(result);
+  });
+
+  it("does not treat aborted assistant calls as an active tool batch", () => {
+    const abortedAssistant = makeAssistantToolCall(1, "call_aborted", "small", "aborted");
+    const latestUser = makeMessage(3, 100);
+    const plan = buildOversizedFallbackPlan({
+      messages: [abortedAssistant, makeMessage(2, 12_000), latestUser],
+      contextWindow: 2_000,
+    });
+
+    expect(plan.smallMessages).toEqual([abortedAssistant, latestUser]);
   });
 });
 

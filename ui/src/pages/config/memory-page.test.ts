@@ -440,7 +440,7 @@ describe("MemorySettingsPage catalog state", () => {
     document.body.append(element);
     try {
       await waitForFast(() => expect(addonStatus(element, "Active memory")).toBe("Unknown"));
-      expect(element.textContent).not.toContain("Disabled");
+      expect(addonStatus(element, "Active memory")).not.toBe("Disabled");
     } finally {
       element.remove();
     }

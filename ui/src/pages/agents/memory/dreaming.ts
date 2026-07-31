@@ -456,27 +456,27 @@ function normalizePhaseStatusBase(record: Record<string, unknown> | null): Dream
   };
 }
 
-function resolveDreamingPluginId(configValue: Record<string, unknown> | null): string {
-  const slots = asRecord(asRecord(configValue?.plugins)?.slots);
-  const selection = resolveSlotSelection("memory", slots?.memory);
-  // Switching the slot off does not move where dreaming config lives: it stays
-  // under the default owner so the knobs remain readable and editable.
-  return selection.kind === "off" ? defaultSlotIdForKey("memory") : selection.pluginId;
-}
-
 export function resolveConfiguredDreaming(configValue: Record<string, unknown> | null): {
   pluginId: string;
   enabled: boolean;
+  overridden: boolean;
+  engineOff: boolean;
 } {
-  const pluginId = resolveDreamingPluginId(configValue);
+  const slots = asRecord(asRecord(configValue?.plugins)?.slots);
+  const slotSelection = resolveSlotSelection("memory", slots?.memory);
+  const pluginId =
+    slotSelection.kind === "off" ? defaultSlotIdForKey("memory") : slotSelection.pluginId;
   const plugins = asRecord(configValue?.plugins);
   const entries = asRecord(plugins?.entries);
   const pluginEntry = asRecord(entries?.[pluginId]);
   const config = asRecord(pluginEntry?.config);
   const dreaming = asRecord(config?.dreaming);
+  const overridden = typeof dreaming?.enabled === "boolean";
   return {
     pluginId,
-    enabled: normalizeBoolean(dreaming?.enabled, false),
+    enabled: slotSelection.kind === "off" ? false : normalizeBoolean(dreaming?.enabled, true),
+    overridden,
+    engineOff: slotSelection.kind === "off",
   };
 }
 

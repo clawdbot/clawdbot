@@ -341,14 +341,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
   });
 
-  const { repairStaleAgentModelRefs } =
-    await import("./doctor/shared/stale-agent-model-ref-repair.js");
-  const staleAgentModelRepair = repairStaleAgentModelRefs(state.candidate, { env: process.env });
-  applyConfigMutation(staleAgentModelRepair, {
-    fixHint: `Run "${doctorFixCommand}" to remove stale agent model references.`,
-    sanitize: true,
-    emitWarnings: true,
-  });
+  if (!shouldRepair) {
+    const { repairStaleAgentModelRefs } =
+      await import("./doctor/shared/stale-agent-model-ref-repair.js");
+    const staleAgentModelRepair = repairStaleAgentModelRefs(state.candidate, { env: process.env });
+    applyConfigMutation(staleAgentModelRepair, {
+      fixHint: `Run "${doctorFixCommand}" to remove stale agent model references.`,
+      sanitize: true,
+      emitWarnings: true,
+    });
+  }
 
   const { collectPluginToolAllowlistWarnings } =
     await import("./doctor/shared/plugin-tool-allowlist-warnings.js");

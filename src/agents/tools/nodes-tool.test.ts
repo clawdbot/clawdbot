@@ -739,6 +739,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
     const result = await tool.execute("call-1", {
       action: "photos_latest",
       node: "macbook",
+      limit: 2,
     });
 
     expect(result?.details).toEqual({

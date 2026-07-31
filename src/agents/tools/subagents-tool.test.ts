@@ -2,6 +2,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { TaskRecord, TaskRuntime, TaskStatus } from "../../tasks/task-registry.types.js";
 import { TASK_STATUS_DETAIL_MAX_CHARS } from "../../tasks/task-status.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../subagent-lifecycle-events.js";
+import {
+  addSubagentRunForTests,
+  resetSubagentRegistryForTests,
+} from "../subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "../subagent-registry.types.js";
 import { createSubagentsTool } from "./subagents-tool.js";
 
 function task(params: {
@@ -45,6 +51,44 @@ describe("subagents tool", () => {
     expect(tool.description).toBe(
       "Background work: subagents, media gen, automation runs. list/cancel.",
     );
+  });
+
+  it("reports a killed subagent truthfully through the actual list tool", async () => {
+    resetSubagentRegistryForTests();
+    const now = Date.now();
+    const run = {
+      runId: "run-tool-killed",
+      childSessionKey: "agent:main:subagent:tool-killed",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "report the killed child",
+      cleanup: "keep",
+      createdAt: now - 2_000,
+      startedAt: now - 2_000,
+      endedAt: now - 1_000,
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "error", error: "agent run aborted" },
+    } satisfies SubagentRunRecord;
+    addSubagentRunForTests(run);
+
+    try {
+      const tool = createSubagentsTool({
+        agentSessionKey: "agent:main:main",
+        config: {},
+        listTasks: () => [],
+      });
+
+      const result = await tool.execute("list-killed", { action: "list" });
+
+      expect(result.details).toMatchObject({
+        status: "ok",
+        recent: [expect.objectContaining({ runId: run.runId, status: "killed" })],
+      });
+      expect((result.details as { text: string }).text).toContain(" killed");
+    } finally {
+      resetSubagentRegistryForTests();
+    }
   });
 
   it("lists cross-runtime tasks in the caller session tree", async () => {
