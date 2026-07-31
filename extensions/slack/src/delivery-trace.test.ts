@@ -20,9 +20,11 @@ import {
   type TraceNormalizer,
 } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { afterAll, afterEach, describe, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, it, vi } from "vitest";
 import type { PreparedSlackMessage } from "./monitor/message-handler/types.js";
+import { setSlackRuntime } from "./runtime.js";
 
 type RecordedWireCall = {
   method: string;
@@ -140,6 +142,14 @@ vi.mock("./client.js", async (importOriginal) => {
 
 import { dispatchPreparedSlackMessage } from "./monitor/message-handler/dispatch.js";
 
+beforeEach(() => {
+  setSlackRuntime({
+    agent: {
+      resolveAgentTimeoutMs: () => 60_000,
+    },
+  } as unknown as PluginRuntime);
+});
+
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/channel-inbound");
   vi.doUnmock("./client.js");
@@ -157,6 +167,7 @@ afterEach(async () => {
   traceState.turnOutcome = null;
   traceState.dispatchDone = null;
   traceState.rejectStartStreamCode = undefined;
+  setSlackRuntime(null as never);
 });
 
 const CHANNEL_ID = "C0TRACE";
