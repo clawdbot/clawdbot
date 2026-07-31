@@ -432,6 +432,7 @@ export function createSessionActions(context: SessionActionContext) {
     if (!result?.entry || !isCurrentSessionSelection(requestSelection)) {
       return false;
     }
+    state.sessionGeneration = (state.sessionGeneration ?? 0) + 1;
     reduceTuiSessionProjection(state, {
       type: "sessionReset",
       scope: readTuiSessionProjectionScope(state),

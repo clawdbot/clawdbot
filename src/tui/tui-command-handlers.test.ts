@@ -122,6 +122,7 @@ function createHarness(params?: {
   activityStatus?: string;
   opts?: { local?: boolean };
   currentSessionId?: string | null;
+  sessionGeneration?: number;
   currentAgentId?: string;
   currentSessionKey?: string;
   sessionProjection?: SessionProjectionState;
@@ -180,6 +181,7 @@ function createHarness(params?: {
     currentAgentId: params?.currentAgentId ?? "main",
     currentSessionKey: params?.currentSessionKey ?? "agent:main:main",
     currentSessionId: params?.currentSessionId ?? null,
+    sessionGeneration: params?.sessionGeneration ?? 0,
     sessionProjection: params?.sessionProjection,
     activeChatRunId: params?.activeChatRunId ?? null,
     pendingSubmit: params?.pendingSubmit ?? null,
@@ -812,6 +814,168 @@ describe("tui command handlers", () => {
     expect(getPendingSubmitAcceptedRunId(state)).toBe("run-accepted");
     expect(forgetLocalRunId).toHaveBeenCalledWith(sentRunId);
     expect(noteLocalRunId).toHaveBeenCalledWith("run-accepted");
+  });
+
+  it("cleans a delayed ACK without mutating the newly selected viewport", async () => {
+    const deferred = createDeferred<{ runId: string; status: string }>();
+    const harness = createHarness({ sendChat: vi.fn(() => deferred.promise) });
+    const sending = harness.handleCommand("old session prompt");
+    const provisionalRunId = (firstMockArg(harness.sendChat, "sendChat") as { runId: string })
+      .runId;
+    const nextProjection = createSessionProjection(
+      { sessionKey: "agent:main:second", agentId: "main" },
+      [
+        {
+          role: "user",
+          content: [{ type: "text", text: "new session prompt" }],
+          __openclaw: { id: "new-user", seq: 1 },
+        },
+      ],
+    );
+    harness.state.currentSessionKey = "agent:main:second";
+    harness.state.sessionProjection = nextProjection;
+    harness.state.activeChatRunId = "new-active";
+    harness.state.pendingSubmit = {
+      phase: "accepted",
+      runId: "new-pending",
+      draftText: "new draft",
+    };
+    harness.state.activityStatus = "streaming";
+
+    deferred.resolve({ runId: "old-accepted", status: "error" });
+    await sending;
+
+    expect(harness.state.sessionProjection).toBe(nextProjection);
+    expect(harness.state.activeChatRunId).toBe("new-active");
+    expect(harness.state.pendingSubmit).toEqual({
+      phase: "accepted",
+      runId: "new-pending",
+      draftText: "new draft",
+    });
+    expect(harness.loadHistory).not.toHaveBeenCalled();
+    expect(harness.addSystem).not.toHaveBeenCalled();
+    expect(harness.setActivityStatus).toHaveBeenCalledExactlyOnceWith("sending");
+    expect(harness.forgetLocalRunId).toHaveBeenCalledWith(provisionalRunId);
+    expect(harness.forgetLocalRunId).toHaveBeenCalledWith("old-accepted");
+  });
+
+  it("ignores a delayed ACK after the selected session is replaced in place", async () => {
+    const deferred = createDeferred<{ runId: string; status: string }>();
+    const harness = createHarness({
+      currentSessionId: "session-old",
+      sendChat: vi.fn(() => deferred.promise),
+    });
+    const sending = harness.handleCommand("old incarnation prompt");
+    harness.state.currentSessionId = "session-new";
+    harness.state.activeChatRunId = "new-active";
+    harness.state.pendingSubmit = {
+      phase: "accepted",
+      runId: "new-pending",
+      draftText: null,
+    };
+
+    deferred.resolve({ runId: "old-accepted", status: "error" });
+    await sending;
+
+    expect(harness.state.currentSessionId).toBe("session-new");
+    expect(harness.state.activeChatRunId).toBe("new-active");
+    expect(harness.state.pendingSubmit?.runId).toBe("new-pending");
+    expect(harness.loadHistory).not.toHaveBeenCalled();
+    expect(harness.addSystem).not.toHaveBeenCalled();
+  });
+
+  it("allows a first send to bind a previously unknown session incarnation", async () => {
+    const deferred = createDeferred<{ runId: string }>();
+    const harness = createHarness({
+      currentSessionId: null,
+      sendChat: vi.fn(() => deferred.promise),
+    });
+    const sending = harness.handleCommand("first session prompt");
+    const provisionalRunId = (firstMockArg(harness.sendChat, "sendChat") as { runId: string })
+      .runId;
+    harness.state.currentSessionId = "session-created";
+    deferred.resolve({ runId: provisionalRunId });
+
+    await sending;
+
+    expect(harness.state.currentSessionId).toBe("session-created");
+    expect(getPendingSubmitAcceptedRunId(harness.state)).toEqual(expect.any(String));
+  });
+
+  it("rejects a delayed ACK when an unknown session is replaced before binding", async () => {
+    const deferred = createDeferred<{ runId: string }>();
+    const harness = createHarness({
+      currentSessionId: null,
+      sessionGeneration: 0,
+      sendChat: vi.fn(() => deferred.promise),
+    });
+    const sending = harness.handleCommand("old unbound prompt");
+    harness.state.currentSessionId = "replacement-session";
+    harness.state.sessionGeneration = 1;
+    harness.state.pendingSubmit = {
+      phase: "accepted",
+      runId: "replacement-pending",
+      draftText: null,
+    };
+    deferred.resolve({ runId: "old-accepted" });
+
+    await sending;
+
+    expect(harness.state.pendingSubmit?.runId).toBe("replacement-pending");
+    expect(harness.loadHistory).not.toHaveBeenCalled();
+    expect(harness.addSystem).not.toHaveBeenCalled();
+  });
+
+  it("accepts a delayed ACK after returning to the exact original session incarnation", async () => {
+    const deferred = createDeferred<{ runId: string }>();
+    const harness = createHarness({
+      currentSessionKey: "agent:main:a",
+      currentSessionId: "session-a",
+      sessionGeneration: 3,
+      sendChat: vi.fn(() => deferred.promise),
+    });
+    const sending = harness.handleCommand("original prompt");
+    const provisionalRunId = (firstMockArg(harness.sendChat, "sendChat") as { runId: string })
+      .runId;
+    harness.state.currentSessionKey = "agent:main:b";
+    harness.state.currentSessionId = "session-b";
+    harness.state.currentSessionKey = "agent:main:a";
+    harness.state.currentSessionId = "session-a";
+    deferred.resolve({ runId: provisionalRunId });
+
+    await sending;
+
+    expect(getPendingSubmitAcceptedRunId(harness.state)).toBe(provisionalRunId);
+    expect(harness.setActivityStatus).toHaveBeenLastCalledWith("waiting");
+  });
+
+  it("cleans a delayed send rejection without reporting it in a new session", async () => {
+    const deferred = createDeferred<never>();
+    const harness = createHarness({ sendChat: vi.fn(() => deferred.promise) });
+    const sending = harness.handleCommand("old session prompt");
+    const provisionalRunId = (firstMockArg(harness.sendChat, "sendChat") as { runId: string })
+      .runId;
+    const nextProjection = createSessionProjection({
+      sessionKey: "agent:work:second",
+      agentId: "work",
+    });
+    harness.state.currentAgentId = "work";
+    harness.state.currentSessionKey = "agent:work:second";
+    harness.state.sessionProjection = nextProjection;
+    harness.state.pendingSubmit = {
+      phase: "accepted",
+      runId: "new-pending",
+      draftText: null,
+    };
+
+    deferred.reject(new Error("old gateway failure"));
+    await sending;
+
+    expect(harness.state.sessionProjection).toBe(nextProjection);
+    expect(harness.state.pendingSubmit?.runId).toBe("new-pending");
+    expect(harness.addSystem).not.toHaveBeenCalled();
+    expect(harness.dropPendingUser).not.toHaveBeenCalled();
+    expect(harness.forgetLocalRunId).toHaveBeenCalledWith(provisionalRunId);
   });
 
   it("clears optimistic state when chat send returns a terminal timeout ack", async () => {

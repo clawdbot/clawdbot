@@ -10,6 +10,8 @@ export type NodeListNode = {
   uiVersion?: string;
   clientId?: string;
   clientMode?: string;
+  /** This node host runs from the Gateway's own canonical node-host installation. */
+  gatewayLocal?: boolean;
   remoteIp?: string;
   deviceFamily?: string;
   modelIdentifier?: string;

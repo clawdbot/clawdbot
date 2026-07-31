@@ -15,6 +15,12 @@ const OPENAI_REALTIME_MODEL =
 const OPENAI_REALTIME_VOICE = process.env.OPENCLAW_REALTIME_OPENAI_VOICE?.trim() || "alloy";
 const DEFAULT_OPENAI_HTTP_TIMEOUT_MS = 30_000;
 const OPENAI_HTTP_RESPONSE_MAX_BYTES = 256 * 1024;
+const DEFAULT_OPENAI_AUDIO_CYCLES = 1;
+const MAX_OPENAI_AUDIO_CYCLES = 10;
+const OPENAI_AUDIO_CHUNK_BYTES = 960;
+const OPENAI_AUDIO_CHUNK_DELAY_MS = 5;
+const OPENAI_AUDIO_ROUNDTRIP_TIMEOUT_MS = 60_000;
+const OPENAI_AUDIO_TRAILING_SILENCE_MS = 750;
 const GOOGLE_REALTIME_MODEL =
   process.env.OPENCLAW_REALTIME_GOOGLE_MODEL?.trim() || "gemini-3.1-flash-live-preview";
 const GOOGLE_REALTIME_VOICE = process.env.OPENCLAW_REALTIME_GOOGLE_VOICE?.trim() || "Kore";
@@ -23,11 +29,13 @@ const GOOGLE_LIVE_WS_URL =
 
 type RealtimeSmokeCliOptions = {
   help: boolean;
+  openAIAudioCycles: number;
   openAIOnly: boolean;
 };
 
 // Keep live stacks behind their owning smoke paths so help and safety helpers stay lightweight.
 type Browser = import("playwright").Browser;
+type RealtimeVoiceBridge = import("../../src/talk/provider-types.ts").RealtimeVoiceBridge;
 type ViteDevServer = Awaited<ReturnType<(typeof import("vite"))["createServer"]>>;
 
 type SmokeResult = {
@@ -66,8 +74,9 @@ function usage(): string {
     "Usage: node --import tsx scripts/dev/realtime-talk-live-smoke.ts [options]",
     "",
     "Options:",
-    "  --openai-only  Run only the OpenAI backend and browser legs",
-    "  -h, --help     Show this help",
+    "  --openai-only             Run only the OpenAI legs",
+    "  --openai-audio-cycles N   Run 1-10 backend audio roundtrip cycles (default: 1)",
+    "  -h, --help                Show this help",
     "",
     "Environment:",
     "  OPENAI_API_KEY",
@@ -76,14 +85,36 @@ function usage(): string {
 }
 
 function parseRealtimeSmokeArgs(argv = process.argv.slice(2)): RealtimeSmokeCliOptions {
-  for (const arg of argv) {
+  let openAIAudioCycles = DEFAULT_OPENAI_AUDIO_CYCLES;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
     if (arg === "--help" || arg === "-h" || arg === "--openai-only") {
+      continue;
+    }
+    if (arg === "--openai-audio-cycles") {
+      const rawCycles = argv[index + 1];
+      if (!rawCycles) {
+        throw new CliArgumentError("--openai-audio-cycles requires a value");
+      }
+      openAIAudioCycles = parseStrictIntegerOption({
+        fallback: DEFAULT_OPENAI_AUDIO_CYCLES,
+        label: "--openai-audio-cycles",
+        min: 1,
+        raw: rawCycles,
+      });
+      if (openAIAudioCycles > MAX_OPENAI_AUDIO_CYCLES) {
+        throw new CliArgumentError(
+          `--openai-audio-cycles must be <= ${MAX_OPENAI_AUDIO_CYCLES}; got ${openAIAudioCycles}`,
+        );
+      }
+      index += 1;
       continue;
     }
     throw new CliArgumentError(`Unknown argument: ${arg}`);
   }
   return {
     help: argv.includes("--help") || argv.includes("-h"),
+    openAIAudioCycles,
     openAIOnly: argv.includes("--openai-only"),
   };
 }
@@ -157,6 +188,53 @@ function printResult(result: SmokeResult): void {
 
 function compareStrings(left: string | undefined, right: string | undefined): number {
   return (left ?? "").localeCompare(right ?? "");
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function appendBounded<T>(items: T[], item: T, maxItems: number): void {
+  if (items.length < maxItems) {
+    items.push(item);
+  }
+}
+
+function normalizeTranscript(text: string): string {
+  return text
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/gu, " ")
+    .trim();
+}
+
+function transcriptIncludesMarker(transcripts: string[], marker: string): boolean {
+  return normalizeTranscript(transcripts.join(" ")).includes(normalizeTranscript(marker));
+}
+
+async function sendPcmAudioInChunks(
+  bridge: RealtimeVoiceBridge,
+  audio: Buffer,
+  options: { chunkBytes?: number; delayMs?: number } = {},
+): Promise<number> {
+  const chunkBytes = options.chunkBytes ?? OPENAI_AUDIO_CHUNK_BYTES;
+  const delayMs = options.delayMs ?? OPENAI_AUDIO_CHUNK_DELAY_MS;
+  if (!Number.isSafeInteger(chunkBytes) || chunkBytes < 1) {
+    throw new Error(`PCM audio chunk size must be a positive integer; got ${chunkBytes}`);
+  }
+  if (!Number.isFinite(delayMs) || delayMs < 0) {
+    throw new Error(`PCM audio chunk delay must be a non-negative number; got ${delayMs}`);
+  }
+  let chunks = 0;
+  for (let offset = 0; offset < audio.byteLength; offset += chunkBytes) {
+    bridge.sendAudio(audio.subarray(offset, Math.min(offset + chunkBytes, audio.byteLength)));
+    chunks += 1;
+    if (delayMs > 0) {
+      await delay(delayMs);
+    }
+  }
+  return chunks;
 }
 
 async function readOpenAIRealtimeBrowserResponseText(
@@ -310,6 +388,180 @@ async function smokeOpenAIBackendBridge(apiKey: string): Promise<SmokeResult> {
     };
   } finally {
     bridge.close();
+  }
+}
+
+async function smokeOpenAIAudioRoundtrip(apiKey: string, cycleCount: number): Promise<SmokeResult> {
+  const cycles: Array<Record<string, unknown>> = [];
+  try {
+    const [
+      { buildOpenAIRealtimeVoiceProvider },
+      { buildOpenAISpeechProvider },
+      { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ },
+    ] = await Promise.all([
+      import("../../extensions/openai/realtime-voice-provider.ts"),
+      import("../../extensions/openai/speech-provider.ts"),
+      import("../../src/talk/provider-types.ts"),
+    ]);
+    const speechProvider = buildOpenAISpeechProvider();
+    const synthesized = await speechProvider.synthesizeTelephony?.({
+      text: "Please reply with the single word glacier.",
+      cfg: { plugins: { enabled: true } } as never,
+      providerConfig: {
+        apiKey,
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+      },
+      timeoutMs: 45_000,
+    });
+    if (!synthesized) {
+      throw new Error("OpenAI speech provider did not return telephony audio");
+    }
+    if (synthesized.outputFormat !== "pcm" || synthesized.sampleRate !== 24_000) {
+      throw new Error(
+        `OpenAI speech provider returned ${synthesized.outputFormat} at ${synthesized.sampleRate} Hz`,
+      );
+    }
+    const trailingSilenceBytes = Math.ceil(
+      (synthesized.sampleRate * 2 * OPENAI_AUDIO_TRAILING_SILENCE_MS) / 1_000,
+    );
+    const inputAudio = Buffer.concat([synthesized.audioBuffer, Buffer.alloc(trailingSilenceBytes)]);
+
+    for (let cycle = 1; cycle <= cycleCount; cycle += 1) {
+      const provider = buildOpenAIRealtimeVoiceProvider();
+      const events: string[] = [];
+      const finalUserTranscripts: string[] = [];
+      const finalAssistantTranscripts: string[] = [];
+      let outputAudioBytes = 0;
+      let lateAudioBytes = 0;
+      let responseDone = false;
+      let closed = false;
+      let resolveRoundtrip: ((error?: Error) => void) | undefined;
+      const roundtrip = new Promise<Error | undefined>((resolve) => {
+        resolveRoundtrip = resolve;
+      });
+      const maybeResolveRoundtrip = () => {
+        if (
+          responseDone &&
+          outputAudioBytes > 512 &&
+          transcriptIncludesMarker(finalUserTranscripts, "glacier") &&
+          transcriptIncludesMarker(finalAssistantTranscripts, "glacier")
+        ) {
+          resolveRoundtrip?.();
+        }
+      };
+      const bridgeRef: { current?: RealtimeVoiceBridge } = {};
+      const bridge = provider.createBridge({
+        providerConfig: {
+          apiKey,
+          model: OPENAI_REALTIME_MODEL,
+          voice: OPENAI_REALTIME_VOICE,
+          vadThreshold: 0.1,
+          silenceDurationMs: 500,
+          prefixPaddingMs: 300,
+        },
+        audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+        instructions:
+          "Follow the speaker's request exactly. Reply briefly and do not add commentary.",
+        onAudio: (audio) => {
+          if (closed) {
+            lateAudioBytes += audio.byteLength;
+            return;
+          }
+          outputAudioBytes += audio.byteLength;
+          maybeResolveRoundtrip();
+        },
+        onClearAudio: () => {},
+        onMark: (markName) => bridgeRef.current?.acknowledgeMark(markName),
+        onTranscript: (role, text, isFinal) => {
+          if (!isFinal) {
+            return;
+          }
+          appendBounded(
+            role === "user" ? finalUserTranscripts : finalAssistantTranscripts,
+            text,
+            8,
+          );
+          maybeResolveRoundtrip();
+        },
+        onEvent: (event) => {
+          appendBounded(events, `${event.direction}:${event.type}`, 80);
+          if (event.direction === "server" && event.type === "response.done") {
+            responseDone = true;
+            maybeResolveRoundtrip();
+          }
+        },
+        onError: (error) => resolveRoundtrip?.(error),
+        onClose: (reason) => {
+          if (!closed && reason === "error") {
+            resolveRoundtrip?.(new Error("OpenAI audio roundtrip bridge closed with an error"));
+          }
+        },
+      });
+      bridgeRef.current = bridge;
+
+      let chunksSent = 0;
+      try {
+        await bridge.connect();
+        const boundedRoundtrip = withTimeout({
+          label: `OpenAI audio roundtrip cycle ${cycle}`,
+          timeoutMs: OPENAI_AUDIO_ROUNDTRIP_TIMEOUT_MS,
+          run: () => roundtrip,
+        });
+        // Observe failures immediately; the same promise is awaited after input streaming completes.
+        void boundedRoundtrip.catch(() => undefined);
+        chunksSent = await sendPcmAudioInChunks(bridge, inputAudio);
+        const roundtripError = await boundedRoundtrip;
+        if (roundtripError) {
+          throw roundtripError;
+        }
+      } catch (error) {
+        resolveRoundtrip?.(error instanceof Error ? error : new Error(String(error)));
+        throw error;
+      } finally {
+        closed = true;
+        bridge.close();
+        bridge.close();
+        bridgeRef.current = undefined;
+        await delay(100);
+      }
+      if (lateAudioBytes > 0) {
+        throw new Error(
+          `OpenAI audio roundtrip cycle ${cycle} received ${lateAudioBytes} audio bytes after close`,
+        );
+      }
+      cycles.push({
+        cycle,
+        inputAudioBytes: inputAudio.byteLength,
+        chunksSent,
+        outputAudioBytes,
+        userTranscript: finalUserTranscripts.join(" "),
+        assistantTranscript: finalAssistantTranscripts.join(" "),
+        responseDone,
+        lateAudioBytes,
+        events,
+      });
+    }
+
+    return {
+      name: "openai-backend-audio-roundtrip",
+      ok: cycles.length === cycleCount,
+      details: {
+        model: OPENAI_REALTIME_MODEL,
+        cycles,
+      },
+    };
+  } catch (error) {
+    return {
+      name: "openai-backend-audio-roundtrip",
+      ok: false,
+      details: {
+        model: OPENAI_REALTIME_MODEL,
+        completedCycles: cycles.length,
+        error: shortError(error),
+      },
+    };
   }
 }
 
@@ -863,6 +1115,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
       });
     } else {
       results.push(await smokeOpenAIBackendBridge(openAIKey));
+      results.push(await smokeOpenAIAudioRoundtrip(openAIKey, cli.openAIAudioCycles));
       results.push(await smokeOpenAIWebRtc(browser, openAIKey));
     }
     if (!cli.openAIOnly) {
@@ -902,6 +1155,8 @@ export const testing = {
   readOpenAIRealtimeBrowserResponseText,
   readBoundedText,
   resolveOpenAIHttpTimeoutMs,
+  sendPcmAudioInChunks,
+  transcriptIncludesMarker,
   usage,
 };
 

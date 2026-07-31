@@ -229,6 +229,40 @@ describe("Matrix QA fault proxy", () => {
     ]);
   });
 
+  it("installs and removes scenario-local rules without changing the proxy origin", async () => {
+    const target = await startTargetServer();
+    proxy = await startMatrixQaFaultProxy({ targetBaseUrl: target.baseUrl, rules: [] });
+    const baseUrl = proxy.baseUrl;
+    const handle = proxy.installRule({
+      id: "scenario-local-sync-fault",
+      match: (proxyRequest) =>
+        proxyRequest.path === "/_matrix/client/v3/sync" && proxyRequest.bearerToken === "sut-token",
+      response: () => ({ body: { errcode: "M_QA_FAULT" }, status: 503 }),
+    });
+
+    const faulted = await fetch(`${proxy.baseUrl}/_matrix/client/v3/sync`, {
+      headers: { authorization: "Bearer sut-token" },
+    });
+    expect(faulted.status).toBe(503);
+    expect(proxy.baseUrl).toBe(baseUrl);
+    expect(handle.hits()).toEqual([
+      {
+        method: "GET",
+        path: "/_matrix/client/v3/sync",
+        ruleId: "scenario-local-sync-fault",
+      },
+    ]);
+
+    handle.remove();
+    handle.remove();
+    const forwarded = await fetch(`${proxy.baseUrl}/_matrix/client/v3/sync`, {
+      headers: { authorization: "Bearer sut-token" },
+    });
+    expect(forwarded.status).toBe(200);
+    expect(handle.hits()).toHaveLength(1);
+    expect(proxy.hits()).toHaveLength(1);
+  });
+
   it("rejects oversized forwarded request bodies before contacting the target", async () => {
     const target = await startTargetServer();
     proxy = await startMatrixQaFaultProxy({

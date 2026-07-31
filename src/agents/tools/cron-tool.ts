@@ -20,6 +20,7 @@ import { resolveSessionAgentId } from "../agent-scope.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { normalizeToolName } from "../tool-policy.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
+import { AUTOMATIONS_TOOL_NAME } from "./automations-tool-name.js";
 import {
   type AnyAgentTool,
   jsonResult,
@@ -250,15 +251,15 @@ function assertCronToolSessionRefsMatchScope(
 ): void {
   const sessionAgentId = readAgentIdFromCronToolSessionRef(value.sessionKey);
   if (sessionAgentId && normalizeAgentId(sessionAgentId) !== callerScope.agentId) {
-    throw new Error("cron sessionKey must match the calling agent");
+    throw new Error("automations sessionKey must match the calling agent");
   }
   const sessionTargetAgentId = readAgentIdFromCronToolSessionTarget(value.sessionTarget);
   if (sessionTargetAgentId && normalizeAgentId(sessionTargetAgentId) !== callerScope.agentId) {
-    throw new Error("cron sessionTarget must match the calling agent");
+    throw new Error("automations sessionTarget must match the calling agent");
   }
 }
 
-const CRON_SELF_REMOVE_SCOPE_ERROR = "Cron tool is restricted to the current cron job.";
+const CRON_SELF_REMOVE_SCOPE_ERROR = "Automations tool is restricted to the current automation.";
 
 function readCronSelfRemoveOnlyJobId(opts: CronToolOptions | undefined) {
   return opts?.selfRemoveOnlyJobId?.trim() || undefined;
@@ -335,7 +336,7 @@ function formatCronTerminalPresentation(
   switch (params.action) {
     case "status": {
       const enabled = result.details.enabled === true ? "yes" : "no";
-      return { text: `Cron scheduler status.\nEnabled: ${enabled}` };
+      return { text: `Automations scheduler status.\nEnabled: ${enabled}` };
     }
     case "list": {
       const total =
@@ -347,18 +348,18 @@ function formatCronTerminalPresentation(
       const count =
         total ?? (Array.isArray(result.details.jobs) ? result.details.jobs.length : undefined);
       return count === undefined
-        ? { text: "Cron jobs listed." }
-        : { text: `Cron jobs listed.\nCount: ${count}` };
+        ? { text: "Automations listed." }
+        : { text: `Automations listed.\nCount: ${count}` };
     }
     case "get":
-      return { text: "Cron job loaded." };
+      return { text: "Automation loaded." };
     case "runs": {
       const entries = Array.isArray(result.details.entries)
         ? result.details.entries.length
         : undefined;
       return entries === undefined
-        ? { text: "Cron run history loaded." }
-        : { text: `Cron run history loaded.\nCount: ${entries}` };
+        ? { text: "Automation run history loaded." }
+        : { text: `Automation run history loaded.\nCount: ${entries}` };
     }
     default:
       return undefined;
@@ -393,8 +394,8 @@ function isOlderGatewayWithoutCompactCronList(error: unknown): boolean {
 export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
   const callGateway = deps?.callGatewayTool ?? callGatewayTool;
   const tool: AnyAgentTool = {
-    label: "Cron",
-    name: "cron",
+    label: "Automations",
+    name: AUTOMATIONS_TOOL_NAME,
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
     description: `Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work, event watchers. Never exec sleep/poll as timer.
 
@@ -402,12 +403,10 @@ ACTIONS: status | list [includeDisabled,limit?,offset?] (use nextOffset for the 
 
 ADD: {name?,schedule,payload,sessionTarget?,pacing?,trigger?,delivery?,enabled?}. Required: schedule+payload.
 
-FLAT JOB FIELDS (add/update; prefer when nested object args are unreliable):
+For ordinary add/update calls, prefer these flat fields when nested objects are unreliable:
 { "action":"add", "name":"...", "at":"<ISO-8601>"|"everyMs":<ms>|"expr":"<cron>", "tz":"<optional-IANA>", "message":"<agentTurn prompt>"|"text":"<systemEvent text>", "sessionTarget":"main|isolated|current|session:<id>", "enabled":true }
 Exactly one schedule field: at, everyMs, or expr. message => agentTurn; text => systemEvent.
-Script payload: script + optional timeoutSeconds/toolBudget. Dynamic cadence: pacingMin and/or pacingMax. Trigger: triggerScript + optional triggerOnce.
-Stream schedule: streamCommand:[argv] (required) + optional streamCwd/streamMode:"line"|"match"/streamMatch/streamBatchMs/streamMaxBatchBytes; implies kind=stream and needs cron.triggers.enabled. Plain top-level mode is wake-only (action="wake"); it and bare match/batchMs/maxBatchBytes are rejected on add/update — use the stream* names instead.
-Use flat fields only when possible. Disjoint flat fields merge with a nested job/patch, but schedule/payload/pacing/trigger groups must not be split across both forms; exact duplicates are accepted and conflicts error.
+Use nested job/patch for model routing, tool policy, scripts, pacing, triggers, streams, delivery, and other advanced settings. Plain top-level mode is wake-only.
 
 SCHEDULE:
 - {kind:"at",at:"ISO-8601"} one-shot; no tz=UTC; auto-deletes after run.
@@ -429,7 +428,7 @@ TRIGGER (condition watcher on every/cron): {script,once?}; needs cron.triggers.e
 
 DELIVERY {mode:"none"|"announce"|"webhook",channel?,to?,threadId?,bestEffort?}: where detached run output goes. Omitted=announce (current=>this chat; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). Silent watcher=>mode:"none". webhook posts finished-run event to URL in \`to\`.
 
-Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted cron-run sessions: self status/list/get/runs/remove + own next_check only. failureAlert {...}|false disables. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.`,
+Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation-run sessions: self status/list/get/runs/remove + own next_check only. failureAlert {...}|false disables. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.`,
     parameters: createCronToolSchema(),
     prepareArguments: prepareCronToolArguments,
     execute: async (_toolCallId, args) => {
@@ -582,7 +581,7 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted cron-run s
               if (callerScope) {
                 assertCronToolAgentFieldMatchesScope({
                   value: (job as { agentId?: unknown }).agentId,
-                  field: "cron job agentId",
+                  field: "automation agentId",
                   callerScope,
                 });
                 (job as { agentId?: string }).agentId = callerScope.agentId;
@@ -696,7 +695,7 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted cron-run s
             }
             const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
             if (callerScope && "agentId" in patch) {
-              throw new Error("cron patch agentId cannot be changed by the agent cron tool");
+              throw new Error("automation patch agentId cannot be changed by the automations tool");
             }
             if (callerScope) {
               assertCronToolSessionRefsMatchScope(patch, callerScope);

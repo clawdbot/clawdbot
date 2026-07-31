@@ -261,7 +261,7 @@
     "tools": [
       {
         "deferLoading": true,
-        "description": "Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work, event watchers. Never exec sleep/poll as timer.\n\nACTIONS: status | list [includeDisabled,limit?,offset?] (use nextOffset for the next page) | get jobId | add job | update jobId patch | remove jobId | run jobId (runMode \"force\"=now) | runs jobId = history | next_check in:\"30m\" (own paced run only) | wake text mode?:\"now\"|\"next-heartbeat\"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).\n\nADD: {name?,schedule,payload,sessionTarget?,pacing?,trigger?,delivery?,enabled?}. Required: schedule+payload.\n\nFLAT JOB FIELDS (add/update; prefer when nested object args are unreliable):\n{ \"action\":\"add\", \"name\":\"...\", \"at\":\"<ISO-8601>\"|\"everyMs\":<ms>|\"expr\":\"<cron>\", \"tz\":\"<optional-IANA>\", \"message\":\"<agentTurn prompt>\"|\"text\":\"<systemEvent text>\", \"sessionTarget\":\"main|isolated|current|session:<id>\", \"enabled\":true }\nExactly one schedule field: at, everyMs, or expr. message => agentTurn; text => systemEvent.\nScript payload: script + optional timeoutSeconds/toolBudget. Dynamic cadence: pacingMin and/or pacingMax. Trigger: triggerScript + optional triggerOnce.\nStream schedule: streamCommand:[argv] (required) + optional streamCwd/streamMode:\"line\"|\"match\"/streamMatch/streamBatchMs/streamMaxBatchBytes; implies kind=stream and needs cron.triggers.enabled. Plain top-level mode is wake-only (action=\"wake\"); it and bare match/batchMs/maxBatchBytes are rejected on add/update — use the stream* names instead.\nUse flat fields only when possible. Disjoint flat fields merge with a nested job/patch, but schedule/payload/pacing/trigger groups must not be split across both forms; exact duplicates are accepted and conflicts error.\n\nSCHEDULE:\n- {kind:\"at\",at:\"ISO-8601\"} one-shot; no tz=UTC; auto-deletes after run.\n- {kind:\"every\",everyMs}.\n- {kind:\"cron\",expr,tz?:\"IANA\"}: expr is wall time in tz; never pre-convert to UTC; no tz=gateway host local. 18:00 Shanghai => {expr:\"0 18 * * *\",tz:\"Asia/Shanghai\"}.\n- {kind:\"stream\",command:[argv],mode?:\"line\"|\"match\",match?}: fires on supervised process output; needs cron.triggers.enabled.\n\nTARGET+PAYLOAD:\n- \"current\" (agentTurn default) = this conversation: run carries this chat's context, result lands here. Self-wakeup/\"continue later\"/loop = at|every + agentTurn + current.\n- \"isolated\" = fresh detached session (shows in `openclaw tasks`); standalone background work.\n- \"main\" = heartbeat lane; payload {kind:\"systemEvent\",text} (systemEvent default target).\n- \"session:<key>\" = named session.\n- agentTurn {kind:\"agentTurn\",message,model?,thinking?,timeoutSeconds?}; timeoutSeconds 0=none.\n- script {kind:\"script\",script,timeoutSeconds?,toolBudget?}: main|isolated only; needs cron.triggers.enabled.\n\nPACED LOOP: recurring job + pacing{min?,max?} durations (\"15m\",\"4h\"; at least one). Inside its run, job calls next_check in:\"<dur>\" to set the next delay (clamped to bounds, measured from run end; failed runs keep normal backoff). Adaptive polling: tighten when active, back off when quiet.\n\nTRIGGER (condition watcher on every/cron): {script,once?}; needs cron.triggers.enabled — if off, say so; never model-poll instead. Quiet headless check, no model; 30s/5 tool calls/16KB state. Read frozen trigger.state, return json({fire,message?,state?}) with NEW state; dedupe via state, never memory. fire:false saves state only. fire:true runs payload; message is that run's entire context — self-contained. Fire on failures/timeouts too; success-only watchers look healthy when broken. Script stays read-only; actions belong in payload. once:true disables after first fire. Code Mode: await tools.call(\"exec\",{command:\"...\"}).\n\nDELIVERY {mode:\"none\"|\"announce\"|\"webhook\",channel?,to?,threadId?,bestEffort?}: where detached run output goes. Omitted=announce (current=>this chat; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). Silent watcher=>mode:\"none\". webhook posts finished-run event to URL in `to`.\n\nJob wakeMode (main jobs): \"now\"(default)|\"next-heartbeat\". Restricted cron-run sessions: self status/list/get/runs/remove + own next_check only. failureAlert {...}|false disables. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.",
+        "description": "Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work, event watchers. Never exec sleep/poll as timer.\n\nACTIONS: status | list [includeDisabled,limit?,offset?] (use nextOffset for the next page) | get jobId | add job | update jobId patch | remove jobId | run jobId (runMode \"force\"=now) | runs jobId = history | next_check in:\"30m\" (own paced run only) | wake text mode?:\"now\"|\"next-heartbeat\"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).\n\nADD: {name?,schedule,payload,sessionTarget?,pacing?,trigger?,delivery?,enabled?}. Required: schedule+payload.\n\nFor ordinary add/update calls, prefer these flat fields when nested objects are unreliable:\n{ \"action\":\"add\", \"name\":\"...\", \"at\":\"<ISO-8601>\"|\"everyMs\":<ms>|\"expr\":\"<cron>\", \"tz\":\"<optional-IANA>\", \"message\":\"<agentTurn prompt>\"|\"text\":\"<systemEvent text>\", \"sessionTarget\":\"main|isolated|current|session:<id>\", \"enabled\":true }\nExactly one schedule field: at, everyMs, or expr. message => agentTurn; text => systemEvent.\nUse nested job/patch for model routing, tool policy, scripts, pacing, triggers, streams, delivery, and other advanced settings. Plain top-level mode is wake-only.\n\nSCHEDULE:\n- {kind:\"at\",at:\"ISO-8601\"} one-shot; no tz=UTC; auto-deletes after run.\n- {kind:\"every\",everyMs}.\n- {kind:\"cron\",expr,tz?:\"IANA\"}: expr is wall time in tz; never pre-convert to UTC; no tz=gateway host local. 18:00 Shanghai => {expr:\"0 18 * * *\",tz:\"Asia/Shanghai\"}.\n- {kind:\"stream\",command:[argv],mode?:\"line\"|\"match\",match?}: fires on supervised process output; needs cron.triggers.enabled.\n\nTARGET+PAYLOAD:\n- \"current\" (agentTurn default) = this conversation: run carries this chat's context, result lands here. Self-wakeup/\"continue later\"/loop = at|every + agentTurn + current.\n- \"isolated\" = fresh detached session (shows in `openclaw tasks`); standalone background work.\n- \"main\" = heartbeat lane; payload {kind:\"systemEvent\",text} (systemEvent default target).\n- \"session:<key>\" = named session.\n- agentTurn {kind:\"agentTurn\",message,model?,thinking?,timeoutSeconds?}; timeoutSeconds 0=none.\n- script {kind:\"script\",script,timeoutSeconds?,toolBudget?}: main|isolated only; needs cron.triggers.enabled.\n\nPACED LOOP: recurring job + pacing{min?,max?} durations (\"15m\",\"4h\"; at least one). Inside its run, job calls next_check in:\"<dur>\" to set the next delay (clamped to bounds, measured from run end; failed runs keep normal backoff). Adaptive polling: tighten when active, back off when quiet.\n\nTRIGGER (condition watcher on every/cron): {script,once?}; needs cron.triggers.enabled — if off, say so; never model-poll instead. Quiet headless check, no model; 30s/5 tool calls/16KB state. Read frozen trigger.state, return json({fire,message?,state?}) with NEW state; dedupe via state, never memory. fire:false saves state only. fire:true runs payload; message is that run's entire context — self-contained. Fire on failures/timeouts too; success-only watchers look healthy when broken. Script stays read-only; actions belong in payload. once:true disables after first fire. Code Mode: await tools.call(\"exec\",{command:\"...\"}).\n\nDELIVERY {mode:\"none\"|\"announce\"|\"webhook\",channel?,to?,threadId?,bestEffort?}: where detached run output goes. Omitted=announce (current=>this chat; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). Silent watcher=>mode:\"none\". webhook posts finished-run event to URL in `to`.\n\nJob wakeMode (main jobs): \"now\"(default)|\"next-heartbeat\". Restricted automation-run sessions: self status/list/get/runs/remove + own next_check only. failureAlert {...}|false disables. jobId canonical (id=compat). contextMessages 0-10 embeds recent chat lines into reminder text.",
         "inputSchema": {
           "additionalProperties": true,
           "properties": {
@@ -284,11 +284,6 @@
               "description": "List filter for `action: \"list\"`; wake target override for `action: \"wake\"` (defaults to the calling agent when omitted on wake)",
               "type": "string"
             },
-            "anchorMs": {
-              "description": "Flat start anchor ms for a flat everyMs schedule",
-              "minimum": 0,
-              "type": "integer"
-            },
             "at": {
               "description": "Flat one-shot ISO-8601 time for action=\"add\" or action=\"update\"",
               "type": "string"
@@ -310,20 +305,6 @@
             "expr": {
               "description": "Flat cron expression for action=\"add\" or action=\"update\"",
               "type": "string"
-            },
-            "fallbacks": {
-              "anyOf": [
-                {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Flat agentTurn fallback models; implies an agentTurn payload, or null to clear on update"
             },
             "gatewayToken": {
               "type": "string"
@@ -697,17 +678,6 @@
               "enum": ["now", "next-heartbeat"],
               "type": "string"
             },
-            "model": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Flat agentTurn model override; implies an agentTurn payload, or null to clear on update"
-            },
             "name": {
               "description": "Flat job name for action=\"add\" or action=\"update\"",
               "type": "string"
@@ -716,14 +686,6 @@
               "description": "Job offset for action=\"list\"; use nextOffset to load the next page",
               "minimum": 0,
               "type": "integer"
-            },
-            "pacingMax": {
-              "description": "Flat maximum dynamic delay for action=\"add\" or action=\"update\"",
-              "type": "string"
-            },
-            "pacingMin": {
-              "description": "Flat minimum dynamic delay for action=\"add\" or action=\"update\"",
-              "type": "string"
             },
             "patch": {
               "additionalProperties": true,
@@ -1145,10 +1107,6 @@
               "enum": ["due", "force"],
               "type": "string"
             },
-            "script": {
-              "description": "Flat headless script payload for action=\"add\" or action=\"update\"; implies a script payload",
-              "type": "string"
-            },
             "sessionKey": {
               "description": "Wake target override for `action: \"wake\"`: route the event to another session owned by the calling agent. Defaults to the resolved calling-session key when omitted.",
               "type": "string"
@@ -1157,84 +1115,13 @@
               "description": "Flat job target for action=\"add\" or action=\"update\": main | isolated | current | session:<id>",
               "type": "string"
             },
-            "streamBatchMs": {
-              "description": "Flat stream output batching interval ms (kind=stream)",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "streamCommand": {
-              "description": "Flat stream supervised-source argv for action=\"add\" or action=\"update\"; implies a stream schedule (kind=stream, requires cron.triggers.enabled)",
-              "items": {
-                "minLength": 1,
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            "streamCwd": {
-              "description": "Flat stream working directory (kind=stream)",
-              "minLength": 1,
-              "type": "string"
-            },
-            "streamMatch": {
-              "description": "Flat stream regex source for streamMode=match",
-              "type": "string"
-            },
-            "streamMaxBatchBytes": {
-              "description": "Flat stream output batch byte cap (kind=stream)",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "streamMode": {
-              "description": "Flat stream match mode (kind=stream)",
-              "enum": ["line", "match"],
-              "type": "string"
-            },
             "text": {
-              "description": "systemEvent text for action=\"wake\"",
-              "type": "string"
-            },
-            "thinking": {
-              "description": "Flat agentTurn thinking override; implies an agentTurn payload",
+              "description": "systemEvent text for action=\"add\" or action=\"update\"; event text for action=\"wake\"",
               "type": "string"
             },
             "timeoutMs": {
               "minimum": 1,
               "type": "integer"
-            },
-            "timeoutSeconds": {
-              "description": "Flat agentTurn timeout seconds; implies an agentTurn payload",
-              "minimum": 0,
-              "type": "number"
-            },
-            "toolBudget": {
-              "description": "Flat maximum tool calls for a script payload",
-              "minimum": 1,
-              "type": "integer"
-            },
-            "toolsAllow": {
-              "anyOf": [
-                {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Flat agentTurn allowed tool ids; implies an agentTurn payload, or null to clear on update"
-            },
-            "triggerOnce": {
-              "description": "Flat flag to disable a trigger after its first successful fire",
-              "type": "boolean"
-            },
-            "triggerScript": {
-              "description": "Flat trigger script for action=\"add\" or action=\"update\"",
-              "maxLength": 65536,
-              "minLength": 1,
-              "type": "string"
             },
             "tz": {
               "description": "IANA timezone for a flat cron expression",
@@ -1244,7 +1131,7 @@
           "required": ["action"],
           "type": "object"
         },
-        "name": "cron",
+        "name": "automations",
         "type": "function"
       },
       {
@@ -1605,7 +1492,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Background work: subagents, media gen, cron runs. list/cancel.",
+        "description": "Background work: subagents, media gen, automation runs. list/cancel.",
         "inputSchema": {
           "properties": {
             "action": {
@@ -1779,7 +1666,7 @@
               "type": "string"
             },
             "scratch": {
-              "description": "Complete replacement for heartbeat monitor prose. Recurring schedules belong in cron jobs, not scratch.",
+              "description": "Complete replacement for heartbeat monitor prose. Recurring schedules belong in automations, not scratch.",
               "type": "string"
             },
             "summary": {

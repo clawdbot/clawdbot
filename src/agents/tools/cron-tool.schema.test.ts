@@ -131,70 +131,35 @@ describe("createCronToolSchema", () => {
     expect(propertyAt(schemaRecord, "message")).toMatchObject({ type: "string" });
     expect(propertyAt(schemaRecord, "text")?.description).toMatch(/systemEvent/i);
     expect(propertyAt(schemaRecord, "mode")?.description).toMatch(/wake.*only/i);
-    expect(propertyAt(schemaRecord, "script")).toMatchObject({ type: "string" });
-    expect(propertyAt(schemaRecord, "toolBudget")).toMatchObject({
-      type: "integer",
-      minimum: 1,
-    });
-    expect(propertyAt(schemaRecord, "pacingMin")).toMatchObject({ type: "string" });
-    expect(propertyAt(schemaRecord, "pacingMax")).toMatchObject({ type: "string" });
-    expect(propertyAt(schemaRecord, "triggerScript")).toMatchObject({ type: "string" });
-    expect(propertyAt(schemaRecord, "triggerOnce")).toMatchObject({ type: "boolean" });
+    expect(propertyAt(schemaRecord, "text")?.description).toMatch(/add.*update.*wake/i);
   });
 
-  it("exposes flat stream* aliases distinct from wake-only top-level mode", () => {
-    expect(propertyAt(schemaRecord, "streamCommand")).toMatchObject({
-      type: "array",
-      minItems: 1,
-    });
-    expect(propertyAt(schemaRecord, "streamCwd")).toMatchObject({ type: "string", minLength: 1 });
-    expect(propertyAt(schemaRecord, "streamMode")?.enum).toEqual(["line", "match"]);
-    expect(propertyAt(schemaRecord, "streamMatch")).toMatchObject({ type: "string" });
-    expect(propertyAt(schemaRecord, "streamBatchMs")).toMatchObject({
-      type: "integer",
-      minimum: 0,
-    });
-    expect(propertyAt(schemaRecord, "streamMaxBatchBytes")).toMatchObject({
-      type: "integer",
-      minimum: 0,
-    });
-    // Provider projection must keep the array type intact for weaker schema
-    // converters, matching the treatment other flat array fields already get.
-    expect(propertyAt(providerSchemaRecord, "streamCommand")).toMatchObject({ type: "array" });
-  });
-
-  it("exposes flat agentTurn payload fields the runtime already recovers", () => {
-    expect(propertyAt(schemaRecord, "thinking")).toMatchObject({ type: "string" });
-    expect(propertyAt(schemaRecord, "timeoutSeconds")).toMatchObject({
-      type: "number",
-      minimum: 0,
-    });
-    expect(propertyAt(schemaRecord, "anchorMs")).toMatchObject({ type: "integer", minimum: 0 });
-  });
-
-  it("accepts nullable flat update clears for model and tool selection overrides", () => {
-    expect(
-      Value.Check(schema, {
-        action: "update",
-        jobId: "job-1",
-        model: null,
-        fallbacks: null,
-        toolsAllow: null,
-      }),
-    ).toBe(true);
-  });
-
-  it("accepts prepared flat update clears after they are synthesized into patch payload", () => {
-    const tool = createCronTool();
-    const prepared = tool.prepareArguments?.({
-      action: "update",
-      jobId: "job-1",
-      model: null,
-      fallbacks: null,
-      toolsAllow: null,
-    });
-
-    expect(Value.Check(schema, prepared)).toBe(true);
+  it("keeps advanced and policy fields in the canonical nested contract", () => {
+    for (const field of [
+      "anchorMs",
+      "model",
+      "fallbacks",
+      "toolsAllow",
+      "thinking",
+      "timeoutSeconds",
+      "script",
+      "toolBudget",
+      "pacingMin",
+      "pacingMax",
+      "triggerScript",
+      "triggerOnce",
+      "streamCommand",
+      "streamCwd",
+      "streamMode",
+      "streamMatch",
+      "streamBatchMs",
+      "streamMaxBatchBytes",
+    ]) {
+      expect(propertyAt(schemaRecord, field)).toBeUndefined();
+    }
+    expect(propertyAt(schemaRecord, "job.payload.model")).toMatchObject({ type: "string" });
+    expect(propertyAt(schemaRecord, "job.payload.toolsAllow")).toMatchObject({ type: "array" });
+    expect(propertyAt(schemaRecord, "job.schedule.command")).toMatchObject({ type: "array" });
   });
 
   // Drift guard: every flat field the schema advertises must be a key the
@@ -294,9 +259,7 @@ describe("createCronToolSchema", () => {
   });
 
   it("documents wake, context, and session-target fields", () => {
-    expect(propertyAt(schemaRecord, "text")?.description).toBe(
-      'systemEvent text for action="wake"',
-    );
+    expect(propertyAt(schemaRecord, "text")?.description).toMatch(/add.*update.*wake/i);
     expect(propertyAt(schemaRecord, "mode")?.description).toBe(
       'Wake mode for action="wake" only (default next-heartbeat); not cron job delivery mode',
     );
@@ -533,15 +496,6 @@ describe("createCronToolSchema", () => {
     expect(patchProps?.payload?.properties?.toolsAllow?.description).toMatch(/null to clear/i);
     expect(patchProps?.payload?.properties?.model?.type).toBe("string");
     expect(patchProps?.payload?.properties?.model?.description).toMatch(/null to clear/i);
-  });
-
-  it("flat nullable update-clear fields project to plain provider-compatible types", () => {
-    expect(propertyAt(providerSchemaRecord, "model")).toMatchObject({ type: "string" });
-    expect(propertyAt(providerSchemaRecord, "fallbacks")).toMatchObject({ type: "array" });
-    expect(propertyAt(providerSchemaRecord, "toolsAllow")).toMatchObject({ type: "array" });
-    expect(propertyAt(providerSchemaRecord, "model")?.description).toMatch(/null to clear/i);
-    expect(propertyAt(providerSchemaRecord, "fallbacks")?.description).toMatch(/null to clear/i);
-    expect(propertyAt(providerSchemaRecord, "toolsAllow")?.description).toMatch(/null to clear/i);
   });
 
   it("projects nullable cron fields for Gemini models behind OpenAI-compatible providers", () => {

@@ -955,6 +955,9 @@ importers:
       '@google/genai':
         specifier: 2.13.0
         version: 2.13.0(@modelcontextprotocol/sdk@1.30.0(supports-color@10.2.2)(zod@4.4.3))(supports-color@10.2.2)
+      dotenv:
+        specifier: 17.4.2
+        version: 17.4.2
       google-auth-library:
         specifier: 10.9.1
         version: 10.9.1(supports-color@10.2.2)

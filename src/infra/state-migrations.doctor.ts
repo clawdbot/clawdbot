@@ -285,7 +285,7 @@ function createPluginDoctorStateMigrationContext(
     },
     importPluginStateEntries(
       options: OpenKeyedStoreOptions,
-      entries: readonly { key: string; value: unknown; createdAt: number }[],
+      entries: readonly { key: string; value: unknown; createdAt: number; ttlMs?: number }[],
     ) {
       importPluginStateEntriesForDoctor(pluginId, { ...options, env: options.env ?? env }, entries);
     },

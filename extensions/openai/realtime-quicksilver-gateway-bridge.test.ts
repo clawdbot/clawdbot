@@ -626,6 +626,30 @@ describe("GPT-Live gateway relay bridge", () => {
     }
   });
 
+  it("bounds gateway delegation output before sideband sends", async () => {
+    const runAgentConsult = vi.fn(async () => ({ text: "x".repeat(10_000) }));
+    const { bridge, socket, testBridge } = createDelegationBridge(runAgentConsult);
+    try {
+      await testBridge.runDelegation({
+        delegationId: "delegation-large",
+        prompt: "summarize everything",
+        runAgentConsult,
+        signal: new AbortController().signal,
+      });
+
+      const appends = parseSent(socket).filter(
+        (event) => event.type === "delegation.context.append",
+      );
+      expect(appends.length).toBeGreaterThan(0);
+      expect(appends.length).toBeLessThanOrEqual(11);
+      expect(
+        appends.map((event) => (event.content as Array<{ text: string }>)[0]?.text ?? "").join(""),
+      ).toMatch(/^x+ \[truncated\]$/);
+    } finally {
+      bridge.close();
+    }
+  });
+
   it("keeps only the latest delegation when the superseded consult rejects on abort", async () => {
     const resolvers: Array<(value: { text: string }) => void> = [];
     const signals: AbortSignal[] = [];

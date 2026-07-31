@@ -191,10 +191,15 @@ async function runGatewayCommand(
     await action();
   } catch (err) {
     if (opts?.json) {
-      const { formatGatewayClientRequestErrorJson, formatGatewayTransportErrorJson } =
-        await import("../../gateway/call.js");
+      const {
+        formatGatewayAuthErrorJson,
+        formatGatewayClientRequestErrorJson,
+        formatGatewayTransportErrorJson,
+      } = await import("../../gateway/call.js");
       const payload =
-        formatGatewayClientRequestErrorJson(err) ?? formatGatewayTransportErrorJson(err);
+        formatGatewayAuthErrorJson(err) ??
+        formatGatewayClientRequestErrorJson(err) ??
+        formatGatewayTransportErrorJson(err);
       if (payload) {
         defaultRuntime.writeJson(payload);
         defaultRuntime.exit(1);

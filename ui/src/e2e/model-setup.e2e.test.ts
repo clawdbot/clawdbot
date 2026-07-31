@@ -345,10 +345,29 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
 
       const start = await gateway.waitForRequest("openclaw.setup.prepare.start");
       expect(start.params).toMatchObject({ authChoice: "ollama" });
+
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "ollama-mode-select-desktop.png"),
+        });
+      }
+
       await page.getByRole("radio", { name: /Local only/u }).check();
       await page.getByRole("button", { name: "Continue" }).click();
       const baseUrl = page.getByLabel("Ollama base URL");
       await expect.poll(() => baseUrl.inputValue()).toBe("http://127.0.0.1:11434");
+
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "ollama-host-desktop.png"),
+        });
+      }
+
       await page.getByRole("button", { name: "Submit" }).click();
       await page.getByText("Ollama could not be reached at http://127.0.0.1:11434.").waitFor();
       await page
@@ -408,6 +427,167 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
       expect(wizardRequests[4]?.params).toMatchObject({
         answer: { stepId: "ollama-retry-confirm", value: true },
       });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("downloads, verifies, and opens chat with llama.cpp", async () => {
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const initialDetection = {
+      candidates: [],
+      manualProviders: [],
+      workspace: "/tmp/openclaw-e2e",
+      setupComplete: false,
+    };
+    const modelRef = "llama-cpp/gemma-4-e4b-it-q4_k_m";
+    const gateway = await installMockGateway(page, {
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "openclaw.setup.detect",
+        "openclaw.setup.activate",
+        "openclaw.setup.prepare.start",
+        "wizard.next",
+      ],
+      methodResponses: {
+        "openclaw.setup.detect": initialDetection,
+        "openclaw.setup.prepare.start": {
+          sessionId: "llama-cpp-prepare-session",
+          done: false,
+          status: "running",
+        },
+        "openclaw.setup.activate": {
+          ok: true,
+          modelRef,
+          latencyMs: 731,
+          lines: ["Model ready"],
+        },
+        "wizard.next": {
+          sequence: [
+            {
+              done: false,
+              status: "running",
+              step: {
+                id: "llama-cpp-consent",
+                type: "confirm",
+                message:
+                  "Download Gemma 4 E4B IT Q4_K_M (about 5.0 GB) for local llama.cpp inference?",
+                initialValue: false,
+              },
+            },
+            {
+              done: false,
+              status: "running",
+              step: {
+                id: "llama-cpp-download-20",
+                type: "progress",
+                message: "Downloading Gemma 4 E4B… 20% (1.0/5.0 GB, 38 MB/s)",
+                executor: "gateway",
+              },
+            },
+            {
+              done: false,
+              status: "running",
+              step: {
+                id: "llama-cpp-download-100",
+                type: "progress",
+                message: "Gemma 4 E4B model downloaded",
+                executor: "gateway",
+              },
+            },
+            { done: true, status: "done" },
+          ],
+        },
+      },
+    });
+
+    try {
+      const response = await page.goto(`${server.baseUrl}settings/model-setup`);
+      expect(response?.status()).toBe(200);
+      const llamaCppRow = page.locator('[data-prepare-choice="llama-cpp"]');
+      await llamaCppRow.getByRole("button", { name: "Check & set up" }).waitFor();
+      await expect
+        .poll(() => llamaCppRow.locator('[data-provider-icon="llamacpp"]').count())
+        .toBe(1);
+      await expect.poll(() => llamaCppRow.textContent()).not.toContain("Gemma");
+      await expect.poll(() => llamaCppRow.textContent()).not.toContain("GB");
+      await expect.poll(() => llamaCppRow.textContent()).not.toContain("RAM");
+
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "llama-cpp-offer-desktop.png"),
+        });
+      }
+
+      await llamaCppRow.getByRole("button", { name: "Check & set up" }).click();
+      const start = await gateway.waitForRequest("openclaw.setup.prepare.start");
+      expect(start.params).toMatchObject({ authChoice: "llama-cpp" });
+      await page.getByRole("heading", { name: "Set up a local model" }).waitFor();
+      await page.getByText("Download Gemma 4 E4B IT Q4_K_M").waitFor();
+
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "llama-cpp-confirm-desktop.png"),
+        });
+      }
+
+      await gateway.setMethodResponse("openclaw.setup.detect", {
+        ...initialDetection,
+        candidates: [
+          {
+            kind: "provider-auto:llama-cpp",
+            brandId: "llama-cpp",
+            label: "llama.cpp",
+            detail: "Gemma 4 E4B downloaded",
+            modelRef,
+            recommended: true,
+            credentials: true,
+          },
+        ],
+      });
+      await page.getByRole("button", { name: "Yes" }).click();
+      await page.getByRole("heading", { name: "Connection verified" }).waitFor();
+      await expect
+        .poll(() => page.locator(".model-setup-success").textContent())
+        .toContain(modelRef);
+      await expect
+        .poll(() => page.locator(".model-setup-success").textContent())
+        .toContain("Verified in 731 ms");
+
+      const activate = await gateway.waitForRequest("openclaw.setup.activate");
+      expect(activate.params).toEqual({
+        kind: "provider-auto:llama-cpp",
+        modelRef,
+      });
+
+      if (artifactDir) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "llama-cpp-ready-desktop.png"),
+        });
+        await page.setViewportSize({ height: 844, width: 390 });
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(artifactDir, "llama-cpp-ready-mobile.png"),
+        });
+      }
+
+      await page.getByRole("button", { name: "Start chatting" }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
     } finally {
       await context.close();
     }

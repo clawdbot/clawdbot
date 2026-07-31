@@ -2229,6 +2229,61 @@
       "translated": "신뢰할 수 있는 비공개 네트워크에서만 사용하세요."
     },
     {
+      "id": "native.android.903b94dca2caaa56",
+      "source": "Connected (node offline)",
+      "translated": "연결됨(노드 오프라인)"
+    },
+    {
+      "id": "native.android.cc51d76c73c98f21",
+      "source": "Connected (operator offline)",
+      "translated": "연결됨(운영자 오프라인)"
+    },
+    {
+      "id": "native.android.1312170581219544",
+      "source": "Ready",
+      "translated": "준비됨"
+    },
+    {
+      "id": "native.android.dfa7a374e2c6b10f",
+      "source": "Connecting...",
+      "translated": "연결 중..."
+    },
+    {
+      "id": "native.android.530b4ba5717efdd0",
+      "source": "Pairing needed",
+      "translated": "페어링 필요"
+    },
+    {
+      "id": "native.android.bd735f74888467d0",
+      "source": "Authentication needed",
+      "translated": "인증 필요"
+    },
+    {
+      "id": "native.android.4d6c4830e8297779",
+      "source": "TLS timed out",
+      "translated": "TLS 시간 초과"
+    },
+    {
+      "id": "native.android.724ae153c20bede5",
+      "source": "No TLS endpoint",
+      "translated": "TLS 엔드포인트 없음"
+    },
+    {
+      "id": "native.android.7220032e6ee66c7f",
+      "source": "Certificate review needed",
+      "translated": "인증서 검토 필요"
+    },
+    {
+      "id": "native.android.e7b3a991683cfc5b",
+      "source": "Cannot reach gateway",
+      "translated": "Gateway에 연결할 수 없음"
+    },
+    {
+      "id": "native.android.b882dd8f5bb2e7a0",
+      "source": "Not connected",
+      "translated": "연결 안 됨"
+    },
+    {
       "id": "native.android.b331b5b54e147e41",
       "source": "Setup code expired",
       "translated": "설정 코드가 만료되었습니다"
@@ -3769,6 +3824,11 @@
       "translated": "이 세션 대시보드를 열려면 Gateway에 연결하세요."
     },
     {
+      "id": "native.android.a38380662bac2210",
+      "source": "Show Sidebar",
+      "translated": "사이드바 표시"
+    },
+    {
       "id": "native.android.a5845742daecb4ba",
       "source": "Threads",
       "translated": "스레드"
@@ -5069,41 +5129,6 @@
       "translated": "항상"
     },
     {
-      "id": "native.android.448831898efda6c2",
-      "source": "Connecting...",
-      "translated": "연결 중..."
-    },
-    {
-      "id": "native.android.a4f0ff7a2cc989d2",
-      "source": "Pairing needed",
-      "translated": "페어링 필요"
-    },
-    {
-      "id": "native.android.ed5aa7f6cceb466c",
-      "source": "Authentication needed",
-      "translated": "인증 필요"
-    },
-    {
-      "id": "native.android.3c96aa987f267692",
-      "source": "TLS timed out",
-      "translated": "TLS 시간 초과"
-    },
-    {
-      "id": "native.android.0eef5fbe3a7c83b3",
-      "source": "No TLS endpoint",
-      "translated": "TLS 엔드포인트 없음"
-    },
-    {
-      "id": "native.android.0273578a6d9e3a48",
-      "source": "Certificate review needed",
-      "translated": "인증서 검토 필요"
-    },
-    {
-      "id": "native.android.9256c686d6616406",
-      "source": "Cannot reach gateway",
-      "translated": "Gateway에 연결할 수 없음"
-    },
-    {
       "id": "native.android.2df2dec704f91977",
       "source": "About",
       "translated": "정보"
@@ -5934,9 +5959,9 @@
       "translated": "스레드 열기"
     },
     {
-      "id": "native.android.ede6f2717ca8e267",
-      "source": "Back",
-      "translated": "뒤로"
+      "id": "native.android.3d8b4fbefc3bed01",
+      "source": "Show Sidebar",
+      "translated": "사이드바 표시"
     },
     {
       "id": "native.android.ed7e1e2e97bfdd0a",
@@ -6407,6 +6432,96 @@
       "id": "native.android.ca180f1e4dd6f138",
       "source": "Not connected",
       "translated": "연결되지 않음"
+    },
+    {
+      "id": "native.android.0c2501a6c5ddca09",
+      "source": "Search sessions",
+      "translated": "세션 검색"
+    },
+    {
+      "id": "native.android.590e8e370944beee",
+      "source": "Clear session search",
+      "translated": "세션 검색 지우기"
+    },
+    {
+      "id": "native.android.5409a13f0c35e1ae",
+      "source": "Working",
+      "translated": "작업 중"
+    },
+    {
+      "id": "native.android.ba8628561f3d7c81",
+      "source": "Needs attention",
+      "translated": "주의 필요"
+    },
+    {
+      "id": "native.android.7371ad8f117e08ff",
+      "source": "Selected",
+      "translated": "선택됨"
+    },
+    {
+      "id": "native.android.4e2f2b168d8402e5",
+      "source": "Home",
+      "translated": "홈"
+    },
+    {
+      "id": "native.android.411af820e8607155",
+      "source": "Overview",
+      "translated": "개요"
+    },
+    {
+      "id": "native.android.82ebfe54bfbfd385",
+      "source": "Usage",
+      "translated": "사용량"
+    },
+    {
+      "id": "native.android.24fff115bd302167",
+      "source": "Automations",
+      "translated": "자동화"
+    },
+    {
+      "id": "native.android.cf5241cd358243fd",
+      "source": "Threads",
+      "translated": "스레드"
+    },
+    {
+      "id": "native.android.aa57a340615c6acc",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.0a6327687ccfbfdb",
+      "source": "Open Settings",
+      "translated": "설정 열기"
+    },
+    {
+      "id": "native.android.a52860ece0b7e03c",
+      "source": "Hide Sidebar",
+      "translated": "사이드바 숨기기"
+    },
+    {
+      "id": "native.android.e2d9151fcb89115a",
+      "source": "Agents",
+      "translated": "에이전트"
+    },
+    {
+      "id": "native.android.8561b4bd41836a1d",
+      "source": "More Agents",
+      "translated": "에이전트 더 보기"
+    },
+    {
+      "id": "native.android.a96adb01ce2f2dbe",
+      "source": "Pages",
+      "translated": "페이지"
+    },
+    {
+      "id": "native.android.a5eca2d258c332b5",
+      "source": "Recent sessions",
+      "translated": "최근 세션"
+    },
+    {
+      "id": "native.android.6d00f84c795947ed",
+      "source": "No recent sessions",
+      "translated": "최근 세션 없음"
     },
     {
       "id": "native.android.7c6f9feb2c16785f",
@@ -8002,6 +8117,11 @@
       "id": "native.android.b73c79389a8cff07",
       "source": "All",
       "translated": "전체"
+    },
+    {
+      "id": "native.android.5771a93c0a100be9",
+      "source": "Show Sidebar",
+      "translated": "사이드바 표시"
     },
     {
       "id": "native.android.4a198e67719b8e83",

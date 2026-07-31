@@ -1437,6 +1437,10 @@ jobs:
           --configLoader runner
           --shard ${{ matrix.shard }}/4
 
+      - name: Test browser copilot end-to-end
+        if: matrix.shard == 1
+        run: pnpm test:e2e:browser-copilot
+
   control-ui-i18n:
     permissions:
       contents: read

@@ -193,7 +193,14 @@ export function resolveGatewayScopedTools(params: {
   const gatewayToolsCfg = params.cfg.gateway?.tools;
   const defaultGatewayDeny =
     surface === "http"
-      ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
+      ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
+          // Config allow entries may use legacy tool names (e.g. "cron");
+          // normalize both sides so they still lift the matching default deny.
+          (name) =>
+            !gatewayToolsCfg?.allow?.some(
+              (allowed) => normalizeToolName(allowed) === normalizeToolName(name),
+            ),
+        )
       : [];
   const ownerOnlyGatewayDeny =
     params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)

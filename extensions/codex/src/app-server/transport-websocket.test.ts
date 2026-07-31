@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
 import { CodexAppServerClient } from "./client.js";
 import { createWebSocketTransport } from "./transport-websocket.js";
@@ -17,6 +17,7 @@ describe("Codex app-server websocket transport", () => {
   const tempDirs: string[] = [];
 
   afterEach(async () => {
+    vi.useRealTimers();
     for (const client of clients) {
       client.close();
     }
@@ -80,6 +81,129 @@ describe("Codex app-server websocket transport", () => {
     await expect(client.initialize()).resolves.toBeUndefined();
     await expect(client.request("model/list", {})).resolves.toEqual({ data: [] });
     expect(authHeaders).toEqual(["Bearer secret"]);
+  });
+
+  it("keeps an idle remote websocket healthy with protocol-level ping frames", async () => {
+    vi.useFakeTimers();
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    servers.push(server);
+    let resolveConnected: (() => void) | undefined;
+    const connected = new Promise<void>((resolve) => {
+      resolveConnected = resolve;
+    });
+    let resolvePing: (() => void) | undefined;
+    const receivedPing = new Promise<void>((resolve) => {
+      resolvePing = resolve;
+    });
+    server.once("connection", (socket) => {
+      socket.once("ping", () => resolvePing?.());
+      resolveConnected?.();
+    });
+    await new Promise<void>((resolve) => {
+      server.once("listening", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected websocket test server port");
+    }
+
+    const transport = createWebSocketTransport({
+      transport: "websocket",
+      command: "codex",
+      args: [],
+      url: `ws://127.0.0.1:${address.port}`,
+      headers: {},
+    });
+    transports.push(transport);
+    await connected;
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    await expect(receivedPing).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(transport.killed).toBe(false);
+  });
+
+  it("closes a remote websocket only after five consecutive unanswered pings", async () => {
+    vi.useFakeTimers();
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0, autoPong: false });
+    servers.push(server);
+    let resolveConnected: (() => void) | undefined;
+    const connected = new Promise<void>((resolve) => {
+      resolveConnected = resolve;
+    });
+    let resolvePing: (() => void) | undefined;
+    const receivedPing = new Promise<void>((resolve) => {
+      resolvePing = resolve;
+    });
+    server.once("connection", (socket) => {
+      socket.once("ping", () => resolvePing?.());
+      resolveConnected?.();
+    });
+    await new Promise<void>((resolve) => {
+      server.once("listening", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected websocket test server port");
+    }
+
+    const transport = createWebSocketTransport({
+      transport: "websocket",
+      command: "codex",
+      args: [],
+      url: `ws://127.0.0.1:${address.port}`,
+      headers: {},
+    });
+    transports.push(transport);
+    const exited = new Promise<unknown>((resolve) => {
+      transport.once("exit", (code) => resolve(code));
+    });
+    await connected;
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    await expect(receivedPing).resolves.toBeUndefined();
+
+    for (let missedPongs = 1; missedPongs < 5; missedPongs += 1) {
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(transport.killed).toBe(false);
+    }
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    await expect(exited).resolves.toBe(1006);
+    expect(transport.killed).toBe(true);
+  });
+
+  it.each([401, 403])("surfaces a rejected HTTP %i websocket upgrade", async (statusCode) => {
+    const httpServer = http.createServer((_request, response) => {
+      response.writeHead(statusCode);
+      response.end();
+    });
+    httpServers.push(httpServer);
+    await new Promise<void>((resolve) => {
+      httpServer.listen(0, "127.0.0.1", resolve);
+    });
+    const address = httpServer.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected websocket test server port");
+    }
+
+    const transport = createWebSocketTransport({
+      transport: "websocket",
+      command: "codex",
+      args: [],
+      url: `ws://127.0.0.1:${address.port}`,
+      headers: {},
+    });
+    transports.push(transport);
+    const connectionError = new Promise<unknown>((resolve) => {
+      transport.once("error", (error) => resolve(error));
+    });
+
+    await expect(connectionError).resolves.toHaveProperty(
+      "message",
+      `Unexpected server response: ${statusCode}`,
+    );
   });
 
   it("preserves UTF-8 JSON-RPC bytes split across writable chunks", async () => {

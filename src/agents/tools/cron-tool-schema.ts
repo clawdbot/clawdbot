@@ -350,11 +350,9 @@ function createCronPatchObjectSchema(): TSchema {
   );
 }
 
-// Flat top-level mirror of the most common nested job fields, for models that
-// flatten args instead of nesting them under `job`. Every key here must be a
-// recognised flat key in cron-tool-canonicalize.ts (CRON_FLAT_PAYLOAD_KEYS /
-// CRON_FLAT_SCHEDULE_KEYS); otherwise the canonicalizer silently drops it.
-// cron-tool.schema.test.ts guards that invariant.
+// Small flat path for common jobs when a model cannot reliably emit nested
+// objects. Advanced fields stay in the canonical job/patch schema; runtime may
+// still recover additional legacy flat fields without advertising them here.
 function createCronFlatJobSchemaProperties() {
   return {
     name: Type.Optional(
@@ -397,86 +395,6 @@ function createCronFlatJobSchemaProperties() {
           'Flat agentTurn prompt for action="add" or action="update"; implies an agentTurn payload',
       }),
     ),
-    anchorMs: optionalNonNegativeIntegerSchema({
-      description: "Flat start anchor ms for a flat everyMs schedule",
-    }),
-    model: Type.Optional(
-      Type.Union([Type.String(), Type.Null()], {
-        description:
-          "Flat agentTurn model override; implies an agentTurn payload, or null to clear on update",
-      }),
-    ),
-    fallbacks: nullableStringArraySchema(
-      "Flat agentTurn fallback models; implies an agentTurn payload, or null to clear on update",
-    ),
-    toolsAllow: nullableStringArraySchema(
-      "Flat agentTurn allowed tool ids; implies an agentTurn payload, or null to clear on update",
-    ),
-    thinking: Type.Optional(
-      Type.String({
-        description: "Flat agentTurn thinking override; implies an agentTurn payload",
-      }),
-    ),
-    timeoutSeconds: optionalFiniteNumberSchema({
-      minimum: 0,
-      description: "Flat agentTurn timeout seconds; implies an agentTurn payload",
-    }),
-    script: Type.Optional(
-      Type.String({
-        description:
-          'Flat headless script payload for action="add" or action="update"; implies a script payload',
-      }),
-    ),
-    toolBudget: optionalPositiveIntegerSchema({
-      description: "Flat maximum tool calls for a script payload",
-    }),
-    pacingMin: Type.Optional(
-      Type.String({
-        description: 'Flat minimum dynamic delay for action="add" or action="update"',
-      }),
-    ),
-    pacingMax: Type.Optional(
-      Type.String({
-        description: 'Flat maximum dynamic delay for action="add" or action="update"',
-      }),
-    ),
-    triggerScript: Type.Optional(
-      Type.String({
-        minLength: 1,
-        maxLength: 65_536,
-        description: 'Flat trigger script for action="add" or action="update"',
-      }),
-    ),
-    triggerOnce: Type.Optional(
-      Type.Boolean({
-        description: "Flat flag to disable a trigger after its first successful fire",
-      }),
-    ),
-    streamCommand: Type.Optional(
-      Type.Array(Type.String({ minLength: 1 }), {
-        minItems: 1,
-        description:
-          'Flat stream supervised-source argv for action="add" or action="update"; implies a stream schedule (kind=stream, requires cron.triggers.enabled)',
-      }),
-    ),
-    streamCwd: Type.Optional(
-      Type.String({
-        minLength: 1,
-        description: "Flat stream working directory (kind=stream)",
-      }),
-    ),
-    streamMode: optionalStringEnum(["line", "match"] as const, {
-      description: "Flat stream match mode (kind=stream)",
-    }),
-    streamMatch: Type.Optional(
-      Type.String({ description: "Flat stream regex source for streamMode=match" }),
-    ),
-    streamBatchMs: optionalNonNegativeIntegerSchema({
-      description: "Flat stream output batching interval ms (kind=stream)",
-    }),
-    streamMaxBatchBytes: optionalNonNegativeIntegerSchema({
-      description: "Flat stream output batch byte cap (kind=stream)",
-    }),
   };
 }
 
@@ -504,7 +422,12 @@ export function createCronToolSchema(): TSchema {
           description: 'Relative duration for action="next_check" (for example, "15m")',
         }),
       ),
-      text: Type.Optional(Type.String({ description: 'systemEvent text for action="wake"' })),
+      text: Type.Optional(
+        Type.String({
+          description:
+            'systemEvent text for action="add" or action="update"; event text for action="wake"',
+        }),
+      ),
       mode: optionalStringEnum(CRON_WAKE_MODES, {
         description:
           'Wake mode for action="wake" only (default next-heartbeat); not cron job delivery mode',

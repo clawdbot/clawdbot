@@ -325,6 +325,33 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+  it("persists reply text alongside media names in SQLite", async () => {
+    await writeTranscriptStore();
+
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Revenue fell 12% quarter over quarter.",
+      mediaUrls: ["https://example.com/files/chart-q3.png?token=secret"],
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(true);
+    const events = await loadFixtureMessages();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Revenue fell 12% quarter over quarter.\nchart-q3.png",
+            },
+          ],
+        }),
+      }),
+    );
+  });
+
   it("advances the session registry marker after managed transcript appends", async () => {
     const updatedAt = Date.parse("2026-05-18T09:00:00.000Z");
     const appendedAt = Date.parse("2026-05-18T09:05:00.000Z");
