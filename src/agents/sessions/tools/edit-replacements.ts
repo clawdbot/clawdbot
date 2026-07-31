@@ -116,11 +116,70 @@ export function applyReplacementsPreservingUnchangedLines(
     if (!firstLine || !lastLine) {
       throw new Error("Replacement group is outside the base content.");
     }
-    const groupStartOffset = firstLine.start;
+
+    // Use the ORIGINAL content for this line group, mapping replacement indices
+    // from normalized space to original space. This ensures bytes outside the
+    // matched span (e.g. Unicode CJK characters in comments, unusual symbols)
+    // stay untouched instead of being silently NFKC-normalized.
+    const originalGroupContent = originalLines.slice(group.startLine, group.endLine).join("");
+
+    // Map replacements from normalized-space indices to original-space indices,
+    // accounting for trailing whitespace that normalizeForFuzzyMatch's trimEnd()
+    // removed from each line.
+    const originalReplacements = group.replacements.map((r) => {
+      const normLine = baseLines.findIndex(
+        (l, i) =>
+          i >= group.startLine &&
+          i < group.endLine &&
+          r.matchIndex >= l.start &&
+          r.matchIndex < l.end,
+      );
+      const withinLineOffset = r.matchIndex - baseLines[normLine].start;
+      const origLineStart = originalLines
+        .slice(0, normLine)
+        .reduce((sum, l) => sum + l.length, 0);
+
+      // Compute original-space match length by walking through lines.
+      const normMatchEnd = r.matchIndex + r.matchLength;
+      const endNormLine = baseLines.findIndex(
+        (l) => normMatchEnd > l.start && normMatchEnd <= l.end,
+      );
+      const matchEndsWithNewline =
+        r.matchLength > 0 && baseContent[r.matchIndex + r.matchLength - 1] === "\n";
+      let origMatchLen = r.matchLength;
+      if (endNormLine >= 0) {
+        let origEndOfMatch: number;
+        if (matchEndsWithNewline) {
+          // Match ends at line end — include full original line length
+          origEndOfMatch = originalLines
+            .slice(0, endNormLine + 1)
+            .reduce((sum, l) => sum + l.length, 0);
+        } else {
+          // Match ends mid-line — same within-line position
+          const lastLineOrigStart = originalLines
+            .slice(0, endNormLine)
+            .reduce((sum, l) => sum + l.length, 0);
+          const withinLastLine = normMatchEnd - baseLines[endNormLine].start;
+          origEndOfMatch = lastLineOrigStart + withinLastLine;
+        }
+        origMatchLen = origEndOfMatch - (origLineStart + withinLineOffset);
+      }
+
+      return {
+        ...r,
+        matchIndex: origLineStart + withinLineOffset,
+        matchLength: origMatchLen,
+      };
+    });
+
+    // Apply replacements on the ORIGINAL content with original-space offsets
+    const origGroupStart = originalLines
+      .slice(0, group.startLine)
+      .reduce((sum, l) => sum + l.length, 0);
     result += applyReplacements(
-      baseContent.slice(groupStartOffset, lastLine.end),
-      group.replacements,
-      groupStartOffset,
+      originalGroupContent,
+      originalReplacements,
+      origGroupStart,
     );
     originalLineIndex = group.endLine;
   }
