@@ -3,6 +3,7 @@
   "areas": [
     {
       "id": "wizard-core",
+      "owner": "wizard",
       "namespace": "wizard",
       "source": "src/wizard/i18n/catalogs/en.json",
       "targets": [

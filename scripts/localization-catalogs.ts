@@ -8,20 +8,21 @@ import {
 } from "../packages/localization-core/src/catalog.js";
 import { SUPPORTED_LOCALES } from "../packages/localization-core/src/locale-registry.js";
 
-type CatalogTarget = {
+export type CatalogTarget = {
   locale: string;
   path: string;
 };
 
-type CatalogArea = {
+export type CatalogArea = {
   id: string;
+  owner: string;
   namespace: string;
   source: string;
   targets: readonly CatalogTarget[];
   protectedLiterals: readonly string[];
 };
 
-type CatalogRegistry = {
+export type CatalogRegistry = {
   schemaVersion: 1;
   areas: readonly CatalogArea[];
 };
@@ -170,6 +171,7 @@ async function readRegistry(root: string, registryPath: string): Promise<Catalog
     }
     return {
       id: expectString(entry.id, `areas[${index}].id`),
+      owner: expectString(entry.owner, `areas[${index}].owner`),
       namespace: expectString(entry.namespace, `areas[${index}].namespace`),
       source: expectRepositoryPath(entry.source, `areas[${index}].source`),
       targets: entry.targets.map((target, targetIndex) => {
@@ -222,6 +224,13 @@ async function readRegistry(root: string, registryPath: string): Promise<Catalog
     }
   }
   return { schemaVersion: 1, areas };
+}
+
+export async function loadCatalogRegistry(
+  options: { root?: string; registryPath?: string } = {},
+): Promise<CatalogRegistry> {
+  const root = options.root ?? process.cwd();
+  return await readRegistry(root, options.registryPath ?? DEFAULT_REGISTRY_PATH);
 }
 
 export async function catalogWorkflowPaths(

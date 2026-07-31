@@ -1506,14 +1506,21 @@ jobs:
           sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
       - name: Check localization surface dispositions
+        env:
+          COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
         run: |
+          set -euo pipefail
           if node -e 'const scripts = require("./package.json").scripts ?? {}; process.exit(scripts["localization:surfaces:check"] ? 0 : 1)'; then
             pnpm localization:surfaces:check
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$COMPATIBILITY_TARGET" == "true" ]]; then
+            echo "Selected proven compatibility target predates the surface-disposition gate."
           else
-            echo "Selected historical target predates the surface-disposition gate."
+            echo "Current CI targets must provide localization:surfaces:check." >&2
+            exit 1
           fi
       - name: Check adopted localization catalogs
         env:
+          COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           DIFF_BASE_REVISION: ${{ needs.preflight.outputs.diff_base_revision }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
@@ -1542,8 +1549,11 @@ jobs:
             else
               pnpm localization:catalogs:detect
             fi
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$COMPATIBILITY_TARGET" == "true" ]]; then
+            echo "Selected proven compatibility target predates the adopted-catalog gate."
           else
-            echo "Selected historical target predates the adopted-catalog gate."
+            echo "Current CI targets must provide localization:catalogs:check." >&2
+            exit 1
           fi
 
   checks-ui:

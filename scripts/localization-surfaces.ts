@@ -1,14 +1,23 @@
-import { lstat, readdir, readFile } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { loadCatalogRegistry, type CatalogArea } from "./localization-catalogs.js";
 
 type SurfaceAdapter = {
   id: string;
   owner: string;
   roots: readonly string[];
   extensions: readonly string[];
-  excludedRoots: readonly string[];
 };
+
+type ConformingPipeline = "control-ui" | "docs-publish" | "native-apps";
+type EnglishOnlyReason =
+  | "developer-only"
+  | "model-authored"
+  | "operational-identifier"
+  | "upstream-owned"
+  | "user-authored";
+type NativePlatform = "android" | "apple";
 
 type SurfaceDisposition =
   | {
@@ -17,20 +26,37 @@ type SurfaceDisposition =
       source: string;
       disposition: "adopted";
       catalogArea: string;
+      namespace: string;
     }
   | {
       id: string;
       owner: string;
       source: string;
       disposition: "conforming-pipeline";
-      pipeline: string;
+      pipeline: ConformingPipeline;
     }
   | {
       id: string;
       owner: string;
       source: string;
-      disposition: "deferred" | "english-only" | "platform-constrained";
-      rationale: string;
+      disposition: "deferred";
+      blockerIssue: number;
+      reviewOwner: string;
+    }
+  | {
+      id: string;
+      owner: string;
+      source: string;
+      disposition: "english-only";
+      reason: EnglishOnlyReason;
+    }
+  | {
+      id: string;
+      owner: string;
+      source: string;
+      disposition: "platform-constrained";
+      pipeline: "native-apps";
+      platform: NativePlatform;
     };
 
 type SurfaceRegistry = {
@@ -39,17 +65,32 @@ type SurfaceRegistry = {
   surfaces: readonly SurfaceDisposition[];
 };
 
+type PipelineContract = {
+  owner: string;
+  evidenceCommand: string;
+};
+
 const DEFAULT_REGISTRY_PATH = "localization/surfaces.json";
 const DEFAULT_CATALOG_REGISTRY_PATH = "localization/catalogs.json";
-type SurfaceDispositionKind = SurfaceDisposition["disposition"];
-
-const DISPOSITIONS = new Set<SurfaceDispositionKind>([
-  "adopted",
-  "conforming-pipeline",
-  "deferred",
-  "english-only",
-  "platform-constrained",
+const PIPELINE_CONTRACTS: Readonly<Record<ConformingPipeline, PipelineContract>> = Object.freeze({
+  "control-ui": Object.freeze({ owner: "control-ui", evidenceCommand: "pnpm ui:i18n:verify" }),
+  "docs-publish": Object.freeze({
+    owner: "docs",
+    evidenceCommand: "pnpm docs:check-i18n-glossary",
+  }),
+  "native-apps": Object.freeze({
+    owner: "native-apps",
+    evidenceCommand: "pnpm native:i18n:verify",
+  }),
+});
+const ENGLISH_ONLY_REASONS = new Set<EnglishOnlyReason>([
+  "developer-only",
+  "model-authored",
+  "operational-identifier",
+  "upstream-owned",
+  "user-authored",
 ]);
+const NATIVE_PLATFORMS = new Set<NativePlatform>(["android", "apple"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -69,12 +110,12 @@ function expectStringArray(value: unknown, label: string): string[] {
   return value.map((entry, index) => expectString(entry, `${label}[${index}]`));
 }
 
-function expectRepoPath(value: unknown, label: string): string {
+function expectRepositoryPath(value: unknown, label: string): string {
   const raw = expectString(value, label);
   const normalized = path.posix.normalize(raw);
   if (
     raw.includes("\\") ||
-    /^[A-Za-z]:\//u.test(raw) ||
+    /^[A-Za-z]:/u.test(raw) ||
     path.isAbsolute(raw) ||
     path.posix.isAbsolute(raw) ||
     normalized === "." ||
@@ -95,8 +136,31 @@ function expectExtension(value: unknown, label: string): string {
   return extension;
 }
 
-async function readJson(filePath: string): Promise<unknown> {
-  return JSON.parse(await readFile(filePath, "utf8"));
+function expectPositiveInteger(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) <= 0) {
+    throw new Error(`${label} must be a positive issue number`);
+  }
+  return value as number;
+}
+
+function expectReviewOwner(value: unknown, label: string): string {
+  const owner = expectString(value, label);
+  if (!/^@[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/u.test(owner)) {
+    throw new Error(`${label} must be a GitHub @handle`);
+  }
+  return owner;
+}
+
+function assertExactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+  label: string,
+): void {
+  const actual = Object.keys(value).toSorted();
+  const wanted = [...expected].toSorted();
+  if (actual.join("\0") !== wanted.join("\0")) {
+    throw new Error(`${label} must contain exactly: ${wanted.join(", ")}`);
+  }
 }
 
 function assertUnique(values: readonly string[], label: string): void {
@@ -105,50 +169,145 @@ function assertUnique(values: readonly string[], label: string): void {
   }
 }
 
-function isDisposition(value: string): value is SurfaceDispositionKind {
-  return DISPOSITIONS.has(value as SurfaceDispositionKind);
+function readPipeline(value: unknown, label: string): ConformingPipeline {
+  const pipeline = expectString(value, label);
+  if (!Object.hasOwn(PIPELINE_CONTRACTS, pipeline)) {
+    throw new Error(`${label} references unsupported conforming pipeline ${pipeline}`);
+  }
+  return pipeline as ConformingPipeline;
 }
 
 function readDisposition(entry: unknown, index: number): SurfaceDisposition {
+  const label = `surfaces[${index}]`;
   if (!isRecord(entry)) {
-    throw new Error(`surfaces[${index}] must be an object`);
+    throw new Error(`${label} must be an object`);
   }
-  const id = expectString(entry.id, `surfaces[${index}].id`);
-  const owner = expectString(entry.owner, `surfaces[${index}].owner`);
-  const source = expectRepoPath(entry.source, `surfaces[${index}].source`);
-  const disposition = expectString(entry.disposition, `surfaces[${index}].disposition`);
-  if (!isDisposition(disposition)) {
-    throw new Error(`surfaces[${index}].disposition is unsupported: ${disposition}`);
-  }
+  const disposition = expectString(entry.disposition, `${label}.disposition`);
+  const common = {
+    id: expectString(entry.id, `${label}.id`),
+    owner: expectString(entry.owner, `${label}.owner`),
+    source: expectRepositoryPath(entry.source, `${label}.source`),
+  };
+
   if (disposition === "adopted") {
+    assertExactKeys(
+      entry,
+      ["id", "owner", "source", "disposition", "catalogArea", "namespace"],
+      label,
+    );
     return {
-      id,
-      owner,
-      source,
+      ...common,
       disposition,
-      catalogArea: expectString(entry.catalogArea, `surfaces[${index}].catalogArea`),
+      catalogArea: expectString(entry.catalogArea, `${label}.catalogArea`),
+      namespace: expectString(entry.namespace, `${label}.namespace`),
     };
   }
   if (disposition === "conforming-pipeline") {
+    assertExactKeys(entry, ["id", "owner", "source", "disposition", "pipeline"], label);
+    const pipeline = readPipeline(entry.pipeline, `${label}.pipeline`);
+    const contract = PIPELINE_CONTRACTS[pipeline];
+    if (contract.owner !== common.owner) {
+      throw new Error(
+        `${label} owner ${common.owner} does not match pipeline ${pipeline} owner ${contract.owner}`,
+      );
+    }
+    return { ...common, disposition, pipeline };
+  }
+  if (disposition === "deferred") {
+    assertExactKeys(
+      entry,
+      ["id", "owner", "source", "disposition", "blockerIssue", "reviewOwner"],
+      label,
+    );
     return {
-      id,
-      owner,
-      source,
+      ...common,
       disposition,
-      pipeline: expectString(entry.pipeline, `surfaces[${index}].pipeline`),
+      blockerIssue: expectPositiveInteger(entry.blockerIssue, `${label}.blockerIssue`),
+      reviewOwner: expectReviewOwner(entry.reviewOwner, `${label}.reviewOwner`),
     };
   }
-  return {
-    id,
-    owner,
-    source,
-    disposition,
-    rationale: expectString(entry.rationale, `surfaces[${index}].rationale`),
-  };
+  if (disposition === "english-only") {
+    assertExactKeys(entry, ["id", "owner", "source", "disposition", "reason"], label);
+    const reason = expectString(entry.reason, `${label}.reason`);
+    if (!ENGLISH_ONLY_REASONS.has(reason as EnglishOnlyReason)) {
+      throw new Error(`${label}.reason is unsupported: ${reason}`);
+    }
+    return { ...common, disposition, reason: reason as EnglishOnlyReason };
+  }
+  if (disposition === "platform-constrained") {
+    assertExactKeys(entry, ["id", "owner", "source", "disposition", "pipeline", "platform"], label);
+    const pipeline = readPipeline(entry.pipeline, `${label}.pipeline`);
+    const platform = expectString(entry.platform, `${label}.platform`);
+    if (pipeline !== "native-apps" || !NATIVE_PLATFORMS.has(platform as NativePlatform)) {
+      throw new Error(`${label} must use native-apps with platform android or apple`);
+    }
+    const contract = PIPELINE_CONTRACTS[pipeline];
+    if (contract.owner !== common.owner) {
+      throw new Error(
+        `${label} owner ${common.owner} does not match pipeline ${pipeline} owner ${contract.owner}`,
+      );
+    }
+    return { ...common, disposition, pipeline, platform: platform as NativePlatform };
+  }
+  throw new Error(`${label}.disposition is unsupported: ${disposition}`);
+}
+
+async function canonicalRepositoryRoot(root: string): Promise<string> {
+  const canonical = await realpath(root);
+  const stats = await lstat(canonical);
+  if (!stats.isDirectory()) {
+    throw new Error("localization repository root must be a directory");
+  }
+  return canonical;
+}
+
+function resolveInsideRepository(root: string, repoPath: string): string {
+  const candidate = path.resolve(root, repoPath);
+  const relative = path.relative(root, candidate);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`${repoPath} must resolve inside the repository root`);
+  }
+  return candidate;
+}
+
+async function assertRepositoryEntry(
+  root: string,
+  repoPath: string,
+  kind: "directory" | "file",
+  label: string,
+): Promise<string> {
+  const candidate = resolveInsideRepository(root, repoPath);
+  const relative = path.relative(root, candidate);
+  let current = root;
+  const segments = relative.split(path.sep);
+  for (const [index, segment] of segments.entries()) {
+    current = path.join(current, segment);
+    let stats;
+    try {
+      stats = await lstat(current);
+    } catch (error) {
+      throw new Error(`${label} is missing: ${repoPath}`, { cause: error });
+    }
+    if (stats.isSymbolicLink()) {
+      throw new Error(`${label} traverses symbolic link ${repoPath}`);
+    }
+    if (index < segments.length - 1 && !stats.isDirectory()) {
+      throw new Error(`${label} has a non-directory parent: ${repoPath}`);
+    }
+    if (index === segments.length - 1) {
+      const valid = kind === "directory" ? stats.isDirectory() : stats.isFile();
+      if (!valid) {
+        throw new Error(`${label} is not a ${kind}: ${repoPath}`);
+      }
+    }
+  }
+  return candidate;
 }
 
 async function readRegistry(root: string, registryPath: string): Promise<SurfaceRegistry> {
-  const raw = await readJson(path.resolve(root, registryPath));
+  const normalizedPath = expectRepositoryPath(registryPath, "surface registry path");
+  const filePath = await assertRepositoryEntry(root, normalizedPath, "file", "surface registry");
+  const raw: unknown = JSON.parse(await readFile(filePath, "utf8"));
   if (
     !isRecord(raw) ||
     raw.schemaVersion !== 1 ||
@@ -162,42 +321,27 @@ async function readRegistry(root: string, registryPath: string): Promise<Surface
   if (raw.adapters.length === 0 || raw.surfaces.length === 0) {
     throw new Error("localization surface registry must declare an adapter and a surface");
   }
+  assertExactKeys(raw, ["schemaVersion", "adapters", "surfaces"], "surface registry");
+
   const adapters = raw.adapters.map((entry, index): SurfaceAdapter => {
+    const label = `adapters[${index}]`;
     if (!isRecord(entry)) {
-      throw new Error(`adapters[${index}] must be an object`);
+      throw new Error(`${label} must be an object`);
     }
-    const roots = expectStringArray(entry.roots, `adapters[${index}].roots`).map(
-      (value, rootIndex) => expectRepoPath(value, `adapters[${index}].roots[${rootIndex}]`),
+    assertExactKeys(entry, ["id", "owner", "roots", "extensions"], label);
+    const roots = expectStringArray(entry.roots, `${label}.roots`).map((value, rootIndex) =>
+      expectRepositoryPath(value, `${label}.roots[${rootIndex}]`),
     );
-    const excludedRoots = Array.isArray(entry.excludedRoots)
-      ? entry.excludedRoots.map((value, excludedIndex) =>
-          expectRepoPath(value, `adapters[${index}].excludedRoots[${excludedIndex}]`),
-        )
-      : [];
-    for (const excludedRoot of excludedRoots) {
-      const staysBelowRoot = roots.some((rootPath) => excludedRoot.startsWith(`${rootPath}/`));
-      const coversDeclaredRoot = roots.some(
-        (rootPath) => rootPath === excludedRoot || rootPath.startsWith(`${excludedRoot}/`),
-      );
-      if (!staysBelowRoot || coversDeclaredRoot) {
-        throw new Error(
-          `adapters[${index}].excludedRoots must stay below and not cover a declared root`,
-        );
-      }
-    }
-    const extensions = expectStringArray(entry.extensions, `adapters[${index}].extensions`).map(
-      (value, extensionIndex) =>
-        expectExtension(value, `adapters[${index}].extensions[${extensionIndex}]`),
+    const extensions = expectStringArray(entry.extensions, `${label}.extensions`).map(
+      (value, extensionIndex) => expectExtension(value, `${label}.extensions[${extensionIndex}]`),
     );
-    assertUnique(roots, `adapters[${index}].roots`);
-    assertUnique(excludedRoots, `adapters[${index}].excludedRoots`);
-    assertUnique(extensions, `adapters[${index}].extensions`);
+    assertUnique(roots, `${label}.roots`);
+    assertUnique(extensions, `${label}.extensions`);
     return {
-      id: expectString(entry.id, `adapters[${index}].id`),
-      owner: expectString(entry.owner, `adapters[${index}].owner`),
+      id: expectString(entry.id, `${label}.id`),
+      owner: expectString(entry.owner, `${label}.owner`),
       roots,
       extensions,
-      excludedRoots,
     };
   });
   const surfaces = raw.surfaces.map(readDisposition);
@@ -213,24 +357,26 @@ async function readRegistry(root: string, registryPath: string): Promise<Surface
     surfaces.map((surface) => surface.source),
     "surface sources",
   );
-  return { schemaVersion: 1, adapters, surfaces };
-}
-
-function isExcluded(repoPath: string, excludedRoots: readonly string[]): boolean {
-  return excludedRoots.some(
-    (excludedRoot) => repoPath === excludedRoot || repoPath.startsWith(`${excludedRoot}/`),
+  assertUnique(
+    surfaces
+      .filter((surface) => surface.disposition === "adopted")
+      .map((surface) => surface.catalogArea),
+    "adopted catalog areas",
   );
+  return { schemaVersion: 1, adapters, surfaces };
 }
 
 async function discoverRoot(
   root: string,
   repoPath: string,
   adapter: SurfaceAdapter,
+  generatedTargets: ReadonlySet<string>,
   discovered: Map<string, string>,
 ): Promise<void> {
+  const directory = resolveInsideRepository(root, repoPath);
   let entries;
   try {
-    entries = await readdir(path.resolve(root, repoPath), { withFileTypes: true });
+    entries = await readdir(directory, { withFileTypes: true });
   } catch (error) {
     throw new Error(`adapter ${adapter.id} cannot read declared root ${repoPath}`, {
       cause: error,
@@ -240,17 +386,17 @@ async function discoverRoot(
     left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
   )) {
     const childPath = path.posix.join(repoPath, entry.name);
-    if (isExcluded(childPath, adapter.excludedRoots)) {
-      continue;
-    }
     if (entry.isSymbolicLink()) {
       throw new Error(`adapter ${adapter.id} encountered symbolic link ${childPath}`);
     }
     if (entry.isDirectory()) {
-      await discoverRoot(root, childPath, adapter, discovered);
+      await discoverRoot(root, childPath, adapter, generatedTargets, discovered);
       continue;
     }
     if (!entry.isFile() || !adapter.extensions.includes(path.posix.extname(entry.name))) {
+      continue;
+    }
+    if (generatedTargets.has(childPath)) {
       continue;
     }
     const previousAdapter = discovered.get(childPath);
@@ -261,71 +407,88 @@ async function discoverRoot(
   }
 }
 
-async function assertRootDirectory(
+async function discoverSurfaces(
   root: string,
-  repoPath: string,
-  adapterId: string,
-): Promise<void> {
-  let currentPath = path.resolve(root);
-  for (const segment of repoPath.split("/")) {
-    currentPath = path.join(currentPath, segment);
-    let stats;
-    try {
-      stats = await lstat(currentPath);
-    } catch (error) {
-      throw new Error(`adapter ${adapterId} cannot read declared root ${repoPath}`, {
-        cause: error,
-      });
-    }
-    if (stats.isSymbolicLink()) {
-      throw new Error(`adapter ${adapterId} declared root traverses symbolic link ${repoPath}`);
-    }
-  }
-  const rootStats = await lstat(currentPath);
-  if (!rootStats.isDirectory()) {
-    throw new Error(`adapter ${adapterId} declared root is not a directory: ${repoPath}`);
-  }
-}
-
-async function discoverSurfaces(root: string, adapters: readonly SurfaceAdapter[]) {
+  adapters: readonly SurfaceAdapter[],
+  generatedTargets: ReadonlySet<string>,
+): Promise<Map<string, string>> {
   const discovered = new Map<string, string>();
   for (const adapter of adapters) {
     for (const rootPath of adapter.roots) {
-      await assertRootDirectory(root, rootPath, adapter.id);
-      await discoverRoot(root, rootPath, adapter, discovered);
+      await assertRepositoryEntry(
+        root,
+        rootPath,
+        "directory",
+        `adapter ${adapter.id} declared root`,
+      );
+      await discoverRoot(root, rootPath, adapter, generatedTargets, discovered);
     }
   }
   return discovered;
 }
 
-async function readCatalogSources(
-  root: string,
-  registryPath: string,
-): Promise<Map<string, string>> {
-  const raw = await readJson(path.resolve(root, registryPath));
-  if (!isRecord(raw) || raw.schemaVersion !== 1 || !Array.isArray(raw.areas)) {
-    throw new Error("localization catalog registry must use schemaVersion 1 and declare areas");
+function validateCatalogBijection(
+  catalogAreas: readonly CatalogArea[],
+  surfaces: readonly SurfaceDisposition[],
+): void {
+  const adoptedByArea = new Map(
+    surfaces
+      .filter((surface) => surface.disposition === "adopted")
+      .map((surface) => [surface.catalogArea, surface]),
+  );
+  const areasById = new Map(catalogAreas.map((area) => [area.id, area]));
+
+  for (const surface of surfaces) {
+    if (surface.disposition !== "adopted") {
+      continue;
+    }
+    const area = areasById.get(surface.catalogArea);
+    if (!area) {
+      throw new Error(
+        `surface ${surface.id} references unknown catalog area ${surface.catalogArea}`,
+      );
+    }
   }
-  const sources = new Map<string, string>();
-  raw.areas.forEach((entry, index) => {
-    if (!isRecord(entry)) {
-      throw new Error(`catalog areas[${index}] must be an object`);
+
+  for (const area of catalogAreas) {
+    const surface = adoptedByArea.get(area.id);
+    if (!surface) {
+      throw new Error(`catalog area ${area.id} has no adopted surface disposition`);
     }
-    const id = expectString(entry.id, `catalog areas[${index}].id`);
-    if (sources.has(id)) {
-      throw new Error(`catalog registry contains duplicate area ${id}`);
+    if (surface.source !== area.source) {
+      throw new Error(
+        `surface ${surface.id} source ${surface.source} does not match catalog area ${area.id} source ${area.source}`,
+      );
     }
-    sources.set(id, expectRepoPath(entry.source, `catalog areas[${index}].source`));
-  });
-  return sources;
+    if (surface.owner !== area.owner) {
+      throw new Error(
+        `surface ${surface.id} owner ${surface.owner} does not match catalog area ${area.id} owner ${area.owner}`,
+      );
+    }
+    if (surface.namespace !== area.namespace) {
+      throw new Error(
+        `surface ${surface.id} namespace ${surface.namespace} does not match catalog area ${area.id} namespace ${area.namespace}`,
+      );
+    }
+  }
 }
 
 export async function checkSurfaceDispositions(
   options: { root?: string; registryPath?: string; catalogRegistryPath?: string } = {},
 ): Promise<number> {
-  const root = options.root ?? process.cwd();
+  const root = await canonicalRepositoryRoot(options.root ?? process.cwd());
   const registry = await readRegistry(root, options.registryPath ?? DEFAULT_REGISTRY_PATH);
-  const discovered = await discoverSurfaces(root, registry.adapters);
+  const catalogRegistry = await loadCatalogRegistry({
+    root,
+    registryPath: options.catalogRegistryPath ?? DEFAULT_CATALOG_REGISTRY_PATH,
+  });
+  const generatedTargets = new Set(
+    catalogRegistry.areas.flatMap((area) => area.targets.map((target) => target.path)),
+  );
+  const discovered = await discoverSurfaces(root, registry.adapters, generatedTargets);
+  for (const target of generatedTargets) {
+    await assertRepositoryEntry(root, target, "file", "generated catalog target");
+  }
   const dispositions = new Map(registry.surfaces.map((surface) => [surface.source, surface]));
   const adaptersById = new Map(registry.adapters.map((adapter) => [adapter.id, adapter]));
   for (const [source, adapterId] of discovered) {
@@ -347,26 +510,7 @@ export async function checkSurfaceDispositions(
       throw new Error(`surface ${surface.id} declares undiscovered source ${surface.source}`);
     }
   }
-  const catalogSources = await readCatalogSources(
-    root,
-    options.catalogRegistryPath ?? DEFAULT_CATALOG_REGISTRY_PATH,
-  );
-  for (const surface of registry.surfaces) {
-    if (surface.disposition !== "adopted") {
-      continue;
-    }
-    const catalogSource = catalogSources.get(surface.catalogArea);
-    if (!catalogSource) {
-      throw new Error(
-        `surface ${surface.id} references unknown catalog area ${surface.catalogArea}`,
-      );
-    }
-    if (catalogSource !== surface.source) {
-      throw new Error(
-        `surface ${surface.id} source ${surface.source} does not match catalog area ${surface.catalogArea} source ${catalogSource}`,
-      );
-    }
-  }
+  validateCatalogBijection(catalogRegistry.areas, registry.surfaces);
   return discovered.size;
 }
 

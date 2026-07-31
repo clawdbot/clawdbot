@@ -82,6 +82,24 @@ describe("localization catalog authoring workflow", () => {
     expect(fallback.with?.["auto-merge"]).toBe("false");
   });
 
+  it("runs the surface gate independently and fails closed for current targets", () => {
+    const workflow = readWorkflow(".github/workflows/ci.yml");
+    const job = workflow.jobs["localization-catalogs"];
+    const step = (job.steps as WorkflowStep[]).find(
+      (entry) => entry.name === "Check localization surface dispositions",
+    )!;
+
+    expect(workflow.on.push["paths-ignore"]).toEqual(["**/*.md", "docs/**"]);
+    expect(job.if).toBe("needs.preflight.outputs.run_localization == 'true'");
+    expect(step.env).toMatchObject({
+      COMPATIBILITY_TARGET: "${{ needs.preflight.outputs.compatibility_target }}",
+    });
+    expect(step.run).toContain('"$GITHUB_EVENT_NAME" == "workflow_dispatch"');
+    expect(step.run).toContain('"$COMPATIBILITY_TARGET" == "true"');
+    expect(step.run).toContain("Current CI targets must provide localization:surfaces:check.");
+    expect(step.run).toContain("exit 1");
+  });
+
   it("blocks stale default-base internal PRs and leaves other ready PRs advisory", () => {
     const workflow = readWorkflow(".github/workflows/ci.yml");
     const step = (workflow.jobs["localization-catalogs"].steps as WorkflowStep[]).find(

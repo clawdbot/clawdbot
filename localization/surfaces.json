@@ -4,9 +4,12 @@
     {
       "id": "wizard-catalog-sources",
       "owner": "wizard",
-      "roots": ["src/wizard/i18n/catalogs"],
-      "extensions": [".json"],
-      "excludedRoots": ["src/wizard/i18n/catalogs/generated"]
+      "roots": [
+        "src/wizard/i18n/catalogs"
+      ],
+      "extensions": [
+        ".json"
+      ]
     }
   ],
   "surfaces": [
@@ -15,7 +18,8 @@
       "owner": "wizard",
       "source": "src/wizard/i18n/catalogs/en.json",
       "disposition": "adopted",
-      "catalogArea": "wizard-core"
+      "catalogArea": "wizard-core",
+      "namespace": "wizard"
     }
   ]
 }

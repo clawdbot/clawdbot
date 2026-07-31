@@ -28,6 +28,14 @@ Before editing, locate:
 
 Extend an existing owner boundary. If the surface is not enrolled, add one bounded owner declaration and its scoped gate as part of the slice; do not create a second shared runtime or a global catalog.
 
+For `localization/surfaces.json`, keep declarations machine-reviewable:
+
+- an `adopted` source must match exactly one catalog area by owner, namespace, and source path;
+- a `conforming-pipeline` source must use a pipeline ID already registered by the gate;
+- `english-only` and `platform-constrained` must use their finite reason/platform values;
+- `deferred` must name a durable blocker issue and GitHub review owner; and
+- never add adapter exclusions. Generated targets are derived from `localization/catalogs.json` and validated as regular, repository-contained files.
+
 Ask the owning maintainer before changing approval, authentication, authorization, destructive-action, privacy, recovery, Gateway protocol, channel safety, Plugin SDK, command metadata, or skill metadata copy.
 
 ## Implement a message
