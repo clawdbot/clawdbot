@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -12,8 +12,13 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { createSessionVisibilityChecker } from "../plugin-sdk/session-visibility.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 
 const callGatewayMock = vi.fn();
+let sessionsListTestState: OpenClawTestState | undefined;
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
@@ -264,6 +269,11 @@ describe("sessions tools", () => {
     });
   });
 
+  afterEach(async () => {
+    await sessionsListTestState?.cleanup();
+    sessionsListTestState = undefined;
+  });
+
   it("uses integer schemas for session count and window parameters", () => {
     const tools = createOpenClawTools();
     const byName = (name: string) => {
@@ -422,11 +432,13 @@ describe("sessions tools", () => {
   });
 
   it("sessions_list forwards mailbox filters and includes messages", async () => {
+    sessionsListTestState = await createOpenClawTestState({ label: "sessions-list-mailbox" });
+    const storePath = path.join(sessionsListTestState.sessionsDir(), "sessions.json");
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
         return {
-          path: "/tmp/sessions.json",
+          path: storePath,
           sessions: [
             {
               key: "main",
