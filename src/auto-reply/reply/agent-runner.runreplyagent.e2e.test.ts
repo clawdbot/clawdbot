@@ -467,7 +467,6 @@ describe("runReplyAgent active steering", () => {
 
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(taskTyping.startTypingLoop).toHaveBeenCalledOnce();
-    expect(taskTyping.refreshTypingTtl).toHaveBeenCalledOnce();
     expect(taskTyping.cleanup).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledOnce();
 

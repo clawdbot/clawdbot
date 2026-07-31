@@ -25,12 +25,10 @@ export function bindReplyOperationTyping(
 export async function refreshReplyOperationTyping(
   operation: ReplyOperation,
   options: { startIfIdle: boolean },
-): Promise<boolean> {
+): Promise<void> {
   const typing = typingByReplyOperation.get(operation);
   if (!typing || operation.result || (!options.startIfIdle && !typing.isActive())) {
-    return false;
+    return;
   }
   await typing.startTypingLoop();
-  typing.refreshTypingTtl();
-  return true;
 }
