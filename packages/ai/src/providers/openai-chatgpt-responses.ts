@@ -38,6 +38,7 @@ import { sleepWithAbort } from "../internal/retry-sleep.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type {
   Api,
   AssistantMessage,
@@ -843,10 +844,12 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
             try {
               yield JSON.parse(data) as Record<string, unknown>;
             } catch (cause) {
-              throw new CodexProtocolError(`Invalid Codex SSE JSON: ${formatThrownValue(cause)}`, {
-                cause,
-                payload: data,
-              });
+              if (!(cause instanceof SyntaxError)) {
+                throw cause;
+              }
+              // Align with the canonical transport contract: the shared marker is what
+              // assistant error formatting maps to the malformed-fragment retry copy.
+              throw new CodexProtocolError(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, { cause });
             }
           }
         }
