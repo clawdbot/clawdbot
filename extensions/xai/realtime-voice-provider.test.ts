@@ -493,6 +493,90 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(onTranscript).toHaveBeenCalledWith("user", "OpenClaw", true);
   });
 
+  it("forwards standard incremental input-transcription events", async () => {
+    const provider = buildXaiRealtimeVoiceProvider();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onTranscript,
+    });
+    const { connecting, socket } = await openRealtimeBridge(bridge);
+    await connecting;
+
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "conversation.item.input_audio_transcription.delta",
+          item_id: "item_speech",
+          delta: "open claw",
+        }),
+      ),
+    );
+
+    expect(onTranscript).toHaveBeenCalledWith("user", "open claw", false);
+  });
+
+  it("surfaces input transcription failures and discards their stale replacement text", async () => {
+    const provider = buildXaiRealtimeVoiceProvider();
+    const onTranscript = vi.fn();
+    const onError = vi.fn();
+    const onEvent = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onTranscript,
+      onError,
+      onEvent,
+    });
+    const { connecting, socket } = await openRealtimeBridge(bridge);
+    await connecting;
+
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "conversation.item.input_audio_transcription.updated",
+          item_id: "item_speech",
+          transcript: "stale speech",
+        }),
+      ),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "conversation.item.input_audio_transcription.failed",
+          item_id: "item_speech",
+          error: { code: "decoder_failure", message: "speech decoder exploded" },
+        }),
+      ),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "conversation.item.input_audio_transcription.completed",
+          item_id: "item_speech",
+        }),
+      ),
+    );
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "speech decoder exploded" }),
+    );
+    expect(onTranscript).not.toHaveBeenCalled();
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "server",
+      type: "conversation.item.input_audio_transcription.failed",
+      itemId: "item_speech",
+      detail: "speech decoder exploded",
+    });
+  });
+
   it("buffers assistant transcript deltas and finalizes them when done has no text", async () => {
     const provider = buildXaiRealtimeVoiceProvider();
     const onTranscript = vi.fn();
@@ -536,6 +620,35 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(onTranscript).toHaveBeenNthCalledWith(2, "assistant", "OpenClaw", false);
     expect(onTranscript).toHaveBeenNthCalledWith(3, "assistant", "Hello OpenClaw", true);
     expect(onTranscript).toHaveBeenCalledTimes(3);
+  });
+
+  it("preserves corrected final text from legacy realtime text events", async () => {
+    const provider = buildXaiRealtimeVoiceProvider();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onTranscript,
+    });
+    const { connecting, socket } = await openRealtimeBridge(bridge);
+    await connecting;
+
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.created" })));
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.text.delta", delta: "draft assistant" })),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.text.done", text: "corrected assistant" })),
+    );
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+
+    expect(onTranscript.mock.calls).toEqual([
+      ["assistant", "draft assistant", false],
+      ["assistant", "corrected assistant", true],
+    ]);
   });
 
   it.each([
@@ -810,6 +923,73 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       args: { question: "delegate this" },
     });
   });
+
+  it.each([
+    {
+      name: "corrected streamed arguments",
+      delta: '{"city":"draft"}',
+      finalArguments: '{"city":"Paris"}',
+      expectedArguments: { city: "Paris" },
+    },
+    {
+      name: "truncated streamed arguments",
+      delta: '{"city":',
+      finalArguments: '{"city":"Paris"}',
+      expectedArguments: { city: "Paris" },
+    },
+    {
+      name: "an explicitly empty completed payload",
+      delta: '{"city":"draft"}',
+      finalArguments: "",
+      expectedArguments: {},
+    },
+  ])(
+    "uses authoritative completed tool arguments for $name",
+    async ({ delta, finalArguments, expectedArguments }) => {
+      const provider = buildXaiRealtimeVoiceProvider();
+      const onToolCall = vi.fn();
+      const bridge = provider.createBridge({
+        providerConfig: { apiKey: "xai-test" }, // pragma: allowlist secret
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        onToolCall,
+      });
+      const { connecting, socket } = await openRealtimeBridge(bridge);
+      await connecting;
+
+      socket.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "response.function_call_arguments.delta",
+            item_id: "item_tool_1",
+            call_id: "call_1",
+            name: "lookup_weather",
+            delta,
+          }),
+        ),
+      );
+      socket.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "response.function_call_arguments.done",
+            item_id: "item_tool_1",
+            call_id: "call_1",
+            name: "lookup_weather",
+            arguments: finalArguments,
+          }),
+        ),
+      );
+
+      expect(onToolCall).toHaveBeenCalledWith({
+        itemId: "item_tool_1",
+        callId: "call_1",
+        name: "lookup_weather",
+        args: expectedArguments,
+      });
+    },
+  );
 
   it("waits for all parallel tool results before sending response.create", async () => {
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret
