@@ -85,7 +85,9 @@ describe("TUI reset transition PTY", () => {
           }),
         );
 
-        await run.write("\u0003\u0003\u0003", { delay: false });
+        await run.write("\u0003", { delay: false });
+        await run.waitForOutput("press ctrl+c again to exit");
+        await run.write("\u0003", { delay: false });
         expect((await run.waitForExit()).exitCode).toBe(0);
       } finally {
         await run.dispose();
