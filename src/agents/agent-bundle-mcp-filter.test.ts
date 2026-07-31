@@ -52,4 +52,13 @@ describe("matchesMcpToolFilterPattern", () => {
       }),
     ).toBe(true);
   });
+
+  it("keeps wildcard matching raw-only while accepting exact projected names", () => {
+    const candidateNames = ["query", "demo__query-2"];
+
+    expect(isMcpToolAllowedByFilter({ include: ["demo__*"], candidateNames })).toBe(false);
+    expect(isMcpToolAllowedByFilter({ include: ["demo__query-2"], candidateNames })).toBe(true);
+    expect(isMcpToolAllowedByFilter({ exclude: ["demo__*"], candidateNames })).toBe(true);
+    expect(isMcpToolAllowedByFilter({ exclude: ["demo__query-2"], candidateNames })).toBe(false);
+  });
 });

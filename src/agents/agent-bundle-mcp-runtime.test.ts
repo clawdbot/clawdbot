@@ -1521,6 +1521,26 @@ describe("session MCP runtime", () => {
     } finally {
       await projectedFilterRuntime.dispose();
     }
+
+    const wildcardFilterRuntime = createRuntime("session-raw-wildcard-filter", ["demo__*"]);
+    try {
+      const catalog = await wildcardFilterRuntime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName).toSorted()).toEqual([
+        "demo__query",
+        "demo__resources_list",
+      ]);
+      expect(catalog.servers.demo?.toolCount).toBe(2);
+      expect(catalog.servers.demo?.tools?.filteredCount).toBe(1);
+      const materialized = await materializeBundleMcpToolsForRun({
+        runtime: wildcardFilterRuntime,
+      });
+      expect(materialized.tools.map((tool) => tool.name).toSorted()).toEqual(
+        [projectedRawCollisionName, projectedRawUtilityCollisionName].toSorted(),
+      );
+      await materialized.dispose();
+    } finally {
+      await wildcardFilterRuntime.dispose();
+    }
   });
 
   it("applies session tool denials to listed and synthetic MCP tools", async () => {

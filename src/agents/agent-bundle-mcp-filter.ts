@@ -36,7 +36,21 @@ export function matchesMcpToolFilterPattern(pattern: string, value: string): boo
   return true;
 }
 
-/** Match include/exclude patterns against every supported name for one MCP tool. */
+function matchesMcpToolFilterCandidate(
+  pattern: string,
+  candidateNames: readonly string[],
+): boolean {
+  const trimmed = pattern.trim();
+  // The first candidate is always the raw MCP name. Preserve the shipped
+  // raw-only glob contract; projected probe names are accepted only exactly.
+  if (trimmed.includes("*")) {
+    const rawName = candidateNames[0];
+    return rawName ? matchesMcpToolFilterPattern(trimmed, rawName) : false;
+  }
+  return candidateNames.some((name) => matchesMcpToolFilterPattern(trimmed, name));
+}
+
+/** Match raw names/globs and exact projected names for one MCP tool. */
 export function isMcpToolAllowedByFilter(params: {
   include?: readonly string[];
   exclude?: readonly string[];
@@ -53,7 +67,7 @@ export function isMcpToolAllowedByFilter(params: {
       ) {
         return false;
       }
-      return params.candidateNames.some((name) => matchesMcpToolFilterPattern(pattern, name));
+      return matchesMcpToolFilterCandidate(trimmed, params.candidateNames);
     });
   const include = params.include ?? [];
   if (include.length > 0 && !matchesAny(include, true)) {
@@ -75,7 +89,7 @@ export function findAmbiguousExactMcpToolFilterPatterns(params: {
     }
     let matchingGroups = 0;
     for (const candidateNames of params.candidateGroups) {
-      if (candidateNames.some((name) => matchesMcpToolFilterPattern(trimmed, name))) {
+      if (matchesMcpToolFilterCandidate(trimmed, candidateNames)) {
         matchingGroups += 1;
         if (matchingGroups > 1) {
           ambiguous.add(trimmed);
@@ -92,7 +106,5 @@ export function matchesAnyMcpToolFilterCandidate(
   patterns: readonly string[],
   candidateNames: readonly string[],
 ): boolean {
-  return patterns.some((pattern) =>
-    candidateNames.some((name) => matchesMcpToolFilterPattern(pattern, name)),
-  );
+  return patterns.some((pattern) => matchesMcpToolFilterCandidate(pattern, candidateNames));
 }
