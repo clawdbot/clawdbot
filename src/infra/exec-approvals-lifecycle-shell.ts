@@ -1,4 +1,10 @@
 // Splits compound shell text without treating quoted separators as commands.
+import { splitShellArgs } from "../utils/shell-argv.js";
+import { resolveCarrierCommandArgv } from "./command-carriers.js";
+import { classifyOpenClawArgv } from "./exec-approvals-lifecycle-cli.js";
+import { isOpenClawExecutablePattern } from "./exec-approvals-lifecycle-patterns.js";
+import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-runners.js";
+
 export type LifecycleShellDialect = "cmd" | "posix" | "powershell";
 
 function stripBraceTokens(argv: readonly string[]): string[] {
@@ -58,6 +64,130 @@ export function powerShellCalculatedInvocationRequiresApproval(command: string):
       command,
     )
   );
+}
+
+function classifyPosixBoundInvocation(argv: readonly string[], depth = 0): boolean {
+  if (argv.length === 0 || depth >= 8) {
+    return false;
+  }
+  if (isOpenClawExecutablePattern(argv[0])) {
+    return classifyOpenClawArgv(["openclaw", ...argv.slice(1)]);
+  }
+  const runner = resolveLifecyclePackageRunnerArgv(argv);
+  if (runner.kind === "approval-required") {
+    return true;
+  }
+  if (runner.kind === "argv") {
+    return classifyPosixBoundInvocation(runner.argv, depth + 1);
+  }
+  const carried = resolveCarrierCommandArgv(argv, depth, { includeExec: true });
+  return carried?.length ? classifyPosixBoundInvocation(carried, depth + 1) : false;
+}
+
+function resolvePosixBindingArgv(
+  name: string,
+  bindings: ReadonlyMap<string, string>,
+): string[] | null {
+  let target = bindings.get(name);
+  const seen = new Set([name]);
+  for (let depth = 0; target && depth < 8; depth += 1) {
+    const targetArgv = splitShellArgs(target) ?? [target];
+    const nestedName = (targetArgv[0] ?? "").trim();
+    if (!bindings.has(nestedName)) {
+      return targetArgv;
+    }
+    if (seen.has(nestedName)) {
+      return null;
+    }
+    seen.add(nestedName);
+    const nestedTarget = bindings.get(nestedName) ?? "";
+    target = [nestedTarget, ...targetArgv.slice(1)].join(" ");
+  }
+  return null;
+}
+
+/** Track POSIX alias and Bash hash bindings across compound command fragments. */
+export function posixCommandBindingRequiresApproval(command: string): boolean {
+  const aliasBindings = new Map<string, string>();
+  const hashBindings = new Map<string, string>();
+  const unresolvedAliases = new Set<string>();
+  const unresolvedHashes = new Set<string>();
+  for (const fragment of splitLifecycleCommandText(
+    command,
+    new Set([";", "|", "&", "\n", "\r"]),
+    "posix",
+  )) {
+    const argv = splitShellArgs(fragment.trim().replace(/^[({\s]+|[)}\s]+$/gu, ""));
+    if (!argv?.length) {
+      continue;
+    }
+    const executable = (argv[0] ?? "").trim().toLowerCase();
+    if (executable === "alias") {
+      for (const assignment of argv.slice(1)) {
+        const separator = assignment.indexOf("=");
+        if (separator <= 0) {
+          continue;
+        }
+        const name = assignment.slice(0, separator);
+        const target = assignment.slice(separator + 1);
+        aliasBindings.delete(name);
+        unresolvedAliases.delete(name);
+        if (/[$`()]/u.test(target)) {
+          unresolvedAliases.add(name);
+        } else {
+          aliasBindings.set(name, target);
+        }
+      }
+      continue;
+    }
+    if (executable === "unalias") {
+      argv
+        .slice(1)
+        .filter((token) => !token.startsWith("-"))
+        .forEach((name) => {
+          aliasBindings.delete(name);
+          unresolvedAliases.delete(name);
+        });
+      continue;
+    }
+    if (executable === "hash") {
+      if (argv.includes("-r")) {
+        hashBindings.clear();
+        unresolvedHashes.clear();
+      }
+      const deleteIndex = argv.indexOf("-d");
+      if (deleteIndex !== -1) {
+        const name = argv[deleteIndex + 1] ?? "";
+        hashBindings.delete(name);
+        unresolvedHashes.delete(name);
+      }
+      const pathIndex = argv.indexOf("-p");
+      if (pathIndex !== -1) {
+        const target = argv[pathIndex + 1] ?? "";
+        const name = argv[pathIndex + 2] ?? "";
+        if (name) {
+          hashBindings.delete(name);
+          unresolvedHashes.delete(name);
+          if (/[$`()]/u.test(target)) {
+            unresolvedHashes.add(name);
+          } else {
+            hashBindings.set(name, target);
+          }
+        }
+      }
+      continue;
+    }
+    const bindings = new Map([...hashBindings, ...aliasBindings]);
+    const bindingArgv = resolvePosixBindingArgv(executable, bindings);
+    if (
+      (bindingArgv && classifyPosixBoundInvocation([...bindingArgv, ...argv.slice(1)])) ||
+      ((unresolvedAliases.has(executable) || unresolvedHashes.has(executable)) &&
+        classifyOpenClawArgv(["openclaw", ...argv.slice(1)]))
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Return the executable argv nested in a supported shell control construct. */

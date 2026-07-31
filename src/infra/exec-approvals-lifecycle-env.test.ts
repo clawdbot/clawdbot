@@ -381,6 +381,42 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
     },
   );
 
+  it.each([
+    [
+      "npx tsx /opt/openclaw/dist/entry.js gateway restart",
+      ["npx", "tsx", "/opt/openclaw/dist/entry.js", "gateway", "restart"],
+    ],
+    [
+      "pnpm dlx tsx /opt/openclaw/dist/entry.js gateway restart",
+      ["pnpm", "dlx", "tsx", "/opt/openclaw/dist/entry.js", "gateway", "restart"],
+    ],
+  ] as Array<[string, string[]]>)(
+    "recognizes OpenClaw entry scripts behind JS runner: %s",
+    (command, argv) => {
+      expect(requiresApproval(command, argv)).toBe(true);
+    },
+  );
+
+  it("keeps read-only OpenClaw entry-script runners non-blocking", () => {
+    const command = "npx tsx /opt/openclaw/dist/entry.js status";
+    expect(requiresApproval(command, ["npx", "tsx", "/opt/openclaw/dist/entry.js", "status"])).toBe(
+      false,
+    );
+  });
+
+  it.each([
+    [
+      "hash -p /usr/local/bin/openclaw oc; oc gateway restart",
+      ["hash", "-p", "/usr/local/bin/openclaw", "oc", ";", "oc", "gateway", "restart"],
+    ],
+    [
+      "alias oc='openclaw'; oc gateway restart",
+      ["alias", "oc=openclaw", ";", "oc", "gateway", "restart"],
+    ],
+  ] as Array<[string, string[]]>)("tracks POSIX command bindings: %s", (command, argv) => {
+    expect(requiresApproval(command, argv)).toBe(true);
+  });
+
   it("fails closed for function-local argv and dynamic Corepack managers", () => {
     expect(
       requiresApproval(`sh -c 'f(){ "$@"; }; f openclaw gateway restart' sh`, [

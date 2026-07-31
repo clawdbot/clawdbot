@@ -1,4 +1,5 @@
 // Resolves package-runner argv without letting supported option layouts hide commands.
+import { isOpenClawEntryScriptPath } from "./exec-approvals-lifecycle-patterns.js";
 import {
   lifecycleBooleanOptionValueMayBeDynamic,
   lifecycleHasEffectiveBooleanOption,
@@ -64,6 +65,19 @@ const PACKAGE_MUTATION_ALIASES = new Set([
 const PACKAGE_DRY_RUN_OPTION = new Set(["--dry-run"]);
 const PACKAGE_HELP_OPTIONS = new Set(["-h", "--help"]);
 const PACKAGE_VERSION_OPTIONS = new Set(["-v", "--version"]);
+const JAVASCRIPT_EXECUTABLE_RUNNERS = new Set([
+  "babel-node",
+  "bun",
+  "esbuild-runner",
+  "esno",
+  "jiti",
+  "node",
+  "nodejs",
+  "ts-node",
+  "ts-node-esm",
+  "tsx",
+  "vite-node",
+]);
 
 export type LifecyclePackageRunnerPlan =
   | { kind: "not-runner" }
@@ -185,6 +199,18 @@ function isOpenClawPackageTarget(token: string): boolean {
   );
 }
 
+function resolvedPackageRunnerPlan(argv: string[]): LifecyclePackageRunnerPlan {
+  if (JAVASCRIPT_EXECUTABLE_RUNNERS.has(normalizeExecutableToken(argv[0] ?? ""))) {
+    const entryIndex = argv.findIndex(
+      (token, index) => index > 0 && isOpenClawEntryScriptPath(token),
+    );
+    if (entryIndex !== -1) {
+      return { kind: "argv", argv: ["openclaw", ...argv.slice(entryIndex + 1)] };
+    }
+  }
+  return { kind: "argv", argv };
+}
+
 function hasEffectivePackageNoExecute(argv: readonly string[], start: number): boolean {
   return (
     lifecycleHasEffectiveBooleanOption(
@@ -278,7 +304,7 @@ export function resolveLifecyclePackageRunnerArgv(
       if (isOpenClawPackageTarget(resolved[0] ?? "")) {
         return { kind: "argv", argv: ["openclaw", ...resolved.slice(1)] };
       }
-      return { kind: "argv", argv: resolved };
+      return resolvedPackageRunnerPlan(resolved);
     }
     return looksLikeUnresolvedLifecycleRunner(argv)
       ? { kind: "approval-required" }
@@ -307,34 +333,34 @@ export function resolveLifecyclePackageRunnerArgv(
   if (executable === "bun" && ["run", "x"].includes(subcommand)) {
     const resolved = packageTarget(argv, subcommandIndex + 1);
     if (resolved?.length) {
-      return { kind: "argv", argv: resolved };
+      return resolvedPackageRunnerPlan(resolved);
     }
   } else if (executable === "npm" && ["exec", "x"].includes(subcommand)) {
     const inline = resolveInlineCommand(argv, subcommandIndex + 1);
     const resolved =
       inline ?? packageTarget(argv, subcommandIndex + 1, PACKAGE_EXEC_TARGET_OPTIONS_WITH_VALUE);
     if (resolved?.length) {
-      return { kind: "argv", argv: resolved };
+      return resolvedPackageRunnerPlan(resolved);
     }
   } else if (executable === "npm" && ["run", "run-script", "rum", "urn"].includes(subcommand)) {
     const resolved = packageTarget(argv, subcommandIndex + 1);
     if (resolved?.length) {
-      return { kind: "argv", argv: resolved };
+      return resolvedPackageRunnerPlan(resolved);
     }
   } else if (["pnpm", "yarn"].includes(executable) && subcommand === "dlx") {
     const resolved = packageTarget(argv, subcommandIndex + 1);
     if (resolved?.length) {
-      return { kind: "argv", argv: resolved };
+      return resolvedPackageRunnerPlan(resolved);
     }
   } else if (["pnpm", "yarn"].includes(executable) && subcommand === "exec") {
     const resolved = packageTarget(argv, subcommandIndex + 1);
     if (resolved?.length) {
-      return { kind: "argv", argv: resolved };
+      return resolvedPackageRunnerPlan(resolved);
     }
   } else if (["pnpm", "yarn"].includes(executable) && subcommand === "run") {
     const resolved = packageTarget(argv, subcommandIndex + 1);
     if (resolved?.length) {
-      return { kind: "argv", argv: resolved };
+      return resolvedPackageRunnerPlan(resolved);
     }
   } else if (["pnpm", "yarn"].includes(executable) && subcommandIndex < argv.length) {
     return { kind: "argv", argv: argv.slice(subcommandIndex) };

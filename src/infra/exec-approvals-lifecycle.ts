@@ -30,6 +30,7 @@ import {
 import { resolveLifecyclePackageRunnerArgv } from "./exec-approvals-lifecycle-runners.js";
 import {
   lifecycleControlArgvRequiresApproval,
+  posixCommandBindingRequiresApproval,
   powerShellCalculatedInvocationRequiresApproval,
   splitLifecycleInlineCommands,
   stripLifecyclePosixAssignments,
@@ -412,7 +413,6 @@ function classifyArgv(
     const nestedShadowedKeys = environment
       ? new Set([...environment.shadowedKeys, ...lifecycleAssignedEnvironmentKeys(rawInline)])
       : new Set<string>();
-    const inline = rawInline;
     const nestedEnvironment = environment
       ? { ...environment, shadowedKeys: nestedShadowedKeys }
       : undefined;
@@ -429,10 +429,10 @@ function classifyArgv(
       : undefined;
     if (
       nestedShellContext === "powershell" &&
-      (powerShellCalculatedInvocationRequiresApproval(inline) ||
-        powerShellAliasLifecycleInvocationRequiresApproval(inline, expandNestedPowerShellArgv) ||
+      (powerShellCalculatedInvocationRequiresApproval(rawInline) ||
+        powerShellAliasLifecycleInvocationRequiresApproval(rawInline, expandNestedPowerShellArgv) ||
         commandHasPowerShellLifecyclePipeline(
-          inline,
+          rawInline,
           environment ? !environment.envComplete : false,
           expandNestedPowerShellArgv,
           (nestedArgv, nestedRaw) =>
@@ -448,16 +448,19 @@ function classifyArgv(
     ) {
       return true;
     }
-    if (lifecycleFunctionLocalPositionalsRequireApproval(inline)) {
+    if (
+      (nestedDialect === "posix" && posixCommandBindingRequiresApproval(rawInline)) ||
+      lifecycleFunctionLocalPositionalsRequireApproval(rawInline)
+    ) {
       return true;
     }
     if (
-      commandHasLifecycleSubstitution(inline, depth, nestedShellContext, cwd, nestedEnvironment)
+      commandHasLifecycleSubstitution(rawInline, depth, nestedShellContext, cwd, nestedEnvironment)
     ) {
       return true;
     }
     const positionalArgv = resolveLifecyclePosixShellPositionals(argv);
-    return splitLifecycleInlineCommands(inline, nestedDialect).some((part) => {
+    return splitLifecycleInlineCommands(rawInline, nestedDialect).some((part) => {
       const rawNestedArgv = splitShellArgs(part);
       if (!rawNestedArgv) {
         return false;
@@ -594,6 +597,7 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
     });
   const shellContext: ShellContext = platform === "win32" ? "powershell" : undefined;
   if (
+    (dialect === "posix" && posixCommandBindingRequiresApproval(params.command)) ||
     (dialect === "powershell" &&
       powerShellAliasLifecycleInvocationRequiresApproval(params.command, expandPowerShellArgv)) ||
     commandHasPowerShellLifecyclePipeline(params.command, !envComplete, expandPowerShellArgv) ||
@@ -681,39 +685,38 @@ export function commandRequiresOpenClawLifecycleApproval(params: {
       return true;
     }
   }
-  if (params.segments.length > 0) {
-    return false;
-  }
-  return splitLifecycleInlineCommands(params.command, dialect).some((part) => {
-    const argv = splitShellArgs(part);
-    if (!argv) {
-      return false;
-    }
-    const partDialect = lifecycleCommandShellDialect(argv[0], platform);
-    const partShellContext: ShellContext = partDialect === "posix" ? undefined : partDialect;
-    if (lifecycleSubstitutionResultMayHideLifecycle(argv, partDialect)) {
-      return true;
-    }
-    if (
-      extractShellWrapperInlineCommand(argv) !== null &&
-      classifyArgv(argv, part, 0, partShellContext, params.cwd, environment)
-    ) {
-      return true;
-    }
-    const expandedArgv = expandLifecycleEnvironmentArgv({
-      argv,
-      env: params.env,
-      envComplete,
-      dialect: partDialect,
-      platform,
-      shadowedKeys,
-    });
-    return (
-      ((expandedArgv.unresolved ||
-        (expandedArgv.fieldSplitUncertain &&
-          lifecycleCommandHasUnquotedEnvironmentReference(part, partDialect))) &&
-        unresolvedEnvironmentMayHideLifecycle(argv)) ||
-      classifyArgv(expandedArgv.argv, part, 0, partShellContext, params.cwd, environment, false)
-    );
-  });
+  return params.segments.length > 0
+    ? false
+    : splitLifecycleInlineCommands(params.command, dialect).some((part) => {
+        const argv = splitShellArgs(part);
+        if (!argv) {
+          return false;
+        }
+        const partDialect = lifecycleCommandShellDialect(argv[0], platform);
+        const partShellContext: ShellContext = partDialect === "posix" ? undefined : partDialect;
+        if (lifecycleSubstitutionResultMayHideLifecycle(argv, partDialect)) {
+          return true;
+        }
+        if (
+          extractShellWrapperInlineCommand(argv) !== null &&
+          classifyArgv(argv, part, 0, partShellContext, params.cwd, environment)
+        ) {
+          return true;
+        }
+        const expandedArgv = expandLifecycleEnvironmentArgv({
+          argv,
+          env: params.env,
+          envComplete,
+          dialect: partDialect,
+          platform,
+          shadowedKeys,
+        });
+        return (
+          ((expandedArgv.unresolved ||
+            (expandedArgv.fieldSplitUncertain &&
+              lifecycleCommandHasUnquotedEnvironmentReference(part, partDialect))) &&
+            unresolvedEnvironmentMayHideLifecycle(argv)) ||
+          classifyArgv(expandedArgv.argv, part, 0, partShellContext, params.cwd, environment, false)
+        );
+      });
 }
