@@ -1,4 +1,4 @@
-// Shared ClawHub exact-release trust gate for plugin and skill installs.
+// Shared ClawHub exact-release trust gate for plugin, skill, and Claw installs.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -64,7 +64,7 @@ type ClawHubInstallLogger = {
 };
 
 type ClawHubTrustSubject = {
-  kind: "plugin" | "skill";
+  kind: "plugin" | "skill" | "claw";
   packageName: string;
   ownerHandle?: string;
 };
@@ -540,9 +540,9 @@ function formatClawHubTrustWarning(params: {
   }
   if (params.assessment.disposition === "review-required") {
     const riskContext =
-      params.subject.kind === "plugin"
-        ? "This plugin is not marked malicious, but ClawHub found security findings or a large local system blast radius."
-        : "This skill is not marked malicious, but ClawHub found security findings or a large instruction/tool-use blast radius.";
+      params.subject.kind === "skill"
+        ? "This skill is not marked malicious, but ClawHub found security findings or a large instruction/tool-use blast radius."
+        : `This ${params.subject.kind} is not marked malicious, but ClawHub found security findings or a large local system blast radius.`;
     return [
       renderClawHubTrustBox(
         "WARNING - ClawHub found security risks in this release",
@@ -915,7 +915,7 @@ async function fetchClawHubSubjectSecurity(params: {
   token?: string;
   timeoutMs?: number;
 }): Promise<ClawHubFetchedSubjectSecurity> {
-  if (params.subject.kind === "plugin") {
+  if (params.subject.kind === "plugin" || params.subject.kind === "claw") {
     return {
       security: await fetchClawHubPackageSecurity({
         name: params.subject.packageName,

@@ -7,7 +7,7 @@ export type ClawHubPluginInstallRecordFields = {
   source: "clawhub";
   clawhubUrl: string;
   clawhubPackage: string;
-  clawhubFamily: Exclude<ClawHubPackageFamily, "skill">;
+  clawhubFamily: Exclude<ClawHubPackageFamily, "skill" | "claw">;
   clawhubChannel?: ClawHubPackageChannel;
   clawhubTrustDisposition?: "clean" | "review-recommended" | "review-required" | "blocked";
   clawhubTrustScanStatus?: string;

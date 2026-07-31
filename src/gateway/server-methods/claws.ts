@@ -5,20 +5,49 @@ import {
   formatValidationErrors,
   type ClawResourceStatus,
   type ClawStatusEntry,
+  type ClawsAddApplyParams,
+  type ClawsAddPlanParams,
+  type ClawsCatalogDetailParams,
+  type ClawsCatalogSearchParams,
+  type ClawsRemoveApplyParams,
+  type ClawsRemovePlanParams,
+  type ClawsUpdateApplyParams,
+  type ClawsUpdatePlanParams,
+  type ValidationError,
   type ClawsDoctorResult,
   type ClawsStatusParams,
   type ClawsStatusResult,
+  validateClawsAddApplyParams,
+  validateClawsAddPlanParams,
+  validateClawsCatalogDetailParams,
+  validateClawsCatalogSearchParams,
   validateClawsDoctorParams,
+  validateClawsRemoveApplyParams,
+  validateClawsRemovePlanParams,
+  validateClawsUpdateApplyParams,
+  validateClawsUpdatePlanParams,
   validateClawsStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { readClawHubClawDetail, searchClawHubClaws } from "../../claws/clawhub-source.js";
+import {
+  applyClawAddFromCatalog,
+  applyClawRemove,
+  applyClawUpdate,
+  planClawAddFromCatalog,
+  planClawRemove,
+  planClawUpdate,
+} from "../../claws/control-ui-lifecycle.js";
 import { collectClawStateHealthFindings } from "../../claws/doctor.js";
 import { assertExperimentalClawsEnabled } from "../../claws/experimental.js";
 import { readClawStatus, type ClawStatusRecord } from "../../claws/lifecycle-state.js";
 import type { HealthFinding } from "../../flows/health-checks.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { formatError } from "../server-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const STATUS_SCHEMA_VERSION = "openclaw.clawsGatewayStatus.v1" as const;
 const DOCTOR_SCHEMA_VERSION = "openclaw.clawsGatewayDoctor.v1" as const;
+const log = createSubsystemLogger("gateway/claws");
 
 function requireClawsEnabled(respond: RespondFn): boolean {
   try {
@@ -34,6 +63,44 @@ function requireClawsEnabled(respond: RespondFn): boolean {
       ),
     );
     return false;
+  }
+}
+
+function invalidParams(
+  method: string,
+  errors: ValidationError[] | null | undefined,
+  respond: RespondFn,
+): void {
+  respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      `invalid ${method} params: ${formatValidationErrors(errors)}`,
+    ),
+  );
+}
+
+async function respondWithLifecycleResult(
+  method: string,
+  respond: RespondFn,
+  operation: () => Promise<unknown>,
+): Promise<void> {
+  try {
+    respond(true, await operation());
+  } catch (error) {
+    const message = formatError(error);
+    log.error(`${method} failed: ${message}`);
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        error instanceof Error && error.message.includes("preview it again")
+          ? error.message
+          : "Claw lifecycle request failed. Review Gateway logs and retry.",
+      ),
+    );
   }
 }
 
@@ -207,5 +274,123 @@ export const clawsHandlers: GatewayRequestHandlers = {
       cronGateway: context.cron,
     });
     respond(true, projectClawsDoctor(findings));
+  },
+  "claws.catalog.search": async ({ params, respond }) => {
+    if (!requireClawsEnabled(respond)) {
+      return;
+    }
+    if (!validateClawsCatalogSearchParams(params)) {
+      invalidParams("claws.catalog.search", validateClawsCatalogSearchParams.errors, respond);
+      return;
+    }
+    const typed = params as ClawsCatalogSearchParams;
+    await respondWithLifecycleResult("claws.catalog.search", respond, async () => ({
+      schemaVersion: "openclaw.clawsCatalogSearch.v1",
+      entries: await searchClawHubClaws(typed),
+    }));
+  },
+  "claws.catalog.detail": async ({ params, respond }) => {
+    if (!requireClawsEnabled(respond)) {
+      return;
+    }
+    if (!validateClawsCatalogDetailParams(params)) {
+      invalidParams("claws.catalog.detail", validateClawsCatalogDetailParams.errors, respond);
+      return;
+    }
+    const typed = params as ClawsCatalogDetailParams;
+    await respondWithLifecycleResult("claws.catalog.detail", respond, async () => ({
+      schemaVersion: "openclaw.clawsCatalogDetail.v1",
+      detail: await readClawHubClawDetail(typed),
+    }));
+  },
+  "claws.add.plan": async ({ params, respond, context }) => {
+    if (!requireClawsEnabled(respond)) {
+      return;
+    }
+    if (!validateClawsAddPlanParams(params)) {
+      invalidParams("claws.add.plan", validateClawsAddPlanParams.errors, respond);
+      return;
+    }
+    await respondWithLifecycleResult("claws.add.plan", respond, async () =>
+      planClawAddFromCatalog({
+        ...(params as ClawsAddPlanParams),
+        context: { config: context.getRuntimeConfig(), cron: context.cron },
+      }),
+    );
+  },
+  "claws.add.apply": async ({ params, respond, context }) => {
+    if (!requireClawsEnabled(respond)) {
+      return;
+    }
+    if (!validateClawsAddApplyParams(params)) {
+      invalidParams("claws.add.apply", validateClawsAddApplyParams.errors, respond);
+      return;
+    }
+    await respondWithLifecycleResult("claws.add.apply", respond, async () =>
+      applyClawAddFromCatalog({
+        ...(params as ClawsAddApplyParams),
+        context: { config: context.getRuntimeConfig(), cron: context.cron },
+      }),
+    );
+  },
+  "claws.update.plan": async ({ params, respond, context }) => {
+    if (!requireClawsEnabled(respond)) {
+      return;
+    }
+    if (!validateClawsUpdatePlanParams(params)) {
+      invalidParams("claws.update.plan", validateClawsUpdatePlanParams.errors, respond);
+      return;
+    }
+    await respondWithLifecycleResult("claws.update.plan", respond, async () =>
+      planClawUpdate({
+        ...(params as ClawsUpdatePlanParams),
+        context: { config: context.getRuntimeConfig(), cron: context.cron },
+      }),
+    );
+  },
+  "claws.update.apply": async ({ params, respond, context }) => {
+    if (!requireClawsEnabled(respond)) {
+      return;
+    }
+    if (!validateClawsUpdateApplyParams(params)) {
+      invalidParams("claws.update.apply", validateClawsUpdateApplyParams.errors, respond);
+      return;
+    }
+    await respondWithLifecycleResult("claws.update.apply", respond, async () =>
+      applyClawUpdate({
+        ...(params as ClawsUpdateApplyParams),
+        context: { config: context.getRuntimeConfig(), cron: context.cron },
+      }),
+    );
+  },
+  "claws.remove.plan": async ({ params, respond, context }) => {
+    if (!requireClawsEnabled(respond)) {
+      return;
+    }
+    if (!validateClawsRemovePlanParams(params)) {
+      invalidParams("claws.remove.plan", validateClawsRemovePlanParams.errors, respond);
+      return;
+    }
+    await respondWithLifecycleResult("claws.remove.plan", respond, async () =>
+      planClawRemove({
+        ...(params as ClawsRemovePlanParams),
+        context: { config: context.getRuntimeConfig(), cron: context.cron },
+      }),
+    );
+  },
+  "claws.remove.apply": async ({ params, respond, context }) => {
+    if (!requireClawsEnabled(respond)) {
+      return;
+    }
+    if (!validateClawsRemoveApplyParams(params)) {
+      invalidParams("claws.remove.apply", validateClawsRemoveApplyParams.errors, respond);
+      return;
+    }
+    await respondWithLifecycleResult("claws.remove.apply", respond, async () =>
+      applyClawRemove({
+        ...(params as ClawsRemoveApplyParams),
+        context: { config: context.getRuntimeConfig(), cron: context.cron },
+      }),
+    );
   },
 };
