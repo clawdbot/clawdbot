@@ -11,7 +11,7 @@ type DefaultModelsViewProps = {
   mutationBlockedReason: string | null;
   dirty: boolean;
   busy: Record<string, boolean>;
-  message?: { kind: "success" | "error"; text: string };
+  message?: { kind: "success" | "error"; text: string; warning?: string };
   onPrimaryChange: (model: string) => void;
   onFallbackAdd: (model: string) => void;
   onFallbackRemove: (index: number) => void;
@@ -164,7 +164,15 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
         </label>
       </div>
       ${props.message
-        ? html`<div class="callout ${props.message.kind}" role="status">${props.message.text}</div>`
+        ? html`<div
+            class="callout ${props.message.kind}"
+            role=${props.message.kind === "error" ? "alert" : "status"}
+          >
+            ${props.message.text}
+          </div>`
+        : nothing}
+      ${props.message?.warning
+        ? html`<div class="callout warning" role="status">${props.message.warning}</div>`
         : nothing}
     </div>
   `;
