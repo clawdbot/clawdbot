@@ -84,13 +84,16 @@ function parseByteRange(value: string, size: number): ByteSlice | "invalid" | "u
 
 export function resolveByteResponse(params: {
   file: FileIdentity;
+  nowMs?: number;
   method?: string;
   rangeHeader?: string | string[];
   ifRangeHeader?: string | string[];
   ifNoneMatchHeader?: string | string[];
 }): ByteResponsePlan {
   const etag = createByteEtag(params.file);
-  const lastModified = new Date(params.file.mtimeMs).toUTCString();
+  const originatedAtMs = params.nowMs ?? Date.now();
+  // Filesystem clocks may lead this host; validators cannot postdate message origination.
+  const lastModified = new Date(Math.min(params.file.mtimeMs, originatedAtMs)).toUTCString();
   if (
     (params.method === "GET" || params.method === "HEAD") &&
     matchesHttpIfNoneMatch(params.ifNoneMatchHeader, etag)

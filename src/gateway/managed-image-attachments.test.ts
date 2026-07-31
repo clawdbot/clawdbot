@@ -450,6 +450,56 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(future.result.body.toString("utf8")).toBe("original-image");
   });
 
+  it("bounds future managed-media validators to the actual HTTP response date", async () => {
+    const nowMs = Math.floor(Date.now() / 1000) * 1000;
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(nowMs);
+    try {
+      const { attachmentId, sessionKey, originalPath } = await createFixture(stateDir);
+      const future = new Date(nowMs + 60_000);
+      await fs.utimes(originalPath, future, future);
+      const futureLastModified = (await fs.stat(originalPath)).mtime.toUTCString();
+      const expectedLastModified = new Date(nowMs).toUTCString();
+      const pathName = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+      const request = { stateDir, pathName, authResponse: { authMethod: "token" } };
+
+      const initial = await requestManagedImage({ ...request, method: "HEAD" });
+      expect(initial.result.statusCode).toBe(200);
+      expect(initial.result.headers["last-modified"]).toBe(expectedLastModified);
+      expect(Date.parse(initial.result.headers.date ?? "")).toBeGreaterThanOrEqual(
+        Date.parse(expectedLastModified),
+      );
+
+      const partial = await requestManagedImage({
+        ...request,
+        headers: { range: "bytes=0-4", "if-range": expectedLastModified },
+      });
+      expect(partial.result.statusCode).toBe(206);
+      expect(partial.result.headers["last-modified"]).toBe(expectedLastModified);
+
+      const stale = await requestManagedImage({
+        ...request,
+        headers: { range: "bytes=0-4", "if-range": futureLastModified },
+      });
+      expect(stale.result.statusCode).toBe(200);
+
+      const unchanged = await requestManagedImage({
+        ...request,
+        headers: { "if-none-match": String(initial.result.headers.etag) },
+      });
+      expect(unchanged.result.statusCode).toBe(304);
+      expect(unchanged.result.headers["last-modified"]).toBe(expectedLastModified);
+
+      const unsatisfiable = await requestManagedImage({
+        ...request,
+        headers: { range: "bytes=999-" },
+      });
+      expect(unsatisfiable.result.statusCode).toBe(416);
+      expect(unsatisfiable.result.headers["last-modified"]).toBe(expectedLastModified);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   it.each(["GET", "HEAD"])(
     "revalidates managed media ETags before ranges for %s",
     async (method) => {

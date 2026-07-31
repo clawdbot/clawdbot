@@ -102,6 +102,72 @@ describe("resolveByteResponse", () => {
   });
 
   it.each([
+    { label: "full GET", method: "GET", rangeHeader: undefined, statusCode: 200 },
+    { label: "full HEAD", method: "HEAD", rangeHeader: undefined, statusCode: 200 },
+    { label: "partial", method: "GET", rangeHeader: "bytes=1-2", statusCode: 206 },
+    { label: "unsatisfiable", method: "GET", rangeHeader: "bytes=10-11", statusCode: 416 },
+  ])("bounds a future file timestamp to the $label response origin", (params) => {
+    const nowMs = FILE.mtimeMs - 60_000;
+    const plan = resolveByteResponse({ file: FILE, nowMs, ...params });
+
+    expect(plan.statusCode).toBe(params.statusCode);
+    expect(plan.lastModified).toBe(new Date(nowMs).toUTCString());
+  });
+
+  it("uses one response-origin timestamp without changing the file identity ETag", () => {
+    const nowMs = FILE.mtimeMs - 60_000;
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(nowMs);
+    try {
+      const future = resolveByteResponse({ file: FILE, method: "GET" });
+
+      expect(dateNow).toHaveBeenCalledOnce();
+      expect(future.lastModified).toBe(new Date(nowMs).toUTCString());
+      expect(future.etag).toBe(resolveByteResponse({ file: FILE, nowMs: FILE.mtimeMs }).etag);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it("matches an If-Range date against the bounded emitted validator", () => {
+    const nowMs = FILE.mtimeMs - 60_000;
+    const emittedLastModified = new Date(nowMs).toUTCString();
+
+    expect(
+      resolveByteResponse({
+        file: FILE,
+        nowMs,
+        method: "GET",
+        rangeHeader: "bytes=1-2",
+        ifRangeHeader: emittedLastModified,
+      }),
+    ).toMatchObject({ kind: "partial", statusCode: 206, lastModified: emittedLastModified });
+    expect(
+      resolveByteResponse({
+        file: FILE,
+        nowMs,
+        method: "GET",
+        rangeHeader: "bytes=1-2",
+        ifRangeHeader: LAST_MODIFIED,
+      }),
+    ).toMatchObject({ kind: "full", statusCode: 200, lastModified: emittedLastModified });
+  });
+
+  it.each(["GET", "HEAD"])(
+    "bounds the future Last-Modified validator on %s not-modified responses",
+    (method) => {
+      const nowMs = FILE.mtimeMs - 60_000;
+      const etag = resolveByteResponse({ file: FILE, nowMs }).etag;
+
+      expect(resolveByteResponse({ file: FILE, method, nowMs, ifNoneMatchHeader: etag })).toEqual({
+        kind: "not-modified",
+        statusCode: 304,
+        etag,
+        lastModified: new Date(nowMs).toUTCString(),
+      });
+    },
+  );
+
+  it.each([
     {
       label: "an earlier HTTP-date",
       header: new Date(Date.parse(LAST_MODIFIED) - 1000).toUTCString(),

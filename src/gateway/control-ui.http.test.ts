@@ -650,6 +650,72 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("bounds future-dated assistant media validators across conditional response plans", async () => {
+    const nowMs = Math.floor(Date.now() / 1000) * 1000;
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(nowMs);
+    try {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-future-mtime-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "photo.png");
+          const body = Buffer.from("future-assistant-media");
+          const future = new Date(nowMs + 60_000);
+          await fs.writeFile(filePath, body);
+          await fs.utimes(filePath, future, future);
+          const futureLastModified = (await fs.stat(filePath)).mtime.toUTCString();
+          const expectedLastModified = new Date(nowMs).toUTCString();
+          const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
+          const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
+
+          const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
+          expect(initial.res.statusCode).toBe(200);
+          expect(initial.setHeader).toHaveBeenCalledWith("Last-Modified", expectedLastModified);
+          const etag = initial.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1];
+
+          const partial = await runAssistantMediaRequest({
+            url,
+            method: "GET",
+            auth,
+            headers: { range: "bytes=0-5", "if-range": expectedLastModified },
+          });
+          expect(partial.res.statusCode).toBe(206);
+          expect(partial.setHeader).toHaveBeenCalledWith("Last-Modified", expectedLastModified);
+
+          const futureRange = await runAssistantMediaRequest({
+            url,
+            method: "GET",
+            auth,
+            headers: { range: "bytes=0-5", "if-range": futureLastModified },
+          });
+          expect(futureRange.res.statusCode).toBe(200);
+
+          const unchanged = await runAssistantMediaRequest({
+            url,
+            method: "GET",
+            auth,
+            headers: { "if-none-match": String(etag) },
+          });
+          expect(unchanged.res.statusCode).toBe(304);
+          expect(unchanged.setHeader).toHaveBeenCalledWith("Last-Modified", expectedLastModified);
+
+          const unsatisfiable = await runAssistantMediaRequest({
+            url,
+            method: "GET",
+            auth,
+            headers: { range: `bytes=${body.byteLength}-` },
+          });
+          expect(unsatisfiable.res.statusCode).toBe(416);
+          expect(unsatisfiable.setHeader).toHaveBeenCalledWith(
+            "Last-Modified",
+            expectedLastModified,
+          );
+        },
+      });
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   it("returns 202 while assistant playback media is preparing", async () => {
     resolvePlaybackTranscodeMock.mockResolvedValueOnce({ kind: "preparing" });
     await withAllowedAssistantMediaRoot({
