@@ -185,9 +185,11 @@ describe("doctor canonical session-key retention repair", () => {
       ).toEqual([{ operation_id: "winner-operation", source_session_key: "agent:main:shared" }]);
       expect(
         destinationDatabase.db
-          .prepare("SELECT previous_session_id FROM session_windows WHERE session_id = 'winner'")
+          .prepare(
+            "SELECT previous_session_id, session_entry_provenance FROM session_windows WHERE session_id = 'winner'",
+          )
           .get(),
-      ).toEqual({ previous_session_id: "destination-only-previous" });
+      ).toEqual({ previous_session_id: "destination-only-previous", session_entry_provenance: 1 });
       expect(
         sourceDatabase.db
           .prepare("SELECT operation_id FROM conversation_deliveries ORDER BY operation_id")
@@ -245,6 +247,11 @@ describe("doctor canonical session-key retention repair", () => {
             "INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at) VALUES ('canonical-operation', 'turn', 'winner-conversation', 'agent:main:work', 'canonical-hash', 'sent', 10, 10)",
           )
           .run();
+        sourceDatabase.db
+          .prepare(
+            "INSERT INTO conversation_deliveries (operation_id, operation_kind, conversation_id, source_session_key, message_hash, status, created_at, updated_at) VALUES ('unrelated-operation', 'turn', 'winner-conversation', 'agent:ops:other', 'unrelated-hash', 'sent', 10, 10)",
+          )
+          .run();
 
         expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
           foundGroups: 1,
@@ -266,8 +273,10 @@ describe("doctor canonical session-key retention repair", () => {
           { operation_id: "winner-operation", source_session_key: "agent:main:work" },
         ]);
         expect(
-          sourceDatabase.db.prepare("SELECT count(*) AS count FROM conversation_deliveries").get(),
-        ).toEqual({ count: 0 });
+          sourceDatabase.db
+            .prepare("SELECT operation_id FROM conversation_deliveries ORDER BY operation_id")
+            .all(),
+        ).toEqual([{ operation_id: "unrelated-operation" }]);
       },
     );
   });

@@ -355,6 +355,9 @@ function copySqliteSessionOwnedStateForRepair(params: {
     ...sessionLinks.map((row) => row.conversation_id),
   ]);
   const sourceKeyReferences = new Set(sourceKeys);
+  const sourceLineageIdentities = new Set(
+    sourceKeys.map((key) => normalizeStoreSessionKey(key.trim())),
+  );
   const deliveryLookupKeys = resolveSqliteCanonicalRepairLookupKeys(
     params.canonicalKey,
     sourceKeys,
@@ -380,14 +383,7 @@ function copySqliteSessionOwnedStateForRepair(params: {
     sourceDb
       .selectFrom("conversation_deliveries")
       .selectAll()
-      .where((eb) =>
-        linkedConversationIds.length > 0
-          ? eb.or([
-              eb("conversation_id", "in", linkedConversationIds),
-              eb("source_session_key", "in", deliverySourceKeys),
-            ])
-          : eb("source_session_key", "in", deliverySourceKeys),
-      ),
+      .where("source_session_key", "in", deliverySourceKeys),
   ).rows;
   const conversationIds = uniqueStrings([
     ...linkedConversationIds,
@@ -437,20 +433,36 @@ function copySqliteSessionOwnedStateForRepair(params: {
         sessionKey: params.canonicalKey,
       })
     : undefined;
+  const preferredWindowProvenance = params.preferredEntry
+    ? executeSqliteQueryTakeFirstSync(
+        params.destination.db,
+        destinationDb
+          .selectFrom("session_windows")
+          .select([
+            "session_entry_provenance",
+            "acp_owned",
+            "plugin_owner_id",
+            "hook_external_content_source",
+          ])
+          .where("session_id", "=", params.preferredEntry.sessionId),
+      )
+    : undefined;
   for (const window of windows) {
     const canonicalWindow = {
       ...window,
       session_key: params.canonicalKey,
       parent_session_key:
-        window.parent_session_key && sourceKeyReferences.has(window.parent_session_key)
+        window.parent_session_key &&
+        sourceLineageIdentities.has(normalizeStoreSessionKey(window.parent_session_key.trim()))
           ? params.canonicalKey
           : window.parent_session_key,
       spawned_by:
-        window.spawned_by && sourceKeyReferences.has(window.spawned_by)
+        window.spawned_by &&
+        sourceLineageIdentities.has(normalizeStoreSessionKey(window.spawned_by.trim()))
           ? params.canonicalKey
           : window.spawned_by,
       ...(preferredWindowProjection && window.session_id === params.preferredEntry?.sessionId
-        ? preferredWindowProjection
+        ? { ...preferredWindowProjection, ...preferredWindowProvenance }
         : {}),
     };
     const { session_id: _sessionId, ...replacement } = {
