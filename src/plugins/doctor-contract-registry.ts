@@ -66,6 +66,8 @@ export type PluginDoctorStateMigrationContext = {
     options: OpenKeyedStoreOptions,
     entries: readonly { key: string; value: unknown; createdAt: number; ttlMs?: number }[],
   ) => void;
+  /** Plugin-wide live-row capacity for import preflight. Older test hosts may omit it. */
+  getPluginStateCapacity?: () => { liveEntries: number; maxEntries: number };
   /** Owner-bound ingress queue access, one entry per manifest-declared channel;
    *  the host fixes the channel identity and doctor state directory. Older test
    *  hosts may omit it. */
