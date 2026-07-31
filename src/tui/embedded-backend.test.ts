@@ -1944,6 +1944,9 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
+  const structuredLifecycleSecret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
+  const structuredLifecycleError = `\u001b[31mThe image is too large. Authorization: Bearer ${structuredLifecycleSecret}\u001b[0m`;
+
   it.each([
     {
       label: "a provider timeout after mechanical cancellation",
@@ -1984,34 +1987,81 @@ describe("EmbeddedTuiBackend", () => {
       meta: { error: { kind: "image_size", message: "Internal provider diagnostic" } },
       text: "The image is too large. Resize it and try again.",
     },
-  ])("projects $label as an actionable terminal failure", async ({ lifecycle, meta, text }) => {
-    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
-    const pending = deferred<{
-      payloads: Array<{ text: string; mediaUrl: null }>;
-      meta: Record<string, unknown>;
-    }>();
-    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
-    const backend = new EmbeddedTuiBackend();
-    const events: Array<{ event: string; payload: unknown }> = [];
-    backend.onEvent = ({ event, payload }) => events.push({ event, payload });
-    backend.start();
-    await backend.sendChat({
-      sessionKey: "agent:main:main",
-      message: "show the actual terminal outcome",
-      runId: "canonical-terminal",
-    });
-    const queuedRunReady = (
-      backend as unknown as { runs: Map<string, { queuedRunReady: Promise<void> }> }
-    ).runs.get("canonical-terminal")?.queuedRunReady;
-    let queueReady = false;
-    void queuedRunReady?.then(() => {
-      queueReady = true;
-    });
+    {
+      label: "a structured lifecycle failure",
+      lifecycle: {
+        phase: "end",
+        aborted: false,
+        error: { kind: "image_size", message: structuredLifecycleError },
+      },
+      meta: {
+        aborted: false,
+        error: { kind: "image_size", message: structuredLifecycleError },
+      },
+      text: "The image is too large. Authorization: Bearer ***",
+      secret: structuredLifecycleSecret,
+    },
+    {
+      label: "an explicit non-aborted failure after controller cancellation",
+      abortBeforeLifecycle: true,
+      lifecycle: {
+        phase: "end",
+        aborted: false,
+        error: { kind: "retry_limit", message: "The provider exhausted its retry limit." },
+      },
+      meta: {
+        aborted: false,
+        error: { kind: "retry_limit", message: "The provider exhausted its retry limit." },
+      },
+      text: "The provider exhausted its retry limit.",
+    },
+  ])(
+    "projects $label as an actionable terminal failure",
+    async ({ lifecycle, meta, text, abortBeforeLifecycle, secret }) => {
+      const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+      const pending = deferred<{
+        payloads: Array<{ text: string; mediaUrl: null }>;
+        meta: Record<string, unknown>;
+      }>();
+      agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+      const backend = new EmbeddedTuiBackend();
+      const events: Array<{ event: string; payload: unknown }> = [];
+      backend.onEvent = ({ event, payload }) => events.push({ event, payload });
+      backend.start();
+      await backend.sendChat({
+        sessionKey: "agent:main:main",
+        message: "show the actual terminal outcome",
+        runId: "canonical-terminal",
+      });
+      const queuedRunReady = (
+        backend as unknown as { runs: Map<string, { queuedRunReady: Promise<void> }> }
+      ).runs.get("canonical-terminal")?.queuedRunReady;
+      let queueReady = false;
+      void queuedRunReady?.then(() => {
+        queueReady = true;
+      });
 
-    if (lifecycle) {
-      registeredListener?.({ runId: "canonical-terminal", stream: "lifecycle", data: lifecycle });
+      if (abortBeforeLifecycle) {
+        await backend.abortChat({ sessionKey: "agent:main:main", runId: "canonical-terminal" });
+      }
+      if (lifecycle) {
+        registeredListener?.({ runId: "canonical-terminal", stream: "lifecycle", data: lifecycle });
+        await flushMicrotasks();
+        expect(queueReady).toBe(true);
+        expect(events).toContainEqual({
+          event: "chat",
+          payload: {
+            runId: "canonical-terminal",
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            state: "error",
+            errorMessage: text,
+          },
+        });
+      }
+      pending.resolve({ payloads: [{ text, mediaUrl: null }], meta });
       await flushMicrotasks();
-      expect(queueReady).toBe(true);
+
       expect(events).toContainEqual({
         event: "chat",
         payload: {
@@ -2022,27 +2072,22 @@ describe("EmbeddedTuiBackend", () => {
           errorMessage: text,
         },
       });
-    }
-    pending.resolve({ payloads: [{ text, mediaUrl: null }], meta });
-    await flushMicrotasks();
-
-    expect(events).toContainEqual({
-      event: "chat",
-      payload: {
-        runId: "canonical-terminal",
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        state: "error",
-        errorMessage: text,
-      },
-    });
-    expect(
-      events.filter(
-        ({ event, payload }) =>
-          event === "chat" && (payload as { state?: string }).state === "error",
-      ),
-    ).toHaveLength(1);
-  });
+      expect(
+        events.filter(
+          ({ event, payload }) =>
+            event === "chat" && (payload as { state?: string }).state === "error",
+        ),
+      ).toHaveLength(1);
+      if (secret) {
+        const terminal = events.find(
+          ({ event, payload }) =>
+            event === "chat" && (payload as { state?: string }).state === "error",
+        )?.payload as { errorMessage: string };
+        expect(terminal.errorMessage).not.toContain(secret);
+        expect(terminal.errorMessage).not.toContain("\u001b");
+      }
+    },
+  );
 
   it("preserves a yielded parent turn in the embedded session projection", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");

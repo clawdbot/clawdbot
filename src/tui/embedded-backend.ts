@@ -1291,8 +1291,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
     },
     options: { phase?: string; visibleText?: string; deferError?: boolean } = {},
   ): boolean {
-    const aborted = metadata.aborted === true || run.controller.signal.aborted;
+    const aborted =
+      typeof metadata.aborted === "boolean" ? metadata.aborted : run.controller.signal.aborted;
     const stopReason = metadata.stopReason ?? (aborted ? "aborted" : undefined);
+    const terminalError =
+      metadata.error && typeof metadata.error === "object" && "message" in metadata.error
+        ? metadata.error.message
+        : metadata.error;
     const outcome = buildAgentRunTerminalOutcome({
       status:
         stopReason === "timeout" || metadata.status === "timeout" || metadata.timeoutPhase
@@ -1300,7 +1305,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           : aborted || metadata.error || options.phase === "error" || stopReason === "error"
             ? "error"
             : "ok",
-      error: typeof metadata.error === "string" ? metadata.error : undefined,
+      error: terminalError ? formatTuiErrorMessage(terminalError) : undefined,
       stopReason,
       livenessState: metadata.livenessState,
       timeoutPhase: metadata.timeoutPhase,
