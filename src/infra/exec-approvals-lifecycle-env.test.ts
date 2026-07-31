@@ -487,6 +487,25 @@ describe("OpenClaw lifecycle dynamic carrier edges", () => {
 
   it.each([
     [
+      "tsx /opt/openclaw/dist/entry.js gateway restart",
+      ["tsx", "/opt/openclaw/dist/entry.js", "gateway", "restart"],
+    ],
+    [
+      "nodejs /opt/openclaw/dist/entry.js gateway restart",
+      ["nodejs", "/opt/openclaw/dist/entry.js", "gateway", "restart"],
+    ],
+    ["service openclaw-gateway --full-restart", ["service", "openclaw-gateway", "--full-restart"]],
+  ] as Array<[string, string[]]>)("classifies direct lifecycle runner: %s", (command, argv) => {
+    expect(requiresApproval(command, argv)).toBe(true);
+  });
+
+  it("keeps a read-only direct JavaScript runner non-blocking", () => {
+    const command = "tsx /opt/openclaw/dist/entry.js status";
+    expect(requiresApproval(command, ["tsx", "/opt/openclaw/dist/entry.js", "status"])).toBe(false);
+  });
+
+  it.each([
+    [
       "hash -p /usr/local/bin/openclaw oc; oc gateway restart",
       ["hash", "-p", "/usr/local/bin/openclaw", "oc", ";", "oc", "gateway", "restart"],
     ],

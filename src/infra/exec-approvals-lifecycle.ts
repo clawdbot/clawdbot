@@ -162,11 +162,11 @@ function classifyServiceManager(argv: readonly string[]): boolean {
   const matchesExecutable = (...names: string[]) =>
     matchesLifecycleExecutablePattern(argv[0], new Set(names));
   if (matchesExecutable("service")) {
+    const action = normalizedToken(argv[2]);
     return (
       looksLikeOpenClaw(argv[1]) &&
-      ["force-reload", "reload", "restart", "start", "stop", "try-restart"].includes(
-        normalizedToken(argv[2]),
-      )
+      (action === "--full-restart" ||
+        ["force-reload", "reload", "restart", "start", "stop", "try-restart"].includes(action))
     );
   }
   if (matchesExecutable("sc")) {

@@ -208,17 +208,25 @@ function isOpenClawPackageTarget(token: string): boolean {
   );
 }
 
-function resolvedPackageRunnerPlan(argv: string[]): LifecyclePackageRunnerPlan {
-  if (isOpenClawPackageTarget(argv[0] ?? "")) {
-    return { kind: "argv", argv: ["openclaw", ...argv.slice(1)] };
-  }
+function resolveJavaScriptOpenClawRunnerArgv(argv: readonly string[]): string[] | null {
   if (JAVASCRIPT_EXECUTABLE_RUNNERS.has(normalizeExecutableToken(argv[0] ?? ""))) {
     const entryIndex = argv.findIndex(
       (token, index) => index > 0 && isOpenClawEntryScriptPath(token),
     );
     if (entryIndex !== -1) {
-      return { kind: "argv", argv: ["openclaw", ...argv.slice(entryIndex + 1)] };
+      return ["openclaw", ...argv.slice(entryIndex + 1)];
     }
+  }
+  return null;
+}
+
+function resolvedPackageRunnerPlan(argv: string[]): LifecyclePackageRunnerPlan {
+  if (isOpenClawPackageTarget(argv[0] ?? "")) {
+    return { kind: "argv", argv: ["openclaw", ...argv.slice(1)] };
+  }
+  const runnerArgv = resolveJavaScriptOpenClawRunnerArgv(argv);
+  if (runnerArgv) {
+    return { kind: "argv", argv: runnerArgv };
   }
   return { kind: "argv", argv };
 }
@@ -328,6 +336,10 @@ export function resolveLifecyclePackageRunnerArgv(
   const rawExecutable = normalizeExecutableToken(argv[0] ?? "");
   const executable =
     rawExecutable === "pnpx" ? "npx" : rawExecutable === "yarnpkg" ? "yarn" : rawExecutable;
+  const directRunnerArgv = resolveJavaScriptOpenClawRunnerArgv(argv);
+  if (directRunnerArgv) {
+    return { kind: "argv", argv: directRunnerArgv };
+  }
   if (executable === "corepack") {
     const manager = normalizedToken(argv[1]);
     const match = /^(npm|pnpm|yarn)(?:@[^/]+)?$/u.exec(manager);
