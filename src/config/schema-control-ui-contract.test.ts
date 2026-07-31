@@ -1,8 +1,8 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { analyzeConfigSchema } from "../../ui/src/components/config-form.analyze.js";
+import { isSupportedConfigValueValid } from "../../ui/src/components/config-form.constraints.js";
 import type { JsonSchema } from "../../ui/src/components/config-form.shared.js";
-import { isSupportedConfigValueValid } from "../../ui/src/components/config-form.validation.js";
 import { computeBaseConfigSchemaResponse } from "./schema-base.js";
 
 type MixedUnion = {
