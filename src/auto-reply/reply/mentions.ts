@@ -15,7 +15,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { compileConfigRegexes, type ConfigRegexRejectReason } from "../../security/config-regex.js";
 import { escapeRegExp } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
-import { resolveCurrentMessageContentStart } from "./history.js";
+import { HISTORY_CONTEXT_MARKER } from "./history.js";
 import type { BuildMentionRegexesOptions, ExplicitMentionSignal } from "./mentions.types.js";
 export type { BuildMentionRegexesOptions } from "./mentions.types.js";
 export { CURRENT_MESSAGE_MARKER } from "./history.js";
@@ -204,12 +204,13 @@ export function stripStructuralPrefixes(text: string): string {
   }
   // Ignore wrapper labels, timestamps, and sender prefixes so directive-only
   // detection still works in group batches that include history/context.
-  const currentMessageContentStart = resolveCurrentMessageContentStart(text);
-  const afterMarker =
-    currentMessageContentStart === undefined
-      ? text
-      : text.slice(currentMessageContentStart).trimStart();
-  const afterEnvelope = afterMarker.replace(/\[[^\]]+\]\s*/g, "");
+  if (text.trimStart().startsWith(HISTORY_CONTEXT_MARKER)) {
+    // Flat history has no trustworthy current-message range when users can quote
+    // marker text. Leave it non-command-shaped instead of guessing a boundary.
+    return text.trim();
+  }
+  const afterMarker = text;
+  const afterEnvelope = afterMarker.replace(/^(?:[ \t]*\[[^\]\n]+\][ \t]*)+/, "");
   const senderPrefixPattern =
     afterEnvelope === afterMarker
       ? /^[ \t]*(?!\/)[^\n:]{1,120}:\s+/gm

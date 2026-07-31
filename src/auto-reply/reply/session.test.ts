@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { testing as sessionMcpTesting } from "../../agents/agent-bundle-mcp-runtime.js";
 import { getOrCreateSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
+import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
@@ -1149,17 +1150,15 @@ describe("initSessionState RawBody", () => {
     },
   );
 
-  it("anchors a reset payload after structural brackets", async () => {
+  it("anchors a reset payload after an explicit channel envelope and sender prefix", async () => {
     const root = await makeCaseDir("openclaw-structural-reset-message-");
     const storePath = path.join(root, "sessions.json");
     const result = await initSessionState({
       ctx: {
-        CommandBody:
-          "[Chat messages since your last reply - for context]\n" +
-          "[Telegram /new id:123] Someone: old text\n\n" +
-          "[Current message - respond to this]\n" +
-          "[Telegram /new id:456] İpek: /NEW: keep [Q3]\nline 2",
+        BodyForCommands: "/NEW: keep [Q3]\nline 2",
+        RawBody: "[Telegram id:456] İpek: /NEW: keep [Q3]\nline 2",
         ChatType: "direct",
+        SenderName: "İpek",
         SessionKey: "agent:main:telegram:dm:s1",
       },
       cfg: {
@@ -1176,12 +1175,13 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionCtx.agentText).toBe("keep [Q3]\nline 2");
   });
 
-  it("does not select a reset-like sender prefix as the command", async () => {
+  it("does not search past an anchored reset-like payload", async () => {
     const root = await makeCaseDir("openclaw-reset-like-sender-message-");
     const storePath = path.join(root, "sessions.json");
     const result = await initSessionState({
       ctx: {
-        CommandBody: "[Telegram id:456] /new: /NEW keep [Q3]\nline 2",
+        BodyForCommands: "/NEW keep [Q3]\nline 2",
+        RawBody: "[Telegram id:456] /new: /NEW keep [Q3]\nline 2",
         ChatType: "direct",
         SessionKey: "agent:main:telegram:dm:s1",
       },
@@ -1195,8 +1195,158 @@ describe("initSessionState RawBody", () => {
     });
 
     expect(result.isNewSession).toBe(true);
-    expect(result.bodyStripped).toBe("keep [Q3]\nline 2");
-    expect(result.sessionCtx.agentText).toBe("keep [Q3]\nline 2");
+    expect(result.bodyStripped).toBe("/NEW keep [Q3]\nline 2");
+    expect(result.sessionCtx.agentText).toBe("/NEW keep [Q3]\nline 2");
+  });
+
+  it("keeps quoted markers and reset text in history out of reset parsing", async () => {
+    const root = await makeCaseDir("openclaw-history-reset-message-");
+    const storePath = path.join(root, "sessions.json");
+    const payload = "review [Current message - respond to this]\nand explain /new syntax";
+    const ctx = buildChannelInboundEventContext({
+      channel: "whatsapp",
+      accountId: "default",
+      from: "whatsapp:user:1",
+      sender: { id: "1", name: "Owner" },
+      conversation: { kind: "group", id: "room-1", label: "Room One" },
+      route: {
+        agentId: "main",
+        routeSessionKey: "agent:main:whatsapp:group:room-1",
+      },
+      reply: { to: "whatsapp:room:room-1" },
+      message: {
+        body: `/new ${payload}`,
+        rawBody: `/new ${payload}`,
+        bodyForAgent: `/new ${payload}`,
+        commandBody: `/new ${payload}`,
+        inboundHistory: [
+          {
+            sender: "Other",
+            body: "quoted [Current message - respond to this] /new old text",
+          },
+        ],
+      },
+      access: { commands: { authorized: true } },
+    });
+    const result = await initSessionState({
+      ctx,
+      cfg: {
+        session: { store: storePath, resetTriggers: ["/new"] },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(ctx).toMatchObject({
+      commandText: `/new ${payload}`,
+      rawText: `/new ${payload}`,
+      agentText: `/new ${payload}`,
+    });
+    expect(result.bodyStripped).toBe(payload);
+    expect(result.sessionCtx.agentText).toBe(payload);
+  });
+
+  it("supports a bounded Body-only legacy envelope without searching flat history", async () => {
+    const storePath = await createStorePath("openclaw-body-only-reset-");
+    const cfg = {
+      session: { store: storePath, resetTriggers: ["/new"] },
+    } as OpenClawConfig;
+
+    const legacy = await initSessionState({
+      ctx: {
+        Body: "[Telegram id:456] İpek: /NEW: keep [Q3]\nline 2",
+        ChatType: "direct",
+        SenderName: "İpek",
+        SessionKey: "agent:main:telegram:dm:legacy",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(legacy.resetTriggered).toBe(true);
+    expect(legacy.bodyStripped).toBe("keep [Q3]\nline 2");
+
+    const flatHistory = await initSessionState({
+      ctx: {
+        Body: [
+          "[Chat messages since your last reply - for context]",
+          "[Telegram id:123] Other: /new old text",
+          "",
+          "[Current message - respond to this]",
+          "[Telegram id:456] İpek: /new current text",
+        ].join("\n"),
+        ChatType: "direct",
+        SessionKey: "agent:main:telegram:dm:flat-history",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(flatHistory.resetTriggered).toBe(false);
+    expect(flatHistory.bodyStripped).toBeUndefined();
+  });
+
+  it("does not treat transcript-only or explicitly empty raw text as a reset command", async () => {
+    const storePath = await createStorePath("openclaw-audio-reset-");
+    const cfg = {
+      session: { store: storePath, resetTriggers: ["/new"] },
+    } as OpenClawConfig;
+
+    const transcriptOnly = await initSessionState({
+      ctx: {
+        Body: "/new spoken payload",
+        Transcript: "/new spoken payload",
+        ChatType: "direct",
+        SessionKey: "agent:main:whatsapp:dm:audio-transcript",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(transcriptOnly.resetTriggered).toBe(false);
+
+    const explicitEmptyRaw = await initSessionState({
+      ctx: {
+        Body: "/new spoken payload",
+        RawBody: "",
+        Transcript: "/new spoken payload",
+        ChatType: "direct",
+        SessionKey: "agent:main:whatsapp:dm:audio-empty-raw",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(explicitEmptyRaw.triggerBodyNormalized).toBe("");
+    expect(explicitEmptyRaw.resetTriggered).toBe(false);
+
+    const explicitCommandWithEmptyRaw = await initSessionState({
+      ctx: {
+        Body: "/new spoken payload",
+        BodyForCommands: "/new spoken payload",
+        RawBody: "",
+        ChatType: "direct",
+        SessionKey: "agent:main:whatsapp:dm:command-empty-raw",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(explicitCommandWithEmptyRaw.triggerBodyNormalized).toBe("/new spoken payload");
+    expect(explicitCommandWithEmptyRaw.resetTriggered).toBe(false);
+  });
+
+  it("does not rotate an unauthorized group session with a mentioned reset payload", async () => {
+    const storePath = await createStorePath("openclaw-group-reset-unauthorized-");
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "@openclaw /new keep [Q3]\nline 2",
+        ChatType: "group",
+        SessionKey: "agent:main:whatsapp:group:g1",
+      },
+      cfg: {
+        session: { store: storePath, resetTriggers: ["/new"] },
+        messages: { groupChat: { mentionPatterns: [String.raw`@openclaw`] } },
+      } as OpenClawConfig,
+      commandAuthorized: false,
+    });
+
+    expect(result.resetTriggered).toBe(false);
+    expect(result.bodyStripped).toBeUndefined();
   });
 
   it("drops cached skills snapshot when /new rotates an existing session", async () => {
