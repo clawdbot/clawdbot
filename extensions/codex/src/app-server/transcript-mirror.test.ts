@@ -26,7 +26,10 @@ import {
   importCodexThreadHistoryToTranscript,
   projectBoundedCodexThreadHistory,
 } from "./transcript-mirror.js";
-import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
+import {
+  attachCodexMirrorIdentity,
+  isImportedHistoryMessage,
+} from "./upstream-prompt-provenance.js";
 
 const mirrorCodexAppServerTranscript = codexTranscriptMirrorRuntime.mirror;
 const mirrorTranscriptBestEffort = codexTranscriptMirrorRuntime.mirrorBestEffort;
@@ -296,6 +299,52 @@ describe("importCodexThreadHistoryToTranscript", () => {
       }
     },
   );
+
+  it("persists import provenance so drift checks can tell imported rows from live ones", async () => {
+    const target = await createSqliteMirrorTarget("openclaw-codex-history-provenance-", {
+      sessionId: "session-history-provenance",
+    });
+    const thread = {
+      id: "thread-provenance",
+      turns: [
+        {
+          id: "turn-1",
+          status: "completed",
+          startedAt: 1_700_000_000,
+          completedAt: 1_700_000_001,
+          items: [
+            {
+              id: "user-1",
+              type: "userMessage",
+              content: [{ type: "text", text: "  refactor the parser  " }],
+            },
+            { id: "assistant-1", type: "agentMessage", text: "done", phase: "final_answer" },
+          ],
+        },
+      ],
+    } as unknown as CodexThread;
+
+    await expect(
+      importCodexThreadHistoryToTranscript({
+        thread,
+        throughTurnId: "turn-1",
+        storePath: target.storePath,
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        agentId: target.agentId,
+      }),
+    ).resolves.toEqual({ importedMessages: 2, omittedMessages: 0 });
+
+    // The mark has to survive serialization: fork drift checks read it back from the
+    // store to decide whether the stored text is the lossy import projection. Read the
+    // stored event, not readMirrorMessages, which projects away message metadata.
+    const events = (await readMirrorEvents(target)) as Array<{ message?: AgentMessage }>;
+    const userMessage = events
+      .map((event) => event.message)
+      .find((message) => message?.role === "user");
+    expect(isImportedHistoryMessage(userMessage)).toBe(true);
+    expect(userMessage).toMatchObject({ content: "refactor the parser" });
+  });
 
   it("imports only bounded user-visible conversation items with stable identities", async () => {
     const target = await createSqliteMirrorTarget("openclaw-codex-history-", {
