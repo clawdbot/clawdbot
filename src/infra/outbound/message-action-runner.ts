@@ -295,11 +295,12 @@ function markDeliveredCurrentSourceReply<T extends MessageActionRunResult>(
 ): T {
   // Current-source identity comes from the authorized route and delivery receipt,
   // not the reply mode; automatic runs also use this marker to avoid false fallbacks.
-  // Reply-type actions are visible source replies too: leaving them unmarked made
-  // dispatch send the no-visible-reply fallback after a delivered reply.
+  // Reply-type actions and polls are visible source replies too: leaving them
+  // unmarked made dispatch send the no-visible-reply fallback after a delivered
+  // reply or poll.
   const isReplyActionResult =
     result.kind === "action" && isCurrentSourceReplyActionName(result.action);
-  if (result.kind !== "send" && !isReplyActionResult) {
+  if (result.kind !== "send" && result.kind !== "poll" && !isReplyActionResult) {
     return result;
   }
   const authorization = params.input.messageActionAuthorization;
@@ -307,7 +308,7 @@ function markDeliveredCurrentSourceReply<T extends MessageActionRunResult>(
     return result;
   }
   const mirrorParams = {
-    action: isReplyActionResult ? result.action : "send",
+    action: isReplyActionResult ? result.action : result.kind === "poll" ? "poll" : "send",
     channel: params.channel,
     actionParams: params.actionParams,
     cfg: params.cfg,
@@ -1739,8 +1740,17 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       dryRun,
     }),
   });
+  const pollReplyToIsExplicit = Boolean(readStringParam(params, "replyTo"));
   if (gatewayPluginAction) {
-    return gatewayPluginAction;
+    return markDeliveredCurrentSourceReply(gatewayPluginAction, {
+      cfg,
+      actionParams: params,
+      channel,
+      accountId,
+      input,
+      agentId,
+      replyToIsExplicit: pollReplyToIsExplicit,
+    });
   }
 
   const poll = await executePollAction({
@@ -1787,17 +1797,28 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
     },
   });
 
-  return {
-    kind: "poll",
-    channel,
-    action,
-    to,
-    handledBy: poll.handledBy,
-    payload: poll.payload,
-    toolResult: poll.toolResult,
-    pollResult: poll.pollResult,
-    dryRun,
-  };
+  return markDeliveredCurrentSourceReply(
+    {
+      kind: "poll",
+      channel,
+      action,
+      to,
+      handledBy: poll.handledBy,
+      payload: poll.payload,
+      toolResult: poll.toolResult,
+      pollResult: poll.pollResult,
+      dryRun,
+    },
+    {
+      cfg,
+      actionParams: params,
+      channel,
+      accountId,
+      input,
+      agentId,
+      replyToIsExplicit: pollReplyToIsExplicit,
+    },
+  );
 }
 
 async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {

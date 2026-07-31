@@ -63,8 +63,11 @@ function isMessageToolSourceReplyActionName(action: unknown): boolean {
   if (typeof action !== "string") {
     return false;
   }
+  // Polls and reply-type actions deliver the visible source answer too; they
+  // qualify only when the runner confirmed the current-source route (or the
+  // caller allows explicit routes), enforced by the caller below.
   const normalized = action.trim().toLowerCase();
-  return normalized === "reply" || normalized === "thread-reply";
+  return normalized === "reply" || normalized === "thread-reply" || normalized === "poll";
 }
 
 function normalizeStatus(value: unknown): string | undefined {

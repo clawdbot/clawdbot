@@ -295,7 +295,10 @@ function isCurrentSourceConversation(
     resolveChannelThreadAddressing(params.channel),
   ),
 ): params is MirrorableSourceReplyTranscriptParams {
-  if (params.action !== "send") {
+  // Polls share the send target contract: `to` addresses a conversation, so the
+  // same current-source matching applies. Transcript mirroring stays send-only
+  // because poll params carry no message text to mirror.
+  if (params.action !== "send" && params.action !== "poll") {
     return false;
   }
   if (!params.sessionKey?.trim()) {
