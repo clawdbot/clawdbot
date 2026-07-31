@@ -81,7 +81,11 @@ import {
   sendControlUiHtmlBody,
   serveControlUiAsset,
 } from "./control-ui-static.js";
-import { resolveByteResponse, writeByteHeaders } from "./http-byte-range.js";
+import {
+  createGatewayByteStream,
+  resolveByteResponse,
+  writeByteHeaders,
+} from "./http-byte-range.js";
 import { buildMissingScopeForbiddenBody, sendGatewayAuthFailure } from "./http-common.js";
 import {
   getBearerToken,
@@ -667,21 +671,13 @@ export async function handleControlUiAssistantMediaRequest(
     return true;
   }
 
-  let opened: Awaited<ReturnType<typeof openLocalFileSafely>> | null = null;
-  let localPath;
-  let handleClosed = false;
-  const closeOpenedHandle = async () => {
-    if (!opened || handleClosed) {
-      return;
-    }
-    handleClosed = true;
-    await opened.handle.close().catch(() => {});
-  };
+  let byteStream: ReturnType<typeof createGatewayByteStream> | undefined;
   try {
     const resolvedReference = await resolveMediaReferenceLocalPathInfo(source);
-    localPath = resolvedReference.path;
+    const localPath = resolvedReference.path;
     await assertLocalMediaAllowed(localPath, localRoots);
-    opened = await openLocalFileSafely({ filePath: localPath });
+    let opened = await openLocalFileSafely({ filePath: localPath });
+    byteStream = createGatewayByteStream(res, opened.handle, () => respondControlUiNotFound(res));
     const sniffLength = Math.min(opened.stat.size, 8192);
     const sniffBuffer = sniffLength > 0 ? Buffer.allocUnsafe(sniffLength) : undefined;
     const bytesRead =
@@ -709,16 +705,18 @@ export async function handleControlUiAssistantMediaRequest(
         kind: mediaKind,
       });
       if (playback.kind === "preparing") {
-        await closeOpenedHandle();
+        await byteStream.close();
         sendJson(res, 202, { status: "preparing" });
         return true;
       }
       if (playback.kind === "transcoded") {
         const transcoded = await openLocalFileSafely({ filePath: playback.path }).catch(() => null);
         if (transcoded) {
-          await closeOpenedHandle();
+          await byteStream.close();
           opened = transcoded;
-          handleClosed = false;
+          byteStream = createGatewayByteStream(res, opened.handle, () =>
+            respondControlUiNotFound(res),
+          );
           contentType = playback.contentType;
           filename = replacePlaybackFileExtension(filename, playback.extension);
         }
@@ -738,39 +736,10 @@ export async function handleControlUiAssistantMediaRequest(
       ifNoneMatchHeader: req.headers["if-none-match"],
     });
     writeByteHeaders(res, byteResponse);
-    if (
-      req.method === "HEAD" ||
-      byteResponse.kind === "not-modified" ||
-      byteResponse.kind === "unsatisfiable" ||
-      opened.stat.size === 0
-    ) {
-      await closeOpenedHandle();
-      res.end();
-      return true;
-    }
-    const stream = opened.handle.createReadStream({
-      start: byteResponse.kind === "partial" ? byteResponse.range.start : 0,
-      end: byteResponse.kind === "partial" ? byteResponse.range.end : opened.stat.size - 1,
-      autoClose: false,
-    });
-    const finishClose = () => {
-      void closeOpenedHandle();
-    };
-    stream.once("end", finishClose);
-    stream.once("close", finishClose);
-    stream.once("error", () => {
-      void closeOpenedHandle();
-      if (!res.headersSent) {
-        respondControlUiNotFound(res);
-      } else {
-        res.destroy();
-      }
-    });
-    res.once("close", finishClose);
-    stream.pipe(res);
+    await byteStream.pipe(byteResponse, req.method);
     return true;
   } catch {
-    await closeOpenedHandle();
+    await byteStream?.close();
     respondControlUiNotFound(res);
     return true;
   }
