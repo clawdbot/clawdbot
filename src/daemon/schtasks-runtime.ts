@@ -9,6 +9,7 @@ import {
   getWindowsPowerShellExePath,
 } from "../infra/windows-install-roots.js";
 import { sleep } from "../utils.js";
+import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { formatLine } from "./output.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { execSchtasks } from "./schtasks-exec.js";
@@ -132,8 +133,22 @@ export async function removeStartupEntries(
     try {
       await fs.unlink(startupEntryPath);
       stdout.write(`${formatLine("Removed Windows login item", startupEntryPath)}\n`);
-    } catch {}
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        throw createStartupEntryRemovalError(error);
+      }
+    }
   }
+}
+
+function createStartupEntryRemovalError(error: unknown): Error {
+  const code = (error as NodeJS.ErrnoException).code;
+  // Native filesystem errors include the private Startup-folder path in their messages.
+  return new Error(
+    `Windows login item removal failed${code ? ` (${code})` : ""}. Check permissions and retry.`,
+    { cause: code ? { code } : undefined },
+  );
 }
 
 export async function hasScheduledTaskRunningEvidence(env: GatewayServiceEnv): Promise<boolean> {
@@ -270,17 +285,9 @@ export async function resolveFallbackRuntime(
         detail: `Startup-folder login item installed; could not verify the installed process for gateway port ${port}.`,
       };
     }
-  } else {
-    const verifiedPids = findVerifiedGatewayListenerPidsOnPortSync(port);
-    if (verifiedPids.length > 0) {
-      return {
-        status: "running",
-        pid: verifiedPids[0],
-        detail: `Startup-folder login item installed; verified gateway listener detected on port ${port}.`,
-      };
-    }
   }
-  const diagnostics = await inspectPortUsage(port).catch(() => null);
+  const probeHosts = await resolveGatewayServiceProbeHosts({ env, command });
+  const diagnostics = await inspectPortUsage(port, { probeHosts }).catch(() => null);
   if (!diagnostics) {
     return {
       status: "unknown",
@@ -299,7 +306,12 @@ export async function resolveFallbackRuntime(
     };
   }
   const matchedGatewayPids = resolveGatewayListenerPids(diagnostics.listeners);
-  if (matchedGatewayPids.length > 0) {
+  const scopedListenerPids = new Set(diagnostics.listeners.map((listener) => listener.pid));
+  const verifiedGatewayPids = findVerifiedGatewayListenerPidsOnPortSync(port).filter((pid) =>
+    scopedListenerPids.has(pid),
+  );
+  const ownedGatewayPids = matchedGatewayPids.length > 0 ? matchedGatewayPids : verifiedGatewayPids;
+  if (ownedGatewayPids.length > 0) {
     return requireCommandOwnership
       ? {
           status: "unknown",
@@ -307,7 +319,7 @@ export async function resolveFallbackRuntime(
         }
       : {
           status: "running",
-          pid: matchedGatewayPids[0],
+          pid: ownedGatewayPids[0],
           detail: `Startup-folder login item installed; verified gateway listener detected on port ${port}.`,
         };
   }
@@ -317,12 +329,17 @@ export async function resolveFallbackRuntime(
   };
 }
 
-export function probeScheduledTaskExists(taskName: string): boolean | null {
+type ScheduledTaskStateProbe =
+  | { status: "found"; state: number | null }
+  | { status: "missing" }
+  | { status: "unknown" };
+
+function probeScheduledTaskState(taskName: string): ScheduledTaskStateProbe {
   const encodedTaskName = Buffer.from(taskName, "utf8").toString("base64");
   const script = [
     "$ErrorActionPreference='Stop'",
     `$taskName=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedTaskName}'))`,
-    "try { $service=New-Object -ComObject 'Schedule.Service'; $service.Connect(); $null=$service.GetFolder('\\').GetTask($taskName); exit 0 } catch { $exception=$_.Exception; while($null -ne $exception.InnerException){$exception=$exception.InnerException}; [Console]::Out.Write($exception.HResult); exit 1 }",
+    "try { $service=New-Object -ComObject 'Schedule.Service'; $service.Connect(); $task=$service.GetFolder('\\').GetTask($taskName); [Console]::Out.Write([int]$task.State); exit 0 } catch { $exception=$_.Exception; while($null -ne $exception.InnerException){$exception=$exception.InnerException}; [Console]::Out.Write($exception.HResult); exit 1 }",
   ].join("; ");
   const probe = spawnSync(
     getWindowsPowerShellExePath(),
@@ -335,14 +352,35 @@ export function probeScheduledTaskExists(taskName: string): boolean | null {
     { encoding: "utf8", timeout: 5_000, windowsHide: true },
   );
   if (probe.error) {
-    return null;
+    return { status: "unknown" };
   }
   if (probe.status === 0) {
-    return true;
+    const rawState = probe.stdout.trim();
+    const state = /^\d+$/.test(rawState) ? Number.parseInt(rawState, 10) : null;
+    return {
+      status: "found",
+      state,
+    };
   }
   const hresult = Number.parseInt(probe.stdout.trim(), 10);
   // Only the locale-independent missing task/folder HRESULT values prove absence.
-  return hresult === -2147024894 || hresult === -2147024893 ? false : null;
+  return hresult === -2147024894 || hresult === -2147024893
+    ? { status: "missing" }
+    : { status: "unknown" };
+}
+
+export function probeScheduledTaskExists(taskName: string): boolean | null {
+  const probe = probeScheduledTaskState(taskName);
+  return probe.status === "found" ? true : probe.status === "missing" ? false : null;
+}
+
+export function isScheduledTaskDefinitelyNotRunning(taskName: string): boolean {
+  const probe = probeScheduledTaskState(taskName);
+  if (probe.status !== "found") {
+    return false;
+  }
+  // TASK_STATE_DISABLED and TASK_STATE_READY both prove no instance is queued or running.
+  return probe.state === 1 || probe.state === 3;
 }
 
 export async function readWindowsStartupFallbackRuntimeForUpdate(

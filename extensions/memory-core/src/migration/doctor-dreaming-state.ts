@@ -207,9 +207,17 @@ export const dreamingStateMigration: PluginDoctorStateMigration = {
           );
           continue;
         }
-        warnings.push(
-          `Skipped Memory Core ${source.label} import for ${source.workspaceDir} because SQLite rows conflict with the legacy source; left legacy source in place`,
+        // Each retired journal mirrors the SQLite namespaces used by the runtime.
+        // Keep canonical state active and retain only the divergent rollback source.
+        changes.push(
+          `Resolved Memory Core ${source.label} legacy conflict by keeping canonical SQLite plugin state`,
         );
+        await archiveLegacyStateSource({
+          filePath: source.filePath,
+          label: `Memory Core ${source.label} conflicting legacy source`,
+          changes,
+          warnings,
+        });
         continue;
       }
       let imported: number;

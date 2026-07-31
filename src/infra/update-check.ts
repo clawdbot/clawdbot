@@ -355,8 +355,11 @@ async function resolveDepsMarker(params: { root: string; manager: PackageManager
     };
   }
   if (params.manager === "bun") {
+    const textLockfilePath = path.join(root, "bun.lock");
     return {
-      lockfilePath: path.join(root, "bun.lockb"),
+      lockfilePath: (await exists(textLockfilePath))
+        ? textLockfilePath
+        : path.join(root, "bun.lockb"),
       markerPath: path.join(root, "node_modules"),
     };
   }

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { fetchSessionLineage } from "./app-sidebar-child-session-data.ts";
 import { buildSidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
+import { projectSessionTree } from "./app-sidebar-session-tree.ts";
+import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
 function projectDraftOwnership(
   row: Pick<GatewaySessionRow, "createdActor" | "sharingRole" | "visibility">,
@@ -77,6 +80,105 @@ describe("sidebar draft ownership presentation", () => {
         "owner",
       ),
     ).toBe(false);
+  });
+});
+
+describe("sidebar navigation lineage ownership", () => {
+  const navigationParent: GatewaySessionRow = {
+    key: "agent:main:dashboard:navigation-parent",
+    kind: "direct",
+    updatedAt: 1,
+    childSessions: ["agent:main:subagent:child"],
+  };
+  const controlParent: GatewaySessionRow = {
+    key: "agent:main:main",
+    kind: "direct",
+    updatedAt: 2,
+    childSessions: ["agent:main:subagent:child"],
+  };
+  const child: GatewaySessionRow = {
+    key: "agent:main:subagent:child",
+    kind: "direct",
+    updatedAt: 3,
+    parentSessionKey: navigationParent.key,
+    spawnedBy: controlParent.key,
+  };
+
+  it("projects a known child exactly once under its explicit navigation parent", () => {
+    const projected = projectSessionTree({
+      roots: [navigationParent, controlParent],
+      agentRows: [navigationParent, controlParent, child],
+      childRowsByParent: {},
+      loadingChildKeys: new Set(),
+      knownSessionAttention: [],
+      toSidebarSession: (row, isChild) =>
+        ({
+          key: row.key,
+          isChild,
+          attention: { kind: "none" },
+          runningChildCount: 0,
+          failedChildCount: 0,
+        }) as SidebarRecentSession,
+    });
+
+    expect(
+      projected.map((row) => ({ key: row.key, children: row.children.map((entry) => entry.key) })),
+    ).toEqual([
+      { key: navigationParent.key, children: [child.key] },
+      { key: controlParent.key, children: [] },
+    ]);
+  });
+
+  it("walks a directly opened child through its navigation parent, not its controller", async () => {
+    const knownRows = new Map(
+      [navigationParent, controlParent, child].map((row) => [row.key, row]),
+    );
+    const lineage = await fetchSessionLineage({
+      client: {} as Parameters<typeof fetchSessionLineage>[0]["client"],
+      sessionKey: child.key,
+      knownRows,
+      isCurrent: () => true,
+    });
+
+    expect(lineage).toMatchObject({
+      rowsByParent: { [navigationParent.key]: [child] },
+      topmostRow: navigationParent,
+      lookupFailed: false,
+    });
+  });
+
+  it("falls back to the control owner when persisted navigation lineage is blank", async () => {
+    const childWithBlankParent = { ...child, parentSessionKey: "  \t  " };
+    const projected = projectSessionTree({
+      roots: [controlParent],
+      agentRows: [controlParent, childWithBlankParent],
+      childRowsByParent: {},
+      loadingChildKeys: new Set(),
+      knownSessionAttention: [],
+      toSidebarSession: (row, isChild) =>
+        ({
+          key: row.key,
+          isChild,
+          attention: { kind: "none" },
+          runningChildCount: 0,
+          failedChildCount: 0,
+        }) as SidebarRecentSession,
+    });
+
+    expect(projected[0]?.children.map((row) => row.key)).toEqual([child.key]);
+
+    const lineage = await fetchSessionLineage({
+      client: {} as Parameters<typeof fetchSessionLineage>[0]["client"],
+      sessionKey: child.key,
+      knownRows: new Map([controlParent, childWithBlankParent].map((row) => [row.key, row])),
+      isCurrent: () => true,
+    });
+
+    expect(lineage).toMatchObject({
+      rowsByParent: { [controlParent.key]: [childWithBlankParent] },
+      topmostRow: controlParent,
+      lookupFailed: false,
+    });
   });
 });
 

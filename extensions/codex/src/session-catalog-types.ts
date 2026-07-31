@@ -41,6 +41,8 @@ export type CodexSessionCatalogPageParams = {
   limit?: number;
   searchTerm?: string;
   cwd?: string;
+  /** Bypasses the brief list memo after a specific thread lookup misses. */
+  forceRefresh?: boolean;
 };
 
 export type CodexSessionCatalogControl = {

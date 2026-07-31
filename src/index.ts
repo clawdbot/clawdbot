@@ -15,7 +15,12 @@ import {
 } from "./infra/unhandled-rejections.js";
 
 type LegacyCliDeps = {
-  runCli: (argv: string[]) => Promise<void>;
+  runCli: (
+    argv: string[],
+    options?: {
+      retainConsoleRoutingUntilProcessExit?: boolean;
+    },
+  ) => Promise<void>;
 };
 
 type LibraryExports = typeof import("./library.js");
@@ -54,9 +59,12 @@ async function loadLegacyCliDeps(): Promise<LegacyCliDeps> {
 export async function runLegacyCliEntry(
   argv: string[] = process.argv,
   deps?: LegacyCliDeps,
+  options?: {
+    retainConsoleRoutingUntilProcessExit?: boolean;
+  },
 ): Promise<void> {
   const { runCli } = deps ?? (await loadLegacyCliDeps());
-  await runCli(argv);
+  await runCli(argv, options);
 }
 
 const isMain = isMainModule({
@@ -121,7 +129,11 @@ if (isMain) {
   });
 
   void runCliWithExitFinalization({
-    run: async () => await runLegacyCliEntry(process.argv),
+    run: async () =>
+      await runLegacyCliEntry(process.argv, undefined, {
+        // Finalizers and process-exit hooks can still emit diagnostics after runCli settles.
+        retainConsoleRoutingUntilProcessExit: true,
+      }),
     onError: (err) => {
       for (const line of formatCliFailureLines({
         title: "The CLI command failed.",

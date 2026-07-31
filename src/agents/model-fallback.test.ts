@@ -12,11 +12,10 @@ import {
 } from "../infra/diagnostic-events.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
-import {
-  clearCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-outcome.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
@@ -33,18 +32,17 @@ import {
 import { clearAgentHarnesses, registerAgentHarness } from "./harness/registry.js";
 import type { AgentHarness } from "./harness/types.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
-import {
-  isFallbackSummaryError,
-  resolveModelCandidateChain,
-  runWithImageModelFallback,
-  runWithModelFallback as runWithModelFallbackBase,
-} from "./model-fallback.js";
+import { isFallbackSummaryError } from "./model-fallback-attempt.js";
+import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import { runWithImageModelFallback } from "./model-fallback-image.js";
+import { runWithModelFallback as runWithModelFallbackBase } from "./model-fallback-runner.js";
 import { shouldDiscardDeferredSessionSuspension } from "./model-fallback.test-support.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
   resolveAgentRunErrorLifecycleFields,
 } from "./run-termination.js";
+import { toSandboxProvisioningError } from "./sandbox/provisioning-error.js";
 import { resolveSessionSuspensionReason } from "./session-suspension.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
@@ -1716,6 +1714,39 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("does not run a second candidate after a canonical hard run timeout", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    });
+    const timeoutError = new AgentRunTerminalOutcomeError(
+      new Error("attempt aborted before prompt submission"),
+      {
+        reason: "hard_timeout",
+        status: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+    );
+    const run = vi.fn().mockRejectedValueOnce(timeoutError).mockResolvedValueOnce("too late");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.4",
+        run,
+      }),
+    ).rejects.toBe(timeoutError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("aborts the fallback chain on embedded session takeover instead of trying every model (#83510)", async () => {
     const cfg = makeCfg({
       agents: {
@@ -1799,6 +1830,40 @@ describe("runWithModelFallback", () => {
       }),
     ).rejects.toBe(preflightError);
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not spend model fallbacks on sandbox provisioning failures", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-4.1-mini"],
+          },
+        },
+      },
+    });
+    const provisioningError = toSandboxProvisioningError(
+      new Error("Sandbox image not found: openclaw-sandbox:analyst. Build or pull it first."),
+      "docker",
+    );
+    const run = vi.fn().mockRejectedValue(provisioningError);
+    const onError = vi.fn();
+    const onFallbackStep = vi.fn();
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.4",
+        run,
+        onError,
+        onFallbackStep,
+      }),
+    ).rejects.toBe(provisioningError);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onFallbackStep).not.toHaveBeenCalled();
   });
 
   it("aborts fallback when a provider prompt error carries cleanup session takeover", async () => {
@@ -1916,6 +1981,42 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(2);
     expect(result.provider).toBe("anthropic");
+  });
+
+  it("continues to the next model after a Google invalid-key response (#114784)", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "google/gemini-3.1-pro-preview",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    });
+    const googleInvalidKey = new Error(
+      "Google Generative AI API error (400): API key not valid. Please pass a valid API key. [code=INVALID_ARGUMENT]",
+    );
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(googleInvalidKey)
+      .mockResolvedValueOnce("fallback ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      run,
+    });
+
+    expect(result.result).toBe("fallback ok");
+    expect(result.provider).toBe("anthropic");
+    expect(result.attempts[0]).toMatchObject({
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      reason: "auth",
+    });
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   it("keeps provider failover metadata authoritative over nested session locks", async () => {

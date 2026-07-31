@@ -108,6 +108,7 @@ describe("tsdown config", () => {
       "media-understanding/apply.runtime",
       "index",
       "commands/status.summary.runtime",
+      "docker-healthcheck",
       "provider-dispatcher.runtime",
       "plugins/hook-runner-global",
       "plugins/provider-discovery.runtime",
@@ -122,6 +123,12 @@ describe("tsdown config", () => {
     ]) {
       expect(keys).toContain(entry);
     }
+  });
+
+  it("builds the Docker healthcheck as a stable dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)["docker-healthcheck"]).toBe("src/docker-healthcheck.ts");
   });
 
   it("keeps root-package-excluded external plugins out of the root dist graph", () => {

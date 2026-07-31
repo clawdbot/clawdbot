@@ -1248,6 +1248,34 @@ describe("devices cli list", () => {
     expect(output).not.toContain("openclaw-macos");
     expect(output).not.toContain("openclaw-ios");
   });
+
+  it("shows a deviceId column so identical display names are distinguishable for remove", async () => {
+    const deviceIdA = "a".repeat(64);
+    const deviceIdB = "b".repeat(64);
+    callGateway.mockResolvedValueOnce({
+      pending: [],
+      paired: [
+        pairedDevice({
+          deviceId: deviceIdA,
+          displayName: "OpenClaw Desktop",
+          clientId: "openclaw-macos",
+        }),
+        pairedDevice({
+          deviceId: deviceIdB,
+          displayName: "OpenClaw Desktop",
+          clientId: "openclaw-macos",
+        }),
+      ],
+    });
+
+    await runDevicesCommand(["list"]);
+
+    const output = stripAnsi(readRuntimeOutput());
+    expect(output).toContain("Device ID");
+    expect(output).toContain("Full device IDs");
+    expect(output.split("\n")).toContain(`  ${deviceIdA}  OpenClaw Desktop`);
+    expect(output.split("\n")).toContain(`  ${deviceIdB}  OpenClaw Desktop`);
+  });
 });
 
 describe("devices cli rename", () => {

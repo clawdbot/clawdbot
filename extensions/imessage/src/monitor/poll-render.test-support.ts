@@ -49,6 +49,70 @@ describe("renderIMessagePollBody", () => {
     expect(out).toContain("Blue");
   });
 
+  it("renders the full selection snapshot instead of a stale singular vote", () => {
+    const out = renderIMessagePollBody({
+      kind: "vote",
+      vote: {
+        participant: "+12065550123",
+        option_id: "a",
+        option_text: "Lobster",
+        event_type: "selected",
+      },
+      votes: [
+        {
+          participant: "+12065550123",
+          option_id: "a",
+          option_text: "Lobster",
+          event_type: "selected",
+        },
+        {
+          participant: "+12065550123",
+          option_id: "b",
+          option_text: "Also lobster",
+          event_type: "selected",
+        },
+      ],
+    });
+
+    expect(out).toContain('currently selected "Lobster", "Also lobster"');
+    expect(out).not.toContain('voted for "Lobster"');
+  });
+
+  it("does not report a remaining selection as a new vote", () => {
+    const out = renderIMessagePollBody({
+      kind: "vote",
+      vote: {
+        participant: "+12065550123",
+        option_id: "b",
+        option_text: "Beta",
+        event_type: "selected",
+      },
+      votes: [
+        {
+          participant: "+12065550123",
+          option_id: "b",
+          option_text: "Beta",
+          event_type: "selected",
+        },
+      ],
+    });
+
+    expect(out).toContain('currently selected "Beta"');
+    expect(out).not.toContain('voted for "Beta"');
+  });
+
+  it("scopes an empty selection snapshot to the event sender", () => {
+    const out = renderIMessagePollBody(
+      {
+        kind: "vote",
+        votes: [],
+      },
+      "+12065550123",
+    );
+
+    expect(out).toBe("\u{1F4CA} Poll selections: +12065550123 currently selected no options");
+  });
+
   it("returns null for a poll with no options and no vote", () => {
     expect(renderIMessagePollBody({ kind: "created", options: [] })).toBeNull();
   });

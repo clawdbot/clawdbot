@@ -100,9 +100,8 @@ describe("loadStaticManifestCatalogRowsForList", () => {
     });
   });
 
-  it("loads refreshable manifest rows as registry-backed supplements", async () => {
-    const { loadSupplementalManifestCatalogRowsForList } =
-      await import("./list.manifest-catalog.js");
+  it("does not expose refreshable provider previews as prepared models", async () => {
+    const { loadStaticManifestCatalogRowsForList } = await import("./list.manifest-catalog.js");
     const manifestRegistry = {
       plugins: [openrouterPlugin, moonshotPlugin],
       diagnostics: [],
@@ -114,15 +113,14 @@ describe("loadStaticManifestCatalogRowsForList", () => {
     });
 
     expect(
-      loadSupplementalManifestCatalogRowsForList({
+      loadStaticManifestCatalogRowsForList({
         cfg: {},
       }).map((row) => row.ref),
-    ).toEqual(["moonshot/kimi-k2.6", "openrouter/auto"]);
+    ).toEqual(["moonshot/kimi-k2.6"]);
   });
 
-  it("supplements runtime-owned providers with refreshed rows only", async () => {
-    const { loadStaticManifestCatalogRowsForList, loadSupplementalManifestCatalogRowsForList } =
-      await import("./list.manifest-catalog.js");
+  it("does not expose runtime overlay rows as static manifest models", async () => {
+    const { loadStaticManifestCatalogRowsForList } = await import("./list.manifest-catalog.js");
     const manifestRegistry = {
       plugins: [openaiRuntimePlugin],
       diagnostics: [],
@@ -144,19 +142,11 @@ describe("loadStaticManifestCatalogRowsForList", () => {
       cfg: {},
       providerFilter: "openai",
       metadataSnapshot: metadataSnapshot as unknown as Parameters<
-        typeof loadSupplementalManifestCatalogRowsForList
+        typeof loadStaticManifestCatalogRowsForList
       >[0]["metadataSnapshot"],
     };
 
     expect(loadStaticManifestCatalogRowsForList(params)).toEqual([]);
-    expect(loadSupplementalManifestCatalogRowsForList(params)).toMatchObject([
-      {
-        provider: "openai",
-        id: "gpt-refreshed",
-        ref: "openai/gpt-refreshed",
-        source: "runtime-refresh",
-      },
-    ]);
   });
 
   it("uses an injected metadata snapshot instead of loading metadata again", async () => {

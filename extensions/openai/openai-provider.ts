@@ -83,7 +83,7 @@ function classifyOpenAiFailoverCode(code: string | undefined) {
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
 // Keep synchronized with extensions/codex's exact @openai/codex dependency;
 // the provider contract test fails when that managed-runtime pin changes.
-const OPENAI_CODEX_CLIENT_VERSION = "0.145.0";
+const OPENAI_CODEX_CLIENT_VERSION = "0.146.0";
 const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`;
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
@@ -138,10 +138,19 @@ const OPENAI_GPT_55_PRO_TEMPLATE_MODEL_IDS = [
 const OPENAI_GPT_55_MEDIA_INPUT = {
   image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
 } as const satisfies ProviderRuntimeModel["mediaInput"];
-const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = [OPENAI_GPT_55_MODEL_ID] as const;
-const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = [OPENAI_GPT_55_PRO_MODEL_ID] as const;
-const OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS = ["gpt-5-mini"] as const;
-const OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS = ["gpt-5-nano", "gpt-5-mini"] as const;
+// Repair an already-authorized model before borrowing an older family template;
+// remote discovery must not be needed to restore its native image capability.
+const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = [OPENAI_GPT_54_MODEL_ID, OPENAI_GPT_55_MODEL_ID] as const;
+const OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS = [
+  OPENAI_GPT_54_PRO_MODEL_ID,
+  OPENAI_GPT_55_PRO_MODEL_ID,
+] as const;
+const OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS = [OPENAI_GPT_54_MINI_MODEL_ID, "gpt-5-mini"] as const;
+const OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS = [
+  OPENAI_GPT_54_NANO_MODEL_ID,
+  "gpt-5-nano",
+  "gpt-5-mini",
+] as const;
 const OPENAI_CHAT_LATEST_TEMPLATE_MODEL_IDS = [
   OPENAI_GPT_55_MODEL_ID,
   OPENAI_GPT_54_MODEL_ID,
@@ -181,7 +190,11 @@ function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionCo
   return OPENAI_MANIFEST_PROVIDER.models.map((model) =>
     model.api === "openai-chatgpt-responses" || isOpenAICodexBaseUrl(model.baseUrl)
       ? { ...model }
-      : { ...model, baseUrl },
+      : {
+          ...model,
+          api: model.api ?? OPENAI_MANIFEST_PROVIDER.api ?? "openai-responses",
+          baseUrl,
+        },
   );
 }
 

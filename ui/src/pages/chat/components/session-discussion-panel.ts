@@ -1,3 +1,4 @@
+import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type {
@@ -6,6 +7,7 @@ import type {
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+import { buildWidgetThemeMessage, postWidgetTheme } from "./widget-theme.ts";
 
 type SessionDiscussionInfoLoader = (sessionKey: string) => Promise<SessionDiscussionInfo>;
 type SessionDiscussionOpener = (sessionKey: string) => Promise<SessionDiscussionInfo>;
@@ -14,6 +16,19 @@ type SessionDiscussionStateListener = (
   discussionState: SessionDiscussionState,
   openUrl: string | null,
 ) => void;
+
+type SessionDiscussionTaskResult = {
+  sessionKey: string;
+  info: SessionDiscussionInfo;
+};
+
+type OpeningDiscussion = {
+  sessionKey: string;
+  loader: SessionDiscussionInfoLoader;
+  opener: SessionDiscussionOpener | null;
+  sourceGeneration: number;
+  canOpen: boolean;
+};
 
 export type SessionDiscussionPanelConfig = {
   sessionKey: string;
@@ -45,7 +60,30 @@ function resolveDiscussionEmbedUrl(value: string | undefined): string | null {
   if (!resolved) {
     return null;
   }
-  return new URL(resolved).origin === window.location.origin ? null : resolved;
+  const url = new URL(resolved);
+  if (url.origin === window.location.origin) {
+    return null;
+  }
+  if (
+    url.searchParams.get("openclawHostTheme") !== "1" ||
+    !/^\/embed\/(?:channel|thread)\/[^/]+\/[^/]+\/?$/u.test(url.pathname)
+  ) {
+    // Provider-issued and signed discussion URLs are opaque. Only ClickClack's
+    // documented embed routes support the first-paint theme query contract.
+    return url.href;
+  }
+  // The initial URL protects the first paint; hostOrigin binds subsequent
+  // full-palette messages to this exact Control UI parent.
+  url.searchParams.set(
+    "theme",
+    document.documentElement.dataset.themeMode === "light" ? "light" : "dark",
+  );
+  url.searchParams.set("hostOrigin", window.location.origin);
+  const themeTokens = buildWidgetThemeMessage().tokens;
+  if (Object.keys(themeTokens).length > 0) {
+    url.searchParams.set("themeTokens", JSON.stringify(themeTokens));
+  }
+  return url.href;
 }
 
 class SessionDiscussionPanel extends OpenClawLightDomElement {
@@ -56,94 +94,112 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
   @property({ type: Boolean }) canOpen = true;
   @property({ type: Number }) sourceGeneration = 0;
 
-  @state() private info: SessionDiscussionInfo | null = null;
-  @state() private loading = false;
-  @state() private opening = false;
-  @state() private error: string | null = null;
+  @state() private openingDiscussion: OpeningDiscussion | null = null;
+  private themeObserver: MutationObserver | null = null;
 
-  private requestVersion = 0;
+  private readonly discussionTask = new Task(this, {
+    args: () =>
+      [
+        this.sessionKey.trim(),
+        this.loadInfo,
+        this.openDiscussion,
+        this.sourceGeneration,
+        this.canOpen,
+      ] as const,
+    task: async ([sessionKey, loader, opener, _sourceGeneration, canOpen], { signal }) => {
+      if (!loader || !sessionKey) {
+        return null;
+      }
+      const loaded = await loader(sessionKey);
+      signal.throwIfAborted();
+      const opening = {
+        sessionKey,
+        loader,
+        opener,
+        sourceGeneration: _sourceGeneration,
+        canOpen,
+      };
+      if (!this.isOpeningCurrent(opening)) {
+        return initialState;
+      }
+      let info = loaded;
+      if (loaded.state === "available" && canOpen && opener) {
+        this.openingDiscussion = opening;
+        this.publish(sessionKey, loaded);
+        if (!this.isOpeningCurrent(opening)) {
+          return initialState;
+        }
+        info = (await opener(sessionKey)) ?? loaded;
+      }
+      signal.throwIfAborted();
+      if (!this.isOpeningCurrent(opening)) {
+        return initialState;
+      }
+      return { sessionKey, info } satisfies SessionDiscussionTaskResult;
+    },
+    onComplete: (result) => {
+      this.openingDiscussion = null;
+      if (result) {
+        this.publish(result.sessionKey, result.info);
+      }
+    },
+    onError: () => {
+      this.openingDiscussion = null;
+    },
+  });
 
-  private isCurrentRequest(sessionKey: string, version: number): boolean {
-    return version === this.requestVersion && sessionKey === this.sessionKey.trim();
+  private isOpeningCurrent(opening: OpeningDiscussion): boolean {
+    return (
+      opening.sessionKey === this.sessionKey.trim() &&
+      opening.loader === this.loadInfo &&
+      opening.opener === this.openDiscussion &&
+      opening.sourceGeneration === this.sourceGeneration &&
+      opening.canOpen === this.canOpen
+    );
   }
 
-  protected override updated(changed: Map<string, unknown>) {
-    if (changed.has("sessionKey") || changed.has("loadInfo") || changed.has("sourceGeneration")) {
-      void this.refresh();
+  override connectedCallback(): void {
+    super.connectedCallback();
+    if (typeof MutationObserver === "undefined") {
       return;
     }
-    // Gaining write access after an available discussion resolved must still
-    // open it: refresh() already ran, and without the removed manual button
-    // nothing else would ever call the opener.
-    if (changed.has("canOpen") && this.canOpen && this.info?.state === "available") {
-      void this.open(this.sessionKey.trim(), this.requestVersion);
+    this.themeObserver = new MutationObserver(() => this.postDiscussionTheme());
+    this.themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme", "data-theme-mode", "style"],
+    });
+  }
+
+  override disconnectedCallback(): void {
+    this.themeObserver?.disconnect();
+    this.themeObserver = null;
+    super.disconnectedCallback();
+  }
+
+  private readonly handleDiscussionFrameLoad = (event: Event): void => {
+    const frame = event.currentTarget;
+    if (frame instanceof HTMLIFrameElement) {
+      this.postDiscussionTheme(frame);
     }
+  };
+
+  private postDiscussionTheme(
+    frame = this.querySelector<HTMLIFrameElement>(".session-discussion__frame"),
+  ): void {
+    if (!frame?.isConnected) {
+      return;
+    }
+    postWidgetTheme(frame, new URL(frame.src).origin);
   }
 
   // requestKey is the key the request was issued for; the sessionKey property
-  // may already name the next session while an old result resolves, and a
-  // stale result must not be attributed to (or close the panel of) the new one.
+  // may already name the next session while an old result resolves. Task only
+  // calls onComplete for the latest args, so stale results never publish.
   private publish(requestKey: string, info: SessionDiscussionInfo): void {
     if (requestKey !== this.sessionKey.trim()) {
       return;
     }
-    this.info = info;
     this.onStateChange?.(requestKey, info.state, resolveDiscussionUrl(info.openUrl));
-  }
-
-  private async refresh(): Promise<void> {
-    const loader = this.loadInfo;
-    const sessionKey = this.sessionKey.trim();
-    const version = ++this.requestVersion;
-    this.info = null;
-    this.error = null;
-    this.opening = false;
-    if (!loader || !sessionKey) {
-      this.loading = false;
-      return;
-    }
-    this.loading = true;
-    try {
-      const info = await loader(sessionKey);
-      if (this.isCurrentRequest(sessionKey, version)) {
-        this.publish(sessionKey, info);
-        this.loading = false;
-        if (info.state === "available" && this.canOpen) {
-          await this.open(sessionKey, version);
-        }
-      }
-    } catch (error) {
-      if (this.isCurrentRequest(sessionKey, version)) {
-        this.error = error instanceof Error ? error.message : String(error);
-      }
-    } finally {
-      if (this.isCurrentRequest(sessionKey, version)) {
-        this.loading = false;
-      }
-    }
-  }
-
-  private async open(sessionKey: string, version: number): Promise<void> {
-    const opener = this.openDiscussion;
-    if (!opener || !sessionKey || this.opening || !this.isCurrentRequest(sessionKey, version)) {
-      return;
-    }
-    this.opening = true;
-    this.error = null;
-    try {
-      const info = await opener(sessionKey);
-      if (this.isCurrentRequest(sessionKey, version)) {
-        this.publish(sessionKey, info);
-      }
-    } catch (error) {
-      if (this.isCurrentRequest(sessionKey, version)) {
-        this.error = error instanceof Error ? error.message : String(error);
-      }
-    } finally {
-      if (this.isCurrentRequest(sessionKey, version)) {
-        this.opening = false;
-      }
-    }
   }
 
   // The iframe sandbox must include allow-same-origin: without it the frame
@@ -161,6 +217,7 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
                 src=${embedUrl}
                 title=${t("chat.sessionDiscussion.frameTitle")}
                 sandbox="allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
+                @load=${this.handleDiscussionFrameLoad}
               ></iframe>
             `
           : html`<div class="session-discussion__empty">
@@ -176,27 +233,39 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
   }
 
   override render() {
-    if (this.error) {
+    if (this.discussionTask.status === TaskStatus.ERROR) {
+      const error = this.discussionTask.error;
       return html`<div class="session-discussion__empty">
-        <div class="callout danger">${this.error}</div>
+        <div class="callout danger">${error instanceof Error ? error.message : String(error)}</div>
       </div>`;
     }
-    if (this.loading || !this.info) {
+    const value = this.discussionTask.value;
+    if (
+      this.discussionTask.status === TaskStatus.PENDING &&
+      this.openingDiscussion &&
+      this.isOpeningCurrent(this.openingDiscussion)
+    ) {
+      return html`<div class="session-discussion__empty">
+        ${t("chat.sessionDiscussion.opening")}
+      </div>`;
+    }
+    if (this.discussionTask.status !== TaskStatus.COMPLETE || !value) {
       return html`<div class="session-discussion__empty">
         ${t("chat.sessionDiscussion.loading")}
       </div>`;
     }
-    if (this.info.state === "none") {
+    const { info } = value;
+    if (info.state === "none") {
       return nothing;
     }
-    if (this.info.state === "available") {
+    if (info.state === "available") {
       return html`<div class="session-discussion__empty">
         ${this.canOpen
           ? t("chat.sessionDiscussion.opening")
           : t("chat.sessionDiscussion.requiresWriteAccess")}
       </div>`;
     }
-    return this.renderOpen(this.info);
+    return this.renderOpen(info);
   }
 }
 

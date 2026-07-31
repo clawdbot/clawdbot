@@ -267,13 +267,17 @@ function resolveShellFromPath(
     return undefined;
   }
   const entries = envPath.split(path.delimiter).filter(Boolean);
-  for (const entry of entries) {
-    const candidate = path.join(entry, name);
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      return candidate;
-    } catch {
-      // ignore missing or non-executable entries
+  const executableNames =
+    process.platform === "win32" && !path.extname(name) ? [`${name}.exe`, name] : [name];
+  for (const executableName of executableNames) {
+    for (const entry of entries) {
+      const candidate = path.join(entry, executableName);
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return candidate;
+      } catch {
+        // Ignore missing or non-executable entries.
+      }
     }
   }
   return undefined;

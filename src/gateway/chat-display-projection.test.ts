@@ -1,5 +1,52 @@
 import { describe, expect, it } from "vitest";
 import { sanitizeChatHistoryMessages } from "./chat-display-projection.js";
+import { mirrorMessageToolVisibleReplies } from "./chat-display-projection.message-tool.js";
+
+describe("chat display message-tool projection", () => {
+  it("mirrors an automatic-mode send confirmed for the current source", () => {
+    const sourceReply = "Visible reply delivered to Slack.";
+    const projected = mirrorMessageToolVisibleReplies([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-message-current-source",
+            name: "message",
+            arguments: {
+              action: "send",
+              channel: "slack",
+              target: "channel:C123",
+              message: sourceReply,
+            },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-current-source",
+        content: { ok: true, messageId: "slack-242" },
+        details: {
+          ok: true,
+          messageId: "slack-242",
+          sourceReplyRoute: "current-source",
+        },
+      },
+      { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+    ]);
+
+    expect(projected).toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: sourceReply }],
+        openclawMessageToolMirror: expect.objectContaining({
+          toolCallId: "call-message-current-source",
+        }),
+      }),
+    );
+  });
+});
 
 describe("chat display tool-result detail projection", () => {
   it("keeps authoritative write booleans and strips unrelated details", () => {

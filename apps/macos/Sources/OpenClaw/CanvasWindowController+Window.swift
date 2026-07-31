@@ -50,7 +50,7 @@ extension CanvasWindowController {
         // when the user clicks into it; user entry points own app activation.
         window.orderFrontRegardless()
         VoiceWakeOverlayController.shared.bringToFrontIfVisible()
-        self.onVisibilityChanged?(true)
+        self.setCanvasVisible(true)
     }
 
     func repositionPanel(using anchorProvider: () -> NSRect?) {
@@ -149,7 +149,7 @@ extension CanvasWindowController {
     // MARK: - NSWindowDelegate
 
     func windowWillClose(_: Notification) {
-        self.onVisibilityChanged?(false)
+        self.setCanvasVisible(false)
     }
 
     func windowDidMove(_: Notification) {

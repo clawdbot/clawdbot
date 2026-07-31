@@ -9,6 +9,7 @@ import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import { SessionManager } from "../agents/sessions/index.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -469,7 +470,10 @@ export async function runSetupInferenceTest(params: {
   // session id as cache affinity, so this ephemeral id must stay under OpenAI's 64-character cap.
   const runId = `probe-setup-inference-${randomUUID()}`;
   const sessionId = runId;
-  const sessionFile = path.join(tempDir, "session.jsonl");
+  const sessionFile = `in-memory:${sessionId}`;
+  const sessionManager = SessionManager.inMemory(tempDir);
+  const effectiveAgentId = plan.routeAgentId ?? plan.agentId ?? "openclaw";
+  const sessionKey = `agent:${effectiveAgentId}:setup-inference:incognito-${runId}`;
   const timeoutMs = deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
   const started = Date.now();
   let successfulAuth: AgentExecutionAuthBinding | undefined;
@@ -494,8 +498,9 @@ export async function runSetupInferenceTest(params: {
       const runCli = deps.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent;
       result = (await runCli({
         sessionId,
-        sessionKey: `temp:setup-inference:${runId}`,
-        agentId: plan.routeAgentId ?? plan.agentId ?? "openclaw",
+        sessionKey,
+        sessionManager,
+        agentId: effectiveAgentId,
         trigger: "manual",
         sessionFile,
         workspaceDir: tempDir,
@@ -522,8 +527,9 @@ export async function runSetupInferenceTest(params: {
         deps.runEmbeddedAgent ?? (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
       result = (await runEmbedded({
         sessionId,
-        sessionKey: `temp:setup-inference:${runId}`,
-        agentId: plan.routeAgentId ?? plan.agentId ?? "openclaw",
+        sessionKey,
+        sessionManager,
+        agentId: effectiveAgentId,
         trigger: "manual",
         sessionFile,
         workspaceDir: tempDir,
@@ -547,6 +553,7 @@ export async function runSetupInferenceTest(params: {
         thinkLevel: "off",
         reasoningLevel: "off",
         verboseLevel: "off",
+        disableTrajectory: true,
         // The 32-token probe cap is sized for the "reply OK" verification
         // prompt only. Custom completions pass no explicit cap: the stream
         // layer then applies the resolved model's own required maxTokens

@@ -135,7 +135,9 @@ export function createBoardHandlers(
         invalidParams("board.get", validateBoardGetParams.errors, respond);
         return;
       }
-      const { snapshot, htmlDocuments } = store.getSnapshotWithHtmlDocuments(params.sessionKey);
+      const { snapshot, htmlViewMetadata } = store.getSnapshotWithHtmlViewMetadata(
+        params.sessionKey,
+      );
       let sandboxPort = context.getMcpAppSandboxPort?.();
       let sandboxOrigin: string | undefined;
       let sandboxOriginResolved = false;
@@ -143,8 +145,8 @@ export function createBoardHandlers(
         if (widget.grantState !== "none" && widget.grantState !== "granted") {
           continue;
         }
-        const document = htmlDocuments.get(widget.name);
-        if (!document || document.revision !== widget.revision) {
+        const viewMetadata = htmlViewMetadata.get(widget.name);
+        if (!viewMetadata || viewMetadata.revision !== widget.revision) {
           continue;
         }
         if (sandboxPort === undefined && context.ensureSandboxHostPort) {
@@ -159,7 +161,7 @@ export function createBoardHandlers(
           sessionKey: snapshot.sessionKey,
           name: widget.name,
           revision: widget.revision,
-          viewGeneration: document.viewGeneration,
+          viewGeneration: viewMetadata.viewGeneration,
         });
         widget.frameUrl = buildBoardWidgetFrameUrl({
           sessionKey: snapshot.sessionKey,
@@ -168,9 +170,9 @@ export function createBoardHandlers(
         });
         widget.viewTicket = ticket;
         widget.viewTicketTtlMs = BOARD_VIEW_TICKET_TTL_MS;
-        widget.viewGeneration = document.viewGeneration;
+        widget.viewGeneration = viewMetadata.viewGeneration;
         if (sandboxPort !== undefined) {
-          widget.sandboxUrl = buildBoardWidgetSandboxPath(document);
+          widget.sandboxUrl = buildBoardWidgetSandboxPath(viewMetadata);
           widget.sandboxPort = sandboxPort;
           if (!sandboxOriginResolved) {
             const configuredOrigin = context.getRuntimeConfig?.().mcp?.apps?.sandboxOrigin;

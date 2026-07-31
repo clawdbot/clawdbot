@@ -159,9 +159,7 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
               authProfileOverrideCompactionCount: undefined,
             }
           : {}),
-        fallbackNoticeSelectedModel: undefined,
-        fallbackNoticeActiveModel: undefined,
-        fallbackNoticeReason: undefined,
+        fallbackNotice: undefined,
         updatedAt: persistedEntry.updatedAt,
       };
     },

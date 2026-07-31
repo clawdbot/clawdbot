@@ -339,10 +339,12 @@ describe("TasksPage cancellation lifecycle", () => {
     expect(request).toHaveBeenCalledWith(
       "tasks.list",
       expect.objectContaining({ agentId: "writer", status: ["queued", "running"] }),
+      { signal: expect.any(AbortSignal) },
     );
     expect(request).toHaveBeenCalledWith(
       "tasks.list",
       expect.objectContaining({ agentId: "writer", limit: 200 }),
+      { signal: expect.any(AbortSignal) },
     );
   });
 
@@ -359,7 +361,11 @@ describe("TasksPage cancellation lifecycle", () => {
     const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
     page.context = createContext(source.gateway);
     document.body.append(page);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("tasks.list", expect.anything()));
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("tasks.list", expect.anything(), {
+        signal: expect.any(AbortSignal),
+      }),
+    );
 
     const cancelling = page.cancelTask("task-1");
     await vi.waitFor(() =>

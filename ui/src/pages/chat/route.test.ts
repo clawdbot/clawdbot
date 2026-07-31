@@ -83,6 +83,11 @@ describe("loadChatRoute", () => {
         search: "?draft=ship",
         hash: "",
       },
+      canonicalLocationSource: {
+        pathname: "/chat/wrong/not-the-name-12345678",
+        search: "?draft=ship",
+        hash: "",
+      },
     });
 
     await expect(
@@ -123,7 +128,7 @@ describe("loadChatRoute", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
-  it("queries the full supplied prefix so longer disambiguation links can resolve", async () => {
+  it("queries the first uuid block so longer disambiguation links can resolve", async () => {
     const target = row({ key: "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001" });
     const { context, list } = contextFor(result([target]));
     await expect(
@@ -140,8 +145,11 @@ describe("loadChatRoute", () => {
       face: "chat",
       shortId: "123456780a",
     });
-    expect(list).toHaveBeenCalledWith(expect.objectContaining({ search: "123456780a" }));
-    expect(list).not.toHaveBeenCalledWith(expect.objectContaining({ search: "12345678" }));
+    // Stored keys hold a hyphenated uuid, so "123456780a" is not a substring of anything
+    // the gateway searches. Only the first block survives as a needle; the full prefix is
+    // still applied per row, so the longer link resolves instead of 404ing.
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ search: "12345678" }));
+    expect(list).not.toHaveBeenCalledWith(expect.objectContaining({ search: "123456780a" }));
   });
 
   it("stops prefix pagination at the fixed bound and reports an incomplete result", async () => {
@@ -205,6 +213,60 @@ describe("loadChatRoute", () => {
       face: "chat",
     });
     expect(list).toHaveBeenCalledTimes(5);
+  });
+
+  it("stops paginating once the route navigation is aborted", async () => {
+    const { context, list } = contextFor(result([]));
+    const navigation = new AbortController();
+    list.mockImplementation(async (options) => {
+      navigation.abort();
+      return result([], {
+        hasMore: true,
+        nextOffset: (options?.offset ?? 0) + 20,
+      });
+    });
+
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/chat/main/deadbeef", search: "", hash: "" },
+        "chat",
+        navigation.signal,
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(list).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a shared session lookup alive while another navigation still owns it", async () => {
+    const matching = row({
+      key: "agent:main:dashboard:deadbeef-0000-4000-8000-000000000001",
+      displayName: "Shared lookup",
+    });
+    const { context, list } = contextFor(result([]));
+    let releaseLookup: ((value: SessionsListResult) => void) | undefined;
+    list.mockImplementation(
+      () =>
+        new Promise<SessionsListResult>((resolve) => {
+          releaseLookup = resolve;
+        }),
+    );
+    const staleNavigation = new AbortController();
+    const activeNavigation = new AbortController();
+    const location = { pathname: "/chat/main/deadbeef", search: "", hash: "" };
+    const stale = loadChatRoute(context, location, "chat", staleNavigation.signal);
+    const active = loadChatRoute(context, location, "chat", activeNavigation.signal);
+    await vi.waitFor(() => expect(list).toHaveBeenCalledOnce());
+
+    staleNavigation.abort();
+    releaseLookup?.(result([matching]));
+
+    await expect(stale).rejects.toMatchObject({ name: "AbortError" });
+    await expect(active).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: matching.key,
+      face: "chat",
+    });
+    expect(list).toHaveBeenCalledOnce();
   });
 
   it("stops after one unavailable session-list result", async () => {
@@ -354,6 +416,7 @@ describe("loadChatRoute", () => {
       draft: undefined,
       face: "chat",
       canonicalLocation: { pathname: "/chat/main", search: "", hash: "" },
+      canonicalLocationSource: { pathname: "/chat/main/workspace", search: "", hash: "" },
     });
     expect(list).not.toHaveBeenCalled();
   });
@@ -377,18 +440,76 @@ describe("loadChatRoute", () => {
         search: "?draft=ship",
         hash: "#pane",
       },
+      canonicalLocationSource: {
+        pathname: "/chat/research/workspace",
+        search: "?draft=ship",
+        hash: "#pane",
+      },
     });
     expect(list).not.toHaveBeenCalled();
   });
 
+  it("reclassifies a slug-shaped path after cold defaults reveal the main key", async () => {
+    type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
+    let listener: GatewayListener | null = null;
+    let snapshot = {
+      phase: "connecting",
+      client: null,
+      hello: null,
+    } as unknown as ApplicationContext["gateway"]["snapshot"];
+    const context = {
+      basePath: "",
+      gateway: {
+        get snapshot() {
+          return snapshot;
+        },
+        subscribe: (next: GatewayListener) => {
+          listener = next;
+          return () => undefined;
+        },
+      },
+      agents: { state: { agentsList: null } },
+    } as unknown as ApplicationContext;
+    const pending = loadChatRoute(
+      context,
+      { pathname: "/chat/research/workspace", search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    snapshot = {
+      phase: "connected",
+      client: {},
+      hello: { snapshot: { sessionDefaults: { mainKey: "workspace" } } },
+    } as unknown as ApplicationContext["gateway"]["snapshot"];
+    const connectedListener = listener as GatewayListener | null;
+    if (!connectedListener) {
+      throw new Error("expected gateway readiness subscription");
+    }
+    connectedListener(snapshot);
+
+    await expect(pending).resolves.toEqual({
+      kind: "session",
+      sessionKey: "agent:research:workspace",
+      draft: undefined,
+      face: "chat",
+      canonicalLocation: { pathname: "/chat/research", search: "", hash: "" },
+      canonicalLocationSource: {
+        pathname: "/chat/research/workspace",
+        search: "",
+        hash: "",
+      },
+    });
+  });
+
   it("canonicalizes a literal configured-main route after cold defaults arrive", async () => {
     for (const [pathname, targetSessionKey, mainKey, expectedCanonicalLocation] of [
-      [
-        "/chat/research/workspace",
-        "agent:research:workspace",
-        "workspace",
-        { pathname: "/chat/research", search: "", hash: "" },
-      ],
       [
         "/chat/research/team/primary",
         "agent:research:team:primary",

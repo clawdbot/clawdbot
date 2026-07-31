@@ -238,6 +238,7 @@ describe("policy doctor metadata", () => {
         "policy/policy-jsonc-missing",
         "policy/sandbox-browser-cdp-source-range-missing",
         "policy/secrets-unmanaged-provider",
+        "policy/tools-md-migration-required",
         "policy/tools-missing-owner",
         "policy/tools-missing-risk-level",
         "policy/tools-missing-sensitivity-token",

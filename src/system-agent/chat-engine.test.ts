@@ -12,6 +12,7 @@ import {
 import { hashSystemAgentOperation } from "../agents/tools/system-agent-tool.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type { runSetupMemoryImportStep } from "../wizard/setup.memory-import.js";
 import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
 import { classifySystemAgentApprovalText } from "./approval-intent.js";
 import {
@@ -42,9 +43,14 @@ const mocks = vi.hoisted(() => ({
   })),
   readSetupConfigFileSnapshot: vi.fn(),
   setupChannels: vi.fn(),
+  setupSkills: vi.fn(),
+  runSearchSetupFlow: vi.fn(),
+  runSetupMemoryImportStep: vi.fn(),
   writeWizardConfigFile: vi.fn(),
   runCollectedChannelOnboardingPostWriteHooks: vi.fn(async () => {}),
 }));
+
+type MemoryImportStepParams = Parameters<typeof runSetupMemoryImportStep>[0];
 
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
@@ -61,6 +67,20 @@ vi.mock("../commands/onboard-channels.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../commands/onboard-channels.js")>()),
   setupChannels: mocks.setupChannels,
   runCollectedChannelOnboardingPostWriteHooks: mocks.runCollectedChannelOnboardingPostWriteHooks,
+}));
+
+vi.mock("../commands/onboard-skills.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/onboard-skills.js")>()),
+  setupSkills: mocks.setupSkills,
+}));
+
+vi.mock("../flows/search-setup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/search-setup.js")>()),
+  runSearchSetupFlow: mocks.runSearchSetupFlow,
+}));
+
+vi.mock("../wizard/setup.memory-import.js", () => ({
+  runSetupMemoryImportStep: mocks.runSetupMemoryImportStep,
 }));
 
 vi.mock("../plugins/providers.js", async (importOriginal) => ({
@@ -266,6 +286,16 @@ class SystemAgentChatEngine extends RuntimeSystemAgentChatEngine {
   }
 }
 
+async function advanceGatewayWizardToToken(engine: SystemAgentChatEngine) {
+  const portStep = await engine.handle("configure gateway");
+  expect((await engine.handle("19001")).text).toContain("Gateway bind address");
+  expect((await engine.handle("2")).text).toContain("Gateway access protection");
+  expect((await engine.handle("1")).text).toContain("Tailscale exposure");
+  expect((await engine.handle("1")).text).toContain("provide the gateway token");
+  const tokenStep = await engine.handle("1");
+  return { portStep, tokenStep };
+}
+
 beforeAll(async () => {
   const fixture = await createSystemAgentVerifiedInferenceTestFixture(
     sharedVerifiedInferenceConfig,
@@ -285,6 +315,9 @@ afterEach(() => {
   );
   mocks.readSetupConfigFileSnapshot.mockReset();
   mocks.setupChannels.mockReset();
+  mocks.setupSkills.mockReset();
+  mocks.runSearchSetupFlow.mockReset();
+  mocks.runSetupMemoryImportStep.mockReset();
   mocks.writeWizardConfigFile.mockReset();
   mocks.runCollectedChannelOnboardingPostWriteHooks.mockReset();
   for (const dir of tempDirs.splice(0)) {
@@ -329,9 +362,15 @@ describe("SystemAgentChatEngine", () => {
     expect(runConfigSet).toHaveBeenCalledOnce();
   });
 
-  it("refuses a delegated channel-setup directive instead of starting the wizard", async () => {
+  it("refuses delegated hosted-setup directives instead of starting wizards", async () => {
     useTempStateDir();
     const runChannelSetupWizard = vi.fn(async () => {});
+    const runSkillsSetupWizard = vi.fn(async () => {});
+    const runSearchSetupWizard = vi.fn(async () => {});
+    const runMemoryImportWizard = vi.fn(async () => ({
+      status: "nothing-to-import" as const,
+      providers: [],
+    }));
     const engine = new SystemAgentChatEngine({
       operatorApprovalOnly: true,
       runAgentTurn: async () => ({
@@ -339,6 +378,9 @@ describe("SystemAgentChatEngine", () => {
         directive: { kind: "channel-setup", channel: "telegram" },
       }),
       runChannelSetupWizard,
+      runSkillsSetupWizard,
+      runSearchSetupWizard,
+      runMemoryImportWizard,
       deps: { loadOverview: fakeOverviewLoader() },
     });
 
@@ -346,7 +388,13 @@ describe("SystemAgentChatEngine", () => {
 
     expect(reply.text).toContain("human operator");
     expect(reply.action).toBe("none");
+    expect((await engine.handle("configure skills")).text).toContain("human operator");
+    expect((await engine.handle("configure search")).text).toContain("human operator");
+    expect((await engine.handle("import memory")).text).toContain("human operator");
     expect(runChannelSetupWizard).not.toHaveBeenCalled();
+    expect(runSkillsSetupWizard).not.toHaveBeenCalled();
+    expect(runSearchSetupWizard).not.toHaveBeenCalled();
+    expect(runMemoryImportWizard).not.toHaveBeenCalled();
   });
 
   it("applies a delegated host proposal without another model turn", async () => {
@@ -730,6 +778,764 @@ describe("SystemAgentChatEngine", () => {
     expect(wizardRuns).toEqual(["telegram", "token:123:abc", "mode:open"]);
   });
 
+  it("hosts the real skills setup flow and guards installs plus the final config write", async () => {
+    const baseConfig: OpenClawConfig = {
+      agents: { defaults: { workspace: "/tmp/skills-workspace" } },
+    };
+    const beforeEffects: Array<() => Promise<void>> = [];
+    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      hash: "skills-base-hash",
+      config: baseConfig,
+      sourceConfig: baseConfig,
+    });
+    mocks.setupSkills.mockImplementation(
+      async (
+        config: OpenClawConfig,
+        workspaceDir: string,
+        _runtime: unknown,
+        prompter: WizardPrompter,
+        options: { beforePersistentEffect?: () => Promise<void> },
+      ) => {
+        expect(workspaceDir).toBe("/tmp/skills-workspace");
+        expect(options.beforePersistentEffect).toBeTypeOf("function");
+        beforeEffects.push(options.beforePersistentEffect!);
+        await prompter.note("Eligible: 2\nMissing requirements: 1", "Skills status");
+        await options.beforePersistentEffect?.();
+        return { ...config, skills: { install: { nodeManager: "npm" } } };
+      },
+    );
+    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      appendAuditEntry,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("configure skills");
+
+    expect(reply.text).toContain("skills dependency setup is complete");
+    expect(beforeEffects).toHaveLength(1);
+    expect(mocks.writeWizardConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({ skills: { install: { nodeManager: "npm" } } }),
+      {
+        allowConfigSizeDrop: false,
+        baseHash: "skills-base-hash",
+        migrationBaseConfig: baseConfig,
+      },
+    );
+    expect(appendAuditEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: "skills.setup" }),
+    );
+  });
+
+  it.each(["cli", "gateway"] as const)(
+    "hosts copy-only memory import on the %s surface and audits imported providers",
+    async (surface) => {
+      const workspace = useTempStateDir();
+      const baseConfig: OpenClawConfig = {
+        ...sharedVerifiedInferenceConfig,
+        agents: {
+          ...sharedVerifiedInferenceConfig.agents,
+          defaults: { workspace },
+        },
+      };
+      const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+      mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+        exists: true,
+        valid: true,
+        hash: "memory-base-hash",
+        config: baseConfig,
+        sourceConfig: {},
+      });
+      mocks.runSetupMemoryImportStep.mockImplementation(async (params: MemoryImportStepParams) => {
+        expect(params.config).toEqual(baseConfig);
+        expect(params.beforeApply).toBeTypeOf("function");
+        await params.prompter.note("Codex: 2 memories", "Memories found");
+        await params.beforeApply?.();
+        return {
+          status: "completed",
+          providers: [{ providerId: "codex", label: "Codex", migrated: 2, skipped: 0 }],
+        };
+      });
+      const engine = new SystemAgentChatEngine({
+        surface,
+        runAgentTurn: async () => null,
+        planWithAssistant: async () => null,
+        appendAuditEntry,
+        deps: { loadOverview: fakeOverviewLoader() },
+      });
+
+      const reply = await engine.handle("import memory");
+
+      expect(reply.text).toContain("Imported 2 items from Codex.");
+      expect(appendAuditEntry).toHaveBeenCalledWith({
+        operation: "memory.import",
+        summary: "Imported memory via chat: Codex (2 items)",
+        details: {
+          totalItems: 2,
+          providers: [{ providerId: "codex", items: 2 }],
+        },
+      });
+      expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses memory import before provider discovery when the default workspace is missing", async () => {
+    const root = useTempStateDir();
+    const workspace = path.join(root, "missing-workspace");
+    const baseConfig: OpenClawConfig = {
+      ...sharedVerifiedInferenceConfig,
+      agents: {
+        ...sharedVerifiedInferenceConfig.agents,
+        defaults: { workspace },
+      },
+    };
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      hash: "memory-base-hash",
+      config: baseConfig,
+      sourceConfig: baseConfig,
+    });
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("memory import");
+
+    expect(reply.text).toContain("default agent workspace does not exist");
+    expect(reply.text).toContain("Finish onboarding first with `openclaw onboard`");
+    expect(mocks.runSetupMemoryImportStep).not.toHaveBeenCalled();
+    expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("rechecks inference authority immediately before a hosted memory copy", async () => {
+    const workspace = useTempStateDir();
+    const baseConfig: OpenClawConfig = {
+      ...sharedVerifiedInferenceConfig,
+      agents: {
+        ...sharedVerifiedInferenceConfig.agents,
+        defaults: { workspace },
+      },
+    };
+    const changedConfig: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-8" } } },
+    };
+    const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
+    let currentConfig = structuredClone(baseConfig);
+    const copyEffect = vi.fn();
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      hash: "memory-base-hash",
+      config: baseConfig,
+      sourceConfig: baseConfig,
+    });
+    mocks.runSetupMemoryImportStep.mockImplementation(async (params: MemoryImportStepParams) => {
+      const confirmed = await params.prompter.confirm({
+        message: "Import detected memory?",
+        initialValue: true,
+      });
+      if (!confirmed) {
+        return { status: "skipped", providers: [] };
+      }
+      // Route changes mid-wizard, after the turn gate: only the copy-boundary
+      // recheck can catch it.
+      currentConfig = changedConfig;
+      await params.beforeApply?.();
+      copyEffect();
+      return {
+        status: "completed",
+        providers: [{ providerId: "codex", label: "Codex", migrated: 1, skipped: 0 }],
+      };
+    });
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      verifiedInference,
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: {
+        loadOverview: fakeOverviewLoader(),
+        readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
+      },
+    });
+
+    const confirm = await engine.handle("import memory");
+    expect(confirm.text).toContain("Import detected memory?");
+
+    const stopped = await engine.handle("yes");
+
+    expect(stopped.text).toContain("Memory import setup stopped");
+    expect(copyEffect).not.toHaveBeenCalled();
+  });
+
+  it("stops a hosted memory copy when config drifts after planning", async () => {
+    const workspace = useTempStateDir();
+    const baseConfig: OpenClawConfig = {
+      ...sharedVerifiedInferenceConfig,
+      agents: {
+        ...sharedVerifiedInferenceConfig.agents,
+        defaults: { workspace },
+      },
+    };
+    let currentHash = "memory-base-hash";
+    const copyEffect = vi.fn();
+    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    mocks.readSetupConfigFileSnapshot.mockImplementation(async () => ({
+      exists: true,
+      valid: true,
+      hash: currentHash,
+      config: baseConfig,
+      sourceConfig: baseConfig,
+    }));
+    mocks.runSetupMemoryImportStep.mockImplementation(async (params: MemoryImportStepParams) => {
+      const confirmed = await params.prompter.confirm({
+        message: "Import detected memory?",
+        initialValue: true,
+      });
+      if (!confirmed) {
+        return { status: "skipped", providers: [] };
+      }
+      params.onProviderOutcome?.({
+        providerId: "claude",
+        label: "Claude",
+        failure: "copy failed after partial progress",
+        copiesIndeterminate: true,
+      });
+      currentHash = "changed-during-wizard";
+      await params.beforeApply?.();
+      copyEffect();
+      return {
+        status: "completed",
+        providers: [{ providerId: "codex", label: "Codex", migrated: 1, skipped: 0 }],
+      };
+    });
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      appendAuditEntry,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const confirm = await engine.handle("import memory");
+    expect(confirm.text).toContain("Import detected memory?");
+
+    const stopped = await engine.handle("yes");
+
+    expect(stopped.text).toContain("Memory import setup stopped");
+    expect(stopped.text).toContain(
+      "configuration changed during memory import; nothing further was copied",
+    );
+    expect(copyEffect).not.toHaveBeenCalled();
+    expect(appendAuditEntry).toHaveBeenCalledWith({
+      operation: "memory.import",
+      summary: "Memory import failed partway via chat: Claude (copy count indeterminate)",
+      details: {
+        confirmedItems: 0,
+        copiesIndeterminate: true,
+        providers: [{ providerId: "claude", copiesIndeterminate: true }],
+      },
+    });
+  });
+
+  it("reports nothing to import without writing config or audit", async () => {
+    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      appendAuditEntry,
+      runMemoryImportWizard: async () => ({ status: "nothing-to-import", providers: [] }),
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("import memories");
+
+    expect(reply.text).toContain("Nothing to import");
+    expect(reply.text).not.toContain("Done");
+    expect(appendAuditEntry).not.toHaveBeenCalled();
+    expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("reports all-provider failure without a false success", async () => {
+    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      appendAuditEntry,
+      runMemoryImportWizard: async () => ({
+        status: "completed",
+        providers: [
+          {
+            providerId: "codex",
+            label: "Codex",
+            migrated: 0,
+            skipped: 0,
+            failure: "copy failed",
+          },
+          {
+            providerId: "claude",
+            label: "Claude",
+            migrated: 0,
+            skipped: 0,
+            failure: "copy failed",
+          },
+        ],
+      }),
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("memory import");
+
+    expect(reply.text).toContain("Memory import did not complete");
+    expect(reply.text).toContain("Failed providers: Codex, Claude");
+    expect(reply.text).not.toContain("Done");
+    expect(appendAuditEntry).not.toHaveBeenCalled();
+  });
+
+  it("audits an apply failure with indeterminate partial-copy progress", async () => {
+    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      appendAuditEntry,
+      runMemoryImportWizard: async () => ({
+        status: "completed",
+        providers: [
+          {
+            providerId: "codex",
+            label: "Codex",
+            failure: "copy failed after writing one file",
+            copiesIndeterminate: true,
+          },
+        ],
+      }),
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("memory import");
+
+    expect(reply.text).toContain("Memory import failed partway");
+    expect(reply.text).toContain("Some files may have been copied before the failure");
+    expect(reply.text).not.toContain("No files were copied");
+    expect(appendAuditEntry).toHaveBeenCalledWith({
+      operation: "memory.import",
+      summary: "Memory import failed partway via chat: Codex (copy count indeterminate)",
+      details: {
+        confirmedItems: 0,
+        copiesIndeterminate: true,
+        providers: [{ providerId: "codex", copiesIndeterminate: true }],
+      },
+    });
+  });
+
+  it("keeps a successful memory-import result when audit persistence fails", async () => {
+    const appendAuditEntry = vi.fn(async () => {
+      throw new Error("audit store is read-only");
+    });
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      appendAuditEntry,
+      runMemoryImportWizard: async () => ({
+        status: "completed",
+        providers: [{ providerId: "codex", label: "Codex", migrated: 1, skipped: 0 }],
+      }),
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("import memory");
+
+    expect(reply.text).toContain("Imported 1 item from Codex.");
+    expect(reply.text).not.toContain("audit store is read-only");
+  });
+
+  it("hosts search setup as question cards and keeps gateway credentials out of model history", async () => {
+    const baseConfig: OpenClawConfig = {};
+    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    const beforePersistentEffects: Array<() => Promise<void>> = [];
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      hash: "search-base-hash",
+      config: baseConfig,
+      sourceConfig: baseConfig,
+    });
+    mocks.runSearchSetupFlow.mockImplementation(
+      async (
+        config: OpenClawConfig,
+        _runtime: unknown,
+        prompter: WizardPrompter,
+        options: {
+          preserveDisabledSearchState?: boolean;
+          beforePersistentEffect?: () => Promise<void>;
+        },
+      ) => {
+        expect(options.preserveDisabledSearchState).toBe(false);
+        beforePersistentEffects.push(options.beforePersistentEffect!);
+        const provider = await prompter.select({
+          message: "Search provider",
+          options: [
+            { value: "brave", label: "Brave" },
+            { value: "grok", label: "Grok" },
+          ],
+          initialValue: "brave",
+        });
+        const key = await prompter.text({ message: "Provider API key", sensitive: true });
+        expect(key).toBe("search-secret-value");
+        await options.beforePersistentEffect?.();
+        return {
+          outcome: "completed",
+          config: {
+            ...config,
+            tools: { web: { search: { enabled: true, provider } } },
+          } as OpenClawConfig,
+        };
+      },
+    );
+    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      appendAuditEntry,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const providerStep = await engine.handle("configure search");
+    expect(providerStep.question).toEqual({
+      id: expect.any(String),
+      header: "Choose one",
+      question: "Search provider",
+      options: [{ label: "Brave", recommended: true }, { label: "Grok" }],
+    });
+
+    const secretStep = await engine.handle("Brave");
+    expect(secretStep.text).toContain("Provider API key");
+    expect(secretStep.sensitive).toBe(true);
+    expect(secretStep.question).toBeUndefined();
+
+    const done = await engine.handle("search-secret-value");
+    expect(done.text).toContain("web search setup is complete");
+    expect(beforePersistentEffects).toHaveLength(1);
+    expect(appendAuditEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: "search.setup" }),
+    );
+    expect(JSON.stringify(engine.historySince(0))).not.toContain("search-secret-value");
+    expect(JSON.stringify(engine.historySince(0))).toContain("<redacted secret>");
+  });
+
+  it("hosts full Gateway setup with a lockout warning, audited config write, and no restart", async () => {
+    const baseConfig: OpenClawConfig = {
+      ...structuredClone(sharedVerifiedInferenceConfig),
+      gateway: { mode: "local" },
+    };
+    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      hash: "gateway-base-hash",
+      config: baseConfig,
+      sourceConfig: baseConfig,
+    });
+    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      appendAuditEntry,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const { portStep, tokenStep } = await advanceGatewayWizardToToken(engine);
+    expect(portStep.text).toContain(
+      "changing the Gateway port, bind address, or auth credential requires a Gateway restart",
+    );
+    expect(portStep.text).toContain(
+      "sign in to the Control UI again with the new address or credential",
+    );
+    expect(portStep.text).toContain("Gateway port");
+
+    expect(tokenStep.text).toContain("Gateway token");
+    expect(tokenStep.sensitive).toBe(true);
+
+    const done = await engine.handle("gateway-secret-value");
+
+    expect(done.text).toContain("Done — gateway settings saved.");
+    expect(done.text).toContain("Restart the Gateway to apply them (`restart gateway`).");
+    expect(done.text).not.toContain("restarted");
+    expect(mocks.writeWizardConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gateway: expect.objectContaining({
+          port: 19001,
+          bind: "lan",
+          auth: expect.objectContaining({ mode: "token", token: "gateway-secret-value" }),
+          tailscale: expect.objectContaining({ mode: "off" }),
+        }),
+      }),
+      {
+        allowConfigSizeDrop: false,
+        baseHash: "gateway-base-hash",
+        migrationBaseConfig: baseConfig,
+        afterWrite: {
+          mode: "none",
+          reason: "Gateway setup defers runtime apply until explicit restart",
+        },
+      },
+    );
+    expect(appendAuditEntry).toHaveBeenCalledWith({
+      operation: "gateway.setup",
+      summary: "Configured Gateway via chat setup",
+      details: { capability: "gateway" },
+    });
+    expect(JSON.stringify(engine.historySince(0))).not.toContain("gateway-secret-value");
+    expect(JSON.stringify(engine.historySince(0))).toContain("<redacted secret>");
+  });
+
+  it("rechecks inference authority immediately before a hosted Gateway write", async () => {
+    useTempStateDir();
+    const baseConfig: OpenClawConfig = {
+      ...structuredClone(sharedVerifiedInferenceConfig),
+      gateway: { mode: "local" },
+    };
+    const currentConfig = structuredClone(baseConfig);
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      hash: "gateway-base-hash",
+      config: baseConfig,
+      sourceConfig: baseConfig,
+    });
+    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
+    const changedConfig: OpenClawConfig = {
+      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            apiKey: "changed-test-key",
+            auth: "api-key",
+            models: [],
+          },
+        },
+      },
+    };
+    // The route flips between the final turn's entry gate and the
+    // persistent-apply recheck; only the apply boundary can catch it.
+    let baseReadsRemaining = Number.POSITIVE_INFINITY;
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: {
+        loadOverview: fakeOverviewLoader(),
+        readConfigFileSnapshot: vi.fn(async () => {
+          const config = baseReadsRemaining > 0 ? currentConfig : changedConfig;
+          baseReadsRemaining -= 1;
+          return configSnapshot(config);
+        }) as never,
+      },
+    });
+
+    const { tokenStep } = await advanceGatewayWizardToToken(engine);
+    expect(tokenStep.sensitive).toBe(true);
+    baseReadsRemaining = 1;
+
+    const stopped = await engine.handle("gateway-secret-value");
+
+    expect(stopped.text).toContain("Gateway setup stopped");
+    expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("keeps remote Gateway mode guidance-only", async () => {
+    const baseConfig: OpenClawConfig = { gateway: { mode: "remote" } };
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      hash: "remote-gateway-hash",
+      config: baseConfig,
+      sourceConfig: baseConfig,
+    });
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("configure gateway");
+
+    expect(reply.text).toContain("manages only a local Gateway");
+    expect(reply.text).toContain("`openclaw onboard` for fresh setup");
+    expect(reply.text).toContain("`openclaw configure` for the mode question");
+    expect(reply.text).not.toContain("Gateway port");
+    expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("hands CLI Gateway credentials to the masked terminal wizard", async () => {
+    const engine = new SystemAgentChatEngine({
+      surface: "cli",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runGatewaySetupWizard: async (prompter) => {
+        await prompter.text({ message: "Gateway token", sensitive: true });
+      },
+    });
+
+    const stopped = await engine.handle("configure gateway");
+    expect(stopped.text).toContain("Sensitive input is not accepted");
+    expect(stopped.text).toContain("open gateway wizard");
+    expect(stopped.text).toContain("openclaw configure --section gateway");
+    expect(stopped.sensitive).toBeUndefined();
+
+    const handoff = await engine.handle("open gateway wizard");
+    expect(handoff.action).toBe("open-setup");
+    expect(handoff.handoff).toEqual({ kind: "open-setup", target: "gateway" });
+  });
+
+  it("reports a failed hosted search-provider install without writing or auditing", async () => {
+    const baseConfig: OpenClawConfig = {};
+    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      hash: "search-base-hash",
+      config: baseConfig,
+      sourceConfig: baseConfig,
+    });
+    mocks.runSearchSetupFlow.mockResolvedValue({
+      outcome: "install-failed",
+      config: baseConfig,
+      providerId: "brave",
+      reason: "failed",
+    });
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      appendAuditEntry,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("configure search");
+
+    expect(reply.text).toContain(
+      "Web search setup stopped: Error: web search provider brave installation failed",
+    );
+    expect(reply.text).not.toContain("Done — web search setup is complete");
+    expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+    expect(appendAuditEntry).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { outcome: "kept-current" as const, config: {}, reason: "user-skipped" as const },
+    {
+      outcome: "kept-current" as const,
+      config: {},
+      reason: "provider-install-skipped" as const,
+      providerId: "brave",
+    },
+  ])("reports $reason as an unchanged setup, not a failure", async (result) => {
+    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      hash: "search-base-hash",
+      config: result.config,
+      sourceConfig: result.config,
+    });
+    mocks.runSearchSetupFlow.mockResolvedValue(result);
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      appendAuditEntry,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("configure search");
+
+    expect(reply.text).toContain("kept the current configuration. Nothing was changed");
+    expect(reply.text).not.toContain("setup stopped");
+    expect(reply.text).not.toContain("Done — web search setup is complete");
+    expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+    expect(appendAuditEntry).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      outcome: "kept-current" as const,
+      config: {},
+      reason: "no-providers" as const,
+      message: "no web search providers are available under the current plugin policy",
+    },
+    {
+      outcome: "kept-current" as const,
+      config: {},
+      reason: "provider-unavailable" as const,
+      providerId: "brave",
+      message: "the selected web search provider is no longer available",
+    },
+  ])("reports $reason as a stopped setup", async ({ message, ...result }) => {
+    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      hash: "search-base-hash",
+      config: result.config,
+      sourceConfig: result.config,
+    });
+    mocks.runSearchSetupFlow.mockResolvedValue(result);
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      appendAuditEntry,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("configure search");
+
+    expect(reply.text).toContain(`Web search setup stopped: Error: ${message}`);
+    expect(reply.text).not.toContain("Done — web search setup is complete");
+    expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+    expect(appendAuditEntry).not.toHaveBeenCalled();
+  });
+
+  it("hands CLI search credentials to the masked terminal wizard", async () => {
+    const engine = new SystemAgentChatEngine({
+      surface: "cli",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runSearchSetupWizard: async (prompter) => {
+        await prompter.text({ message: "Provider API key", sensitive: true });
+      },
+    });
+
+    const stopped = await engine.handle("configure search");
+    expect(stopped.text).toContain("Sensitive input is not accepted");
+    expect(stopped.text).toContain("open search wizard");
+    expect(stopped.sensitive).toBeUndefined();
+
+    const handoff = await engine.handle("open search wizard");
+    expect(handoff.action).toBe("open-setup");
+    expect(handoff.handoff).toEqual({ kind: "open-setup", target: "search" });
+  });
+
   it("reports hosted channel setup success when audit persistence fails", async () => {
     const appendAuditEntry = vi.fn(async () => {
       throw new Error("audit store is read-only");
@@ -898,7 +1704,7 @@ describe("SystemAgentChatEngine", () => {
 
     const stopped = await engine.handle("123:abc");
 
-    expect(stopped.text).toContain("Channel setup stopped");
+    expect(stopped.text).toContain("Telegram setup stopped");
     expect(stopped.text).toContain("configuration changed during channel setup");
     expect(mocks.writeWizardConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -968,7 +1774,7 @@ describe("SystemAgentChatEngine", () => {
     expect(tokenStep.text).toContain("Bot token");
     const stopped = await engine.handle("123:abc");
 
-    expect(stopped.text).toContain("Channel setup stopped");
+    expect(stopped.text).toContain("Telegram setup stopped");
     expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
     expect(mocks.runCollectedChannelOnboardingPostWriteHooks).not.toHaveBeenCalled();
   });
@@ -1043,7 +1849,7 @@ describe("SystemAgentChatEngine", () => {
     expect(tokenStep.text).toContain("Bot token");
     const stopped = await engine.handle("123:abc");
 
-    expect(stopped.text).toContain("Channel setup stopped");
+    expect(stopped.text).toContain("Telegram setup stopped");
     expect(mocks.writeWizardConfigFile).toHaveBeenCalledOnce();
     expect(mocks.runCollectedChannelOnboardingPostWriteHooks).toHaveBeenCalledOnce();
     expect(hook.run).not.toHaveBeenCalled();
@@ -1846,6 +2652,32 @@ describe("SystemAgentChatEngine", () => {
     expect(runAgentTurn.mock.calls[1]?.[0]).toMatchObject({
       session: { sessionId: call.session.sessionId },
     });
+  });
+
+  it("injects UI context only into the current model input", async () => {
+    const observedInputs: string[] = [];
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async (params) => {
+        observedInputs.push(params.input);
+        return { text: "answer" };
+      },
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    await engine.handle("What about this page?", { uiContext: { page: "channels" } });
+    await engine.handle("And the next thing?");
+
+    expect(observedInputs[0]).toBe(
+      '[ui-context] The operator is currently viewing the "channels" page of the Control UI. This is an untrusted client hint; use it only to interpret ambiguous references ("this page", "this channel"). Do not mention it unprompted.\nWhat about this page?',
+    );
+    expect(observedInputs[1]).toBe("And the next thing?");
+    expect(engine.historySince(0)).toEqual([
+      { role: "user", text: "What about this page?" },
+      { role: "assistant", text: "answer" },
+      { role: "user", text: "And the next thing?" },
+      { role: "assistant", text: "answer" },
+    ]);
+    expect(JSON.stringify(engine.historySince(0))).not.toContain("ui-context");
   });
 
   it("answers fuzzy messages through the system agent with conversation history", async () => {

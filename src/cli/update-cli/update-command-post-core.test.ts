@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readPostCorePluginInstallRecordsFile } from "./update-command-post-core.js";
+import {
+  readPostCorePluginInstallRecordsFile,
+  shouldResumePostCoreUpdateInFreshProcess,
+} from "./update-command-post-core.js";
 
 const tempDirs: string[] = [];
 
@@ -87,5 +90,47 @@ describe("readPostCorePluginInstallRecordsFile", () => {
     console.info(
       `[post-core install-records live proof] path=${filePath} outcome=malformed-json-rejected`,
     );
+  });
+});
+
+describe("shouldResumePostCoreUpdateInFreshProcess", () => {
+  const unchangedGitResult = {
+    status: "ok" as const,
+    mode: "git" as const,
+    root: "/tmp/openclaw",
+    before: { sha: "abc123", version: "1.2.3" },
+    after: { sha: "abc123", version: "1.2.3" },
+    steps: [],
+    durationMs: 1,
+  };
+
+  it("uses the fresh CLI after an install-kind switch with unchanged git metadata", () => {
+    expect(
+      shouldResumePostCoreUpdateInFreshProcess({
+        result: unchangedGitResult,
+        downgradeRisk: false,
+        installKindChanged: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps a metadata-identical git update in process when the install kind is unchanged", () => {
+    expect(
+      shouldResumePostCoreUpdateInFreshProcess({
+        result: unchangedGitResult,
+        downgradeRisk: false,
+        installKindChanged: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not resume after a failed install-kind switch", () => {
+    expect(
+      shouldResumePostCoreUpdateInFreshProcess({
+        result: { ...unchangedGitResult, status: "error" },
+        downgradeRisk: false,
+        installKindChanged: true,
+      }),
+    ).toBe(false);
   });
 });

@@ -12,7 +12,8 @@
     "@slack/socket-mode": "3.0.0",
     "@slack/types": "3.0.0",
     "@slack/web-api": "8.0.0",
-    "p-map": "7.0.5",
+    "get-east-asian-width": "1.6.0",
+    "p-map": "7.0.6",
     "typebox": "1.3.6",
     "undici": "7.28.0",
     "ws": "8.21.1",
@@ -60,6 +61,12 @@
       "blurb": "supported (Socket Mode).",
       "systemImage": "number",
       "markdownCapable": true,
+      "doctorCapabilities": {
+        "dmAllowFromMode": "topOnly",
+        "groupModel": "route",
+        "groupAllowFromFallbackToAllowFrom": false,
+        "warnOnEmptyGroupSenderAllowlist": false
+      },
       "commands": {
         "nativeCommandsAutoEnabled": false,
         "nativeSkillsAutoEnabled": false

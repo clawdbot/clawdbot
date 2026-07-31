@@ -47,6 +47,7 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-wal.ts",
     "src/state/openclaw-agent-db-maintenance.ts",
     "src/state/openclaw-agent-db-registry.ts",
+    "src/state/openclaw-agent-db-registry-listing.ts",
     "src/state/openclaw-agent-db-schema-helpers.ts",
     "src/state/openclaw-agent-db-schema.ts",
     "src/state/openclaw-agent-db-session-nodes-migration.ts",
@@ -76,6 +77,9 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-agent-db-readonly.ts",
     "src/state/openclaw-state-db-readonly.ts",
   ],
+  "cold-process read-only relay lookup avoids the shared state writer lifecycle": [
+    "src/agents/harness/native-hook-relay-client-store.ts",
+  ],
   "read-only schema preflight and integrity verification access": [
     "src/state/openclaw-database-preflight.ts",
     "src/state/openclaw-database-verify.worker.ts",
@@ -88,6 +92,7 @@ const rawSqliteAllowPathGroups = {
     "src/commands/status.scan.shared.ts",
   ],
   "doctor SQLite maintenance and legacy state migration": [
+    "src/commands/doctor-agent-memory-schema.ts",
     "src/commands/doctor/cron/legacy-run-log-migration.ts",
     "src/commands/doctor/cron/migration-ledger.ts",
     "src/commands/doctor-sqlite-compact.ts",
@@ -105,6 +110,10 @@ const rawSqliteAllowPathGroups = {
     "src/infra/state-migrations.media-persistence.ts",
   ],
   "shared database stores with direct DatabaseSync access": ["src/proxy-capture/store.sqlite.ts"],
+  "session entry cache connection-local validity counters": [
+    "src/config/sessions/session-accessor.sqlite-entry-cache.ts",
+  ],
+  "device pairing cache connection-local validity counters": ["src/infra/device-pairing-store.ts"],
   "Kysely-backed stores that own a DatabaseSync boundary": [
     "src/acp/event-ledger.ts",
     "src/state/user-profiles.ts",

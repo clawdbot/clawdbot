@@ -89,6 +89,7 @@ export async function applyClawUpdatePlan(
   plan: ClawUpdatePlan,
   params: {
     targetManifest: ClawManifest;
+    targetClawMarkdownBody?: Buffer;
     targetOpenClawProfile?: ClawOpenClawProfile;
     targetSource: ClawSourceIdentity;
   },
@@ -126,6 +127,7 @@ export async function applyClawUpdatePlan(
   const fresh = await rebuildPlan({
     agentId: plan.agentId,
     targetManifest: params.targetManifest,
+    targetClawMarkdownBody: params.targetClawMarkdownBody,
     targetOpenClawProfile: params.targetOpenClawProfile,
     targetSource: params.targetSource,
     config: options.config,
@@ -178,6 +180,7 @@ export async function applyClawUpdatePlan(
   };
   const targetAddPlan = await buildAddPlan({
     manifest: params.targetManifest,
+    clawMarkdownBody: params.targetClawMarkdownBody,
     openClawProfile: params.targetOpenClawProfile,
     source: params.targetSource,
     context: {

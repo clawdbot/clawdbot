@@ -132,6 +132,11 @@ export function createChannelProgressDraftCompositor(params: {
   tryNativeUpdate?: (text: string) => Promise<boolean> | boolean;
   /** Publish when structured lines change even if the rendered text does not. */
   updateOnLineChange?: boolean;
+  /**
+   * Set when the channel renders `update`'s structured `lines` itself, so the
+   * composed text carries only the status block (label, headline, checklist).
+   */
+  rendersRollingLinesNatively?: boolean;
   formatLine?: (line: string) => string;
   isEmptyLine?: (line: ChannelProgressDraftCompositorLine | undefined) => boolean;
   shouldStartNow?: (line: ChannelProgressDraftCompositorLine | undefined) => boolean;
@@ -155,9 +160,9 @@ export function createChannelProgressDraftCompositor(params: {
       .map((line) => line.replace(/^_(.*)_$/su, "$1"))
       .join("\n");
   const previewToolProgressEnabled =
-    params.active && resolveChannelStreamingPreviewToolProgress(params.entry);
+    params.active && resolveChannelStreamingPreviewToolProgress(params.entry, true, params.mode);
   const commentaryProgressEnabled =
-    params.active && resolveChannelStreamingProgressCommentary(params.entry);
+    params.active && resolveChannelStreamingProgressCommentary(params.entry, false, params.mode);
   const thinkingProgressEnabled =
     params.active && (params.reasoningGate ?? previewToolProgressEnabled);
   const suppressDefaultToolProgressMessages =
@@ -172,6 +177,11 @@ export function createChannelProgressDraftCompositor(params: {
   let lastRenderedLines = lines;
   let reasoningRawText = "";
   let lastReasoningLine: string | undefined;
+  // Id-less commentary streams as cumulative snapshots ("Checking" → "Checking
+  // the workspace"). Remember the open line so successive snapshots replace in
+  // place instead of appending one line per growing prefix.
+  let lastIdLessCommentaryId: string | undefined;
+  let lastIdLessCommentaryBare = "";
   // Model preambles and narration share the status slot while tool lines keep
   // accumulating underneath for turns where neither source is available.
   let preambleText = "";
@@ -210,15 +220,21 @@ export function createChannelProgressDraftCompositor(params: {
       : effectiveNarration;
   };
 
-  const formatDraftText = (draftLines = lines, options?: { formatted?: boolean }) =>
-    formatChannelProgressDraftText({
+  const formatDraftText = (draftLines = lines, options?: { formatted?: boolean }) => {
+    const narration = resolveStatusText() || undefined;
+    // Channels that render the rolling lines themselves (from `update`'s
+    // `lines`) would print them twice if they also appeared in this text.
+    const linesRenderedByChannel =
+      params.rendersRollingLinesNatively === true && Boolean(narration || planSteps?.length);
+    return formatChannelProgressDraftText({
       entry: params.entry,
-      lines: draftLines,
+      lines: linesRenderedByChannel ? [] : draftLines,
       seed: params.seed,
       formatLine: options?.formatted === false ? undefined : params.formatLine,
-      narration: resolveStatusText() || undefined,
+      narration,
       plan: planSteps,
     });
+  };
 
   const getSnapshot = (): ChannelProgressDraftCompositorSnapshot => {
     const statusHeadline = resolveStatusText();
@@ -238,6 +254,8 @@ export function createChannelProgressDraftCompositor(params: {
     lastRenderedLines = lines;
     reasoningRawText = "";
     lastReasoningLine = undefined;
+    lastIdLessCommentaryId = undefined;
+    lastIdLessCommentaryBare = "";
     preambleText = "";
     preambleItemId = undefined;
     preambleAt = undefined;
@@ -293,6 +311,35 @@ export function createChannelProgressDraftCompositor(params: {
     setTimeoutFn,
     clearTimeoutFn,
   });
+
+  /**
+   * Commentary line identity. An explicit item id owns its line. Without one,
+   * providers stream cumulative snapshots ("Checking" → "Checking the
+   * workspace"), so a snapshot that continues the open line reuses its id and
+   * updates in place; anything else starts a new line.
+   */
+  const resolveCommentaryLineId = (commentary: {
+    itemId?: string;
+    normalized: string;
+    bareNormalized: string;
+  }): string => {
+    if (commentary.itemId) {
+      return `commentary:${commentary.itemId}`;
+    }
+    if (!commentary.normalized) {
+      // Sanitized to nothing (directive-only / NO_REPLY): no line to address, so
+      // it cannot retract the open one. Only an explicit itemId clears a line.
+      return "";
+    }
+    const continuesOpenLine =
+      Boolean(lastIdLessCommentaryBare) &&
+      (commentary.bareNormalized.startsWith(lastIdLessCommentaryBare) ||
+        lastIdLessCommentaryBare.startsWith(commentary.bareNormalized));
+    if (continuesOpenLine && lastIdLessCommentaryId) {
+      return lastIdLessCommentaryId;
+    }
+    return `commentary:${commentary.normalized}`;
+  };
 
   const clearLine = async (lineId: string) => {
     const nextLines = removeChannelProgressDraftLine(lines, lineId);
@@ -646,7 +693,10 @@ export function createChannelProgressDraftCompositor(params: {
         return false;
       }
       const normalized = normalizeCommentaryProgressText(text ?? "");
-      const lineId = itemId ? `commentary:${itemId}` : normalized ? `commentary:${normalized}` : "";
+      // Compare bare (de-italicized) text so cumulative snapshots still match
+      // after normalizeCommentaryProgressText wraps each line in _…_.
+      const bareNormalized = stripLaneItalics(normalized);
+      const lineId = resolveCommentaryLineId({ itemId, normalized, bareNormalized });
       if (!normalized) {
         // Empty commentary with an item id means the producer retracted that
         // item; remove its draft line if it was already rendered.
@@ -659,7 +709,7 @@ export function createChannelProgressDraftCompositor(params: {
         id: lineId,
         // The lane marker (💬, matching 🧠 thinking / 🛠️ tools) is a per-channel
         // presentation choice supplied via commentaryLinePrefix; default none.
-        text: `${commentaryLinePrefix}${commentaryItalics ? normalized : stripLaneItalics(normalized)}`,
+        text: `${commentaryLinePrefix}${commentaryItalics ? normalized : bareNormalized}`,
         kind: "item",
         label: "Commentary",
         prefix: false,
@@ -667,6 +717,10 @@ export function createChannelProgressDraftCompositor(params: {
       lines = mergeChannelProgressDraftLine(lines, line, {
         maxLines: resolveChannelProgressDraftMaxLines(params.entry),
       });
+      if (!itemId) {
+        lastIdLessCommentaryId = lineId;
+        lastIdLessCommentaryBare = bareNormalized;
+      }
       const alreadyStarted = gate.hasStarted;
       await gate.startNow();
       if (!gate.hasStarted) {

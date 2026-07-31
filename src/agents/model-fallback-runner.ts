@@ -222,6 +222,14 @@ async function runWithModelFallbackInternal<T>(
 
   const hasFallbackCandidates = candidates.length > 1;
   const requestedCandidate = candidates.find((candidate) => candidate.routeOrigin === "requested");
+  const runAttribution = { sessionId: params.sessionId, lane: params.lane };
+  const runObs = {
+    runId: params.runId,
+    ...runAttribution,
+    requestedProvider: params.provider,
+    requestedModel: params.model,
+    fallbackConfigured: hasFallbackCandidates,
+  };
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates.at(i);
@@ -231,6 +239,7 @@ async function runWithModelFallbackInternal<T>(
     if (tlsFailedProviders.has(candidate.provider)) {
       continue;
     }
+    const candidateRef = { provider: candidate.provider, model: candidate.model };
     const nextCandidateIndex = resolveNextFallbackCandidateIndex({
       candidates,
       currentIndex: i,
@@ -250,6 +259,30 @@ async function runWithModelFallbackInternal<T>(
     const requestedModel = requestedCandidate
       ? sameModelCandidate(candidate, requestedCandidate)
       : false;
+    const attemptContext = { attempt: i + 1, total: candidates.length };
+    const candObs = {
+      ...runObs,
+      candidate,
+      ...attemptContext,
+      nextCandidate,
+      isPrimary,
+      requestedModelMatched: requestedModel,
+    };
+    const observeCandidateDecision = (
+      decision: ModelFallbackDecisionParams["decision"],
+      extra: Partial<ModelFallbackDecisionParams> = {},
+    ) => observeDecision({ decision, ...candObs, ...extra });
+    const pushAttempt = (
+      error: string,
+      reason: FailoverReason,
+      auth?: Pick<FallbackAttempt, "authMode">,
+    ) =>
+      attempts.push({
+        ...candidateRef,
+        error,
+        reason,
+        ...auth,
+      });
 
     // Skip-known-bad cache: when a previous turn in this session failed this
     // candidate with `auth` / `auth_permanent` (e.g. missing or expired
@@ -260,43 +293,23 @@ async function runWithModelFallbackInternal<T>(
     if (!isPrimary && params.sessionId) {
       const skipped = isFallbackCandidateSkipped({
         sessionId: params.sessionId,
-        provider: candidate.provider,
-        model: candidate.model,
+        ...candidateRef,
       });
       if (skipped) {
         const skipReason =
           getFallbackCandidateSkipReason({
             sessionId: params.sessionId,
-            provider: candidate.provider,
-            model: candidate.model,
+            ...candidateRef,
           }) ?? "auth";
         const reauthCommand = buildProviderReauthCommand(candidate.provider);
         const reauthHint = reauthCommand
           ? `run \`${reauthCommand}\` to re-authenticate`
           : "re-authenticate that provider";
         const error = `Skipping ${candidate.provider}/${candidate.model}: recent ${skipReason} failure in this session (${reauthHint})`;
-        attempts.push({
-          provider: candidate.provider,
-          model: candidate.model,
-          error,
-          reason: skipReason as FailoverReason,
-        });
-        await observeDecision({
-          decision: "skip_candidate",
-          runId: params.runId,
-          sessionId: params.sessionId,
-          lane: params.lane,
-          requestedProvider: params.provider,
-          requestedModel: params.model,
-          candidate,
-          attempt: i + 1,
-          total: candidates.length,
+        pushAttempt(error, skipReason as FailoverReason);
+        await observeCandidateDecision("skip_candidate", {
           reason: skipReason as FailoverReason,
           error,
-          nextCandidate,
-          isPrimary,
-          requestedModelMatched: requestedModel,
-          fallbackConfigured: hasFallbackCandidates,
         });
         continue;
       }
@@ -343,13 +356,7 @@ async function runWithModelFallbackInternal<T>(
 
         if (decision.type === "suspend_lanes") {
           const error = `Provider ${candidate.provider} is in cooldown (suspending lanes)`;
-          attempts.push({
-            provider: candidate.provider,
-            model: candidate.model,
-            error,
-            reason: decision.reason,
-            authMode,
-          });
+          pushAttempt(error, decision.reason, { authMode });
 
           // Only lock the lane when no remaining candidates can serve as
           // fallbacks. Per-provider cooldown state already prevents
@@ -379,51 +386,19 @@ async function runWithModelFallbackInternal<T>(
             }
           }
 
-          await observeDecision({
-            decision: "skip_candidate",
-            runId: params.runId,
-            sessionId: params.sessionId,
-            lane: params.lane,
-            requestedProvider: params.provider,
-            requestedModel: params.model,
-            candidate,
-            attempt: i + 1,
-            total: candidates.length,
+          await observeCandidateDecision("skip_candidate", {
             reason: decision.reason,
             error,
-            nextCandidate,
-            isPrimary,
-            requestedModelMatched: requestedModel,
-            fallbackConfigured: hasFallbackCandidates,
             profileCount: profileIds.length,
           });
           continue;
         }
 
         if (decision.type === "skip") {
-          attempts.push({
-            provider: candidate.provider,
-            model: candidate.model,
-            error: decision.error,
-            reason: decision.reason,
-            authMode,
-          });
-          await observeDecision({
-            decision: "skip_candidate",
-            runId: params.runId,
-            sessionId: params.sessionId,
-            lane: params.lane,
-            requestedProvider: params.provider,
-            requestedModel: params.model,
-            candidate,
-            attempt: i + 1,
-            total: candidates.length,
+          pushAttempt(decision.error, decision.reason, { authMode });
+          await observeCandidateDecision("skip_candidate", {
             reason: decision.reason,
             error: decision.error,
-            nextCandidate,
-            isPrimary,
-            requestedModelMatched: requestedModel,
-            fallbackConfigured: hasFallbackCandidates,
             profileCount: profileIds.length,
           });
           continue;
@@ -439,29 +414,10 @@ async function runWithModelFallbackInternal<T>(
           const isTransientCooldownReason = shouldUseTransientCooldownProbeSlot(decision.reason);
           if (isTransientCooldownReason && cooldownProbeUsedProviders.has(candidate.provider)) {
             const error = `Provider ${candidate.provider} is in cooldown (probe already attempted this run)`;
-            attempts.push({
-              provider: candidate.provider,
-              model: candidate.model,
-              error,
-              reason: decision.reason,
-              authMode,
-            });
-            await observeDecision({
-              decision: "skip_candidate",
-              runId: params.runId,
-              sessionId: params.sessionId,
-              lane: params.lane,
-              requestedProvider: params.provider,
-              requestedModel: params.model,
-              candidate,
-              attempt: i + 1,
-              total: candidates.length,
+            pushAttempt(error, decision.reason, { authMode });
+            await observeCandidateDecision("skip_candidate", {
               reason: decision.reason,
               error,
-              nextCandidate,
-              isPrimary,
-              requestedModelMatched: requestedModel,
-              fallbackConfigured: hasFallbackCandidates,
               profileCount: profileIds.length,
             });
             continue;
@@ -472,21 +428,8 @@ async function runWithModelFallbackInternal<T>(
           }
         }
         attemptedDuringCooldown = true;
-        await observeDecision({
-          decision: "probe_cooldown_candidate",
-          runId: params.runId,
-          sessionId: params.sessionId,
-          lane: params.lane,
-          requestedProvider: params.provider,
-          requestedModel: params.model,
-          candidate,
-          attempt: i + 1,
-          total: candidates.length,
+        await observeCandidateDecision("probe_cooldown_candidate", {
           reason: decision.reason,
-          nextCandidate,
-          isPrimary,
-          requestedModelMatched: requestedModel,
-          fallbackConfigured: hasFallbackCandidates,
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
           profileCount: profileIds.length,
         });
@@ -509,27 +452,14 @@ async function runWithModelFallbackInternal<T>(
         deferredSuspension.pending = suspension;
       },
       classifyResult: params.classifyResult,
-      attempt: i + 1,
-      total: candidates.length,
-      attribution: { sessionId: params.sessionId, lane: params.lane },
+      ...attemptContext,
+      attribution: runAttribution,
       abortSignal: params.abortSignal,
     });
     if ("success" in attemptRun) {
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
-        await observeDecision({
-          decision: "candidate_succeeded",
-          runId: params.runId,
-          sessionId: params.sessionId,
-          lane: params.lane,
-          requestedProvider: params.provider,
-          requestedModel: params.model,
-          candidate,
-          attempt: i + 1,
-          total: candidates.length,
+        await observeCandidateDecision("candidate_succeeded", {
           previousAttempts: attempts,
-          isPrimary,
-          requestedModelMatched: requestedModel,
-          fallbackConfigured: hasFallbackCandidates,
         });
       }
       const notFoundAttempt =
@@ -551,11 +481,9 @@ async function runWithModelFallbackInternal<T>(
       !attemptRun.classifiedResult &&
       params.canFallbackAfterError &&
       !(await params.canFallbackAfterError({
-        provider: candidate.provider,
-        model: candidate.model,
+        ...candidateRef,
         error: err,
-        attempt: i + 1,
-        total: candidates.length,
+        ...attemptContext,
       }))
     ) {
       throw err;
@@ -604,10 +532,8 @@ async function runWithModelFallbackInternal<T>(
     }
     const normalized =
       coerceToFailoverError(err, {
-        provider: candidate.provider,
-        model: candidate.model,
-        sessionId: params.sessionId,
-        lane: params.lane,
+        ...candidateRef,
+        ...runAttribution,
       }) ?? err;
 
     // LiveSessionModelSwitchError during fallback may point at a later
@@ -640,27 +566,14 @@ async function runWithModelFallbackInternal<T>(
       const switchMsg = err.message;
       const switchNormalized = new FailoverError(switchMsg, {
         reason: "unknown",
-        provider: candidate.provider,
-        model: candidate.model,
-        sessionId: params.sessionId,
-        lane: params.lane,
+        ...candidateRef,
+        ...runAttribution,
       });
       lastError = switchNormalized;
       await observeFailedCandidate({
         attempts,
-        candidate,
+        ...candObs,
         error: switchNormalized,
-        runId: params.runId,
-        sessionId: params.sessionId,
-        lane: params.lane,
-        requestedProvider: params.provider,
-        requestedModel: params.model,
-        attempt: i + 1,
-        total: candidates.length,
-        nextCandidate,
-        isPrimary,
-        requestedModelMatched: requestedModel,
-        fallbackConfigured: hasFallbackCandidates,
       });
       continue;
     }
@@ -684,8 +597,7 @@ async function runWithModelFallbackInternal<T>(
     ) {
       markFallbackCandidateSkipped({
         sessionId: params.sessionId,
-        provider: candidate.provider,
-        model: candidate.model,
+        ...candidateRef,
         reason: normalized.reason,
       });
     }
@@ -701,26 +613,14 @@ async function runWithModelFallbackInternal<T>(
     lastError = isKnownFailover ? normalized : err;
     await observeFailedCandidate({
       attempts,
-      candidate,
+      ...candObs,
       error: normalized,
-      runId: params.runId,
-      sessionId: params.sessionId,
-      lane: params.lane,
-      requestedProvider: params.provider,
-      requestedModel: params.model,
-      attempt: i + 1,
-      total: candidates.length,
       nextCandidate: candidates[failedNextCandidateIndex],
-      isPrimary,
-      requestedModelMatched: requestedModel,
-      fallbackConfigured: hasFallbackCandidates,
     });
     await params.onError?.({
-      provider: candidate.provider,
-      model: candidate.model,
+      ...candidateRef,
       error: isKnownFailover ? normalized : err,
-      attempt: i + 1,
-      total: candidates.length,
+      ...attemptContext,
     });
     if (failedNextCandidateIndex > i + 1) {
       i = failedNextCandidateIndex - 1;

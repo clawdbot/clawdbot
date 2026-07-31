@@ -198,7 +198,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
     expect(selection.modelId).toBe("gpt-5.6-sol");
   });
 
-  it("uses configured provider fallback when default provider is unavailable", () => {
+  it("uses the configured provider model when the runtime default is unavailable", () => {
     const cfg = {
       models: {
         providers: {
@@ -229,6 +229,6 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
       resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" }),
     );
     expect(selection.provider).toBe("openai");
-    expect(selection.modelId).toBe("gpt-5.6-sol");
+    expect(selection.modelId).toBe("gpt-5");
   });
 });

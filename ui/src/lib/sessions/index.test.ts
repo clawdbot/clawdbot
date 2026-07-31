@@ -225,7 +225,7 @@ describe("createSessionCapability", () => {
         return await renamed.promise;
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);
@@ -253,7 +253,7 @@ describe("createSessionCapability", () => {
         return await replaced.promise;
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);
@@ -449,7 +449,7 @@ describe("createSessionCapability", () => {
     let listCalls = 0;
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         listCalls += 1;
@@ -482,7 +482,7 @@ describe("createSessionCapability", () => {
         return await staleCreate.promise;
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);
@@ -583,7 +583,7 @@ describe("createSessionCapability", () => {
         return await staleReset.promise;
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);
@@ -609,7 +609,7 @@ describe("createSessionCapability", () => {
         throw new Error("post-commit lifecycle failed");
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);
@@ -632,7 +632,7 @@ describe("createSessionCapability", () => {
         return await stalePatch.promise;
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);
@@ -665,7 +665,7 @@ describe("createSessionCapability", () => {
         return { ok: true, path: "", key: "agent:main:main", entry: {} };
       }
       if (method === "sessions.subscribe") {
-        return {};
+        return { subscribed: true };
       }
       if (method === "sessions.list") {
         return sessionsResult([], 2);

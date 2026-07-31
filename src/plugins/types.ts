@@ -10,8 +10,12 @@ export type {
   CliBackendAuthEpochMode,
   CliBackendConfig,
   CliBackendExecutionMode,
+  CliBackendJsonlUsage,
   CliBackendNormalizeConfigContext,
   CliBackendNativeToolMode,
+  CliBackendParseJsonlEvent,
+  CliBackendParseJsonlEventContext,
+  CliBackendParsedJsonlEvent,
   CliBackendPlugin,
   CliBackendPreparedExecution,
   CliBackendPrepareExecutionContext,
@@ -238,8 +242,9 @@ export type {
   VideoGenerationProviderPlugin,
 } from "./capability-provider.types.js";
 export type {
-  OpenClawPluginCliCommandDescriptor,
+  OpenClawPluginCliRegistrationOptions,
   OpenClawPluginCliRegistrar,
+  OpenClawPluginCliRootCommandDescriptor,
   OpenClawPluginGatewayRuntimeScopeSurface,
   OpenClawPluginHostedMediaResolver,
   OpenClawPluginHttpRouteAuth,

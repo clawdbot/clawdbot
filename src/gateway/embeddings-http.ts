@@ -25,7 +25,7 @@ import type {
 } from "../plugins/memory-embedding-providers.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, sendMissingScopeForbidden } from "./http-common.js";
+import { sendJson, sendMissingScopeForbidden, watchClientDisconnect } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   OPENCLAW_MODEL_ID,
@@ -72,13 +72,21 @@ const EMBEDDING_PROVIDER_ADMISSION_TAILS = new Map<string, Promise<void>>();
 
 async function acquireEmbeddingProviderLease(
   scopeKey: string,
+  signal: AbortSignal,
   create: () => Promise<MemoryEmbeddingProvider>,
   holdForCleanup: (provider: MemoryEmbeddingProvider) => boolean,
 ): Promise<{ provider: MemoryEmbeddingProvider; release: () => void }> {
   const previous = EMBEDDING_PROVIDER_ADMISSION_TAILS.get(scopeKey) ?? Promise.resolve();
   const createLease = async () => {
+    signal.throwIfAborted();
     await drainEmbeddingProviderRetirements(scopeKey);
+    // Keep the cleanup fence intact, but do not create a provider for an aborted waiter.
+    signal.throwIfAborted();
     const provider = await create();
+    if (signal.aborted) {
+      await closeEmbeddingProvider(scopeKey, provider);
+      signal.throwIfAborted();
+    }
     if (!holdForCleanup(provider)) {
       return { provider, lifecycle: Promise.resolve(), release: () => {} };
     }
@@ -138,6 +146,18 @@ function retainEmbeddingProviderForRetirement(
   const pending = EMBEDDING_PROVIDER_RETIREMENTS.get(scopeKey) ?? new Set();
   pending.add(provider);
   EMBEDDING_PROVIDER_RETIREMENTS.set(scopeKey, pending);
+}
+
+async function closeEmbeddingProvider(
+  scopeKey: string,
+  provider: MemoryEmbeddingProvider,
+): Promise<void> {
+  try {
+    await provider.close?.();
+  } catch (closeErr) {
+    retainEmbeddingProviderForRetirement(scopeKey, provider);
+    logWarn(`openai-compat: failed to close embeddings provider: ${formatErrorMessage(closeErr)}`);
+  }
 }
 
 export async function drainRetainedOpenAiEmbeddingProviders(): Promise<void> {
@@ -449,10 +469,16 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     cfg,
     provider: target.provider,
   });
+  if (req.socket.destroyed || res.destroyed || res.socket?.destroyed) {
+    return true;
+  }
+  const abortController = new AbortController();
+  const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
 
   try {
     const { provider, release } = await acquireEmbeddingProviderLease(
       providerScopeKey,
+      abortController.signal,
       async () =>
         await createConfiguredEmbeddingProvider({
           cfg,
@@ -474,7 +500,10 @@ export async function handleOpenAiEmbeddingsHttpRequest(
         isLocalEmbeddingProvider({ cfg, provider: createdProvider.id }),
     );
     try {
-      const embeddings = await provider.embedBatch(texts);
+      const embeddings = await provider.embedBatch(texts, { signal: abortController.signal });
+      if (abortController.signal.aborted) {
+        return true;
+      }
       const encodingFormat = payload.encoding_format === "base64" ? "base64" : "float";
 
       sendJson(res, 200, {
@@ -492,24 +521,23 @@ export async function handleOpenAiEmbeddingsHttpRequest(
       });
     } finally {
       try {
-        await provider.close?.();
-      } catch (closeErr) {
-        retainEmbeddingProviderForRetirement(providerScopeKey, provider);
-        logWarn(
-          `openai-compat: failed to close embeddings provider: ${formatErrorMessage(closeErr)}`,
-        );
+        await closeEmbeddingProvider(providerScopeKey, provider);
       } finally {
         release();
       }
     }
   } catch (err) {
-    logWarn(`openai-compat: embeddings request failed: ${formatErrorMessage(err)}`);
-    sendJson(res, 500, {
-      error: {
-        message: "internal error",
-        type: "api_error",
-      },
-    });
+    if (!abortController.signal.aborted) {
+      logWarn(`openai-compat: embeddings request failed: ${formatErrorMessage(err)}`);
+      sendJson(res, 500, {
+        error: {
+          message: "internal error",
+          type: "api_error",
+        },
+      });
+    }
+  } finally {
+    stopWatchingDisconnect();
   }
 
   return true;

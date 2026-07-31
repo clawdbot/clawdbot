@@ -334,6 +334,51 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
+    func `load dict skips unchanged forensic fingerprints`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        try FileManager().createDirectory(at: stateDir, withIntermediateDirectories: true)
+        try """
+        {
+          "gateway": {
+            "mode": "local"
+          }
+        }
+        """.write(to: configPath, atomically: true, encoding: .utf8)
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            try OpenClawConfigFile.withTestingFileLock {
+                let before = OpenClawConfigFile.testingConfigObservationCount()
+                _ = OpenClawConfigFile.loadDict()
+                let afterFirstRead = OpenClawConfigFile.testingConfigObservationCount()
+                _ = OpenClawConfigFile.loadDict()
+                let afterUnchangedRead = OpenClawConfigFile.testingConfigObservationCount()
+
+                let attributes = try FileManager.default.attributesOfItem(atPath: configPath.path)
+                let currentMode = try #require(
+                    (attributes[.posixPermissions] as? NSNumber)?.intValue)
+                try FileManager().setAttributes(
+                    [.posixPermissions: currentMode ^ 0o100],
+                    ofItemAtPath: configPath.path)
+                _ = OpenClawConfigFile.loadDict()
+                let afterMetadataChange = OpenClawConfigFile.testingConfigObservationCount()
+
+                #expect(afterFirstRead == before + 1)
+                #expect(afterUnchangedRead == afterFirstRead)
+                #expect(afterMetadataChange == afterFirstRead + 1)
+            }
+        }
+    }
+
+    @MainActor
+    @Test
     func `load dict audits suspicious out-of-band clobbers`() async throws {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)

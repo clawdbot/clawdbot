@@ -20,7 +20,7 @@ import {
   type PluginCapabilityEntry,
   type PluginInspectShape,
 } from "./inspect-shape.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPlugins, resolveCompatibleRuntimePluginRegistry } from "./loader.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -548,9 +548,28 @@ export function buildPluginCompatibilitySnapshotNotices(params?: {
   env?: NodeJS.ProcessEnv;
 }): PluginCompatibilityNotice[] {
   const report = buildPluginSnapshotReport(params);
+  const context = resolvePluginRuntimeLoadContext(params);
+  const runtimeRegistry = resolveCompatibleRuntimePluginRegistry(
+    buildPluginRuntimeLoadOptions(context, { activate: false }),
+  );
+  const registeredPlugins = new Map(runtimeRegistry?.plugins.map((plugin) => [plugin.id, plugin]));
+  // Hook shape is a runtime registration fact. Reuse compatible live registrations without
+  // importing cold plugins or guessing their capabilities from a manifest-only snapshot.
+  const registrationReport = runtimeRegistry
+    ? {
+        ...report,
+        ...runtimeRegistry,
+        workspaceDir: report.workspaceDir,
+        plugins: report.plugins.map((plugin) => ({
+          ...plugin,
+          ...registeredPlugins.get(plugin.id),
+          imported: plugin.imported,
+        })),
+      }
+    : report;
   return buildPluginCompatibilityNotices({
     ...params,
-    report,
+    report: registrationReport,
   });
 }
 

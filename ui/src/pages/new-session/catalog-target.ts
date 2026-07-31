@@ -6,8 +6,14 @@ import { t } from "../../i18n/index.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { NewSessionRouteData } from "./location.ts";
 
+/**
+ * Which draft a new-session route has open. This keys on the requested agent,
+ * not the resolved one: a catalog route resolves its agent through the Gateway
+ * and reports it empty until the roster arrives, so keying on the resolved id
+ * would make that fill-in look like a navigation and discard the draft.
+ */
 export function routeKey(data?: NewSessionRouteData): string {
-  return JSON.stringify([data?.agentId ?? "", data?.catalogId ?? ""]);
+  return JSON.stringify([data?.requestedAgentId ?? "", data?.catalogId ?? ""]);
 }
 
 export function isTarget(data?: NewSessionRouteData): boolean {

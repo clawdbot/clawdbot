@@ -542,6 +542,19 @@ api.registerCli(
 );
 ```
 
+A root descriptor can also declare `machineOutput({ argv, stdoutIsTTY })` when
+the command reserves stdout for JSON, JSONL, or another machine-readable format
+without relying exclusively on a literal `--json` flag. OpenClaw evaluates this
+resolver before plugin activation so startup diagnostics can be routed to
+stderr. The resolver must be synchronous, pure, and dependency-light: inspect
+only the supplied raw argv and stdout TTY state. Reuse the same resolver in
+lightweight CLI metadata and full registration so discovery and execution do
+not disagree. Use `getRootOptionAwareCommandPath` from
+`openclaw/plugin-sdk/cli-argv` when the resolver needs command-path tokens; it
+accepts supported root options before or after the command root. `machineOutput`
+is root metadata; nested descriptors cannot use it because their owning root
+must already be active before they are visible.
+
 Nested commands receive the resolved parent command as `program`:
 
 ```typescript
@@ -605,10 +618,10 @@ For an end-to-end authoring guide, see
 
 ### Exclusive slots
 
-| Method                                     | What it registers                                                                                                                                                                                  |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Lifecycle callbacks receive `runtimeSettings` when the host can provide model/provider/mode diagnostics; older strict engines are retried without that key. |
-| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                          |
+| Method                                     | What it registers                                                                                                                                                                                                             |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Declare accepted host-added lifecycle fields with `info.acceptedHostParams`; undeclared engines receive the legacy field set through 2026-08-12, then receive all current host fields. |
+| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                                                     |
 
 ### Deprecated memory embedding adapters
 

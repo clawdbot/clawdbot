@@ -84,23 +84,9 @@ public final class OpenClawChatViewModel {
     public internal(set) var isLoadingSessionBranches = false
     @ObservationIgnored
     var sessionBranchesRefreshGeneration: UInt64 = 0
-    struct SessionBranchSwitchActivity: Equatable {
-        let session: SessionSnapshot
-        let generation: UInt64
-    }
-
     var sessionBranchSwitchActivity: SessionBranchSwitchActivity?
     @ObservationIgnored
     var nextSessionBranchSwitchGeneration: UInt64 = 0
-
-    var isSwitchingSessionBranch: Bool {
-        self.sessionBranchSwitchActivity != nil
-    }
-
-    /// True when this view model owns a gateway-scoped durable text outbox.
-    public var supportsOfflineTextOutbox: Bool {
-        self.outbox != nil
-    }
 
     public private(set) var pendingRunCount: Int = 0
     public internal(set) var questionCards: [OpenClawQuestionCardModel] = []
@@ -111,9 +97,14 @@ public final class OpenClawChatViewModel {
     var questionRefreshRetryTask: Task<Void, Never>?
     var questionRefreshRetryDelaysMs: [Int64] = [1000, 2000, 4000]
     var hasActiveSessionRunWithoutChatSnapshot = false
+    var activeSessionRunIDs: [String] = []
+    var liveRunStateByRunID: [String: ChatLiveRunState] = [:]
 
     public private(set) var sessionKey: String {
-        didSet { syncContextUsageFraction() }
+        didSet {
+            syncContextUsageFraction()
+            syncActiveSessionRunIDsFromCurrentSession()
+        }
     }
 
     public internal(set) var sessionId: String?
@@ -127,7 +118,10 @@ public final class OpenClawChatViewModel {
     private(set) var timelineRevision: UInt64 = 0
     /// Setter is module-internal for the transcript-cache extension only.
     public internal(set) var sessions: [OpenClawChatSessionEntry] = [] {
-        didSet { syncContextUsageFraction() }
+        didSet {
+            syncContextUsageFraction()
+            syncActiveSessionRunIDsFromCurrentSession()
+        }
     }
 
     public internal(set) var swarmSessions: [OpenClawChatSessionEntry] = []
@@ -684,6 +678,11 @@ public final class OpenClawChatViewModel {
         let contractRoutingChanged = contractChanged &&
             (usesMutableContractRouting(for: sessionRoutingContract) ||
                 self.usesMutableContractRouting(for: nextContract))
+        if agentChanged {
+            self.sessions = ChatSessionSidebarModel.clearingForeignGlobalObserverDigest(
+                in: self.sessions,
+                activeAgentId: nextAgentId)
+        }
         self.activeAgentId = nextAgentId
         self.sessionRoutingContract = nextContract
         let bootstrapIdentityChanged =
@@ -1281,6 +1280,8 @@ extension OpenClawChatViewModel {
         self.updateStreamingAssistantText(nil)
         clearPlan()
         self.updateActiveSessionRunWithoutChatSnapshot(false)
+        self.activeSessionRunIDs = []
+        self.liveRunStateByRunID.removeAll()
         resetSlashCommandCatalog()
         self.sessionBranches = []
         self.isLoadingSessionBranches = false

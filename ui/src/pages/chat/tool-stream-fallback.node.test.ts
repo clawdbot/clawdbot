@@ -305,6 +305,91 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     vi.useRealTimers();
   });
 
+  it.each([
+    { progressText: "Another run's commentary", name: "replace" },
+    { progressText: "", name: "clear" },
+  ])("does not let another run $name the active preamble", ({ progressText }) => {
+    useToolStreamFakeTimers();
+    const host = createHost({ chatRunId: "run-1" });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        kind: "preamble",
+        itemId: "msg-preamble-1",
+        progressText: "The active run's commentary",
+      },
+    });
+    handleAgentEvent(host, {
+      runId: "run-2",
+      seq: 2,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: { kind: "preamble", itemId: "msg-preamble-1", progressText },
+    });
+
+    expect(host.chatStreamSegments).toEqual([
+      {
+        text: "The active run's commentary",
+        ts: TOOL_STREAM_TEST_NOW,
+        runId: "run-1",
+        itemId: "msg-preamble-1",
+      },
+    ]);
+  });
+
+  it("does not insert another run's preamble into the active transcript", () => {
+    useToolStreamFakeTimers();
+    const host = createHost({ chatRunId: "run-1" });
+
+    handleAgentEvent(host, {
+      runId: "run-2",
+      seq: 1,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        kind: "preamble",
+        itemId: "msg-preamble-2",
+        progressText: "Another run's commentary",
+      },
+    });
+
+    expect(host.chatStreamSegments).toEqual([]);
+  });
+
+  it("accepts a session-scoped preamble while no run is active", () => {
+    useToolStreamFakeTimers();
+    const host = createHost();
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        kind: "preamble",
+        itemId: "msg-preamble-1",
+        progressText: "An already active session's commentary",
+      },
+    });
+
+    expect(host.chatStreamSegments).toEqual([
+      {
+        text: "An already active session's commentary",
+        ts: TOOL_STREAM_TEST_NOW,
+        runId: "run-1",
+        itemId: "msg-preamble-1",
+      },
+    ]);
+  });
+
   it("clears keyed preamble item progress on empty updates", () => {
     useToolStreamFakeTimers();
     const host = createHost({ chatRunId: "run-1" });

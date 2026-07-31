@@ -165,14 +165,6 @@ vi.mock("../agents/embedded-agent-runner/model.js", () => ({
   resolveModelAsync: resolveModelAsyncMock,
 }));
 
-vi.mock("../plugin-sdk/provider-auth.js", () => ({
-  buildCopilotIdeHeaders: () => ({
-    "Editor-Version": "vscode/1.107.0",
-    "User-Agent": "GitHubCopilotChat/0.35.0",
-  }),
-  COPILOT_INTEGRATION_ID: "vscode-chat",
-}));
-
 const imageTestFetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 vi.mock("../infra/net/fetch-guard.js", async () => {
   const mod = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
@@ -265,6 +257,14 @@ describe("describeImageWithModel", () => {
         ? {
             [API_KEY_FIELD]: "test-token",
             baseUrl: "https://api.githubcopilot.com",
+            request: {
+              headers: {
+                "Copilot-Integration-Id": "copilot-developer-cli",
+                "Editor-Version": "vscode/1.107.0",
+                "Openai-Organization": "github-copilot",
+                "User-Agent": "GitHubCopilotChat/0.35.0",
+              },
+            },
           }
         : undefined;
     });
@@ -495,17 +495,24 @@ describe("describeImageWithModel", () => {
     expect(storedValue).not.toBe("test-token");
     expect(resolveSecretSentinel(storedValue)).toBe("test-token");
     const [completionModel, context, options] = providerStreamFn.mock.calls[0] as unknown as [
-      { baseUrl?: string },
+      { baseUrl?: string; headers?: Record<string, string> },
       { systemPrompt?: string; messages?: Array<{ role: string; content: unknown[] }> },
       { apiKey?: string; headers?: Record<string, string> },
     ];
     expect(completionModel.baseUrl).toBe("https://api.githubcopilot.com");
+    expect(completionModel.headers).toMatchObject({
+      "Copilot-Integration-Id": "copilot-developer-cli",
+      "Editor-Version": "vscode/1.107.0",
+      "Openai-Organization": "github-copilot",
+      "User-Agent": "GitHubCopilotChat/0.35.0",
+    });
+    expect(
+      Object.values(completionModel.headers ?? {}).some((value) => looksLikeSecretSentinel(value)),
+    ).toBe(false);
     expect(options.apiKey).toBe(storedValue);
     expect(options.headers).toMatchObject({
-      "Copilot-Integration-Id": "vscode-chat",
       "Copilot-Vision-Request": "true",
-      "Editor-Version": "vscode/1.107.0",
-      "User-Agent": "GitHubCopilotChat/0.35.0",
+      "x-initiator": "user",
     });
     expect(context.systemPrompt).toBeUndefined();
     const userMessage = context.messages?.find((m) => m.role === "user");
@@ -861,6 +868,8 @@ describe("describeImageWithModel", () => {
       agentDir: "/tmp/parent-agent",
       config: cfg,
       workspaceDir: "/tmp/parent-workspace",
+      configuredRuntimeModels: [],
+      inlineProviderModels: [],
       createStores: () => ({ authStorage: preparedAuthStorage, modelRegistry: {} }),
     } as never;
 
@@ -881,5 +890,8 @@ describe("describeImageWithModel", () => {
     expect(result.text).toBe("parent runtime");
     expect(acquireAgentRunPreparedModelRuntimeMock).not.toHaveBeenCalled();
     expect(releasePreparedModelRuntimeMock).not.toHaveBeenCalled();
+    for (const call of resolveModelAsyncMock.mock.calls) {
+      expect(call[4]).toEqual(expect.objectContaining({ preparedModelRuntime }));
+    }
   });
 });

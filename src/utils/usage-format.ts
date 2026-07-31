@@ -2,6 +2,7 @@
  * Shared token/cost formatting and pricing lookup helpers for CLI, TUI, gateway, and status output.
  * Keep this module synchronous; request paths call it while rendering usage summaries.
  */
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -529,7 +530,7 @@ export function resolveModelCostConfigFingerprint(
   agentDir?: string,
 ): string {
   const resolvedAgentDir = resolveCostAgentDir(config, agentDir);
-  return stableCostFingerprintValue({
+  const serialized = stableCostFingerprintValue({
     configuredRaw: serializeCostIndex(
       getProviderCostIndex(config?.models?.providers, { allowPluginNormalization: false }),
     ),
@@ -545,6 +546,7 @@ export function resolveModelCostConfigFingerprint(
     ),
     catalogPricing: modelCatalogPricingFingerprint(config),
   });
+  return createHash("sha256").update(serialized).digest("hex");
 }
 
 /**
@@ -563,17 +565,6 @@ export function resolveModelCostConfig(params: {
     return undefined;
   }
   const agentDir = resolveCostAgentDir(params.config, params.agentDir);
-  if (params.allowPluginNormalization !== false) {
-    const catalogPricing = resolveCatalogModelPricing({
-      config: params.config,
-      provider: params.provider ?? "",
-      model: params.model ?? "",
-    });
-    if (catalogPricing) {
-      return normalizeResolvedPricing(catalogPricing);
-    }
-  }
-
   // Favor direct configured keys first so local pricing/status lookups stay
   // synchronous and do not drag plugin/provider discovery into the hot path.
   const rawModelsJsonCost = loadModelsJsonCostIndex({
@@ -609,6 +600,15 @@ export function resolveModelCostConfig(params: {
         return configuredCost;
       }
     }
+  }
+
+  const catalogPricing = resolveCatalogModelPricing({
+    config: params.config,
+    provider: params.provider ?? "",
+    model: params.model ?? "",
+  });
+  if (catalogPricing) {
+    return normalizeResolvedPricing(catalogPricing);
   }
 
   const hostedPricing = resolveHostedModelPricing({

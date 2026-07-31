@@ -4,6 +4,7 @@ import { isBunRuntime, isNodeRuntime } from "../daemon/runtime-binary.js";
 import {
   consumeRootOptionToken,
   FLAG_TERMINATOR,
+  getRootOptionAwareCommandPath,
   isValueToken,
 } from "../infra/cli-root-options.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
@@ -29,7 +30,7 @@ const ROOT_COMMANDS_WITH_SUBCOMMANDS: ReadonlySet<string> = new Set(
 );
 
 export function isHelpOrVersionInvocation(argv: string[]): boolean {
-  if (hasRootVersionAlias(argv)) {
+  if (isRootVersionInvocation(argv)) {
     return true;
   }
 
@@ -46,7 +47,7 @@ export function isHelpOrVersionInvocation(argv: string[]): boolean {
       i += rootConsumed - 1;
       continue;
     }
-    if (HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg)) {
+    if (HELP_FLAGS.has(arg)) {
       return true;
     }
     if (arg.startsWith("-")) {
@@ -161,6 +162,42 @@ function isRootInvocationForFlags(
 
 export function isRootHelpInvocation(argv: string[]): boolean {
   return isRootInvocationForFlags(argv, HELP_FLAGS);
+}
+
+/** Match fast-path command help only when no command option can own the help token as a value. */
+export function isSimpleCommandHelpInvocation(
+  argv: string[],
+  commandNames: ReadonlySet<string>,
+): boolean {
+  const args = argv.slice(2);
+  let commandSeen = false;
+  let helpSeen = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      return false;
+    }
+    const rootConsumed = commandSeen ? 0 : consumeRootOptionToken(args, index);
+    if (rootConsumed > 0) {
+      index += rootConsumed - 1;
+      continue;
+    }
+    if (HELP_FLAGS.has(arg)) {
+      if (!commandSeen) {
+        return false;
+      }
+      helpSeen = true;
+      continue;
+    }
+    if (arg.startsWith("-") || commandSeen) {
+      return false;
+    }
+    if (!commandNames.has(arg)) {
+      return false;
+    }
+    commandSeen = true;
+  }
+  return commandSeen && helpSeen;
 }
 
 type HelpNormalizationPositional = { value: string; index: number };
@@ -464,40 +501,7 @@ export function getPositiveIntFlagValue(argv: string[], name: string): number | 
 }
 
 export function getCommandPathWithRootOptions(argv: string[], depth = 2): string[] {
-  return getCommandPathInternal(argv, depth, { skipRootOptions: true });
-}
-
-function getCommandPathInternal(
-  argv: string[],
-  depth: number,
-  opts: { skipRootOptions: boolean },
-): string[] {
-  const args = argv.slice(2);
-  const path: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
-    if (!arg) {
-      continue;
-    }
-    if (arg === "--") {
-      break;
-    }
-    if (opts.skipRootOptions) {
-      const consumed = consumeRootOptionToken(args, i);
-      if (consumed > 0) {
-        i += consumed - 1;
-        continue;
-      }
-    }
-    if (arg.startsWith("-")) {
-      continue;
-    }
-    path.push(arg);
-    if (path.length >= depth) {
-      break;
-    }
-  }
-  return path;
+  return getRootOptionAwareCommandPath(argv, depth);
 }
 
 export function getPrimaryCommand(argv: string[]): string | null {
@@ -611,7 +615,11 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
     return true;
   }
   const [primary, secondary] = path;
-  if (primary === "health" || primary === "sessions") {
+  if (primary === "health" || primary === "logs" || primary === "sessions") {
+    return false;
+  }
+  // Remote RPC clients must not migrate state owned by the running gateway.
+  if (primary === "gateway" && secondary === "call") {
     return false;
   }
   if (primary === "update" && secondary === "status") {

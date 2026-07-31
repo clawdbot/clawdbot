@@ -24,7 +24,15 @@ const repo = "openclaw/openclaw";
 const githubSnapshotSchemaVersion = 1;
 const githubSnapshotCheckpointInterval = 25;
 const commitAssociationQueryBatchSize = 20;
-const excludedHandles = new Set(["openclaw", "clawsweeper", "claude", "codex", "steipete"]);
+const excludedHandles = new Set([
+  "openclaw",
+  "clawsweeper",
+  "claude",
+  "codex",
+  "hugin-bot",
+  "steipete",
+  "steipete-oai",
+]);
 const nonEditorialTypes = new Set([
   "build",
   "chore",
@@ -405,7 +413,7 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function isEligibleHandle(handle) {
+export function isEligibleHandle(handle) {
   return (
     typeof handle === "string" &&
     handle.toLowerCase() !== "undefined" &&

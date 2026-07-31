@@ -39,6 +39,7 @@ export type SkillWorkshopProps = {
   onPrev: () => void;
   onNext: () => void;
   onApply: (key: string) => void;
+  onEvaluate: (key: string) => void;
   onRevise: (key: string) => void;
   onReject: (key: string) => void;
   onRevisionDraftChange: (draft: string) => void;

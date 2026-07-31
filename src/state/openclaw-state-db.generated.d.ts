@@ -1140,6 +1140,57 @@ export interface SkillUsage {
   use_count: number;
 }
 
+export interface SkillWorkshopProposalEvents {
+  actor_json: string;
+  correlation_id: string | null;
+  event_id: string;
+  event_type: string;
+  occurred_at: string;
+  payload_json: string | null;
+  proposal_id: string;
+  proposed_version: string;
+  revision_hash: string;
+  sequence: Generated<number>;
+}
+
+export interface SkillWorkshopProposalOriginRuns {
+  mutation_count: number;
+  position: number;
+  proposal_id: string;
+  run_id: string;
+}
+
+export interface SkillWorkshopProposalRollbacks {
+  action: string;
+  previous_content: string | null;
+  previous_content_hash: string | null;
+  proposal_id: string;
+  support_files_json: string | null;
+  target_skill_file: string;
+  written_at: string;
+}
+
+export interface SkillWorkshopProposals {
+  applied_at: string | null;
+  created_at: string;
+  draft_hash: string;
+  kind: string;
+  origin_agent_id: string | null;
+  origin_message_id: string | null;
+  origin_run_id: string | null;
+  origin_session_key: string | null;
+  owner_agent_id: string | null;
+  proposal_id: string;
+  quarantined_at: string | null;
+  record_json: string;
+  rejected_at: string | null;
+  stale_at: string | null;
+  status: string;
+  status_reason: string | null;
+  updated_at: string;
+  workspace_dir: string;
+}
+
 export interface StateLeases {
   created_at: number;
   expires_at: number | null;
@@ -1577,6 +1628,10 @@ export interface DB {
   skill_upload_chunks: SkillUploadChunks;
   skill_uploads: SkillUploads;
   skill_usage: SkillUsage;
+  skill_workshop_proposal_events: SkillWorkshopProposalEvents;
+  skill_workshop_proposal_origin_runs: SkillWorkshopProposalOriginRuns;
+  skill_workshop_proposal_rollbacks: SkillWorkshopProposalRollbacks;
+  skill_workshop_proposals: SkillWorkshopProposals;
   state_leases: StateLeases;
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;

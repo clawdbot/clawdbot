@@ -15,6 +15,7 @@ import {
   type NativeCommandTestParams,
 } from "./bot-native-commands.fixture-test-support.js";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
+import { runWithTelegramUpdateProcessingFrame } from "./bot-processing-outcome.js";
 
 // All mocks scoped to this file only — does not affect bot-native-commands.test.ts
 
@@ -731,6 +732,39 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(turnPlan?.record?.sessionKey).toBe(turnPlan?.ctxPayload.CommandTargetSessionKey);
   });
 
+  it("leaves native-command outcomes to the update middleware owner", async () => {
+    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
+
+    const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
+      await handler(createTelegramPrivateCommandContext());
+    });
+
+    expect(result).toBeUndefined();
+  });
+
+  it("preserves every argument on native queue command turns", async () => {
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "queue",
+      cfg: {},
+      allowFrom: ["*"],
+    });
+
+    await handler(createTelegramPrivateCommandContext({ match: "Can you diagnose this?" }));
+
+    expect(dispatchChannelInboundTurnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctxPayload: expect.objectContaining({
+          Body: "/queue Can you diagnose this?",
+          CommandBody: "/queue Can you diagnose this?",
+          CommandTurn: expect.objectContaining({
+            kind: "native",
+            body: "/queue Can you diagnose this?",
+          }),
+        }),
+      }),
+    );
+  });
+
   it("keeps one live config snapshot through native command execution", async () => {
     const startupCfg: OpenClawConfig = { session: { store: "/tmp/startup-sessions.json" } };
     const runtimeCfg: OpenClawConfig = { session: { store: "/tmp/runtime-sessions.json" } };
@@ -1352,6 +1386,58 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await handler(createTelegramPrivateCommandContext());
 
     expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("does not emit the empty fallback for a message-tool-only native reply", async () => {
+    dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
+      plan.dispatcherOptions?.onSkip?.({}, { kind: "final", reason: "empty" });
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: plan.ctxPayload,
+        routeSessionKey: plan.route.sessionKey,
+        dispatchResult: {
+          queuedFinal: false,
+          counts: { block: 0, final: 0, tool: 0 },
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      };
+    });
+    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
+
+    await handler(createTelegramPrivateCommandContext());
+
+    expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("retains the native fallback when message-tool-only delivery also fails", async () => {
+    dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
+      plan.dispatcherOptions?.onSkip?.({}, { kind: "final", reason: "empty" });
+      plan.delivery.onError?.(new Error("Telegram final delivery failed"), {
+        kind: "final",
+      });
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: plan.ctxPayload,
+        routeSessionKey: plan.route.sessionKey,
+        dispatchResult: {
+          queuedFinal: false,
+          counts: { block: 0, final: 0, tool: 0 },
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      };
+    });
+    const { handler } = registerAndResolveStatusHandler({ cfg: {} });
+
+    await handler(createTelegramPrivateCommandContext());
+
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledOnce();
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [{ text: "No response generated. Please try again." }],
+      }),
+    );
   });
 
   it("retains the empty fallback for a true non-silent metadata-only native reply", async () => {

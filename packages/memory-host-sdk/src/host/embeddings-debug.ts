@@ -1,7 +1,7 @@
 // Memory Host SDK module implements embeddings debug behavior.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-// Lightweight stderr debug logging for memory embedding internals.
+// Lightweight debug logging for memory embedding internals.
 
 const debugEmbeddings = isTruthyEnvValue(process.env.OPENCLAW_DEBUG_MEMORY_EMBEDDINGS);
 
@@ -11,7 +11,7 @@ export function debugEmbeddingsLog(message: string, meta?: Record<string, unknow
     return;
   }
   const suffix = meta ? ` ${JSON.stringify(meta)}` : "";
-  process.stderr.write(`${message}${suffix}\n`);
+  console.warn(`${message}${suffix}`);
 }
 
 /** Parse common truthy env values for debug toggles. */

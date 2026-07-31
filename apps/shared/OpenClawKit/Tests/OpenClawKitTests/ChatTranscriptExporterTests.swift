@@ -64,7 +64,10 @@ struct ChatTranscriptExporterTests {
         """)
     }
 
-    @Test(arguments: ["file", "attachment", "image", "audio", "FILE", "ATTACHMENT", "IMAGE", "AuDiO"])
+    @Test(arguments: [
+        "file", "attachment", "image", "audio", "video",
+        "FILE", "ATTACHMENT", "IMAGE", "AuDiO", "ViDeO",
+    ])
     func `classifies gateway media and historical file attachments consistently`(type: String) {
         let content = OpenClawChatMessageContent(
             type: type,
@@ -99,17 +102,18 @@ struct ChatTranscriptExporterTests {
         #expect(!content.isInlineAttachment)
     }
 
-    @Test(arguments: ["user", "assistant"], ["image", "audio", "IMAGE", "AuDiO"])
+    @Test(arguments: ["user", "assistant"], ["image", "audio", "video", "IMAGE", "AuDiO", "ViDeO"])
     func `exports canonical media-only messages`(role: String, type: String) {
         let isAudio = type.lowercased() == "audio"
-        let filename = isAudio ? "voice-note.m4a" : "photo.png"
+        let isVideo = type.lowercased() == "video"
+        let filename = isAudio ? "voice-note.m4a" : isVideo ? "clip.mp4" : "photo.png"
         let message = OpenClawChatMessage(
             role: role,
             content: [
                 OpenClawChatMessageContent(
                     type: type,
                     text: nil,
-                    mimeType: isAudio ? "audio/mp4" : "image/png",
+                    mimeType: isAudio ? "audio/mp4" : isVideo ? "video/mp4" : "image/png",
                     fileName: filename,
                     content: nil),
             ],

@@ -16,6 +16,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
  * back into runtime output blocks, and applies provider request policy.
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import {
   createAnthropicInlineImageBudget,
@@ -23,56 +24,61 @@ import {
   resolveAnthropicImageMediaType,
   type AnthropicInlineImageBudget,
 } from "../internal/anthropic-inline-images.js";
+import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import {
-  ANTHROPIC_OMITTED_REASONING_TEXT,
-  ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
-  ANTHROPIC_SERVER_SIDE_FALLBACKS,
-  applyClaudeRequestContract,
-  applyAnthropicFallbackBoundary,
-  defaultsClaudeAdaptiveThinking,
-  applyAnthropicRefusal,
-  findActiveAnthropicToolTurnAssistantIndex,
   omitFoundryBearerCredentialHeaders,
+  usesFoundryBearerAuth,
+} from "../providers/anthropic-auth-headers.js";
+import {
+  applyClaudeRequestContract,
+  defaultsClaudeAdaptiveThinking,
   prepareClaudeNoPrefillRequestContext,
-  projectAnthropicTools,
-  reconcileAnthropicToolChoice,
   requiresClaudeAdaptiveThinking,
   resolveClaudeNativeThinkingLevelMap,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
-  resolveOriginalAnthropicToolName,
-  readAnthropicFallbackBoundary,
-  readAnthropicPromptUsageSnapshot,
-  readAnthropicUsageTokenCount,
-  readLastAnthropicIterationUsage,
-  resolveAnthropicFallbackServingModelCost,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
   usesClaudeFable5MessagesContract,
   usesClaudeStreamingRefusalContract,
-  usesFoundryBearerAuth,
-  type AnthropicOptions,
-  type AnthropicPromptUsageSnapshot,
-  type AnthropicProjectedToolChoice,
-  type AnthropicThinkingDisplay,
-  type AnthropicToolProjection,
-} from "../internal/anthropic.js";
+} from "../providers/anthropic-model-contract.js";
+import { applyAnthropicRefusal } from "../providers/anthropic-refusal.js";
 import {
-  calculateCost,
-  clampThinkingLevel,
-  createDeferredEventBuffer,
-  getEnvApiKey,
-  notifyLlmRequestActivity,
-  parseStreamingJson,
-} from "../internal/runtime.js";
+  ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
+  ANTHROPIC_SERVER_SIDE_FALLBACKS,
+  applyAnthropicFallbackBoundary,
+  readAnthropicFallbackBoundary,
+  resolveAnthropicFallbackServingModelCost,
+} from "../providers/anthropic-server-fallback.js";
+import {
+  ANTHROPIC_OMITTED_REASONING_TEXT,
+  findActiveAnthropicToolTurnAssistantIndex,
+} from "../providers/anthropic-thinking-replay.js";
+import {
+  projectAnthropicTools,
+  reconcileAnthropicToolChoice,
+  resolveOriginalAnthropicToolName,
+  type AnthropicProjectedToolChoice,
+  type AnthropicToolProjection,
+} from "../providers/anthropic-tool-projection.js";
+import {
+  readAnthropicPromptUsageSnapshot,
+  readAnthropicUsageTokenCount,
+  readLastAnthropicIterationUsage,
+  type AnthropicPromptUsageSnapshot,
+} from "../providers/anthropic-usage.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultBlockText,
   extractToolResultText,
   isImageWithMediaPayload,
-} from "../internal/shared.js";
+} from "../providers/tool-result-text.js";
 import { tagPendingCommentaryText } from "../utils/assistant-text-phase.js";
+import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
+import { parseStreamingJson } from "../utils/json-parse.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,

@@ -1,4 +1,5 @@
 import { onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
+import { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 /**
  * Wraps LLM streams with idle-timeout detection and diagnostics.
  */
@@ -194,10 +195,7 @@ function isOllamaCloudModel(model: { id?: string; provider?: string } | undefine
     return false;
   }
 
-  const modelId = rawModelId.trim().toLowerCase();
-  const slashIndex = modelId.indexOf("/");
-  const bareModelId = slashIndex >= 0 ? modelId.slice(slashIndex + 1) : modelId;
-  return bareModelId.endsWith(":cloud");
+  return isCloudModelRef(rawModelId);
 }
 
 type RuntimeModelLocality = {

@@ -21,7 +21,6 @@ import {
 } from "../agents/model-runtime-aliases.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
-import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import {
   resolveInternalSessionKey,
@@ -184,11 +183,7 @@ function resolveCodexSyntheticUsageAuthProfileId(params: {
     if (!credential) {
       return undefined;
     }
-    const credentialProvider = normalizeOptionalLowercaseString(credential.provider);
-    const resolvedProvider = resolveProviderIdForAuth(credential.provider, { config: params.cfg });
-    return resolvedProvider === "openai" ||
-      credentialProvider === "openai-codex" ||
-      credentialProvider === "codex-cli"
+    return normalizeOptionalLowercaseString(credential.provider) === "openai"
       ? normalizedProfileId
       : undefined;
   } catch {
@@ -546,14 +541,16 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     if (!taskLine && !params.skipDefaultTaskLookup) {
       taskLine = formatAgentTaskCountsLine(statusAgentId);
     }
-    const { buildSubagentsStatusLine, countPendingDescendantRuns, listControlledSubagentRuns } =
+    const { buildControlledSubagentRunsReadContext, buildSubagentsStatusLine } =
       await loadStatusSubagentsRuntime();
-    const runs = listControlledSubagentRuns(requesterKey);
+    const subagentReadContext = buildControlledSubagentRunsReadContext(requesterKey);
+    const runs = subagentReadContext.runs;
     const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
     subagentsLine = buildSubagentsStatusLine({
       runs,
       verboseEnabled,
-      pendingDescendantsForRun: (entry) => countPendingDescendantRuns(entry.childSessionKey),
+      pendingDescendantsForRun: (entry) =>
+        subagentReadContext.countPendingDescendantRuns(entry.childSessionKey),
     });
   }
   const groupActivation = isGroup

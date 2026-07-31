@@ -317,7 +317,7 @@ const expectMissing = (listValue, expected, field) => {
   }
 };
 
-const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "conformance", "adversarial"]);
+const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "adversarial"]);
 const requiredFullDiagnosticCanaries = new Set([
   "agent tool result middleware must be a function",
   "trusted tool policy registration requires id, description, and evaluate()",

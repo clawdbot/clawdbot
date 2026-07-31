@@ -19,7 +19,8 @@ const { formattingHintCalls } = vi.hoisted(() => ({
   formattingHintCalls: [] as Array<{ cfg: OpenClawConfig; accountId?: string | null }>,
 }));
 
-vi.mock("../../channels/plugins/registry-loaded.js", () => ({
+vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../channels/plugins/registry-loaded.js")>()),
   getLoadedChannelPluginById: (channelId: string) =>
     channelId === "slack"
       ? {

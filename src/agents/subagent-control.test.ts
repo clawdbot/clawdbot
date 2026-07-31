@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
 import {
+  buildControlledSubagentRunsReadContext,
   testing,
   killAllControlledSubagentRuns,
   killControlledSubagentRun,
@@ -2233,5 +2234,56 @@ describe("listControlledSubagentRuns", () => {
       }
     },
   );
+
+  it("uses one stable snapshot for listing and descendant counts", () => {
+    const now = Date.now();
+    const rootSessionKey = "agent:main:main";
+    const parentSessionKey = "agent:main:subagent:status-parent";
+    addSubagentRunForTests({
+      runId: "run-status-parent",
+      childSessionKey: parentSessionKey,
+      controllerSessionKey: rootSessionKey,
+      requesterSessionKey: rootSessionKey,
+      requesterDisplayKey: rootSessionKey,
+      task: "status parent",
+      cleanup: "keep",
+      createdAt: now - 4_000,
+      startedAt: now - 3_500,
+      endedAt: now - 3_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-status-child-1",
+      childSessionKey: `${parentSessionKey}:subagent:child-1`,
+      controllerSessionKey: parentSessionKey,
+      requesterSessionKey: parentSessionKey,
+      requesterDisplayKey: parentSessionKey,
+      task: "status child 1",
+      cleanup: "keep",
+      createdAt: now - 2_000,
+      startedAt: now - 1_500,
+    });
+
+    const context = buildControlledSubagentRunsReadContext(rootSessionKey);
+
+    addSubagentRunForTests({
+      runId: "run-status-child-2",
+      childSessionKey: `${parentSessionKey}:subagent:child-2`,
+      controllerSessionKey: parentSessionKey,
+      requesterSessionKey: parentSessionKey,
+      requesterDisplayKey: parentSessionKey,
+      task: "status child 2",
+      cleanup: "keep",
+      createdAt: now - 1_000,
+      startedAt: now - 500,
+    });
+
+    expect(context.runs.map((run) => run.runId)).toEqual(["run-status-parent"]);
+    expect(context.countPendingDescendantRuns(parentSessionKey)).toBe(1);
+    expect(
+      buildControlledSubagentRunsReadContext(rootSessionKey).countPendingDescendantRuns(
+        parentSessionKey,
+      ),
+    ).toBe(2);
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

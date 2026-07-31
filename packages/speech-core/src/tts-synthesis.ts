@@ -2,12 +2,22 @@ import { resolveChannelTtsVoiceDelivery } from "openclaw/plugin-sdk/channel-targ
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { transcodeAudioBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { tempWorkspaceSync, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
-import { scheduleCleanup, type TtsDirectiveOverrides } from "openclaw/plugin-sdk/speech-core";
+import type { TtsDirectiveOverrides } from "openclaw/plugin-sdk/speech-core";
 import { assertSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { normalizeSpeechText } from "./speech-text.js";
-import { executeTtsProviderAttempts, resolveTtsRequestSetup } from "./tts-synthesis-support.js";
+import {
+  executeTtsProviderAttempts,
+  resolveTtsRequestSetup,
+  sanitizeTtsErrorForLog,
+} from "./tts-synthesis-support.js";
 import type { TtsResult, TtsSynthesisResult } from "./tts-types.js";
+
+export type TtsAudioPersistence = (params: {
+  audioBuffer: Buffer;
+  cfg: OpenClawConfig;
+  fileExtension: string;
+  outputFormat?: string;
+}) => Promise<string>;
 
 export function supportsNativeVoiceNoteTts(channel: string | undefined): boolean {
   return resolveChannelTtsVoiceDelivery(channel) !== undefined;
@@ -68,17 +78,20 @@ export function shouldDeliverTtsAsVoice(params: {
   return params.voiceCompatible === true || delivery.transcodesAudio === true;
 }
 
-export async function textToSpeech(params: {
-  text: string;
-  cfg: OpenClawConfig;
-  prefsPath?: string;
-  channel?: string;
-  overrides?: TtsDirectiveOverrides;
-  disableFallback?: boolean;
-  timeoutMs?: number;
-  agentId?: string;
-  accountId?: string;
-}): Promise<TtsResult> {
+export async function textToSpeech(
+  params: {
+    text: string;
+    cfg: OpenClawConfig;
+    prefsPath?: string;
+    channel?: string;
+    overrides?: TtsDirectiveOverrides;
+    disableFallback?: boolean;
+    timeoutMs?: number;
+    agentId?: string;
+    accountId?: string;
+  },
+  persistTtsAudio: TtsAudioPersistence,
+): Promise<TtsResult> {
   const synthesis = await synthesizeSpeech(params);
   if (!synthesis.success || !synthesis.audioBuffer || !synthesis.fileExtension) {
     return {
@@ -106,12 +119,27 @@ export async function textToSpeech(params: {
     outputFormat = transcoded.outputFormat;
   }
 
-  const temp = tempWorkspaceSync({
-    rootDir: resolvePreferredOpenClawTmpDir(),
-    prefix: "tts-",
-  });
-  const audioPath = temp.write(`voice-${Date.now()}${fileExtension}`, audioBuffer);
-  scheduleCleanup(temp.dir);
+  let audioPath: string;
+  try {
+    audioPath = await persistTtsAudio({
+      audioBuffer,
+      cfg: params.cfg,
+      fileExtension,
+      outputFormat,
+    });
+  } catch (err) {
+    logVerbose(`TTS: audio persistence failed: ${sanitizeTtsErrorForLog(err)}`);
+    return {
+      success: false,
+      error: "TTS audio persistence failed",
+      latencyMs: synthesis.latencyMs,
+      provider: synthesis.provider,
+      persona: synthesis.persona,
+      fallbackFrom: synthesis.fallbackFrom,
+      attemptedProviders: synthesis.attemptedProviders,
+      attempts: synthesis.attempts,
+    };
+  }
 
   return {
     success: true,

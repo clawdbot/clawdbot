@@ -15,6 +15,7 @@ import {
   defaultGithubSnapshotPath,
   githubApiWithSnapshot,
   highlightCountError,
+  isEligibleHandle,
   persistGithubSnapshot,
   pullRequestTitleFromCommitSubject,
   releaseNoteReferences,
@@ -48,6 +49,13 @@ function git(cwd: string, args: string[]): string {
 }
 
 describe("release-note verification", () => {
+  it("excludes maintainer and automation identities from contributor credit", () => {
+    expect(isEligibleHandle("human-contributor")).toBe(true);
+    expect(isEligibleHandle("steipete")).toBe(false);
+    expect(isEligibleHandle("steipete-oai")).toBe(false);
+    expect(isEligibleHandle("hugin-bot")).toBe(false);
+  });
+
   it("accepts only canonical commit PR suffixes", () => {
     expect(pullRequestTitleFromCommitSubject("Fix status (#102147)", 102147)).toBe("Fix status");
     expect(pullRequestTitleFromCommitSubject("Fix status(#102147)", 102147)).toBeUndefined();

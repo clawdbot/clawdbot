@@ -60,6 +60,8 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     await import("../commands/doctor-auth-legacy-oauth.js");
   const { maybeRepairLegacyOAuthSidecarProfiles } =
     await import("../commands/doctor-auth-oauth-sidecar.js");
+  const { maybeMigrateLegacyPluginModelCatalogs } =
+    await import("../commands/doctor-plugin-model-catalog.js");
   const { noteAuthProfileHealth, noteLegacyCodexProviderOverride } =
     await import("../commands/doctor-auth.js");
   const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
@@ -75,6 +77,12 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
   await maybeRepairLegacyOAuthSidecarProfiles({
     cfg: ctx.cfg,
     prompter: ctx.prompter,
+  });
+  await maybeMigrateLegacyPluginModelCatalogs({
+    cfg: ctx.cfg,
+    ...(ctx.env ? { env: ctx.env } : {}),
+    prompter: ctx.prompter,
+    runtime: ctx.runtime,
   });
   ctx.cfg = await maybeRepairLegacyOAuthProfileIds(ctx.cfg, ctx.prompter);
   await noteAuthProfileHealth({

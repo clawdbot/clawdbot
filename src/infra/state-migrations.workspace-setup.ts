@@ -19,12 +19,18 @@ import { resolveLegacyStateDirs } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "./errors.js";
 import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
+import {
+  legacyMigrationPathMayExist as pathMayExist,
+  legacyMigrationSourceOrClaimMayExist as sourceOrClaimMayExist,
+  legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
+} from "./state-migrations.source-snapshot.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 import {
   markSourceRemoved,
   readReceipt,
   type MigrationReceipt,
 } from "./state-migrations.workspace-setup-receipts.js";
+import { listSandboxWorkspaceDirs } from "./state-migrations.workspace-setup-sandbox.js";
 import {
   canonicalCoversParsedSource,
   importAndRecordReceipt,
@@ -42,19 +48,6 @@ const CLAIM_SUFFIX = WORKSPACE_DOCTOR_CLAIM_SUFFIX;
 const MIGRATION_LOCK_TIMEOUT_MS = 250;
 const MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
-
-function pathMayExist(filePath: string): boolean {
-  try {
-    fs.lstatSync(filePath);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
-}
-
-function sourceOrClaimMayExist(sourcePath: string): boolean {
-  return pathMayExist(sourcePath) || pathMayExist(`${sourcePath}${CLAIM_SUFFIX}`);
-}
 
 async function readBoundedRegularFile(params: {
   sourceRoot: Root;
@@ -141,16 +134,6 @@ function createLegacySource(
   return { ...params, rootDir, relativePath, sourcePath };
 }
 
-function snapshotsMatch(left: SourceSnapshot, right: SourceSnapshot): boolean {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mtimeMs === right.mtimeMs &&
-    left.sha256 === right.sha256 &&
-    left.size === right.size
-  );
-}
-
 function siblingAttestationNeedsDoctor(filePath: string): boolean {
   try {
     const before = fs.lstatSync(filePath);
@@ -233,6 +216,70 @@ function listOrphanAttestationSources(params: {
   return sources;
 }
 
+function addLegacyWorkspaceSources(params: {
+  workspaceDir: string;
+  env: NodeJS.ProcessEnv;
+  homedir: () => string;
+  add: (source: LegacyWorkspaceStateSource) => void;
+}): void {
+  const identity = resolveWorkspaceStateIdentity(params.workspaceDir);
+  const paths = resolveLegacyWorkspaceSourcePaths(params.workspaceDir, {
+    env: params.env,
+    homedir: params.homedir,
+  });
+  for (const [priority, sourcePath] of paths.setupStatePaths.entries()) {
+    if (sourceOrClaimMayExist(sourcePath)) {
+      params.add(
+        createLegacySource({
+          kind: "setup",
+          rootDir: sourcePath.endsWith(LEGACY_WORKSPACE_STATE_CURRENT_FILENAME)
+            ? path.dirname(sourcePath)
+            : path.dirname(path.dirname(sourcePath)),
+          sourcePath,
+          workspaceKey: identity.workspaceKey,
+          workspaceDir: identity.workspacePath,
+          workspaceAliasPath: paths.workspacePath,
+          priority,
+        }),
+      );
+    }
+  }
+  for (const [priority, sourcePath] of paths.stateDirAttestationPaths.entries()) {
+    if (sourceOrClaimMayExist(sourcePath)) {
+      params.add(
+        createLegacySource({
+          kind: "attestation",
+          rootDir: path.dirname(path.dirname(sourcePath)),
+          sourcePath,
+          workspaceKey: identity.workspaceKey,
+          workspaceDir: identity.workspacePath,
+          workspaceAliasPath: paths.workspacePath,
+          priority,
+        }),
+      );
+    }
+  }
+  for (const [index, sourcePath] of paths.siblingAttestationPaths.entries()) {
+    if (
+      !pathMayExist(`${sourcePath}${CLAIM_SUFFIX}`) &&
+      !siblingAttestationNeedsDoctor(sourcePath)
+    ) {
+      continue;
+    }
+    params.add(
+      createLegacySource({
+        kind: "attestation",
+        rootDir: path.dirname(sourcePath),
+        sourcePath,
+        workspaceKey: identity.workspaceKey,
+        workspaceDir: identity.workspacePath,
+        workspaceAliasPath: paths.workspacePath,
+        priority: paths.stateDirAttestationPaths.length + index,
+      }),
+    );
+  }
+}
+
 /** Detect retired workspace files only when an explicit Doctor flow opts in. */
 export function detectLegacyWorkspaceState(params: {
   cfg: OpenClawConfig;
@@ -262,59 +309,16 @@ export function detectLegacyWorkspaceState(params: {
   };
 
   for (const workspaceDir of listAgentWorkspaceDirs(params.cfg)) {
-    const identity = resolveWorkspaceStateIdentity(workspaceDir);
-    const paths = resolveLegacyWorkspaceSourcePaths(workspaceDir, { env, homedir });
-    for (const [priority, sourcePath] of paths.setupStatePaths.entries()) {
-      if (sourceOrClaimMayExist(sourcePath)) {
-        add(
-          createLegacySource({
-            kind: "setup",
-            rootDir: sourcePath.endsWith(LEGACY_WORKSPACE_STATE_CURRENT_FILENAME)
-              ? path.dirname(sourcePath)
-              : path.dirname(path.dirname(sourcePath)),
-            sourcePath,
-            workspaceKey: identity.workspaceKey,
-            workspaceDir: identity.workspacePath,
-            workspaceAliasPath: paths.workspacePath,
-            priority,
-          }),
-        );
-      }
-    }
-    for (const [priority, sourcePath] of paths.stateDirAttestationPaths.entries()) {
-      if (sourceOrClaimMayExist(sourcePath)) {
-        add(
-          createLegacySource({
-            kind: "attestation",
-            rootDir: path.dirname(path.dirname(sourcePath)),
-            sourcePath,
-            workspaceKey: identity.workspaceKey,
-            workspaceDir: identity.workspacePath,
-            workspaceAliasPath: paths.workspacePath,
-            priority,
-          }),
-        );
-      }
-    }
-    for (const [index, sourcePath] of paths.siblingAttestationPaths.entries()) {
-      if (
-        !pathMayExist(`${sourcePath}${CLAIM_SUFFIX}`) &&
-        !siblingAttestationNeedsDoctor(sourcePath)
-      ) {
-        continue;
-      }
-      add(
-        createLegacySource({
-          kind: "attestation",
-          rootDir: path.dirname(sourcePath),
-          sourcePath,
-          workspaceKey: identity.workspaceKey,
-          workspaceDir: identity.workspacePath,
-          workspaceAliasPath: paths.workspacePath,
-          priority: paths.stateDirAttestationPaths.length + index,
-        }),
-      );
-    }
+    addLegacyWorkspaceSources({ workspaceDir, env, homedir, add });
+  }
+
+  for (const workspaceDir of listSandboxWorkspaceDirs({
+    cfg: params.cfg,
+    env,
+    homedir,
+    stateDir: params.stateDir,
+  })) {
+    addLegacyWorkspaceSources({ workspaceDir, env, homedir, add });
   }
 
   for (const source of listOrphanAttestationSources({ stateDir: params.stateDir, homedir })) {

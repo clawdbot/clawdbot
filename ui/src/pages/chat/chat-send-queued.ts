@@ -61,6 +61,7 @@ import {
   type StoredChatOutboxScope,
 } from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
+import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation } from "./input-history.ts";
 import { controlUiNowMs, roundedControlUiDurationMs } from "./performance.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
@@ -295,6 +296,13 @@ export async function sendQueuedChatMessage(
         sendState: "failed",
       }));
       if (isVisibleSession()) {
+        const scope = readChatSessionProjectionScope(host, {
+          sessionKey,
+          agentId: prepared.agentId,
+        });
+        // A definite rejection removes only this pane's existing optimistic
+        // entry; unrelated transcript rows and unconfirmed sends stay intact.
+        reduceChatSessionProjection(host, { type: "sendFailed", runId }, { scope });
         reconcileChatRunLifecycle(
           host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
           {
@@ -324,20 +332,36 @@ export async function sendQueuedChatMessage(
     }
     if (isVisibleSession()) {
       if (retireOnAck) {
-        host.chatMessages = [
-          ...host.chatMessages,
+        const scope = readChatSessionProjectionScope(host, {
+          sessionKey,
+          agentId: prepared.agentId,
+        });
+        // Route the existing optimistic bubble through the pane reducer so a
+        // concurrent history snapshot cannot erase its send identity.
+        reduceChatSessionProjection(
+          host,
           {
-            role: "user",
-            content: buildUserChatMessageContentBlocks(
-              message,
-              hasAttachments ? attachments : undefined,
-            ),
-            timestamp: startedAt,
-            // Send identity keeps this optimistic turn on the same rendered
-            // bubble key as the pending row and the authoritative history copy.
-            __openclaw: { idempotencyKey: `${runId}:user` },
+            type: "sendPending",
+            runId,
+            message: {
+              role: "user",
+              content: buildUserChatMessageContentBlocks(
+                message,
+                hasAttachments ? attachments : undefined,
+              ),
+              timestamp: startedAt,
+              __openclaw: { idempotencyKey: `${runId}:user` },
+            },
           },
-        ];
+          { scope },
+        );
+        if (ack.runId !== runId) {
+          reduceChatSessionProjection(
+            host,
+            { type: "sendAcknowledged", previousRunId: runId, runId: ack.runId },
+            { scope },
+          );
+        }
       }
       if (ack.status === "ok") {
         reconcileChatRunLifecycle(

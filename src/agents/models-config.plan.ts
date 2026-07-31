@@ -5,6 +5,7 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import { isRecord } from "../utils.js";
 import {
   mergeProviders,
@@ -35,12 +36,16 @@ type ResolveImplicitProvidersForModelsJson = (params: {
   workspaceDir?: string;
   explicitProviders: Record<string, ProviderConfig>;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+  preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
   providerDiscoveryProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
 }) => Promise<Record<string, ProviderConfig>>;
 
-/** Planned models.json write/noop/skip result plus plugin catalog sidecar writes. */
+/**
+ * Planned models.json result. When present, pluginCatalogWrites is the complete
+ * replacement set; omission means the plan is non-authoritative for plugin catalogs.
+ */
 type ModelsJsonPlan =
   | {
       action: "skip";
@@ -99,6 +104,7 @@ async function resolveProvidersForModelsJsonWithDeps(
     env: NodeJS.ProcessEnv;
     workspaceDir?: string;
     pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+    preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
     providerDiscoveryProviderIds?: readonly string[];
     providerDiscoveryTimeoutMs?: number;
     providerDiscoveryEntriesOnly?: boolean;
@@ -127,6 +133,9 @@ async function resolveProvidersForModelsJsonWithDeps(
     explicitProviders,
     ...(params.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+      : {}),
+    ...(params.preparedStaticProviderCatalog
+      ? { preparedStaticProviderCatalog: params.preparedStaticProviderCatalog }
       : {}),
     ...(params.providerDiscoveryProviderIds
       ? { providerDiscoveryProviderIds: params.providerDiscoveryProviderIds }
@@ -210,6 +219,7 @@ async function planOpenClawModelsJsonWithDeps(
     existingRaw: string;
     existingParsed: unknown;
     pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+    preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
     providerDiscoveryProviderIds?: readonly string[];
     providerDiscoveryTimeoutMs?: number;
     providerDiscoveryEntriesOnly?: boolean;
@@ -227,6 +237,9 @@ async function planOpenClawModelsJsonWithDeps(
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       ...(params.pluginMetadataSnapshot
         ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+        : {}),
+      ...(params.preparedStaticProviderCatalog
+        ? { preparedStaticProviderCatalog: params.preparedStaticProviderCatalog }
         : {}),
       ...(params.providerDiscoveryProviderIds
         ? { providerDiscoveryProviderIds: params.providerDiscoveryProviderIds }

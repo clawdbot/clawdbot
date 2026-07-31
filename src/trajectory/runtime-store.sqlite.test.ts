@@ -13,6 +13,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   appendSqliteTrajectoryRuntimeEvents,
+  loadSqliteTrajectoryRuntimeEventRowsSync,
   loadSqliteTrajectoryRuntimeEvents,
 } from "./runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "./types.js";
@@ -85,6 +86,40 @@ describe("SQLite trajectory runtime store", () => {
     });
 
     expect(events.map((event) => event.type)).toEqual(["event-3", "event-4"]);
+  });
+
+  it("loads a bounded trailing window in storage order", () => {
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
+      createTrajectoryEvent({ type: "event-1" }),
+      createTrajectoryEvent({ type: "event-2" }),
+      createTrajectoryEvent({ type: "event-3" }),
+    ]);
+
+    const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
+      sessionId: "session-1",
+      storePath,
+      tailEvents: 2,
+    });
+
+    expect(rows.map((row) => row.event.type)).toEqual(["event-2", "event-3"]);
+    expect(rows.map((row) => row.seq)).toEqual([1, 2]);
+  });
+
+  it("applies maxEvents to a trailing window", () => {
+    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
+      createTrajectoryEvent({ type: "event-1" }),
+      createTrajectoryEvent({ type: "event-2" }),
+      createTrajectoryEvent({ type: "event-3" }),
+    ]);
+
+    const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
+      sessionId: "session-1",
+      storePath,
+      tailEvents: 3,
+      maxEvents: 1,
+    });
+
+    expect(rows.map((row) => row.event.type)).toEqual(["event-3"]);
   });
 
   it("drops old runs while retaining recent runs", async () => {

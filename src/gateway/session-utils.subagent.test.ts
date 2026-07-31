@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { canonicalSubagentRunFixtures } from "../agents/subagent-registry.persistence.test-support.js";
 import { saveSubagentRegistryToSqlite } from "../agents/subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
@@ -23,6 +24,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnv } from "../test-utils/env.js";
+import { buildSingleRowStoreChildSessionsByKey } from "./session-utils-projection.js";
 import {
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
@@ -171,6 +173,81 @@ describe("listSessionsFromStore subagent metadata", () => {
       entryId: "entry-source",
     });
     expect(row.previousSessionId).toBe("sess-previous");
+  });
+
+  test("discovers controlled children through both navigation and runtime owners", () => {
+    const now = Date.now();
+    const navigationParentKey = "agent:main:dashboard:navigation-parent";
+    const controlParentKey = "agent:main:subagent:runtime-controller";
+    const staleParentKey = "agent:main:subagent:stale-controller";
+    const childSessionKey = "agent:main:subagent:controlled-child";
+    const store: Record<string, SessionEntry> = {
+      [navigationParentKey]: {
+        sessionId: "sess-navigation-parent",
+        updatedAt: now - 2_000,
+      } as SessionEntry,
+      [controlParentKey]: {
+        sessionId: "sess-runtime-controller",
+        updatedAt: now - 1_000,
+      } as SessionEntry,
+      [childSessionKey]: {
+        sessionId: "sess-controlled-child",
+        updatedAt: now,
+        spawnedBy: staleParentKey,
+        parentSessionKey: navigationParentKey,
+      } as SessionEntry,
+    };
+
+    addSubagentRunForTests({
+      runId: "run-controlled-child-dual-owner",
+      childSessionKey,
+      controllerSessionKey: controlParentKey,
+      requesterSessionKey: controlParentKey,
+      requesterDisplayKey: "runtime-controller",
+      task: "controlled child",
+      cleanup: "keep",
+      createdAt: now - 5_000,
+      startedAt: now - 4_000,
+    });
+
+    const listForOwner = (ownerSessionKey: string) =>
+      listSessionsFromStore({
+        cfg,
+        storePath: "/tmp/sessions.json",
+        store,
+        opts: { spawnedBy: ownerSessionKey },
+      });
+
+    const navigationChildren = listForOwner(navigationParentKey).sessions;
+    expect(navigationChildren.map((session) => session.key)).toEqual([childSessionKey]);
+    expect(navigationChildren[0]?.parentSessionKey).toBe(navigationParentKey);
+    expect(navigationChildren[0]?.controlOwnerSessionKey).toBe(controlParentKey);
+    expect(listForOwner(controlParentKey).sessions.map((session) => session.key)).toEqual([
+      childSessionKey,
+    ]);
+    expect(listForOwner(staleParentKey).sessions).toEqual([]);
+
+    const all = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+    expect(
+      all.sessions.find((session) => session.key === navigationParentKey)?.childSessions,
+    ).toEqual([childSessionKey]);
+    expect(all.sessions.find((session) => session.key === controlParentKey)?.childSessions).toEqual(
+      [childSessionKey],
+    );
+
+    expect(
+      buildSingleRowStoreChildSessionsByKey({
+        store,
+        storePath: "/tmp/sessions.json",
+        key: navigationParentKey,
+        now,
+      }).get(navigationParentKey),
+    ).toEqual([childSessionKey]);
   });
 
   test("includes subagent status timing and direct child session keys", () => {
@@ -829,7 +906,7 @@ describe("listSessionsFromStore subagent metadata", () => {
           OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1",
         },
         () => {
-          saveSubagentRegistryToSqlite(persistedRuns);
+          saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(persistedRuns));
           const result = listSessionsFromStore({
             cfg,
             storePath: "/tmp/sessions.json",
@@ -920,7 +997,7 @@ describe("listSessionsFromStore subagent metadata", () => {
           OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1",
         },
         () => {
-          saveSubagentRegistryToSqlite(persistedRuns);
+          saveSubagentRegistryToSqlite(canonicalSubagentRunFixtures(persistedRuns));
           return listSessionsFromStore({
             cfg,
             storePath: "/tmp/sessions.json",
@@ -1406,8 +1483,8 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       await seedSessionEntry(
         storePath,
         "agent:ops:legacy",
-        { sessionId: "s-legacy-ops", spawnedBy: "main", updatedAt: 400 },
-        "main",
+        { sessionId: "s-legacy-ops", spawnedBy: "agent:ops:main", updatedAt: 400 },
+        "ops",
       );
       const dynamicIncognitoKey = "dashboard:incognito-dynamic";
       await seedSessionEntry(

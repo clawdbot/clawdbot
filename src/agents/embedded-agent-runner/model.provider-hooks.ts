@@ -1,6 +1,7 @@
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Api, Model } from "../../llm/types.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   applyProviderResolvedTransportWithPlugin,
   buildProviderUnknownModelHintWithPlugin,
@@ -11,6 +12,7 @@ import {
   shouldPreferProviderRuntimeResolvedModel,
 } from "../../plugins/provider-runtime.js";
 import { canonicalizeOpenAIModelId } from "../openai-routing.js";
+import { inheritModelProviderMetadataOwners } from "../provider-request-config.js";
 import {
   normalizeResolvedTransportApi,
   resolveProviderModelInput,
@@ -182,7 +184,7 @@ export function normalizeResolvedModel(params: {
       input: params.model.input,
     }),
     cost: normalizeModelCost((params.model as { cost?: unknown }).cost),
-  } as Model;
+  } as Model & ProviderRuntimeModel;
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const pluginNormalized = runtimeHooks.normalizeProviderResolvedModelWithPlugin({
     provider: params.provider,
@@ -219,13 +221,24 @@ export function normalizeResolvedModel(params: {
       runtimeHooks,
       model: pluginNormalized ?? normalizedInputModel,
     });
-  return canonicalizeLegacyResolvedModel({
+  const normalizedModel = normalizeResolvedProviderModel({
     provider: params.provider,
-    model: normalizeResolvedProviderModel({
+    model: fallbackTransportNormalized ?? pluginNormalized ?? normalizedInputModel,
+  }) as Model & ProviderRuntimeModel;
+  // Rebuilding provider hooks may drop the host-prepared timeout. Restore it
+  // only when the final model does not declare a provider-owned override.
+  const modelWithProviderTimeout =
+    normalizedModel.requestTimeoutMs === undefined &&
+    normalizedInputModel.requestTimeoutMs !== undefined
+      ? { ...normalizedModel, requestTimeoutMs: normalizedInputModel.requestTimeoutMs }
+      : normalizedModel;
+  return inheritModelProviderMetadataOwners(
+    params.model,
+    canonicalizeLegacyResolvedModel({
       provider: params.provider,
-      model: fallbackTransportNormalized ?? pluginNormalized ?? normalizedInputModel,
+      model: modelWithProviderTimeout,
     }),
-  });
+  );
 }
 
 export function resolveProviderTransport(params: {

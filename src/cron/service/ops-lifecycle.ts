@@ -49,17 +49,20 @@ export async function start(state: CronServiceState) {
         const taskRunId = tryFindCronTaskRunIdForRecovery(state, job.id, runningAtMs);
         const finalized = tryFindFinalizedCronTaskRun(state, job.id, runningAtMs);
         if (finalized) {
-          interruptedJobIds.add(job.id);
-          if (
-            restoreFinalizedStartupRun({
-              state,
-              job,
-              runningAtMs,
-              entry: finalized.entry,
-              ...(finalized.scriptResult ? { scriptResult: finalized.scriptResult } : {}),
-              ...(finalized.triggerEval ? { triggerEval: finalized.triggerEval } : {}),
-            })
-          ) {
+          const repaired = restoreFinalizedStartupRun({
+            state,
+            job,
+            runningAtMs,
+            entry: finalized.entry,
+            ...(finalized.scriptResult ? { scriptResult: finalized.scriptResult } : {}),
+            ...(finalized.triggerEval ? { triggerEval: finalized.triggerEval } : {}),
+          });
+          // Skip only the old invocation; a distinct overdue replacement
+          // must remain eligible for normal one-shot startup catch-up.
+          if (repaired.replacementAtMs === undefined) {
+            interruptedJobIds.add(job.id);
+          }
+          if (repaired.shouldDelete) {
             completedJobIdsToDelete.add(job.id);
           }
           repairedAnyStartupRun = true;
@@ -73,7 +76,9 @@ export async function start(state: CronServiceState) {
           runningAtMs,
           nowMs,
         });
-        interruptedJobIds.add(job.id);
+        if (interrupted.replacementAtMs === undefined) {
+          interruptedJobIds.add(job.id);
+        }
         interruptedRuns.push(interrupted);
         repairedAnyStartupRun = true;
       }

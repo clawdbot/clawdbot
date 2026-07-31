@@ -1,8 +1,10 @@
 // Memory Host SDK module implements embeddings worker behavior.
 import { fork, type ChildProcess } from "node:child_process";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { stableHomebrewNodePathCandidates } from "@openclaw/normalization-core/stable-node-path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 import {
@@ -117,6 +119,14 @@ function createWorkerExitError(code: number | null, signal: NodeJS.Signals | nul
   });
 }
 
+function createWorkerShutdownError(): Error {
+  return createLocalEmbeddingWorkerFailureError({
+    message: "Local embedding worker exited unexpectedly (shutdown)",
+    code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
+    reason: "exit",
+  });
+}
+
 /** Convert worker response errors into Error objects while preserving worker error codes. */
 function createWorkerResponseError(error: LocalEmbeddingWorkerResponse & { ok: false }): Error {
   if (typeof error.error === "object" && error.error) {
@@ -225,16 +235,32 @@ function resolveWorkerExecArgv(): string[] {
   return args;
 }
 
+async function resolveWorkerExecPath(nodePath: string): Promise<string> {
+  for (const candidate of stableHomebrewNodePathCandidates(nodePath)) {
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // Try the next Homebrew-managed stable path.
+    }
+  }
+  return nodePath;
+}
+
 /** IPC client that serializes local embedding calls through one child process. */
 class LocalEmbeddingWorkerClient {
   private child: ChildProcess | null = null;
   private closed = false;
   private shutdownPromise: Promise<void> | null = null;
+  private requestTail: Promise<void> = Promise.resolve();
   private nextRequestId = 1;
   private pending = new Map<number, PendingRequest>();
   private lastRuntimeFacts: LocalEmbeddingRuntimeFacts | undefined;
 
-  constructor(private readonly scriptPath: string) {}
+  constructor(
+    private readonly scriptPath: string,
+    private readonly execPath: string,
+  ) {}
 
   /** Start or reuse the child worker and initialize its provider. */
   async initialize(options: EmbeddingProviderOptions): Promise<void> {
@@ -247,7 +273,7 @@ class LocalEmbeddingWorkerClient {
     text: string,
     callOptions?: EmbeddingProviderCallOptions,
   ): Promise<number[]> {
-    const result = await this.send({ type: "embedQuery", options, text }, callOptions);
+    const result = await this.enqueueRequest({ type: "embedQuery", options, text }, callOptions);
     return Array.isArray(result) ? (result as number[]) : [];
   }
 
@@ -257,7 +283,7 @@ class LocalEmbeddingWorkerClient {
     texts: string[],
     callOptions?: EmbeddingProviderCallOptions,
   ): Promise<number[][]> {
-    const result = await this.send({ type: "embedBatch", options, texts }, callOptions);
+    const result = await this.enqueueRequest({ type: "embedBatch", options, texts }, callOptions);
     return Array.isArray(result) ? (result as number[][]) : [];
   }
 
@@ -331,6 +357,7 @@ class LocalEmbeddingWorkerClient {
     }
 
     const child = fork(this.scriptPath, [], {
+      execPath: this.execPath,
       execArgv: resolveWorkerExecArgv(),
       serialization: "json",
       stdio: ["ignore", "ignore", "ignore", "ipc"],
@@ -363,6 +390,58 @@ class LocalEmbeddingWorkerClient {
     });
     this.child = child;
     return child;
+  }
+
+  /** Serialize native work without letting a queued cancellation kill the active child. */
+  private async enqueueRequest(
+    request: LocalEmbeddingWorkerRequestPayload,
+    options?: EmbeddingProviderCallOptions,
+  ): Promise<number[] | number[][] | undefined> {
+    const signal = options?.signal;
+    signal?.throwIfAborted();
+    const queuedDuringShutdown = this.shutdownPromise !== null;
+
+    // The child also serializes native work, so queued requests must remain in
+    // the parent until they own the worker and can safely terminate it on abort.
+    const operation = this.requestTail.then(async () => {
+      signal?.throwIfAborted();
+      // Work submitted after active cancellation must join its shutdown before
+      // observing close; work already queued when close begins gets worker exit.
+      if (this.closed && !queuedDuringShutdown) {
+        throw createWorkerShutdownError();
+      }
+      return await this.send(request, options);
+    });
+    this.requestTail = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+
+    if (!signal) {
+      return await operation;
+    }
+
+    return await new Promise((resolve, reject) => {
+      const abort = () => {
+        reject(
+          toErrorObject(
+            signal.reason ?? new Error("Local embedding request aborted"),
+            "Non-Error rejection",
+          ),
+        );
+      };
+      signal.addEventListener("abort", abort, { once: true });
+      void operation.then(
+        (value) => {
+          signal.removeEventListener("abort", abort);
+          resolve(value);
+        },
+        (error: unknown) => {
+          signal.removeEventListener("abort", abort);
+          reject(toErrorObject(error, "Local embedding request failed"));
+        },
+      );
+    });
   }
 
   /** Send one request over IPC and bind its abort signal to child shutdown. */
@@ -475,13 +554,7 @@ class LocalEmbeddingWorkerClient {
   }
 
   private async stopChild(child: ChildProcess): Promise<void> {
-    this.rejectPending(
-      createLocalEmbeddingWorkerFailureError({
-        message: "Local embedding worker exited unexpectedly (shutdown)",
-        code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
-        reason: "exit",
-      }),
-    );
+    this.rejectPending(createWorkerShutdownError());
     if (child.connected) {
       child.disconnect();
     }
@@ -598,8 +671,12 @@ async function createLocalEmbeddingWorkerProviderOnce(
 ): Promise<EmbeddingProvider> {
   const modelPath = normalizeOptionalString(options.local?.modelPath) || DEFAULT_LOCAL_MODEL;
   const workerOptions = serializeLocalEmbeddingOptions(options, runtimeOptions);
+  // Resolve before constructing the client so worker restarts stay synchronous.
+  // The stable Homebrew symlink can retarget without changing this stored path.
+  const workerExecPath = await resolveWorkerExecPath(process.execPath);
   const client = new LocalEmbeddingWorkerClient(
     runtimeOptions?.workerScriptPath ?? resolveDefaultWorkerScriptPath(),
+    workerExecPath,
   );
   try {
     await client.initialize(workerOptions);

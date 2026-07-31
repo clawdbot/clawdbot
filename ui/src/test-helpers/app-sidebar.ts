@@ -20,6 +20,7 @@ import type {
 } from "../components/app-sidebar-workboard.ts";
 import type { SessionDataController } from "../components/session-data-controller.ts";
 import type { SessionOrganizerController } from "../components/session-organizer-controller.ts";
+import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { reconcileSessionHistory } from "../lib/sessions/reconcile.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
@@ -78,6 +79,27 @@ export type TestSessionMenu = HTMLElement & {
 };
 
 export function createGatewayHarness(client: GatewayBrowserClient) {
+  const originalRequest =
+    typeof client.request === "function"
+      ? (client.request.bind(client) as GatewayBrowserClient["request"])
+      : undefined;
+  // Custom-element registrations survive non-isolated test files, so real
+  // attention health requests must not consume sidebar feature response mocks.
+  client.request = <T = unknown>(
+    ...args: Parameters<GatewayBrowserClient["request"]>
+  ): Promise<T> => {
+    const [method] = args;
+    if (method === "cron.list") {
+      return Promise.resolve({ jobs: [], total: 0 } as T);
+    }
+    if (method === "models.authStatus") {
+      return Promise.resolve({ ts: 0, providers: [] } as T);
+    }
+    if (!originalRequest) {
+      return Promise.reject(new Error(`Unexpected sidebar gateway request: ${method}`));
+    }
+    return originalRequest<T>(...args);
+  };
   let snapshot: ApplicationGatewaySnapshot = {
     client,
     phase: "connected",
@@ -94,6 +116,12 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
   const gateway = {
     get snapshot() {
       return snapshot;
+    },
+    connection: {
+      gatewayUrl: "ws://gateway.test",
+      token: "",
+      bootstrapToken: "",
+      password: "",
     },
     setSessionKey: () => undefined,
     subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
@@ -307,6 +335,13 @@ export function createContext(
   sessions: SessionCapability,
   agentsList: AgentsListResult | null = null,
   approvalQueue: readonly ExecApprovalRequest[] = [],
+  agentIdentity: AgentIdentityCapability = {
+    get: () => null,
+    entries: () => [],
+    ensure: async () => undefined,
+    invalidate: () => undefined,
+    subscribe: () => () => undefined,
+  },
 ): ApplicationContext<RouteId> {
   const selectedAgentId = sessions.state.agentId ?? "main";
   return {
@@ -322,6 +357,7 @@ export function createContext(
       },
       subscribe: () => () => undefined,
     },
+    agentIdentity,
     agentSelection: {
       state: { selectedId: selectedAgentId, scopeId: selectedAgentId },
       set: () => undefined,
@@ -341,8 +377,9 @@ export async function mountSidebar(
   variant: SidebarLifecycleState["variant"] = "panel",
   agentsList: AgentsListResult | null = null,
   approvalQueue: readonly ExecApprovalRequest[] = [],
+  agentIdentity?: AgentIdentityCapability,
 ) {
-  const context = createContext(gateway, sessions, agentsList, approvalQueue);
+  const context = createContext(gateway, sessions, agentsList, approvalQueue, agentIdentity);
   const provider = createApplicationContextProvider(context);
   const sidebar = document.createElement(
     "openclaw-app-sidebar",
@@ -446,8 +483,8 @@ export function setupSidebarTest() {
   });
 
   afterEach(() => {
-    vi.useRealTimers();
     document.body.replaceChildren();
+    vi.useRealTimers();
     if (originalLocalStorage) {
       Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
     } else {

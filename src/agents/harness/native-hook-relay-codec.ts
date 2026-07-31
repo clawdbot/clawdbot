@@ -1,5 +1,6 @@
 import { stableStringify } from "../stable-stringify.js";
 import { normalizeToolName } from "../tool-policy.js";
+import { codexNativeHookRelayResponseCodec } from "./native-hook-relay-response-codec.js";
 import type {
   JsonValue,
   NativeHookRelayInvocation,
@@ -15,8 +16,11 @@ import {
   shellQuoteArgs,
 } from "./native-hook-relay-utils.js";
 
-const NATIVE_HOOK_TOOL_NAME_ALIASES: Record<string, string> = {
+const CODEX_NATIVE_HOOK_TOOL_NAME_ALIASES: Record<string, string> = {
   exec_command: "exec",
+  write: "apply_patch",
+  edit: "apply_patch",
+  agent: "spawn_agent",
 };
 
 const nativeHookRelayProviderAdapters: Record<
@@ -27,22 +31,7 @@ const nativeHookRelayProviderAdapters: Record<
     normalizeMetadata: normalizeCodexHookMetadata,
     readToolInput: readCodexToolInput,
     readToolResponse: readCodexToolResponse,
-    renderNoopResponse: () => {
-      // Codex treats empty stdout plus exit 0 as no decision/no additional context.
-      return { stdout: "", stderr: "", exitCode: 0 };
-    },
-    renderPreToolUseBlockResponse: (reason, failureDisposition) => ({
-      stdout: `${JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason: reason,
-        },
-      })}\n`,
-      stderr: "",
-      exitCode: 0,
-      ...(failureDisposition ? { failureDisposition } : {}),
-    }),
+    ...codexNativeHookRelayResponseCodec,
     renderBeforeAgentFinalizeReviseResponse: (reason) => ({
       stdout: `${JSON.stringify({
         decision: "block",
@@ -55,22 +44,6 @@ const nativeHookRelayProviderAdapters: Record<
       stdout: `${JSON.stringify({
         continue: false,
         ...(reason?.trim() ? { stopReason: reason.trim() } : {}),
-      })}\n`,
-      stderr: "",
-      exitCode: 0,
-    }),
-    renderPermissionDecisionResponse: (decision, message) => ({
-      stdout: `${JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "PermissionRequest",
-          decision:
-            decision === "allow"
-              ? { behavior: "allow" }
-              : {
-                  behavior: "deny",
-                  message: message?.trim() || "Denied by OpenClaw",
-                },
-        },
       })}\n`,
       stderr: "",
       exitCode: 0,
@@ -214,5 +187,5 @@ export function readNativeHookRelayApprovalMode(rawPayload: JsonValue): "report"
 
 export function normalizeNativeHookToolName(toolName: string | undefined): string {
   const normalized = normalizeToolName(toolName ?? "tool");
-  return NATIVE_HOOK_TOOL_NAME_ALIASES[normalized] ?? normalized;
+  return CODEX_NATIVE_HOOK_TOOL_NAME_ALIASES[normalized] ?? normalized;
 }

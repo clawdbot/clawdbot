@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 @testable import OpenClaw
@@ -6,21 +7,59 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct GatewayProcessManagerTests {
+    private func availableGatewayPort() throws -> Int {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        defer { _ = Darwin.close(fd) }
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
+                Darwin.bind(fd, socketAddress, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bound == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+
+        var assigned = sockaddr_in()
+        var assignedLength = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let resolved = withUnsafeMutablePointer(to: &assigned) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
+                getsockname(fd, socketAddress, &assignedLength)
+            }
+        }
+        guard resolved == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        return Int(UInt16(bigEndian: assigned.sin_port))
+    }
+
     private func withGatewayConfig<T>(
         mode: String,
+        port: Int? = nil,
         _ body: () async throws -> T) async throws -> T
     {
         let configPath = TestIsolation.tempConfigPath()
-        try Data(#"{"gateway":{"mode":"\#(mode)"}}"#.utf8)
+        let portFragment = port.map { ",\"port\":\($0)" } ?? ""
+        let config = #"{"gateway":{"mode":"\#(mode)""# + portFragment + "}}"
+        try Data(config.utf8)
             .write(to: URL(fileURLWithPath: configPath))
         defer { try? FileManager.default.removeItem(atPath: configPath) }
         return try await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath], body)
     }
 
     private func withLocalGatewayConfig<T>(
+        port: Int? = nil,
         _ body: () async throws -> T) async throws -> T
     {
-        try await self.withGatewayConfig(mode: "local", body)
+        try await self.withGatewayConfig(mode: "local", port: port, body)
     }
 
     @Test func `coalesces concurrent launch agent enable requests`() async throws {
@@ -1002,6 +1041,7 @@ struct GatewayProcessManagerTests {
     }
 
     @Test func `startup install forces the recovered control channel refresh`() async throws {
+        let port = try self.availableGatewayPort()
         let marker = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
         let session = GatewayTestWebSocketSession(
@@ -1018,8 +1058,8 @@ struct GatewayProcessManagerTests {
             configProvider: { (url: url, token: nil, password: nil) },
             sessionBox: WebSocketSessionBox(session: session))
 
-        try await self.withLocalGatewayConfig {
-            let port = GatewayEnvironment.gatewayPort()
+        try await self.withLocalGatewayConfig(port: port) {
+            #expect(GatewayEnvironment.gatewayPort() == port)
             GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
             GatewayLaunchAgentManager.setTestingDaemonStatusPayload(

@@ -189,6 +189,17 @@ describe("registerPluginCliCommands", () => {
     expect(mocks.otherRegister).toHaveBeenCalledTimes(1);
   });
 
+  it("skips plugin CLI registrars when an existing command alias matches", async () => {
+    const program = createProgram();
+    // Alias-only root names (e.g. cron|automations) are owned commands too.
+    program.command("mem-core").alias("memory");
+
+    await registerPluginCliCommands(program, {} as OpenClawConfig);
+
+    expect(mocks.memoryRegister).not.toHaveBeenCalled();
+    expect(mocks.otherRegister).toHaveBeenCalledTimes(1);
+  });
+
   it("forwards an explicit env to plugin loading", async () => {
     const env = { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv;
 

@@ -1,6 +1,7 @@
 // Coverage for the overflow compaction retry loop in runEmbeddedAgent.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "../../llm/types.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import {
   makeAttemptResult,
   makeCompactionSuccess,
@@ -128,6 +129,20 @@ describe("overflow compaction in run loop", () => {
     expectLogIncludes(mockedLog.info, "auto-compaction succeeded");
     // Should not be an error result
     expect(result.meta.error).toBeUndefined();
+  });
+
+  it("preserves a caller-owned session manager across retry attempts", async () => {
+    const sessionManager = SessionManager.inMemory();
+    mockOverflowRetrySuccess({
+      runEmbeddedAttempt: mockedRunEmbeddedAttempt,
+      compactDirect: mockedCompactDirect,
+    });
+
+    await runEmbeddedAgent({ ...baseParams, sessionManager });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(requireMockCallArg(mockedRunEmbeddedAttempt, 0).sessionManager).toBe(sessionManager);
+    expect(requireMockCallArg(mockedRunEmbeddedAttempt, 1).sessionManager).toBe(sessionManager);
   });
 
   it("uses the canonical assistant classifier when the legacy text heuristic misses", async () => {
@@ -823,7 +838,7 @@ describe("overflow compaction in run loop", () => {
     expect(
       requireMockCallArg(mockedSessionLikelyHasOversizedToolResults, 0).contextWindowTokens,
     ).toBe(200000);
-    expectTruncationScopeSessionFile(0, "/tmp/session.json");
+    expectTruncationScopeSessionFile(0, baseParams.sessionKey);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expectLogIncludes(mockedLog.info, "Truncated 1 tool result(s)");
     expect(result.meta.error).toBeUndefined();
@@ -869,7 +884,7 @@ describe("overflow compaction in run loop", () => {
     const oversizedArgs = requireMockCallArg(mockedSessionLikelyHasOversizedToolResults, 0);
     const messages = oversizedArgs.messages as Array<{ role?: string }>;
     expect(messages.filter((message) => message.role === "toolResult")).toHaveLength(3);
-    expectTruncationScopeSessionFile(0, "/tmp/session.json");
+    expectTruncationScopeSessionFile(0, baseParams.sessionKey);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expectLogIncludes(mockedLog.info, "Truncated 2 tool result(s)");
     expect(result.meta.error).toBeUndefined();
@@ -1010,7 +1025,7 @@ describe("overflow compaction in run loop", () => {
     const result = await runEmbeddedAgent(baseParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expectTruncationScopeSessionFile(0, "/tmp/session.json");
+    expectTruncationScopeSessionFile(0, baseParams.sessionKey);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expectLogIncludes(mockedLog.info, "post-compaction tool-result truncation succeeded");
     expect(result.meta.error).toBeUndefined();

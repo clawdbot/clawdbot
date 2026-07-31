@@ -1,8 +1,13 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import { escapeRegExp } from "../../../../src/shared/regexp.js";
-import type { ChatItem, NormalizedMessage, ToolCard } from "../../lib/chat/chat-types.ts";
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatItem,
+  ChatQueueItem,
+  NormalizedMessage,
+  ToolCard,
+} from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import {
   normalizeMessage,
@@ -311,50 +316,30 @@ export function isPendingSendMessage(message: unknown): boolean {
   return asRecord(asRecord(message)?.["__openclaw"])?.kind === "pending-send";
 }
 
+function readChatThreadMessageIdentity(message: unknown) {
+  const record = asRecord(message);
+  const surfaceId =
+    typeof record?.messageId === "string" && record.messageId.trim()
+      ? record.messageId
+      : record?.id;
+  return readSessionMessageIdentity(message, { messageId: surfaceId });
+}
+
 /** Every projection of one composer submit (pending queue row, locally
  * materialized turn, authoritative history) shares this identity so the
  * rendered bubble keeps one Lit key and never remounts mid-handoff. */
 export function userTurnSendIdentity(message: unknown): string | null {
-  const record = asRecord(message);
-  if (typeof record?.role !== "string" || record.role.toLowerCase() !== "user") {
-    return null;
-  }
-  const idempotencyKey = asRecord(record["__openclaw"])?.idempotencyKey;
-  if (typeof idempotencyKey !== "string" || !idempotencyKey.trim()) {
-    return null;
-  }
-  const base = idempotencyKey.endsWith(":user")
-    ? idempotencyKey.slice(0, -":user".length)
-    : idempotencyKey;
-  return `send:${base}`;
-}
-
-function sourceMessageId(message: unknown): string | null {
-  const record = asRecord(message);
-  if (!record) {
-    return null;
-  }
-  const openclawId = asRecord(record["__openclaw"])?.id;
-  if (typeof openclawId === "string" && openclawId.trim()) {
-    return openclawId.trim();
-  }
-  const messageId = typeof record.messageId === "string" ? record.messageId.trim() : "";
-  if (messageId) {
-    return messageId;
-  }
-  const id = typeof record.id === "string" ? record.id.trim() : "";
-  return id || null;
+  const identity = readChatThreadMessageIdentity(message);
+  return identity?.role === "user" && identity.runId ? `send:${identity.runId}` : null;
 }
 
 export function persistedMessageEntryId(message: unknown): string | null {
-  return isPendingSendMessage(message) ? null : sourceMessageId(message);
+  return isPendingSendMessage(message)
+    ? null
+    : (readChatThreadMessageIdentity(message)?.id ?? null);
 }
 
 function transcriptMessageSourceKey(message: unknown): string | null {
-  const record = asRecord(message);
-  if (!record) {
-    return null;
-  }
   // Send identity outranks transcript ids: the same submit is re-projected with
   // different id/seq metadata across the pending -> history handoff, and a key
   // change there remounts the bubble (visible flicker).
@@ -362,14 +347,17 @@ function transcriptMessageSourceKey(message: unknown): string | null {
   if (sendIdentity) {
     return sendIdentity;
   }
-  const id = sourceMessageId(message);
-  if (id) {
-    return `id:${id}`;
+  const identity = readChatThreadMessageIdentity(message);
+  if (identity?.isImported) {
+    if (identity.externalSource) {
+      return `import:${identity.externalSource}`;
+    }
+    return identity.sequence === null ? null : `import-seq:${identity.sequence}`;
   }
-  const seq = asRecord(record["__openclaw"])?.seq;
-  const normalizedSeq =
-    typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? seq : null;
-  return normalizedSeq == null ? null : `seq:${normalizedSeq}`;
+  if (identity?.id) {
+    return `id:${identity.id}`;
+  }
+  return identity?.sequence == null ? null : `seq:${identity.sequence}`;
 }
 
 const messageProjectionDigests = new WeakMap<object, string>();
@@ -424,11 +412,17 @@ function collapseDuplicateSourceKey(message: unknown): string | null {
     return null;
   }
   const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
-  if (role !== "assistant") {
+  if (role !== "assistant" && role !== "user") {
     return null;
   }
-  const id = sourceMessageId(message);
-  return id ? `${role}:${id}` : null;
+  const identity = readChatThreadMessageIdentity(message);
+  if (!identity?.isImported) {
+    return identity?.id ? `${role}:${identity.id}` : null;
+  }
+  if (identity.externalSource) {
+    return `${role}:import:${identity.externalSource}`;
+  }
+  return identity.sequence === null ? null : `${role}:import-seq:${identity.sequence}`;
 }
 
 function prefersNativeChatSurface(message: unknown): boolean {
@@ -510,16 +504,24 @@ export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem
   const collapsed: ChatItem[] = [];
   let previousSignature: string | null = null;
   let previousSourceKey: string | null = null;
+  let previousSourceIsUnprovenImport = false;
 
   for (const item of items) {
     if (item.kind !== "message") {
       collapsed.push(item);
       previousSignature = null;
       previousSourceKey = null;
+      previousSourceIsUnprovenImport = false;
       continue;
     }
     const signature = collapseDuplicateDisplaySignature(item.message);
     const sourceKey = collapseDuplicateSourceKey(item.message);
+    const identity = readChatThreadMessageIdentity(item.message);
+    const sourceIsUnprovenImport =
+      sourceKey === null &&
+      identity?.isImported === true &&
+      identity.externalSource === null &&
+      identity.sequence === null;
     const previous = collapsed[collapsed.length - 1];
     if (
       sourceKey &&
@@ -537,6 +539,8 @@ export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem
       signature &&
       previousSignature === signature &&
       previous?.kind === "message" &&
+      !sourceIsUnprovenImport &&
+      !previousSourceIsUnprovenImport &&
       !(sourceKey && previousSourceKey && sourceKey !== previousSourceKey)
     ) {
       previous.duplicateCount = (previous.duplicateCount ?? 1) + 1;
@@ -545,6 +549,7 @@ export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem
     collapsed.push(item);
     previousSignature = signature;
     previousSourceKey = sourceKey;
+    previousSourceIsUnprovenImport = sourceIsUnprovenImport;
   }
 
   return collapsed;

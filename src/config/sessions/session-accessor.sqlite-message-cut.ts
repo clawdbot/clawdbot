@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
 import {
   openOpenClawAgentDatabase,
@@ -17,7 +18,7 @@ import {
 import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
 import { loadSqliteTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
-  formatSqliteSessionMarkerForScope,
+  getSessionKysely,
   normalizeSqliteSessionKey,
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
@@ -37,7 +38,6 @@ import type {
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { inheritSessionSelection } from "./session-entry-selection.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
-import { parseSqliteSessionFileMarker } from "./sqlite-marker.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   isSessionTranscriptLeafControl,
@@ -62,6 +62,80 @@ type SessionTranscriptMutationResult =
 type SessionTranscriptMutationMode = "fork" | "rewind" | "switch";
 
 const BRANCH_HEADLINE_MAX_CHARS = 120;
+const SESSION_BRANCH_CACHE_MAX_ENTRIES = 32;
+
+type SessionBranchCacheEntry = {
+  branches: SessionBranchSummary[];
+  generation: string | null;
+  maxSeq: number | null;
+};
+
+// Branch listing must not scale with transcript size on every request. Appends advance max(seq),
+// while every in-place or replacement path rotates generation; cap the validated LRU at 32 sessions.
+const sessionBranchCache = new Map<string, SessionBranchCacheEntry>();
+
+function sessionBranchCacheKey(databasePath: string, sessionId: string): string {
+  return `${databasePath}\0${sessionId}`;
+}
+
+function cloneSessionBranchSummaries(branches: readonly SessionBranchSummary[]) {
+  return branches.map((branch) => ({ ...branch }));
+}
+
+function readSessionBranchWatermark(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): Pick<SessionBranchCacheEntry, "generation" | "maxSeq"> {
+  const db = getSessionKysely(database.db);
+  const maxSeq = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select((eb) => eb.fn.max<number>("seq").as("max_seq"))
+      .where("session_id", "=", sessionId),
+  )?.max_seq;
+  const generation = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_rewrite_watermarks")
+      .select("generation")
+      .where("session_id", "=", sessionId),
+  )?.generation;
+  return { generation: generation ?? null, maxSeq: maxSeq ?? null };
+}
+
+function loadSessionBranchSummaries(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): SessionBranchSummary[] {
+  const cacheKey = sessionBranchCacheKey(database.path, sessionId);
+  const watermark = readSessionBranchWatermark(database, sessionId);
+  const cached = sessionBranchCache.get(cacheKey);
+  if (cached?.generation === watermark.generation && cached.maxSeq === watermark.maxSeq) {
+    sessionBranchCache.delete(cacheKey);
+    sessionBranchCache.set(cacheKey, cached);
+    return cloneSessionBranchSummaries(cached.branches);
+  }
+
+  const branches = summarizeSessionBranches(
+    loadSqliteTranscriptEventsFromDatabase(database, sessionId),
+  );
+  sessionBranchCache.delete(cacheKey);
+  sessionBranchCache.set(cacheKey, { ...watermark, branches });
+  if (sessionBranchCache.size > SESSION_BRANCH_CACHE_MAX_ENTRIES) {
+    const oldestKey = sessionBranchCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      sessionBranchCache.delete(oldestKey);
+    }
+  }
+  return cloneSessionBranchSummaries(branches);
+}
+
+function invalidateSessionBranchCache(databasePath: string, sessionIds: readonly string[]): void {
+  for (const sessionId of uniqueStrings(sessionIds)) {
+    sessionBranchCache.delete(sessionBranchCacheKey(databasePath, sessionId));
+  }
+}
 
 export async function listSqliteSessionBranches(
   params: SessionBranchListParams,
@@ -79,14 +153,10 @@ export async function listSqliteSessionBranches(
     if (!currentEntry?.sessionId) {
       return { status: "missing-session" };
     }
-    if (
-      currentEntry.sessionFile?.trim() &&
-      !parseSqliteSessionFileMarker(currentEntry.sessionFile)
-    ) {
-      return { status: "unsupported-storage" };
-    }
-    const events = loadSqliteTranscriptEventsFromDatabase(database, currentEntry.sessionId);
-    return { status: "ok", branches: summarizeSessionBranches(events) };
+    return {
+      status: "ok",
+      branches: loadSessionBranchSummaries(database, currentEntry.sessionId),
+    };
   } catch {
     return { status: "failed" };
   }
@@ -141,16 +211,17 @@ async function mutateSqliteSessionAtMessage(
     ...(params.storePath ? { storePath: params.storePath } : {}),
   });
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    let result: SessionTranscriptMutationResult = { status: "failed" };
     let previousIdentity = new Map<string, SessionEntry>();
     let currentIdentity = new Map<string, SessionEntry>();
-    runOpenClawAgentWriteTransaction((database) => {
+    let databasePath: string | undefined;
+    const result = runOpenClawAgentWriteTransaction((database) => {
+      databasePath = database.path;
       const identityKeys = uniqueStrings([
         ...collectSessionEntryLookupKeys(database, sourceKey),
         ...collectSessionEntryLookupKeys(database, targetKey),
       ]);
       previousIdentity = readSqliteSessionIdentitySnapshot(database, identityKeys);
-      result = mutateSqliteSessionAtMessageInTransaction(database, resolved, {
+      const mutationResult = mutateSqliteSessionAtMessageInTransaction(database, resolved, {
         entryId: params.entryId,
         canonicalSourceKey,
         creation: params.creation,
@@ -159,7 +230,16 @@ async function mutateSqliteSessionAtMessage(
         targetKey,
       });
       currentIdentity = readSqliteSessionIdentitySnapshot(database, identityKeys);
+      return mutationResult;
     }, toDatabaseOptions(resolved));
+    if (result.status === "created" && databasePath) {
+      invalidateSessionBranchCache(databasePath, [
+        ...[...previousIdentity.values()].flatMap((entry) =>
+          entry.sessionId ? [entry.sessionId] : [],
+        ),
+        ...(result.entry.sessionId ? [result.entry.sessionId] : []),
+      ]);
+    }
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
     return result;
   });
@@ -181,9 +261,6 @@ function mutateSqliteSessionAtMessageInTransaction(
   if (!currentEntry?.sessionId) {
     return { status: "missing-session" };
   }
-  if (currentEntry.sessionFile?.trim() && !parseSqliteSessionFileMarker(currentEntry.sessionFile)) {
-    return { status: "unsupported-storage" };
-  }
   const events = loadSqliteTranscriptEventsFromDatabase(database, currentEntry.sessionId);
   const cut = params.mode === "switch" ? undefined : resolveMessageCut(events, params.entryId);
   if (cut && "status" in cut) {
@@ -202,7 +279,6 @@ function mutateSqliteSessionAtMessageInTransaction(
     sessionId: nextSessionId,
     sessionKey: params.targetKey,
   };
-  const nextSessionFile = formatSqliteSessionMarkerForScope(targetScope);
   const header = createSessionTranscriptHeader({
     cwd: readTranscriptHeaderCwd(events),
     sessionId: nextSessionId,
@@ -240,7 +316,6 @@ function mutateSqliteSessionAtMessageInTransaction(
               entryId: params.entryId,
             }
           : undefined,
-      nextSessionFile,
       nextSessionId,
     }),
     ...(params.mode === "fork" && params.creation
@@ -392,7 +467,6 @@ function cloneMessageCutSessionEntry(params: {
   currentEntry: SessionEntry;
   forked: boolean;
   forkSource?: NonNullable<SessionEntry["forkSource"]>;
-  nextSessionFile: string;
   nextSessionId: string;
 }): SessionEntry {
   const baseEntry = params.forked
@@ -401,7 +475,6 @@ function cloneMessageCutSessionEntry(params: {
   return {
     ...baseEntry,
     sessionId: params.nextSessionId,
-    sessionFile: params.nextSessionFile,
     lifecycleRevision: params.forked ? randomUUID() : params.currentEntry.lifecycleRevision,
     updatedAt: Date.now(),
     systemSent: false,
@@ -423,12 +496,7 @@ function cloneMessageCutSessionEntry(params: {
     contextBudgetStatus: undefined,
     compactionCount: undefined,
     compactionCheckpoints: undefined,
-    memoryFlushAt: undefined,
-    memoryFlushCompactionCount: undefined,
-    memoryFlushContextHash: undefined,
-    memoryFlushFailureCount: undefined,
-    memoryFlushLastFailedAt: undefined,
-    memoryFlushLastFailureError: undefined,
+    memoryFlush: undefined,
     cliSessionBindings: undefined,
     cliSessionIds: undefined,
     claudeCliSessionId: undefined,

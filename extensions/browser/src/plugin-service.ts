@@ -1,6 +1,7 @@
 /**
  * Browser plugin service factory that lazily starts the control server.
  */
+import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import {
   startLazyPluginServiceModule,
   type LazyPluginServiceHandle,
@@ -10,10 +11,6 @@ import {
 type BrowserControlHandle = LazyPluginServiceHandle | null;
 const EAGER_BROWSER_CONTROL_SERVICE_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER";
 const UNSAFE_BROWSER_CONTROL_OVERRIDE_SPECIFIER = /^(?:data|http|https|node):/i;
-
-function isTruthyEnvValue(value: string | undefined): boolean {
-  return /^(?:1|true|yes|on)$/iu.test(value?.trim() ?? "");
-}
 
 function validateBrowserControlOverrideSpecifier(specifier: string): string {
   const trimmed = specifier.trim();

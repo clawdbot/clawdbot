@@ -4,6 +4,7 @@ import { EventEmitter, once } from "node:events";
 import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -221,11 +222,150 @@ describe("formatQaGatewayProcessBoundaryStartupFailure", () => {
   });
 });
 
+describe("waitForGatewayReady", () => {
+  it.each(["startup", "restart"] as const)(
+    "does not accept a healthy listener as %s readiness",
+    async (phase) => {
+      vi.useFakeTimers();
+      const baseUrl = "http://127.0.0.1:43124";
+      const release = vi.fn(async () => {});
+      let ready = false;
+
+      fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
+        const status = url.endsWith("/healthz") || ready ? 200 : 503;
+        return { response: { ok: status === 200, status }, release };
+      });
+
+      try {
+        const readiness = testing.waitForGatewayReady({
+          baseUrl,
+          logs: () => `${phase} logs`,
+          child: { exitCode: null, signalCode: null },
+          timeoutMs: 1_000,
+        });
+
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url)).toEqual([
+          `${baseUrl}/readyz`,
+        ]);
+        expect(release).toHaveBeenCalledTimes(1);
+
+        ready = true;
+        await vi.advanceTimersByTimeAsync(250);
+
+        await expect(readiness).resolves.toBeUndefined();
+        expect(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url)).toEqual([
+          `${baseUrl}/readyz`,
+          `${baseUrl}/readyz`,
+        ]);
+        expect(release).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+});
+
 describe("Gateway child fixture helpers", () => {
   it("creates an empty transport config seam", () => {
     expect(testing.createQaGatewayEmptyTransport()).toEqual({
       requiredPluginIds: [],
       createGatewayConfig: expect.any(Function),
+    });
+  });
+
+  it("stages native Codex model metadata before starting the private mock runtime", async () => {
+    const tempRoot = await tempDirs.makeTempDir("qa-codex-model-catalog-");
+    const modelCatalogPath = await testing.stageQaCodexMockModelCatalog({
+      tempRoot,
+      forcedRuntime: "codex",
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
+    });
+
+    expect(modelCatalogPath).toBe(path.join(tempRoot, "codex-model-catalog.json"));
+    const catalog = JSON.parse(await readFile(modelCatalogPath!, "utf8")) as {
+      models: Array<Record<string, unknown>>;
+    };
+    expect(catalog.models).toEqual([
+      expect.objectContaining({
+        slug: "gpt-5.6-luna",
+        apply_patch_tool_type: "freeform",
+        tool_mode: "direct",
+      }),
+      expect.objectContaining({
+        slug: "gpt-5.6-luna-alt",
+        apply_patch_tool_type: "freeform",
+        tool_mode: "direct",
+      }),
+    ]);
+    expect(
+      testing.buildQaForcedRuntimeEnvPatch({
+        forcedRuntime: "codex",
+        providerMode: "mock-openai",
+        providerBaseUrl: "http://127.0.0.1:44080/v1",
+        codexModelCatalogPath: modelCatalogPath,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        OPENCLAW_CODEX_APP_SERVER_ARGS: `app-server -c openai_base_url=http://127.0.0.1:44080/v1 -c ${JSON.stringify(`model_catalog_json=${modelCatalogPath}`)} -c sandbox_workspace_write.exclude_tmpdir_env_var=true -c sandbox_workspace_write.exclude_slash_tmp=true --listen stdio://`,
+      }),
+    );
+  });
+
+  it("does not stage a Codex catalog for other runtimes or live providers", async () => {
+    const tempRoot = await tempDirs.makeTempDir("qa-codex-model-catalog-unused-");
+    await expect(
+      testing.stageQaCodexMockModelCatalog({
+        tempRoot,
+        forcedRuntime: "openclaw",
+        providerMode: "mock-openai",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      testing.stageQaCodexMockModelCatalog({
+        tempRoot,
+        forcedRuntime: "codex",
+        providerMode: "live-frontier",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      readFile(path.join(tempRoot, "codex-model-catalog.json"), "utf8"),
+    ).rejects.toThrow();
+  });
+
+  it("confines live Codex QA without replacing its native provider configuration", () => {
+    expect(
+      testing.buildQaForcedRuntimeEnvPatch({
+        forcedRuntime: "codex",
+        providerMode: "live-frontier",
+      }),
+    ).toEqual({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "codex",
+      OPENCLAW_CODEX_APP_SERVER_ARGS:
+        "app-server -c sandbox_workspace_write.exclude_tmpdir_env_var=true " +
+        "-c sandbox_workspace_write.exclude_slash_tmp=true --listen stdio://",
+    });
+  });
+
+  it("preserves preconfigured live Codex arguments while enforcing QA containment", () => {
+    expect(
+      testing.buildQaForcedRuntimeEnvPatch({
+        forcedRuntime: "codex",
+        providerMode: "live-frontier",
+        nativeAppServerArgs:
+          'app-server -c openai_base_url="https://live.example/v1" --listen stdio://',
+      }),
+    ).toEqual({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "codex",
+      OPENCLAW_CODEX_APP_SERVER_ARGS:
+        'app-server -c openai_base_url="https://live.example/v1" --listen stdio:// ' +
+        "-c sandbox_workspace_write.exclude_tmpdir_env_var=true " +
+        "-c sandbox_workspace_write.exclude_slash_tmp=true",
     });
   });
 
@@ -1219,6 +1359,25 @@ describe("buildQaRuntimeEnv", () => {
       gracefulTimeoutMs: 1,
       forceTimeoutMs: 2,
     });
+  });
+
+  it("force-closes a gateway log stream whose final flush never settles", async () => {
+    const stream = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+      final() {
+        // Simulate the stalled filesystem flush observed in the release profile.
+      },
+    });
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    await testing.closeWriteStream(stream as never, "stdout", 1);
+
+    expect(stream.destroyed).toBe(true);
+    expect(stderr).toHaveBeenCalledWith(
+      "[qa-suite] stdout gateway log flush exceeded 1ms; forcing close\n",
+    );
   });
 
   it.runIf(process.platform !== "win32")(

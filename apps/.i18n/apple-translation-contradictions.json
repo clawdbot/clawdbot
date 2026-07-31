@@ -886,6 +886,174 @@
     },
     {
       "locale": "ar",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "مرفق"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Attachment",
+      "translations": [
+        "Anhang",
+        "Attachment"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Attachment",
+      "translations": [
+        "Archivo adjunto",
+        "Attachment"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "پیوست"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "Pièce jointe"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "अटैचमेंट"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "Lampiran"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Attachment",
+      "translations": [
+        "Allegato",
+        "Attachment"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "添付ファイル"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "첨부 파일"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "Bijlage"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "Załącznik"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Attachment",
+      "translations": [
+        "Anexo",
+        "Attachment"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "Вложение"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "Bilaga"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "ไฟล์แนบ"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "Ek"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "Вкладення"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "Tệp đính kèm"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "附件"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Attachment",
+      "translations": [
+        "Attachment",
+        "附件"
+      ]
+    },
+    {
+      "locale": "ar",
       "source": "Attention",
       "translations": [
         "تنبيه",
@@ -2179,10 +2347,19 @@
       ]
     },
     {
+      "locale": "ru",
+      "source": "Details",
+      "translations": [
+        "Подробности",
+        "Сведения"
+      ]
+    },
+    {
       "locale": "uk",
       "source": "Details",
       "translations": [
         "Відомості",
+        "Деталі",
         "Докладно"
       ]
     },
@@ -2603,9 +2780,18 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Done",
+      "translations": [
+        "تم",
+        "مكتمل"
+      ]
+    },
+    {
       "locale": "es",
       "source": "Done",
       "translations": [
+        "Completado",
         "Hecho",
         "Listo"
       ]
@@ -2622,8 +2808,17 @@
       "locale": "it",
       "source": "Done",
       "translations": [
+        "Completato",
         "Fatto",
         "Fine"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Done",
+      "translations": [
+        "Gereed",
+        "Klaar"
       ]
     },
     {
@@ -2632,6 +2827,30 @@
       "translations": [
         "Klar",
         "Klart"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Done",
+      "translations": [
+        "Bitti",
+        "Tamamlandı"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Done",
+      "translations": [
+        "Hoàn tất",
+        "Xong"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Done",
+      "translations": [
+        "完成",
+        "已完成"
       ]
     },
     {
@@ -2993,6 +3212,79 @@
       "translations": [
         "匯出對話紀錄",
         "匯出逐字稿"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Failed",
+      "translations": [
+        "فشل",
+        "فشلت"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Failed",
+      "translations": [
+        "Fallida",
+        "Fallido",
+        "Falló"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Failed",
+      "translations": [
+        "Échec",
+        "Échoué"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Failed",
+      "translations": [
+        "失敗",
+        "失敗しました"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Failed",
+      "translations": [
+        "실패",
+        "실패함"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Failed",
+      "translations": [
+        "Niepowodzenie",
+        "Nieudane"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Failed",
+      "translations": [
+        "Не выполнено",
+        "Ошибка"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Failed",
+      "translations": [
+        "Başarısız",
+        "Başarısız oldu"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Failed",
+      "translations": [
+        "Не вдалося",
+        "Не виконано"
       ]
     },
     {
@@ -6740,9 +7032,18 @@
       ]
     },
     {
+      "locale": "de",
+      "source": "Pause",
+      "translations": [
+        "Pause",
+        "Pausieren"
+      ]
+    },
+    {
       "locale": "fa",
       "source": "Pause",
       "translations": [
+        "توقف",
         "توقف موقت",
         "مکث"
       ]
@@ -6752,7 +7053,40 @@
       "source": "Pause",
       "translations": [
         "Mettre en pause",
+        "Pause",
         "Suspendre"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Pause",
+      "translations": [
+        "Metti in pausa",
+        "Pausa"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Pause",
+      "translations": [
+        "일시 중지",
+        "일시정지"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Pause",
+      "translations": [
+        "Пауза",
+        "Приостановить"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Pause",
+      "translations": [
+        "Пауза",
+        "Призупинити"
       ]
     },
     {
@@ -7045,6 +7379,38 @@
       "translations": [
         "QR 扫描器不可用",
         "二维码扫描器不可用"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Queued",
+      "translations": [
+        "En attente",
+        "En file d'attente"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Queued",
+      "translations": [
+        "Dalam Antrean",
+        "Dalam antrean"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Queued",
+      "translations": [
+        "Sırada",
+        "Sıraya alındı"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Queued",
+      "translations": [
+        "Trong hàng đợi",
+        "Đang chờ"
       ]
     },
     {
@@ -7777,7 +8143,8 @@
       "source": "Retry",
       "translations": [
         "Reintentar",
-        "Retry"
+        "Retry",
+        "Volver a intentarlo"
       ]
     },
     {
@@ -7802,7 +8169,8 @@
       "translations": [
         "Retry",
         "पुनः प्रयास करें",
-        "फिर से कोशिश करें"
+        "फिर से कोशिश करें",
+        "फिर से प्रयास करें"
       ]
     },
     {
@@ -8057,6 +8425,14 @@
       "translations": [
         "Chạy",
         "Lần chạy"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Running",
+      "translations": [
+        "Läuft",
+        "Wird ausgeführt"
       ]
     },
     {
@@ -9984,6 +10360,7 @@
       "source": "Voice note",
       "translations": [
         "Sprachnachricht",
+        "Sprachnotiz",
         "Voice note"
       ]
     },
@@ -10040,7 +10417,8 @@
       "source": "Voice note",
       "translations": [
         "Voice note",
-        "ボイスノート"
+        "ボイスノート",
+        "ボイスメモ"
       ]
     },
     {
@@ -10055,6 +10433,7 @@
       "locale": "nl",
       "source": "Voice note",
       "translations": [
+        "Spraakbericht",
         "Spraaknotitie",
         "Voice note"
       ]
@@ -10096,7 +10475,8 @@
       "source": "Voice note",
       "translations": [
         "Voice note",
-        "ข้อความเสียง"
+        "ข้อความเสียง",
+        "บันทึกเสียง"
       ]
     },
     {
@@ -10112,6 +10492,7 @@
       "source": "Voice note",
       "translations": [
         "Voice note",
+        "Голосова нотатка",
         "Голосове повідомлення"
       ]
     },
@@ -10128,7 +10509,8 @@
       "source": "Voice note",
       "translations": [
         "Voice note",
-        "语音消息"
+        "语音消息",
+        "语音留言"
       ]
     },
     {

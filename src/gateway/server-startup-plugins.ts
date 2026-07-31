@@ -142,6 +142,12 @@ export async function prepareGatewayPluginBootstrap(params: {
           workerProviderIds: params.workerProviderIds ?? [],
           ambientEnvTriggers: params.ambientEnvTriggers,
         });
+  // Startup logging consumes the same process-stable manifest snapshot used for
+  // activation planning. Minimal gateways deliberately have no plugin metadata.
+  const pluginManifestRecords =
+    pluginLookUpTable?.manifestRegistry.plugins ??
+    params.pluginMetadataSnapshot?.manifestRegistry.plugins ??
+    [];
   const deferredConfiguredChannelPluginIds = [
     ...(pluginLookUpTable?.startup.configuredDeferredChannelPluginIds ?? []),
   ];
@@ -154,9 +160,7 @@ export async function prepareGatewayPluginBootstrap(params: {
             activationSourceConfig,
             env: process.env,
             includePersistedAuthState: false,
-            ...(pluginLookUpTable?.manifestRegistry.plugins
-              ? { manifestRecords: pluginLookUpTable.manifestRegistry.plugins }
-              : {}),
+            manifestRecords: pluginManifestRecords,
           }),
         )
       : new Set<string>();
@@ -223,6 +227,7 @@ export async function prepareGatewayPluginBootstrap(params: {
     defaultWorkspaceDir,
     deferredConfiguredChannelPluginIds,
     startupPluginIds,
+    pluginManifestRecords,
     pluginLookUpTable,
     baseMethods,
     pluginRegistry,

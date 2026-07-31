@@ -755,7 +755,10 @@ async function main(argv = process.argv.slice(2)) {
       ],
       outputPaths: [
         "dist/plugin-sdk/.boundary-entry-shims.stamp",
-        ...resolveBoundaryEntryShimRequiredOutputs(),
+        ...resolveBoundaryEntryShimRequiredOutputs({
+          ...process.env,
+          OPENCLAW_BUILD_PRIVATE_QA: "1",
+        }),
       ],
     });
     const qaChannelDtsFresh =
@@ -1036,7 +1039,12 @@ async function main(argv = process.argv.slice(2)) {
           resolve(repoRoot, "scripts/write-plugin-sdk-entry-dts.ts"),
         ],
         ROOT_SHIMS_TIMEOUT_MS,
-        { env: { NODE_OPTIONS: ROOT_SHIMS_NODE_OPTIONS } },
+        {
+          env: {
+            NODE_OPTIONS: ROOT_SHIMS_NODE_OPTIONS,
+            OPENCLAW_BUILD_PRIVATE_QA: "1",
+          },
+        },
       );
     } else if (mode === "all") {
       process.stdout.write("[plugin-sdk boundary root shims] fresh; skipping\n");

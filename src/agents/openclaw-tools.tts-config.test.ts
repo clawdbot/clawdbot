@@ -377,6 +377,24 @@ describe("createOpenClawTools cron context wiring", () => {
     mocks.createCronToolOptions.mockClear();
   });
 
+  it.each([
+    ["prefers the durable run session key", "agent:main:main"],
+    ["falls back to the policy session key", undefined],
+  ])("%s for cron bindings", (_label, runSessionKey) => {
+    createOpenClawTools({
+      agentSessionKey: "agent:main:telegram:default:direct:1234",
+      runSessionKey,
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createCronToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSessionKey: runSessionKey ?? "agent:main:telegram:default:direct:1234",
+      }),
+    );
+  });
+
   it("passes preserved channel delivery context into the cron tool", async () => {
     createOpenClawTools({
       agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",

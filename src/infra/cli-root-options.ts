@@ -36,3 +36,28 @@ export function consumeRootOptionToken(args: ReadonlyArray<string>, index: numbe
   }
   return 0;
 }
+
+/** Read positional command tokens while accepting root options at any pre-terminator position. */
+export function getRootOptionAwareCommandPath(argv: readonly string[], depth: number): string[] {
+  const args = argv.slice(2);
+  const path: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      break;
+    }
+    const consumed = consumeRootOptionToken(args, index);
+    if (consumed > 0) {
+      index += consumed - 1;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      continue;
+    }
+    path.push(arg);
+    if (path.length >= depth) {
+      break;
+    }
+  }
+  return path;
+}

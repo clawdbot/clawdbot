@@ -21,10 +21,19 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
+import type { IMessageApprovalGatewayRuntime } from "./approval-resolver.js";
+import {
+  buildIMessageApprovalConversationKeyForInbound,
+  buildIMessageApprovalConversationKeyForTarget,
+  enumerateApprovalTargetKeys,
+  normalizeConversationKey,
+  normalizeIMessageGuid,
+  type IMessageApprovalConversationKey,
+} from "./approval-target-keys.js";
 import { resolveIMessageReactionContext } from "./monitor/reaction-context.js";
 import type { IMessagePayload } from "./monitor/types.js";
 import { getOptionalIMessageRuntime } from "./runtime.js";
-import { normalizeIMessageHandle, parseIMessageTarget } from "./targets.js";
+import { normalizeIMessageHandle } from "./targets.js";
 
 const PERSISTENT_NAMESPACE = "imessage.approval-reactions";
 const PERSISTENT_MAX_ENTRIES = 1000;
@@ -50,13 +59,7 @@ type IMessageApprovalReactionTarget = ApprovalReactionTargetRecord & {
   approvalKind: "exec" | "plugin";
 };
 
-export type IMessageApprovalConversationKey = {
-  chatGuid?: string;
-  chatIdentifier?: string;
-  chatId?: number | string;
-  /** Direct-message handle (already normalized via normalizeIMessageHandle). */
-  handle?: string;
-};
+export type { IMessageApprovalConversationKey } from "./approval-target-keys.js";
 
 export type PendingIMessageApprovalReactionPollTarget = {
   accountId: string;
@@ -72,60 +75,6 @@ const resolverRuntimeLoader = createLazyRuntimeModule(() => import("./approval-r
 const pendingReactionPollTargets = new Map<string, PendingIMessageApprovalReactionPollTarget>();
 
 const loadApprovalResolver = resolverRuntimeLoader;
-
-function chatIdToKeyValue(chatId: number | string | undefined): string | null {
-  if (chatId == null || chatId === "") {
-    return null;
-  }
-  if (typeof chatId === "number") {
-    // chat.db ROWID is always > 0; treat 0 as "missing" rather than a valid key.
-    return Number.isFinite(chatId) && chatId > 0 ? String(chatId) : null;
-  }
-  const value = chatId.trim();
-  return value || null;
-}
-
-function enumerateConversationKeyForms(conversation: IMessageApprovalConversationKey): string[] {
-  const forms: string[] = [];
-  const chatGuid = conversation.chatGuid?.trim();
-  if (chatGuid) {
-    forms.push(`chat_guid:${chatGuid}`);
-  }
-  const chatIdentifier = conversation.chatIdentifier?.trim();
-  if (chatIdentifier) {
-    forms.push(`chat_identifier:${chatIdentifier}`);
-  }
-  const chatIdValue = chatIdToKeyValue(conversation.chatId);
-  if (chatIdValue) {
-    forms.push(`chat_id:${chatIdValue}`);
-  }
-  const handle = conversation.handle?.trim();
-  if (handle) {
-    forms.push(`handle:${handle}`);
-  }
-  return forms;
-}
-
-function normalizeConversationKey(
-  conversation: IMessageApprovalConversationKey,
-): string | undefined {
-  return enumerateConversationKeyForms(conversation)[0];
-}
-
-function enumerateReactionTargetKeys(params: {
-  accountId: string;
-  conversation: IMessageApprovalConversationKey;
-  messageId: string;
-}): string[] {
-  const accountId = params.accountId.trim();
-  const messageId = params.messageId.trim();
-  if (!accountId || !messageId) {
-    return [];
-  }
-  return enumerateConversationKeyForms(params.conversation).map(
-    (form) => `${accountId}:${form}:${messageId}`,
-  );
-}
 
 function prunePendingReactionPollTargets(nowMs = Date.now()): void {
   for (const [key, target] of pendingReactionPollTargets.entries()) {
@@ -154,10 +103,6 @@ function resolvePendingReactionPollExpiry(
   };
 }
 
-function normalizePollTargetMessageId(messageId: string): string {
-  return messageId.trim().replace(/^p:\d+\//iu, "");
-}
-
 function mergePollTargetConversation(
   left: IMessageApprovalConversationKey,
   right: IMessageApprovalConversationKey,
@@ -183,7 +128,7 @@ export function listPendingIMessageApprovalReactionPollTargets(params: {
     if (target.accountId !== accountId) {
       continue;
     }
-    const key = `${target.approvalId}:${normalizePollTargetMessageId(target.messageId)}`;
+    const key = `${target.approvalId}:${normalizeIMessageGuid(target.messageId)}`;
     const existing = targetByApprovalAndMessage.get(key);
     if (!existing) {
       targetByApprovalAndMessage.set(key, target);
@@ -601,7 +546,7 @@ export function registerIMessageApprovalReactionTarget(params: {
   // DM target, while the bridge populates chat_guid on the inbound tapback.
   // Indexing under every available key keeps send/inbound symmetric without
   // forcing the caller to know which key the bridge will pick.
-  const keys = enumerateReactionTargetKeys({
+  const keys = enumerateApprovalTargetKeys({
     accountId: params.accountId,
     conversation: params.conversation,
     messageId: params.messageId,
@@ -650,26 +595,7 @@ export function registerIMessageApprovalReactionTargetForOutboundMessage(params:
   );
 }
 
-export function buildIMessageApprovalConversationKeyForTarget(
-  to: string,
-): IMessageApprovalConversationKey | null {
-  try {
-    const target = parseIMessageTarget(to);
-    if (target.kind === "chat_id") {
-      return { chatId: target.chatId };
-    }
-    if (target.kind === "chat_guid") {
-      return { chatGuid: target.chatGuid };
-    }
-    if (target.kind === "chat_identifier") {
-      return { chatIdentifier: target.chatIdentifier };
-    }
-    const handle = normalizeIMessageHandle(target.to);
-    return handle ? { handle } : null;
-  } catch {
-    return null;
-  }
-}
+export { buildIMessageApprovalConversationKeyForTarget };
 
 function listDeliveredIMessageApprovalGuids(params: {
   binding: IMessageApprovalDeliveryBinding;
@@ -751,7 +677,7 @@ export function unregisterIMessageApprovalReactionTarget(params: {
   conversation: IMessageApprovalConversationKey;
   messageId: string;
 }): void {
-  const keys = enumerateReactionTargetKeys(params);
+  const keys = enumerateApprovalTargetKeys(params);
   for (const key of keys) {
     imessageApprovalReactionTargets.delete(key);
     pendingReactionPollTargets.delete(key);
@@ -790,7 +716,7 @@ export async function resolveIMessageApprovalReactionTargetWithPersistence(param
   // registered only `handle:`, while the inbound payload carries chat_guid
   // (the bridge sets chat_guid even for DMs). We probe in precedence order
   // (chat_guid → chat_identifier → chat_id → handle) and accept the first hit.
-  const keys = enumerateReactionTargetKeys(params);
+  const keys = enumerateApprovalTargetKeys(params);
   for (const key of keys) {
     const target = resolveTarget({
       target: await imessageApprovalReactionTargets.lookup(key),
@@ -838,14 +764,13 @@ function readApprovalReactionEvent(
   if (!reactionKey || !primary || !actorHandle) {
     return null;
   }
-  const conversation: IMessageApprovalConversationKey = {
-    ...(message.chat_guid?.trim() ? { chatGuid: message.chat_guid.trim() } : {}),
-    ...(message.chat_identifier?.trim() ? { chatIdentifier: message.chat_identifier.trim() } : {}),
-    ...(chatIdToKeyValue(message.chat_id ?? undefined)
-      ? { chatId: message.chat_id as number }
-      : {}),
-    ...(message.is_group ? {} : { handle: actorHandle }),
-  };
+  const conversation = buildIMessageApprovalConversationKeyForInbound({
+    chatGuid: message.chat_guid,
+    chatIdentifier: message.chat_identifier,
+    chatId: message.chat_id,
+    isGroup: message.is_group,
+    actorHandle,
+  });
   if (!normalizeConversationKey(conversation)) {
     return null;
   }
@@ -865,6 +790,7 @@ export async function handleIMessageApprovalReaction(params: {
   message: IMessagePayload;
   bodyText: string;
   gatewayUrl?: string;
+  gatewayRuntime?: IMessageApprovalGatewayRuntime;
   logVerboseMessage?: (message: string) => void;
 }): Promise<IMessageApprovalReactionHandleResult> {
   const event = readApprovalReactionEvent(params.message, params.bodyText);
@@ -927,6 +853,7 @@ export async function handleIMessageApprovalReaction(params: {
       decision: target.decision,
       senderId: event.actorHandle,
       gatewayUrl: params.gatewayUrl,
+      ...(params.gatewayRuntime ? { gatewayRuntime: params.gatewayRuntime } : {}),
     });
     // Every terminal result clears the binding. Losing surfaces receive applied:false
     // without a new event, so retaining their controls would keep polling stale state.
@@ -983,6 +910,7 @@ export async function maybeResolveIMessageApprovalReaction(params: {
   message: IMessagePayload;
   bodyText: string;
   gatewayUrl?: string;
+  gatewayRuntime?: IMessageApprovalGatewayRuntime;
   logVerboseMessage?: (message: string) => void;
 }): Promise<boolean> {
   return (await handleIMessageApprovalReaction(params)).handled;

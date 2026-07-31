@@ -12,7 +12,7 @@ import { startGatewayServer, type GatewayServer } from "../gateway/server.js";
 import { extractPayloadText } from "../gateway/test-helpers.agent-results.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,

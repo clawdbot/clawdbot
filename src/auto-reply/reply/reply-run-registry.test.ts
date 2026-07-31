@@ -15,6 +15,7 @@ import {
   abortActiveReplyRuns,
   createReplyOperation,
   expireStaleReplyOperation,
+  forceClearReplyOperation,
   forceClearReplyRunBySessionId,
   isReplyRunEvidenceStale,
   isReplyRunActiveForSessionId,
@@ -761,6 +762,16 @@ describe("reply run registry", () => {
     expect(forceClearReplyRunBySessionId("session-retained", new Error("stuck"))).toBe(true);
     expect(operation.result).toMatchObject({ kind: "failed", code: "run_failed" });
     expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
+  });
+
+  it("does not force-clear a replacement operation through a stale owner", () => {
+    const original = createTestReplyOperation({ sessionId: "session-reused" });
+    original.complete();
+    const replacement = createTestReplyOperation({ sessionId: "session-reused" });
+
+    expect(forceClearReplyOperation(original, new Error("stuck"))).toBe(false);
+    expect(replacement.result).toBeNull();
+    expect(isReplyRunActiveForSessionId("session-reused")).toBe(true);
   });
 
   it("force-clears a running operation after abort without backend cleanup", async () => {

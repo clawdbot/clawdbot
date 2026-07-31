@@ -16,7 +16,7 @@ import type {
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../avatar.ts";
-import { buildQualifiedChatModelValue } from "../chat/model-ref.ts";
+import { buildCatalogDisplayLookup, buildChatModelOptionFromLookup } from "../chat/model-ref.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 
 type AgentRosterEntry = {
@@ -548,6 +548,7 @@ export function buildModelOptions(
 ) {
   const seen = new Set<string>();
   const options: ConfiguredModelOption[] = [];
+  const catalogOptions = new Map<string, ConfiguredModelOption>();
   const selectedKey = selected ? normalizeLowercaseStringOrEmpty(selected) : null;
   const addOption = (value: string, label: string) => {
     const key = normalizeLowercaseStringOrEmpty(value);
@@ -558,17 +559,23 @@ export function buildModelOptions(
     options.push({ value, label });
   };
 
-  for (const opt of resolveConfiguredModels(configForm)) {
-    addOption(opt.value, opt.label);
+  if (catalog) {
+    const displayLookup = buildCatalogDisplayLookup(catalog);
+    for (const entry of catalog) {
+      const option = buildChatModelOptionFromLookup(entry, displayLookup);
+      catalogOptions.set(normalizeLowercaseStringOrEmpty(option.value), option);
+    }
   }
 
-  if (catalog) {
-    for (const entry of catalog) {
-      const provider = entry.provider?.trim();
-      const value = buildQualifiedChatModelValue(entry.id, provider);
-      const label = provider ? `${entry.id} · ${provider}` : entry.id;
-      addOption(value, label);
-    }
+  for (const opt of resolveConfiguredModels(configForm)) {
+    // Configured options keep their order and fallback aliases; an authoritative
+    // catalog match must still expose the same model identity as the chat picker.
+    const catalogOption = catalogOptions.get(normalizeLowercaseStringOrEmpty(opt.value));
+    addOption(opt.value, catalogOption?.label ?? opt.label);
+  }
+
+  for (const option of catalogOptions.values()) {
+    addOption(option.value, option.label);
   }
 
   if (current && !seen.has(normalizeLowercaseStringOrEmpty(current))) {

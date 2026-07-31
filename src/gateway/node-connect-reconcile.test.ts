@@ -205,7 +205,7 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(approvedPairingRequest).not.toHaveBeenCalled();
   });
 
-  it("keeps an approved computer.act surface effective without re-pairing while unarmed", async () => {
+  it("keeps an approved computer.act surface effective without re-pairing", async () => {
     const connectParams = makeNodeConnectParams({
       client: {
         id: GATEWAY_CLIENT_IDS.NODE_HOST,
@@ -219,9 +219,8 @@ describe("reconcileNodePairingOnConnect", () => {
     });
     const requestPairing = vi.fn();
 
-    // No commands.allow entry (unarmed): the previously approved dangerous
-    // surface must reconcile cleanly instead of demanding a pairing upgrade
-    // on every reconnect.
+    // The previously approved, node-enabled surface must reconcile cleanly
+    // instead of demanding a pairing upgrade on every reconnect.
     const result = await reconcileNodePairingOnConnect({
       cfg: {} as never,
       connectParams,

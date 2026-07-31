@@ -7,7 +7,7 @@ import {
   formatInboundEnvelope,
   formatLocationText,
   resolveInboundSessionEnvelopeContext,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
   toLocationContext,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -285,7 +285,7 @@ async function finalizeLineInboundContext(params: {
   });
 
   const agentBody = params.agentBody ?? params.rawBody;
-  const media = toInboundMediaFacts(params.media);
+  const media = await toInboundMediaFactsWithMetadata(params.media);
   const body = formatInboundEnvelope({
     channel: "LINE",
     from: conversationLabel,

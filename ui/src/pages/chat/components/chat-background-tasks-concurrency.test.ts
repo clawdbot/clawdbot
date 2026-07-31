@@ -22,6 +22,7 @@ function makeTask(overrides: Partial<TaskSummary> & { id: string }): TaskSummary
     runtime: "subagent",
     agentId: "main",
     title: "Investigate concurrent sessions",
+    sessionKey: "agent:main:current",
     createdAt: 1_000,
     updatedAt: 2_000,
     startedAt: 1_500,
@@ -128,7 +129,11 @@ describe("background tasks concurrent snapshots", () => {
     handleBackgroundTasksEvent(refresh.host, test.event);
     handleBackgroundTasksEvent(refresh.host, {
       action: "upserted",
-      task: makeTask({ id: "task-other-agent", agentId: "writer", updatedAt: 4_000 }),
+      task: makeTask({
+        id: "task-other-session",
+        sessionKey: "agent:main:other",
+        updatedAt: 4_000,
+      }),
     });
     refresh.resolveActive({ tasks: test.stale });
     refresh.resolveRecent({ tasks: test.stale });

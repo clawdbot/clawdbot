@@ -18,7 +18,6 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 export type PluginCatalogItem = PluginCatalogEntry;
 export type PluginListResult = ProtocolPluginsListResult;
 export type PluginSearchResult = ProtocolPluginsSearchResult["results"][number];
-type PluginSearchResponse = ProtocolPluginsSearchResult;
 export type PluginInstallRequest = PluginsInstallParams;
 export type PluginMutationResult = PluginsInstallResult | PluginsSetEnabledResult;
 type PluginUninstallResult = PluginsUninstallResult;
@@ -27,13 +26,6 @@ export const CLAWHUB_BROWSE_URL = "https://clawhub.ai/plugins";
 
 export function loadPluginCatalog(client: GatewayBrowserClient): Promise<PluginListResult> {
   return client.request<PluginListResult>("plugins.list", {});
-}
-
-export function searchPluginCatalog(
-  client: GatewayBrowserClient,
-  query: string,
-): Promise<PluginSearchResponse> {
-  return client.request<PluginSearchResponse>("plugins.search", { query, limit: 20 });
 }
 
 export function installPlugin(

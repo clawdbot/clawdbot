@@ -149,6 +149,48 @@ describe("gateway/node-catalog", () => {
     });
   });
 
+  it("keeps the operator node name across live metadata and reconnects", () => {
+    const connectedNode = (connId: string, displayName: string) => ({
+      nodeId: "mac-1",
+      connId,
+      client: {} as never,
+      displayName,
+      platform: "macos",
+      declaredCaps: [],
+      caps: [],
+      declaredCommands: [],
+      commands: [],
+      declaredNodePluginTools: [],
+      nodePluginTools: [],
+      nodeSkills: [],
+      connectedAtMs: 1,
+    });
+    const pairedDevices = [pairedDevice({ displayName: "Device Name" })];
+    const pairedNodes = [pairedNode({ displayName: "Operator Name" })];
+
+    const connected = createKnownNodeCatalog({
+      pairedDevices,
+      pairedNodes,
+      connectedNodes: [connectedNode("conn-1", "Live Name")],
+    });
+    expect(listKnownNodes(connected)[0]?.displayName).toBe("Operator Name");
+    expect(getKnownNode(connected, "mac-1")?.displayName).toBe("Operator Name");
+
+    const reconnected = createKnownNodeCatalog({
+      pairedDevices,
+      pairedNodes,
+      connectedNodes: [connectedNode("conn-2", "Replacement Live Name")],
+    });
+    expect(getKnownNode(reconnected, "mac-1")?.displayName).toBe("Operator Name");
+
+    const liveFallback = createKnownNodeCatalog({
+      pairedDevices,
+      pairedNodes: [pairedNode({ displayName: undefined })],
+      connectedNodes: [connectedNode("conn-3", "Live Fallback")],
+    });
+    expect(getKnownNode(liveFallback, "mac-1")?.displayName).toBe("Live Fallback");
+  });
+
   it("surfaces paired-node metadata while the node is offline", () => {
     const catalog = createKnownNodeCatalog({
       pairedDevices: [pairedDevice()],
@@ -483,8 +525,7 @@ describe("gateway/node-catalog", () => {
   });
 
   it("falls through a non-string higher-priority scalar to a valid lower-priority value", () => {
-    // A corrupted live (higher-priority) scalar must be treated as ABSENT so the valid paired
-    // (lower-priority) value still surfaces, instead of the malformed value suppressing it.
+    // A corrupted live scalar must be treated as ABSENT so the valid paired value still surfaces.
     const catalog = createKnownNodeCatalog({
       pairedDevices: [pairedDevice({ deviceId: "mac-1" })],
       pairedNodes: [

@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { Browser, BrowserContext, CDPSession, Page } from "playwright-core";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
+import { withManagedProxyForCdpUrl, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { PLAYWRIGHT_TARGET_INFO_TIMEOUT_MS } from "./cdp-timeouts.js";
 import {
   assertCdpEndpointAllowed,
@@ -421,9 +421,11 @@ export async function connectBrowser(
         const connectEndpoint = async (target: string) => {
           const headers = getHeadersWithAuth(target);
           const connectionUrl = stripCdpUrlCredentials(target);
-          // Bypass proxy for loopback CDP connections (#31219)
-          return await withNoProxyForCdpUrl(connectionUrl, () =>
-            chromium.connectOverCDP(connectionUrl, { timeout, headers }),
+          // Keep both loopback bypasses active until the Playwright handshake settles.
+          return await withManagedProxyForCdpUrl(connectionUrl, () =>
+            withNoProxyForCdpUrl(connectionUrl, () =>
+              chromium.connectOverCDP(connectionUrl, { timeout, headers }),
+            ),
           );
         };
         let browser: Browser;

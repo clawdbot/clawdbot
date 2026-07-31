@@ -47,6 +47,7 @@ export type {
   UnifiedModelCatalogKind,
   UnifiedModelCatalogSource,
 } from "@openclaw/model-catalog-core/model-catalog-types";
+export { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 export type {
   BedrockDiscoveryConfig,
   ModelCompatConfig,

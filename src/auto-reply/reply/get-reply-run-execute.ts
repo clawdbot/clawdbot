@@ -39,6 +39,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   const {
     context,
     resolvedThinkLevel,
+    thinkingCatalog,
     skillsSnapshot,
     prefixedCommandBody,
     queuedBody,
@@ -359,6 +360,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       workspaceDir,
       cwd: normalizeOptionalString(state.sessionEntry?.spawnedCwd),
       config: cfg,
+      toolOverrides: preparedSessionState.sessionEntry?.toolOverrides,
       skillsSnapshot,
       provider,
       model,
@@ -370,6 +372,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       autoFallbackPrimaryProbe: params.autoFallbackPrimaryProbe,
       authProfileId,
       authProfileIdSource,
+      thinkingCatalog,
       thinkLevel: resolvedThinkLevel,
       ...(() => {
         if (useFastReplyRuntime) {

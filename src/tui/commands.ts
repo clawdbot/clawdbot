@@ -271,5 +271,9 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/abort",
     "/settings",
     "/exit",
+    "",
+    "Keyboard shortcuts:",
+    "Enter: send message",
+    "Shift+Enter or Ctrl+J: insert a newline",
   ].join("\n");
 }

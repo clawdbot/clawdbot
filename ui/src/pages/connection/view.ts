@@ -1,5 +1,6 @@
 // Control UI view renders the gateway connection settings content.
 import { html } from "lit";
+import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import { resolveGatewayTokenForUrlEdit, type UiSettings } from "../../app/settings.ts";
 import {
@@ -11,7 +12,8 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { formatDurationHuman, formatRelativeTimestamp } from "../../lib/format.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { renderSystemSection } from "./system-section.ts";
 
 type ConnectionProps = {
   connected: boolean;
@@ -20,6 +22,8 @@ type ConnectionProps = {
   password: string;
   lastError: string | null;
   lastChannelsRefresh: number | null;
+  systemInfo: SystemInfoResult | null;
+  systemInfoUnavailable: boolean;
   showGatewayToken: boolean;
   showGatewayPassword: boolean;
   onConnectionChange: (patch: Partial<Pick<UiSettings, "gatewayUrl" | "token">>) => void;
@@ -49,11 +53,9 @@ function renderSecretRow(params: {
 export function renderConnection(props: ConnectionProps) {
   const snapshot = props.hello?.snapshot as
     | {
-        uptimeMs?: number;
         authMode?: "none" | "token" | "password" | "trusted-proxy";
       }
     | undefined;
-  const uptime = snapshot?.uptimeMs ? formatDurationHuman(snapshot.uptimeMs) : t("common.na");
   const tickIntervalMs = props.hello?.policy?.tickIntervalMs;
   const tick = tickIntervalMs
     ? `${(tickIntervalMs / 1000).toFixed(tickIntervalMs % 1000 === 0 ? 0 : 1)}s`
@@ -139,10 +141,6 @@ export function renderConnection(props: ConnectionProps) {
       }),
     })}
     ${renderSettingsRow({
-      title: t("connection.snapshot.uptime"),
-      control: renderSettingsValue(uptime),
-    })}
-    ${renderSettingsRow({
       title: t("connection.snapshot.tickInterval"),
       control: renderSettingsValue(tick),
     })}
@@ -170,6 +168,7 @@ export function renderConnection(props: ConnectionProps) {
       { title: t("connection.access.title"), description: t("connection.access.subtitle") },
       accessRows,
     ),
+    renderSystemSection(props),
     renderSettingsSection(
       { title: t("connection.snapshot.title"), description: t("connection.snapshot.subtitle") },
       snapshotRows,

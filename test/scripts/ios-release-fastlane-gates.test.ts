@@ -310,16 +310,17 @@ describe("iOS Fastlane release upload gates", () => {
     );
   });
 
-  it("runs the exact screenshot lane during manual and full release CI", () => {
+  it("runs the exact screenshot lane during native Apple, manual, and full release CI", () => {
     const workflow = readFileSync(ciWorkflowPath, "utf8");
     const iosJobStart = workflow.indexOf("\n  ios-build:\n");
     const iosJobEnd = workflow.indexOf("\n  android:\n", iosJobStart);
     const iosJob = workflow.slice(iosJobStart, iosJobEnd);
 
-    expect(iosJob).toContain("timeout-minutes: 75");
+    expect(iosJob).toContain("timeout-minutes: 150");
     expect(iosJob).toContain("Capture iOS release screenshots");
     expect(iosJob).toContain("github.event_name == 'workflow_dispatch'");
     expect(iosJob).toContain("github.event_name == 'pull_request'");
+    expect(iosJob).toContain("needs.preflight.outputs.run_macos == 'true'");
     expect(iosJob).toContain("run: pnpm ios:screenshots");
     expect(iosJob).toContain("Upload iOS release screenshot evidence");
     expect(iosJob).toContain("apps/ios/build/SnapshotTestResults/*.xcresult");

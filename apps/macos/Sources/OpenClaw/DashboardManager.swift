@@ -31,11 +31,13 @@ final class DashboardManager {
     @ObservationIgnored private var endpointTask: Task<Void, Never>?
     @ObservationIgnored private var pendingOpenCommands: [DashboardNativeCommand] = []
     @ObservationIgnored private var openForCommandTask: Task<Void, Never>?
+    @ObservationIgnored private var navigationGeneration: UInt64 = 0
     @ObservationIgnored private var updater: UpdaterProviding?
     @ObservationIgnored private var displayedRouteRevision: UInt64?
     @ObservationIgnored private var switchGenerations: [ObjectIdentifier: UInt64] = [:]
     @ObservationIgnored private let authTokenProvider: @Sendable (GatewayConnection.Config) async -> String?
     @ObservationIgnored private let routeProbe: @Sendable () async -> Void
+    @ObservationIgnored private let endpointStateProvider: @Sendable () async -> GatewayEndpointState
     @ObservationIgnored private let mainWindowAutosaveName: String
     private(set) var gatewayEntries: [DashboardGatewayEntry] = []
     private(set) var frontmostDashboardTarget: DashboardGatewayTarget?
@@ -60,11 +62,15 @@ final class DashboardManager {
                 timeoutMs: 3000,
                 retryTransportFailures: false)
         },
+        endpointStateProvider: @escaping @Sendable () async -> GatewayEndpointState = {
+            await GatewayEndpointStore.shared.currentState()
+        },
         observeGatewayChanges: Bool = true,
         mainWindowAutosaveName: String = DashboardWindowLayout.windowFrameAutosaveName)
     {
         self.authTokenProvider = authTokenProvider
         self.routeProbe = routeProbe
+        self.endpointStateProvider = endpointStateProvider
         self.mainWindowAutosaveName = mainWindowAutosaveName
         if observeGatewayChanges {
             let names: [Notification.Name] = [
@@ -78,7 +84,13 @@ final class DashboardManager {
                     object: nil,
                     queue: .main)
                 { [weak self] _ in
-                    Task { @MainActor [weak self] in await self?.refreshGatewaySnapshots() }
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        if name == .controlChannelStateDidChange {
+                            await self.handleControlChannelStateChange(ControlChannel.shared.state)
+                        }
+                        await self.refreshGatewaySnapshots()
+                    }
                 }
             }
             let windowNames: [Notification.Name] = [
@@ -95,6 +107,14 @@ final class DashboardManager {
                 }
             }
         }
+    }
+
+    private func handleControlChannelStateChange(_ state: ControlChannel.ConnectionState) async {
+        guard state == .connected else { return }
+        // Endpoint readiness can precede device authentication. Replay the
+        // unchanged route once the control socket owns a usable credential.
+        let endpointState = await self.endpointStateProvider()
+        await self.handleEndpointState(endpointState, forceRouteReplacement: true)
     }
 
     func configure(updater: UpdaterProviding) {
@@ -130,7 +150,10 @@ final class DashboardManager {
         }
     }
 
-    func handleEndpointState(_ state: GatewayEndpointState) async {
+    func handleEndpointState(
+        _ state: GatewayEndpointState,
+        forceRouteReplacement: Bool = false) async
+    {
         // The shared endpoint stream owns only the main window's primary route.
         // Profile-targeted documents keep their saved endpoint and credentials.
         guard self.mainTarget == .primary else { return }
@@ -142,8 +165,9 @@ final class DashboardManager {
         }
         let config: GatewayConnection.Config = (url, token, password)
         let tlsParams = Self.primaryTLSParams(for: config, mode: mode)
-        let routeChanged = self.displayedRouteRevision.map { $0 != routeRevision }
-            ?? (routeRevision > 0) || !controller.hasTLSParams(tlsParams)
+        let routeChanged = forceRouteReplacement ||
+            (self.displayedRouteRevision.map { $0 != routeRevision }
+                ?? (routeRevision > 0) || !controller.hasTLSParams(tlsParams))
         var authToken = await self.authTokenProvider(config)
         if authToken == nil, password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty == nil {
             await self.routeProbe()
@@ -346,6 +370,24 @@ final class DashboardManager {
         Task { _ = try? await ControlChannel.shared.health(timeout: 3) }
     }
 
+    func show(atPath path: String) async {
+        self.navigationGeneration &+= 1
+        let generation = self.navigationGeneration
+        do {
+            try await self.show()
+            guard generation == self.navigationGeneration else { return }
+            guard let controller,
+                  let fallbackURL = DashboardRouteMap.dashboardURL(
+                      byAppendingSameAppPath: path,
+                      to: controller.dashboardBaseURL)
+            else { return }
+            controller.dispatchNativeNavigation(DashboardNativeNavigation(path: path, fallbackURL: fallbackURL))
+        } catch {
+            guard generation == self.navigationGeneration else { return }
+            self.showFailure(error)
+        }
+    }
+
     func showFailure(_ error: Error) {
         let message = (error as NSError).localizedDescription
         dashboardManagerLogger.error("dashboard setup failed error=\(message, privacy: .public)")
@@ -405,6 +447,10 @@ final class DashboardManager {
     }
 
     func dispatchNativeCommand(_ command: DashboardNativeCommand) {
+        if command.supersedesPendingNavigation {
+            // This also invalidates a handoff still suspended in show(atPath:).
+            self.navigationGeneration &+= 1
+        }
         NSApp.activate(ignoringOtherApps: true)
         if let controller, controller.isWindowOpen, controller.canDeliverNativeCommands {
             controller.show()
@@ -954,6 +1000,9 @@ extension DashboardManager {
     static func _testMake(
         authTokenProvider: @escaping @Sendable (GatewayConnection.Config) async -> String? = { $0.token },
         routeProbe: @escaping @Sendable () async -> Void = {},
+        endpointStateProvider: @escaping @Sendable () async -> GatewayEndpointState = {
+            .unavailable(mode: .unconfigured, reason: "not configured")
+        },
         primaryEndpointProvider: (@Sendable (AppState.ConnectionMode) async throws
             -> GatewayConnection.EndpointSnapshot)? = nil,
         profileEndpointProvider: (@Sendable (String) async throws
@@ -964,6 +1013,7 @@ extension DashboardManager {
         let manager = DashboardManager(
             authTokenProvider: authTokenProvider,
             routeProbe: routeProbe,
+            endpointStateProvider: endpointStateProvider,
             observeGatewayChanges: false,
             mainWindowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)")
         manager.testPrimaryEndpointProvider = primaryEndpointProvider
@@ -994,6 +1044,10 @@ extension DashboardManager {
 
     func _testSwitchFrontmostDashboard(to target: DashboardGatewayTarget) async {
         await self.performSwitchFrontmostDashboard(to: target)
+    }
+
+    func _testHandleControlChannelStateChange(_ state: ControlChannel.ConnectionState) async {
+        await self.handleControlChannelStateChange(state)
     }
 
     func _testWindowTLSParams(for target: DashboardGatewayTarget) async throws -> GatewayTLSParams? {

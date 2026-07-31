@@ -87,7 +87,8 @@
                 "low",
                 "high",
                 "max"
-              ]
+              ],
+              "codeMode": "preferred"
             }
           },
           {

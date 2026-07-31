@@ -17,7 +17,8 @@ import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-captu
  * but before runtime defaults), so runtime defaults don't leak into the written config.
  */
 
-const mockReadConfigFileSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
+const mockReadConfigFileSnapshot =
+  vi.fn<(options?: { observe?: boolean }) => Promise<ConfigFileSnapshot>>();
 const mockWriteConfigFile = vi.fn<
   (
     cfg: OpenClawConfig,
@@ -36,7 +37,8 @@ const mockLoadPluginMetadataSnapshot = vi.fn((_configForTest: unknown) =>
 );
 
 vi.mock("../config/config.js", () => ({
-  readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
+  readConfigFileSnapshot: (...args: Parameters<typeof mockReadConfigFileSnapshot>) =>
+    mockReadConfigFileSnapshot(...args),
   writeConfigFile: (
     cfg: OpenClawConfig,
     options?: {
@@ -111,6 +113,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 
 const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 const mockLog = defaultRuntime.log;
+const mockWriteStdout = defaultRuntime.writeStdout;
 const mockError = defaultRuntime.error;
 const mockExit = defaultRuntime.exit;
 
@@ -852,6 +855,31 @@ describe("config cli", () => {
       ]);
     });
 
+    it("normalizes explicit per-agent model-map paths before writing config mutations", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          entries: {
+            ops: { models: { "google/gemini-3-pro-preview": {} } },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "agents.entries.ops.models.google/gemini-3-pro-preview.alias",
+        "gemini",
+      ]);
+
+      expect(firstWrittenConfig().agents?.entries?.ops?.models).toEqual({
+        "google/gemini-3.1-pro-preview": { alias: "gemini" },
+      });
+      expect(requireWriteOptions().explicitSetPaths).toEqual([
+        ["agents", "entries", "ops", "models", "google/gemini-3.1-pro-preview", "alias"],
+      ]);
+    });
+
     it("normalizes agent-list model refs before writing config mutations", async () => {
       const resolved: OpenClawConfig = {
         agents: {
@@ -907,6 +935,52 @@ describe("config cli", () => {
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       expect(firstWrittenConfig().models?.providers?.google?.models?.[0]?.id).toBe(
         "google/gemini-3.1-pro-preview",
+      );
+    });
+
+    it("normalizes manifest-backed provider catalog refs before writing config mutations", async () => {
+      mockLoadPluginMetadataSnapshot.mockReturnValue(
+        createPluginMetadataSnapshot({
+          diagnostics: [],
+          plugins: [
+            createPluginManifestRecord({
+              id: "myproxy-plugin",
+              providers: ["myproxy"],
+              modelIdNormalization: {
+                providers: {
+                  myproxy: { aliases: { latest: "modern-model" }, prefixWhenBare: "vendor" },
+                },
+              },
+            }),
+          ],
+        }),
+      );
+      const resolved: OpenClawConfig = {
+        models: {
+          providers: {
+            myproxy: {
+              baseUrl: "https://proxy.example/v1",
+              models: [
+                {
+                  id: "latest",
+                  name: "Custom latest",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 200_000,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "gateway.port", "18790"]);
+
+      expect(firstWrittenConfig().models?.providers?.myproxy?.models?.[0]?.id).toBe(
+        "vendor/modern-model",
       );
     });
 
@@ -1179,6 +1253,15 @@ describe("config cli", () => {
   });
 
   describe("config get", () => {
+    it("reads the valid configuration without observing persistent health state", async () => {
+      setGatewaySnapshot();
+
+      await runConfigCommand(["config", "get", "gateway.port", "--json"]);
+
+      expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
+      expect(parseLastLogPayload()).toBe(18789);
+    });
+
     it("redacts sensitive values", async () => {
       const resolved: OpenClawConfig = {
         gateway: {
@@ -1191,7 +1274,7 @@ describe("config cli", () => {
 
       await runConfigCommand(["config", "get", "gateway.auth.token"]);
 
-      expect(mockLog).toHaveBeenCalledWith("__OPENCLAW_REDACTED__");
+      expect(mockWriteStdout).toHaveBeenCalledWith("__OPENCLAW_REDACTED__\n");
     });
 
     it("prints materialized subagent archive default", async () => {
@@ -1211,7 +1294,7 @@ describe("config cli", () => {
 
       await runConfigCommand(["config", "get", "agents.defaults.subagents.archiveAfterMinutes"]);
 
-      expect(mockLog).toHaveBeenCalledWith("60");
+      expect(mockWriteStdout).toHaveBeenCalledWith("60\n");
     });
 
     it("outputs JSON error to stdout when path is not found and --json is set", async () => {
@@ -1225,9 +1308,64 @@ describe("config cli", () => {
       const payload = parseLastLogPayload() as { error: string };
       expect(payload.error).toBe("Config path not found: nonexistent.path");
     });
+
+    it.each([
+      {
+        path: "gateway.__proto__.token",
+        error: "Invalid path segment: __proto__",
+      },
+      {
+        path: ".gateway.port",
+        error: "Invalid path (empty segment): .gateway.port",
+      },
+      {
+        path: "agents.list[0]id",
+        error: "Invalid path (missing separator after bracket): agents.list[0]id",
+      },
+    ])(
+      "returns a JSON error without reading configuration for malformed $path",
+      async (testCase) => {
+        await expect(runConfigCommand(["config", "get", testCase.path, "--json"])).rejects.toThrow(
+          ExitError,
+        );
+
+        expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+        expect(mockError).not.toHaveBeenCalled();
+        expect(parseLastLogPayload()).toMatchObject({
+          error: expect.stringContaining(testCase.error),
+        });
+      },
+    );
+
+    it("returns invalid configuration as JSON without observing persistent state", async () => {
+      setSnapshotOnce(
+        makeInvalidSnapshot({
+          issues: [{ path: "gateway.bind", message: "Invalid enum value" }],
+        }),
+      );
+
+      await expect(runConfigCommand(["config", "get", "gateway.port", "--json"])).rejects.toThrow(
+        ExitError,
+      );
+
+      expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
+      expect(mockError).not.toHaveBeenCalled();
+      expect(parseLastLogPayload()).toMatchObject({
+        error: expect.stringContaining("OpenClaw config is invalid"),
+        issues: [{ path: "gateway.bind", message: "Invalid enum value" }],
+      });
+    });
   });
 
   describe("config validate", () => {
+    it("validates without observing persistent configuration health state", async () => {
+      setGatewaySnapshot();
+
+      await runConfigCommand(["config", "validate"]);
+
+      expect(mockReadConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
+    });
+
     it("prints success and exits 0 when config is valid", async () => {
       setGatewaySnapshot();
 
@@ -2131,6 +2269,33 @@ describe("config cli", () => {
       );
     });
 
+    it("rejects empty inline batches before reading or rewriting config", async () => {
+      await expect(runConfigCommand(["config", "set", "--batch-json", "[]"])).rejects.toThrow(
+        ExitError,
+      );
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockLog).not.toHaveBeenCalled();
+      expectErrorIncludes("--batch-json must contain at least one config update.");
+    });
+
+    it("rejects empty batch files before reading or rewriting config", async () => {
+      const pathname = writeTempJson5File("openclaw-config-batch-empty", []);
+      try {
+        await expect(runConfigCommand(["config", "set", "--batch-file", pathname])).rejects.toThrow(
+          ExitError,
+        );
+      } finally {
+        fs.rmSync(pathname, { force: true });
+      }
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockLog).not.toHaveBeenCalled();
+      expectErrorIncludes("--batch-file must contain at least one config update.");
+    });
+
     it("supports batch-file mode", async () => {
       const resolved: OpenClawConfig = { gateway: { port: 18789 } };
       setSnapshot(resolved, resolved);
@@ -3013,6 +3178,60 @@ describe("config cli", () => {
       expect(errorRefs).toContain("env:default:DISCORD_BOT_TOKEN");
     });
 
+    it.each([
+      {
+        name: "a malformed batch payload",
+        args: ["config", "set", "--batch-json", "{}", "--dry-run", "--json"],
+        message: "--batch-json must be a JSON array.",
+      },
+      {
+        name: "an empty batch payload",
+        args: ["config", "set", "--batch-json", "[]", "--dry-run", "--json"],
+        message: "--batch-json must contain at least one config update.",
+      },
+      {
+        name: "an invalid set path",
+        args: ["config", "set", "gateway.port\\", "19000", "--dry-run", "--json"],
+        message: "Invalid path (trailing escape): gateway.port\\",
+      },
+      {
+        name: "an invalid unset path",
+        args: ["config", "unset", "gateway.port\\", "--dry-run", "--json"],
+        message: "Invalid path (trailing escape): gateway.port\\",
+      },
+      {
+        name: "a missing patch file",
+        args: [
+          "config",
+          "patch",
+          "--file",
+          "/nonexistent/openclaw-config-json-patch.json5",
+          "--dry-run",
+          "--json",
+        ],
+        message: "--file not found: /nonexistent/openclaw-config-json-patch.json5",
+      },
+    ])("emits structured JSON and actionable stderr for $name", async ({ args, message }) => {
+      await expect(runConfigCommand(args)).rejects.toThrow(ExitError);
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(parseLastLogPayload()).toMatchObject({
+        ok: false,
+        operations: 0,
+        inputModes: [],
+        checks: {
+          schema: false,
+          resolvability: false,
+          resolvabilityComplete: false,
+        },
+        refsChecked: 0,
+        skippedExecRefs: 0,
+        errors: [{ kind: "schema", message }],
+      });
+      expectErrorIncludes(message);
+    });
+
     it("keeps distinct resolvability failures when messages are identical but refs differ", async () => {
       setGatewaySnapshot({ providers: { default: { source: "env" } } });
 
@@ -3208,6 +3427,31 @@ describe("config cli", () => {
         args: ["config", "set", "gateway.[port]", "23456"],
         error: "Invalid path (empty segment): gateway.[port]",
       },
+      {
+        name: "rejects a trailing escape for config get before reading another key",
+        args: ["config", "get", "gateway.port\\"],
+        error: "Invalid path (trailing escape): gateway.port\\",
+      },
+      {
+        name: "rejects a trailing escape for config set before writing another key",
+        args: ["config", "set", "gateway.port\\", "23456"],
+        error: "Invalid path (trailing escape): gateway.port\\",
+      },
+      {
+        name: "rejects a trailing escape for config unset before deleting another key",
+        args: ["config", "unset", "gateway.port\\"],
+        error: "Invalid path (trailing escape): gateway.port\\",
+      },
+      {
+        name: "rejects a trailing escape for batch config set before writing another key",
+        args: [
+          "config",
+          "set",
+          "--batch-json",
+          JSON.stringify([{ path: "gateway.port\\", value: 23456 }]),
+        ],
+        error: "Invalid path (trailing escape): gateway.port\\",
+      },
     ])("$name", async ({ args, error, list }) => {
       if (list) {
         const resolved = { agents: { list } } as unknown as OpenClawConfig;
@@ -3219,6 +3463,15 @@ describe("config cli", () => {
       }
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
+
+    it.each(["gateway.port\\", "gateway.port\\   "])(
+      "rejects a trailing escape in shared config path %s",
+      (configPath) => {
+        expect(() => parseConfigSetPath(configPath)).toThrow(
+          `Invalid path (trailing escape): ${configPath}`,
+        );
+      },
+    );
 
     it.each([
       "agents.list[0]id",
@@ -3258,6 +3511,12 @@ describe("config cli", () => {
       ["agents.list[0].id", ["agents", "list", "0", "id"]],
       ["agents.list[0][1]", ["agents", "list", "0", "1"]],
       ["[0]", ["0"]],
+      ["  gateway.port  ", ["gateway", "port"]],
+      ["channels.discord.guilds.prod\\.guild", ["channels", "discord", "guilds", "prod.guild"]],
+      [
+        "channels.discord.guilds.prod\\\\.channels",
+        ["channels", "discord", "guilds", "prod\\", "channels"],
+      ],
     ])("preserves valid bracket path %s", (configPath, expected) => {
       expect(parseConfigSetPath(configPath)).toEqual(expected);
     });
@@ -3575,7 +3834,7 @@ describe("config cli", () => {
 
       await runConfigCommand(["config", "get", aliasPath]);
 
-      expect(mockLog).toHaveBeenCalledWith("gpt");
+      expect(mockWriteStdout).toHaveBeenCalledWith("gpt\n");
       mockLog.mockClear();
       setSnapshot(resolved, runtimeMerged);
 
@@ -3952,9 +4211,10 @@ describe("config cli", () => {
 
       try {
         await runConfigCommand(["config", "file"]);
-        const output = String(lastMockArg(mockLog));
-        expect(output).toBe(configPath);
-        expect(path.isAbsolute(output)).toBe(true);
+        const output = String(lastMockArg(mockWriteStdout));
+        expect(mockWriteStdout).toHaveBeenCalledWith(`${configPath}\n`);
+        expect(output).toBe(`${configPath}\n`);
+        expect(path.isAbsolute(output.trimEnd())).toBe(true);
         expect(output).not.toContain("$OPENCLAW_HOME");
         expect(output).not.toContain("~");
         expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();

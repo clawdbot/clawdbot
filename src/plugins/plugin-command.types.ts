@@ -9,6 +9,13 @@ import type {
 
 type ChannelId = import("../channels/plugins/types.core.js").ChannelId;
 
+type PluginCommandSessionTarget = {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+};
+
 // =============================================================================
 // Plugin Commands
 // =============================================================================
@@ -18,6 +25,8 @@ export type PluginCommandDiagnosticsSession = {
   sessionKey?: string;
   /** Ephemeral OpenClaw session id when available. */
   sessionId?: string;
+  /** Canonical SQLite identity for active transcript access. */
+  sessionTarget?: PluginCommandSessionTarget;
   /**
    * Deprecated transcript locator for this OpenClaw session when available.
    *
@@ -64,6 +73,8 @@ export type PluginCommandContext = {
   sessionKey?: string;
   /** Ephemeral host session id for the active conversation when available. */
   sessionId?: string;
+  /** Canonical SQLite identity for active transcript access. */
+  sessionTarget?: PluginCommandSessionTarget;
   /**
    * Deprecated transcript locator for the active OpenClaw session when available.
    *

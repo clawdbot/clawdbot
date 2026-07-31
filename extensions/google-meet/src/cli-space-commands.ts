@@ -26,7 +26,6 @@ export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandCo
     callGateway,
     operationTimeoutMs,
     hasCreateOAuth,
-    resolveCreateTokenOptions,
     resolveMeetingInput,
     resolveOAuthTokenOptions,
   } = context;
@@ -148,7 +147,7 @@ export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandCo
         return;
       }
       const token = await resolveGoogleMeetAccessToken(
-        resolveCreateTokenOptions(params.config, options),
+        resolveOAuthTokenOptions(params.config, options),
       );
       const result = await createGoogleMeetSpace({
         accessToken: token.accessToken,

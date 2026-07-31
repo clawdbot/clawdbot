@@ -12,7 +12,7 @@ import type { ProcessSupervisor } from "../process/supervisor/index.js";
 import type { SpawnInput } from "../process/supervisor/types.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { createExecTool } from "./bash-tools.exec.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { getBashShellConfig } from "./shell-utils.js";
 

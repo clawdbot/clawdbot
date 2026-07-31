@@ -10,6 +10,8 @@ Run multiple _isolated_ agents in one Gateway process, each with its own workspa
 
 An **agent** is the full per-persona scope: workspace files, auth profiles, model registry, and session store. A **binding** maps a channel account (a Slack workspace, a WhatsApp number, etc.) to one of those agents.
 
+For a focused setup guide with account and conversation examples, see [Agent bindings](/concepts/agent-bindings).
+
 ## What is one agent
 
 Each agent has its own:

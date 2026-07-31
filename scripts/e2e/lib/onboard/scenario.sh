@@ -261,7 +261,7 @@ run_case_local_basic() {
   sessions_dir="$OPENCLAW_STATE_DIR/agents/main/sessions"
 
   openclaw_e2e_assert_dir "$sessions_dir"
-  for file in AGENTS.md BOOTSTRAP.md IDENTITY.md SOUL.md TOOLS.md USER.md; do
+  for file in AGENTS.md BOOTSTRAP.md IDENTITY.md SOUL.md USER.md; do
     openclaw_e2e_assert_file "$workspace_dir/$file"
   done
 

@@ -37,7 +37,6 @@ import {
 import {
   createMattermostReplyDeliveryBarrier,
   deliverMattermostReplyPayload,
-  toMattermostChannelDeliveryResult,
 } from "./reply-delivery.js";
 import {
   buildModelsProviderData,
@@ -887,21 +886,20 @@ async function handleSlashCommandAsync(params: {
     },
     ctxPayload,
     delivery: {
+      observeMessageSent: true,
       deliver: async (payload) => {
-        const result = toMattermostChannelDeliveryResult(
-          await deliverMattermostReplyPayload({
-            core,
-            cfg,
-            payload,
-            to,
-            accountId: account.accountId,
-            agentId: route.agentId,
-            textLimit,
-            tableMode,
-            sendMessage: sendMessageMattermost,
-            onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
-          }),
-        );
+        const result = await deliverMattermostReplyPayload({
+          core,
+          cfg,
+          payload,
+          to,
+          accountId: account.accountId,
+          agentId: route.agentId,
+          textLimit,
+          tableMode,
+          sendMessage: sendMessageMattermost,
+          onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
+        });
         if (result.visibleReplySent) {
           runtime.log?.(`delivered slash reply to ${to}`);
         }

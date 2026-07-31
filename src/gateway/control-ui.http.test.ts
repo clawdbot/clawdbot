@@ -39,12 +39,46 @@ import { setControlUiPluginAuthCookieForRequest } from "./http-auth-utils.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
+type PlaybackTranscodeResolution = Awaited<
+  ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackTranscode"]>
+>;
+type PlaybackModeForSourceResolver = (
+  ...args: Parameters<
+    (typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]
+  >
+) => ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]>;
+
 // Keeps bootstrap payload tests deterministic: the real resolver reports the
 // git branch of this checkout, which varies across CI and dev machines.
 const devInstallBranchMock = vi.hoisted(() => ({ branch: null as string | null }));
+const probeMediaFileDescriptorMock = vi.hoisted(() => vi.fn(async () => ({})));
+const resolvePlaybackModeForSourceMock = vi.hoisted(() => vi.fn<PlaybackModeForSourceResolver>());
+const resolvePlaybackTranscodeMock = vi.hoisted(() =>
+  vi.fn(async (): Promise<PlaybackTranscodeResolution> => ({ kind: "passthrough" })),
+);
 vi.mock("../infra/dev-install-branch.js", () => ({
   resolveDevInstallGitBranch: async () => devInstallBranchMock.branch,
 }));
+vi.mock("../media/media-probe.js", () => ({
+  probePlaybackMediaFileDescriptor: probeMediaFileDescriptorMock,
+}));
+vi.mock("../media/playback-transcode.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media/playback-transcode.js")>();
+  const testApi = (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.playbackTranscodeTestApi")
+  ] as {
+    PLAYBACK_TRANSCODE_POLICY: Record<"audio" | "video", unknown>;
+    resolvePlaybackMode(mimeType: string, policy: unknown): "native" | "transcode" | undefined;
+  };
+  resolvePlaybackModeForSourceMock.mockImplementation(async (params) =>
+    testApi.resolvePlaybackMode(params.mimeType, testApi.PLAYBACK_TRANSCODE_POLICY[params.kind]),
+  );
+  return {
+    ...actual,
+    resolvePlaybackModeForSource: resolvePlaybackModeForSourceMock,
+    resolvePlaybackTranscode: resolvePlaybackTranscodeMock,
+  };
+});
 
 const REAL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -54,6 +88,11 @@ const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("base64")}`
 const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+  probeMediaFileDescriptorMock.mockReset();
+  probeMediaFileDescriptorMock.mockResolvedValue({});
+  resolvePlaybackModeForSourceMock.mockClear();
+  resolvePlaybackTranscodeMock.mockReset();
+  resolvePlaybackTranscodeMock.mockResolvedValue({ kind: "passthrough" });
 });
 
 describe("handleControlUiHttpRequest", () => {
@@ -100,7 +139,6 @@ describe("handleControlUiHttpRequest", () => {
       devGitBranch?: string;
       localMediaPreviewRoots?: string[];
       seamColor?: string;
-      timeFormat?: "auto" | "12" | "24";
       terminalEnabled: boolean;
       pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
     };
@@ -215,7 +253,7 @@ describe("handleControlUiHttpRequest", () => {
     trustedProxies?: string[];
     remoteAddress?: string;
   }) {
-    const { res, end } = makeMockHttpResponse();
+    const { res, end, setHeader } = makeMockHttpResponse();
     const handled = await handleControlUiAssistantMediaRequest(
       {
         url: params.url,
@@ -230,7 +268,7 @@ describe("handleControlUiHttpRequest", () => {
         ...(params.trustedProxies ? { trustedProxies: params.trustedProxies } : {}),
       },
     );
-    return { res, end, handled };
+    return { res, end, setHeader, handled };
   }
 
   function createTrustedProxyAuth(): ResolvedGatewayAuth {
@@ -529,6 +567,198 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it.each(["GET", "HEAD"] as const)(
+    "revalidates assistant media ETags before ranges for %s",
+    async (method) => {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-conditional-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "photo.png");
+          await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+          const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
+          const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
+          const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
+          const etag = initial.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1];
+          expect(etag).toMatch(/^"[A-Za-z0-9_-]+"$/);
+
+          const conditional = await runAssistantMediaRequest({
+            url,
+            method,
+            auth,
+            headers: {
+              "if-none-match": `W/${String(etag)}`,
+              range: "bytes=0-3",
+              "if-range": '"stale"',
+            },
+          });
+
+          expect(conditional.handled).toBe(true);
+          expect(conditional.res.statusCode).toBe(304);
+          expect(conditional.setHeader).toHaveBeenCalledWith("ETag", etag);
+          expect(conditional.setHeader).not.toHaveBeenCalledWith(
+            "Content-Length",
+            expect.anything(),
+          );
+          expect(conditional.end).toHaveBeenCalledWith();
+        },
+      });
+    },
+  );
+
+  it("resumes assistant media only for an exact If-Range HTTP-date", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-if-range-date-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "photo.png");
+        const body = Buffer.from("assistant-media-bytes");
+        const modified = new Date("2025-07-08T18:40:00.789Z");
+        await fs.writeFile(filePath, body);
+        await fs.utimes(filePath, modified, modified);
+        const lastModified = (await fs.stat(filePath)).mtime.toUTCString();
+        const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
+        const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
+
+        const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
+        expect(initial.res.statusCode).toBe(200);
+        expect(initial.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
+
+        const partial = await runAssistantMediaRequest({
+          url,
+          method: "GET",
+          auth,
+          headers: { range: "bytes=0-8", "if-range": lastModified },
+        });
+        expect(partial.res.statusCode).toBe(206);
+        expect(partial.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
+        expect(partial.setHeader).toHaveBeenCalledWith(
+          "Content-Range",
+          `bytes 0-8/${body.byteLength}`,
+        );
+
+        const future = await runAssistantMediaRequest({
+          url,
+          method: "GET",
+          auth,
+          headers: {
+            range: "bytes=0-8",
+            "if-range": new Date(Date.parse(lastModified) + 1000).toUTCString(),
+          },
+        });
+        expect(future.res.statusCode).toBe(200);
+        expect(future.setHeader).toHaveBeenCalledWith("Last-Modified", lastModified);
+      },
+    });
+  });
+
+  it("bounds future-dated assistant media validators across conditional response plans", async () => {
+    const nowMs = Math.floor(Date.now() / 1000) * 1000;
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(nowMs);
+    try {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-future-mtime-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "photo.png");
+          const body = Buffer.from("future-assistant-media");
+          const future = new Date(nowMs + 60_000);
+          await fs.writeFile(filePath, body);
+          await fs.utimes(filePath, future, future);
+          const futureLastModified = (await fs.stat(filePath)).mtime.toUTCString();
+          const expectedLastModified = new Date(nowMs).toUTCString();
+          const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`;
+          const auth = { mode: "token", token: "test-token", allowTailscale: false } as const;
+
+          const initial = await runAssistantMediaRequest({ url, method: "HEAD", auth });
+          expect(initial.res.statusCode).toBe(200);
+          expect(initial.setHeader).toHaveBeenCalledWith("Last-Modified", expectedLastModified);
+          const etag = initial.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1];
+
+          const partial = await runAssistantMediaRequest({
+            url,
+            method: "GET",
+            auth,
+            headers: { range: "bytes=0-5", "if-range": expectedLastModified },
+          });
+          expect(partial.res.statusCode).toBe(206);
+          expect(partial.setHeader).toHaveBeenCalledWith("Last-Modified", expectedLastModified);
+
+          const futureRange = await runAssistantMediaRequest({
+            url,
+            method: "GET",
+            auth,
+            headers: { range: "bytes=0-5", "if-range": futureLastModified },
+          });
+          expect(futureRange.res.statusCode).toBe(200);
+
+          const unchanged = await runAssistantMediaRequest({
+            url,
+            method: "GET",
+            auth,
+            headers: { "if-none-match": String(etag) },
+          });
+          expect(unchanged.res.statusCode).toBe(304);
+          expect(unchanged.setHeader).toHaveBeenCalledWith("Last-Modified", expectedLastModified);
+
+          const unsatisfiable = await runAssistantMediaRequest({
+            url,
+            method: "GET",
+            auth,
+            headers: { range: `bytes=${body.byteLength}-` },
+          });
+          expect(unsatisfiable.res.statusCode).toBe(416);
+          expect(unsatisfiable.setHeader).toHaveBeenCalledWith(
+            "Last-Modified",
+            expectedLastModified,
+          );
+        },
+      });
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it("returns 202 while assistant playback media is preparing", async () => {
+    resolvePlaybackTranscodeMock.mockResolvedValueOnce({ kind: "preparing" });
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-playback-preparing-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "voice.caf");
+        await fs.writeFile(filePath, Buffer.from("caff-original"));
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?playback=1&source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(202);
+        expect(responseJson(end)).toEqual({ status: "preparing" });
+      },
+    });
+  });
+
+  it("falls back to original assistant media when playback transcode fails", async () => {
+    resolvePlaybackTranscodeMock.mockResolvedValueOnce({ kind: "fallback" });
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-playback-fallback-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "voice.caf");
+        await fs.writeFile(filePath, Buffer.from("caff-original"));
+        const { res, handled, setHeader } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?playback=1&source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(setHeader).toHaveBeenCalledWith("Content-Type", "audio/x-caf");
+        expect(resolvePlaybackTranscodeMock).toHaveBeenCalledWith(
+          expect.objectContaining({ mimeType: "audio/x-caf", kind: "audio" }),
+        );
+      },
+    });
+  });
+
   it.each([
     { filename: "voice.ogg", disposition: "inline" },
     { filename: "clip.mp4", disposition: "inline" },
@@ -731,6 +961,57 @@ describe("handleControlUiHttpRequest", () => {
         expect(payload.available).toBe(true);
         expect(payload.mediaTicket).toMatch(/^v1\./);
         expect(Date.parse(payload.mediaTicketExpiresAt ?? "")).not.toBeNaN();
+      },
+    });
+  });
+
+  it("reports assistant audio size, type, and probed duration metadata", async () => {
+    probeMediaFileDescriptorMock.mockResolvedValueOnce({ durationMs: 2345 });
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-audio-meta-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "voice.mp3");
+        const contents = Buffer.from("ID3audio-fixture");
+        await fs.writeFile(filePath, contents);
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(responseJson(end)).toMatchObject({
+          available: true,
+          mimeType: "audio/mpeg",
+          playback: "native",
+          sizeBytes: contents.byteLength,
+          durationMs: 2345,
+        });
+        expect(probeMediaFileDescriptorMock).toHaveBeenCalledWith(expect.any(Number), "audio");
+      },
+    });
+  });
+
+  it("marks exotic assistant media metadata for playback transcoding", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-transcode-meta-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "voice.caf");
+        await fs.writeFile(filePath, Buffer.from("caff-original"));
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(responseJson(end)).toMatchObject({
+          available: true,
+          mimeType: "audio/x-caf",
+          playback: "transcode",
+        });
       },
     });
   });
@@ -1170,7 +1451,6 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAvatarReason).toBe("missing");
         expect(parsed.assistantAgentId).toBe("roboclaw");
         expect(parsed.seamColor).toBe("#1A2b3C");
-        expect(parsed.timeFormat).toBe("auto");
         expect(parsed.terminalEnabled).toBe(true);
         expect(parsed.devGitBranch).toBeUndefined();
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
@@ -2398,7 +2678,7 @@ describe("handleControlUiHttpRequest", () => {
               req: {
                 headers: { "accept-encoding": "br, identity;q=0" },
               } as IncomingMessage,
-              sourceFile: { path: filePath, fd },
+              sourceFile: { path: filePath, fd, size: fsSync.fstatSync(fd).size },
               precompressed: true,
               openPrecompressedFile: () => {
                 throw openError;
@@ -2580,6 +2860,38 @@ describe("handleControlUiHttpRequest", () => {
       },
     });
   });
+
+  it.each(["identity", "gzip", "br"] as const)(
+    "preserves the selected %s static-asset Content-Length for HEAD",
+    async (encoding) => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const source = "console.log('static asset metadata');\n".repeat(12);
+          const { filePath } = await writeAssetFile(tmp, "app-HeAd1234.js", source);
+          await fs.writeFile(`${filePath}.gz`, gzipSync(source));
+          await fs.writeFile(`${filePath}.br`, brotliCompressSync(source));
+          const request = {
+            url: "/assets/app-HeAd1234.js",
+            rootPath: tmp,
+            rootKind: "bundled" as const,
+            headers: { "accept-encoding": encoding },
+          };
+          const get = await runControlUiRequest({ ...request, method: "GET" });
+          const head = await runControlUiRequest({ ...request, method: "HEAD" });
+          const body = get.end.mock.calls[0]?.[0];
+
+          expect(Buffer.isBuffer(body)).toBe(true);
+          expect(head.setHeader).toHaveBeenCalledWith("Content-Length", String(body.byteLength));
+          expect(firstEndCallLength(head.end)).toBe(0);
+          if (encoding === "identity") {
+            expect(head.setHeader).not.toHaveBeenCalledWith("Content-Encoding", expect.anything());
+          } else {
+            expect(head.setHeader).toHaveBeenCalledWith("Content-Encoding", encoding);
+          }
+        },
+      });
+    },
+  );
 
   it.each([
     {

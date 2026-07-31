@@ -113,17 +113,62 @@ describeControlUiE2e("Control UI About mocked Gateway E2E", () => {
       await expect.poll(() => xLink.getAttribute("href")).toBe("https://x.com/openclaw");
 
       const clawd = page.getByRole("button", { name: "Wave hello to Clawd" });
-      await clawd.click();
-      await expect
-        .poll(() => clawd.evaluate((el) => el.classList.contains("about-hero__clawd--wave")))
-        .toBe(true);
+      // CLAWD_WAVE_MS clears the class after 1400ms, so click and read it in one browser step.
+      const clawdWaving = await clawd.evaluate(async (element) => {
+        const button = element as HTMLButtonElement;
+        const owner = element.closest("openclaw-about-page") as
+          | (HTMLElement & {
+              updateComplete: Promise<unknown>;
+            })
+          | null;
+        if (!owner) {
+          throw new Error("About page owner is unavailable");
+        }
+        button.click();
+        await owner.updateComplete;
+        return button.classList.contains("about-hero__clawd--wave");
+      });
+      expect(clawdWaving).toBe(true);
 
       await expect.poll(() => page.locator(".about-footer").textContent()).toContain("MIT License");
 
       const copyButton = strip.locator(".about-commit button");
       await expect.poll(() => copyButton.getAttribute("aria-label")).toBe("Copy full commit hash");
-      await copyButton.click();
-      await expect.poll(() => copyButton.getAttribute("aria-label")).toBe("Commit hash copied");
+      // COPY_RESULT_VISIBLE_MS clears the copied label after 1800ms. Await both the
+      // initial copying render and the async clipboard continuation before reading it.
+      const copiedLabel = await copyButton.evaluate(async (element) => {
+        const button = element as HTMLButtonElement;
+        const owner = element.closest("openclaw-about-page") as
+          | (HTMLElement & {
+              updateComplete: Promise<unknown>;
+            })
+          | null;
+        if (!owner) {
+          throw new Error("About page owner is unavailable");
+        }
+        let copyObserver: MutationObserver | undefined;
+        const copySettled = new Promise<void>((resolve) => {
+          copyObserver = new MutationObserver(() => {
+            if (button.getAttribute("aria-busy") !== "true") {
+              copyObserver?.disconnect();
+              resolve();
+            }
+          });
+          copyObserver.observe(button, {
+            attributeFilter: ["aria-busy", "aria-label"],
+            attributes: true,
+          });
+        });
+        button.click();
+        await owner.updateComplete;
+        if (button.getAttribute("aria-busy") === "true") {
+          await copySettled;
+        }
+        copyObserver?.disconnect();
+        await owner.updateComplete;
+        return button.getAttribute("aria-label");
+      });
+      expect(copiedLabel).toBe("Commit hash copied");
       await expect
         .poll(() =>
           page.evaluate(

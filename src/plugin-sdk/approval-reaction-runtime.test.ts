@@ -1,7 +1,7 @@
 /**
  * Tests approval reaction runtime helper behavior.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import {
@@ -370,6 +370,22 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     expect(await store.lookup("message-1")).toEqual(target);
     now = 1_101;
     expect(await store.lookup("message-1")).toBeNull();
+  });
+
+  it("uses the current system clock when no clock is injected", async () => {
+    vi.useFakeTimers({ now: 1_000 });
+    try {
+      const store = createApprovalReactionTargetStore<{ approvalId: string }>({
+        namespace: "test.default-clock",
+        maxEntries: 10,
+        defaultTtlMs: 100,
+      });
+      store.register("message-1", { approvalId: "approval-1" }, { ttlMs: 1 });
+      vi.setSystemTime(1_002);
+      expect(await store.lookup("message-1")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("fails open for local suppression unless native exec route facts match", () => {

@@ -2,7 +2,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
+import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import {
@@ -34,6 +34,7 @@ import {
 } from "./openclaw-agent-db-lease.js";
 import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 import {
+  isSameOpenClawAgentDatabasePath,
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
 } from "./openclaw-agent-db-registry.js";
@@ -306,6 +307,7 @@ export function openOpenClawAgentDatabase(
     // pressure the 65th open would otherwise fail before eviction could run.
     evictLruAgentDatabaseHandles();
     const db = openNodeSqliteDatabase(pathname);
+    enableNodeSqliteKyselyStatementCache(db);
     openedDb = db;
     // Eviction churn must avoid schema/registry busy waits on the event loop while
     // reconcile workers hold write transactions on these same agent databases.
@@ -482,7 +484,6 @@ function closeCachedOpenClawAgentDatabase(
   // Eviction must stay cheap: PASSIVE skips waiting on concurrent readers,
   // whose drained TRUNCATE checkpoints blocked the event loop for seconds.
   database.walMaintenance.close(options.eviction ? { checkpointMode: "PASSIVE" } : undefined);
-  clearNodeSqliteKyselyCacheForDatabase(database.db);
   if (database.db.isOpen) {
     database.db.close();
   }
@@ -608,33 +609,37 @@ export function closeOpenClawAgentDatabaseByPath(pathname: string): boolean {
   return true;
 }
 
-/** Close and unregister one transient agent database by exact cached pathname. */
+/** Close and unregister one unambiguous transient agent database by filesystem identity. */
 export function disposeOpenClawAgentDatabaseByPath(
   pathname: string,
   options: { env?: NodeJS.ProcessEnv } = {},
 ): boolean {
-  // Require the cache's exact lexical owner. Following a symlink or accepting
-  // an uncached path could unregister a database another process now owns.
   const resolvedPath = path.resolve(pathname);
   // Disposal can be followed by file deletion or recreation, so revalidate next open.
   validatedAgentDatabasePaths.delete(resolvedPath);
-  const database = cachedDatabases.get(resolvedPath);
-  if (!database || database.path !== resolvedPath) {
+  const matchingDatabases = [...cachedDatabases.values()].filter((candidate) =>
+    isSameOpenClawAgentDatabasePath(candidate.path, resolvedPath),
+  );
+  if (matchingDatabases.length > 1) {
     return false;
   }
-  if (incognitoDatabases.has(database)) {
-    return closeOpenClawAgentDatabaseByPath(resolvedPath);
+  const database = matchingDatabases[0];
+  if (database && incognitoDatabases.has(database)) {
+    return closeOpenClawAgentDatabaseByPath(database.path);
+  }
+  if (!database) {
+    return false;
   }
   try {
     unregisterOpenClawAgentDatabase({
       agentId: database.agentId,
-      path: resolvedPath,
+      path: database.path,
       ...(options.env ? { env: options.env } : {}),
     });
   } finally {
     // Secret-bearing transient DBs must close even when registry maintenance
     // fails; Windows otherwise cannot remove the file during caller cleanup.
-    closeOpenClawAgentDatabaseByPath(resolvedPath);
+    closeOpenClawAgentDatabaseByPath(database.path);
   }
   return true;
 }

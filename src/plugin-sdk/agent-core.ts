@@ -52,6 +52,7 @@ export {
 } from "../../packages/agent-core/src/index.js";
 export type {
   AfterToolCallResult,
+  AfterToolOutcomeContext,
   AgentEvent,
   AgentMessage,
   AfterToolCallContext,

@@ -313,6 +313,18 @@ struct ChatGatewayRequestTests {
         #expect(String(decoding: encoded, as: UTF8.self).contains("a.png"))
     }
 
+    @Test func `send request omits inherited thinking override`() {
+        let inherited = OpenClawChatGatewayRequests.sendMessage(
+            sessionKey: "global",
+            agentID: nil,
+            expectedSessionRoutingContract: nil,
+            message: "inherit",
+            thinking: nil,
+            idempotencyKey: "send-inherit",
+            attachments: [])
+        #expect(inherited.params["thinking"] == nil)
+    }
+
     @Test func `question resolve request preserves answer arrays`() throws {
         let request = OpenClawChatGatewayRequests.resolveQuestion(
             id: "ask_123",
@@ -442,6 +454,38 @@ struct ChatGatewayPayloadCodecTests {
         #expect(note.swarmGroupId == "swarm:agent:main:main:run-1")
         #expect(note.kind == "phase")
         #expect(note.text == "Research")
+
+        let lifecycleChanged = EventFrame(
+            type: "event",
+            event: "sessions.changed",
+            payload: AnyCodable([
+                "sessionKey": AnyCodable("agent:main:main"),
+                "phase": AnyCodable("end"),
+                "runId": AnyCodable("run-1"),
+                "session": AnyCodable([
+                    "key": AnyCodable("agent:main:main"),
+                    "updatedAt": AnyCodable(30000),
+                    "status": AnyCodable("done"),
+                    "hasActiveRun": AnyCodable(false),
+                    "runtimeMs": AnyCodable(30000),
+                    "outputTokens": AnyCodable(42),
+                    "activeRunIds": AnyCodable([]),
+                ]),
+            ]))
+        guard case let .sessionsChanged(lifecycle) = OpenClawChatGatewayPayloadCodec.event(
+            from: lifecycleChanged)
+        else {
+            Issue.record("expected lifecycle sessionsChanged")
+            return
+        }
+        #expect(lifecycle.reason.isEmpty)
+        #expect(lifecycle.phase == "end")
+        #expect(lifecycle.runId == "run-1")
+        #expect(lifecycle.session?.key == "agent:main:main")
+        #expect(lifecycle.session?.status == "done")
+        #expect(lifecycle.session?.runtimeMs == 30000)
+        #expect(lifecycle.session?.outputTokens == 42)
+        #expect(lifecycle.session?.activeRunIds == [])
 
         let chat = EventFrame(
             type: "event",

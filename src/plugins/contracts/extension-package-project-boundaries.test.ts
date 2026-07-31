@@ -45,14 +45,12 @@ type PackageJson = {
   devDependencies?: Record<string, string>;
 };
 const MEMORY_HOST_SDK_EXPORTS = [
-  "./engine",
   "./engine-embeddings",
   "./engine-foundation",
   "./engine-qmd",
   "./engine-storage",
   "./multimodal",
   "./query",
-  "./runtime-cli",
   "./runtime-core",
   "./runtime-files",
   "./secret",
@@ -66,7 +64,6 @@ const MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES = [
 ] as const;
 const MEMORY_HOST_SDK_RUNTIME_ADAPTER_FILES = [
   "packages/memory-host-sdk/src/host/openclaw-runtime-agent.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-cli.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-config.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-io.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-memory.ts",

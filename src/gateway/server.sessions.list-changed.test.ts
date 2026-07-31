@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, expect, test, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { subscribePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   pinActivePluginSessionExtensionRegistry,
@@ -20,6 +21,7 @@ import {
   normalizeSessionDeliveryState,
   projectSessionDeliveryFields,
 } from "../utils/delivery-context.shared.js";
+import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { buildGatewaySessionRow } from "./session-utils.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -423,6 +425,59 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
   ws.close();
 });
 
+test.each([
+  ["my-ngc", "nvidia/nemotron-3-ultra-550b-a55b"],
+  ["my-ngc", "z-ai/glm-5.2"],
+  ["my-ngc", "deepseek-ai/deepseek-v4-pro"],
+  ["my-ngc:nvidia", "nvidia/nemotron-3-ultra-550b-a55b"],
+])(
+  "sessions.list preserves custom provider %s and nested models over WebSocket",
+  async (provider, model) => {
+    const { storePath } = await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: sessionStoreEntry("sess-parent"),
+        "dashboard:child": sessionStoreEntry("sess-custom-provider", {
+          modelProvider: provider,
+          model,
+          parentSessionKey: "agent:main:main",
+        }),
+      },
+    });
+    await seedSessionTranscript({
+      sessionId: "sess-custom-provider",
+      sessionKey: "agent:main:dashboard:child",
+      storePath,
+      messages: [
+        {
+          role: "user",
+          content: `List ${provider}/${model} sessions.`,
+        },
+        {
+          role: "assistant",
+          provider,
+          model,
+          content: `${provider} remains a model provider, not a plugin directory.`,
+        },
+      ],
+    });
+
+    const { ws } = await openClient();
+    const listed = await rpcReq<{
+      sessions: Array<{ key: string; modelProvider?: string; model?: string }>;
+    }>(ws, "sessions.list", {});
+    ws.close();
+
+    expect(listed.ok, JSON.stringify(listed)).toBe(true);
+    expect(
+      listed.payload?.sessions.find((session) => session.key === "agent:main:dashboard:child"),
+    ).toMatchObject({
+      modelProvider: provider,
+      model,
+    });
+  },
+);
+
 test("sessions.list uses the gateway model catalog for effective thinking defaults", async () => {
   testState.agentConfig = {
     model: { primary: "test-provider/reasoner" },
@@ -641,6 +696,34 @@ test("sessions.changed mutation events refresh effective fast metadata", async (
     effectiveFastModeSource: "session",
     fastAutoOnSeconds: 30,
   });
+});
+
+test("sessions.changed mutations reach plugin subscribers without websocket clients", async () => {
+  await writeMainSessionStore({ label: "Original title" });
+  const received = vi.fn();
+  const unsubscribe = subscribePluginSessionsChanged(received);
+  const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new Set() });
+
+  try {
+    await invokeSessionMutation({
+      method: "sessions.patch",
+      params: { key: "main", label: "Renamed title" },
+      subscribedConnIds: new Set(),
+      context: { broadcastToConnIds },
+    });
+
+    await vi.waitFor(() => {
+      expect(received).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:main",
+          label: "Renamed title",
+          reason: "patch",
+        }),
+      );
+    });
+  } finally {
+    unsubscribe();
+  }
 });
 
 test("sessions.list marks sessions with active abortable runs", async () => {

@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { formatErrorMessage } from "./errors.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
+import { isSqliteLockError } from "./sqlite-transaction.js";
 import { installProcessWarningFilter } from "./warning-filter.js";
 
 const require = createRequire(import.meta.url);
@@ -95,4 +96,30 @@ export function openNodeSqliteDatabase(
   return options === undefined
     ? new sqlite.DatabaseSync(resolvedLocation)
     : new sqlite.DatabaseSync(resolvedLocation, options);
+}
+
+/** Hold a raw exclusive transaction until release for cross-process coordination. */
+export function tryAcquireExclusiveSqliteCoordinator(
+  location: string,
+): { release: () => void } | null {
+  const database = openNodeSqliteDatabase(location);
+  try {
+    // Kysely transaction callbacks cannot own a lock beyond their synchronous commit section.
+    database.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
+  } catch (error) {
+    database.close();
+    if (isSqliteLockError(error)) {
+      return null;
+    }
+    throw error;
+  }
+  return {
+    release: () => {
+      try {
+        database.exec("ROLLBACK");
+      } finally {
+        database.close();
+      }
+    },
+  };
 }

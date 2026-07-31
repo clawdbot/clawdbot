@@ -267,8 +267,14 @@ extension GatewayLaunchAgentManager {
                 payload: Data(payload.utf8),
                 message: nil)
         }
+        if ProcessInfo.processInfo.isRunningTests {
+            return CommandResult(
+                success: false,
+                payload: nil,
+                message: "Gateway daemon commands require explicit interception during tests")
+        }
         #endif
-        let command = CommandResolver.openclawCommand(
+        let command = await CommandResolver.openclawCommand(
             subcommand: "gateway",
             extraArgs: self.withJsonFlag(args),
             // Launchd management must always run locally, even if remote mode is configured.

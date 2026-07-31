@@ -1,6 +1,7 @@
 // Searchable select list tests cover filtering and selection behavior.
+import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-import { stripAnsi, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
+import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { SearchableSelectList, type SearchableSelectListTheme } from "./searchable-select-list.js";
 
 const mockTheme: SearchableSelectListTheme = {
@@ -88,6 +89,46 @@ describe("SearchableSelectList", () => {
     expect(output.length).toBeGreaterThanOrEqual(3);
     expect(output[0]).toContain("search");
   });
+
+  it("emits the hardware cursor marker only while the search input is focused", () => {
+    const list = new SearchableSelectList(testItems, 5, mockTheme);
+
+    expect(list.focused).toBe(false);
+    expect(list.render(80)[0]).not.toContain(CURSOR_MARKER);
+
+    list.focused = true;
+    expect(list.focused).toBe(true);
+    expect(list.render(80)[0]).toContain(CURSOR_MARKER);
+
+    list.focused = false;
+    expect(list.focused).toBe(false);
+    expect(list.render(80)[0]).not.toContain(CURSOR_MARKER);
+  });
+
+  it.each([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])(
+    "keeps ANSI, CJK, scroll, and no-match rows within %i terminal columns",
+    (width) => {
+      const items = [
+        {
+          value: "cjk",
+          label: "\u001b[32m日本語の検索結果\u001b[0m",
+          description: "長い説明と表示幅の検証",
+        },
+        { value: "other", label: "another long search result" },
+      ];
+      const list = new SearchableSelectList(items, 1, ansiHighlightTheme);
+      list.focused = true;
+
+      for (const line of list.render(width)) {
+        expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      }
+
+      list.handleInput("missing");
+      for (const line of list.render(width)) {
+        expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      }
+    },
+  );
 
   it("does not truncate long labels on wide terminals when description is present", () => {
     const tail = "__TAIL__";
@@ -325,22 +366,24 @@ describe("SearchableSelectList", () => {
     expect(list.getSelectedItem()?.value).toBe("anthropic/claude-3-sonnet");
   });
 
-  it("types j and k into search input instead of intercepting as vim navigation", () => {
-    const items = [
-      { value: "alpha", label: "alpha" },
-      { value: "kilo", label: "kilo" },
-      { value: "juliet", label: "juliet" },
-    ];
+  it.each([
+    { query: "j", expectedValue: "juliet" },
+    { query: "k", expectedValue: "kilo" },
+  ])("filters names beginning with $query", ({ query, expectedValue }) => {
+    const list = new SearchableSelectList(
+      [
+        { value: "alpha", label: "alpha" },
+        { value: "kilo", label: "kilo" },
+        { value: "juliet", label: "juliet" },
+      ],
+      5,
+      mockTheme,
+    );
 
-    const jList = new SearchableSelectList(items, 5, mockTheme);
-    jList.handleInput("j");
-    expect(jList.getSelectedItem()?.value).toBe("juliet");
-    expect(stripAnsi(jList.render(80)[0] ?? "")).toContain("j");
+    list.handleInput(query);
 
-    const kList = new SearchableSelectList(items, 5, mockTheme);
-    kList.handleInput("k");
-    expect(kList.getSelectedItem()?.value).toBe("kilo");
-    expect(stripAnsi(kList.render(80)[0] ?? "")).toContain("k");
+    expect(list.getSelectedItem()?.value).toBe(expectedValue);
+    expect(stripAnsi(list.render(80)[0] ?? "")).toContain(query);
   });
 
   it("calls onSelect when enter is pressed", () => {

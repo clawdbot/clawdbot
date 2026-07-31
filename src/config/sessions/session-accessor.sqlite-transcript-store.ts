@@ -47,6 +47,7 @@ export function appendTranscriptEventInTransaction(
   scope: ResolvedTranscriptScope,
   event: TranscriptEvent,
   options: {
+    allowStoredAlias?: boolean;
     dedupeByMessageIdempotency?: boolean;
     onProjectionReconcileNeeded?: () => void;
     scheduleProjectionReconcile?: boolean;
@@ -56,7 +57,9 @@ export function appendTranscriptEventInTransaction(
   const persistedEvent = canonicalizeTranscriptEventMedia(event);
   const db = getSessionKysely(database.db);
   const createdAt = readEventTimestamp(persistedEvent) ?? Date.now();
-  ensureTranscriptSessionRoot(database, scope, createdAt);
+  ensureTranscriptSessionRoot(database, scope, createdAt, {
+    allowStoredAlias: options.allowStoredAlias === true,
+  });
   ensureTranscriptGenerationInTransaction(database, scope.sessionId);
   const identity = readTranscriptEventIdentity(persistedEvent);
   if (identity && readTranscriptIdentityByEventId(database, scope.sessionId, identity.eventId)) {
@@ -322,19 +325,28 @@ export function replaceSqliteTranscriptEventsInTransaction(
   events: readonly TranscriptEvent[],
   options: {
     createdAtByIndex?: readonly number[];
-    preserveSessionWindowTimestamps?: boolean;
+    /** Keep maintenance rewrites at their existing recency while invalidating stale projections. */
+    preserveSessionWindowRecency?: boolean;
   } = {},
 ): void {
+  const preservedTranscriptUpdatedAt =
+    options.preserveSessionWindowRecency === true
+      ? readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt
+      : undefined;
   const previousGeneration = readTranscriptGenerationInTransaction(database, resolved.sessionId);
   const deleted = deleteSqliteTranscriptEventsInTransaction(database, resolved.sessionId);
   if (events.length === 0) {
     if (deleted || previousGeneration) {
       rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
-      touchTranscriptMutationInTransaction(database, resolved.sessionId);
+      recordTranscriptReplacementMutation(
+        database,
+        resolved.sessionId,
+        preservedTranscriptUpdatedAt,
+      );
     }
     return;
   }
-  if (!deleted || options.preserveSessionWindowTimestamps !== true) {
+  if (!deleted || options.preserveSessionWindowRecency !== true) {
     ensureTranscriptSessionRoot(database, resolved, readEventTimestamp(events[0]) ?? Date.now());
   }
   if (deleted || previousGeneration) {
@@ -363,9 +375,25 @@ export function replaceSqliteTranscriptEventsInTransaction(
     }
   }
   if (deleted || seq > 0) {
-    touchTranscriptMutationInTransaction(database, resolved.sessionId);
+    recordTranscriptReplacementMutation(database, resolved.sessionId, preservedTranscriptUpdatedAt);
     reconcileSessionTranscriptIndexInTransaction(database.db, resolved.sessionId);
   }
+}
+
+function recordTranscriptReplacementMutation(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  preservedUpdatedAt: number | null | undefined,
+): void {
+  if (preservedUpdatedAt === undefined || preservedUpdatedAt === null) {
+    touchTranscriptMutationInTransaction(database, sessionId);
+    return;
+  }
+  // Maintenance rewrites must invalidate in-flight projections without making an old session
+  // look newly active. A one-tick advance preserves ordering while changing the snapshot key.
+  advanceTranscriptMutationAtInTransaction(database, sessionId, preservedUpdatedAt, {
+    strictly: true,
+  });
 }
 
 /** Rewrite existing transcript rows exactly, without append-time deduplication. */
@@ -450,17 +478,17 @@ export function readTranscriptIdentityByEventId(
   database: OpenClawAgentDatabase,
   sessionId: string,
   eventId: string,
-): { eventId: string; seq: number } | undefined {
+): { eventId: string; parentId: string | null; seq: number } | undefined {
   const db = getSessionKysely(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
     db
       .selectFrom("transcript_event_identities")
-      .select(["event_id", "seq"])
+      .select(["event_id", "parent_id", "seq"])
       .where("session_id", "=", sessionId)
       .where("event_id", "=", eventId),
   );
-  return row ? { eventId: row.event_id, seq: row.seq } : undefined;
+  return row ? { eventId: row.event_id, parentId: row.parent_id, seq: row.seq } : undefined;
 }
 
 function readTranscriptIdentityByMessageIdempotencyKey(

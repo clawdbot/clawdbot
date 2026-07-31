@@ -16,8 +16,8 @@ import {
   formatEnvelopeForText,
   providerHasGenericConfig,
   providerSummaryText,
+  requireProviderModelOverride,
   resolveLocalCapabilityRuntimeConfig,
-  resolveModelRefOverride,
 } from "./shared.js";
 
 async function closeEmbeddingProviderWithRetry(provider: {
@@ -40,18 +40,19 @@ async function runMemoryEmbeddingCreate(params: {
   provider?: string;
   model?: string;
 }) {
+  const modelRef = requireProviderModelOverride(params.model);
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer embedding create",
     targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
   });
-  const modelRef = resolveModelRefOverride(params.model);
-  const requestedProvider = normalizeOptionalString(params.provider) || modelRef.provider || "auto";
+  const requestedProvider =
+    normalizeOptionalString(params.provider) || modelRef?.provider || "auto";
   const result = await createEmbeddingProvider({
     config: cfg,
     agentDir: resolveAgentDir(cfg, resolveDefaultAgentId(cfg)),
     provider: requestedProvider,
     fallback: "none",
-    model: modelRef.model ?? "",
+    model: modelRef?.model ?? "",
   });
   if (!result.provider) {
     throw new Error(result.providerUnavailableReason ?? "No embedding provider available.");

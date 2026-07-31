@@ -818,7 +818,18 @@ function normalizeNpmVersionDrift(lockfile) {
   return lockfile;
 }
 
-export function generateNpmPackageLock(packageDir) {
+export function createNpmPackageLockInstallStrategyArgs(options = {}) {
+  const installStrategy = options.installStrategy;
+  if (installStrategy === undefined || installStrategy === null || installStrategy === "") {
+    return [];
+  }
+  if (!["hoisted", "nested", "shallow", "linked"].includes(installStrategy)) {
+    throw new Error(`invalid npm package-lock install strategy: ${installStrategy}`);
+  }
+  return [`--install-strategy=${installStrategy}`];
+}
+
+export function generateNpmPackageLock(packageDir, options = {}) {
   const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-npm-lock-"));
   try {
     const packageJson = JSON.parse(readFileSync(path.join(packageDir, "package.json"), "utf8"));
@@ -829,6 +840,7 @@ export function generateNpmPackageLock(packageDir) {
     const npmInstallArgs = [
       "install",
       "--package-lock-only",
+      ...createNpmPackageLockInstallStrategyArgs(options),
       "--ignore-scripts",
       "--no-audit",
       "--no-fund",

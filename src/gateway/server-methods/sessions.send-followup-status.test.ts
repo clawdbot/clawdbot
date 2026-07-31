@@ -4,6 +4,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-accessor.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -13,6 +14,21 @@ const loadGatewaySessionRowMock = vi.fn();
 const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
 const replaceSubagentRunAfterSteerMock = vi.fn();
 const chatSendMock = vi.fn();
+const isEmbeddedAgentRunActiveMock = vi.fn();
+const abortEmbeddedAgentRunMock = vi.fn();
+const waitForEmbeddedAgentRunEndMock = vi.fn();
+
+vi.mock("../../agents/embedded-agent-runner/runs.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/embedded-agent-runner/runs.js")>(
+    "../../agents/embedded-agent-runner/runs.js",
+  );
+  return {
+    ...actual,
+    abortEmbeddedAgentRun: (...args: unknown[]) => abortEmbeddedAgentRunMock(...args),
+    isEmbeddedAgentRunActive: (...args: unknown[]) => isEmbeddedAgentRunActiveMock(...args),
+    waitForEmbeddedAgentRunEnd: (...args: unknown[]) => waitForEmbeddedAgentRunEndMock(...args),
+  };
+});
 
 vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
@@ -64,6 +80,9 @@ describe("sessions.send completed subagent follow-up status", () => {
     getLatestSubagentRunByChildSessionKeyMock.mockReset();
     replaceSubagentRunAfterSteerMock.mockReset();
     chatSendMock.mockReset();
+    isEmbeddedAgentRunActiveMock.mockReset().mockReturnValue(false);
+    abortEmbeddedAgentRunMock.mockReset();
+    waitForEmbeddedAgentRunEndMock.mockReset().mockResolvedValue(true);
   });
 
   it("reactivates completed subagent sessions before broadcasting sessions.changed", async () => {
@@ -142,6 +161,193 @@ describe("sessions.send completed subagent follow-up status", () => {
       childSessionKey,
       task: "follow-up",
     });
+  });
+
+  for (const method of ["sessions.send", "sessions.steer"] as const) {
+    it(`${method} returns retryable unavailable before side effects while projection rebuilds`, async () => {
+      const sessionKey = "agent:main:main";
+      loadSessionEntryMock.mockReturnValue({
+        cfg: {},
+        canonicalKey: sessionKey,
+        storePath: "/tmp/sessions.json",
+        entry: { sessionId: "sess-rebuilding" },
+      });
+      readSessionMessageCountAsyncMock.mockRejectedValue(
+        new SessionTranscriptProjectionUnavailableError("sess-rebuilding"),
+      );
+
+      const respondMock = vi.fn();
+      await expectDefined(
+        sessionsHandlers[method],
+        "sessionsHandlers[method] test invariant",
+      )({
+        req: { id: "req-rebuilding" } as never,
+        params: {
+          key: sessionKey,
+          message: "follow-up",
+          idempotencyKey: "retry-safe-send",
+        },
+        respond: respondMock as unknown as RespondFn,
+        context: {
+          chatAbortControllers: new Map(),
+          getRuntimeConfig: () => ({}),
+        } as unknown as GatewayRequestContext,
+        client: null,
+        isWebchatConnect: () => false,
+      });
+
+      expect(respondMock).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          details: { method },
+          retryable: true,
+          retryAfterMs: 250,
+        }),
+      );
+      expect(isEmbeddedAgentRunActiveMock).not.toHaveBeenCalled();
+      expect(chatSendMock).not.toHaveBeenCalled();
+    });
+  }
+
+  it("sessions.steer refreshes the pending sequence after an active run drains", async () => {
+    const sessionKey = "agent:main:main";
+    loadSessionEntryMock.mockReturnValue({
+      cfg: {},
+      canonicalKey: sessionKey,
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "sess-active" },
+    });
+    readSessionMessageCountAsyncMock.mockResolvedValueOnce(2).mockResolvedValueOnce(3);
+    isEmbeddedAgentRunActiveMock.mockReturnValue(true);
+    chatSendMock.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
+      respond(true, { runId: "run-steered", status: "started" }, undefined, undefined);
+    });
+
+    const respondMock = vi.fn();
+    await expectDefined(
+      sessionsHandlers["sessions.steer"],
+      'sessionsHandlers["sessions.steer"] test invariant',
+    )({
+      req: { id: "req-steer" } as never,
+      params: {
+        key: sessionKey,
+        message: "replacement turn",
+        idempotencyKey: "steer-after-drain",
+      },
+      respond: respondMock as unknown as RespondFn,
+      context: {
+        chatAbortControllers: new Map(),
+        broadcastToConnIds: vi.fn(),
+        getSessionEventSubscriberConnIds: () => new Set<string>(),
+        getRuntimeConfig: () => ({}),
+      } as unknown as GatewayRequestContext,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(abortEmbeddedAgentRunMock).toHaveBeenCalledWith("sess-active");
+    expect(waitForEmbeddedAgentRunEndMock).toHaveBeenCalledWith("sess-active", 15_000);
+    expect(readSessionMessageCountAsyncMock).toHaveBeenCalledTimes(2);
+    expect(respondMock.mock.calls.at(0)?.[1]).toMatchObject({
+      runId: "run-steered",
+      messageSeq: 4,
+      interruptedActiveRun: true,
+    });
+  });
+
+  it("sessions.steer refreshes when a run finishes before the active check", async () => {
+    const sessionKey = "agent:main:main";
+    loadSessionEntryMock.mockReturnValue({
+      cfg: {},
+      canonicalKey: sessionKey,
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "sess-finished" },
+    });
+    readSessionMessageCountAsyncMock.mockResolvedValueOnce(2).mockResolvedValueOnce(3);
+    isEmbeddedAgentRunActiveMock.mockReturnValue(false);
+    chatSendMock.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
+      respond(true, { runId: "run-raced", status: "started" }, undefined, undefined);
+    });
+
+    const respondMock = vi.fn();
+    await expectDefined(
+      sessionsHandlers["sessions.steer"],
+      'sessionsHandlers["sessions.steer"] test invariant',
+    )({
+      req: { id: "req-raced" } as never,
+      params: {
+        key: sessionKey,
+        message: "replacement turn",
+        idempotencyKey: "steer-after-race",
+      },
+      respond: respondMock as unknown as RespondFn,
+      context: {
+        chatAbortControllers: new Map(),
+        broadcastToConnIds: vi.fn(),
+        getSessionEventSubscriberConnIds: () => new Set<string>(),
+        getRuntimeConfig: () => ({}),
+      } as unknown as GatewayRequestContext,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(abortEmbeddedAgentRunMock).not.toHaveBeenCalled();
+    expect(readSessionMessageCountAsyncMock).toHaveBeenCalledTimes(2);
+    expect(respondMock.mock.calls.at(0)?.[1]).toMatchObject({
+      runId: "run-raced",
+      messageSeq: 4,
+    });
+  });
+
+  it("sessions.steer preserves delivery when projection rebuilds after interruption", async () => {
+    const sessionKey = "agent:main:main";
+    loadSessionEntryMock.mockReturnValue({
+      cfg: {},
+      canonicalKey: sessionKey,
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "sess-rebuild-after-interrupt" },
+    });
+    readSessionMessageCountAsyncMock
+      .mockResolvedValueOnce(2)
+      .mockRejectedValueOnce(
+        new SessionTranscriptProjectionUnavailableError("sess-rebuild-after-interrupt"),
+      );
+    isEmbeddedAgentRunActiveMock.mockReturnValue(true);
+    chatSendMock.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
+      respond(true, { runId: "run-after-rebuild", status: "started" }, undefined, undefined);
+    });
+
+    const respondMock = vi.fn();
+    await expectDefined(
+      sessionsHandlers["sessions.steer"],
+      'sessionsHandlers["sessions.steer"] test invariant',
+    )({
+      req: { id: "req-rebuild-after-interrupt" } as never,
+      params: {
+        key: sessionKey,
+        message: "replacement turn",
+        idempotencyKey: "steer-after-rebuild",
+      },
+      respond: respondMock as unknown as RespondFn,
+      context: {
+        chatAbortControllers: new Map(),
+        broadcastToConnIds: vi.fn(),
+        getSessionEventSubscriberConnIds: () => new Set<string>(),
+        getRuntimeConfig: () => ({}),
+      } as unknown as GatewayRequestContext,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(abortEmbeddedAgentRunMock).toHaveBeenCalledWith("sess-rebuild-after-interrupt");
+    expect(chatSendMock).toHaveBeenCalledTimes(1);
+    expect(respondMock.mock.calls.at(0)?.[1]).toMatchObject({
+      runId: "run-after-rebuild",
+      interruptedActiveRun: true,
+    });
+    expect(respondMock.mock.calls.at(0)?.[1]).not.toHaveProperty("messageSeq");
   });
 
   for (const method of ["sessions.send", "sessions.steer"] as const) {

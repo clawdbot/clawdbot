@@ -62,7 +62,6 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
     updatedAt,
     ageMs: updatedAt ? Date.now() - updatedAt : null,
     sessionId: entry?.sessionId,
-    sessionFile: entry?.sessionFile,
     spawnedBy: entry?.spawnedBy,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,

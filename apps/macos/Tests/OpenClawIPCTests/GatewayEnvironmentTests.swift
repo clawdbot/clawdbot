@@ -3,6 +3,21 @@ import Testing
 @testable import OpenClaw
 
 struct GatewayEnvironmentTests {
+    private final class LockedCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+
+        func increment() {
+            self.lock.withLock {
+                self.count += 1
+            }
+        }
+
+        func value() -> Int {
+            self.lock.withLock { self.count }
+        }
+    }
+
     @Test func `semver parses common forms`() {
         #expect(Semver.parse("1.2.3") == Semver(major: 1, minor: 2, patch: 3))
         #expect(Semver.parse("  v1.2.3  \n") == Semver(major: 1, minor: 2, patch: 3))
@@ -39,6 +54,60 @@ struct GatewayEnvironmentTests {
         let normalized2 = GatewayEnvironment.normalizeGatewayVersionOutput("OpenClaw 2026.4.2-1 (d74a122)")
         #expect(normalized2 == "2026.4.2-1")
         #expect(Semver.parse(normalized2) == Semver(major: 2026, minor: 4, patch: 2))
+    }
+
+    @Test func `failed global version probe falls back to local package`() async throws {
+        let projectRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-gateway-environment-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: projectRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: projectRoot) }
+        try Data(#"{"version":"2026.7.29"}"#.utf8)
+            .write(to: projectRoot.appendingPathComponent("package.json"))
+
+        let version = await GatewayEnvironment.installedGatewayVersion(
+            gatewayBin: "/usr/bin/false",
+            projectRoot: projectRoot,
+            searchPaths: ["/usr/bin"])
+
+        #expect(version == "2026.7.29")
+    }
+
+    @Test func `gateway launch resolution scans preferred paths once`() async throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bin = root.appendingPathComponent("bin", isDirectory: true)
+        let node = bin.appendingPathComponent("node")
+        let gateway = bin.appendingPathComponent("openclaw")
+        try makeExecutableForTests(at: node)
+        try makeExecutableForTests(at: gateway)
+        try "#!/bin/sh\necho v24.15.0\n".write(to: node, atomically: true, encoding: .utf8)
+        let expectedVersion = GatewayEnvironment.expectedGatewayVersionString()
+        let gatewayVersion = expectedVersion.flatMap { Semver.parse($0) == nil ? nil : $0 } ?? "2026.7.30"
+        try "#!/bin/sh\necho OpenClaw \(gatewayVersion)\n"
+            .write(to: gateway, atomically: true, encoding: .utf8)
+
+        let scans = LockedCounter()
+        let resolution = await GatewayEnvironment.resolveGatewayCommand(searchPathsProvider: {
+            scans.increment()
+            return [bin.path]
+        })
+
+        #expect(scans.value() == 1)
+        #expect(resolution.status.kind == .ok)
+        #expect(resolution.status.gatewayVersion == gatewayVersion)
+        #expect(resolution.command?.first == gateway.path)
+    }
+
+    @Test func `failed gateway launch resolution scans preferred paths once`() async {
+        let scans = LockedCounter()
+        let resolution = await GatewayEnvironment.resolveGatewayCommand(searchPathsProvider: {
+            scans.increment()
+            return ["/missing/\(UUID().uuidString)"]
+        })
+
+        #expect(scans.value() == 1)
+        #expect(resolution.status.kind == .missingNode)
+        #expect(resolution.command == nil)
     }
 
     @Test func `semver compatibility requires same major and not older`() {

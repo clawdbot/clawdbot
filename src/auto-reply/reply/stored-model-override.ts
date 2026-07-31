@@ -198,7 +198,7 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
 
   const noticeSelectedKey = resolveModelRefKey({
     defaultProvider: params.defaultProvider,
-    overrideModel: normalizeOptionalString(entry.fallbackNoticeSelectedModel),
+    overrideModel: normalizeOptionalString(entry.fallbackNotice?.selectedModel),
   });
   if (noticeSelectedKey) {
     return noticeSelectedKey !== primaryKey;

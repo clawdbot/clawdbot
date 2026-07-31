@@ -302,12 +302,38 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(sanitizeDoctorNote(unsupportedInternalHookEntryWarnings.join("\n")), "Doctor warnings");
   }
 
+  // Parsed config supplies invalid-key evidence only; migrations still mutate the
+  // include/env-resolved candidate so doctor never writes unresolved source values.
   const normalized = normalizeCompatibilityConfigValues(state.candidate, {
     blockedModelIdentities: blockedCodexModelIdentities,
+    sourceRaw: snapshot.parsed,
   });
   applyConfigMutation(normalized, {
     fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
   });
+
+  const { prepareRetiredPhoneControlCleanup } = await import("./doctor-retired-phone-control.js");
+  const retiredPhoneControlCleanup = await prepareRetiredPhoneControlCleanup({
+    cfg: state.candidate,
+    env: process.env,
+  });
+  applyConfigMutation(
+    {
+      config: retiredPhoneControlCleanup.config,
+      changes: retiredPhoneControlCleanup.configChanges,
+      warnings: retiredPhoneControlCleanup.warnings,
+    },
+    {
+      fixHint: `Run "${doctorFixCommand}" to retire Phone Control lease configuration.`,
+      emitWarnings: true,
+    },
+  );
+  if (retiredPhoneControlCleanup.cleanupPending && !shouldRepair) {
+    note(
+      `Retired Phone Control lease state remains. Run "${doctorFixCommand}" to archive it.`,
+      "Legacy state detected",
+    );
+  }
 
   const pluginActivationSourceConfig = state.candidate;
   const { applyPluginAutoEnable } = await import("../config/plugin-auto-enable.js");
@@ -315,14 +341,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
   });
 
-  const { repairStaleAgentModelRefs } =
-    await import("./doctor/shared/stale-agent-model-ref-repair.js");
-  const staleAgentModelRepair = repairStaleAgentModelRefs(state.candidate, { env: process.env });
-  applyConfigMutation(staleAgentModelRepair, {
-    fixHint: `Run "${doctorFixCommand}" to remove stale agent model references.`,
-    sanitize: true,
-    emitWarnings: true,
-  });
+  if (!shouldRepair) {
+    const { repairStaleAgentModelRefs } =
+      await import("./doctor/shared/stale-agent-model-ref-repair.js");
+    const staleAgentModelRepair = repairStaleAgentModelRefs(state.candidate, { env: process.env });
+    applyConfigMutation(staleAgentModelRepair, {
+      fixHint: `Run "${doctorFixCommand}" to remove stale agent model references.`,
+      sanitize: true,
+      emitWarnings: true,
+    });
+  }
 
   const { collectPluginToolAllowlistWarnings } =
     await import("./doctor/shared/plugin-tool-allowlist-warnings.js");
@@ -448,7 +476,23 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       candidate: cfg,
     });
 
-  noteOpencodeProviderOverrides(cfg);
+  const configuredOpencodePluginIds = [
+    cfg.models?.providers?.opencode || cfg.models?.providers?.["opencode-zen"]
+      ? "opencode"
+      : undefined,
+    cfg.models?.providers?.["opencode-go"] ? "opencode-go" : undefined,
+  ].filter((pluginId): pluginId is string => pluginId !== undefined);
+  const activeOpencodePluginIds =
+    configuredOpencodePluginIds.length > 0
+      ? (await import("../plugins/providers.js")).resolveEnabledProviderPluginIds({
+          config: cfg,
+          onlyPluginIds: configuredOpencodePluginIds,
+        })
+      : [];
+  noteOpencodeProviderOverrides(cfg, {
+    opencodePluginActive: activeOpencodePluginIds.includes("opencode"),
+    opencodeGoPluginActive: activeOpencodePluginIds.includes("opencode-go"),
+  });
   noteImplicitFallbackClobberWarnings(cfg);
   noteSandboxOriginProxyWarning(cfg);
 
@@ -462,6 +506,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     ...(singleTopLevelIncludeWrite ? { skipWizardMetadataForIncludeWrite: true } : {}),
     ...(shouldRepairCronCodexModelRefsAfterConfigWrite
       ? { shouldRepairCronCodexModelRefsAfterConfigWrite: true }
+      : {}),
+    ...(shouldRepair &&
+    retiredPhoneControlCleanup.cleanupPending &&
+    retiredPhoneControlCleanup.cleanupSafe
+      ? { retiredPhoneControlStateCleanupPending: true }
       : {}),
     ...(blockedCodexProviderPlan.blockedModelIdentities.length > 0
       ? { blockedCodexModelIdentities: blockedCodexProviderPlan.blockedModelIdentities }

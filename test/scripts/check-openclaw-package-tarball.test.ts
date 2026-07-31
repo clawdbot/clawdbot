@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
+import { gte as semverGte, valid as validSemver } from "semver";
 import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 import { PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-dist-inventory.ts";
@@ -18,6 +19,8 @@ import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-boots
 
 const CHECK_SCRIPT = "scripts/check-openclaw-package-tarball.mjs";
 const NODE_DEFAULT_SPAWN_MAX_BUFFER_BYTES = 1024 * 1024;
+const CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
+const FIRST_CODE_MODE_WORKER_VERSION = "2026.5.14-beta.2";
 const FLAT_PLUGIN_SDK_DECLARATION = "dist/plugin-sdk/provider-entry.d.ts";
 const DEEP_PLUGIN_SDK_DECLARATION = "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts";
 const AI_RUNTIME_PACKAGE_JSON = JSON.stringify({
@@ -55,6 +58,8 @@ function withTarball(
   testBody: (tarball: string) => void,
   version = "2026.7.2",
   options: {
+    includeCodeModeWorker?: boolean;
+    includeCodeModeWorkerInInventory?: boolean;
     includeControlUi?: boolean;
     includeInstallGuard?: boolean;
     includeShrinkwrap?: boolean;
@@ -64,6 +69,15 @@ function withTarball(
 ) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-package-tarball-test-"));
   try {
+    const validVersion = validSemver(version);
+    const includeCodeModeWorker =
+      options.includeCodeModeWorker ??
+      (validVersion !== null && semverGte(validVersion, FIRST_CODE_MODE_WORKER_VERSION));
+    const includeCodeModeWorkerInInventory =
+      options.includeCodeModeWorkerInInventory ?? includeCodeModeWorker;
+    const packageInventory = includeCodeModeWorkerInInventory
+      ? [...new Set([...inventory, CODE_MODE_WORKER_PATH])]
+      : inventory;
     const packageRoot = join(root, "package");
     mkdirSync(join(packageRoot, "dist"), { recursive: true });
     writeFileSync(
@@ -72,7 +86,7 @@ function withTarball(
     );
     writeFileSync(
       join(packageRoot, "dist", "postinstall-inventory.json"),
-      JSON.stringify(inventory),
+      JSON.stringify(packageInventory),
     );
     const workspaceTemplates =
       options.includeWorkspaceTemplates === false
@@ -113,6 +127,7 @@ function withTarball(
       ...controlUiFiles,
       ...installGuardFile,
       ...shrinkwrapFile,
+      ...(includeCodeModeWorker ? { [CODE_MODE_WORKER_PATH]: "export {};\n" } : {}),
       ...files,
     };
     for (const [relativePath, body] of Object.entries(tarFiles)) {
@@ -346,6 +361,64 @@ describe("check-openclaw-package-tarball", () => {
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
       },
+    );
+  });
+
+  it("accepts historical packages published before the Code Mode worker existed", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      },
+      "2026.5.14-beta.1",
+    );
+  });
+
+  it("rejects Code Mode packages that omit the dynamically loaded worker", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(`missing required tar entry ${CODE_MODE_WORKER_PATH}`);
+      },
+      FIRST_CODE_MODE_WORKER_VERSION,
+      { includeCodeModeWorker: false },
+    );
+  });
+
+  it("rejects Code Mode workers that postinstall would remove", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(`postinstall inventory omits ${CODE_MODE_WORKER_PATH}`);
+      },
+      FIRST_CODE_MODE_WORKER_VERSION,
+      { includeCodeModeWorkerInInventory: false },
+    );
+  });
+
+  it("accepts Code Mode packages whose worker survives postinstall", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      },
+      FIRST_CODE_MODE_WORKER_VERSION,
     );
   });
 

@@ -32,7 +32,7 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import {
   loadAccessorSessionEntryForGatewayTarget,
   loadSessionsRuntimeModule,
-  rejectPluginRuntimeDeleteMismatch,
+  rejectPluginRuntimeSessionOwnershipMismatch,
   requireSessionKey,
   resolveGatewaySessionTargetFromKey,
   resolveSessionWorkerPlacementMutationError,
@@ -181,7 +181,8 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
       return;
     }
     if (
-      rejectPluginRuntimeDeleteMismatch({
+      rejectPluginRuntimeSessionOwnershipMismatch({
+        action: "delete",
         client,
         key: target.canonicalKey ?? key,
         entry: initialDeleteEntry,
@@ -304,7 +305,8 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
           return undefined;
         }
         if (
-          rejectPluginRuntimeDeleteMismatch({
+          rejectPluginRuntimeSessionOwnershipMismatch({
+            action: "delete",
             client,
             key: canonicalKey ?? key,
             entry,

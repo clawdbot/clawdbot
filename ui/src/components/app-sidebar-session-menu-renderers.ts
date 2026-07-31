@@ -192,7 +192,7 @@ export function renderSidebarCatalogViewMenu(params: {
                       <span slot="details" class="session-menu__check" aria-hidden="true"
                         >${params.creatorFilterId === creator.id ? icons.check : nothing}</span
                       >
-                      ${renderSessionOwnerChip(creator, "row")}
+                      ${renderSessionOwnerChip(creator, "row", "created")}
                       <span class="session-menu__text">${creator.label ?? creator.id}</span>
                     </wa-dropdown-item>
                   `,
@@ -364,7 +364,7 @@ export function renderSidebarSessionSortMenu(params: {
                       <span slot="details" class="session-menu__check" aria-hidden="true"
                         >${params.creatorFilterId === creator.id ? icons.check : nothing}</span
                       >
-                      ${renderSessionOwnerChip(creator, "row")}
+                      ${renderSessionOwnerChip(creator, "row", "created")}
                       <span class="session-menu__text">${creator.label ?? creator.id}</span>
                     </wa-dropdown-item>
                   `,

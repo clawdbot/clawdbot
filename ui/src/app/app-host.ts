@@ -13,18 +13,20 @@ import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
 import "../components/login-gate.ts";
 import "../components/macos-titlebar-controls.ts";
-import "../components/onboarding-memory-import.ts";
-import "../components/resizable-divider.ts";
-import "../components/sidebar-update-card.ts";
-import "../components/tooltip.ts";
-import "../components/update-banner.ts";
+import "../components/modal-dialog.ts";
 import {
   formatDocumentTitle,
   isSettingsNavigationRoute,
   titleForRoute,
 } from "../app-navigation.ts";
+import "../components/onboarding-memory-import.ts";
+import "../components/openclaw-mascot.ts";
+import "../components/resizable-divider.ts";
+import "../components/sidebar-update-card.ts";
+import "../components/tooltip.ts";
+import "../components/update-banner.ts";
 import { isSessionRouteId, workboardBoardIdFromPath } from "../app-route-paths.ts";
-import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
+import { APP_ROUTE_IDS, isRouteId, routeIdFromPath, type RouteId } from "../app-routes.ts";
 import {
   EMPTY_SIDEBAR_WORKBOARD_SNAPSHOT,
   type SidebarWorkboardRenderers,
@@ -41,8 +43,10 @@ import {
   type ShellNavDrawerToggleDetail,
 } from "../components/command-palette-contract.ts";
 import { icons } from "../components/icons.ts";
+import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
+  CUSTODIAN_PANEL_TOGGLE_EVENT,
   isTerminalPanelShortcut,
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
@@ -56,26 +60,33 @@ import type { BoardFace } from "../lib/board/settings.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
+import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
+  findUiSessionRow,
   resolveSessionPreferredFaceForKey,
+  resolveSessionNavigationAgentId,
   sessionNavigationTarget,
 } from "../lib/sessions/route-navigation.ts";
 import {
+  buildAgentMainSessionKey,
   isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiKnownSelectedGlobalAgentId,
+  uiSessionEventMatches,
 } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import type { ChatPage } from "../pages/chat/chat-page.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
+import { selectApplicationSession } from "./agent-selection.ts";
 import { selectShellRouteState, type ShellRouteState } from "./app-host-route-state.ts";
 import { findInlineApproval } from "./approval-presentation.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
@@ -89,6 +100,7 @@ import {
   APPROVAL_PAGE_ELEMENT,
   BROWSER_PANEL_ELEMENT,
   COMMAND_PALETTE_ELEMENT,
+  CUSTODIAN_PANEL_ELEMENT,
   EXEC_APPROVAL_ELEMENT,
   ensureOptionalElementForHost,
   isOptionalElementDefined,
@@ -107,7 +119,7 @@ import {
 } from "./native-web-chrome.ts";
 import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigation-surface.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
-import { hasOperatorAdminAccess } from "./operator-access.ts";
+import { hasOperatorAdminAccess, readGatewayOperatorAccess } from "./operator-access.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
 import {
   applyServerUiPrefs,
@@ -116,6 +128,7 @@ import {
   isApplyingServerUiPrefs,
   pushServerUiPrefs,
   resetServerUiPrefsSync,
+  resolveServerUiPrefState,
 } from "./server-prefs.ts";
 import {
   NAV_WIDTH_MAX,
@@ -125,6 +138,7 @@ import {
   setSettingsChangeListener,
 } from "./settings.ts";
 import { isStaleChunkImportError, scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
+import { resolveControlUiRefreshRequiredBanner } from "./update-overlay-helpers.ts";
 
 type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
@@ -215,16 +229,10 @@ function resolveTerminalThemeMode(): "dark" | "light" {
   return document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
 }
 
-// The mascot SVG animates via SMIL, so it must load through <img src> —
-// inlining the markup would freeze it (see ui/public/favicon.svg).
-function renderConnectingSplash(basePath: string) {
+function renderConnectingSplash() {
   return html`
     <main class="connect-splash" role="status" aria-live="polite" aria-label=${t("common.loading")}>
-      <img
-        class="connect-splash__logo"
-        src=${controlUiPublicAssetPath("favicon.svg", basePath)}
-        alt=""
-      />
+      <openclaw-mascot mood="thinking" .size=${120}></openclaw-mascot>
     </main>
   `;
 }
@@ -416,7 +424,7 @@ class OpenClawApp extends OpenClawLightDomElement {
           fullscreen
         ></openclaw-terminal-panel>
         ${!isOptionalElementDefined(TERMINAL_PANEL_ELEMENT) && terminalAvailable
-          ? renderConnectingSplash(context.basePath)
+          ? renderConnectingSplash()
           : nothing}
         ${!terminalAvailable && (gatewayConnected || gatewaySnapshot.lastError)
           ? html`<div class="terminal-view-unavailable">${t("terminal.unavailable")}</div>`
@@ -439,7 +447,7 @@ class OpenClawApp extends OpenClawLightDomElement {
     if (initialConnectPending) {
       return html`
         <openclaw-tooltip-provider>
-          ${renderConnectingSplash(context.basePath)} ${gatewayUrlConfirmation}
+          ${renderConnectingSplash()} ${gatewayUrlConfirmation}
         </openclaw-tooltip-provider>
       `;
     }
@@ -516,6 +524,7 @@ class OpenClawShell extends OpenClawLightDomElement {
   @property({ attribute: false }) onboarding = false;
 
   @state() private navDrawerOpen = false;
+  @state() private desktopNavigationExpanded = false;
   @state() private activeSessionKey = "";
   @state() private settingsSearchQuery = "";
   @state() private routeState: ShellRouteState = {};
@@ -523,21 +532,31 @@ class OpenClawShell extends OpenClawLightDomElement {
   private readonly commandPaletteElement = COMMAND_PALETTE_ELEMENT;
   private readonly terminalPanelElement = TERMINAL_PANEL_ELEMENT;
   private readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
+  private readonly custodianPanelElement = CUSTODIAN_PANEL_ELEMENT;
   private readonly execApprovalElement = EXEC_APPROVAL_ELEMENT;
   @query("openclaw-command-palette") private commandPalette?: CommandPaletteElement;
   @query("openclaw-exec-approval")
   private approvalOverlay?: HTMLElement & { show(): void };
   private commandPaletteTarget?: CommandPaletteTargetDetail;
   private navDrawerTrigger: HTMLElement | null = null;
+  // Desktop and modal navigation are two slots for the same live sidebar.
+  // Moving its element preserves session controllers and the resident pet
+  // instead of resetting their lifecycle at every responsive breakpoint.
+  private readonly navigationSidebar = document.createElement(
+    "openclaw-app-sidebar",
+  ) as AppSidebarElement;
   // Where "Back to app" / Escape leaves the settings takeover; falls back to
   // chat (the app default route) when settings was the entry point.
   private lastWorkspaceLocation: { routeId: RouteId; pathname: string; search: string } | null =
     null;
+  private custodianMinimizeRequestId = 0;
+  private lastConcreteRouteId: RouteId | undefined;
   private agentsListClient: GatewayBrowserClient | null = null;
   private agentsListSource: ApplicationContext["agents"] | null = null;
   private sessionKeyClient: GatewayBrowserClient | null = null;
   private runtimeConfigClient: GatewayBrowserClient | null = null;
   private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
+  private lastLocalePrefSignature: string | null = null;
   private previousGatewayPhase: ApplicationContext["gateway"]["snapshot"]["phase"] | null = null;
   private sidebarWorkboardSnapshot = EMPTY_SIDEBAR_WORKBOARD_SNAPSHOT;
   private sidebarWorkboardRuntime: SidebarWorkboardRuntime | null = null;
@@ -668,6 +687,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       .watch(
         () => this.context?.sessions,
         (sessions, notify) => sessions.subscribe(notify),
+        (sessions) => this.recoverDeletedActiveSession(sessions.state),
       )
       .watch(
         () => this.context?.runtimeConfig,
@@ -699,18 +719,45 @@ class OpenClawShell extends OpenClawLightDomElement {
     if (!snapshot?.config || !context || context.runtimeConfig !== runtimeConfig) {
       return;
     }
+    const scope = context.gateway.connection.gatewayUrl;
     applyServerUiPrefs(snapshot.config, {
-      scope: context.gateway.connection.gatewayUrl,
+      scope,
       onApplied: (patch) => {
         if (patch.sidebarEntries !== undefined) {
           context.navigation.update({ sidebarEntries: patch.sidebarEntries });
         }
-        if (isSupportedLocale(patch.locale)) {
-          void i18n.setLocale(patch.locale);
-        }
         context.theme.refresh();
       },
     });
+    const localePref = resolveServerUiPrefState(snapshot.config, "locale", scope);
+    const localePrefSignature = JSON.stringify([scope, localePref.overridden, localePref.value]);
+    if (localePrefSignature === this.lastLocalePrefSignature) {
+      return;
+    }
+    this.lastLocalePrefSignature = localePrefSignature;
+    if (localePref.overridden && isSupportedLocale(localePref.value)) {
+      void i18n.setLocale(localePref.value);
+    } else {
+      void i18n.useSystemLocale();
+    }
+  }
+
+  private reconcileCommittedServerUiPrefs(
+    runtimeConfig: ApplicationContext["runtimeConfig"],
+    needsRefresh: boolean,
+    retainedLocal = false,
+  ) {
+    if (this.context?.runtimeConfig !== runtimeConfig) {
+      return;
+    }
+    if (needsRefresh) {
+      void runtimeConfig.refresh();
+      return;
+    }
+    this.reconcileServerUiPrefs(runtimeConfig);
+    if (retainedLocal) {
+      this.context?.theme.refresh();
+    }
   }
 
   override connectedCallback() {
@@ -735,8 +782,10 @@ class OpenClawShell extends OpenClawLightDomElement {
     window.addEventListener("openclaw:native-open-search", this.handleNativeOpenSearch);
     window.addEventListener("openclaw:native-toggle-search", this.handleNativeToggleSearch);
     window.addEventListener("openclaw:native-new-session", this.handleNativeNewSession);
+    window.addEventListener("openclaw:native-navigate", this.handleNativeNavigate);
     window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
+    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
     // Write-through of synced display prefs to config ui.prefs. Server-applied
     // deltas are suppressed so a reconcile never echoes back to the gateway.
     setSettingsChangeListener((previous, next) => {
@@ -744,15 +793,11 @@ class OpenClawShell extends OpenClawLightDomElement {
         return;
       }
       const prefs = changedServerUiPrefs(previous, next);
-      const snapshot = this.context?.gateway.snapshot;
-      if (prefs && snapshot?.client) {
-        pushServerUiPrefs(snapshot.client, prefs, {
-          afterCommit: () => {
-            const runtimeConfig = this.context?.runtimeConfig;
-            if (runtimeConfig) {
-              void runtimeConfig.refresh();
-            }
-          },
+      const runtimeConfig = this.context?.runtimeConfig;
+      if (prefs && runtimeConfig) {
+        pushServerUiPrefs(runtimeConfig, prefs, {
+          afterCommit: ({ needsRefresh, retainedLocal }) =>
+            this.reconcileCommittedServerUiPrefs(runtimeConfig, needsRefresh, retainedLocal),
         });
       }
     });
@@ -771,11 +816,14 @@ class OpenClawShell extends OpenClawLightDomElement {
     window.removeEventListener("openclaw:native-open-search", this.handleNativeOpenSearch);
     window.removeEventListener("openclaw:native-toggle-search", this.handleNativeToggleSearch);
     window.removeEventListener("openclaw:native-new-session", this.handleNativeNewSession);
+    window.removeEventListener("openclaw:native-navigate", this.handleNativeNavigate);
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
+    window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
     this.outboxStoreImport.dispose();
     this.outboxStoreUnsubscribe?.();
     this.outboxStoreUnsubscribe = null;
+    this.lastLocalePrefSignature = null;
     setSettingsChangeListener(null);
     this.resetShellEpochState();
     super.disconnectedCallback();
@@ -795,6 +843,7 @@ class OpenClawShell extends OpenClawLightDomElement {
 
   private resetShellEpochState() {
     this.navDrawerOpen = false;
+    this.desktopNavigationExpanded = false;
     this.navDrawerTrigger = null;
     this.lastWorkspaceLocation = null;
     this.activeSessionKey = "";
@@ -819,8 +868,38 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.settingsPreloadTimers.clear();
   }
 
+  private selectChatSession(sessionKey: string, agentId?: string | null) {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    selectApplicationSession({
+      selection: context.agentSelection,
+      gateway: context.gateway,
+      sessionKey,
+      agentId,
+    });
+    const face = resolveSessionPreferredFaceForKey(context, sessionKey, agentId);
+    this.navigate(
+      face,
+      sessionNavigationTarget({
+        context,
+        face,
+        sessionKey,
+        ...(agentId ? { agentId } : {}),
+        preferenceDerivedFace: true,
+      }).options,
+    );
+  }
   private readonly handleGatewayEvent = (event: GatewayEventFrame) => {
     this.sidebarWorkboardRuntime?.handleGatewayEvent(event.event);
+    if (event.event === "sessions.changed") {
+      const context = this.context;
+      if (context) {
+        this.recoverDeletedActiveSession(context.sessions.state);
+      }
+      return;
+    }
     if (event.event === "session.observer") {
       const context = this.context;
       if (context) {
@@ -834,13 +913,7 @@ class OpenClawShell extends OpenClawLightDomElement {
             selectedSessionKey: this.activeSessionKey,
             sessionHost: this.storedOutboxScopeHost(context),
             sessions: context.sessions.state.result?.sessions ?? [],
-            onOpen: (sessionKey) => {
-              context.gateway.setSessionKey(sessionKey);
-              const face = resolveSessionPreferredFaceForKey(context, sessionKey);
-              // Ambiguous one-segment keys intentionally fall back to /chat;
-              // the removed query deep-link format is not a compatibility path.
-              this.navigate(face, sessionNavigationTarget({ context, face, sessionKey }).options);
-            },
+            onOpen: (sessionKey, agentId) => this.selectChatSession(sessionKey, agentId),
           }),
         );
       }
@@ -870,6 +943,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       return;
     }
     if (command.kind === "sidebar") {
+      this.desktopNavigationExpanded = false;
       context.navigation.update({ navCollapsed: !command.visible });
       return;
     }
@@ -897,12 +971,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     if (handled || (command.kind !== "navigate" && command.kind !== "split")) {
       return;
     }
-    context.gateway.setSessionKey(command.sessionKey);
-    const face = resolveSessionPreferredFaceForKey(context, command.sessionKey);
-    this.navigate(
-      face,
-      sessionNavigationTarget({ context, face, sessionKey: command.sessionKey }).options,
-    );
+    this.selectChatSession(command.sessionKey);
   };
 
   private scheduleAgentRosterRefresh() {
@@ -1004,7 +1073,86 @@ class OpenClawShell extends OpenClawLightDomElement {
       return;
     }
     const face = this.routeState.routeId === "dashboard" ? "dashboard" : "chat";
-    context.replace(face, this.chatNavigationOptions(face));
+    const sessionWasDeleted = (context.sessions.state.deletedSessions ?? []).some(
+      ({ key, agentId }) =>
+        uiSessionEventMatches(
+          {
+            agentsList: context.agents.state.agentsList,
+            hello: context.gateway.snapshot.hello,
+            sessionKey,
+          },
+          key,
+          agentId,
+        ),
+    );
+    // Session lists are filtered and windowed. Only a failed route for this
+    // active key, or an authoritative deletion, proves it needs replacement.
+    const activeSessionRow = findUiSessionRow(context, sessionKey);
+    const attemptedPathname = this.routeState.location?.pathname;
+    const activeRouteFailed =
+      !attemptedPathname ||
+      attemptedPathname === sessionNavigationTarget({ context, face, sessionKey }).options.pathname;
+    const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+    const knownAgents = context.agents.state.agentsList?.agents;
+    // A parseable retired agent is not a navigable owner; never turn its
+    // deleted session into another permanently unresolvable chat route.
+    const replacementAgentId =
+      parsedAgentId &&
+      (!knownAgents || knownAgents.some((agent) => normalizeAgentId(agent.id) === parsedAgentId))
+        ? parsedAgentId
+        : resolveSessionNavigationAgentId(context);
+    const replacementSessionKey =
+      !sessionWasDeleted && (activeSessionRow?.key || !activeRouteFailed)
+        ? sessionKey
+        : buildAgentMainSessionKey({
+            agentId: replacementAgentId,
+            mainKey: resolveUiConfiguredMainKey({
+              agentsList: context.agents.state.agentsList,
+              hello: context.gateway.snapshot.hello,
+            }),
+          });
+    // Gateway rejects deletion of a live main session. If an orphaned event
+    // still names that fallback, replacing the same route would retry forever.
+    if (sessionWasDeleted && replacementSessionKey === sessionKey) {
+      return;
+    }
+    if (replacementSessionKey !== sessionKey) {
+      // Commit the replacement to both selection owners before navigating;
+      // otherwise a stale Gateway snapshot restores the deleted key and loops.
+      this.activeSessionKey = replacementSessionKey;
+      selectApplicationSession({
+        selection: context.agentSelection,
+        gateway: context.gateway,
+        sessionKey: replacementSessionKey,
+      });
+    }
+    context.replace(
+      face,
+      sessionNavigationTarget({ context, face, sessionKey: replacementSessionKey }).options,
+    );
+  }
+
+  private recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]) {
+    const context = this.context;
+    const routeId = this.routeState.routeId;
+    const sessionKey = this.activeSessionKey.trim();
+    if (!context || !routeId || !isSessionRouteId(routeId) || !sessionKey) {
+      return;
+    }
+    const selectedSessionDeleted = sessionState.deletedSessions.some(({ key, agentId }) =>
+      uiSessionEventMatches(
+        {
+          agentsList: context.agents.state.agentsList,
+          hello: context.gateway.snapshot.hello,
+          sessionKey,
+        },
+        key,
+        agentId,
+      ),
+    );
+    if (selectedSessionDeleted) {
+      this.replaceChatWithCurrentSession();
+    }
   }
 
   private isSettingsTakeover(): boolean {
@@ -1040,9 +1188,12 @@ class OpenClawShell extends OpenClawLightDomElement {
       this.navDrawerOpen = true;
       return;
     }
-    // A drawer that survived a breakpoint change is visually expanded even
-    // when the persisted desktop preference says collapsed.
-    const nextNavCollapsed = this.navDrawerOpen || !context.navigation.snapshot.navCollapsed;
+    // A responsive drawer handoff can expand this shell without rewriting the
+    // stored desktop preference; toggle the surface the user actually sees.
+    const nextNavCollapsed =
+      this.navDrawerOpen ||
+      !(context.navigation.snapshot.navCollapsed && !this.desktopNavigationExpanded);
+    this.desktopNavigationExpanded = false;
     if (nextNavCollapsed) {
       this.dismissSidebarTransientMenus();
     }
@@ -1079,6 +1230,15 @@ class OpenClawShell extends OpenClawLightDomElement {
       this.dismissSidebarTransientMenus();
     }
     const trigger = options.restoreFocus ? this.navDrawerTrigger : null;
+    const returnFocusTarget =
+      options.restoreFocus && trigger?.isConnected && trigger.checkVisibility()
+        ? trigger
+        : options.restoreFocus
+          ? this.querySelector<HTMLElement>(".content")
+          : null;
+    this.querySelector<OpenClawModalDialog>(
+      "openclaw-modal-dialog.nav-drawer",
+    )?.setReturnFocusTarget(returnFocusTarget ?? null);
     this.navDrawerOpen = false;
     this.navDrawerTrigger = null;
     if (!options.restoreFocus) {
@@ -1139,6 +1299,26 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.openNewSession(agentId);
   };
 
+  private readonly handleNativeNavigate = (event: Event) => {
+    const path = (event as CustomEvent<{ path?: unknown }>).detail?.path;
+    const schemeCandidate = typeof path === "string" ? path.slice(1) : "";
+    if (
+      typeof path !== "string" ||
+      !path.startsWith("/") ||
+      path.startsWith("//") ||
+      /^[a-z][a-z\d+.-]*:/i.test(schemeCandidate)
+    ) {
+      return;
+    }
+    const routeId = routeIdFromPath(path);
+    if (!routeId || !this.context) {
+      // Leave invalid or unavailable destinations unhandled so the native host can load its URL fallback.
+      return;
+    }
+    event.preventDefault();
+    this.navigate(routeId);
+  };
+
   private readonly handleNativeHistoryState = (event: Event) => {
     const detail = (event as CustomEvent<NativeHistoryState>).detail;
     if (typeof detail?.canGoBack !== "boolean" || typeof detail.canGoForward !== "boolean") {
@@ -1148,9 +1328,22 @@ class OpenClawShell extends OpenClawLightDomElement {
   };
 
   private readonly handleWindowResize = () => {
+    const mobileNavLayout = isMobileNavLayout();
+    // Clean up the old navigation surface before the shared sidebar moves;
+    // otherwise menus survive the breakpoint or the closed drawer reopens.
+    const dismissedSidebarMenus =
+      mobileNavLayout && !this.navDrawerOpen && this.dismissSidebarTransientMenus();
+    if (mobileNavLayout) {
+      this.desktopNavigationExpanded = false;
+    } else if (this.navDrawerOpen) {
+      this.closeNavDrawer({ restoreFocus: false });
+      // Keep the drawer visibly expanded in this shell without changing the
+      // user's persisted desktop-collapse preference.
+      this.desktopNavigationExpanded = this.context?.navigation.snapshot.navCollapsed ?? false;
+    }
     this.requestUpdate();
     void this.updateComplete.then(() => {
-      if (isMobileNavLayout() && !this.navDrawerOpen && this.dismissSidebarTransientMenus()) {
+      if (isMobileNavLayout() && !this.navDrawerOpen && dismissedSidebarMenus) {
         requestAnimationFrame(() => {
           this.restoreFocusTo(this.visibleNavDrawerToggle());
         });
@@ -1187,14 +1380,6 @@ class OpenClawShell extends OpenClawLightDomElement {
     );
   }
 
-  private readonly handleShellKeydown = (event: KeyboardEvent) => {
-    if (event.defaultPrevented || event.key !== "Escape" || !this.navDrawerOpen) {
-      return;
-    }
-    event.preventDefault();
-    this.closeNavDrawer({ restoreFocus: true });
-  };
-
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
     if (!this.commandPalette && isCommandPaletteShortcut(event)) {
       event.preventDefault();
@@ -1226,11 +1411,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     const settingsModifier = event.metaKey !== event.ctrlKey && !event.altKey;
     if (settingsModifier && event.shiftKey && event.code === "Comma") {
       event.preventDefault();
-      this.navigate("config");
+      this.navigate("appearance");
       return;
     }
     const commandKey = event.metaKey && !event.ctrlKey && !event.altKey;
-    if (!commandKey || event.shiftKey || event.key.toLowerCase() !== "b") {
+    if (!commandKey || event.shiftKey || resolveAsciiShortcutKey(event) !== "b") {
       return;
     }
     event.preventDefault();
@@ -1344,6 +1529,17 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.deliverPanelEventAfterLoad(this.browserPanelElement, event);
   };
 
+  private readonly handleDeferredCustodianToggle = (event: Event) => {
+    if (isOptionalElementDefined(this.custodianPanelElement)) {
+      return;
+    }
+    const snapshot = this.context?.gateway?.snapshot;
+    if (!snapshot || isGatewayMethodAdvertised(snapshot, "openclaw.chat") !== true) {
+      return;
+    }
+    this.deliverPanelEventAfterLoad(this.custodianPanelElement, event);
+  };
+
   private readonly handleCommandPaletteSlashCommand = (command: string) => {
     const chatHandler = this.commandPaletteTarget?.owner.isConnected
       ? this.commandPaletteTarget.onSlashCommand
@@ -1381,7 +1577,9 @@ class OpenClawShell extends OpenClawLightDomElement {
       this.onboardingMode ||
       mobileNavLayout ||
       (this.isSettingsTakeover() && !mobileNavLayout) ||
-      (!this.navDrawerOpen && (this.context?.navigation.snapshot.navCollapsed ?? false))
+      (!this.navDrawerOpen &&
+        !this.desktopNavigationExpanded &&
+        (this.context?.navigation.snapshot.navCollapsed ?? false))
     );
   }
 
@@ -1414,6 +1612,10 @@ class OpenClawShell extends OpenClawLightDomElement {
 
   override updated() {
     this.syncDocumentTitle();
+    const chatPage = this.querySelector<ChatPage>("openclaw-chat-page");
+    if (chatPage) {
+      chatPage.navDrawerOpen = this.navDrawerOpen && !this.onboardingMode;
+    }
     const context = this.context;
     if (!context) {
       return;
@@ -1425,6 +1627,9 @@ class OpenClawShell extends OpenClawLightDomElement {
       }
       if (isBrowserPanelAvailable(gatewaySnapshot)) {
         preloadOptionalElement(this, this.browserPanelElement);
+      }
+      if (isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true) {
+        preloadOptionalElement(this, this.custodianPanelElement);
       }
     }
     if ((context.overlays?.snapshot.approvalQueue.length ?? 0) > 0) {
@@ -1561,13 +1766,9 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
     this.runtimeConfigClient = snapshot.client;
     this.runtimeConfigSource = runtimeConfig;
-    flushServerUiPrefs(snapshot.client, {
-      afterCommit: () => {
-        const currentRuntimeConfig = this.context?.runtimeConfig;
-        if (currentRuntimeConfig) {
-          void currentRuntimeConfig.refresh();
-        }
-      },
+    flushServerUiPrefs(runtimeConfig, {
+      afterCommit: ({ needsRefresh, retainedLocal }) =>
+        this.reconcileCommittedServerUiPrefs(runtimeConfig, needsRefresh, retainedLocal),
     });
     void runtimeConfig.ensureLoaded();
   }
@@ -1622,6 +1823,12 @@ class OpenClawShell extends OpenClawLightDomElement {
 
   private updateRouteState(routeState: ShellRouteState) {
     this.routeState = routeState;
+    if (routeState.routeId !== undefined) {
+      if (this.lastConcreteRouteId === "custodian" && routeState.routeId !== "custodian") {
+        this.custodianMinimizeRequestId += 1;
+      }
+      this.lastConcreteRouteId = routeState.routeId;
+    }
     const committedRouteId = routeState.committedRouteId;
     const committedPathname = routeState.committedLocation?.pathname ?? "";
     const committedSearch = routeState.committedLocation?.search ?? "";
@@ -1653,11 +1860,34 @@ class OpenClawShell extends OpenClawLightDomElement {
         }
       }
       if (!pendingDiffers) {
-        persistRoute(committedRouteId, committedPathname, committedSearch);
         const committedSessionKey = routeState.committedSessionKey;
+        const committedSessionDeleted =
+          committedSessionKey !== undefined &&
+          (routeContext.sessions?.state.deletedSessions ?? []).some(({ key, agentId }) =>
+            uiSessionEventMatches(
+              {
+                agentsList: routeContext.agents.state.agentsList,
+                hello: routeContext.gateway.snapshot.hello,
+                sessionKey: committedSessionKey,
+              },
+              key,
+              agentId,
+            ),
+          );
+        if (committedSessionDeleted) {
+          // An older route can commit after deletion recovery has started.
+          // Never let it persist or reselect the session we just retired.
+          this.replaceChatWithCurrentSession();
+          return;
+        }
+        persistRoute(committedRouteId, committedPathname, committedSearch);
         if (committedSessionKey) {
           this.activeSessionKey = committedSessionKey;
-          routeContext.gateway.setSessionKey(committedSessionKey);
+          selectApplicationSession({
+            selection: routeContext.agentSelection,
+            gateway: routeContext.gateway,
+            sessionKey: committedSessionKey,
+          });
         }
       }
     }
@@ -1683,6 +1913,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
     const gatewaySnapshot = context.gateway.snapshot;
     const gatewayConnected = gatewaySnapshot.phase === "connected";
+    const operatorAccess = readGatewayOperatorAccess(gatewaySnapshot);
     const outboxScopeHost = this.storedOutboxScopeHost(context);
     const outboxStoreRuntime = this.outboxStoreRuntime;
     const storedOutboxes = outboxStoreRuntime
@@ -1707,6 +1938,8 @@ class OpenClawShell extends OpenClawLightDomElement {
       context.config.current.terminalEnabled ?? false,
     );
     const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
+    const custodianPanelAvailable =
+      gatewayConnected && isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true;
     const activeRoute = this.routeState.routeId ?? "chat";
     // Plugin tabs share one route; the search picks the active item.
     const activePluginRef =
@@ -1722,6 +1955,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       value: runtimeConfig.configForm ?? runtimeConfig.configSnapshot?.config ?? null,
       uiHints: runtimeConfig.configUiHints,
       identityAvailable: Boolean(gatewaySnapshot.selfUser),
+      basePath: context.basePath,
     });
     const onboarding = this.onboardingMode;
     const navDrawerOpen = this.navDrawerOpen && !onboarding;
@@ -1734,7 +1968,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     // Drawer navigation always opens expanded; the desktop collapse preference
     // stays persisted for when the viewport returns to the desktop layout.
     // The settings sidebar has a fixed width, so the collapse state pauses too.
-    const navCollapsed = navigationSnapshot.navCollapsed && !navDrawerOpen && !settingsTakeover;
+    const navCollapsed =
+      navigationSnapshot.navCollapsed &&
+      !this.desktopNavigationExpanded &&
+      !navDrawerOpen &&
+      !settingsTakeover;
     const navigationSurfaceHidden = navigationSurfaceIsHidden({
       navCollapsed,
       navDrawerOpen,
@@ -1751,22 +1989,105 @@ class OpenClawShell extends OpenClawLightDomElement {
     const uiSettings = loadSettings();
     // The new-session draft shares the chat layout: full-height pane that owns
     // its scrolling and pins the composer dock to the bottom.
-    const chatLikeRoute =
-      isSessionRouteId(activeRoute) || activeRoute === "custodian" || activeRoute === "new-session";
+    const chatLikeRoute = isSessionRouteId(activeRoute) || activeRoute === "new-session";
+    const custodianRoute = activeRoute === "custodian";
     const inlineApproval = isSessionRouteId(activeRoute)
       ? findInlineApproval(overlaySnapshot.approvalQueue, this.activeSessionKey)
       : null;
+    if (!settingsTakeover) {
+      Object.assign(this.navigationSidebar, {
+        basePath: context.basePath,
+        activeRouteId: activeRoute,
+        activePluginTabId,
+        enabledRouteIds: this.enabledRouteIds(),
+        activeWorkboardBoardId:
+          workboardBoardIdFromPath(this.routeState.location?.pathname ?? "", context.basePath) ??
+          "",
+        sessionKey: this.activeSessionKey,
+        connected: gatewayConnected,
+        offline: gatewaySnapshot.offlineStable,
+        outboxCountForSession,
+        terminalAvailable,
+        catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),
+        canPairDevice: gatewayConnected && (operatorAccess.canAdmin || operatorAccess.canPair),
+        sidebarEntries: navigationSnapshot.sidebarEntries,
+        workboardBoards: this.sidebarWorkboardSnapshot.boards,
+        workboardBoardsReady: this.sidebarWorkboardSnapshot.ready,
+        workboardRenderers: this.sidebarWorkboardRenderers,
+        sidebarLiveActivity: uiSettings.sidebarLiveActivity !== false,
+        pinnedAgentIds: navigationSnapshot.pinnedAgentIds,
+        themeMode: context.theme.mode,
+        lobsterPetVisits: uiSettings.lobsterPetVisits !== false,
+        lobsterPetSounds: uiSettings.lobsterPetSounds === true,
+        gatewayVersion:
+          context.config.current.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? null,
+        devGitBranch: context.config.current.devGitBranch,
+        updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
+        updateRunning: overlaySnapshot.updateRunning,
+        onUpdate: () => void context.overlays.runUpdate(),
+        onOpenApprovals: this.openApprovals,
+        onRetryConnect: () => context.gateway.connect(),
+        onOpenNewSession: (agentId: string, target?: NewSessionTarget) =>
+          this.openNewSession(agentId, target),
+        draftSessionAgentId: this.draftSessionAgentId(),
+        onUpdateSidebarEntries: (entries: string[]) =>
+          context.navigation.update({ sidebarEntries: entries }),
+        onPairMobile: () => void context.overlays.openDevicePairSetup(),
+        onNavigate: (routeId: string, options?: ApplicationNavigationOptions) =>
+          this.navigate(routeId, options),
+        onPreloadRoute: (routeId: string) =>
+          isRouteId(routeId) ? context.preload(routeId) : Promise.resolve(),
+      });
+    }
+    const navigationContent = settingsTakeover
+      ? renderSettingsSidebar({
+          basePath: context.basePath,
+          activeRouteId: activeRoute,
+          activePathname: this.routeState.location?.pathname ?? "",
+          activeSearch: this.routeState.location?.search ?? "",
+          activeHash: this.routeState.location?.hash ?? "",
+          offline: gatewaySnapshot.offlineStable,
+          queuedOutboxCount: storedOutboxes?.total ?? 0,
+          lastError: gatewaySnapshot.lastError,
+          gatewayVersion:
+            context.config.current.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
+          updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
+          updateRunning: overlaySnapshot.updateRunning,
+          onUpdate: () => void context.overlays.runUpdate(),
+          searchQuery: this.settingsSearchQuery,
+          searchBlockMatches: settingsSearchBlocks,
+          onExit: () => this.exitSettings(),
+          onRetryConnect: () => context.gateway.connect(),
+          onNavigate: (routeId, options) => this.navigate(routeId, options),
+          onPreload: (routeId) => context.preload(routeId),
+          onSearchQueryChange: (nextQuery) => {
+            void this.handleSettingsSearchQueryChange(nextQuery);
+          },
+          preloadTimers: this.settingsPreloadTimers,
+          saveIndicator: {
+            status: runtimeConfig.configAutoSaveStatus,
+            lastError: runtimeConfig.lastError,
+            needsApply: runtimeConfig.configNeedsApply,
+            applying: runtimeConfig.configApplying,
+            applyDisabled:
+              runtimeConfig.configLoading ||
+              runtimeConfig.configSaving ||
+              (runtimeConfig.configFormDirty && runtimeConfig.configFormMode === "raw") ||
+              overlaySnapshot.updateRunning ||
+              overlaySnapshot.updateReconciliationPending,
+            onRetry: () => void context.runtimeConfig.save(),
+            onReload: () => void context.runtimeConfig.discardDraft(),
+            onApply: () => void context.runtimeConfig.apply(),
+          },
+        })
+      : this.navigationSidebar;
     // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
     // and the upgraded panels catch the first toggle instead of dropping the event.
     return html`
       ${isOptionalElementDefined(this.commandPaletteElement)
         ? html`<openclaw-command-palette
             .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
-            .onSelectSession=${(sessionKey: string) => {
-              context.gateway.setSessionKey(sessionKey);
-              const face = resolveSessionPreferredFaceForKey(context, sessionKey);
-              this.navigate(face, sessionNavigationTarget({ context, face, sessionKey }).options);
-            }}
+            .onSelectSession=${(sessionKey: string) => this.selectChatSession(sessionKey)}
             .onSlashCommand=${this.handleCommandPaletteSlashCommand}
           ></openclaw-command-palette>`
         : nothing}
@@ -1779,16 +2100,9 @@ class OpenClawShell extends OpenClawLightDomElement {
           ? "shell--onboarding"
           : ""} ${settingsTakeover ? "shell--settings" : ""}"
         style=${`--shell-nav-expanded-width: ${navigationSnapshot.navWidth}px`}
-        @keydown=${this.handleShellKeydown}
         @theme-change=${this.handleThemeChange}
       >
         <a class="shell-skip-link" href="#control-ui-main"> ${t("common.skipToMainContent")} </a>
-        <button
-          type="button"
-          class="shell-nav-backdrop"
-          aria-label=${t("nav.close")}
-          @click=${() => this.closeNavDrawer({ restoreFocus: true })}
-        ></button>
         ${isNativeWebChromeHost() && !onboarding
           ? html`
               <openclaw-macos-titlebar-controls
@@ -1858,80 +2172,19 @@ class OpenClawShell extends OpenClawLightDomElement {
               </div>
             `
           : nothing}
-        <div class="shell-nav">
-          ${settingsTakeover
-            ? renderSettingsSidebar({
-                basePath: context.basePath,
-                activeRouteId: activeRoute,
-                activeSearch: this.routeState.location?.search ?? "",
-                activeHash: this.routeState.location?.hash ?? "",
-                offline: gatewaySnapshot.offlineStable,
-                queuedOutboxCount: storedOutboxes?.total ?? 0,
-                lastError: gatewaySnapshot.lastError,
-                version:
-                  context.config.current.serverVersion ??
-                  gatewaySnapshot.hello?.server?.version ??
-                  "",
-                updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
-                updateRunning: overlaySnapshot.updateRunning,
-                onUpdate: () => void context.overlays.runUpdate(),
-                searchQuery: this.settingsSearchQuery,
-                searchBlockMatches: settingsSearchBlocks,
-                onExit: () => this.exitSettings(),
-                onRetryConnect: () => context.gateway.connect(),
-                onNavigate: (routeId, options) => this.navigate(routeId, options),
-                onPreload: (routeId) => context.preload(routeId),
-                onSearchQueryChange: (nextQuery) => {
-                  void this.handleSettingsSearchQueryChange(nextQuery);
-                },
-                preloadTimers: this.settingsPreloadTimers,
-              })
-            : html`<openclaw-app-sidebar
-                .basePath=${context.basePath}
-                .activeRouteId=${activeRoute}
-                .activePluginTabId=${activePluginTabId}
-                .enabledRouteIds=${this.enabledRouteIds()}
-                .activeWorkboardBoardId=${workboardBoardIdFromPath(
-                  this.routeState.location?.pathname ?? "",
-                  context.basePath,
-                ) ?? ""}
-                .sessionKey=${this.activeSessionKey}
-                .connected=${gatewayConnected}
-                .offline=${gatewaySnapshot.offlineStable}
-                .outboxCountForSession=${outboxCountForSession}
-                .terminalAvailable=${terminalAvailable}
-                .catalogOpenTarget=${normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget)}
-                .canPairDevice=${gatewayConnected &&
-                hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
-                .sidebarEntries=${navigationSnapshot.sidebarEntries}
-                .workboardBoards=${this.sidebarWorkboardSnapshot.boards}
-                .workboardBoardsReady=${this.sidebarWorkboardSnapshot.ready}
-                .workboardRenderers=${this.sidebarWorkboardRenderers}
-                .sidebarLiveActivity=${uiSettings.sidebarLiveActivity !== false}
-                .pinnedAgentIds=${navigationSnapshot.pinnedAgentIds}
-                .themeMode=${context.theme.mode}
-                .lobsterPetVisits=${uiSettings.lobsterPetVisits !== false}
-                .lobsterPetSounds=${uiSettings.lobsterPetSounds === true}
-                .gatewayVersion=${context.config.current.serverVersion ??
-                gatewaySnapshot.hello?.server?.version ??
-                null}
-                .devGitBranch=${context.config.current.devGitBranch}
-                .updateAvailable=${navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable}
-                .updateRunning=${overlaySnapshot.updateRunning}
-                .onUpdate=${() => void context.overlays.runUpdate()}
-                .onOpenApprovals=${this.openApprovals}
-                .onRetryConnect=${() => context.gateway.connect()}
-                .onOpenNewSession=${(agentId: string, target?: NewSessionTarget) =>
-                  this.openNewSession(agentId, target)}
-                .draftSessionAgentId=${this.draftSessionAgentId()}
-                .onUpdateSidebarEntries=${(entries: string[]) =>
-                  context.navigation.update({ sidebarEntries: entries })}
-                .onPairMobile=${() => void context.overlays.openDevicePairSetup()}
-                .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
-                  this.navigate(routeId, options)}
-                .onPreloadRoute=${(routeId: string) =>
-                  isRouteId(routeId) ? context.preload(routeId) : Promise.resolve()}
-              ></openclaw-app-sidebar>`}
+        <div class="shell-nav" ?inert=${navigationSurfaceHidden}>
+          ${mobileNavLayout
+            ? html`<openclaw-modal-dialog
+                class="drawer nav-drawer"
+                .open=${navDrawerOpen}
+                .label=${t("palette.categories.navigation")}
+                @modal-cancel=${() => this.closeNavDrawer({ restoreFocus: true })}
+              >
+                <div class="shell-nav-modal__content" tabindex="-1" autofocus>
+                  ${navigationContent}
+                </div>
+              </openclaw-modal-dialog>`
+            : navigationContent}
         </div>
         ${!navCollapsed && !onboarding && !settingsTakeover
           ? html`
@@ -1950,9 +2203,9 @@ class OpenClawShell extends OpenClawLightDomElement {
           : nothing}
         <main
           id="control-ui-main"
-          class="content ${chatLikeRoute ? "content--chat" : ""} ${activeRoute === "workboard"
-            ? "content--workboard"
-            : ""}"
+          class="content ${chatLikeRoute ? "content--chat" : ""} ${custodianRoute
+            ? "content--custodian"
+            : ""} ${activeRoute === "workboard" ? "content--workboard" : ""}"
           .tabIndex=${-1}
         >
           ${gatewaySnapshot.hello?.deviceAuthMigration?.pending === true
@@ -1976,10 +2229,7 @@ class OpenClawShell extends OpenClawLightDomElement {
             : html`<openclaw-update-banner
                 .props=${{
                   statusBanner: overlaySnapshot.controlUiRefreshRequired
-                    ? {
-                        tone: "info",
-                        text: "Server updated — refresh for full capabilities",
-                      }
+                    ? resolveControlUiRefreshRequiredBanner()
                     : null,
                   action: overlaySnapshot.controlUiRefreshRequired
                     ? { label: t("common.refresh"), onClick: this.refreshControlUi }
@@ -2007,11 +2257,13 @@ class OpenClawShell extends OpenClawLightDomElement {
         <openclaw-terminal-panel
           .client=${gatewayConnected ? gatewaySnapshot.client : null}
           .available=${terminalAvailable}
+          .suppressed=${settingsTakeover}
           .themeMode=${resolveTerminalThemeMode()}
         ></openclaw-terminal-panel>
         <openclaw-browser-panel
           .client=${gatewayConnected ? gatewaySnapshot.client : null}
           .available=${browserPanelAvailable}
+          .suppressed=${settingsTakeover}
           .basePath=${context.basePath}
           .authToken=${resolveControlUiAuthToken({
             hello: gatewaySnapshot.hello,
@@ -2019,6 +2271,11 @@ class OpenClawShell extends OpenClawLightDomElement {
             password: context.gateway.connection.password,
           })}
         ></openclaw-browser-panel>
+        <openclaw-custodian-panel
+          .available=${custodianPanelAvailable}
+          .suppressed=${activeRoute === "custodian"}
+          .minimizeRequestId=${this.custodianMinimizeRequestId}
+        ></openclaw-custodian-panel>
         ${isOptionalElementDefined(this.execApprovalElement)
           ? html`<openclaw-exec-approval
               .props=${{

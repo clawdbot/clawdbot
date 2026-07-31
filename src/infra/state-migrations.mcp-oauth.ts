@@ -19,6 +19,12 @@ import {
 import { parseLegacyMcpOAuthStore } from "./state-migrations.mcp-oauth-format.js";
 import { withRootBoundedLegacyFileLock } from "./state-migrations.mcp-oauth-lock.js";
 import type { LegacyMcpOAuthDetection } from "./state-migrations.mcp-oauth.types.js";
+import {
+  legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
+  readLegacyMigrationSourceSnapshot,
+  resolveLegacyMigrationRelativePath,
+  type LegacyMigrationSourceSnapshot,
+} from "./state-migrations.source-snapshot.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_MCP_OAUTH_DIR = "mcp-oauth";
@@ -35,15 +41,7 @@ type McpOAuthMigrationDatabase = Pick<
   "mcp_oauth_stores" | "migration_runs" | "migration_sources"
 >;
 
-type LegacySourceSnapshot = {
-  sourcePath: string;
-  dev: number;
-  ino: number;
-  mtimeMs: number;
-  sha256: string;
-  size: number;
-  store: Record<string, unknown>;
-};
+type LegacySourceSnapshot = LegacyMigrationSourceSnapshot & { store: Record<string, unknown> };
 
 type MigrationReceipt = {
   sourceKey: string;
@@ -114,16 +112,7 @@ export function detectLegacyMcpOAuthStores(params: {
 }
 
 function relativeLegacyPath(stateDir: string, filePath: string): string {
-  const relativePath = path.relative(path.resolve(stateDir), path.resolve(filePath));
-  if (
-    !relativePath ||
-    relativePath === ".." ||
-    relativePath.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relativePath)
-  ) {
-    throw new Error("legacy MCP OAuth path is outside the state directory");
-  }
-  return relativePath;
+  return resolveLegacyMigrationRelativePath(stateDir, filePath, "MCP OAuth", false);
 }
 
 async function readLegacySourceSnapshot(
@@ -132,37 +121,18 @@ async function readLegacySourceSnapshot(
   sourcePath: string,
   options: { parseStore?: boolean } = {},
 ): Promise<LegacySourceSnapshot> {
-  const opened = await stateRoot.read(relativeLegacyPath(stateDir, sourcePath), {
-    hardlinks: "reject",
+  const snapshot = await readLegacyMigrationSourceSnapshot({
+    stateRoot,
+    stateDir,
+    sourcePath,
     maxBytes: MAX_LEGACY_STORE_BYTES,
-    symlinks: "reject",
+    label: "MCP OAuth",
   });
-  if (opened.stat.size !== opened.buffer.byteLength) {
-    throw new Error("legacy MCP OAuth store changed while it was being read");
-  }
   const parsed =
     options.parseStore === false
       ? {}
-      : parseLegacyMcpOAuthStore(JSON.parse(utf8Decoder.decode(opened.buffer)));
-  return {
-    sourcePath,
-    dev: opened.stat.dev,
-    ino: opened.stat.ino,
-    mtimeMs: opened.stat.mtimeMs,
-    sha256: createHash("sha256").update(opened.buffer).digest("hex"),
-    size: opened.stat.size,
-    store: parsed,
-  };
-}
-
-function snapshotsMatch(left: LegacySourceSnapshot, right: LegacySourceSnapshot): boolean {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mtimeMs === right.mtimeMs &&
-    left.sha256 === right.sha256 &&
-    left.size === right.size
-  );
+      : parseLegacyMcpOAuthStore(JSON.parse(utf8Decoder.decode(snapshot.buffer)));
+  return { ...snapshot, store: parsed };
 }
 
 function storeKeyForSource(sourcePath: string): string {

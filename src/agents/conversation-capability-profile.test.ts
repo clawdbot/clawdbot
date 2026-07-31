@@ -1,12 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAccountCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
+import { PLUGIN_REGISTRY_STATE } from "../plugins/runtime-state-key.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 
 describe("resolveConversationCapabilityProfile", () => {
   it("prepares a direct conversation profile with sender tool restrictions", () => {
@@ -373,5 +377,70 @@ describe("resolveConversationCapabilityProfile", () => {
 
     expect(profile.policy.trustedGroup).toEqual({ groupId: "team", dropped: false });
     expect(profile.conversation.scope).toBe("shared");
+  });
+});
+
+describe("resolveConversationCapabilityProfile scheduled account authority", () => {
+  const ownerSessionKey = "agent:main:whatsapp:group:safe-room";
+  const globalState = globalThis as Record<symbol, unknown>;
+  let previousRegistryState: unknown;
+
+  beforeAll(() => {
+    previousRegistryState = globalState[PLUGIN_REGISTRY_STATE];
+    globalState[PLUGIN_REGISTRY_STATE] = {
+      channel: {
+        version: 1,
+        registry: {
+          channels: [
+            {
+              plugin: {
+                id: "whatsapp",
+                meta: {},
+                config: createAccountListHelpers("whatsapp"),
+              },
+            },
+          ],
+        },
+      },
+    };
+  });
+
+  afterAll(() => {
+    globalState[PLUGIN_REGISTRY_STATE] = previousRegistryState;
+  });
+
+  function scheduledProfile(accounts: Record<string, unknown>) {
+    return resolveConversationCapabilityProfile({
+      config: {
+        channels: {
+          whatsapp: {
+            accounts,
+            groups: { "safe-room": { tools: { allow: ["read"] } } },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      sessionKey: ownerSessionKey,
+      agentId: "main",
+      messageProvider: "whatsapp",
+      groupId: "safe-room",
+      groupChannel: "whatsapp",
+      scheduledToolPolicy: createAccountCronScheduledToolPolicy({
+        ownerSessionKey,
+        ownerAccountId: "work",
+      }),
+    });
+  }
+
+  it("keeps the group policy while the scheduled owner account stays configured", () => {
+    expect(scheduledProfile({ work: {} }).policy.groupPolicy).toEqual({ allow: ["read"] });
+  });
+
+  it("denies every tool for a scheduled run after its owner account is removed", () => {
+    const groupPolicy = scheduledProfile({}).policy.groupPolicy;
+
+    expect(groupPolicy).toEqual({ allow: [], deny: ["*"] });
+    for (const toolName of ["read", "write", "exec", "apply_patch"]) {
+      expect(isToolAllowedByPolicyName(toolName, groupPolicy)).toBe(false);
+    }
   });
 });

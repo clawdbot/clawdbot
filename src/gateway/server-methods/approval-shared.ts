@@ -1,11 +1,7 @@
 // Approval shared helpers normalize pending exec/plugin approval lookups,
 // decision payloads, turn-source routing, and gateway error responses.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-} from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { ValidationError } from "../../../packages/gateway-protocol/src/index.js";
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
@@ -17,6 +13,7 @@ import type {
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
 import { buildWaitResponse, type WaitReasonResolver } from "./approval-wait-response.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const APPROVAL_NOT_FOUND_DETAILS = {
   reason: ErrorCodes.APPROVAL_NOT_FOUND,
@@ -271,15 +268,7 @@ export function resolveApprovalDecisionParams<TParams extends ApprovalResolvePar
   respond: RespondFn;
 }): { inputId: string; decision: ExecApprovalDecision } | null {
   const rawParams = params.rawParams;
-  if (!params.validate(rawParams)) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `invalid ${params.methodName} params: ${formatValidationErrors(params.validate.errors)}`,
-      ),
-    );
+  if (!assertValidParams(rawParams, params.validate, params.methodName, params.respond)) {
     return null;
   }
   if (!isApprovalDecision(rawParams.decision)) {

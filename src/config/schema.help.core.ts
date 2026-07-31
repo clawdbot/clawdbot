@@ -1,5 +1,6 @@
 // Defines user-facing config field help text for docs and UI surfaces.
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
+import { CLOUD_WORKER_FIELD_HELP } from "./zod-schema.cloud-workers.js";
 
 export const CORE_FIELD_HELP: Record<string, string> = {
   "channels.discord.activities":
@@ -71,16 +72,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Enable background auto-update for stable and beta package installs; extended-stable never auto-applies (default: false).",
   cloudWorkers:
     "Opt-in cloud worker profiles for disposable remote environments. When this section is omitted or has no profiles, cloud worker creation remains unavailable and existing gateway/node status behavior is unchanged.",
-  "cloudWorkers.profiles":
-    "Named cloud worker profiles. Each profile selects a worker provider registered by a plugin and carries provider-owned settings.",
-  "cloudWorkers.profiles.*":
-    "One cloud worker profile selected by name when creating an environment. Keep provider credentials in supported references rather than embedding secret material in this block.",
-  "cloudWorkers.profiles.*.provider":
-    "Worker provider id registered by a plugin. The configured plugin must expose this id before the gateway can provision environments from the profile.",
-  "cloudWorkers.profiles.*.install":
-    'Worker installation method: "bundle" (default) transfers the gateway\'s content-hashed installed build and supports released, development, and unreleased versions; "npm" installs the exact gateway version and is available only when that version is released.',
-  "cloudWorkers.profiles.*.settings":
-    "Provider-owned settings validated by the selected plugin. Use SecretRef objects for secret-bearing values; opaque settings do not gain automatic secret resolution.",
+  ...CLOUD_WORKER_FIELD_HELP,
   gateway:
     "Gateway runtime surface for bind mode, auth, control UI, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.",
   "gateway.port":
@@ -216,7 +208,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "talk.consultFastMode":
     "Use this to set true or false fast mode for the regular agent run behind Talk realtime consults.",
   "talk.speechLocale":
-    'BCP 47 locale id for Talk speech recognition on device nodes, for example "ru-RU". Leave unset to use each device default.',
+    'BCP 47 locale id for Talk speech recognition on device nodes and the iOS system-voice fallback, for example "ru-RU". Leave unset to use each device default.',
   "talk.interruptOnSpeech":
     "If true (default), stop assistant speech when the user starts speaking in Talk mode. Keep enabled for conversational turn-taking.",
   "talk.silenceTimeoutMs": `Milliseconds of user silence before Talk mode finalizes and sends the current transcript. Leave unset to keep the platform default pause window (${describeTalkSilenceTimeoutDefaults()}).`,

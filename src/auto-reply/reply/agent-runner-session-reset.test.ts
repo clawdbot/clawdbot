@@ -4,12 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
 import { setAgentRunnerSessionResetTestDeps } from "./agent-runner-session-reset.test-support.js";
 import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.test-fixtures.js";
@@ -51,6 +51,7 @@ async function writeFileTranscript(filePath: string, sessionId: string): Promise
 }
 
 describe("resetReplyRunSession", () => {
+  const sessionKey = "agent:main:main";
   let rootDir = "";
 
   beforeEach(async () => {
@@ -102,16 +103,14 @@ describe("resetReplyRunSession", () => {
         unwindowedMessageCount: 10,
         sessionId: "session",
       },
-      fallbackNoticeSelectedModel: "anthropic/claude",
-      fallbackNoticeActiveModel: "openai/gpt",
-      fallbackNoticeReason: "rate limit",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "anthropic/claude",
+        activeModel: "openai/gpt",
+        reason: "rate limit",
+      },
       compactionCount: 4,
-      memoryFlushAt: 50,
-      memoryFlushCompactionCount: 3,
-      memoryFlushContextHash: "context-hash",
-      memoryFlushFailureCount: 2,
-      memoryFlushLastFailedAt: 60,
-      memoryFlushLastFailureError: "memory failed",
+      memoryFlush: { kind: "failed", compactionCount: 3, failureCount: 2 },
       systemPromptReport: {
         source: "run",
         generatedAt: 1,
@@ -121,10 +120,10 @@ describe("resetReplyRunSession", () => {
         tools: { listChars: 0, schemaChars: 0, entries: [] },
       },
     };
-    const sessionStore = { main: sessionEntry };
+    const sessionStore = { [sessionKey]: sessionEntry };
     const followupRun = createTestFollowupRun();
     await writeFileTranscript(sessionEntry.sessionFile!, sessionEntry.sessionId);
-    await writeTestSessionStore(storePath, "main", sessionEntry);
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
 
     let activeSessionEntry: SessionEntry | undefined = sessionEntry;
     let isNewSession = false;
@@ -133,7 +132,7 @@ describe("resetReplyRunSession", () => {
         failureLabel: "compaction failure",
         buildLogMessage: (next) => `reset ${next}`,
       },
-      sessionKey: "main",
+      sessionKey,
       queueKey: "main",
       activeSessionEntry,
       activeSessionStore: sessionStore,
@@ -158,48 +157,33 @@ describe("resetReplyRunSession", () => {
     expect(activeSessionEntry?.model).toBeUndefined();
     expect(activeSessionEntry?.contextTokens).toBeUndefined();
     expect(activeSessionEntry?.contextBudgetStatus).toBeUndefined();
-    expect(activeSessionEntry?.fallbackNoticeSelectedModel).toBeUndefined();
-    expect(activeSessionEntry?.fallbackNoticeActiveModel).toBeUndefined();
-    expect(activeSessionEntry?.fallbackNoticeReason).toBeUndefined();
+    expect(activeSessionEntry?.fallbackNotice).toBeUndefined();
     expect(activeSessionEntry?.compactionCount).toBe(0);
-    expect(activeSessionEntry?.memoryFlushAt).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushCompactionCount).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushContextHash).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushFailureCount).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushLastFailedAt).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushLastFailureError).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlush).toBeUndefined();
     expect(activeSessionEntry?.systemPromptReport).toBeUndefined();
     expect(activeSessionEntry?.compactionCount).toBe(0);
-    expect(activeSessionEntry?.memoryFlushAt).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushCompactionCount).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushContextHash).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushFailureCount).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushLastFailedAt).toBeUndefined();
-    expect(activeSessionEntry?.memoryFlushLastFailureError).toBeUndefined();
+    expect(activeSessionEntry?.memoryFlush).toBeUndefined();
     expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
       key: "main",
       previousSessionId: "session",
       nextSessionId: activeSessionEntry?.sessionId,
-      nextSessionFile: activeSessionEntry?.sessionFile,
+      nextSessionFile: sessionKey,
     });
     expect(resetRegisteredAgentHarnessSessionsMock).toHaveBeenCalledWith({
       agentId: followupRun.run.agentId,
       sessionId: "session",
-      sessionKey: "main",
-      sessionFile: activeSessionEntry?.sessionFile,
+      sessionKey,
+      sessionFile: sessionKey,
       reason: "reset",
     });
     expect(errorMock).toHaveBeenCalledWith("reset session");
 
-    const persisted = loadSessionEntry({ storePath, sessionKey: "main" });
+    const persisted = loadSessionEntry({ storePath, sessionKey });
     expect(persisted?.sessionId).toBe(activeSessionEntry?.sessionId);
     expect(persisted?.contextBudgetStatus).toBeUndefined();
-    expect(persisted?.fallbackNoticeReason).toBeUndefined();
+    expect(persisted?.fallbackNotice).toBeUndefined();
     expect(persisted?.compactionCount).toBe(0);
-    expect(persisted?.memoryFlushAt).toBeUndefined();
-    expect(persisted?.memoryFlushFailureCount).toBeUndefined();
-    expect(persisted?.memoryFlushLastFailedAt).toBeUndefined();
-    expect(persisted?.memoryFlushLastFailureError).toBeUndefined();
+    expect(persisted?.memoryFlush).toBeUndefined();
   });
 
   it("rejects automatic recovery rotation for a model-locked session", async () => {
@@ -211,9 +195,9 @@ describe("resetReplyRunSession", () => {
       agentHarnessId: "codex",
       modelSelectionLocked: true,
     };
-    const sessionStore = { main: sessionEntry };
+    const sessionStore = { [sessionKey]: sessionEntry };
     const followupRun = createTestFollowupRun();
-    await writeTestSessionStore(storePath, "main", sessionEntry);
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
 
     await expect(
       resetReplyRunSession({
@@ -221,7 +205,7 @@ describe("resetReplyRunSession", () => {
           failureLabel: "memory flush exhaustion",
           buildLogMessage: (next) => `reset ${next}`,
         },
-        sessionKey: "main",
+        sessionKey,
         queueKey: "main",
         activeSessionEntry: sessionEntry,
         activeSessionStore: sessionStore,
@@ -232,7 +216,7 @@ describe("resetReplyRunSession", () => {
       }),
     ).rejects.toThrow("cannot be reset while model selection is locked");
 
-    expect(sessionStore.main).toEqual(sessionEntry);
+    expect(sessionStore[sessionKey]).toEqual(sessionEntry);
     expect(followupRun.run.sessionId).not.toBe("00000000-0000-0000-0000-000000000123");
     expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
   });
@@ -246,8 +230,8 @@ describe("resetReplyRunSession", () => {
       updatedAt: 1,
       sessionFile: oldTranscriptPath,
     };
-    const sessionStore = { main: sessionEntry };
-    await writeTestSessionStore(storePath, "main", sessionEntry);
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
 
     await resetReplyRunSession({
       options: {
@@ -255,7 +239,7 @@ describe("resetReplyRunSession", () => {
         cleanupTranscripts: true,
         buildLogMessage: (next) => `reset ${next}`,
       },
-      sessionKey: "main",
+      sessionKey,
       queueKey: "main",
       activeSessionEntry: sessionEntry,
       activeSessionStore: sessionStore,
@@ -277,8 +261,8 @@ describe("resetReplyRunSession", () => {
       updatedAt: 1,
       sessionFile: oldTranscriptPath,
     };
-    const sessionStore = { main: sessionEntry };
-    await writeTestSessionStore(storePath, "main", sessionEntry);
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
 
     let rotatedSessionId: string | undefined;
     await resetReplyRunSession({
@@ -287,7 +271,7 @@ describe("resetReplyRunSession", () => {
         cleanupTranscripts: false,
         buildLogMessage: (next) => `reset ${next}`,
       },
-      sessionKey: "main",
+      sessionKey,
       queueKey: "main",
       activeSessionEntry: sessionEntry,
       activeSessionStore: sessionStore,
@@ -307,7 +291,6 @@ describe("resetReplyRunSession", () => {
 
   it("uses the same SQLite marker and appends a boundary over the kept DM tail", async () => {
     const storePath = path.join(rootDir, "sessions.json");
-    const sessionKey = "main";
     const oldSessionId = "old-session";
     const oldSessionFile = formatSqliteSessionFileMarker({
       agentId: "main",
@@ -352,13 +335,7 @@ describe("resetReplyRunSession", () => {
       onNewSession: () => {},
     });
 
-    expect(activeSessionEntry?.sessionFile).toBe(
-      formatSqliteSessionFileMarker({
-        agentId: "main",
-        sessionId: oldSessionId,
-        storePath,
-      }),
-    );
+    expect(activeSessionEntry).not.toHaveProperty("sessionFile");
     const replayed = await loadTranscriptEvents({
       agentId: "main",
       sessionId: oldSessionId,
@@ -380,7 +357,6 @@ describe("resetReplyRunSession", () => {
 
   it("migrates an unreadable legacy transcript target to the SQLite reset boundary", async () => {
     const storePath = path.join(rootDir, "sessions.json");
-    const sessionKey = "main";
     const unreadableReplaySource = path.join(rootDir, "previous-transcript-dir");
     await fs.mkdir(unreadableReplaySource);
     const sessionEntry: SessionEntry = {
@@ -409,9 +385,7 @@ describe("resetReplyRunSession", () => {
       onNewSession: () => {},
     });
 
-    expect(activeSessionEntry?.sessionFile).toBe(
-      formatSqliteSessionFileMarker({ agentId: "main", sessionId: "old-session", storePath }),
-    );
+    expect(activeSessionEntry).not.toHaveProperty("sessionFile");
     await expect(
       loadTranscriptEvents({
         agentId: "main",
@@ -424,7 +398,6 @@ describe("resetReplyRunSession", () => {
 
   it("replaces a SQLite marker for a different transcript target", async () => {
     const storePath = path.join(rootDir, "sessions.json");
-    const sessionKey = "main";
     const sessionId = "current-session";
     const staleMarker = formatSqliteSessionFileMarker({
       agentId: "main",
@@ -457,9 +430,6 @@ describe("resetReplyRunSession", () => {
       onNewSession: () => {},
     });
 
-    expect(activeSessionEntry?.sessionFile).toBe(
-      formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath }),
-    );
-    expect(activeSessionEntry?.sessionFile).not.toBe(staleMarker);
+    expect(activeSessionEntry).not.toHaveProperty("sessionFile");
   });
 });

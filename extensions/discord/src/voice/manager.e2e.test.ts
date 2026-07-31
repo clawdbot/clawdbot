@@ -2955,6 +2955,101 @@ describe("DiscordVoiceManager", () => {
     bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
   });
 
+  it("cancels realtime output when Discord playback backpressures", async () => {
+    const manager = createAgentProxyManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    const player = getLastAudioPlayer();
+    const entry = getSessionEntry(manager);
+    const bridgeParams = lastRealtimeBridgeParams();
+
+    for (let index = 0; index < 50; index += 1) {
+      bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+    }
+
+    const realtime = entry.realtime as unknown as { outputStream?: PassThrough };
+    const stream = realtime.outputStream;
+    if (!stream) {
+      throw new Error("expected realtime output stream");
+    }
+    vi.spyOn(stream, "write").mockReturnValueOnce(false);
+
+    bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+
+    expect(player.stop).toHaveBeenCalledWith(true);
+    await vi.waitFor(() =>
+      expect(realtimeSessionMock.handleBargeIn).toHaveBeenCalledWith({
+        audioPlaybackActive: true,
+        force: true,
+      }),
+    );
+
+    bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+    expect(createAudioResourceMock).toHaveBeenCalledTimes(1);
+    expect(player.play).toHaveBeenCalledTimes(1);
+
+    bridgeParams?.onEvent?.({ direction: "server", type: "response.cancelled" });
+    for (let index = 0; index < 50; index += 1) {
+      bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+    }
+
+    expect(createAudioResourceMock).toHaveBeenCalledTimes(2);
+    expect(player.play).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["response cancellation", { direction: "server", type: "response.cancelled" }],
+    [
+      "cancellation race",
+      {
+        direction: "server",
+        type: "error",
+        detail: "Cancellation failed: no active response found",
+      },
+    ],
+  ] as const)("does not let a deferred backpressure cancel cross %s", async (_label, terminal) => {
+    const manager = createAgentProxyManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    const player = getLastAudioPlayer();
+    const entry = getSessionEntry(manager);
+    const bridgeParams = lastRealtimeBridgeParams();
+
+    for (let index = 0; index < 50; index += 1) {
+      bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+    }
+
+    const realtime = entry.realtime as unknown as { outputStream?: PassThrough };
+    const stream = realtime.outputStream;
+    if (!stream) {
+      throw new Error("expected realtime output stream");
+    }
+    vi.spyOn(stream, "write").mockReturnValueOnce(false);
+
+    bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+    bridgeParams?.onEvent?.(terminal);
+    for (let index = 0; index < 50; index += 1) {
+      bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+    }
+    await Promise.resolve();
+
+    const stopCallCount = player.stop.mock.calls.length;
+    bridgeParams?.onEvent?.({
+      direction: "server",
+      type: "error",
+      detail: "Cancellation failed: no active response found",
+    });
+    bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+
+    expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
+    expect(player.stop).toHaveBeenCalledWith(true);
+    expect(player.stop).toHaveBeenCalledTimes(stopCallCount);
+    expect(createAudioResourceMock).toHaveBeenCalledTimes(2);
+    expect(player.play).toHaveBeenCalledTimes(2);
+  });
+
   it("discards prebuffered realtime output when the response is cancelled", async () => {
     const manager = createAgentProxyManager();
 

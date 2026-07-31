@@ -768,6 +768,54 @@ describe("checkUpdateStatus", () => {
     });
   });
 
+  it.each([
+    {
+      name: "text lockfile",
+      lockfiles: ["bun.lock"],
+      expectedLockfile: "bun.lock",
+    },
+    {
+      name: "binary lockfile",
+      lockfiles: ["bun.lockb"],
+      expectedLockfile: "bun.lockb",
+    },
+    {
+      name: "text lockfile when both formats exist",
+      lockfiles: ["bun.lock", "bun.lockb"],
+      expectedLockfile: "bun.lock",
+    },
+  ])("reports dependency status for Bun's $name", async ({ lockfiles, expectedLockfile }) => {
+    await withTempDir({ prefix: "openclaw-update-check-bun-" }, async (root) => {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "openclaw", packageManager: "bun@1.2.0" }),
+        "utf8",
+      );
+      for (const lockfile of lockfiles) {
+        await fs.writeFile(path.join(root, lockfile), "lock", "utf8");
+      }
+      await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
+
+      const status = await checkUpdateStatus({
+        root,
+        includeRegistry: false,
+        fetchGit: false,
+        timeoutMs: 1000,
+      });
+
+      expect(status).toMatchObject({
+        installKind: "package",
+        packageManager: "bun",
+        deps: {
+          manager: "bun",
+          lockfilePath: path.join(root, expectedLockfile),
+          markerPath: path.join(root, "node_modules"),
+          status: "ok",
+        },
+      });
+    });
+  });
+
   it("detects lockless OpenClaw npm installs despite packed pnpm metadata", async () => {
     await withTempDir({ prefix: "openclaw-update-check-lockless-npm-" }, async (base) => {
       const root = path.join(base, "prefix", "node_modules", "openclaw");

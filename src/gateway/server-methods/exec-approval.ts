@@ -4,7 +4,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateExecApprovalGetParams,
   validateExecApprovalRequestParams,
   validateExecApprovalResolveParams,
@@ -47,6 +46,7 @@ import {
   resolvePendingApprovalRecord,
 } from "./approval-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS = {
   reason: "APPROVAL_ALLOW_ALWAYS_UNAVAILABLE",
@@ -99,17 +99,7 @@ export function createExecApprovalHandlers(
 ): GatewayRequestHandlers {
   return {
     "exec.approval.get": async ({ params, respond, client }) => {
-      if (!validateExecApprovalGetParams(params)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid exec.approval.get params: ${formatValidationErrors(
-              validateExecApprovalGetParams.errors,
-            )}`,
-          ),
-        );
+      if (!assertValidParams(params, validateExecApprovalGetParams, "exec.approval.get", respond)) {
         return;
       }
       const p = params as { id: string };
@@ -145,17 +135,14 @@ export function createExecApprovalHandlers(
       respond(true, listVisiblePendingApprovalRequests({ manager, client }), undefined);
     },
     "exec.approval.request": async ({ params, respond, context, client }) => {
-      if (!validateExecApprovalRequestParams(params)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid exec.approval.request params: ${formatValidationErrors(
-              validateExecApprovalRequestParams.errors,
-            )}`,
-          ),
-        );
+      if (
+        !assertValidParams(
+          params,
+          validateExecApprovalRequestParams,
+          "exec.approval.request",
+          respond,
+        )
+      ) {
         return;
       }
       const p = params as {

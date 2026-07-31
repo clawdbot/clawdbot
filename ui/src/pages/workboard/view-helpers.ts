@@ -28,6 +28,7 @@ export type WorkboardProps = {
   pluginEnabled: boolean | null;
   pluginEnablementError?: string | null;
   agentsList: AgentsListResult | null;
+  defaultAgentId?: string | null;
   sessions: GatewaySessionRow[];
   scopeAgentId?: string | null;
   showAgentFilter?: boolean;
@@ -186,11 +187,6 @@ export function matchesFilter(
   ]
     .filter((value): value is string => typeof value === "string")
     .some((value) => value.toLowerCase().includes(query));
-}
-
-export function nextPosition(cards: readonly WorkboardCard[], status: WorkboardStatus): number {
-  const positions = cards.filter((card) => card.status === status).map((card) => card.position);
-  return (positions.length ? Math.max(...positions) : 0) + 1000;
 }
 
 export function isWorkboardSessionChoice(session: GatewaySessionRow): boolean {

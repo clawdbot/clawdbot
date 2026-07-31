@@ -19,12 +19,7 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   return resolveTtsProvider(config, prefsPath);
 }
 
-export {
-  getLastTtsAttempt,
-  listSpeechVoices,
-  maybeApplyTtsToPayload,
-  setLastTtsAttempt,
-} from "./tts-payload.js";
+export { getLastTtsAttempt, listSpeechVoices, setLastTtsAttempt } from "./tts-payload.js";
 export {
   getResolvedSpeechProviderConfig,
   isTtsProviderConfigured,
@@ -36,10 +31,9 @@ export {
   type PreparedTtsRequest,
 } from "./tts-request.js";
 export { streamSpeech, textToSpeechStream } from "./tts-streaming.js";
-export { synthesizeSpeech, textToSpeech } from "./tts-synthesis.js";
+export { synthesizeSpeech } from "./tts-synthesis.js";
 export { textToSpeechTelephony } from "./tts-telephony.js";
 export type {
-  TtsResult,
   TtsStreamResult,
   TtsSynthesisResult,
   TtsSynthesisStreamResult,

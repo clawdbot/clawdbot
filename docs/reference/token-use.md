@@ -20,7 +20,7 @@ OpenClaw assembles its own system prompt on every run. It includes:
   Bounded by `skills.limits.maxSkillsPromptChars`, with optional per-agent
   override at `agents.entries.*.skillsLimits.maxSkillsPromptChars`.
 - Self-update instructions
-- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`,
+- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`,
   `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md` when new, plus
   `MEMORY.md` when present). Large injected files are truncated by
   `agents.defaults.bootstrapMaxChars` (default: `20000`); total bootstrap
@@ -212,7 +212,7 @@ For a full knob-by-knob guide, see [Prompt Caching](/reference/prompt-caching).
 For Anthropic API pricing, cache reads are significantly cheaper than input
 tokens, while cache writes are billed at a higher multiplier. See Anthropic's
 prompt caching pricing for the latest rates and TTL multipliers:
-[https://docs.anthropic.com/docs/build-with-claude/prompt-caching](https://docs.anthropic.com/docs/build-with-claude/prompt-caching)
+[https://platform.claude.com/docs/en/build-with-claude/prompt-caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
 
 ### Example: keep 1h cache warm with heartbeat
 

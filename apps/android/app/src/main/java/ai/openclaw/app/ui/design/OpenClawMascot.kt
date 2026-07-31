@@ -1,6 +1,6 @@
 package ai.openclaw.app.ui.design
 
-import android.provider.Settings
+import ai.openclaw.app.ui.rememberSystemAnimationsEnabled
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -23,7 +23,6 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.vector.PathParser
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -75,11 +74,7 @@ fun OpenClawMascot(
   contentDescription: String? = null,
   mood: MascotMood = MascotMood.Idle,
 ) {
-  val context = LocalContext.current
-  val animationsEnabled =
-    remember(context) {
-      Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f
-    }
+  val animationsEnabled = rememberSystemAnimationsEnabled()
   val animator = remember { MascotAnimator() }
   var pose by remember { mutableStateOf(staticPose(mood)) }
 

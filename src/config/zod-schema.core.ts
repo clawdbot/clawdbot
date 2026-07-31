@@ -210,6 +210,7 @@ const ModelCompatSchema = z
     supportsTemperature: z.boolean().optional(),
     supportsUsageInStreaming: z.boolean().optional(),
     supportsTools: z.boolean().optional(),
+    codeMode: z.enum(["preferred", "capable"]).optional(),
     supportsStrictMode: z.boolean().optional(),
     supportsJsonSchemaResponseFormat: z.boolean().optional(),
     requiresStringContent: z.boolean().optional(),

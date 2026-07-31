@@ -1,11 +1,11 @@
 /** Prunes expired per-run cron sessions and archives unreferenced transcripts. */
+import path from "node:path";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntries,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -22,7 +22,7 @@ const MIN_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
 const lastSweepAtMsByTarget = new Map<string, number>();
 
 function reaperTargetKey(agentId: string, storePath: string): string {
-  return `${agentId}\0${storePath}`;
+  return `${normalizeAgentId(agentId)}\0${path.resolve(storePath)}`;
 }
 
 /** Resolves cron run-session retention; `false` disables pruning, bad strings fall back safely. */
@@ -63,6 +63,11 @@ export async function sweepCronRunSessions(params: {
   /** Override for testing — skips the min-interval throttle. */
   force?: boolean;
 }): Promise<ReaperResult> {
+  const retentionMs = resolveRetentionMs(params.cronConfig);
+  if (retentionMs === null) {
+    return { swept: false, pruned: 0 };
+  }
+
   const now = params.nowMs ?? Date.now();
   const storePath = params.sessionStorePath;
   // Shared physical stores still hold agent-scoped rows. The throttle also
@@ -72,7 +77,7 @@ export async function sweepCronRunSessions(params: {
 
   // Timer ticks can be frequent; throttle per agent/store target to avoid
   // repeated session-store I/O while preserving a force path for tests.
-  if (!params.force && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS) {
+  if (!params.force && now >= lastSweepAtMs && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS) {
     return { swept: false, pruned: 0 };
   }
 
@@ -80,22 +85,11 @@ export async function sweepCronRunSessions(params: {
   // not turn frequent timer ticks into an unbounded persistence-error loop.
   lastSweepAtMsByTarget.set(targetKey, now);
 
-  const retentionMs = resolveRetentionMs(params.cronConfig);
-  if (retentionMs === null) {
-    return { swept: false, pruned: 0 };
-  }
-
   let pruned = 0;
   let transcriptCleanupError: unknown;
   try {
     const cutoff = now - retentionMs;
-    const resolvedTarget = resolveSqliteTargetFromSessionStorePath(storePath, {
-      agentId: params.agentId,
-      defaultAgentId: params.defaultAgentId,
-    });
-    const sharedPhysicalOwner = resolvedTarget.shared
-      ? normalizeAgentId(resolvedTarget.agentId ?? params.defaultAgentId)
-      : undefined;
+    const requestedOwner = normalizeAgentId(params.agentId);
     let pendingMediaSessionKeys: Set<string> | undefined;
     const removals: SessionEntryLifecycleRemoval[] = [];
     // The accessor keeps agentId logical for admission checks and resolves a shared
@@ -104,17 +98,11 @@ export async function sweepCronRunSessions(params: {
       agentId: params.agentId,
       storePath,
     })) {
-      const scopedOwner = parseAgentSessionKey(sessionKey)?.agentId;
-      const requestedOwner = normalizeAgentId(params.agentId);
-      if (
-        (scopedOwner && normalizeAgentId(scopedOwner) !== requestedOwner) ||
-        (!scopedOwner &&
-          sharedPhysicalOwner !== undefined &&
-          sharedPhysicalOwner !== requestedOwner)
-      ) {
+      if (!isCronRunSessionKey(sessionKey)) {
         continue;
       }
-      if (!isCronRunSessionKey(sessionKey)) {
+      const scopedOwner = parseAgentSessionKey(sessionKey)?.agentId;
+      if (!scopedOwner || normalizeAgentId(scopedOwner) !== requestedOwner) {
         continue;
       }
       const updatedAt = entry.updatedAt ?? 0;
@@ -147,8 +135,6 @@ export async function sweepCronRunSessions(params: {
         agentId: params.agentId,
         storePath,
         removals,
-        preserveActiveWork: true,
-        restrictArchivedTranscriptsToStoreDir: true,
         ...(archiveRetentionMs == null
           ? {}
           : {

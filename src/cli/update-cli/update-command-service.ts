@@ -28,11 +28,7 @@ import {
 } from "../../daemon/schtasks.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
-import {
-  readGatewayServiceState,
-  resolveGatewayService,
-  type GatewayService,
-} from "../../daemon/service.js";
+import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
@@ -45,12 +41,10 @@ import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-runtime.js";
 import { runDaemonInstall, runDaemonRestart } from "../daemon-cli.js";
-import { recoverInstalledLaunchAgent } from "../daemon-cli/launchd-recovery.js";
 import {
   renderRestartDiagnostics,
   terminateStaleGatewayPids,
   waitForGatewayHealthyRestart,
-  type GatewayRestartSnapshot,
 } from "../daemon-cli/restart-health.js";
 import {
   registerSignalExitBarrier,
@@ -60,6 +54,15 @@ import {
 import { runRestartScript } from "./restart-helper.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config.js";
+import {
+  formatPostUpdateGatewayRecoveryInstructions,
+  hasLoadedLaunchdKeepAliveSupervisor,
+  isPackageManagerUpdateMode,
+  recoverLaunchAgentAndRecheckGatewayHealth,
+  shouldUseLegacyProcessRestartAfterUpdate,
+} from "./update-command-service-recovery.js";
+
+export { isPackageManagerUpdateMode } from "./update-command-service-recovery.js";
 
 const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
@@ -79,12 +82,6 @@ const JSON_MODE_SERVICE_STDOUT = new Writable({
     callback();
   },
 });
-
-export function isPackageManagerUpdateMode(
-  mode: UpdateRunResult["mode"],
-): mode is "npm" | "pnpm" | "bun" {
-  return mode === "npm" || mode === "pnpm" || mode === "bun";
-}
 
 export function shouldPrepareUpdatedInstallRestart(params: {
   updateMode: UpdateRunResult["mode"];
@@ -107,163 +104,6 @@ export function shouldPrepareUpdatedInstallRestart(params: {
     return params.serviceLoaded && params.serviceMatchesUpdateRoot === true;
   }
   return params.serviceLoaded;
-}
-
-function shouldUseLegacyProcessRestartAfterUpdate(params: {
-  updateMode: UpdateRunResult["mode"];
-}): boolean {
-  return !isPackageManagerUpdateMode(params.updateMode);
-}
-
-type PostUpdateLaunchAgentRecoveryResult =
-  | { attempted: false; recovered: false }
-  | { attempted: true; recovered: true; message: string }
-  | { attempted: true; recovered: false; detail: string };
-
-type PostUpdateLaunchAgentRecoveryDeps = {
-  platform?: NodeJS.Platform;
-  readState?: typeof readGatewayServiceState;
-  recover?: typeof recoverInstalledLaunchAgent;
-};
-
-async function recoverInstalledLaunchAgentAfterUpdate(params: {
-  service?: GatewayService;
-  env?: NodeJS.ProcessEnv;
-  deps?: PostUpdateLaunchAgentRecoveryDeps;
-}): Promise<PostUpdateLaunchAgentRecoveryResult> {
-  const platform = params.deps?.platform ?? process.platform;
-  if (platform !== "darwin") {
-    return { attempted: false, recovered: false };
-  }
-
-  const service = params.service ?? resolveGatewayService();
-  const readState = params.deps?.readState ?? readGatewayServiceState;
-  const recover = params.deps?.recover ?? recoverInstalledLaunchAgent;
-  const state = await readState(service, { env: params.env }).catch(() => null);
-  if (state?.loaded) {
-    return { attempted: false, recovered: false };
-  }
-  if (state && !state.installed && !state.runtime?.missingSupervision) {
-    return { attempted: false, recovered: false };
-  }
-
-  const recovered = await recover({ result: "restarted", env: state?.env ?? params.env }).catch(
-    () => null,
-  );
-  if (!recovered) {
-    return {
-      attempted: true,
-      recovered: false,
-      detail:
-        "LaunchAgent was installed but not loaded; automatic bootstrap/kickstart recovery failed.",
-    };
-  }
-
-  return {
-    attempted: true,
-    recovered: true,
-    message: recovered.message,
-  };
-}
-
-type PostUpdateGatewayHealthRecoveryDeps = {
-  recoverLaunchAgent?: typeof recoverInstalledLaunchAgentAfterUpdate;
-  waitForHealthy?: typeof waitForGatewayHealthyRestart;
-};
-
-async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
-  health: GatewayRestartSnapshot;
-  service: GatewayService;
-  port: number;
-  expectedVersion?: string;
-  env?: NodeJS.ProcessEnv;
-  deps?: PostUpdateGatewayHealthRecoveryDeps;
-}): Promise<{
-  health: GatewayRestartSnapshot;
-  launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
-}> {
-  if (params.health.healthy) {
-    return { health: params.health, launchAgentRecovery: null };
-  }
-
-  const recoverLaunchAgent =
-    params.deps?.recoverLaunchAgent ?? recoverInstalledLaunchAgentAfterUpdate;
-  const launchAgentRecovery = await recoverLaunchAgent({
-    service: params.service,
-    env: params.env,
-  });
-  if (!launchAgentRecovery.recovered) {
-    return { health: params.health, launchAgentRecovery };
-  }
-
-  const waitForHealthy = params.deps?.waitForHealthy ?? waitForGatewayHealthyRestart;
-  const health = await waitForHealthy({
-    service: params.service,
-    port: params.port,
-    expectedVersion: params.expectedVersion,
-    env: params.env,
-    supervisorKeepsAlive: true,
-  });
-  return { health, launchAgentRecovery };
-}
-
-async function hasLoadedLaunchdKeepAliveSupervisor(params: {
-  service: GatewayService;
-  env?: NodeJS.ProcessEnv;
-}): Promise<boolean> {
-  if (process.platform !== "darwin") {
-    return false;
-  }
-  // OpenClaw's loaded LaunchAgent has canonical KeepAlive policy. Read this once before
-  // polling so an unloaded agent can still reach the existing recovery path promptly.
-  return await params.service.isLoaded({ env: params.env }).catch(() => false);
-}
-
-function formatPostUpdateGatewayRecoveryLine(platform: NodeJS.Platform): string {
-  const restartCommand = replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME);
-  const installCommand = replaceCliName(
-    formatCliCommand("openclaw gateway install --force"),
-    CLI_NAME,
-  );
-  const statusCommand = replaceCliName(
-    formatCliCommand("openclaw gateway status --deep"),
-    CLI_NAME,
-  );
-  if (platform === "darwin") {
-    return `Recovery: run \`${restartCommand}\`; if the LaunchAgent is installed but not loaded, run \`${installCommand}\` from the logged-in macOS user session, then rerun \`${statusCommand}\`.`;
-  }
-  if (platform === "linux") {
-    return `Recovery: run \`${restartCommand}\`; if the systemd user service is missing, stale, or not active, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
-  }
-  if (platform === "win32") {
-    return `Recovery: run \`${restartCommand}\`; if the gateway Scheduled Task or Windows login item is missing, stale, or not running, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
-  }
-  return `Recovery: run \`${restartCommand}\`; if the local service manager reports the gateway service is missing, stale, or not running, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
-}
-
-function formatPostUpdateGatewayRecoveryInstructions(
-  result: UpdateRunResult,
-  platform: NodeJS.Platform = process.platform,
-): string[] {
-  const lines = [formatPostUpdateGatewayRecoveryLine(platform)];
-  const beforeVersion = normalizeOptionalString(result.before?.version);
-  if (isPackageManagerUpdateMode(result.mode) && beforeVersion) {
-    lines.push(
-      `Rollback: reinstall OpenClaw ${beforeVersion} with the same package manager, then rerun \`${replaceCliName(formatCliCommand("openclaw gateway install --force"), CLI_NAME)}\`.`,
-    );
-  }
-  return lines;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.updateCommandServiceTestApi")] =
-    {
-      formatPostUpdateGatewayRecoveryInstructions,
-      recoverInstalledLaunchAgentAfterUpdate,
-      recoverLaunchAgentAndRecheckGatewayHealth,
-      hasLoadedLaunchdKeepAliveSupervisor,
-      shouldUseLegacyProcessRestartAfterUpdate,
-    };
 }
 
 export type PreManagedServiceStop = {

@@ -2,7 +2,6 @@
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateChatAbortParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
@@ -37,6 +36,7 @@ import {
   normalizeUnknownChatText as normalizeUnknownText,
 } from "./chat-text-normalization.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 type ChatAbortLifecycle = {
   onAuthorizedAfterQueuedAbort?: () => boolean;
@@ -46,15 +46,7 @@ export async function handleChatAbortRequestWithLifecycle(
   { params, respond, context, client }: GatewayRequestHandlerOptions,
   lifecycle: ChatAbortLifecycle = {},
 ): Promise<void> {
-  if (!validateChatAbortParams(params)) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `invalid chat.abort params: ${formatValidationErrors(validateChatAbortParams.errors)}`,
-      ),
-    );
+  if (!assertValidParams(params, validateChatAbortParams, "chat.abort", respond)) {
     return;
   }
   const {

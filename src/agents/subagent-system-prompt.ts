@@ -63,7 +63,7 @@ export function buildSubagentSystemPrompt(params: {
     "## What You DON'T Do",
     `- No user conversation or pretending to be ${parentLabel}.`,
     "- No external message unless explicitly tasked to message specific recipient/channel.",
-    "- No cron/persistent state.",
+    "- No automations/persistent state.",
     `- Report via plain final text, never \`message\`.`,
     "",
   ];

@@ -36,6 +36,10 @@ function resolveDefaultHomeDir(): string {
   return resolveRequiredHomeDir(process.env, os.homedir);
 }
 
+function resolveSystemAccountHomeDir(): string {
+  return os.userInfo().homedir;
+}
+
 /** Build a homedir thunk that respects OPENCLAW_HOME for the given env. */
 function envHomedir(env: NodeJS.ProcessEnv): () => string {
   return () => resolveRequiredHomeDir(env, os.homedir);
@@ -91,6 +95,62 @@ export function resolveStateDir(
     return existingLegacy;
   }
   return newDir;
+}
+
+function normalizePathForComparison(candidate: string): string {
+  const resolved = path.resolve(candidate);
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    // Missing paths have no filesystem identity yet; exact resolution is the safe fallback.
+    return resolved;
+  }
+}
+
+/** Whether the process uses the default home-scoped state directory. */
+export function isDefaultStateDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = envHomedir(env),
+): boolean {
+  const override = env.OPENCLAW_STATE_DIR?.trim();
+  if (!override) {
+    // Preserve the default install path, including automatic legacy-state discovery.
+    return true;
+  }
+  const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
+  return (
+    normalizePathForComparison(resolveStateDir(env, effectiveHomedir)) ===
+    normalizePathForComparison(newStateDir(effectiveHomedir))
+  );
+}
+
+/** Whether host service management belongs to the active default install identity. */
+export function isDefaultInstallIdentity(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = resolveSystemAccountHomeDir,
+): boolean {
+  const accountHome = resolveRequiredHomeDir({}, homedir);
+  const accountHomedir = () => accountHome;
+  if (
+    normalizePathForComparison(resolveStateDir(env, envHomedir(env))) !==
+    normalizePathForComparison(newStateDir(accountHomedir))
+  ) {
+    return false;
+  }
+  if (!env.OPENCLAW_CONFIG_PATH?.trim()) {
+    return true;
+  }
+  const defaultConfigEnv = {
+    ...env,
+    HOME: accountHome,
+    OPENCLAW_HOME: undefined,
+    OPENCLAW_STATE_DIR: undefined,
+    OPENCLAW_CONFIG_PATH: undefined,
+  };
+  return (
+    normalizePathForComparison(resolveConfigPathCandidate(env, envHomedir(env))) ===
+    normalizePathForComparison(resolveConfigPathCandidate(defaultConfigEnv, accountHomedir))
+  );
 }
 
 export function normalizeStateDirEnv(env: NodeJS.ProcessEnv = process.env): void {

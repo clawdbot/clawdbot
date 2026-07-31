@@ -155,11 +155,8 @@ export {
   wrapProviderStreamFn,
 };
 
-function resetExternalAuthFallbackWarningCacheForTest(): void {}
-
 export const testing = {
   clearProviderRuntimePluginCacheForTest,
-  resetExternalAuthFallbackWarningCacheForTest,
 } as const;
 
 function resolveProviderPluginsForCatalogHooks(params: {

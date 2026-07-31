@@ -1,4 +1,4 @@
-// Self-learning (skills.workshop.autonomous.enabled) surface for the Workshop
+// Self-learning (skills.workshop.autonomous.mode) surface for the Workshop
 // tab: config read/patch plumbing plus the toggle, pitch, and error renderers.
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
@@ -16,12 +16,12 @@ export type SkillWorkshopSelfLearning = {
 
 const CONFIG_CHANGED_SINCE_LOAD = "config changed since last load";
 
-// Mirrors the gateway default for skills.workshop.autonomous.enabled: absent
-// config means self-learning is off. Snapshot sourceConfig/resolved are both
+// Mirrors the gateway default for skills.workshop.autonomous.mode: absent
+// config means automatic self-learning. Snapshot sourceConfig/resolved are both
 // $include-resolved (src/config/io.ts), so the editable read is display-safe.
 function isSelfLearningEnabled(config: Record<string, unknown>): boolean {
   const workshop = asRecord(asRecord(config.skills)?.workshop);
-  return asRecord(workshop?.autonomous)?.enabled === true;
+  return asRecord(workshop?.autonomous)?.mode !== "off";
 }
 
 export function resolveSelfLearning(
@@ -38,8 +38,9 @@ export async function setSelfLearningEnabled(
   runtimeConfig: RuntimeConfigCapability,
   enabled: boolean,
 ): Promise<string | null> {
+  const mode = enabled ? "auto" : "off";
   const patch = {
-    raw: { skills: { workshop: { autonomous: { enabled } } } },
+    raw: { skills: { workshop: { autonomous: { mode } } } },
     note: enabled ? "Enable Skill Workshop self-learning" : "Disable Skill Workshop self-learning",
   };
   let patched = await runtimeConfig.patch(patch);

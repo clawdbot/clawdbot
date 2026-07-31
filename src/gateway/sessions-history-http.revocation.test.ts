@@ -87,7 +87,7 @@ vi.mock("./session-utils.js", () => ({
     agentId: "main",
     store: {},
   }),
-  resolveFreshestSessionEntryFromStoreKeys: () => ({
+  resolveCanonicalSessionEntryFromStoreKeys: () => ({
     sessionId: "session-1",
     sessionFile: "/tmp/session-1.jsonl",
   }),
@@ -117,6 +117,7 @@ vi.mock("./session-history-state.js", () => ({
   SessionHistorySseState: {
     fromRawSnapshot: (_params: unknown) => ({
       snapshot: () => ({ items: [], nextCursor: null, messages: [] }),
+      retainRecentMessages: () => ({ items: [], nextCursor: null, messages: [] }),
       appendInlineMessage: ({ message, messageId }: { message: unknown; messageId?: string }) => ({
         message,
         messageSeq: 1,

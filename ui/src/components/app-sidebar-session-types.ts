@@ -93,7 +93,7 @@ export type SidebarRecentSession = {
   agentStatusNote?: string;
   observerDigest?: Pick<
     SessionObserverDigest,
-    "runId" | "headline" | "health" | "updatedAt" | "revision"
+    "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   >;
   spawnedBy?: string;
   status?: SessionRunStatus;

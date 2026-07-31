@@ -2,6 +2,8 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { isModelsStatusJsonOutput } from "./models-output-mode.js";
+import { setCommandJsonMode } from "./program/json-mode.js";
 
 type ModelsCliRuntime = typeof import("./models-cli.runtime.js");
 
@@ -48,6 +50,7 @@ export function registerModelsCli(program: Command) {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/models", "docs.openclaw.ai/cli/models")}\n`,
     );
+  setCommandJsonMode(models, "output", ({ argv }) => isModelsStatusJsonOutput(argv));
 
   models
     .command("list")
@@ -350,6 +353,27 @@ export function registerModelsCli(program: Command) {
         const agent = resolveModelAgentOption(command) ?? resolveModelAgentOption(auth);
         const { modelsAuthAddCommand } = await loadModelsAuthCommands();
         await modelsAuthAddCommand({ agent }, defaultRuntime);
+      });
+    });
+
+  auth
+    .command("logout")
+    .description("Remove a saved auth profile (see `models auth list` for ids)")
+    .argument("<profileId>", "Auth profile id (e.g. openai:manual)")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
+    .option("--yes", "Skip the confirmation prompt", false)
+    .action(async (profileId: string, opts, command) => {
+      await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
+        const agent = resolveModelAgentOption(command, opts);
+        const { modelsAuthLogoutCommand } = await import("../commands/models/auth-logout.js");
+        await modelsAuthLogoutCommand(
+          {
+            profileId,
+            agent,
+            yes: Boolean(opts.yes),
+          },
+          defaultRuntime,
+        );
       });
     });
 

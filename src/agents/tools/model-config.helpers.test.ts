@@ -20,8 +20,20 @@ vi.mock("../auth-profiles/external-cli-sync.js", () => ({
 const authMocks = vi.hoisted(() => ({ resolveEnvApiKey: vi.fn() }));
 
 vi.mock("../model-auth.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return { ...actual, resolveEnvApiKey: authMocks.resolveEnvApiKey };
+  const actual = await importOriginal<typeof import("../model-auth.js")>();
+  return {
+    ...actual,
+    resolveEnvApiKey: authMocks.resolveEnvApiKey,
+    hasRuntimeAvailableProviderAuth: (
+      params: Parameters<typeof actual.hasRuntimeAvailableProviderAuth>[0],
+    ) => {
+      const envAuth = authMocks.resolveEnvApiKey(params.provider, params.env, {
+        config: params.cfg,
+        workspaceDir: params.workspaceDir,
+      });
+      return Boolean(envAuth?.apiKey) || actual.hasRuntimeAvailableProviderAuth(params);
+    },
+  };
 });
 
 const AGENT_DIR = "/tmp/openclaw-model-config-helper";
@@ -177,7 +189,20 @@ describe("hasProviderAuthForTool", () => {
   });
 
   it("rejects providers without config, env, or profile auth", () => {
-    expect(hasProviderAuthForTool({ provider: "unconfigured-provider" })).toBe(false);
+    expect(
+      hasProviderAuthForTool({
+        provider: "unconfigured-provider",
+        runtimeLookup: {
+          envApiKey: {
+            aliasMap: {},
+            candidateMap: {},
+            authEvidenceMap: {},
+            skipSetupProviderFallback: true,
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(authMocks.resolveEnvApiKey).toHaveBeenCalledTimes(1);
   });
 });
 

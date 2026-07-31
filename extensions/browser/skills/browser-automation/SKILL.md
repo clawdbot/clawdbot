@@ -34,7 +34,8 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
    - Use `labels=true` on snapshot or screenshot when visual position matters. On Playwright-backed profiles, the response includes an `annotations` array (`{ref, number, role, name?, box}`) with each ref's bounding box in the captured image's coordinate space, so you can reason about position without re-snapshotting; screenshot labels can also combine with `fullPage=true` (CLI: `--full-page`) to label the whole document, or `ref` / `element` to clip to one element. `profile="user"` and other existing-session (chrome-mcp) profiles render an overlay into page screenshots but do not attach `annotations` or use the Playwright full-page/ref/element projection helper, so read positions from the labeled image itself on those profiles. The raw-CDP fallback (no Playwright) does not support labeled screenshots at all and returns a 501, so only request `labels` when Playwright is available.
 4. Act narrowly:
    - Prefer `action="act"` with a ref from the latest snapshot.
-   - After navigation, modal changes, or form submission, snapshot again before the next action.
+   - `navigate` returns the loaded page's compact snapshot inline, and batch `act` results that report a cross-document navigation include fresh page state; use those refs directly instead of a follow-up snapshot call.
+   - After a single act that triggers navigation, and after modal changes or form submissions, snapshot again before the next action.
    - Avoid blind waits. Wait for visible UI state when possible.
 5. Report real blockers:
    - If the page needs login, permission, captcha, 2FA, camera/microphone approval, or another manual step, stop and tell the user exactly what is needed.

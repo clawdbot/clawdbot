@@ -7,7 +7,6 @@
 export * from "./session-history.js";
 export type {
   BranchSessionFromCompactionCheckpointParams,
-  CanonicalizeSessionEntryAliasesResult,
   DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
   DeletedAgentSessionEntryPurgeParams,
@@ -120,9 +119,15 @@ export type {
   UpdateSessionLastRouteParams,
 } from "./session-accessor.entry-mutation.js";
 export {
+  copySessionOwnedStateForCanonicalRepair,
+  listSessionGenerationIdsForCanonicalRepair,
   clearPluginOwnedSessionState,
+  listSessionChildEntriesReadOnly,
   listSessionEntries,
   listSessionEntriesReadOnly,
+  listSessionEntriesForCanonicalRepair,
+  rehomeSessionDeliveryReferencesForCanonicalRepair,
+  rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
   listSessionEntryKeysReadOnly,
   loadExactSessionEntry,
   loadExactSessionEntryReadOnly,
@@ -142,7 +147,6 @@ export {
   upsertSessionEntry,
 } from "./session-accessor.entry.js";
 export {
-  canonicalizeSessionEntryAliases,
   createSessionEntryWithTranscript,
   forkSessionEntryFromParentTarget,
   forkSessionFromParentTranscript,
@@ -191,6 +195,8 @@ export {
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
+  loadTranscriptHeaderSync,
+  loadTranscriptTailEventsSync,
   preflightSessionTranscriptForManualCompact,
   publishTranscriptUpdate,
   readLatestTranscriptAssistantText,
@@ -199,14 +205,21 @@ export {
   readTranscriptStatsSync,
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
+  rewriteTranscriptEventRowsExact,
   resolveTranscriptSessionKeyBySessionId,
   trimSessionTranscriptForManualCompact,
   withTranscriptWriteLock,
   withTranscriptWriteTransaction,
 } from "./session-accessor.transcript.js";
-export { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
+export {
+  appendTranscriptMessages,
+  persistSessionTranscriptTurn,
+} from "./session-accessor.transcript-turn.js";
 export {
   isSessionTranscriptProjectionUnavailableError,
+  readRecentSessionTranscriptActiveEvents,
+  readSessionTranscriptActiveStats,
+  readSessionTranscriptBoundedMessageTailPage,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActiveLeafEvents,
   readSessionTranscriptMessageAnchorPage,
@@ -216,13 +229,20 @@ export {
   readSessionTranscriptMessageEvents,
   readSessionTranscriptVisibleMessageDelta,
   SessionTranscriptProjectionUnavailableError,
+  waitForSessionTranscriptProjection,
 } from "./session-accessor.sqlite-active-events.js";
 export type {
+  SessionTranscriptBoundedMessageTailPage,
   SessionTranscriptMessageAnchorPage,
   SessionTranscriptMessageEvent,
   SessionTranscriptMessageEventPage,
 } from "./session-accessor.sqlite-active-events.js";
 export {
+  readSessionTranscriptWatermark,
+  type SessionTranscriptWatermark,
+} from "./session-accessor.sqlite-transcript-watermark.js";
+export {
+  resolveConcreteSessionStorePath,
   resolveSessionTranscriptReadTarget,
   resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,

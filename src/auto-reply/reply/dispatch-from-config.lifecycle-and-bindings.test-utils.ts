@@ -723,8 +723,29 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
-  it("routes plugin-owned bindings to the owning plugin before generic inbound claim broadcast", async () => {
+  it("resolves one matching inbound claim pair for a plugin-owned binding", async () => {
     setNoAbort();
+    let resolveCalls = 0;
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "discord" }),
+            messaging: {
+              resolveInboundConversation: () => {
+                resolveCalls += 1;
+                return {
+                  conversationId: `conversation-${resolveCalls}`,
+                  parentConversationId: `parent-${resolveCalls}`,
+                };
+              },
+            },
+          },
+        },
+      ]),
+    );
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) =>
         hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
@@ -793,20 +814,24 @@ describe("dispatchReplyFromConfig", () => {
             channel?: unknown;
             content?: unknown;
             conversationId?: unknown;
+            parentConversationId?: unknown;
             senderIsOwner?: unknown;
           },
           {
             accountId?: unknown;
             channelId?: unknown;
             conversationId?: unknown;
-            pluginBinding?: { data?: Record<string, unknown> };
+            parentConversationId?: unknown;
+            pluginBinding?: { bindingId?: string; data?: Record<string, unknown> };
           },
         ]
       | undefined;
+    expect(resolveCalls).toBe(1);
     expect(inboundClaimCall?.[0]).toBe("openclaw-codex-app-server");
     expect(inboundClaimCall?.[1]?.channel).toBe("discord");
     expect(inboundClaimCall?.[1]?.accountId).toBe("default");
-    expect(inboundClaimCall?.[1]?.conversationId).toBe("channel:1481858418548412579");
+    expect(inboundClaimCall?.[1]?.conversationId).toBe("conversation-1");
+    expect(inboundClaimCall?.[1]?.parentConversationId).toBe("parent-1");
     expect(inboundClaimCall?.[1]?.content).toBe("who are you");
     // Context OwnerAllowFrom authorizes commands but no longer grants owner status;
     // only commands.ownerAllowFrom or operator.admin does (operator.write here does not).
@@ -814,10 +839,97 @@ describe("dispatchReplyFromConfig", () => {
     expect(inboundClaimCall?.[1]).not.toHaveProperty("gatewayClientScopes");
     expect(inboundClaimCall?.[2]?.channelId).toBe("discord");
     expect(inboundClaimCall?.[2]?.accountId).toBe("default");
-    expect(inboundClaimCall?.[2]?.conversationId).toBe("channel:1481858418548412579");
+    expect(inboundClaimCall?.[2]?.conversationId).toBe(inboundClaimCall?.[1]?.conversationId);
+    expect(inboundClaimCall?.[2]?.parentConversationId).toBe(
+      inboundClaimCall?.[1]?.parentConversationId,
+    );
+    expect(inboundClaimCall?.[2]?.pluginBinding?.bindingId).toBe("binding-1");
     expect(inboundClaimCall?.[2]?.pluginBinding?.data?.kind).toBe("codex-app-server-session");
     expect(inboundClaimCall?.[2]?.pluginBinding?.data?.sessionFile).toBe("/tmp/session.jsonl");
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
+  });
+
+  it("preserves explicit inbound claim rejection for a plugin-owned binding", async () => {
+    setNoAbort();
+    const resolveInboundConversation = vi.fn(() => null);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "discord" }),
+            messaging: { resolveInboundConversation },
+          },
+        },
+      ]),
+    );
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "inbound_claim") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "test-plugin", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true },
+    });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-null-rejection",
+      targetSessionKey: "plugin-binding:test:null-rejection",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:null-rejection",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "test-plugin",
+        pluginRoot: "/plugins/test-plugin",
+      },
+    } satisfies SessionBindingRecord);
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "discord:channel:null-rejection",
+      To: "discord:channel:null-rejection",
+      AccountId: "default",
+      Body: "keep the rejection",
+      MessageSid: "msg-claim-null-rejection",
+      SessionKey: "agent:main:discord:channel:null-rejection",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(resolveInboundConversation).toHaveBeenCalledTimes(1);
+    const [, event, context] = firstMockCall(
+      hookMocks.runner.runInboundClaimForPluginOutcome,
+      "targeted inbound claim",
+    ) as [
+      string,
+      { conversationId?: string; parentConversationId?: string },
+      {
+        conversationId?: string;
+        parentConversationId?: string;
+        pluginBinding?: { bindingId?: string };
+      },
+    ];
+    expect(event.conversationId).toBeUndefined();
+    expect(event.parentConversationId).toBeUndefined();
+    expect(context.conversationId).toBeUndefined();
+    expect(context.parentConversationId).toBeUndefined();
+    expect(context.pluginBinding?.bindingId).toBe("binding-null-rejection");
     expect(replyResolver).not.toHaveBeenCalled();
   });
 
@@ -1276,10 +1388,12 @@ describe("dispatchReplyFromConfig", () => {
     const sessionKey = "agent:main:discord:channel:interrupted-fallback";
     const sessionId = "interrupted-fallback-session";
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
-    let resolveNotice: ((result: { ok: true; messageId: string }) => void) | undefined;
+    let resolveNotice:
+      | ((result: { ok: true; delivered: true; messageId: string }) => void)
+      | undefined;
     mocks.routeReply.mockImplementationOnce(
       async () =>
-        await new Promise<{ ok: true; messageId: string }>((resolve) => {
+        await new Promise<{ ok: true; delivered: true; messageId: string }>((resolve) => {
           resolveNotice = resolve;
         }),
     );
@@ -1329,7 +1443,7 @@ describe("dispatchReplyFromConfig", () => {
     });
     expect(mutationRan).toBe(false);
 
-    resolveNotice?.({ ok: true, messageId: "fallback-notice" });
+    resolveNotice?.({ ok: true, delivered: true, messageId: "fallback-notice" });
     const result = await dispatch;
     await mutation;
 

@@ -727,168 +727,93 @@ describe("config observe recovery", () => {
     });
   });
 
-  it("records writeFile failure instead of falsely claiming restore succeeded", async () => {
+  it.each([
+    {
+      name: "records writeFile failure instead of falsely claiming restore succeeded",
+      mode: "async",
+      retry: false,
+    },
+    {
+      name: "sync recovery records writeFileSync failure instead of falsely claiming restore succeeded",
+      mode: "sync",
+      retry: false,
+    },
+    {
+      name: "retries recovery on next launch after a failed writeFile restore",
+      mode: "async",
+      retry: true,
+    },
+    {
+      name: "sync recovery retries on next launch after a failed writeFileSync restore",
+      mode: "sync",
+      retry: true,
+    },
+  ] as const)("$name", async ({ mode, retry }) => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath, warn } = makeDeps(home);
       await seedConfigBackup(configPath, recoverableTelegramConfig);
       const clobbered = await writeClobberedUpdateChannel(configPath);
-
       const copyError = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
-      const writeFile = deps.fs.promises.writeFile.bind(deps.fs.promises);
-      const failingFs: ObserveRecoveryDeps["fs"] = {
-        ...deps.fs,
-        promises: {
-          ...deps.fs.promises,
-          writeFile: (target, data, options) =>
-            target === configPath ? Promise.reject(copyError) : writeFile(target, data, options),
-        },
+      const failingFs: ObserveRecoveryDeps["fs"] =
+        mode === "async"
+          ? {
+              ...deps.fs,
+              promises: {
+                ...deps.fs.promises,
+                writeFile: (target, data, options) =>
+                  target === configPath
+                    ? Promise.reject(copyError)
+                    : deps.fs.promises.writeFile(target, data, options),
+              },
+            }
+          : {
+              ...deps.fs,
+              writeFileSync: (target, data, options) => {
+                if (target === configPath) {
+                  throw copyError;
+                }
+                return deps.fs.writeFileSync(target, data, options);
+              },
+            };
+      const recover = (recoveryDeps: ObserveRecoveryDeps) => {
+        const input = { deps: recoveryDeps, configPath, ...clobbered };
+        return mode === "async"
+          ? maybeRecoverSuspiciousConfigRead(input)
+          : maybeRecoverSuspiciousConfigReadSync(input);
       };
-      const recovered = await maybeRecoverSuspiciousConfigRead({
-        deps: { ...deps, fs: failingFs },
-        configPath,
-        raw: clobbered.raw,
-        parsed: clobbered.parsed,
-      });
+      const recovered = await recover({ ...deps, fs: failingFs });
 
       expect((recovered.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
       await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
       expectWarnContaining(warn, "Config auto-restore from backup failed:");
       expectWarnNotContaining(warn, "Config auto-restored from backup:");
+      if (mode === "sync" && !retry) {
+        expectWarnContaining(warn, "EACCES: permission denied");
+      }
 
-      const observe = await readLastObserveEvent(auditPath);
-      expect(observe?.restoredFromBackup).toBe(false);
-      expect(observe?.valid).toBe(false);
-      expect(observe?.restoreErrorCode).toBe("EACCES");
-      expect(observe?.restoreErrorMessage).toBe("EACCES: permission denied");
-    });
-  });
-
-  it("sync recovery records writeFileSync failure instead of falsely claiming restore succeeded", async () => {
-    await withSuiteHome(async (home) => {
-      const { deps, configPath, auditPath, warn } = makeDeps(home);
-      await seedConfigBackup(configPath, recoverableTelegramConfig);
-      const clobbered = await writeClobberedUpdateChannel(configPath);
-
-      const copyError = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
-      const writeFileSync = deps.fs.writeFileSync.bind(deps.fs);
-      const failingFs: ObserveRecoveryDeps["fs"] = {
-        ...deps.fs,
-        writeFileSync: (target, data, options) => {
-          if (target === configPath) {
-            throw copyError;
-          }
-          return writeFileSync(target, data, options);
-        },
-      };
-      const recovered = maybeRecoverSuspiciousConfigReadSync({
-        deps: { ...deps, fs: failingFs },
-        configPath,
-        raw: clobbered.raw,
-        parsed: clobbered.parsed,
-      });
-
-      expect((recovered.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
-      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
-      expectWarnContaining(warn, "Config auto-restore from backup failed:");
-      expectWarnContaining(warn, "EACCES: permission denied");
-      expectWarnNotContaining(warn, "Config auto-restored from backup:");
-
-      const observe = await readLastObserveEvent(auditPath);
-      expect(observe?.restoredFromBackup).toBe(false);
-      expect(observe?.valid).toBe(false);
-      expect(observe?.restoreErrorCode).toBe("EACCES");
-      expect(observe?.restoreErrorMessage).toBe("EACCES: permission denied");
-    });
-  });
-
-  it("retries recovery on next launch after a failed writeFile restore", async () => {
-    await withSuiteHome(async (home) => {
-      const { deps, configPath, auditPath, warn } = makeDeps(home);
-      await seedConfigBackup(configPath, recoverableTelegramConfig);
-      const clobbered = await writeClobberedUpdateChannel(configPath);
-
-      const copyError = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
-      const writeFile = deps.fs.promises.writeFile.bind(deps.fs.promises);
-      const failingFs: ObserveRecoveryDeps["fs"] = {
-        ...deps.fs,
-        promises: {
-          ...deps.fs.promises,
-          writeFile: (target, data, options) =>
-            target === configPath ? Promise.reject(copyError) : writeFile(target, data, options),
-        },
-      };
-      await maybeRecoverSuspiciousConfigRead({
-        deps: { ...deps, fs: failingFs },
-        configPath,
-        raw: clobbered.raw,
-        parsed: clobbered.parsed,
-      });
-
-      expectWarnContaining(warn, "Config auto-restore from backup failed:");
       const firstEvents = await readObserveEvents(auditPath);
       expect(firstEvents).toHaveLength(1);
-      expect(firstEvents[0]?.restoredFromBackup).toBe(false);
-
-      const retryResult = await maybeRecoverSuspiciousConfigRead({
-        deps,
-        configPath,
-        raw: clobbered.raw,
-        parsed: clobbered.parsed,
+      expect(firstEvents[0]).toMatchObject({
+        restoredFromBackup: false,
+        valid: false,
+        restoreErrorCode: "EACCES",
+        restoreErrorMessage: "EACCES: permission denied",
       });
-
-      expect((retryResult.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
-      await expect(fsp.readFile(configPath, "utf-8")).resolves.not.toBe(clobbered.raw);
-      const retryEvents = await readObserveEvents(auditPath);
-      expect(retryEvents).toHaveLength(2);
-      expect(retryEvents[1]?.restoredFromBackup).toBe(true);
+      if (retry) {
+        const retryResult = await recover(deps);
+        expect((retryResult.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
+        await expect(fsp.readFile(configPath, "utf-8")).resolves.not.toBe(clobbered.raw);
+        const retryEvents = await readObserveEvents(auditPath);
+        expect(retryEvents).toHaveLength(2);
+        expect(retryEvents[1]?.restoredFromBackup).toBe(true);
+      }
     });
   });
 
-  it("sync recovery retries on next launch after a failed writeFileSync restore", async () => {
-    await withSuiteHome(async (home) => {
-      const { deps, configPath, auditPath, warn } = makeDeps(home);
-      await seedConfigBackup(configPath, recoverableTelegramConfig);
-      const clobbered = await writeClobberedUpdateChannel(configPath);
-
-      const copyError = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
-      const writeFileSync = deps.fs.writeFileSync.bind(deps.fs);
-      const failingFs: ObserveRecoveryDeps["fs"] = {
-        ...deps.fs,
-        writeFileSync: (target, data, options) => {
-          if (target === configPath) {
-            throw copyError;
-          }
-          return writeFileSync(target, data, options);
-        },
-      };
-      maybeRecoverSuspiciousConfigReadSync({
-        deps: { ...deps, fs: failingFs },
-        configPath,
-        raw: clobbered.raw,
-        parsed: clobbered.parsed,
-      });
-
-      expectWarnContaining(warn, "Config auto-restore from backup failed:");
-      const firstEvents = await readObserveEvents(auditPath);
-      expect(firstEvents).toHaveLength(1);
-      expect(firstEvents[0]?.restoredFromBackup).toBe(false);
-
-      const retryResult = maybeRecoverSuspiciousConfigReadSync({
-        deps,
-        configPath,
-        raw: clobbered.raw,
-        parsed: clobbered.parsed,
-      });
-
-      expect((retryResult.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
-      await expect(fsp.readFile(configPath, "utf-8")).resolves.not.toBe(clobbered.raw);
-      const retryEvents = await readObserveEvents(auditPath);
-      expect(retryEvents).toHaveLength(2);
-      expect(retryEvents[1]?.restoredFromBackup).toBe(true);
-    });
-  });
-
-  it("restores the exact async backup bytes approved by validation", async () => {
+  it.each([
+    { name: "restores the exact async backup bytes approved by validation", mode: "async" },
+    { name: "restores the exact sync backup bytes approved by validation", mode: "sync" },
+  ] as const)("$name", async ({ mode }) => {
     await withSuiteHome(async (home) => {
       const { deps, configPath } = makeDeps(home);
       await seedConfigBackup(configPath, recoverableTelegramConfig);
@@ -896,43 +821,25 @@ describe("config observe recovery", () => {
       const approvedRaw = await fsp.readFile(backupPath, "utf-8");
       const replacementRaw = `${JSON.stringify({ gateway: { mode: "remote" } }, null, 2)}\n`;
       const clobbered = await writeClobberedUpdateChannel(configPath);
+      const input = { deps, configPath, ...clobbered };
 
-      await maybeRecoverSuspiciousConfigRead({
-        deps,
-        configPath,
-        raw: clobbered.raw,
-        parsed: clobbered.parsed,
-        validateBackup: async () => {
-          await fsp.writeFile(backupPath, replacementRaw, "utf-8");
-          return true;
-        },
-      });
-
-      await expect(fsp.readFile(backupPath, "utf-8")).resolves.toBe(replacementRaw);
-      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(approvedRaw);
-    });
-  });
-
-  it("restores the exact sync backup bytes approved by validation", async () => {
-    await withSuiteHome(async (home) => {
-      const { deps, configPath } = makeDeps(home);
-      await seedConfigBackup(configPath, recoverableTelegramConfig);
-      const backupPath = `${configPath}.bak`;
-      const approvedRaw = await fsp.readFile(backupPath, "utf-8");
-      const replacementRaw = `${JSON.stringify({ gateway: { mode: "remote" } }, null, 2)}\n`;
-      const clobbered = await writeClobberedUpdateChannel(configPath);
-
-      maybeRecoverSuspiciousConfigReadSync({
-        deps,
-        configPath,
-        raw: clobbered.raw,
-        parsed: clobbered.parsed,
-        validateBackupSync: () => {
-          fs.writeFileSync(backupPath, replacementRaw, "utf-8");
-          return true;
-        },
-      });
-
+      if (mode === "async") {
+        await maybeRecoverSuspiciousConfigRead({
+          ...input,
+          validateBackup: async () => {
+            await fsp.writeFile(backupPath, replacementRaw, "utf-8");
+            return true;
+          },
+        });
+      } else {
+        maybeRecoverSuspiciousConfigReadSync({
+          ...input,
+          validateBackupSync: () => {
+            fs.writeFileSync(backupPath, replacementRaw, "utf-8");
+            return true;
+          },
+        });
+      }
       await expect(fsp.readFile(backupPath, "utf-8")).resolves.toBe(replacementRaw);
       await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(approvedRaw);
     });
@@ -1166,30 +1073,19 @@ describe("config observe recovery", () => {
     });
   });
 
-  it("does not restore stale last-known-good for plugin schema evolution issues", async () => {
-    await withSuiteHome(async (home) => {
-      const { deps, configPath, warn } = makeDeps(home);
-      const staleSnapshot = await makeSnapshot(configPath, {
+  it.each([
+    {
+      name: "does not restore stale last-known-good for plugin schema evolution issues",
+      staleConfig: {
         gateway: { mode: "local" },
         agents: { defaults: { model: "sonnet-4.6" } },
         plugins: {
           entries: {
-            "lossless-claw": {
-              enabled: true,
-              config: { compactionMode: "legacy" },
-            },
+            "lossless-claw": { enabled: true, config: { compactionMode: "legacy" } },
           },
         },
-      });
-      await expect(
-        promoteConfigSnapshotToLastKnownGood({
-          deps,
-          snapshot: staleSnapshot,
-          logger: deps.logger,
-        }),
-      ).resolves.toBe(true);
-
-      const activeConfig = {
+      },
+      activeConfig: {
         gateway: { mode: "local" },
         agents: { defaults: { model: "gpt-5.4" } },
         plugins: {
@@ -1200,51 +1096,19 @@ describe("config observe recovery", () => {
             },
           },
         },
-      };
-      const active = await writeConfigRaw(configPath, activeConfig);
-      const restored = await recoverConfigFromLastKnownGood({
-        deps,
-        snapshot: {
-          ...staleSnapshot,
-          raw: active.raw,
-          parsed: active.parsed,
-          valid: false,
-          issues: [
-            {
-              path: "plugins.entries.lossless-claw.config.cacheAwareCompaction",
-              message: "invalid config: must NOT have additional properties",
-            },
-          ],
-        },
-        reason: "reload-invalid-config",
-      });
-
-      expect(restored).toBe(false);
-      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(active.raw);
-      expectWarnContaining(warn, "Config last-known-good recovery skipped");
-    });
-  });
-
-  it("does not restore stale last-known-good for plugin minHostVersion skew issues", async () => {
-    await withSuiteHome(async (home) => {
-      const { deps, configPath } = makeDeps(home);
-      const staleSnapshot = await makeSnapshot(configPath, {
+      },
+      issue: {
+        path: "plugins.entries.lossless-claw.config.cacheAwareCompaction",
+        message: "invalid config: must NOT have additional properties",
+      },
+    },
+    {
+      name: "does not restore stale last-known-good for plugin minHostVersion skew issues",
+      staleConfig: {
         gateway: { mode: "local" },
-        plugins: {
-          entries: {
-            feishu: { enabled: false },
-          },
-        },
-      });
-      await expect(
-        promoteConfigSnapshotToLastKnownGood({
-          deps,
-          snapshot: staleSnapshot,
-          logger: deps.logger,
-        }),
-      ).resolves.toBe(true);
-
-      const activeConfig = {
+        plugins: { entries: { feishu: { enabled: false } } },
+      },
+      activeConfig: {
         gateway: { mode: "local" },
         agents: { defaults: { model: "gpt-5.4" } },
         plugins: {
@@ -1253,29 +1117,37 @@ describe("config observe recovery", () => {
             whatsapp: { enabled: true, config: { account: "primary" } },
           },
         },
-      };
+      },
+      issue: {
+        path: "plugins.entries.feishu",
+        message:
+          "plugin feishu: plugin requires OpenClaw >=2026.4.23, but this host is 2026.4.22; skipping load",
+      },
+    },
+  ])("$name", async ({ staleConfig, activeConfig, issue }) => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, warn } = makeDeps(home);
+      const staleSnapshot = await makeSnapshot(configPath, staleConfig);
+      await expect(
+        promoteConfigSnapshotToLastKnownGood({
+          deps,
+          snapshot: staleSnapshot,
+          logger: deps.logger,
+        }),
+      ).resolves.toBe(true);
       const active = await writeConfigRaw(configPath, activeConfig);
       const restored = await recoverConfigFromLastKnownGood({
         deps,
-        snapshot: {
-          ...staleSnapshot,
-          raw: active.raw,
-          parsed: active.parsed,
-          valid: false,
-          issues: [
-            {
-              path: "plugins.entries.feishu",
-              message:
-                "plugin feishu: plugin requires OpenClaw >=2026.4.23, but this host is 2026.4.22; skipping load",
-            },
-          ],
-        },
+        snapshot: { ...staleSnapshot, ...active, valid: false, issues: [issue] },
         reason: "reload-invalid-config",
       });
 
       expect(restored).toBe(false);
       await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(active.raw);
       expect(JSON5.parse(active.raw)).toEqual(activeConfig);
+      if (issue.path.includes("lossless-claw")) {
+        expectWarnContaining(warn, "Config last-known-good recovery skipped");
+      }
     });
   });
 

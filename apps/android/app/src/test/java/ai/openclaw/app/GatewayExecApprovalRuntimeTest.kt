@@ -6,6 +6,7 @@ import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.i18n.verbatimText
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -216,6 +217,29 @@ class GatewayExecApprovalRuntimeTest {
 
       assertTrue(runtime.execApprovals.value.isEmpty())
       assertEquals("A prior response already denied this approval.", runtime.execApprovalsNotice.value?.message)
+    }
+
+  @Test
+  fun cancelledApprovalRefreshPreservesOwnerStateWithoutPublishingFailure() =
+    runBlocking {
+      val runtime = createTestRuntime()
+      seedConnectedRuntime(runtime, unifiedMethods)
+      seedApproval(runtime)
+      val requestStarted = CompletableDeferred<Unit>()
+      runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+        check(method == "exec.approval.list")
+        requestStarted.complete(Unit)
+        throw CancellationException("approval gateway generation retired")
+      }
+
+      runtime.refreshExecApprovals()
+      withTimeout(2_000) { requestStarted.await() }
+      waitUntil { !runtime.execApprovalsRefreshing.value }
+
+      val retainedApproval = runtime.execApprovals.value.single()
+      assertNull(runtime.execApprovalsErrorText.value)
+      assertEquals("approval-1", retainedApproval.id)
+      assertNull(retainedApproval.errorText)
     }
 
   @Test

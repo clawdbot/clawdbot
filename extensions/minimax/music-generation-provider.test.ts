@@ -158,6 +158,35 @@ describe("minimax music generation provider", () => {
     expect(result.metadata).not.toHaveProperty("requestedDurationSeconds");
   });
 
+  it.each([
+    {
+      name: "streamed",
+      contentType: "text/event-stream",
+      body: `data: ${JSON.stringify({ data: { status: 1, audio: "ZE==" }, base_resp: { status_code: 0 } })}\n\n`,
+    },
+    {
+      name: "inline",
+      contentType: "application/json",
+      body: JSON.stringify({ data: { audio: "ZE==" }, base_resp: { status_code: 0 } }),
+    },
+  ])("rejects $name audio outside MiniMax's documented hex format", async (fixture) => {
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(fixture.body, {
+        headers: { "content-type": fixture.contentType },
+      }),
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      buildMinimaxMusicGenerationProvider().generateMusic({
+        provider: "minimax",
+        model: "",
+        prompt: "short track",
+        cfg: {},
+      }),
+    ).rejects.toThrow("MiniMax music generation returned malformed hex audio");
+  });
+
   it("reports streaming music task failures", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: new Response(

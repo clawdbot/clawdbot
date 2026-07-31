@@ -11,10 +11,12 @@
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Диктовать"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"В прямом эфире"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ветка"</string>
+    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Открыть ветку"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← Проведите пальцем →"</string>
     <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Удерживайте"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Коснитесь"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Двойное нажатие"</string>
+    <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Показать новые сообщения"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Запустите Live, чтобы увидеть здесь переписку."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Новое"</string>
     <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Введите текст"</string>

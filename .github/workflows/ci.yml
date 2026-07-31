@@ -1397,6 +1397,50 @@ jobs:
             pnpm --dir ui test --maxWorkers 3
           fi
 
+  checks-ui-e2e:
+    permissions:
+      contents: read
+    name: checks-ui-e2e (${{ matrix.shard }}/4)
+    needs: [preflight]
+    # Compatibility targets pin a frozen Control UI whose e2e expectations track
+    # that release, not current main.
+    if: needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'
+    # Chromium, Vite, and the Vitest coordinator share this runner even though
+    # files are serial. Four-vCPU runners let host-side CDP polling starve while
+    # the browser kept making progress, producing rotating timeout failures.
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    # Keep Chromium ownership serial within each independently required shard.
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          install-bun: "false"
+          # Fork PRs must never read or write repository-global sticky snapshots.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+
+      - name: Install Playwright Chromium
+        run: node scripts/ensure-playwright-chromium.mjs
+
+      - name: Test Control UI end-to-end
+        run: >-
+          node scripts/run-vitest.mjs run
+          --config test/vitest/vitest.ui-e2e.config.ts
+          --configLoader runner
+          --shard ${{ matrix.shard }}/4
+
+      - name: Test browser copilot end-to-end
+        if: matrix.shard == 1
+        run: pnpm test:e2e:browser-copilot
+
   control-ui-i18n:
     permissions:
       contents: read
@@ -1405,6 +1449,8 @@ jobs:
     if: needs.preflight.outputs.run_control_ui_i18n == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 10
+    env:
+      COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -1417,6 +1463,17 @@ jobs:
           # repository-global state and must never be produced by fork code.
           sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+
+      - name: Verify Control UI i18n source
+        run: |
+          if node -e 'process.exit(require("./package.json").scripts?.["ui:i18n:verify"] ? 0 : 1)'; then
+            pnpm ui:i18n:verify
+          elif [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
+            echo "Skipping ui:i18n:verify: unavailable on the selected compatibility target." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ui:i18n:verify is required for non-compatibility targets." >&2
+            exit 1
+          fi
 
       - name: Check Control UI locale parity
         # Source-only drift stays advisory because the post-merge bot owns
@@ -1736,7 +1793,6 @@ jobs:
             const compatibilityScenarioIds = new Set([
               "control-ui-chat-flow-playwright",
               "system-agent-ring-zero-setup",
-              "dreaming-shadow-trial-report",
               "gateway-smoke",
               "group-visible-reply-tool",
               "long-running-release-audit",
@@ -2008,11 +2064,24 @@ jobs:
           echo "detected cores=$cores plan_concurrency=${SHARD_PLAN_CONCURRENCY:-default} -> workers=$workers"
           echo "OPENCLAW_VITEST_MAX_WORKERS=$workers" >> "$GITHUB_ENV"
 
+      - name: Checkout trusted Node shard runner
+        # Frozen release targets can predate the workflow-owned shard runner.
+        # Keep its implementation pinned to this workflow revision, while tests
+        # continue to run against the checked-out candidate.
+        if: ${{ hashFiles('scripts/ci-run-node-test-shard.mjs') == '' }}
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-workflow
+          sparse-checkout: |
+            scripts/ci-run-node-test-shard.mjs
+            scripts/lib/direct-run.mjs
+            scripts/lib/local-heavy-check-runtime.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Run Node test shard
-        # actionlint 1.7.11 lacks GitHub's current job.workflow_* fields. Serialize the
-        # non-secret job context, then validate the defining workflow identity below.
         env:
-          JOB_CONTEXT_JSON: ${{ toJSON(job) }}
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ toJson(matrix.groups || null) }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
@@ -2020,10 +2089,11 @@ jobs:
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_NODE_TEST_TARGETS_JSON: ${{ toJson(matrix.targets) }}
           # Frozen targets can carry integration hooks whose cold setup exceeds
-          # the current 120-second default on shared release runners.
-          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ${{ needs.preflight.outputs.compatibility_target == 'true' && '["--hookTimeout=300000"]' || '[]' }}
+          # the current defaults on shared release runners. Keep the no-output
+          # watchdog above Vitest so it cannot preempt hook diagnostics.
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ${{ needs.preflight.outputs.compatibility_target == 'true' && '["--hookTimeout=600000"]' || '[]' }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
-          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: ${{ needs.preflight.outputs.compatibility_target == 'true' && '660000' || '300000' }}
           OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1"
           OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: ${{ matrix.plan_concurrency }}
         shell: bash
@@ -2031,30 +2101,8 @@ jobs:
           set -euo pipefail
           runner="scripts/ci-run-node-test-shard.mjs"
           if [[ ! -f "$runner" ]]; then
-            # Frozen release targets can predate the workflow-owned shard runner.
-            # Load only that runner from the exact trusted workflow commit while
-            # keeping its child tests rooted in the checked-out candidate.
-            job_workflow_repository=$(jq -r '.workflow_repository // empty' <<<"$JOB_CONTEXT_JSON")
-            job_workflow_sha=$(jq -r '.workflow_sha // empty' <<<"$JOB_CONTEXT_JSON")
-            if [[ ! "$job_workflow_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
-              echo "invalid job workflow repository: $job_workflow_repository" >&2
-              exit 1
-            fi
-            if [[ ! "$job_workflow_sha" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "invalid job workflow SHA: $job_workflow_sha" >&2
-              exit 1
-            fi
-            harness_root="${RUNNER_TEMP}/openclaw-ci-shard-runner"
-            workflow_remote="https://github.com/${job_workflow_repository}.git"
-            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 "$workflow_remote" "$job_workflow_sha"
-            for file in \
-              scripts/ci-run-node-test-shard.mjs \
-              scripts/lib/direct-run.mjs \
-              scripts/lib/local-heavy-check-runtime.mjs; do
-              mkdir -p "${harness_root}/$(dirname "$file")"
-              git show "${job_workflow_sha}:${file}" > "${harness_root}/${file}"
-            done
-            runner="${harness_root}/${runner}"
+            runner=".ci-workflow/${runner}"
+            [[ -f "$runner" ]]
           fi
           node "$runner"
 
@@ -2931,6 +2979,7 @@ jobs:
     timeout-minutes: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 30 || 20 }}
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+      SWIFT_TEST_EXECUTION: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}
     steps:
       - *platform_checkout_step
 
@@ -3120,8 +3169,16 @@ jobs:
       - name: Swift test
         run: |
           set -euo pipefail
+          swift_test_args=(--package-path apps/macos --enable-code-coverage)
+          # Hosted release and retry runs have shown test-process contention;
+          # keep the faster first-attempt Blacksmith path parallel.
+          if [[ "$SWIFT_TEST_EXECUTION" == "parallel" ]]; then
+            swift_test_args+=(--parallel)
+          else
+            swift_test_args+=(--no-parallel)
+          fi
           for attempt in 1 2 3; do
-            if swift test --package-path apps/macos --parallel --enable-code-coverage; then
+            if swift test "${swift_test_args[@]}"; then
               exit 0
             fi
             echo "swift test failed (attempt $attempt/3). Retrying…"
@@ -3136,7 +3193,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_ios_build == 'true'
     runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
-    timeout-minutes: 75
+    timeout-minutes: 150
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
@@ -3233,12 +3290,72 @@ jobs:
       - name: Build iOS app
         run: pnpm ios:build
 
+      # Debug's incremental compilation can miss actor-isolation diagnostics
+      # that Swift's optimized whole-module Release build enforces.
+      - name: Build iOS app (Release)
+        if: env.HISTORICAL_TARGET != 'true'
+        run: |
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClaw \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      # App compilation and screenshots do not execute approval or notification
+      # lifecycles. Exercise both owners on the already provisioned simulator.
+      - name: Run focused iOS lifecycle simulator tests
+        id: ios_lifecycle_tests
+        if: env.HISTORICAL_TARGET != 'true'
+        run: |
+          set -euo pipefail
+          simulator_id="$(
+            xcrun simctl list devices available --json | node --input-type=module -e '
+              const chunks = [];
+              for await (const chunk of process.stdin) chunks.push(chunk);
+              const runtimes = JSON.parse(Buffer.concat(chunks).toString("utf8")).devices;
+              const simulator = Object.values(runtimes)
+                .flat()
+                .find((device) => device.isAvailable && device.name.startsWith("iPhone"));
+              if (!simulator) {
+                console.error("No available iPhone simulator for iOS lifecycle tests");
+                process.exit(1);
+              }
+              process.stdout.write(simulator.udid);
+            '
+          )"
+          result_bundle="apps/ios/build/LifecycleTestResults/OpenClawLifecycleTests.xcresult"
+          mkdir -p "apps/ios/build/LifecycleTestResults"
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClaw \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=${simulator_id}" \
+            -resultBundlePath "$result_bundle" \
+            -parallel-testing-enabled NO \
+            -only-testing:OpenClawTests/DelayedActionGateTests \
+            -only-testing:OpenClawTests/NodeAppModelInvokeTests \
+            -only-testing:OpenClawTests/NotificationServingPreferenceTests \
+            -only-testing:OpenClawTests/RootTabsSourceGuardTests \
+            -only-testing:OpenClawTests/TraceHeadingVisualProofTests \
+            test
+
+      - name: Upload iOS lifecycle simulator evidence
+        if: ${{ always() && steps.ios_lifecycle_tests.outcome != '' && steps.ios_lifecycle_tests.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-lifecycle-tests-${{ needs.preflight.outputs.checkout_revision }}
+          path: apps/ios/build/LifecycleTestResults/*.xcresult
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Capture iOS release screenshots
-        if: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request') && env.HISTORICAL_TARGET != 'true' }}
+        if: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.preflight.outputs.run_macos == 'true')) && env.HISTORICAL_TARGET != 'true' }}
         run: pnpm ios:screenshots
 
       - name: Upload iOS release screenshot evidence
-        if: ${{ always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request') && env.HISTORICAL_TARGET != 'true' }}
+        if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.preflight.outputs.run_macos == 'true')) && env.HISTORICAL_TARGET != 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ios-release-screenshots-${{ needs.preflight.outputs.checkout_revision }}
@@ -3447,6 +3564,7 @@ jobs:
       - build-artifacts
       - native-i18n
       - checks-ui
+      - checks-ui-e2e
       - control-ui-i18n
       - checks-fast-core
       - qa-smoke-ci-profile
@@ -3478,6 +3596,7 @@ jobs:
             build-artifacts=${{ needs.build-artifacts.result }}
             native-i18n=${{ needs.native-i18n.result }}
             checks-ui=${{ needs.checks-ui.result }}
+            checks-ui-e2e=${{ needs.checks-ui-e2e.result }}
             control-ui-i18n=${{ needs.control-ui-i18n.result }}
             checks-fast-core=${{ needs.checks-fast-core.result }}
             qa-smoke-ci-profile=${{ needs.qa-smoke-ci-profile.result }}
@@ -3536,6 +3655,7 @@ jobs:
       - pnpm-store-warmup
       - build-artifacts
       - checks-ui
+      - checks-ui-e2e
       - control-ui-i18n
       - checks-fast-core
       - checks-fast-plugin-contracts-shard

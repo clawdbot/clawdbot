@@ -9,6 +9,10 @@ export function cleanTsdownOutputRoots(params?: {
   roots?: string[];
 }): void;
 export function pruneStaleRootChunkFiles(params?: Record<string, unknown>): void;
+export function pruneStaleRuntimeSymlinks(params?: {
+  cwd?: string;
+  fs?: typeof import("node:fs");
+}): void;
 export function listTsdownOutputRoots(): string[];
 export function resolveTsdownCleanOutputRoots(args?: string[]): string[];
 export function pruneUntrackedGeneratedSourceDeclarations(params?: Record<string, unknown>): number;

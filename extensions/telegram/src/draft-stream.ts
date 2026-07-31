@@ -235,6 +235,11 @@ export function createTelegramDraftStream(params: {
   replyToMode?: ReplyToMode;
   richMessages?: boolean;
   throttleMs?: number;
+  /**
+   * When false, suppress Telegram link previews on the streamed draft. Rich
+   * messages express this as `skip_entity_detection` at render time instead.
+   */
+  linkPreview?: boolean;
   /** Minimum chars before sending first message (debounce for push notifications) */
   minInitialChars?: number;
   /** Optional preview renderer (e.g. markdown -> HTML + parse mode). */
@@ -252,6 +257,12 @@ export function createTelegramDraftStream(params: {
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
+  // Telegram re-enables the preview on any edit that omits the field, so the
+  // flag has to ride along with every send AND every edit, not just the first
+  // send. Finalization cannot be relied on to clean it up: it deliberately
+  // skips the edit when the streamed draft already equals the final text.
+  const linkPreviewParams =
+    params.linkPreview === false ? ({ link_preview_options: { is_disabled: true } } as const) : {};
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
   const initialSendMessageParams =
@@ -312,6 +323,18 @@ export function createTelegramDraftStream(params: {
   // ephemeral preview to delete, NOT a durable content chunk to retain — that
   // distinguishes a reposition from forceNewMessage's continuation-chunk race.
   const repositionedSendGenerations = new Set<number>();
+  // Keep the call arity unchanged when no preview options apply: an explicit
+  // trailing `undefined` is a different call than omitting the argument.
+  const editMessageTextWithPreview = async (
+    messageId: number,
+    text: string,
+    other?: NonNullable<Parameters<Bot["api"]["editMessageText"]>[3]>,
+  ) => {
+    const merged = other ? { ...other, ...linkPreviewParams } : linkPreviewParams;
+    return Object.keys(merged).length > 0
+      ? await params.api.editMessageText(chatId, messageId, text, merged)
+      : await params.api.editMessageText(chatId, messageId, text);
+  };
   const fallbackSnapshot = (plainText: string): TelegramDraftMessageSnapshot => ({
     text: plainText,
     sourceText: escapeTelegramHtml(plainText),
@@ -377,14 +400,20 @@ export function createTelegramDraftStream(params: {
           throw err;
         }
         return {
-          message: await params.api.sendMessage(chatId, fallbackPlan.plainText, sendMessageParams),
+          message: await params.api.sendMessage(chatId, fallbackPlan.plainText, {
+            ...sendMessageParams,
+            ...linkPreviewParams,
+          }),
           snapshot: fallbackSnapshot(fallbackPlan.plainText),
         };
       }
     }
     if (page.sourceTextMode !== "html") {
       return {
-        message: await params.api.sendMessage(chatId, page.text, sendMessageParams),
+        message: await params.api.sendMessage(chatId, page.text, {
+          ...sendMessageParams,
+          ...linkPreviewParams,
+        }),
         snapshot: page,
       };
     }
@@ -393,6 +422,7 @@ export function createTelegramDraftStream(params: {
         message: await params.api.sendMessage(chatId, page.sourceText, {
           parse_mode: "HTML" as const,
           ...sendMessageParams,
+          ...linkPreviewParams,
         }),
         snapshot: page,
       };
@@ -401,7 +431,10 @@ export function createTelegramDraftStream(params: {
         throw err;
       }
       return {
-        message: await params.api.sendMessage(chatId, page.text, sendMessageParams),
+        message: await params.api.sendMessage(chatId, page.text, {
+          ...sendMessageParams,
+          ...linkPreviewParams,
+        }),
         snapshot: fallbackSnapshot(page.text),
       };
     }
@@ -436,23 +469,23 @@ export function createTelegramDraftStream(params: {
           if (!fallbackPlan) {
             throw err;
           }
-          await params.api.editMessageText(chatId, targetMessageId, fallbackPlan.plainText);
+          await editMessageTextWithPreview(targetMessageId, fallbackPlan.plainText);
           acceptedSnapshot = fallbackSnapshot(fallbackPlan.plainText);
         }
       } else if (page.sourceTextMode === "html") {
         try {
-          await params.api.editMessageText(chatId, targetMessageId, page.sourceText, {
+          await editMessageTextWithPreview(targetMessageId, page.sourceText, {
             parse_mode: "HTML" as const,
           });
         } catch (err) {
           if (!isTelegramHtmlParseError(err)) {
             throw err;
           }
-          await params.api.editMessageText(chatId, targetMessageId, page.text);
+          await editMessageTextWithPreview(targetMessageId, page.text);
           acceptedSnapshot = fallbackSnapshot(page.text);
         }
       } else {
-        await params.api.editMessageText(chatId, targetMessageId, page.sourceText);
+        await editMessageTextWithPreview(targetMessageId, page.sourceText);
       }
       if (sendGeneration === generation && streamMessageId === targetMessageId) {
         streamMessageSnapshot = acceptedSnapshot;

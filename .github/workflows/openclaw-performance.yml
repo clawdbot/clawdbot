@@ -154,8 +154,8 @@ jobs:
             deep_profile: "false"
             live: "false"
             managed_service: "true"
-            include_filters: "scenario:fresh-install,scenario:gateway-performance,scenario:bundled-plugin-startup,scenario:bundled-runtime-deps,scenario:agent-cold-warm-message"
-            expected_release_entries: "fresh-install:fresh,fresh-install:onboarded-user,bundled-runtime-deps:missing-plugin-index,bundled-plugin-startup:fresh,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins"
+            include_filters: "scenario:fresh-install,scenario:gateway-performance,scenario:bundled-plugin-startup,scenario:agent-cold-warm-message"
+            expected_release_entries: "fresh-install:fresh,fresh-install:onboarded-user,bundled-plugin-startup:fresh,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins"
           - lane: mock-deep-profile
             title: Kova mock provider deep profile
             auth: mock
@@ -708,17 +708,27 @@ jobs:
             pnpm build
           fi
 
+          supported_startup_cases="$(
+            node --import tsx scripts/bench-gateway-startup.ts --help |
+              sed -n 's/^  \([[:alnum:]_-][[:alnum:]_-]*\) (.*/\1/p'
+          )"
+          startup_case_args=()
+          for startup_case in default skipChannels preparedRuntimeCatalogStall preparedRuntimeScaleOne preparedRuntimeScaleMany oneInternalHook allInternalHooks fiftyPlugins fiftyStartupLazyPlugins; do
+            if grep -Fxq "$startup_case" <<<"$supported_startup_cases"; then
+              startup_case_args+=(--startup-case "$startup_case")
+            fi
+          done
+          if [[ " ${startup_case_args[*]} " != *" --startup-case default "* ]]; then
+            echo "The target startup benchmark did not advertise its required default case." >&2
+            exit 1
+          fi
+
           pnpm test:gateway:cpu-scenarios \
             --output-dir "$SOURCE_PERF_DIR/gateway-cpu" \
             --runs "$source_runs" \
             --warmup 1 \
             --skip-qa \
-            --startup-case default \
-            --startup-case skipChannels \
-            --startup-case oneInternalHook \
-            --startup-case allInternalHooks \
-            --startup-case fiftyPlugins \
-            --startup-case fiftyStartupLazyPlugins
+            "${startup_case_args[@]}"
 
           pnpm test:extensions:memory \
             -- --json "$SOURCE_PERF_DIR/extension-memory.json"

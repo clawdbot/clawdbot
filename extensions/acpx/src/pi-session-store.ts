@@ -12,6 +12,8 @@ const MAX_SESSION_BYTES = 32 * 1024 * 1024;
 const MAX_SUMMARY_LINE_BYTES = 1024 * 1024;
 const APPEND_PROOF_EDGE_BYTES = 64 * 1024;
 const IO_CONCURRENCY = 8;
+const PI_FILE_CANDIDATE_CACHE_TTL_MS = 32_000;
+const PI_FILE_CANDIDATE_CACHE_MAX_ENTRIES = 8;
 const SESSION_ID_PATTERN = /^(?!-)[A-Za-z0-9._:-]{1,256}$/u;
 
 type PiSessionSummary = SessionCatalogSession & { file: string; version: number };
@@ -40,10 +42,19 @@ type CachedSummary = PiFileCandidate & {
   appendProof: { head: Buffer; tail: Buffer };
 };
 
+type PiFileCandidateCacheEntry = {
+  expiresAt: number;
+  candidates: Promise<PiFileCandidate[]>;
+};
+
 // Pi owns session-file mutation. The bounded cache resumes append-only metadata
 // scans, avoiding a full reread every time an active transcript grows.
 const summaryCache = new Map<string, CachedSummary>();
 const threadFileCache = new Map<string, string>();
+// Candidate snapshots are valid for one session-root/ACP-root identity for 32s, just beyond stable
+// polling. Root changes or expiry re-walk; rejected scans are removed so transient I/O recovers.
+// Keeping this bounded avoids rescanning every file each poll without retaining obsolete stores.
+const piFileCandidateCache = new Map<string, PiFileCandidateCacheEntry>();
 
 function threadCacheKey(storeRoot: string, threadId: string): string {
   return `${storeRoot}\0${threadId}`;
@@ -151,7 +162,7 @@ async function mapConcurrent<T, R>(
   return results;
 }
 
-async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate[]> {
+async function scanPiFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate[]> {
   const { root, files } = await discoverPiSessionFiles(env);
   const configuredAcpRoot = piAcpSessionStoreRoot(env);
   const acpRoot = configuredAcpRoot ? await realpathOrResolve(configuredAcpRoot) : undefined;
@@ -175,6 +186,38 @@ async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate
   return candidates
     .filter((candidate): candidate is PiFileCandidate => candidate !== undefined)
     .toSorted((left, right) => right.mtimeMs - left.mtimeMs);
+}
+
+async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate[]> {
+  const store = piSessionStore(env);
+  const key = `${store.root}\0${store.flat}\0${piAcpSessionStoreRoot(env) ?? ""}`;
+  const cached = piFileCandidateCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    piFileCandidateCache.delete(key);
+    piFileCandidateCache.set(key, cached);
+    return await cached.candidates;
+  }
+  if (cached) {
+    piFileCandidateCache.delete(key);
+  }
+  const candidates = scanPiFileCandidates(env);
+  const entry = { expiresAt: Date.now() + PI_FILE_CANDIDATE_CACHE_TTL_MS, candidates };
+  piFileCandidateCache.set(key, entry);
+  while (piFileCandidateCache.size > PI_FILE_CANDIDATE_CACHE_MAX_ENTRIES) {
+    const oldest = piFileCandidateCache.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    piFileCandidateCache.delete(oldest.value);
+  }
+  try {
+    return await candidates;
+  } catch (error) {
+    if (piFileCandidateCache.get(key) === entry) {
+      piFileCandidateCache.delete(key);
+    }
+    throw error;
+  }
 }
 
 function pathIsWithin(root: string, candidate: string): boolean {

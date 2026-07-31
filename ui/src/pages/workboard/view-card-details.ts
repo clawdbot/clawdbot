@@ -372,7 +372,9 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
           <div class="workboard-detail__actions">
             ${writable && !archived ? renderEditCardAction(props, card) : nothing}
             ${writable ? renderArchiveCardAction(props, card, busy, archived) : nothing}
-            ${writable ? renderCardMoveControl(props, card, busy, { wide: true }) : nothing}
+            ${writable && !archived
+              ? renderCardMoveControl(props, card, busy, { wide: true })
+              : nothing}
             ${writable && (linkedSessionKey ? live : activeTask)
               ? renderStopCardAction(props, card, busy)
               : nothing}

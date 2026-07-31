@@ -56,7 +56,8 @@ private struct SpeechHarness {
         self.controller = OpenClawChatSpeechController(
             synthesize: synthesize,
             clipPlayer: clipPlayer,
-            localSpeech: localSpeaker)
+            localSpeech: localSpeaker,
+            playbackCoordinator: ChatMediaPlaybackCoordinator())
     }
 }
 

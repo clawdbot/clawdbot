@@ -176,6 +176,71 @@ struct MacNodeModeCoordinatorTests {
         }
     }
 
+    @Test @MainActor func `terminal worker failure is reported instead of scheduling another restart`() async throws {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let session = GatewayNodeSession()
+        let notificationCenter = NotificationCenter()
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker,
+            notificationCenter: notificationCenter,
+            nodeHostWorkerRetryPolicy: MacNodeHostWorkerRetryPolicy(maximumRetryCount: 0))
+
+        try coordinator.prepareNodeHostWorkerRetryForTesting(
+            command: ["/usr/local/bin/openclaw", "node", "worker"])
+        await confirmation("terminal worker failure") { confirmed in
+            let observer = notificationCenter.addObserver(
+                forName: .openclawNodeHostWorkerRetryExhausted,
+                object: coordinator,
+                queue: nil)
+            { notification in
+                #expect(notification.userInfo?["unexpectedExitCount"] as? Int == 1)
+                confirmed()
+            }
+            coordinator.handleNodeHostWorkerFailureForTesting()
+            notificationCenter.removeObserver(observer)
+        }
+        await coordinator.waitForRouteInvalidationForTesting()
+        #expect(await worker.stops() == 0)
+    }
+
+    @Test @MainActor func `worker cannot restart before its crash backoff expires`() async throws {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let session = GatewayNodeSession()
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker,
+            observeNotifications: false,
+            nodeHostWorkerRetryPolicy: MacNodeHostWorkerRetryPolicy(
+                maximumRetryCount: 1,
+                initialDelayNanoseconds: 50_000_000,
+                maximumDelayNanoseconds: 50_000_000))
+        let command = ["/usr/local/bin/openclaw", "node", "worker"]
+
+        try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
+        coordinator.handleNodeHostWorkerFailureForTesting()
+        #expect(throws: MacNodeHostWorkerRetryPolicy.RetryBackoffPending.self) {
+            try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
+        }
+
+        try await self.waitUntil("node-host worker retry backoff") {
+            do {
+                try await MainActor.run {
+                    try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
+                }
+                return true
+            } catch is MacNodeHostWorkerRetryPolicy.RetryBackoffPending {
+                return false
+            } catch {
+                Issue.record("unexpected retry admission error: \(error)")
+                return false
+            }
+        }
+        await coordinator.waitForRouteInvalidationForTesting()
+    }
+
     @Test func `paused node state requires route disconnect`() {
         #expect(MacNodeModeCoordinator.pausedStateRequiresDisconnect(true))
         #expect(!MacNodeModeCoordinator.pausedStateRequiresDisconnect(false))

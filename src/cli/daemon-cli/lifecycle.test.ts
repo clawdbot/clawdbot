@@ -129,9 +129,10 @@ vi.mock("../../config/config.js", () => ({
   resolveGatewayPort: (cfg?: unknown, env?: unknown) => resolveGatewayPort(cfg, env),
 }));
 
+vi.mock("../../config/paths.js", () => ({ isDefaultInstallIdentity: () => true }));
+
 vi.mock("../../infra/gateway-processes.js", () => ({
-  findVerifiedGatewayListenerPidsOnPortSync: (port: number) =>
-    findVerifiedGatewayListenerPidsOnPortSync(port),
+  findVerifiedGatewayListenerPidsOnPortSync,
   signalVerifiedGatewayPidSync: (pid: number, signal: "SIGTERM" | "SIGUSR1") =>
     signalVerifiedGatewayPidSync(pid, signal),
   formatGatewayPidList: (pids: number[]) => formatGatewayPidList(pids),

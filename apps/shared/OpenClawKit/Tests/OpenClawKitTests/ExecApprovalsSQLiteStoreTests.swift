@@ -212,8 +212,17 @@ struct ExecApprovalsSQLiteStoreTests {
             do {
                 _ = try ExecApprovalsSQLiteStore.read(stateDirectoryURL: stateDirectoryURL)
                 Issue.record("Expected pending legacy approvals to refuse SQLite access")
+            } catch let error as ExecApprovalsLegacyMigrationRequiredError {
+                #expect(error.stateDirectoryURL == stateDirectoryURL)
+                #expect(error.legacyFileURL == legacyURL)
+                // The blocked state directory must be named; a bare command repairs the
+                // default root, and an app store never shares the CLI's default root.
+                #expect(
+                    error.localizedDescription.contains(
+                        "Run `openclaw doctor --fix` with OPENCLAW_STATE_DIR set to "
+                            + stateDirectoryURL.path))
             } catch {
-                #expect(error.localizedDescription.contains("Run `openclaw doctor --fix`"))
+                Issue.record("Expected typed migration error, got \(error)")
             }
         }
     }

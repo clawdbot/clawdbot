@@ -14,6 +14,7 @@ import {
   defaultToolStreamExtraParams,
   isOpenAICompatibleThinkingEnabled,
   normalizeOpenAICompatibleReasoningPayload,
+  normalizeOpenAICompatibleReasoningReplay,
   setQwenChatTemplateThinking,
   stripTrailingAnthropicAssistantPrefillWhenThinking,
 } from "./provider-stream-shared.js";
@@ -260,6 +261,103 @@ describe("normalizeOpenAICompatibleReasoningPayload", () => {
     normalizeOpenAICompatibleReasoningPayload(payload, "ultra");
 
     expect(payload).toEqual({ reasoning: { effort: "xhigh" } });
+  });
+});
+
+describe("normalizeOpenAICompatibleReasoningReplay", () => {
+  it("backfills only assistant messages while preserving existing reasoning", () => {
+    const payload = {
+      messages: [
+        { role: "user", content: "read" },
+        { role: "assistant", content: "done" },
+        { role: "tool", content: "ok" },
+        { role: "assistant", reasoning_content: "native reasoning" },
+        { role: "assistant", reasoning_content: null },
+      ],
+    };
+
+    normalizeOpenAICompatibleReasoningReplay(payload, { thinkingEnabled: true });
+
+    expect(payload.messages).toEqual([
+      { role: "user", content: "read" },
+      { role: "assistant", content: "done", reasoning_content: "" },
+      { role: "tool", content: "ok" },
+      { role: "assistant", reasoning_content: "native reasoning" },
+      { role: "assistant", reasoning_content: null },
+    ]);
+  });
+
+  it("honors provider-owned tool-call replay selection", () => {
+    const payload = {
+      messages: [
+        { role: "assistant", content: "plain" },
+        { role: "assistant", tool_calls: [{ id: "call_1" }] },
+      ],
+    };
+
+    normalizeOpenAICompatibleReasoningReplay(payload, {
+      thinkingEnabled: true,
+      shouldBackfillAssistantMessage: (message) => Array.isArray(message.tool_calls),
+    });
+
+    expect(payload.messages).toEqual([
+      { role: "assistant", content: "plain" },
+      { role: "assistant", tool_calls: [{ id: "call_1" }], reasoning_content: "" },
+    ]);
+  });
+
+  it("normalizes nullable reasoning for providers requiring string replay", () => {
+    const payload = {
+      messages: [
+        { role: "assistant", reasoning_content: null },
+        { role: "assistant", reasoning_content: undefined },
+      ],
+    };
+
+    normalizeOpenAICompatibleReasoningReplay(payload, {
+      thinkingEnabled: true,
+      replaceNullReasoningContent: true,
+    });
+
+    expect(payload.messages).toEqual([
+      { role: "assistant", reasoning_content: "" },
+      { role: "assistant", reasoning_content: "" },
+    ]);
+  });
+
+  it("strips reasoning across all replay messages when thinking is disabled", () => {
+    const payload = {
+      messages: [
+        { role: "user", reasoning_content: "cross-provider" },
+        { role: "assistant", reasoning_content: "native" },
+        { role: "tool", reasoning_content: "cross-provider" },
+      ],
+    };
+
+    normalizeOpenAICompatibleReasoningReplay(payload, { thinkingEnabled: false });
+
+    expect(payload.messages).toEqual([{ role: "user" }, { role: "assistant" }, { role: "tool" }]);
+  });
+
+  it("preserves non-assistant replay metadata for assistant-only provider policies", () => {
+    const payload = {
+      messages: [
+        { role: "user", reasoning_content: "preserve user" },
+        { role: "assistant", reasoning_content: "remove assistant" },
+        { role: "tool", reasoning_content: "preserve tool" },
+      ],
+    };
+
+    normalizeOpenAICompatibleReasoningReplay(payload, {
+      thinkingEnabled: false,
+      stripAssistantMessagesOnly: true,
+    });
+
+    expect(payload.messages).toEqual([
+      { role: "user", reasoning_content: "preserve user" },
+      { role: "assistant" },
+      { role: "tool", reasoning_content: "preserve tool" },
+    ]);
   });
 });
 

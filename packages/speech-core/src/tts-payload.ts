@@ -28,7 +28,7 @@ import {
   resolveTtsSettingsSnapshot,
   type ResolvedTtsConfig,
 } from "./tts-settings.js";
-import { textToSpeech } from "./tts-synthesis.js";
+import { textToSpeech, type TtsAudioPersistence } from "./tts-synthesis.js";
 import type { TtsStatusEntry } from "./tts-types.js";
 
 let lastTtsAttempt: TtsStatusEntry | undefined;
@@ -82,16 +82,19 @@ function hasLegacyFinalMediaDirective(text: string): boolean {
   return /(?:^|\n)\s*MEDIA\s*:/i.test(text);
 }
 
-export async function maybeApplyTtsToPayload(params: {
-  payload: ReplyPayload;
-  cfg: OpenClawConfig;
-  channel?: string;
-  kind?: "tool" | "block" | "final";
-  inboundAudio?: boolean;
-  ttsAuto?: string;
-  agentId?: string;
-  accountId?: string;
-}): Promise<ReplyPayload> {
+export async function maybeApplyTtsToPayload(
+  params: {
+    payload: ReplyPayload;
+    cfg: OpenClawConfig;
+    channel?: string;
+    kind?: "tool" | "block" | "final";
+    inboundAudio?: boolean;
+    ttsAuto?: string;
+    agentId?: string;
+    accountId?: string;
+  },
+  persistTtsAudio: TtsAudioPersistence,
+): Promise<ReplyPayload> {
   if (!isSpeechRuntimeAvailable()) {
     return params.payload;
   }
@@ -217,15 +220,18 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   const ttsStart = Date.now();
-  const result = await textToSpeech({
-    text: textForAudio,
-    cfg,
-    prefsPath,
-    channel: params.channel,
-    overrides: directives.overrides,
-    agentId: params.agentId,
-    accountId: params.accountId,
-  });
+  const result = await textToSpeech(
+    {
+      text: textForAudio,
+      cfg,
+      prefsPath,
+      channel: params.channel,
+      overrides: directives.overrides,
+      agentId: params.agentId,
+      accountId: params.accountId,
+    },
+    persistTtsAudio,
+  );
 
   if (result.success && result.audioPath) {
     lastTtsAttempt = {

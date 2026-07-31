@@ -129,6 +129,21 @@ describe("google provider plugin hooks", () => {
     ).toBe("tagged");
   });
 
+  it("keeps the Gemini CLI runtime without offering new OAuth setup", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
+
+    expect(cliProvider.label).toBe("Gemini CLI runtime");
+    expect(cliProvider.auth).toEqual([]);
+    expect(cliProvider.envVars).toEqual([]);
+    expect(cliProvider.wizard).toBeUndefined();
+    expect(cliProvider.refreshOAuth).toBeTypeOf("function");
+  });
+
   it("keeps google-antigravity hook aliases on tagged reasoning mode", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: googleProviderPlugin,

@@ -39,3 +39,7 @@ export function shouldMergeChatChrome(params: {
     !hasNativeShellClass()
   );
 }
+
+export function mergeChatPageChrome(mobileNavLayout: boolean, onboarding: boolean): boolean {
+  return shouldMergeChatChrome({ mobileNavLayout, routeId: "chat", onboarding });
+}

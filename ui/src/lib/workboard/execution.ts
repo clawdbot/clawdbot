@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { requestSessionCreate } from "../sessions/index.ts";
+import { normalizeAgentId } from "../sessions/session-key.ts";
 import {
   normalizeString,
   replaceCard,
@@ -94,11 +95,11 @@ function buildCardTaskSessionKey(card: WorkboardCard): string {
   const boardId = sanitizeSessionSegment(card.metadata?.automation?.boardId, "default");
   const cardId = sanitizeSessionSegment(card.id, "card");
   const suffix = `subagent:workboard-${boardId}-${cardId}`;
-  const sessionKey = card.agentId
-    ? `agent:${sanitizeSessionSegment(card.agentId, "agent")}:${suffix}`
-    : suffix;
-  const existing = workboardCardSessionKey(card)?.trim();
-  return existing === sessionKey ? existing : sessionKey;
+  const agentId = card.agentId?.trim();
+  // Unassigned cards stay unscoped on purpose: the gateway canonicalizes a bare
+  // suffix onto the configured default agent, while normalizeAgentId maps an
+  // empty id to "main" and would target the wrong agent when the default differs.
+  return agentId ? `agent:${normalizeAgentId(agentId)}:${suffix}` : suffix;
 }
 
 function buildCardRunIdempotencyKey(card: WorkboardCard): string {
@@ -174,29 +175,31 @@ async function findTaskForStartedRun(params: {
   return null;
 }
 
+function workboardRunWasAborted(result: unknown): boolean {
+  return (
+    isRecord(result) &&
+    (result.aborted === true || (Array.isArray(result.runIds) && result.runIds.length > 0))
+  );
+}
+
 async function abortWorkboardSessionRun(params: {
   client: GatewayBrowserClient;
   sessionKey: string;
   runId?: string;
 }): Promise<boolean> {
-  let abortResult = await params.client.request("chat.abort", {
+  const targetedAbort = await params.client.request("chat.abort", {
     sessionKey: params.sessionKey,
     ...(params.runId ? { runId: params.runId } : {}),
   });
-  let aborted =
-    isRecord(abortResult) &&
-    (abortResult.aborted === true ||
-      (Array.isArray(abortResult.runIds) && abortResult.runIds.length > 0));
-  if (!aborted && params.runId) {
-    abortResult = await params.client.request("chat.abort", {
-      sessionKey: params.sessionKey,
-    });
-    aborted =
-      isRecord(abortResult) &&
-      (abortResult.aborted === true ||
-        (Array.isArray(abortResult.runIds) && abortResult.runIds.length > 0));
+  const aborted = workboardRunWasAborted(targetedAbort);
+  if (aborted || !params.runId) {
+    return aborted;
   }
-  return aborted;
+  // A card run id that no longer names the live run aborts nothing, so retry
+  // session-wide before reporting failure; otherwise Stop strands an active run.
+  return workboardRunWasAborted(
+    await params.client.request("chat.abort", { sessionKey: params.sessionKey }),
+  );
 }
 
 function taskIsActive(task: WorkboardTaskSummary | undefined): task is WorkboardTaskSummary {

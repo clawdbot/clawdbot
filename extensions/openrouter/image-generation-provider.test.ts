@@ -1,37 +1,15 @@
 // Openrouter tests cover image generation provider plugin behavior.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  getProviderHttpMocks,
+  installProviderHttpMockCleanup,
+} from "openclaw/plugin-sdk/provider-http-test-mocks";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 
-const {
-  assertOkOrThrowHttpErrorMock,
-  postJsonRequestMock,
-  resolveApiKeyForProviderMock,
-  resolveProviderHttpRequestConfigMock,
-} = vi.hoisted(() => ({
-  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-  postJsonRequestMock: vi.fn(),
-  resolveApiKeyForProviderMock: vi.fn(async (_params: unknown) => ({
-    apiKey: "openrouter-key",
-  })),
-  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
-    allowPrivateNetwork: false,
-    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-    dispatcherPolicy: undefined,
-  })),
-}));
+const { postJsonRequestMock, resolveApiKeyForProviderMock, resolveProviderHttpRequestConfigMock } =
+  getProviderHttpMocks();
 
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-}));
-
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
-  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-  postJsonRequest: postJsonRequestMock,
-  // Pass-through: bounded-reader enforcement is tested via bounded-reader unit tests.
-  readProviderJsonResponse: async (response: { json(): Promise<unknown> }) => response.json(),
-  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-}));
+installProviderHttpMockCleanup();
 
 function requireOpenRouterPostBody(): {
   messages?: Array<{ content?: unknown }>;
@@ -85,11 +63,8 @@ function requireGeneratedImage(
 }
 
 describe("openrouter image generation provider", () => {
-  afterEach(() => {
-    assertOkOrThrowHttpErrorMock.mockClear();
-    postJsonRequestMock.mockReset();
-    resolveApiKeyForProviderMock.mockClear();
-    resolveProviderHttpRequestConfigMock.mockClear();
+  beforeEach(() => {
+    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "openrouter-key" });
   });
 
   it("builds provider metadata and capabilities", () => {

@@ -401,3 +401,38 @@ export function resolveMessagingToolPayloadDedupe(params: {
     useGlobalSentMediaUrlEvidenceFallback: allTargetsMatchRoute && !hasTargetMediaUrlEvidence,
   };
 }
+
+/** True when a message-tool send visibly delivered to the source conversation.
+ * Route matching keeps cross-provider or unrelated-target tool sends from
+ * counting as the source reply. */
+export function hasSourceRoutedMessagingToolDelivery(params: {
+  config?: OpenClawConfig;
+  messageProvider?: string;
+  messagingToolSentTargets?: MessagingToolSend[];
+  messagingToolSentTexts?: string[];
+  messagingToolSentMediaUrls?: string[];
+  originatingTo?: string;
+  originatingThreadId?: string | number;
+  accountId?: string;
+}): boolean {
+  const decision = resolveMessagingToolPayloadDedupe({
+    config: params.config,
+    messageProvider: params.messageProvider,
+    messagingToolSentTargets: params.messagingToolSentTargets,
+    originatingTo: params.originatingTo,
+    originatingThreadId: params.originatingThreadId,
+    accountId: params.accountId,
+  });
+  if (!decision.matchingRoute) {
+    return false;
+  }
+  return (
+    decision.routeSentTexts.length > 0 ||
+    decision.routeSentMediaUrls.length > 0 ||
+    // Legacy runtimes record aggregate evidence without per-target content.
+    (decision.useGlobalSentTextEvidenceFallback &&
+      (params.messagingToolSentTexts?.length ?? 0) > 0) ||
+    (decision.useGlobalSentMediaUrlEvidenceFallback &&
+      (params.messagingToolSentMediaUrls?.length ?? 0) > 0)
+  );
+}

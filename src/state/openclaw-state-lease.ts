@@ -8,6 +8,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { isSqliteLockError } from "../infra/sqlite-transaction.js";
+import { loggingState } from "../logging/state.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import {
@@ -81,14 +82,24 @@ let processExitListenerInstalled = false;
 
 function runProcessExitLeaseCleanups(): void {
   processExitListenerInstalled = false;
-  for (const cleanup of processExitLeaseCleanups) {
-    try {
-      cleanup();
-    } catch {
-      // Expiry still recovers a lease when synchronous process-exit cleanup loses a DB race.
+  // Exit cleanup runs after CLI output routing is restored (for example after a
+  // --json envelope already reached stdout). Lease release reopens the state
+  // database and can emit diagnostics, so keep them on stderr to preserve
+  // machine-readable stdout for the whole process lifetime.
+  const previousForceConsoleToStderr = loggingState.forceConsoleToStderr;
+  loggingState.forceConsoleToStderr = true;
+  try {
+    for (const cleanup of processExitLeaseCleanups) {
+      try {
+        cleanup();
+      } catch {
+        // Expiry still recovers a lease when synchronous process-exit cleanup loses a DB race.
+      }
     }
+    processExitLeaseCleanups.clear();
+  } finally {
+    loggingState.forceConsoleToStderr = previousForceConsoleToStderr;
   }
-  processExitLeaseCleanups.clear();
 }
 
 function registerProcessExitLeaseCleanup(cleanup: () => void): () => void {

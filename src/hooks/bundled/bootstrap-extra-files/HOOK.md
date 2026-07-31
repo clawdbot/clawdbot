@@ -21,7 +21,7 @@ Loads additional bootstrap files into `Project Context` during `agent:bootstrap`
 ## Why
 
 Use this when your workspace has multiple context roots (for example monorepos) and
-you want to include extra `AGENTS.md`/`TOOLS.md`-class files without changing the
+you want to include extra `AGENTS.md`-class files without changing the
 workspace root.
 
 ## Configuration
@@ -34,7 +34,7 @@ workspace root.
       "entries": {
         "bootstrap-extra-files": {
           "enabled": true,
-          "paths": ["packages/*/AGENTS.md", "packages/*/TOOLS.md"]
+          "paths": ["packages/*/AGENTS.md"]
         }
       }
     }
@@ -49,5 +49,5 @@ workspace root.
 - `files` (string[]): alias of `paths`.
 
 All paths are resolved from the workspace and must stay inside it (including realpath checks).
-Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`,
+Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`,
 `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`, `MEMORY.md`).

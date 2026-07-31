@@ -7,7 +7,6 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -2609,13 +2608,7 @@ describe("followup queue collect routing", () => {
       const recorder = calls[0]?.userTurnTranscriptRecorder;
       expect(recorder).toBeDefined();
       const persisted = await recorder?.persistFallback();
-      expect(persisted?.sessionFile).toBe(
-        formatSqliteSessionFileMarker({
-          agentId: "agent",
-          sessionId: "new-session",
-          storePath,
-        }),
-      );
+      expect(persisted?.sessionFile).toBe("agent:agent:main");
       await expect(
         loadTranscriptEvents({
           agentId: "agent",

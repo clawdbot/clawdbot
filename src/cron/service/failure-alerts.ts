@@ -16,6 +16,7 @@ type ResolvedFailureAlert = {
   to?: string;
   mode?: "announce" | "webhook";
   accountId?: string;
+  threadId?: string | number;
   includeSkipped: boolean;
 };
 
@@ -97,18 +98,31 @@ export function resolveFailureAlert(
     : undefined;
   // Webhook destinations have no chat-channel identity. Announce destinations
   // must stay on their original channel when a job overrides its route.
-  const globalTo =
-    mode === "webhook" || !jobChannel || jobChannel === globalChannel
-      ? configuredGlobalTo
-      : undefined;
+  const inheritsGlobalRoute =
+    inheritsGlobalMode && (mode === "webhook" || !jobChannel || jobChannel === globalChannel);
+  const globalTo = inheritsGlobalRoute ? configuredGlobalTo : undefined;
   const deliveryTo = normalizeTo(job.delivery?.to);
   const deliveryChannel = resolveFailureAlertChannel(job.delivery?.channel, deliveryTo);
   const channel = jobChannel ?? globalChannel ?? deliveryChannel ?? "last";
-  const compatibleDeliveryTo =
-    channel === deliveryChannel || (channel === "last" && !deliveryChannel)
-      ? deliveryTo
-      : undefined;
+  const inheritsDeliveryChannel =
+    channel === deliveryChannel || (channel === "last" && !deliveryChannel);
+  const compatibleDeliveryTo = inheritsDeliveryChannel ? deliveryTo : undefined;
   const explicitTo = jobTo ?? globalTo;
+  const inheritedDeliveryAccountId =
+    mode !== "webhook" && !explicitTo && inheritsDeliveryChannel
+      ? job.delivery?.accountId
+      : undefined;
+  const accountId =
+    jobConfig?.accountId ??
+    (inheritsGlobalRoute ? globalConfig?.accountId : undefined) ??
+    inheritedDeliveryAccountId;
+  // A topic belongs to its channel, peer, and account; never attach the
+  // primary topic to an independently routed failure destination.
+  const inheritsDeliveryThread =
+    mode !== "webhook" &&
+    inheritsDeliveryChannel &&
+    (explicitTo === undefined || explicitTo === deliveryTo) &&
+    accountId === job.delivery?.accountId;
 
   // Announce alerts inherit the job delivery target; webhook alerts require an
   // explicit alert target so chat recipients are not reused as URLs.
@@ -121,7 +135,8 @@ export function resolveFailureAlert(
     channel,
     to: mode === "webhook" ? explicitTo : (explicitTo ?? compatibleDeliveryTo),
     mode,
-    accountId: jobConfig?.accountId ?? globalConfig?.accountId,
+    accountId,
+    threadId: inheritsDeliveryThread ? job.delivery?.threadId : undefined,
     includeSkipped: jobConfig?.includeSkipped ?? globalConfig?.includeSkipped ?? false,
   };
 }
@@ -132,11 +147,13 @@ function emitFailureAlert(
     job: CronJob;
     error?: string;
     errorReason?: FailoverReason;
+    runAtMs?: number;
     consecutiveErrors: number;
     channel: CronMessageChannel;
     to?: string;
     mode?: "announce" | "webhook";
     accountId?: string;
+    threadId?: string | number;
     status: "error" | "skipped";
   },
 ) {
@@ -148,7 +165,7 @@ function emitFailureAlert(
   const statusVerb = params.status === "skipped" ? "skipped" : "failed";
   const detailLabel = params.status === "skipped" ? "Skip reason" : "Last error";
   const text = [
-    `Cron job "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times`,
+    `Automation "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times`,
     ...(errorReason ? [`Cause: ${errorReason}`] : []),
     `${detailLabel}: ${truncatedError}`,
   ].join("\n");
@@ -158,10 +175,12 @@ function emitFailureAlert(
       .sendCronFailureAlert({
         job: params.job,
         text,
+        runAtMs: params.runAtMs,
         channel: params.channel,
         to: params.to,
         mode: params.mode,
         accountId: params.accountId,
+        threadId: params.threadId,
       })
       .catch((err: unknown) => {
         state.deps.log.warn(
@@ -191,6 +210,7 @@ export function maybeEmitFailureAlert(
     status: "error" | "skipped";
     error?: string;
     errorReason?: FailoverReason;
+    runAtMs?: number;
     consecutiveCount: number;
     delivery?: "emit" | "record-only";
     occurredAtMs?: number;
@@ -208,8 +228,9 @@ export function maybeEmitFailureAlert(
     // Suppress failed-run duplicates without disabling global skipped alerts.
     return;
   }
-  const isBestEffort = params.job.delivery?.bestEffort === true;
-  if (isBestEffort) {
+  // Best-effort delivery suppresses inherited alert noise, not an independently
+  // configured job alert that the operator explicitly requested.
+  if (params.job.delivery?.bestEffort === true && !params.job.failureAlert) {
     return;
   }
   const now = params.occurredAtMs ?? state.deps.nowMs();
@@ -226,11 +247,13 @@ export function maybeEmitFailureAlert(
       job: params.job,
       error: params.error,
       errorReason: params.errorReason,
+      runAtMs: params.runAtMs,
       consecutiveErrors: params.consecutiveCount,
       channel: params.alertConfig.channel,
       to: params.alertConfig.to,
       mode: params.alertConfig.mode,
       accountId: params.alertConfig.accountId,
+      threadId: params.alertConfig.threadId,
       status: params.status,
     });
   }

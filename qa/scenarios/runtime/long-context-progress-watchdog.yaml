@@ -74,7 +74,7 @@ flow:
                       agents:
                         defaults:
                           models:
-                            expr: "({ [env.primaryModel]: { agentRuntime: { id: config.harnessRuntime } } })"
+                            expr: "({ [env.primaryModel]: { agentRuntime: { id: config.harnessRuntime }, params: null } })"
               - call: waitForGatewayHealthy
                 args:
                   - ref: env
@@ -91,6 +91,10 @@ flow:
                   expr: "snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.agentRuntime?.id === config.harnessRuntime"
                   message:
                     expr: "`expected ${env.primaryModel} agentRuntime.id=${config.harnessRuntime}, got ${JSON.stringify(snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.agentRuntime)}`"
+              - assert:
+                  expr: "snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.params === undefined"
+                  message:
+                    expr: "`expected ${env.primaryModel} provider request params to be absent for the Codex harness, got ${JSON.stringify(snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.params)}`"
               - call: reset
               - set: logCursor
                 value:

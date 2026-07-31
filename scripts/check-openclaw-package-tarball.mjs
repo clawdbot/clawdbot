@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { gte as semverGte, valid as validSemver } from "semver";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "./lib/local-build-metadata-paths.mjs";
 import {
   collectPackageDistImports,
@@ -323,6 +324,8 @@ const normalized = entries.map((entry) => entry.replace(/^package\//u, ""));
 const entrySet = new Set(normalized);
 const errors = [];
 const warnings = [];
+const CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
+const FIRST_CODE_MODE_WORKER_VERSION = "2026.5.14-beta.2";
 const REQUIRED_TARBALL_ENTRIES = ["dist/control-ui/index.html", ...WORKSPACE_TEMPLATE_PACK_PATHS];
 const PACKAGE_INSTALL_GUARD_RELATIVE_PATH = "dist/openclaw-install-guard";
 const REQUIRED_TARBALL_ENTRY_PREFIXES = ["dist/control-ui/assets/"];
@@ -474,6 +477,12 @@ if (entrySet.has("package.json")) {
     packageVersion = "";
   }
 }
+const validPackageVersion = validSemver(packageVersion);
+const requiresCodeModeWorker =
+  validPackageVersion !== null && semverGte(validPackageVersion, FIRST_CODE_MODE_WORKER_VERSION);
+if (requiresCodeModeWorker && !entrySet.has(CODE_MODE_WORKER_PATH)) {
+  errors.push(`missing required tar entry ${CODE_MODE_WORKER_PATH}`);
+}
 if (entrySet.has("package-lock.json")) {
   errors.push("package tarball must not contain package-lock.json");
 }
@@ -570,6 +579,9 @@ if (entrySet.has("dist/postinstall-inventory.json")) {
     } else {
       const normalizedInventory = inventory.map((entry) => entry.replace(/\\/gu, "/"));
       const normalizedInventorySet = new Set(normalizedInventory);
+      if (requiresCodeModeWorker && !normalizedInventorySet.has(CODE_MODE_WORKER_PATH)) {
+        errors.push(`postinstall inventory omits ${CODE_MODE_WORKER_PATH}`);
+      }
       if (normalizedInventorySet.has(PACKAGE_INSTALL_GUARD_RELATIVE_PATH)) {
         errors.push(
           `package dist inventory must omit install guard ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`,

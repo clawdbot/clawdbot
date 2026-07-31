@@ -176,9 +176,6 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       if (audit && typeof audit.ok === "boolean") {
         bits.push(audit.ok ? "audit ok" : "audit failed");
       }
-      if (typeof account.lastError === "string" && account.lastError) {
-        bits.push(`error:${account.lastError}`);
-      }
       const rawChannelLabel = channelLabels[provider];
       return buildChannelAccountLine(provider, account, bits, {
         channelLabel: typeof rawChannelLabel === "string" ? rawChannelLabel : provider,

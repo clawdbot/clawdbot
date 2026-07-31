@@ -1,6 +1,9 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
-import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  bindIngressLifecycleToReplyOptions,
+  waitUntilAbort,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
@@ -1518,21 +1521,11 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       2 * 60 * 1000,
     );
 
-    if (opts.abortSignal) {
-      const signal = opts.abortSignal;
-      await new Promise((resolve) => {
-        signal.addEventListener(
-          "abort",
-          () => {
-            clearInterval(pollInterval);
-            resolve(null);
-          },
-          { once: true },
-        );
-      });
-    } else {
-      await new Promise(() => {});
-    }
+    // Startup may finish after cancellation, so replay an already-aborted signal
+    // and release the discovery timer before running the monitor cleanup.
+    await waitUntilAbort(opts.abortSignal, () => {
+      clearInterval(pollInterval);
+    });
   } finally {
     api?.stopReceiving();
     await ingress.stop();

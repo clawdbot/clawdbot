@@ -43,6 +43,7 @@ import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
 } from "./run/incomplete-turn.js";
+import { measureEmbeddedAgentPreparation } from "./run/preparation-timing.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { prepareEmbeddedRunRuntime } from "./run/runtime-preparation.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
@@ -50,6 +51,7 @@ import { prepareTerminalWithSettledTurnFinalization } from "./run/settled-turn-f
 import { resolveEmbeddedRunTerminal } from "./run/terminal-resolution.js";
 import { createEmbeddedRunTerminalRetryState } from "./run/terminal-retry-state.js";
 import { resolveEmbeddedRunTerminalTimeout } from "./run/terminal-timeout.js";
+import { createAgentTurnTaintState } from "./run/turn-taint-state.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
 
@@ -76,20 +78,25 @@ export async function runPreparedEmbeddedLoop(
   const { maybeEmitFastModeAutoResetBestEffort, notifyExecutionPhase } = input.progressController;
   const { laneTaskAbortController } = input.laneController;
   let startupStagesEmitted = false;
-  const preparedRuntime = await prepareEmbeddedRunRuntime({
-    runParams: params,
-    provider,
-    modelId,
-    agentDir,
-    workspaceDir: resolvedWorkspace,
-    globalLane,
-    hookRunner,
-    hookContext: hookCtx,
-    markStartupStage: (stage) => startupStages.mark(stage),
-    notifyExecutionPhase,
-    fallbackConfigured,
-    preparedModelRuntime: input.preparedModelRuntime,
-  });
+  const preparedRuntime = await measureEmbeddedAgentPreparation(
+    "runtime",
+    () =>
+      prepareEmbeddedRunRuntime({
+        runParams: params,
+        provider,
+        modelId,
+        agentDir,
+        workspaceDir: resolvedWorkspace,
+        globalLane,
+        hookRunner,
+        hookContext: hookCtx,
+        markStartupStage: (stage) => startupStages.mark(stage),
+        notifyExecutionPhase,
+        fallbackConfigured,
+        preparedModelRuntime: input.preparedModelRuntime,
+      }),
+    { config: params.config },
+  );
   provider = preparedRuntime.provider;
   modelId = preparedRuntime.modelId;
   const {
@@ -205,6 +212,7 @@ export async function runPreparedEmbeddedLoop(
   const allocateToolOutcomeOrdinal = (): number => nextToolOutcomeOrdinal++;
   const readAttemptTerminalToolPresentation = (): string | undefined =>
     attemptTerminalToolPresentation.value;
+  const turnTaintState = createAgentTurnTaintState();
   const observeToolOutcome = (observation: ToolOutcomeObservation): void => {
     const observationOrdinal =
       observation.toolCallOrdinal ?? attemptTerminalToolPresentation.ordinal + 1;
@@ -212,6 +220,7 @@ export async function runPreparedEmbeddedLoop(
       attemptTerminalToolPresentation.ordinal = observationOrdinal;
       attemptTerminalToolPresentation.value = observation.terminalPresentation;
     }
+    turnTaintState.observe(observation);
     if (observation.presentationOnly) {
       return;
     }
@@ -251,10 +260,15 @@ export async function runPreparedEmbeddedLoop(
   // Resolve the context engine once and reuse across retries to avoid
   // repeated initialization/connection overhead per attempt.
   ensureContextEnginesInitialized();
-  const contextEngine = await resolveContextEngine(params.config, {
-    agentDir,
-    workspaceDir: resolvedWorkspace,
-  });
+  const contextEngine = await measureEmbeddedAgentPreparation(
+    "context-engine",
+    () =>
+      resolveContextEngine(params.config, {
+        agentDir,
+        workspaceDir: resolvedWorkspace,
+      }),
+    { config: params.config },
+  );
   const resolveContextEnginePluginId = () => resolveContextEngineOwnerPluginId(contextEngine);
   startupStages.mark("context-engine");
   notifyExecutionPhase("context_engine", { provider, model: modelId });
@@ -330,6 +344,7 @@ export async function runPreparedEmbeddedLoop(
         bootstrapPromptWarningSignaturesSeen,
         resolveRuntimeFallbackReason,
         observeToolOutcome,
+        isTurnTainted: turnTaintState.isTainted,
         allocateToolOutcomeOrdinal,
         getPostCompactionAbortError: () => postCompactionAbortError,
         setPostCompactionAbortController: (controller) => {

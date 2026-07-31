@@ -1,4 +1,3 @@
-// Agent Core module implements compaction behavior.
 import {
   resolveClaudeFable5ModelIdentity,
   type AssistantMessage,
@@ -8,6 +7,11 @@ import {
   type StreamFn,
   type Usage,
 } from "@openclaw/llm-core";
+// Agent Core module implements compaction behavior.
+import {
+  CHARS_PER_TOKEN_ESTIMATE,
+  estimateStringChars,
+} from "@openclaw/normalization-core/cjk-chars";
 import { resolveAgentReasoningOption } from "../../reasoning.js";
 import {
   type AgentCoreCompletionRuntimeDeps,
@@ -269,7 +273,7 @@ function countContentBlockChars(
     if (block.type === "image") {
       chars += IMAGE_BLOCK_CHARS;
     } else {
-      chars += getCompactionContentBlockText(block).length;
+      chars += estimateStringChars(getCompactionContentBlockText(block));
     }
   }
   return chars;
@@ -286,42 +290,45 @@ export function estimateTokens(message: AgentMessage): number {
         harnessMessage as { content: string | Array<{ type: string; text?: string }> }
       ).content;
       if (typeof content === "string") {
-        chars = content.length;
+        chars = estimateStringChars(content);
       } else if (Array.isArray(content)) {
         chars = countContentBlockChars(content);
       }
-      return Math.ceil(chars / 4);
+      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "assistant": {
       const assistant = harnessMessage;
       for (const block of assistant.content) {
         if (block.type === "text") {
-          chars += block.text.length;
+          chars += estimateStringChars(block.text);
         } else if (block.type === "thinking") {
-          chars += block.thinking.length;
+          chars += estimateStringChars(block.thinking);
         } else if (block.type === "toolCall") {
-          chars += block.name.length + safeJsonStringify(block.arguments).length;
+          chars +=
+            estimateStringChars(block.name) +
+            estimateStringChars(safeJsonStringify(block.arguments));
         }
       }
-      return Math.ceil(chars / 4);
+      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "custom":
     case "toolResult": {
       if (typeof harnessMessage.content === "string") {
-        chars = harnessMessage.content.length;
+        chars = estimateStringChars(harnessMessage.content);
       } else {
         chars = countContentBlockChars(harnessMessage.content);
       }
-      return Math.ceil(chars / 4);
+      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "bashExecution": {
-      chars = harnessMessage.command.length + harnessMessage.output.length;
-      return Math.ceil(chars / 4);
+      chars =
+        estimateStringChars(harnessMessage.command) + estimateStringChars(harnessMessage.output);
+      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "branchSummary":
     case "compactionSummary": {
-      chars = harnessMessage.summary.length;
-      return Math.ceil(chars / 4);
+      chars = estimateStringChars(harnessMessage.summary);
+      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
   }
 
@@ -762,7 +769,25 @@ export function prepareCompaction(
   }
   const boundaryEnd = effectiveEntries.length;
 
-  const tokensBefore = estimateContextTokens(buildSessionContext(pathEntries).messages).tokens;
+  const contextMessages = buildSessionContext(pathEntries).messages;
+  const contextUsage = estimateContextTokens(contextMessages);
+  const tokensBefore = contextUsage.tokens;
+  const totalEstimatedTokens = contextMessages.reduce(
+    (total, message) => total + estimateTokens(message),
+    0,
+  );
+  // Provider usage includes prompt/schema tokens omitted by estimateTokens. Normalize its trigger
+  // units to the cut walk, capped at a one-token retained tail; otherwise a small transcript
+  // can leave the cut at the first entry and free nothing.
+  const triggerUnitScale =
+    totalEstimatedTokens > 0 &&
+    Number.isFinite(totalEstimatedTokens) &&
+    Number.isFinite(contextUsage.usageTokens)
+      ? Math.min(
+          Math.max(1, settings.keepRecentTokens),
+          Math.max(1, contextUsage.usageTokens / totalEstimatedTokens),
+        )
+      : 1;
   const resetPreludeTokens = resetPreludeMessages.reduce(
     (total, message) => total + estimateTokens(message),
     0,
@@ -771,7 +796,7 @@ export function prepareCompaction(
   // other model-visible boundary context so a large kept tail moves the cut earlier.
   const keepRecentTokens = Math.min(
     Number.MAX_SAFE_INTEGER,
-    settings.keepRecentTokens + resetPreludeTokens,
+    settings.keepRecentTokens / triggerUnitScale + resetPreludeTokens,
   );
 
   const cutPoint = findCutPoint(effectiveEntries, boundaryStart, boundaryEnd, keepRecentTokens);

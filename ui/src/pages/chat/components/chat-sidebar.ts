@@ -5,7 +5,10 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { handleMarkdownCodeBlockCopy } from "../../../components/markdown-code-blocks.ts";
-import { markdownFileLinkFromEvent } from "../../../components/markdown-file-links.ts";
+import {
+  markdownFileLinkFromEvent,
+  markdownFileLinkFromKeyboardEvent,
+} from "../../../components/markdown-file-links.ts";
 import "../../../components/web-awesome.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
@@ -145,11 +148,11 @@ function hasFullMessageRequest(content: SidebarContent): content is SidebarConte
 function formatUnavailableReason(reason: DetailUnavailableReason | null | undefined): string {
   switch (reason) {
     case "oversized":
-      return "Full content is unavailable because the stored transcript entry is too large to return safely.";
+      return t("chat.detailPanel.fullContentOversized");
     case "not_visible":
-      return "Full content is unavailable because this transcript entry does not have a visible WebChat projection.";
+      return t("chat.detailPanel.fullContentNotVisible");
     default:
-      return "Full content is no longer available for this transcript entry.";
+      return t("chat.detailPanel.fullContentUnavailable");
   }
 }
 
@@ -301,7 +304,7 @@ function renderFileSidebarContent(
                         ?disabled=${!controls.dirty || controls.saving}
                         @click=${controls.onSave}
                       >
-                        ${controls.saving ? "Saving…" : "Save"}
+                        ${controls.saving ? t("common.saving") : t("common.save")}
                       </button>
                       <button
                         class="btn btn--sm"
@@ -359,13 +362,15 @@ function renderFileSidebarContent(
                         onOpenChange: controls.onEditorMenuOpenChange,
                         onOpenEditor: controls.onOpenEditor,
                       })}
-                      <openclaw-tooltip content="Copy file contents">
+                      <openclaw-tooltip .content=${t("chat.detailPanel.copyContents")}>
                         <button
                           class="btn btn--sm sidebar-file-view__action ${controls.copied
                             ? "copied"
                             : ""}"
                           type="button"
-                          aria-label=${controls.copied ? "Copied" : "Copy file contents"}
+                          aria-label=${controls.copied
+                            ? t("common.copied")
+                            : t("chat.detailPanel.copyContents")}
                           @click=${controls.onCopyContents}
                         >
                           ${controls.copied ? icons.check : icons.copy}
@@ -417,7 +422,7 @@ function renderFileSidebarContent(
             <div class="file-view__save-notice" role="alert">
               <span>
                 ${controls.saveNotice.kind === "conflict"
-                  ? "File changed on disk since it was loaded."
+                  ? t("chat.detailPanel.fileChanged")
                   : controls.saveNotice.message}
               </span>
               ${controls.saveNotice.kind === "conflict"
@@ -521,16 +526,16 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
       : null;
   const title =
     content?.kind === "canvas"
-      ? content.title?.trim() || "Render Preview"
+      ? content.title?.trim() || t("chat.detailPanel.renderPreview")
       : content?.kind === "image"
-        ? content.title.trim() || "Image Preview"
+        ? content.title.trim() || t("chat.detailPanel.imagePreview")
         : content?.kind === "file"
-          ? content.name.trim() || "File"
+          ? content.name.trim() || t("chat.detailPanel.file")
           : content?.kind === "session-diff"
             ? t("chat.sessionDiff.title")
             : content?.kind === "markdown"
-              ? "Markdown Preview"
-              : "Tool Details";
+              ? t("chat.detailPanel.markdownPreview")
+              : t("chat.detailPanel.toolDetails");
   return html`
     <div class="sidebar-panel">
       ${props.embedded
@@ -581,7 +586,8 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                             html`
                               <iframe
                                 class="chat-tool-card__preview-frame"
-                                title=${content.title?.trim() || "Render preview"}
+                                title=${content.title?.trim() ||
+                                t("chat.detailPanel.renderPreview")}
                                 sandbox=${canvasSandbox}
                                 src=${canvasSrc ?? nothing}
                                 style=${content.preferredHeight
@@ -1112,7 +1118,10 @@ class ChatDetailPanel extends OpenClawLightDomElement {
           return;
         }
         if (!latest) {
-          this.fileSaveNotice = { kind: "error", message: "Failed to reload the latest file." };
+          this.fileSaveNotice = {
+            kind: "error",
+            message: t("chat.detailPanel.reloadFailed"),
+          };
           return;
         }
         this.fileEditor?.setContent(latest.content);
@@ -1164,7 +1173,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         if (!latest) {
           this.fileSaveNotice = {
             kind: "error",
-            message: "Failed to load the latest file before overwriting.",
+            message: t("chat.detailPanel.overwriteLoadFailed"),
           };
           return;
         }
@@ -1229,9 +1238,9 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       if (version !== this.requestVersion || this.content !== content) {
         return;
       }
-      this.error = `Failed to load full content: ${
-        error instanceof Error ? error.message : String(error)
-      }`;
+      this.error = t("chat.detailPanel.fullContentLoadFailed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -1275,13 +1284,28 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     }
   };
 
+  private readonly handlePanelKeyDown = (event: KeyboardEvent) => {
+    const target = markdownFileLinkFromKeyboardEvent(event);
+    if (target) {
+      this.onOpenWorkspaceFile?.(target);
+    }
+  };
+
   override render() {
     const matches = this.fileSearchMatches();
     const currentMatchIndex = matches.length
       ? Math.min(this.fileSearchMatchIndex, matches.length - 1)
       : 0;
+    // Markdown previews and file editors need a bounded host wrapper so their
+    // inner content can shrink and scroll. Content-sized kinds keep auto height.
+    const fillHost =
+      this.visibleContent?.kind === "file" || this.visibleContent?.kind === "markdown";
     return html`
-      <div @click=${this.handlePanelClick}>
+      <div
+        class=${fillHost ? "sidebar-panel-host--fill" : ""}
+        @click=${this.handlePanelClick}
+        @keydown=${this.handlePanelKeyDown}
+      >
         ${renderMarkdownSidebar({
           content: this.visibleContent,
           error: this.error,

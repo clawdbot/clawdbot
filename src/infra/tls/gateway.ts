@@ -5,14 +5,10 @@ import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import tls from "node:tls";
-import {
-  ensureDurableDirectory,
-  syncDirectory,
-  type DirectoryReceipt,
-} from "@openclaw/fs-safe/durability";
 import type { GatewayTlsConfig } from "../../config/types.gateway.js";
 import { runExec } from "../../process/exec.js";
 import { CONFIG_DIR, resolveUserPath, shortenHomeInString } from "../../utils.js";
+import { ensureDurableDirectory, publishFileNoClobber } from "../directory-durability.js";
 import { sameFileIdentity } from "../fs-safe-advanced.js";
 import { canonicalPathFromExistingAncestor, pathExists } from "../fs-safe.js";
 import { resolveSystemBin } from "../resolve-system-bin.js";
@@ -43,11 +39,6 @@ function gatewayTlsDegradation(reason: GatewayTlsDegradation["reason"]): Gateway
   };
 }
 
-function isHardLinkUnsupportedError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  return code === "ENOTSUP" || code === "EOPNOTSUPP" || code === "EPERM";
-}
-
 type PublishedGeneratedTlsOutput = {
   degradationReasons: GatewayTlsDegradation["reason"][];
   identity: Stats;
@@ -56,8 +47,6 @@ type PublishedGeneratedTlsOutput = {
 async function publishGeneratedTlsOutput(
   stagedPath: string,
   finalPath: string,
-  contents: string,
-  parentReceipt: DirectoryReceipt,
 ): Promise<PublishedGeneratedTlsOutput> {
   const degradationReasons: GatewayTlsDegradation["reason"][] = [];
   const stagedHandle = await fs.open(stagedPath, "r+");
@@ -68,42 +57,32 @@ async function publishGeneratedTlsOutput(
   } finally {
     await stagedHandle.close();
   }
-  let publishedIdentity: Stats | undefined;
-  // Publication failures deliberately preserve any final path already created. Node has no
-  // cross-platform unlink-if-inode-matches primitive, so rollback could delete a replacement.
-  try {
-    await fs.link(stagedPath, finalPath);
-    const linkedIdentity = await fs.lstat(finalPath);
-    if (!linkedIdentity.isFile() || !sameFileIdentity(stagedIdentity, linkedIdentity)) {
-      throw new Error(`Generated TLS output changed during publication: ${finalPath}`);
-    }
-    publishedIdentity = linkedIdentity;
-  } catch (error) {
-    if (!isHardLinkUnsupportedError(error)) {
-      throw error;
-    }
-    degradationReasons.push("atomic hard-link publication unavailable");
-    // Some supported filesystems cannot publish with hard links. An exclusive handle keeps
-    // no-overwrite semantics without pathname cleanup that could delete concurrent output.
-    const handle = await fs.open(finalPath, "wx", 0o600);
-    try {
-      publishedIdentity = await handle.stat();
-      await handle.writeFile(contents, "utf8");
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-  }
-  if (!publishedIdentity) {
-    throw new Error(`Generated TLS output was not published: ${finalPath}`);
-  }
-  const directorySync = await syncDirectory(parentReceipt, {
-    label: "gateway TLS publication directory",
+  const publication = await publishFileNoClobber(stagedPath, finalPath, {
+    strategy: "link-or-copy",
+    durability: "degrade",
   });
-  if (directorySync.status === "unsupported") {
+  if (publication.method === "exclusive-copy") {
+    degradationReasons.push("atomic hard-link publication unavailable");
+  }
+  if (publication.durability === "degraded") {
     degradationReasons.push("directory durability unavailable");
   }
-  return { degradationReasons, identity: publishedIdentity };
+  const [currentStagedIdentity, currentPublishedIdentity] = await Promise.all([
+    fs.lstat(stagedPath),
+    fs.lstat(finalPath),
+  ]);
+  const hardlinkChanged =
+    publication.method === "hardlink" && !sameFileIdentity(stagedIdentity, publication.identity);
+  if (
+    !currentStagedIdentity.isFile() ||
+    !currentPublishedIdentity.isFile() ||
+    !sameFileIdentity(stagedIdentity, currentStagedIdentity) ||
+    !sameFileIdentity(publication.identity, currentPublishedIdentity) ||
+    hardlinkChanged
+  ) {
+    throw new Error(`Generated TLS output changed during publication: ${finalPath}`);
+  }
+  return { degradationReasons, identity: publication.identity };
 }
 
 // Gateway TLS runtime carries loaded cert material plus the normalized SHA-256
@@ -183,16 +162,12 @@ async function generateSelfSignedCert(params: {
     const certPublication = await publishGeneratedTlsOutput(
       stagedCertPath,
       path.join(certDirectory.path, path.basename(params.certPath)),
-      cert,
-      certDirectory,
     );
     certPublication.degradationReasons.forEach((reason) => degradationReasons.add(reason));
     // Preserve the published certificate on key failure: conditional pathname removal is not atomic.
     const keyPublication = await publishGeneratedTlsOutput(
       stagedKeyPath,
       path.join(keyDirectory.path, path.basename(params.keyPath)),
-      key,
-      keyDirectory,
     );
     keyPublication.degradationReasons.forEach((reason) => degradationReasons.add(reason));
     for (const reason of degradationReasons) {

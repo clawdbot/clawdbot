@@ -22,10 +22,12 @@ import {
   SANDBOX_CONTAINERS_DIR,
   SANDBOX_REGISTRY_PATH,
 } from "./constants.js";
+import type { SandboxContainerEngineTarget } from "./container-engine.js";
 
 export type SandboxRegistryEntry = {
   containerName: string;
   backendId?: string;
+  backendTarget?: SandboxContainerEngineTarget;
   runtimeLabel?: string;
   sessionKey: string;
   createdAtMs: number;
@@ -174,6 +176,7 @@ function containerEntryToRow(entry: SandboxRegistryEntry, existing?: SandboxRegi
   const next: SandboxRegistryEntry = {
     ...entry,
     backendId: entry.backendId ?? existing?.backendId,
+    backendTarget: entry.backendTarget ?? existing?.backendTarget,
     runtimeLabel: entry.runtimeLabel ?? existing?.runtimeLabel,
     createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
     image: existing?.image ?? entry.image,
@@ -231,7 +234,10 @@ function rowToUpdate(row: SandboxRegistryInsert): SandboxRegistryUpdate {
   return update;
 }
 
-function readRegistryRows(kind: SandboxRegistryKind): SandboxRegistryRow[] {
+function readRegistryRows(
+  kind: SandboxRegistryKind,
+  filter?: { backendId: string; scopeKey: string },
+): SandboxRegistryRow[] {
   if (!fsSync.existsSync(resolveOpenClawStateSqlitePath(process.env))) {
     return [];
   }
@@ -241,13 +247,20 @@ function readRegistryRows(kind: SandboxRegistryKind): SandboxRegistryRow[] {
       return [];
     }
     const stateDb = getSandboxRegistryKysely(db);
+    let query = stateDb
+      .selectFrom("sandbox_registry_entries")
+      .selectAll()
+      .where("registry_kind", "=", kind);
+    if (filter) {
+      query = query
+        .where("session_key", "=", filter.scopeKey)
+        .where("backend_id", "=", filter.backendId);
+    }
     return executeSqliteQuerySync(
       db,
-      stateDb
-        .selectFrom("sandbox_registry_entries")
-        .selectAll()
-        .where("registry_kind", "=", kind)
-        .orderBy("container_name", "asc"),
+      filter
+        ? query.orderBy("last_used_at_ms", "desc").orderBy("container_name", "asc")
+        : query.orderBy("container_name", "asc"),
     ).rows;
   });
 }
@@ -354,7 +367,6 @@ function normalizeSandboxRegistryEntry(entry: SandboxRegistryEntry): SandboxRegi
 async function withRegistryLock<T>(registryPath: string, fn: () => Promise<T>): Promise<T> {
   const lock = await acquireSessionWriteLock({
     sessionFile: registryPath,
-    allowReentrant: false,
     timeoutMs: 60_000,
   });
   try {
@@ -703,6 +715,17 @@ export async function readRegistryEntry(
   const row = readRegistryRow("container", containerName);
   const entry = row ? rowToContainerEntry(row) : null;
   return entry ? normalizeSandboxRegistryEntry(entry) : null;
+}
+
+/** Reads registered runtime IDs for one backend-owned sandbox scope, newest first. */
+export async function readRegisteredSandboxRuntimeIds(params: {
+  backendId: string;
+  scopeKey: string;
+}): Promise<string[]> {
+  return readRegistryRows("container", params)
+    .map((row) => rowToContainerEntry(row))
+    .filter((entry): entry is SandboxRegistryEntry => entry != null)
+    .map((entry) => entry.containerName);
 }
 
 /** Creates or updates one sandbox runtime registry entry, preserving immutable creation fields. */

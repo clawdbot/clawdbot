@@ -76,7 +76,7 @@ function buildStrandedReplyRetryPrompt(finalText: string): string {
 }
 
 /** Build the one-shot recovery followup that re-prompts message(action=send). */
-export function buildStrandedReplyRetryFollowupRun(
+function buildStrandedReplyRetryFollowupRun(
   base: FollowupRun,
   params: {
     finalText: string;

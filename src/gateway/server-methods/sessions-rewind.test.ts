@@ -432,34 +432,6 @@ describe("session message-cut methods", () => {
     },
   );
 
-  it("returns a typed error for unsupported transcript storage", async () => {
-    await upsertSessionEntry(
-      { agentId: "main", sessionKey },
-      {
-        sessionFile: "/tmp/legacy-session.jsonl",
-      },
-    );
-    const respond = await invoke("sessions.rewind", "user-entry");
-    const listed = await invoke("sessions.branches.list");
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: expect.stringContaining("storage does not support rewind"),
-      }),
-    );
-    expect(listed).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: expect.stringContaining("storage does not support branch listing"),
-      }),
-    );
-  });
-
   it.each([
     ["sessions.fork", "Fork"],
     ["sessions.rewind", "Rewind"],

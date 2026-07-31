@@ -13,6 +13,7 @@ import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registr
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
+import type { SessionToolOverrides } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { MediaFact } from "../../../media/media-facts.js";
@@ -44,6 +45,7 @@ import type { AgentInternalEvent } from "../../internal-events.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { ScheduledToolPolicyContext } from "../../scheduled-tool-policy.js";
+import type { SessionManager } from "../../sessions/index.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
@@ -52,6 +54,11 @@ import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.typ
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 
 export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
+
+export type ResolvedToolPromptFinalizer = (params: {
+  prompt: string;
+  messageToolAvailable: boolean;
+}) => string;
 
 type ReasoningStreamPayload = Pick<
   ReplyPayload,
@@ -69,6 +76,8 @@ export type CurrentInboundPromptContext = {
 };
 
 export type RunEmbeddedAgentParams = {
+  /** Caller-owned in-memory transcript for ephemeral helper runs. */
+  sessionManager?: SessionManager;
   sessionId: string;
   sessionKey?: string;
   /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */
@@ -146,12 +155,16 @@ export type RunEmbeddedAgentParams = {
   swarmOutputSchema?: Record<string, unknown>;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
+  /** Preserve Code Mode controls for a replay-safe restart recovery turn. */
+  forceCodeModeTools?: boolean;
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
   modelRun?: boolean;
   /** Disable trajectory persistence for auxiliary runs with no durable session owner. */
   disableTrajectory?: boolean;
   /** Restrict Skill Workshop to a bounded pending-proposal budget for an internal review run. */
   skillWorkshopProposalOnly?: boolean;
+  /** Mark proposals created by this internal review as autonomous captures. */
+  skillWorkshopAutonomousCapture?: boolean;
   /** Preserve the foreground run as proposal provenance for an internal review run. */
   skillWorkshopOrigin?: SkillProposalOrigin;
   /** Run-scoped mutation budget shared across internal runner attempts. */
@@ -183,10 +196,13 @@ export type RunEmbeddedAgentParams = {
    * overrides are unsupported; use an explicit run param instead.
    */
   config?: OpenClawConfig;
+  toolOverrides?: SessionToolOverrides;
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
+  /** Finalizes caller-owned guidance after the submitted tool surface is known. */
+  finalizePromptForResolvedTools?: ResolvedToolPromptFinalizer;
   currentInboundEventKind?: InboundEventKind;
   currentInboundContext?: CurrentInboundPromptContext;
   images?: ImageContent[];

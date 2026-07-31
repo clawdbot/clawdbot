@@ -1,5 +1,6 @@
 // Line tests cover channel.sendPayload plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageReceiveAckPolicyAdapterProofs,
@@ -51,6 +52,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
@@ -137,6 +139,132 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
 }
 
 describe("line outbound sendPayload", () => {
+  it.each([
+    { name: "empty", text: "" },
+    { name: "whitespace-only", text: "   " },
+  ])("rejects a $name payload instead of fabricating a delivery", async ({ text }) => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+
+    await expect(
+      lineOutboundAdapter.sendPayload!({
+        to: "line:user:U123",
+        text,
+        payload: { text },
+        accountId: "default",
+        cfg: { channels: { line: {} } } as OpenClawConfig,
+      }),
+    ).rejects.toThrow("Message must be non-empty for LINE sends");
+    expect(mocks.pushMessageLine).not.toHaveBeenCalled();
+    expect(mocks.pushMessagesLine).not.toHaveBeenCalled();
+  });
+
+  it("preserves the finalized receipt when its delivery observer rejects", async () => {
+    const { runtime } = createRuntime();
+    setLineRuntime(runtime);
+    const onDeliveryResult = vi.fn(async () => {
+      throw new Error("delivery observer unavailable");
+    });
+
+    let caught: unknown;
+    try {
+      await lineOutboundAdapter.sendPayload!({
+        to: "line:user:U123",
+        text: "Hello",
+        payload: { text: "Hello" },
+        accountId: "default",
+        cfg: { channels: { line: {} } } as OpenClawConfig,
+        onDeliveryResult,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    if (!isChannelPartialDeliveryError(caught)) {
+      throw new Error("expected a partial LINE delivery error");
+    }
+    expect(caught.deliveryResult).toMatchObject({
+      messageIds: ["m-text"],
+      receipt: { primaryPlatformMessageId: "m-text" },
+      visibleReplySent: true,
+    });
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+  });
+
+  it("returns the provider receipt for a Flex-only legacy text send", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = {
+      channels: { line: { channelAccessToken: "line-fixture-token" } },
+    } as OpenClawConfig;
+    const providerResponse = new Response(JSON.stringify({ sentMessages: [{ id: "m-flex" }] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+    const fetch = vi.fn(async () => providerResponse);
+    vi.stubGlobal("fetch", fetch);
+    const onDeliveryResult = vi.fn();
+
+    const result = await lineOutboundAdapter.sendText!({
+      to: "line:user:U123",
+      text: "| Name | Status |\n|---|---|\n| OpenClaw | ready |",
+      accountId: "default",
+      cfg,
+      onDeliveryResult,
+    });
+
+    expect(result.messageId).toBe("m-flex");
+    expect(result.receipt?.platformMessageIds).toEqual(["m-flex"]);
+    expect(result.receipt?.threadId).toBe("c1");
+    expect(mocks.pushFlexMessage).toHaveBeenCalledOnce();
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(onDeliveryResult).toHaveBeenCalledWith(expect.objectContaining({ messageId: "m-flex" }));
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("publishes completed Flex receipts before a later legacy text send fails", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = {
+      channels: { line: { channelAccessToken: "line-fixture-token" } },
+    } as OpenClawConfig;
+    const laterFailure = new Error("second LINE Flex send failed");
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ sentMessages: [{ id: "m-first-flex" }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockRejectedValueOnce(laterFailure);
+    vi.stubGlobal("fetch", fetch);
+    mocks.pushFlexMessage
+      .mockResolvedValueOnce(lineResult("m-first-flex"))
+      .mockRejectedValueOnce(laterFailure);
+    const onDeliveryResult = vi.fn();
+
+    await expect(
+      lineOutboundAdapter.sendText!({
+        to: "line:user:U123",
+        text: "```js\nfirst()\n```\n\n```js\nsecond()\n```",
+        accountId: "default",
+        cfg,
+        onDeliveryResult,
+      }),
+    ).rejects.toThrow("second LINE Flex send failed");
+
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "m-first-flex",
+        receipt: expect.objectContaining({ platformMessageIds: ["m-first-flex"] }),
+      }),
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("sends flex message without dropping text", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
@@ -193,6 +321,62 @@ describe("line outbound sendPayload", () => {
       "m-text",
       "m-media",
     ]);
+  });
+
+  it("preserves every provider receipt and conversation for an inline LINE batch", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+    const providerMessageIds = ["line-provider-first", "line-provider-second"] as const;
+    mocks.pushMessagesLine.mockResolvedValueOnce({
+      messageId: providerMessageIds[0],
+      chatId: "C123",
+      receipt: createLineSendReceipt({
+        messageId: providerMessageIds[0],
+        messageIds: providerMessageIds,
+        chatId: "C123",
+        kind: "card",
+        messageCount: 2,
+      }),
+    });
+    const onDeliveryResult = vi.fn();
+
+    const result = await lineOutboundAdapter.sendPayload!({
+      to: "line:group:C123",
+      text: "",
+      payload: {
+        text: "",
+        channelData: {
+          line: {
+            quickReplies: ["Confirm"],
+            flexMessage: { altText: "Review", contents: { type: "bubble" } },
+            location: {
+              title: "Meet here",
+              address: "1 Main Street",
+              latitude: 37.7,
+              longitude: -122.4,
+            },
+          },
+        },
+      },
+      accountId: "default",
+      cfg,
+      onDeliveryResult,
+    });
+
+    expect(result.messageId).toBe("line-provider-first");
+    expect(result.receipt?.platformMessageIds).toEqual(providerMessageIds);
+    expect(result.receipt?.parts.map((part) => part.platformMessageId)).toEqual(providerMessageIds);
+    expect(result.receipt?.threadId).toBe("C123");
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "line-provider-first",
+        receipt: expect.objectContaining({
+          platformMessageIds: providerMessageIds,
+          threadId: "C123",
+        }),
+      }),
+    );
   });
 
   it("sends template message without dropping text", async () => {

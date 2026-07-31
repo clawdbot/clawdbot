@@ -38,16 +38,17 @@ async function markSessionFailed(params: {
   return false;
 }
 
-async function sendUnresumableSessionNotice(params: {
+export async function sendUnresumableSessionNotice(params: {
   deliveryContext: DeliveryContext;
   entry: SessionEntry;
+  gatewayRuntime: GatewayRecoveryRuntime;
   reason: string;
   sessionKey: string;
-  gatewayRuntime: GatewayRecoveryRuntime;
+  text: string;
 }): Promise<void> {
   const messageParams: Record<string, unknown> = {
     to: params.deliveryContext.to,
-    message: UNRESUMABLE_SESSION_NOTICE,
+    message: params.text,
     bestEffort: true,
   };
   if (params.deliveryContext.threadId != null) {
@@ -147,6 +148,7 @@ export async function failUnresumableMainSession(params: {
       gatewayRuntime: params.gatewayRuntime,
       reason: params.reason,
       sessionKey: params.sessionKey,
+      text: UNRESUMABLE_SESSION_NOTICE,
     });
   }
   return "failed";

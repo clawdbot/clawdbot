@@ -12,7 +12,7 @@ import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type {
   UserTurnTranscriptRecorder,
   UserTurnTranscriptTarget,
@@ -86,6 +86,8 @@ export async function retireTerminalRestartRecoverySourceClaim(params: {
 function buildExpectedSessionState(entry: SessionEntry): SessionTranscriptTurnExpectedState {
   return {
     abortedLastRun: entry.abortedLastRun,
+    mainRestartRecoveryCycleId: entry.mainRestartRecovery?.cycleId,
+    mainRestartRecoveryRevision: entry.mainRestartRecovery?.revision,
     restartRecoveryBeforeAgentReplyState: entry.restartRecoveryBeforeAgentReplyState,
     restartRecoveryDeliveryReceiptState: entry.restartRecoveryDeliveryReceiptState,
     restartRecoveryDeliveryToolCallId: entry.restartRecoveryDeliveryToolCallId,
@@ -99,7 +101,6 @@ function buildExpectedSessionState(entry: SessionEntry): SessionTranscriptTurnEx
     restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
     restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
     status: entry.status,
-    updatedAt: entry.updatedAt,
   };
 }
 
@@ -111,6 +112,8 @@ function matchesExpectedSessionState(
   return (
     entry.sessionId === sessionId &&
     entry.abortedLastRun === expected.abortedLastRun &&
+    entry.mainRestartRecovery?.cycleId === expected.mainRestartRecoveryCycleId &&
+    entry.mainRestartRecovery?.revision === expected.mainRestartRecoveryRevision &&
     entry.restartRecoveryBeforeAgentReplyState === expected.restartRecoveryBeforeAgentReplyState &&
     entry.restartRecoveryDeliveryReceiptState === expected.restartRecoveryDeliveryReceiptState &&
     entry.restartRecoveryDeliveryToolCallId === expected.restartRecoveryDeliveryToolCallId &&
@@ -129,8 +132,7 @@ function matchesExpectedSessionState(
       entry.restartRecoveryTerminalRunIds,
       expected.restartRecoveryTerminalRunIds,
     ) &&
-    entry.status === expected.status &&
-    entry.updatedAt === expected.updatedAt
+    entry.status === expected.status
   );
 }
 
@@ -395,11 +397,18 @@ export function createReplyRestartRecoveryClaimController(params: {
                 restartRecoveryBeforeAgentReplyState: state,
                 ...(pendingFinalDelivery
                   ? {
-                      pendingFinalDelivery: true,
-                      pendingFinalDeliveryText: pendingFinalDelivery.text,
-                      pendingFinalDeliveryIntentId: pendingFinalDelivery.intentId,
-                      pendingFinalDeliveryContext: pendingFinalDelivery.context,
-                      pendingFinalDeliveryCreatedAt: updatedAt,
+                      pendingFinalDelivery: {
+                        ...(pendingFinalDelivery.text
+                          ? { kind: "replayable" as const, text: pendingFinalDelivery.text }
+                          : { kind: "transport-only" as const }),
+                        createdAt: updatedAt,
+                        ...(pendingFinalDelivery.intentId
+                          ? { intentId: pendingFinalDelivery.intentId }
+                          : {}),
+                        ...(pendingFinalDelivery.context
+                          ? { context: pendingFinalDelivery.context }
+                          : {}),
+                      },
                       // Hook-owned replies are already terminal. A restart may only deliver this
                       // checkpoint; it must never resume the model or broader tool surface.
                       restartRecoveryForceSafeTools: true,
@@ -483,13 +492,6 @@ export function createReplyRestartRecoveryClaimController(params: {
             abortedLastRun: true,
             endedAt,
             pendingFinalDelivery: undefined,
-            pendingFinalDeliveryText: undefined,
-            pendingFinalDeliveryCreatedAt: undefined,
-            pendingFinalDeliveryLastAttemptAt: undefined,
-            pendingFinalDeliveryAttemptCount: undefined,
-            pendingFinalDeliveryLastError: undefined,
-            pendingFinalDeliveryContext: undefined,
-            pendingFinalDeliveryIntentId: undefined,
             runtimeMs:
               typeof current.startedAt === "number"
                 ? Math.max(0, endedAt - current.startedAt)
@@ -498,9 +500,7 @@ export function createReplyRestartRecoveryClaimController(params: {
             updatedAt: endedAt,
           };
         }
-        const preservesPendingFinal =
-          current.pendingFinalDelivery === true ||
-          normalizeOptionalString(current.pendingFinalDeliveryText) !== undefined;
+        const preservesPendingFinal = current.pendingFinalDelivery !== undefined;
         const completesHandledSilent =
           current.restartRecoveryBeforeAgentReplyState === "handled-silent" &&
           !preservesPendingFinal;
