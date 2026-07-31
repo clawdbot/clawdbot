@@ -1805,6 +1805,75 @@
       }
     },
     {
+      "name": "@openclaw/volcengine-provider",
+      "description": "OpenClaw Volcengine provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "volcengine",
+          "label": "Volcengine"
+        },
+        "providers": [
+          {
+            "id": "volcengine",
+            "aliases": [
+              "volcengine-plan"
+            ],
+            "name": "Volcengine",
+            "docs": "/providers/volcengine",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "VOLCANO_ENGINE_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "volcengine-api-key",
+                "choiceLabel": "Volcano Engine API key",
+                "groupId": "volcengine",
+                "groupLabel": "Volcano Engine",
+                "groupHint": "API key",
+                "optionKey": "volcengineApiKey",
+                "cliFlag": "--volcengine-api-key",
+                "cliOption": "--volcengine-api-key <key>",
+                "cliDescription": "Volcano Engine API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          },
+          {
+            "id": "volcengine-plan",
+            "name": "Volcengine Plan",
+            "docs": "/providers/volcengine",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "VOLCANO_ENGINE_API_KEY"
+            ]
+          }
+        ],
+        "contracts": {
+          "speechProviders": [
+            "volcengine"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/volcengine-provider",
+          "npmSpec": "@openclaw/volcengine-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/stepfun-provider",
       "description": "OpenClaw StepFun provider plugin.",
       "source": "official",

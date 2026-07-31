@@ -2039,6 +2039,32 @@ describe("official external plugin catalog", () => {
     });
   });
 
+  it("lists Volcengine model and speech providers as one official external plugin", () => {
+    const entry = expectCatalogEntry("volcengine");
+    const manifest = getOfficialExternalPluginCatalogManifest(entry);
+    const volcengine = manifest?.providers?.find((provider) => provider.id === "volcengine");
+
+    expect(resolveOfficialExternalPluginId(entry)).toBe("volcengine");
+    expect(getOfficialExternalPluginCatalogEntry("volcengine-plan")).toBe(entry);
+    expect(resolveOfficialExternalPluginInstall(entry)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/volcengine-provider",
+      npmSpec: "@openclaw/volcengine-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.7.2",
+    });
+    expect(volcengine?.aliases).toEqual(["volcengine-plan"]);
+    expect(volcengine?.authChoices?.[0]).toMatchObject({
+      choiceId: "volcengine-api-key",
+      optionKey: "volcengineApiKey",
+      onboardingScopes: ["text-inference"],
+    });
+    expect(manifest?.providers?.map((provider) => provider.id)).toEqual([
+      "volcengine",
+      "volcengine-plan",
+    ]);
+    expect(manifest?.contracts?.speechProviders).toEqual(["volcengine"]);
+  });
+
   it.each([
     ["teams-meetings", "@openclaw/teams-meetings", "teams_meetings", "teams"],
     ["zoom-meetings", "@openclaw/zoom-meetings", "zoom_meetings", "zoom"],
