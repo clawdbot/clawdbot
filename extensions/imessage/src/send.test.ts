@@ -135,6 +135,25 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.sentAt).toBeGreaterThan(0);
   });
 
+  it("rejects an unsuccessful RPC send instead of acknowledging a delivered message", async () => {
+    const client = createClient({ success: false, error: "recipient is not registered" });
+
+    await expect(
+      sendMessageIMessage("+15551234567", "hello", {
+        config: IMESSAGE_TEST_CFG,
+        client,
+      }),
+    ).rejects.toThrow("recipient is not registered");
+
+    expect(
+      hasPersistedIMessageEcho({
+        scope: "default:imessage:+15551234567",
+        text: "hello",
+        includePendingText: true,
+      }),
+    ).toBe(false);
+  });
+
   it("drops reply metadata from text sends when reply actions are disabled", async () => {
     const client = createClient({ guid: "p:0/imsg-plain" });
 

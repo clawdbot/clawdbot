@@ -62,6 +62,7 @@ export async function deliverReplies(params: {
         const sent = await sendMessageIMessage(target, caption ?? "", {
           config: params.cfg,
           mediaUrl,
+          ...(payload.audioAsVoice ? { audioAsVoice: true } : {}),
           maxBytes,
           accountId,
           replyToId: payload.replyToId,

@@ -129,6 +129,28 @@ describe("deliverReplies", () => {
     ]);
   });
 
+  it("forwards voice-note payloads to the canonical iMessage media sender", async () => {
+    await deliverReplies({
+      cfg: IMESSAGE_TEST_CFG,
+      replies: [{ mediaUrl: "https://example.com/voice.caf", audioAsVoice: true }],
+      target: "chat_id:20",
+      accountId: "acct-2",
+      runtime,
+      maxBytes: 8192,
+      textLimit: 4000,
+    });
+
+    expect(sendMessageIMessageMock).toHaveBeenCalledWith(
+      "chat_id:20",
+      "",
+      expect.objectContaining({
+        accountId: "acct-2",
+        audioAsVoice: true,
+        mediaUrl: "https://example.com/voice.caf",
+      }),
+    );
+  });
+
   it("records durable outbound sends in the sent-message cache", async () => {
     const remember = vi.fn();
     const send = createIMessageEchoCachingSend({

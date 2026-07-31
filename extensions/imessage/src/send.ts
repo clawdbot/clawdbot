@@ -454,7 +454,7 @@ function resolveOutboundEchoScope(params: {
   return `${params.accountId}:imessage:${params.target.to}`;
 }
 
-function resolveIMessageCliFailure(result: Record<string, unknown>): string | null {
+function resolveIMessageSendFailure(result: Record<string, unknown>): string | null {
   if (result.success !== false) {
     return null;
   }
@@ -625,7 +625,7 @@ async function trySendAttachmentForTarget(params: {
     }
     throw error;
   }
-  const failure = resolveIMessageCliFailure(result);
+  const failure = resolveIMessageSendFailure(result);
   if (failure) {
     const error = new Error(failure);
     forgetPersistedIMessageEchoKey(pendingEchoKey);
@@ -874,6 +874,16 @@ export async function sendMessageIMessage(
     closedClient = true;
     await client.stop();
   };
+  const requestSuccessfulSend = async (sendParams: Record<string, unknown>) => {
+    const response = await client.request<Record<string, unknown>>("send", sendParams, {
+      timeoutMs,
+    });
+    const failure = resolveIMessageSendFailure(response);
+    if (failure) {
+      throw new Error(failure);
+    }
+    return response;
+  };
   let result: Record<string, unknown>;
   const sendStartedAtMs = Date.now();
   let pendingEchoKey: string | undefined;
@@ -888,9 +898,7 @@ export async function sendMessageIMessage(
           pending: true,
         });
       }
-      result = await client.request<Record<string, unknown>>("send", params, {
-        timeoutMs,
-      });
+      result = await requestSuccessfulSend(params);
     } catch (error) {
       if (resolvedReplyToId && isThreadedReplyUnsupportedError(error)) {
         // #99638: the transport cannot deliver a threaded reply, so resend the
@@ -899,9 +907,7 @@ export async function sendMessageIMessage(
         // reply_to stripped, keeping any file; a further failure propagates.
         const plainParams = { ...params };
         delete plainParams.reply_to;
-        result = await client.request<Record<string, unknown>>("send", plainParams, {
-          timeoutMs,
-        });
+        result = await requestSuccessfulSend(plainParams);
         effectiveReplyToId = undefined;
       } else if (filePath || !isIMessageRpcSendTimeout(error)) {
         throw error;
