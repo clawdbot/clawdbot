@@ -325,6 +325,7 @@ async function editMessageTelegramWithContext(
       chatId,
       message: editedMessage,
       messageId: editedMessage.message_id,
+      recordGroupHistory: false,
       ...(botUserId !== undefined ? { botUserId } : {}),
       ...(editedMessage.message_thread_id !== undefined
         ? { messageThreadId: editedMessage.message_thread_id }
