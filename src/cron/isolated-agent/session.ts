@@ -157,8 +157,12 @@ export function resolveCronSession(params: {
     );
   const sourceSessionKey = params.sourceSessionKey?.trim();
   const sourceSessionDiffers = Boolean(sourceSessionKey && sourceSessionKey !== params.sessionKey);
-  const targetEntry = store[params.sessionKey];
-  const entry = store[sourceSessionKey || params.sessionKey];
+  const targetEntry = params.store
+    ? store[params.sessionKey]
+    : loadCronSessionEntryLatest(storePath, params.sessionKey);
+  const entry = params.store
+    ? store[sourceSessionKey || params.sessionKey]
+    : (loadCronSessionEntryLatest(storePath, sourceSessionKey || params.sessionKey) ?? targetEntry);
   // Guard the run's target row: archived sessions stay read-only even when a
   // differing source session seeds the carried preferences.
   const archivedSessionError = resolveSessionWorkStartError(params.sessionKey, targetEntry);

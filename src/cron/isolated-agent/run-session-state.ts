@@ -98,6 +98,8 @@ export function projectCronOwnershipFields(entry: SessionEntry): Partial<Session
   delete projected.label;
   delete projected.pinnedAt;
   delete projected.updatedAt;
+  delete projected.observerDigest;
+  delete projected.compactionCount;
   return projected;
 }
 
