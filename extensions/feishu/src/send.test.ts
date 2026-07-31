@@ -381,6 +381,37 @@ describe("getMessageFeishu", () => {
     });
   });
 
+  it("preserves the canonical root and thread returned by the Feishu message API", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "om_topic_child",
+            root_id: "om_topic_root",
+            thread_id: "omt_topic",
+            chat_id: "oc_topic_group",
+            msg_type: "text",
+            body: { content: JSON.stringify({ text: "topic reply" }) },
+          },
+        ],
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_topic_child",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        messageId: "om_topic_child",
+        rootId: "om_topic_root",
+        threadId: "omt_topic",
+      }),
+    );
+  });
+
   it("falls through empty interactive card element arrays and locale variants", async () => {
     mockClientGet.mockResolvedValueOnce({
       code: 0,

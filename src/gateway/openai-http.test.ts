@@ -205,9 +205,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       });
       expect(res.status).toBe(400);
       const json = (await res.json()) as Record<string, unknown>;
-      expect((json.error as Record<string, unknown> | undefined)?.type).toBe(
-        "invalid_request_error",
-      );
+      const error = json.error as Record<string, unknown> | undefined;
+      expect(error?.type).toBe("invalid_request_error");
+      expect(error?.message).toBe("Invalid image_url content in `messages`.");
       expect(agentCommand).toHaveBeenCalledTimes(0);
     };
     const postSyncUserMessage = async (message: string) => {
@@ -561,6 +561,48 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         },
       ]);
 
+      const malformedImageParts = [
+        { type: "image_url" },
+        { type: "image_url", image_url: null },
+        { type: "image_url", image_url: {} },
+        { type: "image_url", image_url: { url: "   " } },
+        { type: "image_url", image_url: { url: 123 } },
+        { type: "image_url", image_url: { url: null } },
+        { type: "image_url", image_url: "   " },
+        { type: "image_url", image_url: 123 },
+      ];
+      const validImagePart = {
+        type: "image_url",
+        image_url: { url: "data:image/png;base64,QUJDRA==" },
+      };
+      for (const imagePart of malformedImageParts) {
+        for (const content of [
+          [imagePart],
+          [{ type: "text", text: "describe this" }, imagePart],
+          [validImagePart, imagePart],
+        ]) {
+          await expectInvalidRequestNoDispatch([{ role: "user", content }]);
+        }
+      }
+
+      for (const malformedDataUri of [
+        "data:image/png,QUJDRA==",
+        "data:image/png;base64,",
+        "data:image/png;base64,%%%",
+        "data:image/svg+xml;base64,PHN2Zz4=",
+        "data:image/png;base64,JVBERi0xLjQK",
+      ]) {
+        await expectInvalidRequestNoDispatch([
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "describe this" },
+              { type: "image_url", image_url: { url: malformedDataUri } },
+            ],
+          },
+        ]);
+      }
+
       {
         mockAgentOnce([{ text: "I can see the image" }]);
         const res = await postChatCompletions(port, {
@@ -608,6 +650,33 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(firstCall?.images).toBeUndefined();
         expect(firstCall?.message ?? "").not.toContain("User sent image(s) with no text.");
         await res.text();
+      }
+
+      for (const historicalImageParts of [
+        [{ type: "image_url", image_url: { url: "   " } }],
+        [validImagePart, { type: "image_url", image_url: { url: "   " } }],
+      ]) {
+        for (const followup of [
+          { role: "user", content: "What color was it?" },
+          { role: "tool", content: "Vision tool says it is blue." },
+        ]) {
+          mockAgentOnce([{ text: "follow up answer" }]);
+          const res = await postChatCompletions(port, {
+            model: "openclaw",
+            messages: [
+              {
+                role: "user",
+                content: [{ type: "text", text: "look at this" }, ...historicalImageParts],
+              },
+              { role: "assistant", content: "Checking the image." },
+              followup,
+            ],
+          });
+          expect(res.status).toBe(200);
+          expect(getFirstAgentCall()?.images).toBeUndefined();
+          expect(getFirstAgentMessage()).toContain("User: look at this");
+          await res.text();
+        }
       }
 
       {

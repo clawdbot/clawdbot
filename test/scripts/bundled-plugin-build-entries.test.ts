@@ -357,6 +357,12 @@ describe("bundled plugin build entries", () => {
     expect(artifacts).not.toContain("dist/extensions/vydra/package.json");
   });
 
+  it("excludes the externalized ComfyUI provider from bundled artifacts", () => {
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expectNoPrefixMatches(artifacts, "dist/extensions/comfy/");
+  });
+
   it("excludes externalized meeting plugins from bundled artifacts", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
