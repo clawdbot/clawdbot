@@ -35,10 +35,12 @@ export function normalizeLlamaServerPayload(
   if (!isRecord(schema)) {
     return payload;
   }
-  const { response_format: _responseFormat, ...rest } = payload;
   return {
-    ...rest,
-    json_schema: schema,
+    ...payload,
+    response_format: {
+      type: "json_object",
+      schema,
+    },
   };
 }
 

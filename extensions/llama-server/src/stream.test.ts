@@ -20,15 +20,18 @@ describe("llama-server stream payload", () => {
       }),
     ).toEqual({
       model: "model",
-      json_schema: {
-        type: "object",
-        properties: { ok: { type: "boolean" } },
-        required: ["ok"],
+      response_format: {
+        type: "json_object",
+        schema: {
+          type: "object",
+          properties: { ok: { type: "boolean" } },
+          required: ["ok"],
+        },
       },
     });
   });
 
-  it("maps llama-server's direct response-format schema to its top-level field", () => {
+  it("maps llama-server's direct response-format schema to json_object", () => {
     expect(
       normalizeLlamaServerPayload({
         response_format: {
@@ -37,7 +40,10 @@ describe("llama-server stream payload", () => {
         },
       }),
     ).toEqual({
-      json_schema: { type: "object", properties: { ok: { type: "boolean" } } },
+      response_format: {
+        type: "json_object",
+        schema: { type: "object", properties: { ok: { type: "boolean" } } },
+      },
     });
   });
 
@@ -53,10 +59,13 @@ describe("llama-server stream payload", () => {
       ),
     ).toEqual({
       model: "model",
-      json_schema: {
-        type: "object",
-        properties: { ok: { type: "boolean" } },
-        required: ["ok"],
+      response_format: {
+        type: "json_object",
+        schema: {
+          type: "object",
+          properties: { ok: { type: "boolean" } },
+          required: ["ok"],
+        },
       },
     });
   });

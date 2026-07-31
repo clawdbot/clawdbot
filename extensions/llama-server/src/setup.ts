@@ -18,7 +18,11 @@ import {
   selectPreferredLocalModelId,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { applyProviderDefaultModel } from "openclaw/plugin-sdk/provider-setup";
-import { resolveLlamaServerProviderHeaders, resolveLlamaServerRuntimeApiKey } from "./auth.js";
+import {
+  hasLlamaServerAuthorizationHeader,
+  resolveLlamaServerProviderHeaders,
+  resolveLlamaServerRuntimeApiKey,
+} from "./auth.js";
 import {
   LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR,
   LLAMA_SERVER_DEFAULT_ORIGIN,
@@ -123,18 +127,20 @@ async function discoverForSetup(params: {
   apiKey?: string;
   signal?: AbortSignal;
 }): Promise<LlamaServerDiscoveryResult> {
-  const resolvedApiKey =
-    params.apiKey ??
-    (await resolveLlamaServerRuntimeApiKey({
-      config: params.config,
-      agentDir: params.agentDir,
-    }));
   const providerConfig = params.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID];
   const headers = await resolveLlamaServerProviderHeaders({
     config: params.config,
     env: params.env,
     headers: providerConfig?.headers,
   });
+  const resolvedApiKey =
+    params.apiKey ??
+    (hasLlamaServerAuthorizationHeader(headers)
+      ? undefined
+      : await resolveLlamaServerRuntimeApiKey({
+          config: params.config,
+          agentDir: params.agentDir,
+        }));
   return await discoverLlamaServer({
     baseUrl: params.baseUrl,
     apiKey: resolvedApiKey,
@@ -286,9 +292,13 @@ async function validateNonInteractiveDiscovery(
     env: process.env,
     headers: ctx.config.models?.providers?.[LLAMA_SERVER_PROVIDER_ID]?.headers,
   });
+  const selectedApiKey =
+    hasLlamaServerAuthorizationHeader(headers) && resolvedApiKey?.source !== "flag"
+      ? null
+      : resolvedApiKey;
   const discovery = await discoverLlamaServer({
     baseUrl,
-    apiKey: resolvedApiKey?.key,
+    apiKey: selectedApiKey?.key,
     headers,
     cacheTtlMs: 0,
   });
@@ -309,7 +319,7 @@ async function validateNonInteractiveDiscovery(
     ctx.runtime.exit(1);
     return null;
   }
-  return { discovery, modelId, resolvedApiKey };
+  return { discovery, modelId, resolvedApiKey: selectedApiKey };
 }
 
 export async function validateLlamaServerNonInteractive(

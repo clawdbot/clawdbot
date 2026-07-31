@@ -91,6 +91,34 @@ describe("llama-server setup", () => {
     });
   });
 
+  it("prefers configured Authorization over ambient auth during guided detection", async () => {
+    discoverMock.mockResolvedValue(successfulDiscovery());
+    runtimeApiKeyMock.mockResolvedValue("ambient-key");
+
+    await detectLlamaServerSetup({
+      config: {
+        models: {
+          providers: {
+            "llama-server": {
+              baseUrl: "http://localhost:8080/v1",
+              headers: { Authorization: "Bearer proxy-key" },
+              models: [],
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(runtimeApiKeyMock).not.toHaveBeenCalled();
+    expect(discoverMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: undefined,
+        headers: { Authorization: "Bearer proxy-key" },
+      }),
+    );
+  });
+
   it("skips guided detection when configured auth cannot be resolved", async () => {
     runtimeApiKeyMock.mockRejectedValue(new Error("unresolved SecretRef"));
 
@@ -241,6 +269,36 @@ describe("llama-server setup", () => {
 
     expect(configured?.models?.providers?.[LLAMA_SERVER_PROVIDER_ID]?.headers).toEqual({
       "X-Tenant": "one",
+    });
+  });
+
+  it("preserves Authorization when non-interactive auth came from the environment", async () => {
+    discoverMock.mockResolvedValue(successfulDiscovery());
+    const ctx = nonInteractiveContext();
+    ctx.config = {
+      models: {
+        providers: {
+          "llama-server": {
+            baseUrl: "http://localhost:8080/v1",
+            headers: { Authorization: "Bearer proxy-key" },
+            models: [],
+          },
+        },
+      },
+    };
+    ctx.resolveApiKey = vi.fn(async () => ({ key: "ambient-key", source: "env" as const }));
+
+    const configured = await configureLlamaServerNonInteractive(ctx);
+
+    expect(discoverMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: undefined,
+        headers: { Authorization: "Bearer proxy-key" },
+      }),
+    );
+    expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
+    expect(configured?.models?.providers?.[LLAMA_SERVER_PROVIDER_ID]?.headers).toEqual({
+      Authorization: "Bearer proxy-key",
     });
   });
 
