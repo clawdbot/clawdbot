@@ -18,6 +18,7 @@ const isEmbeddedAgentRunActiveMock = vi.fn();
 const abortEmbeddedAgentRunMock = vi.fn();
 const waitForEmbeddedAgentRunEndMock = vi.fn();
 const clearSessionQueuesMock = vi.fn();
+const chatSendWithAdmissionOwnedMock = vi.fn();
 
 vi.mock("../../agents/embedded-agent-runner/runs.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/embedded-agent-runner/runs.js")>(
@@ -81,6 +82,10 @@ vi.mock("./chat.js", () => ({
   },
 }));
 
+vi.mock("./chat-send-handler.js", () => ({
+  handleChatSend: (...args: unknown[]) => chatSendWithAdmissionOwnedMock(...args),
+}));
+
 import { sessionsHandlers } from "./sessions.js";
 
 function createRequestContext(overrides: Record<string, unknown> = {}): GatewayRequestContext {
@@ -108,6 +113,15 @@ describe("sessions.send completed subagent follow-up status", () => {
     abortEmbeddedAgentRunMock.mockReset();
     waitForEmbeddedAgentRunEndMock.mockReset().mockResolvedValue(true);
     clearSessionQueuesMock.mockReset();
+    chatSendWithAdmissionOwnedMock
+      .mockReset()
+      .mockImplementation(
+        async (options: { respond: RespondFn }, onAdmissionOwned: () => Promise<boolean>) => {
+          if (await onAdmissionOwned()) {
+            await chatSendMock(options);
+          }
+        },
+      );
   });
 
   it("reactivates completed subagent sessions before broadcasting sessions.changed", async () => {
@@ -369,6 +383,11 @@ describe("sessions.send completed subagent follow-up status", () => {
     chatSendMock.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
       respond(true, { runId: "steer-retry", status: "completed" }, undefined, { cached: true });
     });
+    chatSendWithAdmissionOwnedMock.mockImplementationOnce(
+      async (options: { respond: RespondFn }) => {
+        await chatSendMock(options);
+      },
+    );
 
     const respondMock = vi.fn();
     await expectDefined(
@@ -393,6 +412,7 @@ describe("sessions.send completed subagent follow-up status", () => {
 
     expect(abortEmbeddedAgentRunMock).not.toHaveBeenCalled();
     expect(clearSessionQueuesMock).not.toHaveBeenCalled();
+    expect(readSessionMessageCountAsyncMock).toHaveBeenCalledTimes(1);
     expect(respondMock.mock.calls.at(0)?.[1]).not.toHaveProperty("interruptedActiveRun");
     expect(respondMock.mock.calls.at(0)?.[3]).toMatchObject({ cached: true });
   });
@@ -449,6 +469,11 @@ describe("sessions.send completed subagent follow-up status", () => {
         runId: "steer-inflight",
       });
     });
+    chatSendWithAdmissionOwnedMock.mockImplementationOnce(
+      async (options: { respond: RespondFn }) => {
+        await chatSendMock(options);
+      },
+    );
 
     const respondMock = vi.fn();
     await expectDefined(
@@ -474,6 +499,7 @@ describe("sessions.send completed subagent follow-up status", () => {
 
     expect(abortEmbeddedAgentRunMock).not.toHaveBeenCalled();
     expect(clearSessionQueuesMock).not.toHaveBeenCalled();
+    expect(readSessionMessageCountAsyncMock).toHaveBeenCalledTimes(1);
     expect(respondMock.mock.calls.at(0)?.[3]).toMatchObject({ cached: true });
   });
 

@@ -5,7 +5,7 @@ import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
-import { PENDING_CHAT_SEND_DEDUPE_PREFIX, pendingChatSendDedupeKey } from "../server-shared.js";
+import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import {
@@ -41,26 +41,6 @@ export function respondChatActiveLeafChanged(respond: GatewayRequestHandlerOptio
     errorShape(ErrorCodes.INVALID_REQUEST, "active branch changed; review and resend", {
       details: { reason: ACTIVE_LEAF_CHANGED_ERROR_REASON },
     }),
-  );
-}
-
-/**
- * True when runChatSendPreAdmission would replay an existing chat.send for this
- * client run id instead of admitting a new turn. Callers that take destructive
- * action before dispatch must consult this first, so an idempotent retry cannot
- * destroy a run it only meant to replay. Keep the checks below in step with the
- * replay branches of runChatSendPreAdmission.
- */
-export function hasReplayableChatSend(
-  context: GatewayRequestHandlerOptions["context"],
-  clientRunId: string,
-): boolean {
-  return (
-    context.dedupe.has(`chat:${clientRunId}`) ||
-    context.chatRunState.runs.get(clientRunId)?.abortMarker !== undefined ||
-    context.dedupe.has(pendingChatSendDedupeKey(clientRunId)) ||
-    context.chatAbortControllers.has(clientRunId) ||
-    context.chatQueuedTurns.has(clientRunId)
   );
 }
 

@@ -26,7 +26,7 @@ import {
   resolveDeletedAgentIdFromSessionKey,
 } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
-import { hasReplayableChatSend } from "./chat-send-pre-admission.js";
+import { handleChatSend } from "./chat-send-handler.js";
 import { chatHandlers } from "./chat.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -266,11 +266,11 @@ async function handleSessionSend(params: {
       ? rawIdempotencyKey.trim()
       : undefined;
   const idempotencyKey = explicitIdempotencyKey ?? randomUUID();
-  const dispatchChatSend = async (respond: RespondFn) => {
-    await expectDefined(
-      chatHandlers["chat.send"],
-      "chat.send handler",
-    )({
+  const dispatchChatSend = async (
+    respond: RespondFn,
+    onAdmissionOwned?: () => Promise<boolean>,
+  ) => {
+    const options: GatewayRequestHandlerOptions = {
       req: params.req,
       params: {
         sessionKey: canonicalKey,
@@ -285,7 +285,12 @@ async function handleSessionSend(params: {
       context: params.context,
       client: params.client,
       isWebchatConnect: params.isWebchatConnect,
-    });
+    };
+    if (onAdmissionOwned) {
+      await handleChatSend(options, onAdmissionOwned);
+      return;
+    }
+    await expectDefined(chatHandlers["chat.send"], "chat.send handler")(options);
   };
   const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry);
   if (archivedSessionError) {
@@ -354,44 +359,38 @@ async function handleSessionSend(params: {
   }
 
   let interruptedActiveRun = false;
-  // An explicit retry may already own a chat.send that the handler will replay.
-  // Interrupting first aborts whatever is running now - an unrelated turn, or the
-  // very run this retry is replaying - and clears its queued follow-ups, so let
-  // the owning handler replay before steering, as the archive guard does above.
-  const replaysExistingChatSend =
-    explicitIdempotencyKey !== undefined &&
-    hasReplayableChatSend(params.context, explicitIdempotencyKey);
-  if (params.interruptIfActive && !replaysExistingChatSend) {
-    const interruptResult = await interruptSessionRunIfActive({
-      req: params.req,
-      context: params.context,
-      client: params.client,
-      isWebchatConnect: params.isWebchatConnect,
-      requestedKey: key,
-      canonicalKey,
-      agentId: requestedAgentId,
-      sessionId: entry.sessionId,
-    });
-    if (interruptResult.error) {
-      params.respond(false, undefined, interruptResult.error);
-      return;
-    }
-    interruptedActiveRun = interruptResult.interrupted;
-  }
-  if (params.interruptIfActive) {
-    try {
-      // A run can finish before the active check or while an interruption
-      // drains. Refresh after every steer attempt so the pending seq is current.
-      messageSeq = await readNextMessageSeq();
-    } catch (error) {
-      if (!isSessionTranscriptProjectionUnavailableError(error)) {
-        throw error;
+  const onAdmissionOwned = params.interruptIfActive
+    ? async (): Promise<boolean> => {
+        const interruptResult = await interruptSessionRunIfActive({
+          req: params.req,
+          context: params.context,
+          client: params.client,
+          isWebchatConnect: params.isWebchatConnect,
+          requestedKey: key,
+          canonicalKey,
+          agentId: requestedAgentId,
+          sessionId: entry.sessionId,
+        });
+        if (interruptResult.error) {
+          params.respond(false, undefined, interruptResult.error);
+          return false;
+        }
+        interruptedActiveRun = interruptResult.interrupted;
+        try {
+          // A run can finish before the active check or while an interruption
+          // drains. Refresh only for new sends; replays retain their original result.
+          messageSeq = await readNextMessageSeq();
+        } catch (error) {
+          if (!isSessionTranscriptProjectionUnavailableError(error)) {
+            throw error;
+          }
+          // Interruption may already have committed side effects. The sequence is
+          // optional, so preserve delivery and let transcript events reconcile it.
+          messageSeq = undefined;
+        }
+        return true;
       }
-      // Interruption may already have committed side effects. The sequence is
-      // optional, so preserve delivery and let transcript events reconcile it.
-      messageSeq = undefined;
-    }
-  }
+    : undefined;
 
   let sendAcked = false;
   let sendPayload: unknown;
@@ -431,7 +430,7 @@ async function handleSessionSend(params: {
       error,
       meta,
     );
-  });
+  }, onAdmissionOwned);
   if (sendAcked) {
     if (shouldAttachPendingMessageSeq({ payload: sendPayload, cached: sendCached })) {
       await reactivateCompletedSubagentSession({

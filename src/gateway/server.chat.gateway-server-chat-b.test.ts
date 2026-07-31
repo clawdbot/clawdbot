@@ -36,7 +36,11 @@ import {
   createTextTranscriptEvent,
 } from "./server-chat.agent-events.test-helpers.js";
 import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
-import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+  RespondFn,
+} from "./server-methods/shared-types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import {
   connectOk,
@@ -246,6 +250,7 @@ async function sendControlUiChat(params: {
   idempotencyKey: string;
   message: string;
   respond: RespondFn;
+  onAdmissionOwned?: () => Promise<boolean>;
 }): Promise<void> {
   const requestParams = {
     sessionKey: "main",
@@ -255,11 +260,7 @@ async function sendControlUiChat(params: {
       ? { expectedSessionRoutingContract: params.expectedSessionRoutingContract }
       : {}),
   };
-  const { chatHandlers } = await import("./server-methods/chat.js");
-  await expectDefined(
-    chatHandlers["chat.send"],
-    'chatHandlers["chat.send"] test invariant',
-  )({
+  const options: GatewayRequestHandlerOptions = {
     req: {
       type: "req",
       id: params.idempotencyKey,
@@ -283,7 +284,17 @@ async function sendControlUiChat(params: {
     isWebchatConnect: () => true,
     respond: params.respond,
     context: params.context,
-  });
+  };
+  if (params.onAdmissionOwned) {
+    const { handleChatSend } = await import("./server-methods/chat-send-handler.js");
+    await handleChatSend(options, params.onAdmissionOwned);
+    return;
+  }
+  const { chatHandlers } = await import("./server-methods/chat.js");
+  await expectDefined(
+    chatHandlers["chat.send"],
+    'chatHandlers["chat.send"] test invariant',
+  )(options);
 }
 
 test("chat.send replays a cached result after the session is archived", async () => {
@@ -2829,11 +2840,16 @@ describe("gateway server chat", () => {
       const context = createDirectChatContext();
       dispatchInboundMessageMock.mockImplementationOnce(async () => dispatchRelease.promise);
       let snapshotAtAck: ReturnType<typeof loadSessionEntry>;
+      const freshAdmission = vi.fn(async () => {
+        expect(context.chatAbortControllers.get(nextRunId)?.controlUiVisible).toBe(false);
+        return true;
+      });
 
       await sendControlUiChat({
         context,
         idempotencyKey: nextRunId,
         message: "admit after terminal claim",
+        onAdmissionOwned: freshAdmission,
         respond: ((ok, payload) => {
           if (ok && (payload as { status?: unknown } | undefined)?.status === "started") {
             snapshotAtAck = loadSessionEntry({
@@ -2844,6 +2860,8 @@ describe("gateway server chat", () => {
         }) as RespondFn,
       });
 
+      expect(freshAdmission).toHaveBeenCalledTimes(1);
+      expect(context.chatAbortControllers.get(nextRunId)?.controlUiVisible).toBeUndefined();
       expect(snapshotAtAck).toMatchObject({
         restartRecoveryDeliveryRunId: nextRunId,
         restartRecoveryDeliverySourceRunId: nextRunId,
@@ -2852,13 +2870,16 @@ describe("gateway server chat", () => {
       });
 
       const retryResponses: Array<{ ok: boolean; payload?: unknown; meta?: unknown }> = [];
+      const replayAdmission = vi.fn(async () => true);
       await sendControlUiChat({
         context,
         idempotencyKey: priorRunId,
         message: "must not execute again",
+        onAdmissionOwned: replayAdmission,
         respond: ((ok, payload, _error, meta) =>
           retryResponses.push({ ok, payload, meta })) as RespondFn,
       });
+      expect(replayAdmission).not.toHaveBeenCalled();
       expect(retryResponses).toEqual([
         {
           ok: true,
@@ -2867,6 +2888,62 @@ describe("gateway server chat", () => {
         },
       ]);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+
+      dispatchRelease.resolve(undefined);
+      await waitForFast(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
+    } finally {
+      dispatchRelease.resolve(undefined);
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+    }
+  });
+
+  test("chat.send runs an admission-owned callback for only one concurrent retry", async () => {
+    const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
+    const dispatchRelease = createDeferred();
+    const runId = "idem-concurrent-admission-owner";
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            status: "done",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const context = createDirectChatContext();
+      dispatchInboundMessageMock.mockImplementationOnce(async () => dispatchRelease.promise);
+      const firstAdmission = vi.fn(async () => true);
+      const secondAdmission = vi.fn(async () => true);
+      const responses: Array<{ ok: boolean; payload?: unknown; meta?: unknown }> = [];
+      const send = (onAdmissionOwned: () => Promise<boolean>) =>
+        sendControlUiChat({
+          context,
+          idempotencyKey: runId,
+          message: "admit exactly once",
+          onAdmissionOwned,
+          respond: ((ok, payload, _error, meta) =>
+            responses.push({ ok, payload, meta })) as RespondFn,
+        });
+
+      await Promise.all([send(firstAdmission), send(secondAdmission)]);
+
+      expect(firstAdmission.mock.calls.length + secondAdmission.mock.calls.length).toBe(1);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      expect(responses).toHaveLength(2);
+      expect(responses.every((response) => response.ok)).toBe(true);
+      expect(
+        responses.filter(
+          (response) =>
+            (response.payload as { status?: unknown } | undefined)?.status === "started",
+        ),
+      ).toHaveLength(1);
 
       dispatchRelease.resolve(undefined);
       await waitForFast(

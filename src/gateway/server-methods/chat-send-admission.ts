@@ -48,6 +48,7 @@ export async function admitChatSend(params: {
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
   client: GatewayRequestHandlerOptions["client"];
+  onAdmissionOwned?: () => Promise<boolean>;
 }) {
   const { request, session, respond, context, client } = params;
   const { p, explicitOrigin, normalizedAttachments, turnKind } = request;
@@ -378,6 +379,36 @@ export async function admitChatSend(params: {
       runId: clientRunId,
     });
     return { ok: false as const };
+  }
+  if (params.onAdmissionOwned) {
+    const activeEntry = activeRunAbort.entry;
+    const previousVisibility = activeEntry?.controlUiVisible;
+    if (activeEntry) {
+      // Keep the winning replacement visible to idempotency checks but outside
+      // the session-wide abort that clears the run it is replacing.
+      activeEntry.controlUiVisible = false;
+    }
+    let proceed = false;
+    try {
+      proceed = await params.onAdmissionOwned();
+    } catch (error) {
+      activeRunAbort.cleanup({ force: true });
+      gatewayWorkAdmission.release();
+      throw error;
+    } finally {
+      if (activeEntry) {
+        if (previousVisibility === undefined) {
+          delete activeEntry.controlUiVisible;
+        } else {
+          activeEntry.controlUiVisible = previousVisibility;
+        }
+      }
+    }
+    if (!proceed) {
+      activeRunAbort.cleanup({ force: true });
+      gatewayWorkAdmission.release();
+      return { ok: false as const };
+    }
   }
 
   let releaseGatewayRootContinuation: (() => void) | undefined;
