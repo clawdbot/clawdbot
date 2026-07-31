@@ -148,6 +148,32 @@ struct ChatToolDiffTests {
         #expect(resolved.stat == ChatToolDiffStat(added: 2, removed: 0))
     }
 
+    @Test func `write created flags control fallback stats`() throws {
+        let arguments = AnyCodable(["content": "one\ntwo\n"])
+        let created = try #require(ChatToolDiff.resolveDiff(
+            name: "write",
+            arguments: arguments,
+            details: AnyCodable(["created": true])))
+        let overwritten = try #require(ChatToolDiff.resolveDiff(
+            name: "write",
+            arguments: arguments,
+            details: AnyCodable(["created": false])))
+        let unknown = try #require(ChatToolDiff.resolveDiff(
+            name: "write",
+            arguments: arguments,
+            details: AnyCodable(["changed": true])))
+
+        #expect(created.stat == ChatToolDiffStat(added: 2, removed: 0))
+        #expect(overwritten.lines == created.lines)
+        #expect(overwritten.stat == nil)
+        #expect(unknown.lines == created.lines)
+        #expect(unknown.stat == nil)
+        #expect(ChatToolDiff.resolveDiff(
+            name: "write",
+            arguments: arguments,
+            details: AnyCodable(["changed": false])) == nil)
+    }
+
     @Test func `renders editor create and insert commands`() throws {
         let create = try #require(ChatToolDiff.resolveDiff(
             name: "str_replace_editor",
@@ -165,6 +191,16 @@ struct ChatToolDiffTests {
             details: nil))
         #expect(createFallback.lines == [ChatToolDiffLine(kind: .add, lineNo: 1, text: "fallback")])
         #expect(createFallback.stat == ChatToolDiffStat(added: 1, removed: 0))
+
+        let overwrittenCreate = try #require(ChatToolDiff.resolveDiff(
+            name: "str_replace_editor",
+            arguments: AnyCodable(["command": "create", "file_text": "replacement"]),
+            details: AnyCodable(["created": false])))
+        #expect(overwrittenCreate.stat == nil)
+        #expect(ChatToolDiff.resolveDiff(
+            name: "str_replace_editor",
+            arguments: AnyCodable(["command": "create", "file_text": "unchanged"]),
+            details: AnyCodable(["changed": false])) == nil)
 
         let insert = try #require(ChatToolDiff.resolveDiff(
             name: "str_replace_based_edit_tool",
@@ -241,6 +277,20 @@ struct ChatToolDiffTests {
             ])
             #expect(resolved.stat == ChatToolDiffStat(added: 1, removed: 1))
         }
+    }
+
+    @Test func `patch envelope precedence matches transcript caching`() throws {
+        let input = "*** Begin Patch\n*** Add File: input.txt\n+input\n*** End Patch"
+        let patch = "*** Begin Patch\n*** Add File: patch.txt\n+patch\n*** End Patch"
+        let resolved = try #require(ChatToolDiff.resolveDiff(
+            name: "apply_patch",
+            arguments: AnyCodable([
+                "input": AnyCodable(input),
+                "patch": AnyCodable(patch),
+            ]),
+            details: nil))
+
+        #expect(resolved.lines.first == ChatToolDiffLine(kind: .add, lineNo: 1, text: "input"))
     }
 
     @Test func `separates add delete and move patch files`() throws {

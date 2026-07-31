@@ -6,6 +6,7 @@ import {
   type ThinkLevel,
 } from "../../auto-reply/thinking.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
+import { resolveSessionModelOverrideRouteResolution } from "../../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
@@ -16,6 +17,10 @@ import {
   isModelSelectionLocked,
   repairProviderWrappedModelOverride,
 } from "../../sessions/model-overrides.js";
+import {
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
@@ -31,11 +36,13 @@ import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { loadManifestModelCatalog } from "../model-catalog.js";
+import type { ModelFallbackRouteResolution } from "../model-fallback.types.js";
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
-import type { ModelManifestNormalizationContext } from "../model-selection-normalize.js";
+import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import {
   modelKey,
   resolveDefaultModelForAgent,
+  resolveModelAliasFromPair,
   resolveThinkingDefault,
 } from "../model-selection.js";
 import {
@@ -99,9 +106,13 @@ export async function resolveEmbeddedModelSelection(params: {
   );
   let provider = defaultProvider;
   let model = defaultModel;
+  let requestedRouteResolution: ModelFallbackRouteResolution = "resolved";
   let sessionEntry = params.sessionEntry;
   const hasStoredOverride = Boolean(sessionEntry?.modelOverride || sessionEntry?.providerOverride);
   let storedModelOverrideSource = hasStoredOverride ? sessionEntry?.modelOverrideSource : undefined;
+  let storedModelOverrideRouteResolution = hasStoredOverride
+    ? resolveSessionModelOverrideRouteResolution(sessionEntry)
+    : undefined;
   let hasStoredAutoFallbackProvenance =
     hasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
   let hasLegacyAutoFallbackOverrideWithoutOrigin =
@@ -214,6 +225,9 @@ export async function resolveEmbeddedModelSelection(params: {
       storedModelOverrideSource = adoptedHasStoredOverride
         ? sessionEntry?.modelOverrideSource
         : undefined;
+      storedModelOverrideRouteResolution = adoptedHasStoredOverride
+        ? resolveSessionModelOverrideRouteResolution(sessionEntry)
+        : undefined;
       hasStoredAutoFallbackProvenance =
         adoptedHasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
       hasLegacyAutoFallbackOverrideWithoutOrigin =
@@ -239,20 +253,16 @@ export async function resolveEmbeddedModelSelection(params: {
     params.cfg.channels?.modelByChannel && !hasExplicitRunOverride
       ? resolveChannelModelOverride({
           cfg: params.cfg,
-          channel:
-            currentRunModelChannel ??
-            sessionEntry?.channel ??
-            sessionEntry?.lastChannel ??
-            sessionEntry?.origin?.provider,
+          channel: currentRunModelChannel ?? sessionDeliveryChannel(sessionEntry),
           groupId: channelOverrideGroupId,
-          groupChatType: sessionEntry?.chatType ?? sessionEntry?.origin?.chatType,
+          groupChatType: sessionEntry?.chatType ?? sessionDeliveryOrigin(sessionEntry)?.chatType,
           groupChannel: params.runContext.groupChannel ?? sessionEntry?.groupChannel,
           groupSubject: sessionEntry?.subject,
           parentSessionKey: sessionEntry?.parentSessionKey ?? params.sessionKey,
           directUserIds: [
-            sessionEntry?.origin?.nativeDirectUserId,
-            sessionEntry?.origin?.from,
-            sessionEntry?.origin?.to,
+            sessionDeliveryOrigin(sessionEntry)?.nativeDirectUserId,
+            sessionDeliveryOrigin(sessionEntry)?.from,
+            sessionDeliveryOrigin(sessionEntry)?.to,
           ],
         })
       : null;
@@ -270,18 +280,39 @@ export async function resolveEmbeddedModelSelection(params: {
   if (normalizedChannelOverride && !hasEffectiveStoredOverride) {
     provider = normalizedChannelOverride.provider;
     model = normalizedChannelOverride.model;
+    requestedRouteResolution = "resolved";
   }
   if (storedModelOverride) {
     const candidateProvider = storedProviderOverride || defaultProvider;
+    const storedRouteKey = modelKey(candidateProvider, storedModelOverride);
+    const storedRouteCataloged = (modelCatalog ?? allowedModelCatalog).some(
+      (entry) => modelKey(entry.provider, entry.id) === storedRouteKey,
+    );
+    const storedAlias =
+      storedModelOverrideRouteResolution === "raw" && !storedRouteCataloged
+        ? resolveModelAliasFromPair({
+            cfg: params.cfg,
+            provider: candidateProvider,
+            model: storedModelOverride,
+            defaultProvider,
+            aliasIndex: visibilityPolicy.selectionAliasIndex,
+            allowPluginNormalization: params.pluginsEnabled,
+            ...params.modelManifestContext,
+          })
+        : null;
     const normalizedStored = normalizeAgentCommandModelRef(
       params.cfg,
-      candidateProvider,
-      storedModelOverride,
+      storedAlias?.provider ?? candidateProvider,
+      storedAlias?.model ?? storedModelOverride,
       params.modelManifestContext,
     );
     if (visibilityPolicy.allowsKey(modelKey(normalizedStored.provider, normalizedStored.model))) {
       provider = normalizedStored.provider;
       model = normalizedStored.model;
+      requestedRouteResolution =
+        storedAlias || storedRouteCataloged
+          ? "resolved"
+          : (storedModelOverrideRouteResolution ?? "raw");
     }
   }
   const autoFallbackPrimaryProbe =
@@ -297,6 +328,7 @@ export async function resolveEmbeddedModelSelection(params: {
   if (autoFallbackPrimaryProbe && sessionEntry) {
     provider = autoFallbackPrimaryProbe.provider;
     model = autoFallbackPrimaryProbe.model;
+    requestedRouteResolution = "resolved";
     autoFallbackPrimaryProbeSessionEntry = { ...sessionEntry };
     clearAutoFallbackPrimaryProbeSelection(autoFallbackPrimaryProbeSessionEntry);
   }
@@ -337,7 +369,9 @@ export async function resolveEmbeddedModelSelection(params: {
     }
     provider = explicitRef.provider;
     model = explicitRef.model;
+    requestedRouteResolution = "resolved";
   }
+  const unresolvedSelectionKey = modelKey(provider, model);
   const allowedInitialSelection = visibilityPolicy.resolveSelection({ provider, model });
   if (!allowedInitialSelection) {
     const policyPath = visibilityPolicy.allowConfigPath ?? "modelPolicy.allow";
@@ -347,6 +381,9 @@ export async function resolveEmbeddedModelSelection(params: {
   }
   provider = allowedInitialSelection.provider;
   model = allowedInitialSelection.model;
+  if (modelKey(provider, model) !== unresolvedSelectionKey) {
+    requestedRouteResolution = "resolved";
+  }
   const providerForAuthProfileValidation = provider;
   let sessionEntryForAttempt = autoFallbackPrimaryProbeSessionEntry ?? sessionEntry;
   const initialAgentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
@@ -544,6 +581,7 @@ export async function resolveEmbeddedModelSelection(params: {
     sessionEntry,
     provider,
     model,
+    requestedRouteResolution,
     defaultProvider,
     defaultModel,
     configuredDefaultAuthProfileId,

@@ -14,16 +14,21 @@ import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "../../packages/gateway-protocol/src/version.js";
-import { readGatewayDispatchConfig } from "../config/gateway-dispatch-config.js";
+import {
+  readGatewayDispatchConfig,
+  readGatewayDispatchConfigWithShellEnvFallback,
+} from "../config/gateway-dispatch-config.js";
 import {
   resolveConfigPath as resolveConfigPathFromPaths,
   resolveGatewayPort as resolveGatewayPortFromPaths,
   resolveStateDir as resolveStateDirFromPaths,
 } from "../config/paths.js";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
+import { isVitestRuntimeEnv } from "../infra/env.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
@@ -330,8 +335,10 @@ export function isGatewayExplicitAuthRequiredError(
 
 const defaultCreateGatewayClient = (opts: GatewayClientOptions) => new GatewayClient(opts);
 type GatewayRuntimeConfigLoader = () => OpenClawConfig | Promise<OpenClawConfig>;
+// Gateway dispatch owns only connection, auth, TLS, and shell-env resolution.
+// Loading the full runtime config here makes every RPC pay unrelated plugin/state startup costs.
 const defaultGetRuntimeConfig = async (): Promise<OpenClawConfig> =>
-  (await import("../config/io.js")).getRuntimeConfig();
+  getRuntimeConfigSnapshot() ?? (await readGatewayDispatchConfigWithShellEnvFallback());
 const defaultGatewayCallDeps: {
   createGatewayClient: typeof defaultCreateGatewayClient;
   getRuntimeConfig: GatewayRuntimeConfigLoader;
@@ -652,33 +659,24 @@ type ResolvedGatewayCallContext = {
   remoteUrl?: string;
   explicitAuth: ExplicitGatewayAuth;
   modeOverride?: GatewayCredentialMode;
-  localTokenPrecedence?: GatewayCredentialPrecedence;
-  localPasswordPrecedence?: GatewayCredentialPrecedence;
+  localPrecedence?: GatewayCredentialPrecedence;
   remoteTokenPrecedence?: GatewayRemoteCredentialPrecedence;
   remotePasswordPrecedence?: GatewayRemoteCredentialPrecedence;
   remoteTokenFallback?: GatewayRemoteCredentialFallback;
   remotePasswordFallback?: GatewayRemoteCredentialFallback;
 };
 
-function resolveGatewayCallTimeout(
-  timeoutValue: unknown,
-  configuredHandshakeTimeoutMs?: number | null,
-): {
+function resolveGatewayCallTimeout(timeoutValue: unknown): {
   timeoutMs: number | null;
   startupTimeoutMs: number;
   safeTimerTimeoutMs: number;
 } {
-  const hasConfiguredHandshakeTimeout =
-    typeof configuredHandshakeTimeoutMs === "number" &&
-    Number.isFinite(configuredHandshakeTimeoutMs) &&
-    configuredHandshakeTimeoutMs > 0;
   const hasEnvHandshakeTimeout =
     Boolean(process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS) ||
-    Boolean(process.env.VITEST && process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
-  const resolvedHandshakeTimeoutMs =
-    hasConfiguredHandshakeTimeout || hasEnvHandshakeTimeout
-      ? resolvePreauthHandshakeTimeoutMs({ configuredTimeoutMs: configuredHandshakeTimeoutMs })
-      : undefined;
+    Boolean(isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
+  const resolvedHandshakeTimeoutMs = hasEnvHandshakeTimeout
+    ? resolvePreauthHandshakeTimeoutMs()
+    : undefined;
   const defaultTimeoutMs =
     typeof resolvedHandshakeTimeoutMs === "number" && resolvedHandshakeTimeoutMs > 10_000
       ? resolvedHandshakeTimeoutMs
@@ -767,8 +765,7 @@ async function resolveGatewayCredentialsWithEnv(
     urlOverrideSource: context.urlOverrideSource,
     env,
     modeOverride: context.modeOverride,
-    localTokenPrecedence: context.localTokenPrecedence,
-    localPasswordPrecedence: context.localPasswordPrecedence,
+    localPrecedence: context.localPrecedence,
     remoteTokenPrecedence: context.remoteTokenPrecedence,
     remotePasswordPrecedence: context.remotePasswordPrecedence,
     remoteTokenFallback: context.remoteTokenFallback,
@@ -891,7 +888,7 @@ function ensureGatewaySupportsRequiredMethods(params: {
     throw new Error(
       [
         `active gateway does not support required method "${method}" for "${params.attemptedMethod}".`,
-        "Update the gateway or run without SecretRefs.",
+        "Update or restart the active gateway and try again.",
       ].join(" "),
     );
   }
@@ -1134,7 +1131,6 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const context = await resolveGatewayCallContext(opts);
   const { timeoutMs, startupTimeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(
     opts.timeoutMs,
-    context.config.gateway?.handshakeTimeoutMs,
   );
   if (opts.requireLocalBackendSharedAuth && (context.urlOverride || context.isRemoteMode)) {
     throw new GatewayLocalBackendSharedAuthUnavailableError(
@@ -1232,7 +1228,6 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     token,
     password,
     tlsFingerprint,
-    preauthHandshakeTimeoutMs: context.config.gateway?.handshakeTimeoutMs,
     timeoutMs,
     startupTimeoutMs,
     safeTimerTimeoutMs,
@@ -1281,9 +1276,6 @@ export async function buildGatewayProbeConnectionDetails(
   return {
     ...connectionDetails,
     ...(tlsFingerprint ? { tlsFingerprint } : {}),
-    ...(context.config.gateway?.handshakeTimeoutMs
-      ? { preauthHandshakeTimeoutMs: context.config.gateway.handshakeTimeoutMs }
-      : {}),
   };
 }
 

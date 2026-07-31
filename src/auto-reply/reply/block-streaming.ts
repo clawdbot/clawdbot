@@ -31,12 +31,8 @@ function resolveProviderChunkContext(
 }
 
 type ProviderBlockStreamingConfig = {
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   streaming?: unknown;
-  accounts?: Record<
-    string,
-    { blockStreamingCoalesce?: BlockStreamingCoalesceConfig; streaming?: unknown }
-  >;
+  accounts?: Record<string, { streaming?: unknown }>;
 };
 
 function resolveScopedBlockStreamingCoalesce(
@@ -87,7 +83,7 @@ type BlockStreamingChunking = {
   flushOnParagraph?: boolean;
 };
 
-export function clampPositiveInteger(
+function clampPositiveInteger(
   value: unknown,
   fallback: number,
   bounds: { min: number; max: number },

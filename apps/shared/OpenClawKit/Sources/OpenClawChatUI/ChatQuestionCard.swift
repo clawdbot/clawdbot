@@ -57,6 +57,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
             questions: record.questions,
             agentid: record.agentid,
             sessionkey: record.sessionkey,
+            runid: record.runid,
             createdatms: record.createdatms,
             expiresatms: record.expiresatms,
             status: record.status,
@@ -86,7 +87,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
     }
 
     public func toggleOption(questionID: String, label: String) {
-        guard let question = self.record.questions.first(where: { $0.id == questionID }),
+        guard let question = self.record.questions.first(where: { $0.questionid == questionID }),
               question.options.contains(where: { $0.label == label }),
               self.status() == .pending
         else { return }
@@ -109,7 +110,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
 
     @discardableResult
     public func toggleOption(questionID: String, optionNumber: Int) -> Bool {
-        guard let question = self.record.questions.first(where: { $0.id == questionID }),
+        guard let question = self.record.questions.first(where: { $0.questionid == questionID }),
               self.status() == .pending,
               (1...4).contains(optionNumber),
               question.options.indices.contains(optionNumber - 1)
@@ -119,7 +120,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
     }
 
     public func setOtherText(questionID: String, value: String) {
-        guard let question = self.record.questions.first(where: { $0.id == questionID }),
+        guard let question = self.record.questions.first(where: { $0.questionid == questionID }),
               question.options.isEmpty || question.isother == true,
               self.status() == .pending
         else { return }
@@ -161,12 +162,11 @@ public final class OpenClawQuestionCardModel: Identifiable {
             questions: self.record.questions,
             agentid: self.record.agentid,
             sessionkey: self.record.sessionkey,
+            runid: self.record.runid,
             createdatms: self.record.createdatms,
             expiresatms: self.record.expiresatms,
             status: .answered,
-            answers: QuestionAnswers(answers: answers.mapValues { values in
-                AnyCodable(["answers": values])
-            }),
+            answers: QuestionAnswers(answers: answers.mapValues(AnyCodable.init)),
             resolvedby: self.record.resolvedby)
     }
 
@@ -180,6 +180,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
             questions: self.record.questions,
             agentid: self.record.agentid,
             sessionkey: self.record.sessionkey,
+            runid: self.record.runid,
             createdatms: self.record.createdatms,
             expiresatms: self.record.expiresatms,
             status: .cancelled,
@@ -197,6 +198,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
             questions: self.record.questions,
             agentid: self.record.agentid,
             sessionkey: self.record.sessionkey,
+            runid: self.record.runid,
             createdatms: self.record.createdatms,
             expiresatms: self.record.expiresatms,
             status: .answered,
@@ -224,6 +226,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
             questions: self.record.questions,
             agentid: self.record.agentid,
             sessionkey: self.record.sessionkey,
+            runid: self.record.runid,
             createdatms: self.record.createdatms,
             expiresatms: self.record.expiresatms,
             status: resolved.status,
@@ -255,9 +258,9 @@ public final class OpenClawQuestionCardModel: Identifiable {
     public func terminalSummaryText(for question: Question) -> String {
         switch self.status() {
         case .answered:
-            self.answerValues(questionID: question.id)?.joined(separator: ", ") ?? String(localized: "Answered")
+            self.answerValues(questionID: question.questionid)?.joined(separator: ", ") ?? String(localized: "Answered")
         case .answeredElsewhere:
-            self.answerValues(questionID: question.id)?.joined(separator: ", ")
+            self.answerValues(questionID: question.questionid)?.joined(separator: ", ")
                 ?? String(localized: "Answered elsewhere")
         case .cancelled:
             String(localized: "Skipped")
@@ -273,15 +276,15 @@ public final class OpenClawQuestionCardModel: Identifiable {
     private func answers() -> [String: [String]]? {
         var result: [String: [String]] = [:]
         for question in self.record.questions {
-            let selected = self.selectedOptions[question.id] ?? []
+            let selected = self.selectedOptions[question.questionid] ?? []
             var values = question.options.compactMap { selected.contains($0.label) ? $0.label : nil }
-            if let other = self.otherText[question.id]?.trimmingCharacters(in: .whitespacesAndNewlines),
+            if let other = self.otherText[question.questionid]?.trimmingCharacters(in: .whitespacesAndNewlines),
                !other.isEmpty
             {
                 values.append(other)
             }
             guard !values.isEmpty else { return nil }
-            result[question.id] = values
+            result[question.questionid] = values
         }
         return result
     }
@@ -289,14 +292,10 @@ public final class OpenClawQuestionCardModel: Identifiable {
     private func answerValues(questionID: String) -> [String]? {
         guard let answer = self.record.answers?.answers[questionID],
               let data = try? JSONEncoder().encode(answer),
-              let decoded = try? JSONDecoder().decode(ResolvedAnswer.self, from: data),
-              !decoded.answers.isEmpty
+              let decoded = try? JSONDecoder().decode([String].self, from: data),
+              !decoded.isEmpty
         else { return nil }
-        return decoded.answers
-    }
-
-    private struct ResolvedAnswer: Codable {
-        let answers: [String]
+        return decoded
     }
 
     private static func recordsMatch(_ lhs: QuestionRecord, _ rhs: QuestionRecord) -> Bool {
@@ -336,7 +335,7 @@ struct OpenClawQuestionCard: View {
     private var pendingCard: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             VStack(alignment: .leading, spacing: 14) {
-                ForEach(self.model.record.questions, id: \.id) { question in
+                ForEach(self.model.record.questions, id: \.questionid) { question in
                     self.questionSection(question, now: context.date)
                 }
                 self.footer(now: context.date)
@@ -349,7 +348,7 @@ struct OpenClawQuestionCard: View {
 
     private var terminalSummary: some View {
         VStack(alignment: .leading, spacing: 5) {
-            ForEach(self.model.record.questions, id: \.id) { question in
+            ForEach(self.model.record.questions, id: \.questionid) { question in
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(verbatim: "\(question.header):")
                         .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .callout))
@@ -381,8 +380,8 @@ struct OpenClawQuestionCard: View {
                 TextField(
                     "Other answer",
                     text: Binding(
-                        get: { self.model.otherText[question.id] ?? "" },
-                        set: { self.model.setOtherText(questionID: question.id, value: $0) }),
+                        get: { self.model.otherText[question.questionid] ?? "" },
+                        set: { self.model.setOtherText(questionID: question.questionid, value: $0) }),
                     axis: .vertical)
                     .font(OpenClawChatTypography.body)
                     .textFieldStyle(.roundedBorder)
@@ -392,13 +391,13 @@ struct OpenClawQuestionCard: View {
         }
         #if os(macOS)
         .focusable()
-        .focused(self.$focusedQuestionID, equals: question.id)
+        .focused(self.$focusedQuestionID, equals: question.questionid)
         .onKeyPress(characters: .decimalDigits) { keyPress in
-            guard self.focusedQuestionID == question.id else { return .ignored }
+            guard self.focusedQuestionID == question.questionid else { return .ignored }
             return self.handleNumberKey(keyPress, question: question, now: now)
         }
         .onKeyPress(.return) {
-            guard self.focusedQuestionID == question.id,
+            guard self.focusedQuestionID == question.questionid,
                   self.model.status(at: now) == .pending,
                   self.model.canSubmit
             else { return .ignored }
@@ -409,12 +408,12 @@ struct OpenClawQuestionCard: View {
     }
 
     private func optionRow(question: Question, option: QuestionOption, now: Date) -> some View {
-        let selected = self.model.selectedOptions[question.id]?.contains(option.label) == true
+        let selected = self.model.selectedOptions[question.questionid]?.contains(option.label) == true
         return Button {
             #if os(macOS)
-            self.focusedQuestionID = question.id
+            self.focusedQuestionID = question.questionid
             #endif
-            self.model.toggleOption(questionID: question.id, label: option.label)
+            self.model.toggleOption(questionID: question.questionid, label: option.label)
         } label: {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: selected
@@ -498,7 +497,7 @@ struct OpenClawQuestionCard: View {
     {
         guard self.model.status(at: now) == .pending,
               let digit = keyPress.characters.first?.wholeNumberValue,
-              self.model.toggleOption(questionID: question.id, optionNumber: digit)
+              self.model.toggleOption(questionID: question.questionid, optionNumber: digit)
         else { return .ignored }
         return .handled
     }

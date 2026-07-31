@@ -140,6 +140,7 @@ export type SnapshotResult =
       url: string;
       snapshot: string;
       truncated?: boolean;
+      newElements?: number;
       refs?: Record<string, { role: string; name?: string; nth?: number }>;
       stats?: {
         lines: number;

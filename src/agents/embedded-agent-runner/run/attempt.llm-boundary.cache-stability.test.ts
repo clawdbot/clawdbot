@@ -22,11 +22,13 @@ import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/int
  * Self-contained: no gateway, no provider, no live session.
  */
 import { describe, expect, it } from "vitest";
+import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import type { Context, Model } from "../../../llm/types.js";
 import {
+  buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
   type UserTurnInput,
@@ -348,8 +350,7 @@ describe("prompt-cache byte-identity (issue #3658)", () => {
     // Historical user turns get their inbound-metadata blocks stripped (same as
     // the original boundary behaviour), then stamped. The current turn keeps its
     // metadata. We only assert the historical strip+stamp here.
-    const metaBlock =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord"}\n```\n\n';
+    const metaBlock = `${markInboundContextLabel("Conversation info:")}\n\`\`\`json\n{"channel":"discord"}\n\`\`\`\n\n`;
     const userText = "What is 2+2?";
     const stored = `${metaBlock}${userText}`;
 
@@ -437,6 +438,15 @@ describe("append-only late media (issue #99495)", () => {
       expect(lateProvider?.content).toBe(
         `${EXPECTED_PREFIX_TURN1}[media attached: ${path.join(dir, "image.png")}]`,
       );
+      const lateProjection = buildLateMediaAttachedProjection(latePersisted as AgentMsg);
+      expect(lateProjection.text).toBe(`[media attached: ${path.join(dir, "image.png")}]`);
+      expect(lateProjection.media).toEqual([
+        expect.objectContaining({
+          path: path.join(dir, "image.png"),
+          contentType: "image/png",
+          kind: "image",
+        }),
+      ]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -467,7 +477,11 @@ describe("append-only late media (issue #99495)", () => {
     const normalized = normalizeMessagesForLlmBoundary([merged], { timezone: TZ });
 
     expect(normalized).toHaveLength(1);
-    expect(merged).toMatchObject({ MediaPath: "media://inbound/image.jpg" });
+    expect(merged).toMatchObject({
+      __openclaw: {
+        media: [expect.objectContaining({ path: "media://inbound/image.jpg" })],
+      },
+    });
   });
 });
 
@@ -510,7 +524,7 @@ describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", 
       normalizeMessagesForLlmBoundary(messages, { timezone: TZ }),
     ) as unknown as Array<Record<string, unknown>>;
 
-  const META = "Conversation info (untrusted metadata):\nsender=Bob";
+  const META = "Conversation info:\nsender=Bob";
 
   it("keeps the active user turn bare, tail-places the carrier, and drops it from replayed history", () => {
     // The runner installs the carrier immediately BEFORE the active user turn;
@@ -630,7 +644,7 @@ describe("prompt-cache tail carrier for current-turn metadata (issue #100271)", 
     const historicalContent = (asHistorical[0] as { content?: unknown } | undefined)?.content;
     expect(JSON.stringify(currentContent)).toBe(JSON.stringify(historicalContent));
     expect(typeof currentContent).toBe("string");
-    expect(currentContent).toContain('"name": "Alice"');
+    expect(currentContent).toContain('"name":"Alice"');
     expect(
       normalizeMessagesForLlmBoundary(asCurrent, {
         timezone: TZ,

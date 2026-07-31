@@ -11,7 +11,7 @@ type SpawnDeps = Omit<
     | "getGlobalHookRunner"
     | "getRuntimeConfig"
     | "hasInProcessGatewayContext"
-    | "loadModelCatalog"
+    | "loadPreparedModelCatalog"
     | "resolveContextEngine"
   >,
   "getGlobalHookRunner"

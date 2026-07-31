@@ -21,7 +21,7 @@ import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import { readRegularFile, statRegularFile } from "../infra/fs-safe.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import type { SkillScanFinding } from "../skills/security/scanner.js";
@@ -642,19 +642,22 @@ export async function collectStateDeepFilesystemFindings(params: {
     }
   }
 
-  const agentIds = Array.isArray(params.cfg.agents?.list)
-    ? params.cfg.agents?.list
-        .map(
-          (a) =>
-            normalizeOptionalString(
-              a && typeof a === "object" ? (a as { id?: unknown }).id : undefined,
-            ) ?? "",
-        )
-        .filter(Boolean)
-    : [];
-  const { resolveDefaultAgentId } = await loadAgentScopeModule();
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const ids = uniqueStrings([defaultAgentId, ...agentIds]).map((id) => normalizeAgentId(id));
+  const agentScope = await loadAgentScopeModule();
+  const agentIds = agentScope.listAgentEntries(params.cfg).map((agent) => agent.id);
+  let defaultAgentId: string | undefined;
+  if (agentIds.length > 0) {
+    try {
+      defaultAgentId = agentScope.resolveDefaultAgentId(params.cfg);
+    } catch {
+      // Security audits must still inspect known agent stores when a malformed
+      // roster prevents normal default selection; config findings report that defect.
+    }
+  }
+  const ids = uniqueStrings([
+    LEGACY_IMPLICIT_AGENT_ID,
+    ...(defaultAgentId ? [defaultAgentId] : []),
+    ...agentIds,
+  ]).map((id) => normalizeAgentId(id));
 
   for (const agentId of ids) {
     const agentDir = path.join(params.stateDir, "agents", agentId, "agent");
@@ -896,16 +899,26 @@ export async function collectPluginsCodeSafetyFindings(params: {
 export async function collectInstalledSkillsCodeSafetyFindings(params: {
   cfg: OpenClawConfig;
   stateDir: string;
+  workspaceDir?: string;
   summaryCache?: CodeSafetySummaryCache;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   const pluginExtensionsDir = path.join(params.stateDir, "extensions");
   const scannedSkillDirs = new Set<string>();
-  const [{ listAgentWorkspaceDirs }, { resolveSkillSource }] = await Promise.all([
-    loadAgentWorkspaceDirsModule(),
-    loadSkillSourceModule(),
-  ]);
-  const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
+  const [{ listAgentWorkspaceDirs, listExplicitAgentWorkspaceDirs }, { resolveSkillSource }] =
+    await Promise.all([loadAgentWorkspaceDirsModule(), loadSkillSourceModule()]);
+  const workspaceDirs = new Set(params.workspaceDir ? [params.workspaceDir] : []);
+  try {
+    for (const workspaceDir of listAgentWorkspaceDirs(params.cfg)) {
+      workspaceDirs.add(workspaceDir);
+    }
+  } catch {
+    // Deep audit accepts raw pre-migration and malformed configs. Continue
+    // scanning every entry-authored workspace instead of turning a finding into a crash.
+    for (const workspaceDir of listExplicitAgentWorkspaceDirs(params.cfg)) {
+      workspaceDirs.add(workspaceDir);
+    }
+  }
   const { loadWorkspaceSkillEntries } = await loadSkillsModule();
 
   for (const workspaceDir of workspaceDirs) {

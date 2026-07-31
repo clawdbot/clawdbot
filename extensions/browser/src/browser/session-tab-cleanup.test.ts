@@ -43,13 +43,13 @@ describe("session tab cleanup timer", () => {
     const onWarn = vi.fn();
     const stop = startTrackedBrowserTabCleanupTimer({ onWarn });
 
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(300_000);
     await vi.waitFor(() =>
       expect(onWarn).toHaveBeenCalledWith(
         "failed to sweep tracked browser tabs: Error: sqlite read failed",
       ),
     );
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(300_000);
     await vi.waitFor(() => expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledTimes(2));
 
     await stop();

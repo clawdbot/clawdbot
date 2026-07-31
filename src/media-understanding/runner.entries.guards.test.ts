@@ -133,11 +133,10 @@ describe("media-understanding missing provider errors", () => {
 
 describe("media-understanding SecretRef owner isolation", () => {
   it("rejects only the configured media model whose owner is unavailable", async () => {
-    const entry = { provider: "openai" };
-    const cfg = { tools: { media: { audio: { models: [entry] } } } };
+    const entry = { provider: "openai", capabilities: ["audio" as const] };
+    const cfg = { tools: { media: { models: [entry], audio: {} } } };
     const ownerId = runtimeMediaModelSecretOwnerId({
-      source: "capability",
-      capability: "audio",
+      source: "shared",
       index: 0,
     });
     setActiveDegradedSecretOwners([
@@ -145,7 +144,7 @@ describe("media-understanding SecretRef owner isolation", () => {
         ownerKind: "capability",
         ownerId,
         state: "unavailable",
-        paths: ["tools.media.audio.models.0.request.auth.token"],
+        paths: ["tools.media.models.0.request.auth.token"],
         refKeys: ["env:default:MISSING_MEDIA_VALUE"],
         reason: "secret reference was not found",
       },
@@ -174,9 +173,10 @@ describe("media-understanding SecretRef owner isolation", () => {
   it("keeps a model active when it overrides the unavailable request field", async () => {
     const entry = {
       provider: "unknown-provider",
+      capabilities: ["audio" as const],
       request: { auth: { mode: "authorization-bearer" as const, token: "test-token" } },
     };
-    const cfg = { tools: { media: { audio: { models: [entry] } } } };
+    const cfg = { tools: { media: { models: [entry], audio: {} } } };
     setActiveDegradedSecretOwners([
       {
         ownerKind: "capability",

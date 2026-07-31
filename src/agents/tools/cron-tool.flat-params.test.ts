@@ -73,7 +73,7 @@ describe("cron tool flat-params", () => {
     ).toBeUndefined();
   });
 
-  it("preserves explicit top-level sessionKey during flat-params recovery", async () => {
+  it("binds recovered agentTurn jobs to the creating conversation by default", async () => {
     const tool = createCronTool(
       { agentSessionKey: "agent:main:discord:channel:ops" },
       { callGatewayTool: callGatewayToolMock },
@@ -85,9 +85,13 @@ describe("cron tool flat-params", () => {
       message: "do stuff",
     });
 
-    const [method, _gatewayOpts, params] = firstGatewayToolCall<{ sessionKey?: string }>();
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      sessionKey?: string;
+      sessionTarget?: string;
+    }>();
     expect(method).toBe("cron.add");
-    expect(params.sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
+    expect(params.sessionTarget).toBe("current");
+    expect(params.sessionKey).toBe("agent:main:discord:channel:ops");
   });
 
   it("recovers flat cron schedule shorthand for add", async () => {
@@ -457,6 +461,157 @@ describe("cron tool flat-params", () => {
     expect(onExitError).not.toContain("command/cwd");
     expect(strayError).toContain("cron command/cwd fields cannot be set");
     expect(strayError).not.toContain("on-exit schedules");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("recovers a fully flat stream schedule for add", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-stream-add", {
+      action: "add",
+      name: "log watcher",
+      streamCommand: ["tail", "-f", "app.log"],
+      streamCwd: "/srv/app",
+      streamMode: "match",
+      streamMatch: "ERROR",
+      streamBatchMs: 500,
+      streamMaxBatchBytes: 4096,
+      message: "log line matched",
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{ schedule?: unknown }>();
+    expect(method).toBe("cron.add");
+    expect(params.schedule).toEqual({
+      kind: "stream",
+      command: ["tail", "-f", "app.log"],
+      cwd: "/srv/app",
+      mode: "match",
+      match: "ERROR",
+      batchMs: 500,
+      maxBatchBytes: 4096,
+    });
+  });
+
+  it("recovers a fully flat stream schedule for update", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-stream-update", {
+      action: "update",
+      jobId: "job-stream",
+      streamCommand: ["tail", "-f", "app.log"],
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      id?: string;
+      patch?: { schedule?: unknown };
+    }>();
+    expect(method).toBe("cron.update");
+    expect(params.id).toBe("job-stream");
+    expect(params.patch?.schedule).toEqual({ kind: "stream", command: ["tail", "-f", "app.log"] });
+  });
+
+  it("rejects a stream schedule with a malformed (non-array) command", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-stream-bad-argv", {
+        action: "add",
+        name: "log watcher",
+        job: {
+          name: "log watcher",
+          schedule: { kind: "stream", command: "tail -f app.log" },
+          payload: { kind: "systemEvent", text: "matched" },
+        },
+      }),
+    ).rejects.toThrow("cron stream schedules require a non-empty command argv array");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a stream schedule with an empty command array", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-stream-empty-argv", {
+        action: "add",
+        job: {
+          name: "log watcher",
+          schedule: { kind: "stream", command: [] },
+          payload: { kind: "systemEvent", text: "matched" },
+        },
+      }),
+    ).rejects.toThrow("cron stream schedules require a non-empty command argv array");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a stream schedule missing command entirely", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-stream-no-argv", {
+        action: "add",
+        name: "log watcher",
+        streamMode: "line",
+        message: "matched",
+      }),
+    ).rejects.toThrow("cron stream schedules require a non-empty command argv array");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a stream schedule with an empty cwd", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-stream-empty-cwd", {
+        action: "add",
+        job: {
+          name: "log watcher",
+          schedule: { kind: "stream", command: ["tail", "-f", "app.log"], cwd: "" },
+          payload: { kind: "systemEvent", text: "matched" },
+        },
+      }),
+    ).rejects.toThrow("cron stream schedule cwd must be a non-empty string");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects raw top-level command/cwd even for a stream job", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-stream-raw-command", {
+        action: "add",
+        name: "log watcher",
+        command: "tail -f app.log",
+        streamMode: "line",
+      }),
+    ).rejects.toThrow("cron command/cwd fields cannot be set");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects bare top-level mode on add instead of silently ignoring it", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-bare-mode-add", {
+        action: "add",
+        name: "watcher",
+        everyMs: 60_000,
+        message: "check",
+        mode: "match",
+      }),
+    ).rejects.toThrow('"mode" is only valid for action="wake"');
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects bare top-level match/batchMs/maxBatchBytes on update instead of silently ignoring them", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-bare-match-update", {
+        action: "update",
+        jobId: "job-1",
+        match: "ERROR",
+      }),
+    ).rejects.toThrow('"match" is not a valid field for action="add" or action="update"');
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 

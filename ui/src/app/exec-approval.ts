@@ -10,6 +10,7 @@ export type ExecApprovalRequestPayload = {
   agentId?: string | null;
   resolvedPath?: string | null;
   sessionKey?: string | null;
+  runId?: string | null;
   commandSpans?: readonly {
     startIndex: number;
     endIndex: number;
@@ -138,6 +139,7 @@ function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | nul
       agentId: typeof request.agentId === "string" ? request.agentId : null,
       resolvedPath: typeof request.resolvedPath === "string" ? request.resolvedPath : null,
       sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
+      runId: typeof request.runId === "string" ? request.runId : null,
       commandSpans: parseCommandSpans(request.commandSpans, command.length),
       allowedDecisions: parseAllowedDecisions(request.allowedDecisions),
     },

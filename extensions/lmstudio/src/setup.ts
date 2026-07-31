@@ -26,6 +26,7 @@ import {
   type ProviderPrepareDynamicModelContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/provider-setup";
+import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { WizardCancelledError, type WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -44,6 +45,7 @@ import { discoverLmstudioModels, fetchLmstudioModels } from "./models.fetch.js";
 import {
   mapLmstudioWireModelsToConfig,
   type LmstudioModelWire,
+  resolveLmstudioEffectiveContextWindow,
   resolveLmstudioInferenceBase,
 } from "./models.js";
 import {
@@ -66,16 +68,14 @@ type ProviderPromptText = (params: {
 
 type ProviderPromptNote = (message: string, title?: string) => Promise<void> | void;
 type LmstudioDiscoveryResult = Awaited<ReturnType<typeof fetchLmstudioModels>>;
+const LMSTUDIO_APP_GUIDED_MIN_CONTEXT_TOKENS = 16_384;
+
 type LmstudioSetupDiscovery = {
   discovery: LmstudioDiscoveryResult;
   models: ModelDefinitionConfig[];
   defaultModel: string | undefined;
   defaultModelId: string | undefined;
 };
-
-function isTruthyEnvValue(value: string | undefined): boolean {
-  return ["1", "true", "yes", "on"].includes(value?.trim().toLowerCase() ?? "");
-}
 
 function resolveLmstudioSetupDefaultBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   return isTruthyEnvValue(env.OPENCLAW_DOCKER_SETUP)
@@ -354,7 +354,12 @@ function collectAppGuidedLmstudioModelIds(discovery: LmstudioDiscoveryResult): S
   return new Set(
     discovery.models.flatMap((entry) => {
       const id = entry.key?.trim();
-      return entry.type === "llm" && entry.capabilities?.trained_for_tool_use === true && id
+      if (entry.type !== "llm" || entry.capabilities?.trained_for_tool_use !== true || !id) {
+        return [];
+      }
+      const effectiveContextWindow = resolveLmstudioEffectiveContextWindow(entry);
+      return effectiveContextWindow !== null &&
+        effectiveContextWindow >= LMSTUDIO_APP_GUIDED_MIN_CONTEXT_TOKENS
         ? [id]
         : [];
     }),

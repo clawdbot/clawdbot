@@ -1,4 +1,4 @@
-// Subagent registry SQLite store tests cover canonical whole-snapshot persistence.
+// Subagent registry SQLite store tests cover canonical snapshot and exact-row persistence.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,7 +11,10 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  loadSubagentRunsForChildSessionFromSqlite,
+  loadSubagentRunsForControllerFromSqlite,
   loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryChangesToSqlite,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -31,6 +34,12 @@ function createRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecor
     endedAt: 250,
     outcome: { status: "ok", startedAt: 110, endedAt: 250, elapsedMs: 140 },
     expectsCompletionMessage: true,
+    execution: {
+      status: "terminal",
+      startedAt: 110,
+      endedAt: 250,
+      outcome: { status: "ok", startedAt: 110, endedAt: 250, elapsedMs: 140 },
+    },
     completion: {
       required: true,
       resultText: "done",
@@ -144,6 +153,74 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
+  it("writes only named registry mutations", async () => {
+    await withTempStateEnv(async () => {
+      const first = createRun({ runId: "run-one", childSessionKey: "agent:main:subagent:one" });
+      const removed = createRun({ runId: "run-two", childSessionKey: "agent:main:subagent:two" });
+      const untouched = createRun({
+        runId: "run-three",
+        childSessionKey: "agent:main:subagent:three",
+      });
+      const runs = new Map([first, removed, untouched].map((run) => [run.runId, run] as const));
+      saveSubagentRegistryToSqlite(runs);
+
+      const { db } = openOpenClawStateDatabase();
+      db.exec(`
+        CREATE TEMP TABLE subagent_run_write_audit (
+          action TEXT NOT NULL,
+          run_id TEXT NOT NULL
+        );
+        CREATE TEMP TRIGGER subagent_run_audit_insert
+        AFTER INSERT ON subagent_runs
+        BEGIN
+          INSERT INTO subagent_run_write_audit VALUES ('insert', NEW.run_id);
+        END;
+        CREATE TEMP TRIGGER subagent_run_audit_update
+        AFTER UPDATE ON subagent_runs
+        BEGIN
+          INSERT INTO subagent_run_write_audit VALUES ('update', NEW.run_id);
+        END;
+        CREATE TEMP TRIGGER subagent_run_audit_delete
+        AFTER DELETE ON subagent_runs
+        BEGIN
+          INSERT INTO subagent_run_write_audit VALUES ('delete', OLD.run_id);
+        END;
+      `);
+
+      first.task = "updated task";
+      runs.delete(removed.runId);
+      saveSubagentRegistryChangesToSqlite(runs, [first.runId, removed.runId]);
+
+      expect(
+        db.prepare("SELECT action, run_id FROM subagent_run_write_audit ORDER BY rowid").all(),
+      ).toEqual([
+        { action: "update", run_id: first.runId },
+        { action: "delete", run_id: removed.runId },
+      ]);
+      expect([...loadSubagentRegistryFromSqlite().entries()]).toMatchObject([
+        [first.runId, { task: "updated task" }],
+        [untouched.runId, { task: untouched.task }],
+      ]);
+    });
+  });
+
+  it("rejects writes outside the canonical nested state", async () => {
+    await withTempStateEnv(async () => {
+      const missingState = createRun({ execution: undefined });
+      const retiredState = createRun();
+      Object.assign(retiredState.delivery!, { handoffLeaseId: "lease-1" });
+      const invalidStatus = createRun({
+        execution: { status: "running\n" } as unknown as SubagentRunRecord["execution"],
+      });
+
+      for (const run of [missingState, retiredState, invalidStatus]) {
+        expect(() => saveSubagentRegistryToSqlite(new Map([[run.runId, run]]))).toThrow(
+          "subagent run is missing canonical nested state",
+        );
+      }
+    });
+  });
+
   it("preserves announcedAt for not_required delivery when completion was announced", async () => {
     await withTempStateEnv(async () => {
       const run = createRun({
@@ -217,6 +294,101 @@ describe("subagent registry sqlite store", () => {
       expect(
         openOpenClawStateDatabase().db.prepare("SELECT COUNT(*) AS count FROM subagent_runs").get(),
       ).toEqual({ count: 0 });
+    });
+  });
+
+  it("ignores rows with retired flat delivery state", async () => {
+    await withTempStateEnv(async () => {
+      const run = createRun();
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+
+      const { db } = openOpenClawStateDatabase();
+      db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?").run(
+        JSON.stringify({
+          ...run,
+          execution: undefined,
+          completion: undefined,
+          delivery: undefined,
+          pendingFinalDelivery: true,
+        }),
+        run.runId,
+      );
+
+      expect(loadSubagentRegistryFromSqlite()).toEqual(new Map());
+
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?").run(
+        JSON.stringify({ ...run, delivery: "pending" }),
+        run.runId,
+      );
+      expect(loadSubagentRegistryFromSqlite()).toEqual(new Map());
+    });
+  });
+
+  it("loads explicit controller rows and null-controller requester fallbacks", async () => {
+    await withTempStateEnv(async () => {
+      const explicit = createRun({
+        runId: "explicit",
+        controllerSessionKey: "agent:main:controller",
+        requesterSessionKey: "agent:main:other",
+      });
+      const fallback = createRun({
+        runId: "fallback",
+        controllerSessionKey: undefined,
+        requesterSessionKey: "agent:main:controller",
+      });
+      const emptyController = createRun({
+        runId: "empty-controller",
+        controllerSessionKey: "",
+        requesterSessionKey: "agent:main:controller",
+      });
+      const paddedController = createRun({
+        runId: "padded-controller",
+        controllerSessionKey: " agent:main:controller ",
+        requesterSessionKey: "agent:main:other",
+      });
+      const other = createRun({
+        runId: "other",
+        controllerSessionKey: "agent:main:other-controller",
+        requesterSessionKey: "agent:main:controller",
+      });
+      saveSubagentRegistryToSqlite(
+        new Map([
+          [explicit.runId, explicit],
+          [fallback.runId, fallback],
+          [emptyController.runId, emptyController],
+          [paddedController.runId, paddedController],
+          [other.runId, other],
+        ]),
+      );
+
+      expect(
+        loadSubagentRunsForControllerFromSqlite("agent:main:controller").map((run) => run.runId),
+      ).toEqual(["empty-controller", "explicit", "fallback", "padded-controller"]);
+      expect(
+        loadSubagentRunsForControllerFromSqlite("agent:main:controller").at(-1)
+          ?.controllerSessionKey,
+      ).toBe("agent:main:controller");
+      expect(loadSubagentRunsForControllerFromSqlite("   ")).toEqual([]);
+    });
+  });
+
+  it("loads only the requested child session in deterministic storage order", async () => {
+    await withTempStateEnv(async () => {
+      const childSessionKey = "agent:main:subagent:restarted";
+      const runs = [
+        createRun({ runId: "legacy", childSessionKey, createdAt: 300, generation: 1 }),
+        createRun({ runId: "latest", childSessionKey, createdAt: 100, generation: 2 }),
+        createRun({ runId: "same-zulu", childSessionKey, createdAt: 200, generation: 2 }),
+        createRun({ runId: "same-alpha", childSessionKey, createdAt: 200, generation: 2 }),
+        createRun({ runId: "other", childSessionKey: "agent:main:subagent:other" }),
+      ];
+      saveSubagentRegistryToSqlite(new Map(runs.map((run) => [run.runId, run])));
+
+      expect(
+        loadSubagentRunsForChildSessionFromSqlite(childSessionKey).map((run) => run.runId),
+      ).toEqual(["latest", "same-alpha", "same-zulu", "legacy"]);
+      expect(loadSubagentRunsForChildSessionFromSqlite("   ")).toEqual([]);
     });
   });
 });

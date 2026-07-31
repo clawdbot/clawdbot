@@ -5,9 +5,9 @@ scenario:
   surface: models
   coverage:
     primary:
-      - models.thinking
+      - agent-runtime.thinking
     secondary:
-      - runtime.reasoning-visibility
+      - agent-runtime.progress-visibility-reasoning-visibility
   objective: Verify GPT-5.6 Luna can switch from disabled thinking to medium thinking while reasoning display stays enabled.
   successCriteria:
     - Live runs target openai/gpt-5.6-luna.

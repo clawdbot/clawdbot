@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { spawnSync } from "node:child_process";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { execPlainGh } from "../lib/plain-gh.mjs";
 
@@ -126,6 +127,27 @@ async function dispatchCiForPr(
   return undefined;
 }
 
+// Dispatch always targets the REMOTE head; unpushed local work silently gets
+// no CI. Warn (never block) when a same-named local branch points elsewhere,
+// so an operator who meant to test local changes pushes first. Best-effort:
+// any git failure (no repo, no branch) skips the check.
+function warnOnLocalHeadDrift(record) {
+  const probe = spawnSync(
+    "git",
+    ["rev-parse", "--verify", "--quiet", `refs/heads/${record.headRefName}`],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+  );
+  if (probe.status !== 0) {
+    return;
+  }
+  const localOid = probe.stdout.trim();
+  if (SHA_PATTERN.test(localOid) && localOid !== record.headRefOid) {
+    console.error(
+      `warning: local branch ${record.headRefName} is at ${localOid}, but CI is being dispatched for the remote head ${record.headRefOid}; push first if you meant to test local changes.`,
+    );
+  }
+}
+
 async function main(argv = process.argv.slice(2)) {
   if (argv.length !== 4 || !["true", "false"].includes(argv[3])) {
     console.error("Usage: ci-dispatch.mjs <PR> <headRefName> <headRefOid> <isCrossRepository>");
@@ -138,6 +160,8 @@ async function main(argv = process.argv.slice(2)) {
     headRefOid: argv[2],
     isCrossRepository: argv[3] === "true",
   };
+  requirePrRecord(record);
+  warnOnLocalHeadDrift(record);
   const run = await dispatchCiForPr(record);
   if (run) {
     console.log(

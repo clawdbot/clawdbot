@@ -69,6 +69,7 @@ export const fsHandlers: GatewayRequestHandlers = {
         const result = await context.nodeRegistry.invoke({
           nodeId: params.nodeId,
           expectedConnId: node.connId,
+          ...(node.pairingGeneration ? { expectedPairingGeneration: node.pairingGeneration } : {}),
           command: NODE_FS_LIST_DIR_COMMAND,
           params: params.path ? { path: params.path } : {},
         });

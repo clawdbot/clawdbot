@@ -115,7 +115,7 @@ describe("AppSidebar live narration", () => {
       id: "question-narration-priority",
       agentId: "main",
       sessionKey: key,
-      questions: [{ id: "confirm", header: "Confirm", question: "Continue?", options: [] }],
+      questions: [{ questionId: "confirm", header: "Confirm", question: "Continue?", options: [] }],
       createdAtMs: Date.now(),
       expiresAtMs: Date.now() + 60_000,
       status: "pending",
@@ -202,12 +202,12 @@ describe("AppSidebar live narration", () => {
       agentId: undefined,
     });
 
-    gateway.publish({ connected: false });
+    gateway.publish({ phase: "stopped" });
     sidebar.connected = false;
     await sidebar.updateComplete;
     await waitForFast(() => expect(sessions.unsubscribeMessages).toHaveBeenCalledTimes(1));
 
-    gateway.publish({ connected: true });
+    gateway.publish({ phase: "connected" });
     sidebar.connected = true;
     await sidebar.updateComplete;
     await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(2));

@@ -13,18 +13,21 @@ function completedRun(
   options: {
     iterations?: number;
     success?: boolean;
+    error?: string;
     sessionKey?: string;
     runId?: string;
-    enabled?: boolean;
+    mode?: "off" | "propose" | "auto";
     skillWorkshopAvailable?: boolean;
     compacted?: boolean;
     modelMetadata?: boolean;
+    modelIterations?: number;
   } = {},
 ): SkillExperienceReviewParams {
   const iterations = options.iterations ?? 10;
   return {
     event: {
       success: options.success ?? true,
+      ...(options.error === undefined ? {} : { error: options.error }),
       messages: [
         { role: "user", content: "Diagnose and repair the workflow." },
         ...Array.from({ length: iterations }, (_, index) => ({
@@ -53,17 +56,27 @@ function completedRun(
             authProfileId: "openai:work",
           }),
       skillWorkshopAvailable: options.skillWorkshopAvailable ?? true,
+      ...(options.modelIterations === undefined
+        ? {}
+        : { modelIterations: options.modelIterations }),
       compacted: options.compacted,
       trigger: "user",
     },
     config: {
       skills: {
         workshop: {
-          autonomous: { enabled: options.enabled ?? true },
+          autonomous: { mode: options.mode ?? "propose" },
         },
       },
     },
   };
+}
+
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 afterEach(() => {
@@ -92,12 +105,42 @@ describe("skill experience review scheduler", () => {
     scheduler.clear();
   });
 
+  it("uses exact harness iterations for a Codex-style projected trajectory", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun({ iterations: 1, modelIterations: 10 }));
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(runReview).toHaveBeenCalledWith(expect.objectContaining({ modelIterations: 10 }));
+    scheduler.clear();
+  });
+
+  it("does not infer iterations when a harness explicitly reports none", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun({ iterations: 10, modelIterations: 0 }));
+    await vi.runAllTimersAsync();
+
+    expect(runReview).not.toHaveBeenCalled();
+    scheduler.clear();
+  });
+
   it("rechecks current autonomy and tool policy before a delayed review", async () => {
     vi.useFakeTimers();
     const runReview = vi.fn().mockResolvedValue(undefined);
     const prepareReview = vi.fn(async (candidate) =>
       prepareSkillExperienceReviewCandidate(candidate, {
-        skills: { workshop: { autonomous: { enabled: true } } },
+        skills: { workshop: { autonomous: { mode: "propose" } } },
         tools: { deny: ["skill_workshop"] },
       }),
     );
@@ -126,7 +169,7 @@ describe("skill experience review scheduler", () => {
     };
     await expect(
       prepareSkillExperienceReviewCandidate(candidate, {
-        skills: { workshop: { autonomous: { enabled: true } } },
+        skills: { workshop: { autonomous: { mode: "propose" } } },
         channels: {
           whatsapp: {
             groups: { "safe-room": { tools: { deny: ["skill_workshop"] } } },
@@ -145,14 +188,14 @@ describe("skill experience review scheduler", () => {
           modelIterations: 10,
         },
         {
-          skills: { workshop: { autonomous: { enabled: true } } },
+          skills: { workshop: { autonomous: { mode: "propose" } } },
           agents: { defaults: { sandbox: { mode: "non-main" } } },
         },
       ),
     ).resolves.toBeDefined();
   });
 
-  it("skips short, failed, disabled, metadata-missing, restricted, and internal runs", async () => {
+  it("skips short, errored, disabled, metadata-missing, restricted, and internal runs", async () => {
     vi.useFakeTimers();
     const runReview = vi.fn().mockResolvedValue(undefined);
     const scheduler = createSkillExperienceReviewScheduler({
@@ -161,9 +204,9 @@ describe("skill experience review scheduler", () => {
     });
 
     scheduler.schedule(completedRun({ iterations: 9 }));
-    scheduler.schedule(completedRun({ success: false }));
+    scheduler.schedule(completedRun({ success: false, error: "provider failed" }));
     scheduler.schedule(completedRun({ compacted: true, sessionKey: "agent:main:compacted" }));
-    scheduler.schedule(completedRun({ enabled: false }));
+    scheduler.schedule(completedRun({ mode: "off" }));
     scheduler.schedule(
       completedRun({ modelMetadata: false, sessionKey: "agent:main:missing-model" }),
     );
@@ -219,7 +262,7 @@ describe("skill experience review scheduler", () => {
     scheduler.clear();
   });
 
-  it("discards a queued candidate when the same run later fails", async () => {
+  it("discards a queued candidate when the same run later errors", async () => {
     vi.useFakeTimers();
     const runReview = vi.fn().mockResolvedValue(undefined);
     const scheduler = createSkillExperienceReviewScheduler({
@@ -228,9 +271,46 @@ describe("skill experience review scheduler", () => {
     });
 
     scheduler.schedule(completedRun({ runId: "retried-run" }));
-    scheduler.schedule(completedRun({ runId: "retried-run", success: false }));
+    scheduler.schedule(completedRun({ runId: "retried-run", success: false, error: "boom" }));
     await vi.runAllTimersAsync();
     expect(runReview).not.toHaveBeenCalled();
+    scheduler.clear();
+  });
+
+  it("reviews a deep user-aborted turn and marks the candidate interrupted", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun({ success: false }));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(runReview).toHaveBeenCalledTimes(1);
+    expect(runReview.mock.calls[0]?.[0]).toMatchObject({
+      modelIterations: 10,
+      turnAborted: true,
+    });
+    scheduler.clear();
+  });
+
+  it("replaces queued evidence when the same run is later aborted deep in the turn", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun({ runId: "retried-run", iterations: 10 }));
+    scheduler.schedule(completedRun({ runId: "retried-run", iterations: 12, success: false }));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(runReview).toHaveBeenCalledTimes(1);
+    expect(runReview.mock.calls[0]?.[0]).toMatchObject({
+      modelIterations: 12,
+      turnAborted: true,
+    });
     scheduler.clear();
   });
 
@@ -295,6 +375,65 @@ describe("skill experience review scheduler", () => {
     scheduler.clear();
   });
 
+  it("drops terminal auth-migration failures without re-arming", async () => {
+    const callbacks: Array<() => void> = [];
+    const setTimer = vi.fn((callback: () => void) => {
+      callbacks.push(callback);
+      return { unref: vi.fn() } as unknown as ReturnType<typeof setTimeout>;
+    });
+    const clearTimer = vi.fn();
+    const runReview = vi.fn().mockRejectedValue(
+      Object.assign(new Error("Auth migration required; run openclaw doctor --fix."), {
+        code: "AUTH_PROFILE_MIGRATION_REQUIRED" as const,
+      }),
+    );
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+      setTimer,
+      clearTimer,
+    });
+
+    scheduler.schedule(completedRun());
+    callbacks[0]?.();
+    await flushMicrotasks();
+
+    expect(runReview).toHaveBeenCalledTimes(1);
+    expect(setTimer).toHaveBeenCalledTimes(1);
+    expect(clearTimer).not.toHaveBeenCalled();
+
+    scheduler.schedule(completedRun());
+    expect(setTimer).toHaveBeenCalledTimes(2);
+    expect(clearTimer).not.toHaveBeenCalled();
+    scheduler.clear();
+  });
+
+  it("re-arms after a generic review failure", async () => {
+    const callbacks: Array<() => void> = [];
+    const setTimer = vi.fn((callback: () => void, _delayMs: number) => {
+      callbacks.push(callback);
+      return { unref: vi.fn() } as unknown as ReturnType<typeof setTimeout>;
+    });
+    const clearTimer = vi.fn();
+    const runReview = vi.fn().mockRejectedValue(new Error("provider unavailable"));
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+      setTimer,
+      clearTimer,
+    });
+
+    scheduler.schedule(completedRun());
+    callbacks[0]?.();
+    await flushMicrotasks();
+
+    expect(runReview).toHaveBeenCalledTimes(1);
+    expect(setTimer).toHaveBeenCalledTimes(2);
+    expect(setTimer).toHaveBeenLastCalledWith(expect.any(Function), 30_000);
+    expect(clearTimer).not.toHaveBeenCalled();
+    scheduler.clear();
+  });
+
   it("serializes reviews across sessions", async () => {
     vi.useFakeTimers();
     let finishFirst: (() => void) | undefined;
@@ -339,6 +478,21 @@ describe("skill experience review scheduler", () => {
     expect(prompt).toContain("cannot update a live skill");
     expect(prompt).toContain("NOTHING_TO_LEARN");
     expect(prompt).toContain("[tool call: exec]");
+    expect(prompt).toContain("Completed run: run-1");
+    expect(prompt).not.toContain("Interrupted run");
+  });
+
+  it("flags interrupted turns in the review prompt", () => {
+    const params = completedRun({ success: false });
+    const prompt = buildSkillExperienceReviewPrompt({
+      ctx: params.ctx,
+      transcript: formatSkillExperienceReviewTranscript(params.event.messages),
+      modelIterations: 10,
+      turnAborted: true,
+    });
+
+    expect(prompt).toContain("Interrupted run (stopped before completion): run-1");
+    expect(prompt).toContain("Only capture procedures that visibly worked");
   });
 });
 

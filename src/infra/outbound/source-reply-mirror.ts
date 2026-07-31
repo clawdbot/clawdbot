@@ -1,5 +1,6 @@
 // Source reply mirroring records successful same-conversation message-tool
 // sends back into the owning session transcript.
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -8,6 +9,7 @@ import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
+import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
@@ -53,12 +55,6 @@ function readStringArray(value: unknown): string[] | undefined {
   return normalizeOptionalTrimmedStringList(value);
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function readFirstString(
   params: Record<string, unknown>,
   keys: readonly string[],
@@ -96,6 +92,7 @@ function resolveDeliveredThreadPlacement(
 
 function resolveSourceReplyThreadPlacement(
   params: SourceReplyTranscriptMirrorParams,
+  threadAddressing: ReturnType<typeof resolveChannelThreadAddressing>,
 ): SourceReplyThreadPlacement {
   const currentThreadId = normalizeOptionalString(params.toolContext?.currentThreadTs);
   const deliveredPlacement = resolveDeliveredThreadPlacement(params, currentThreadId);
@@ -106,7 +103,7 @@ function resolveSourceReplyThreadPlacement(
     return currentThreadId ? "mismatch" : "match";
   }
   if (
-    params.channel === "slack" &&
+    threadAddressing === "message" &&
     params.replyToIsExplicit === true &&
     !currentThreadId &&
     normalizeOptionalString(params.actionParams.replyTo)
@@ -293,6 +290,10 @@ function resolveTranscriptMirrorIdempotencyKey(params: {
 
 function isCurrentSourceConversation(
   params: SourceReplyTranscriptMirrorParams,
+  threadPlacement = resolveSourceReplyThreadPlacement(
+    params,
+    resolveChannelThreadAddressing(params.channel),
+  ),
 ): params is MirrorableSourceReplyTranscriptParams {
   if (params.action !== "send") {
     return false;
@@ -329,7 +330,6 @@ function isCurrentSourceConversation(
   if (!requestedTarget) {
     return false;
   }
-  const threadPlacement = resolveSourceReplyThreadPlacement(params);
   if (threadPlacement === "mismatch") {
     return false;
   }
@@ -358,9 +358,11 @@ function isCurrentSourceConversation(
 function isExactCurrentSourceConversation(
   params: SourceReplyTranscriptMirrorParams,
 ): params is MirrorableSourceReplyTranscriptParams {
-  return (
-    resolveSourceReplyThreadPlacement(params) === "match" && isCurrentSourceConversation(params)
+  const threadPlacement = resolveSourceReplyThreadPlacement(
+    params,
+    resolveChannelThreadAddressing(params.channel),
   );
+  return threadPlacement === "match" && isCurrentSourceConversation(params, threadPlacement);
 }
 
 /** Confirms that a successful send reached the exact trusted source conversation. */
@@ -377,10 +379,14 @@ export async function mirrorDeliveredSourceReplyToTranscript(
   if (hasExplicitDeliveryFailure(params.deliveredPayload)) {
     return false;
   }
-  if (!isCurrentSourceConversation(params)) {
+  const threadPlacement = resolveSourceReplyThreadPlacement(
+    params,
+    resolveChannelThreadAddressing(params.channel),
+  );
+  if (!isCurrentSourceConversation(params, threadPlacement)) {
     return false;
   }
-  if (params.sourceReplyFinal === true && !isExactCurrentSourceConversation(params)) {
+  if (params.sourceReplyFinal === true && threadPlacement !== "match") {
     return false;
   }
 

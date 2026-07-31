@@ -81,23 +81,9 @@ function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function asStreamingConfigRecord(value: unknown): Record<string, unknown> | undefined {
-  const record = asObjectRecord(value);
-  if (record) {
-    return record;
-  }
-  if (typeof value === "string") {
-    return { mode: value };
-  }
-  if (typeof value === "boolean") {
-    return { mode: value ? "partial" : "off" };
-  }
-  return undefined;
-}
-
 function mergeStreamingConfig(base: unknown, override: unknown): unknown {
-  const baseRecord = asStreamingConfigRecord(base);
-  const overrideRecord = asStreamingConfigRecord(override);
+  const baseRecord = asObjectRecord(base);
+  const overrideRecord = asObjectRecord(override);
   if (!baseRecord || !overrideRecord) {
     return override ?? base;
   }
@@ -135,11 +121,7 @@ function mergeStreamingEntry(
 }
 
 function hasConfiguredPreviewStreamMode(entry: StreamingCompatEntry): boolean {
-  return (
-    asObjectRecord(entry.streaming)?.mode !== undefined ||
-    typeof entry.streaming === "string" ||
-    typeof entry.streaming === "boolean"
-  );
+  return asObjectRecord(entry.streaming)?.mode !== undefined;
 }
 
 function applyParentPreviewStreamModeDefault(

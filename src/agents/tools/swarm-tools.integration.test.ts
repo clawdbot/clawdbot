@@ -98,7 +98,7 @@ describe("swarm tools integration", () => {
         getRuntimeConfig: () => config,
         hasInProcessGatewayContext: () => false,
         ensureContextEnginesInitialized: vi.fn(),
-        loadModelCatalog: vi.fn(async () => []),
+        loadPreparedModelCatalog: vi.fn(async () => []),
         resolveContextEngine: vi.fn(async () => ({
           info: { id: "test", name: "Test", version: "0.0.1" },
           ingest: vi.fn(async () => ({ ingested: false })),

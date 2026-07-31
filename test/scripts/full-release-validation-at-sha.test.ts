@@ -8,6 +8,7 @@ import {
   releaseEvidenceVerificationArgs,
   releaseEvidenceVerifierPath,
   resolveRemoteTargetRefSha,
+  shouldDeleteTemporaryWorkflowRef,
 } from "../../scripts/full-release-validation-at-sha.mjs";
 
 describe("full-release-validation-at-sha", () => {
@@ -34,6 +35,7 @@ describe("full-release-validation-at-sha", () => {
         mode: "linux",
         provider: "anthropic",
         reuse_evidence: "true",
+        fail_fast: "false",
       },
       sha: "abc123",
       targetRef: "release/2026.7.1",
@@ -123,6 +125,8 @@ describe("full-release-validation-at-sha", () => {
     expect(() => parseArgs(["-f", "reuse_evidence=maybe"])).toThrow(
       "reuse_evidence must be true or false",
     );
+    expect(parseArgs(["-f", "fail_fast=true"]).inputs.fail_fast).toBe("true");
+    expect(() => parseArgs(["-f", "fail_fast=maybe"])).toThrow("fail_fast must be true or false");
     expect(() => parseArgs(["-f", "release_profile=minimum"])).toThrow(
       "release_profile must be beta, stable, or full",
     );
@@ -151,8 +155,33 @@ describe("full-release-validation-at-sha", () => {
     const source = readFileSync("scripts/full-release-validation-at-sha.mjs", "utf8");
     expect(source).toContain("actions/runs/${parentRunId}");
     expect(source).toContain("workflowRun.head_sha !== workflowSha");
+    expect(source).toContain("return suite;");
     expect(source).not.toContain('"graphql"');
     expect(source).not.toContain('["run", "watch"');
+  });
+
+  it("retains a failed parent workflow ref for GitHub reruns", () => {
+    expect(
+      shouldDeleteTemporaryWorkflowRef({
+        dryRun: false,
+        keepBranch: false,
+        parentConclusion: "failure",
+      }),
+    ).toBe(false);
+    expect(
+      shouldDeleteTemporaryWorkflowRef({
+        dryRun: false,
+        keepBranch: false,
+        parentConclusion: "success",
+      }),
+    ).toBe(true);
+    expect(
+      shouldDeleteTemporaryWorkflowRef({
+        dryRun: true,
+        keepBranch: false,
+        parentConclusion: "",
+      }),
+    ).toBe(true);
   });
 
   it("supports current and legacy verifier locations in trusted workflow checkouts", () => {

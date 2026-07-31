@@ -14,13 +14,7 @@ import {
   makeTrackedTempDir,
 } from "../../../plugins/test-helpers/fs-fixtures.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
-import {
-  DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV,
-  migratePluginRegistryForInstall,
-  preflightPluginRegistryInstallMigration,
-} from "./plugin-registry-migration.js";
-
-const FORCE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION";
+import { migratePluginRegistryForInstall } from "./plugin-registry-migration.js";
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -496,39 +490,5 @@ describe("plugin registry install migration", () => {
       installPath: pluginDir,
     });
     expect(persisted?.plugins).toEqual([]);
-  });
-
-  it("marks force migration env as deprecated break-glass", () => {
-    const result = preflightPluginRegistryInstallMigration({
-      stateDir: makeTempDir(),
-      env: hermeticEnv({
-        [FORCE_PLUGIN_REGISTRY_MIGRATION_ENV]: "1",
-      }),
-    });
-    expectRecordFields(requireRecord(result, "preflight result"), {
-      action: "migrate",
-      force: true,
-    });
-    expect(result.deprecationWarnings).toStrictEqual([
-      `${FORCE_PLUGIN_REGISTRY_MIGRATION_ENV} is deprecated and will be removed after the plugin registry migration rollout; use doctor registry repair once available.`,
-    ]);
-  });
-
-  it("treats falsey env flag strings as unset", async () => {
-    const stateDir = makeTempDir();
-    await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
-
-    const result = preflightPluginRegistryInstallMigration({
-      stateDir,
-      env: hermeticEnv({
-        [DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV]: "0",
-        [FORCE_PLUGIN_REGISTRY_MIGRATION_ENV]: "false",
-      }),
-    });
-    expectRecordFields(requireRecord(result, "preflight result"), {
-      action: "skip-existing",
-      force: false,
-      deprecationWarnings: [],
-    });
   });
 });

@@ -10,7 +10,7 @@ import { isStringOption } from "../../utils/string-readers.js";
 // "on-exit" is recognized (not synthesized) so an explicit on-exit kind
 // survives canonicalization and reaches the assertNoCronShellExecution
 // rejection instead of being overwritten by another flat schedule field.
-const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit"] as const;
+const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit", "stream"] as const;
 const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script"] as const;
 const CRON_FLAT_PAYLOAD_KEYS = [
   "message",
@@ -38,6 +38,17 @@ const CRON_FLAT_SCHEDULE_KEYS = [
   "stagger",
   "staggerMs",
   "exact",
+  // command/cwd deliberately excluded — must stay fully nested under an
+  // explicit schedule.kind="stream" object, never flat-recovered, so the
+  // assertNoCronShellExecution guard has one legitimate path to check.
+  // Dedicated stream* aliases (not the raw field names) avoid colliding with
+  // unrelated same-named top-level fields, e.g. the wake-only `mode`.
+  "streamCommand",
+  "streamCwd",
+  "streamMode",
+  "streamMatch",
+  "streamBatchMs",
+  "streamMaxBatchBytes",
 ] as const;
 const CRON_FLAT_PACING_KEYS = ["pacingMin", "pacingMax"] as const;
 const CRON_FLAT_TRIGGER_KEYS = ["triggerScript", "triggerOnce"] as const;
@@ -214,8 +225,30 @@ function canonicalizeCronToolSchedule(value: Record<string, unknown>): void {
     schedule.kind = "cron";
   }
 
+  // command is deliberately not flat-recovered (see CRON_FLAT_SCHEDULE_KEYS);
+  // an explicit schedule.kind must be provided nested for on-exit.
   for (const key of ["anchorMs", "tz", "staggerMs"] as const) {
     hasSchedule = moveDefinedField({ source: value, target: schedule, from: key }) || hasSchedule;
+  }
+
+  // stream* flat aliases avoid colliding with unrelated top-level fields
+  // (e.g. wake-only `mode`). Any one of them present is explicit stream
+  // intent, so it sets kind="stream" even if streamCommand itself is
+  // missing — that surfaces as a clear "command required" error downstream
+  // instead of a silently ignored field.
+  for (const [from, to] of [
+    ["streamCommand", "command"],
+    ["streamCwd", "cwd"],
+    ["streamMode", "mode"],
+    ["streamMatch", "match"],
+    ["streamBatchMs", "batchMs"],
+    ["streamMaxBatchBytes", "maxBatchBytes"],
+  ] as const) {
+    const movedStreamField = moveDefinedField({ source: value, target: schedule, from, to });
+    if (movedStreamField && !isCronScheduleKind(schedule.kind)) {
+      schedule.kind = "stream";
+    }
+    hasSchedule = movedStreamField || hasSchedule;
   }
   hasSchedule =
     moveDefinedField({ source: value, target: schedule, from: "stagger", to: "staggerMs" }) ||
@@ -456,6 +489,34 @@ export function recoverCronObjectFromFlatParams(params: Record<string, unknown>)
     }
   }
   return { found, value: canonicalizeCronToolObject(value), consumedKeys };
+}
+
+const CRON_STREAM_ONLY_FLAT_ALIASES: ReadonlyMap<string, string> = new Map([
+  ["match", "streamMatch"],
+  ["batchMs", "streamBatchMs"],
+  ["maxBatchBytes", "streamMaxBatchBytes"],
+]);
+
+/**
+ * Rejects bare schedule-shaped keys on add/update that collide with an
+ * unrelated same-named top-level field instead of silently doing nothing.
+ * `mode` is a real top-level field, but only for action="wake"; `match`/
+ * `batchMs`/`maxBatchBytes` have no other top-level meaning at all. Both
+ * would otherwise be dropped by canonicalization with no effect and no
+ * error, reproducing the exact silent-failure shape this flat-field system
+ * exists to prevent.
+ */
+export function assertNoStrayCronScheduleAliasFields(value: Record<string, unknown>): void {
+  if (value.mode !== undefined) {
+    throw new Error('"mode" is only valid for action="wake"; use streamMode for stream schedules.');
+  }
+  for (const [key, alias] of CRON_STREAM_ONLY_FLAT_ALIASES) {
+    if (value[key] !== undefined) {
+      throw new Error(
+        `"${key}" is not a valid field for action="add" or action="update"; use ${alias} for stream schedules.`,
+      );
+    }
+  }
 }
 
 /** Checks whether a recovered flat object has enough schedule/payload signal to create a job. */

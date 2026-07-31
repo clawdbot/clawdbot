@@ -184,7 +184,8 @@ enum ChatToolDiff {
             case "create":
                 return self.resolveWriteDiff(
                     argumentsRecord,
-                    keys: ["file_text", "content"])
+                    keys: ["file_text", "content"],
+                    details: details)
             case "insert":
                 return self.resolveInsertionDiff(argumentsRecord, details: details)
             default:
@@ -206,7 +207,10 @@ enum ChatToolDiff {
                 return detailsDiff
             }
             guard !isError else { return nil }
-            return self.resolveWriteDiff(argumentsRecord, keys: ["content", "text", "file_text"])
+            return self.resolveWriteDiff(
+                argumentsRecord,
+                keys: ["content", "text", "file_text"],
+                details: details)
         }
         if self.patchToolNames.contains(normalizedName) {
             if let detailsDiff = self.resolveDetailsDiff(details) {
@@ -243,8 +247,9 @@ enum ChatToolDiff {
     private static func resolvePatchDiff(
         _ arguments: [String: AnyCodable]?) -> (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
     {
-        guard let patch = self.string(in: arguments, keys: ["patch", "input", "diff"]),
-              !patch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // First NON-BLANK alias, matching the transcript cache's selection so a
+        // cold-cache reload renders the same envelope as the live row.
+        guard let patch = self.firstNonBlankString(in: arguments, keys: ["input", "patch", "diff"])
         else { return nil }
 
         let inputClipped = patch.utf16.count > self.maxLocalInputCharacters
@@ -261,6 +266,11 @@ enum ChatToolDiff {
             let structural = current?.operation == .update
                 ? raw.replacingOccurrences(of: #"[ \t]+$"#, with: "", options: .regularExpression)
                 : raw.trimmingCharacters(in: .whitespaces)
+            if structural == "...(truncated)..." {
+                // Cached envelopes use this marker to make an unknown patch tail explicit.
+                clipped = true
+                continue
+            }
             if let header = self.patchFileHeader(structural) {
                 if let current { sections.append(current) }
                 current = PatchSection(
@@ -554,8 +564,11 @@ enum ChatToolDiff {
 
     private static func resolveWriteDiff(
         _ arguments: [String: AnyCodable]?,
-        keys: [String]) -> (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
+        keys: [String],
+        details: AnyCodable?) -> (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
     {
+        let detailValues = details?.dictionaryValue
+        guard detailValues?["changed"]?.boolValue != false else { return nil }
         guard let content = self.string(in: arguments, keys: keys) else { return nil }
         let allLines = self.splitLines(content)
         guard !allLines.isEmpty else { return nil }
@@ -572,7 +585,11 @@ enum ChatToolDiff {
         if lines.count < allLines.count {
             lines.append(ChatToolDiffLine(kind: .skip, text: ""))
         }
-        return (lines, ChatToolDiffStat(added: allLines.count, removed: 0))
+        // Present details need created=true before zero removals are authoritative.
+        let stat = detailValues != nil && detailValues?["created"]?.boolValue != true
+            ? nil
+            : ChatToolDiffStat(added: allLines.count, removed: 0)
+        return (lines, stat)
     }
 
     private static func resolveEditDiff(
@@ -690,6 +707,21 @@ enum ChatToolDiff {
                 stat
             }
         }
+    }
+
+    private static func firstNonBlankString(
+        in record: [String: AnyCodable]?,
+        keys: [String]) -> String?
+    {
+        guard let record else { return nil }
+        for key in keys {
+            if let value = record[key]?.stringValue,
+               !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                return value
+            }
+        }
+        return nil
     }
 
     private static func string(in record: [String: AnyCodable]?, keys: [String]) -> String? {

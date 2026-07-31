@@ -106,8 +106,15 @@ export type RealtimeVoiceProviderConfiguredContext = {
   providerConfig: RealtimeVoiceProviderConfig;
 };
 
+export type RealtimeVoiceAgentConsultRunner = (params: {
+  prompt: string;
+  signal?: AbortSignal;
+}) => Promise<{ text: string }>;
+
 export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
   cfg?: OpenClawConfig;
+  /** Host-selected agent scope for provider auth and agent-owned bridge state. */
+  agentId?: string;
   providerConfig: RealtimeVoiceProviderConfig;
   audioFormat?: RealtimeVoiceAudioFormat;
   instructions?: string;
@@ -115,6 +122,8 @@ export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
   autoRespondToAudio?: boolean;
   interruptResponseOnInputAudio?: boolean;
   tools?: RealtimeVoiceTool[];
+  /** Host-injected agent delegation runner for provider-owned realtime control channels. */
+  runAgentConsult?: RealtimeVoiceAgentConsultRunner;
 };
 
 export type RealtimeVoiceBrowserSessionCreateRequest = {
@@ -128,6 +137,8 @@ export type RealtimeVoiceBrowserSessionCreateRequest = {
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
   reasoningEffort?: string;
+  /** Host-injected agent delegation runner for provider-owned realtime control channels. */
+  runAgentConsult?: RealtimeVoiceAgentConsultRunner;
 };
 
 export type RealtimeVoiceBrowserAudioContract = {
@@ -191,6 +202,8 @@ export type RealtimeVoiceBridge = {
   supportsToolResultContinuation?: boolean;
   /** False when the provider cannot accept a tool result without starting a response. */
   supportsToolResultSuppression?: boolean;
+  /** Per-session override for provider-confirmed input-audio barge-in handling. */
+  handlesInputAudioBargeIn?: boolean;
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
   setMediaTimestamp(ts: number): void;

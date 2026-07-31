@@ -36,6 +36,7 @@ describe("realtime Talk microphone inputs", () => {
         { deviceId: "built-in", label: "Built-in Microphone" },
         { deviceId: "usb", label: "Microphone 2" },
       ],
+      permissionRequired: true,
       warning: null,
     });
     expect(getUserMedia).not.toHaveBeenCalled();
@@ -61,6 +62,7 @@ describe("realtime Talk microphone inputs", () => {
         { deviceId: "built-in", label: "Built-in Microphone" },
         { deviceId: "loopback", label: "Loopback Audio" },
       ],
+      permissionRequired: false,
       warning: null,
     });
     expect(getUserMedia).toHaveBeenCalledWith({ audio: true });
@@ -82,6 +84,7 @@ describe("realtime Talk microphone inputs", () => {
     const result = await discoverRealtimeTalkInputs(true);
 
     expect(result.devices).toEqual([]);
+    expect(result.permissionRequired).toBe(true);
     expect(result.warning).toContain("Microphone access is blocked");
   });
 
@@ -212,6 +215,7 @@ describe("realtime Talk camera inputs", () => {
         { deviceId: "front", label: "Front Camera" },
         { deviceId: "back", label: "Camera 2" },
       ],
+      permissionRequired: true,
       warning: null,
     });
     expect(getUserMedia).not.toHaveBeenCalled();
@@ -228,6 +232,7 @@ describe("realtime Talk camera inputs", () => {
 
     await expect(discoverRealtimeTalkCameras(true)).resolves.toEqual({
       devices: [{ deviceId: "camera", label: "Desk Camera" }],
+      permissionRequired: false,
       warning: null,
     });
     expect(getUserMedia).toHaveBeenCalledWith({ video: true });

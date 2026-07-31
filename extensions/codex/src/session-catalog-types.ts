@@ -13,6 +13,8 @@ export type CodexSessionCatalogSession = {
   threadId: string;
   sessionId?: string;
   name?: string | null;
+  /** Display-only fallback kept separate so title search never scans prompt previews. */
+  fallbackName?: string;
   cwd?: string;
   status: string;
   activeFlags?: string[];
@@ -24,7 +26,7 @@ export type CodexSessionCatalogSession = {
   cliVersion?: string;
   gitBranch?: string;
   /** Existing locked OpenClaw chat already mapped to this native source thread. */
-  openClawSessionKey?: string;
+  sessionKey?: string;
   archived: boolean;
 };
 
@@ -39,9 +41,12 @@ export type CodexSessionCatalogPageParams = {
   limit?: number;
   searchTerm?: string;
   cwd?: string;
+  /** Bypasses the brief list memo after a specific thread lookup misses. */
+  forceRefresh?: boolean;
 };
 
 export type CodexSessionCatalogControl = {
+  clientId?: string;
   connectionFingerprint?: string;
   withPinnedConnection<T>(run: (control: CodexSessionCatalogControl) => Promise<T>): Promise<T>;
   listPage(params: CodexSessionCatalogPageParams): Promise<CodexSessionCatalogPage>;

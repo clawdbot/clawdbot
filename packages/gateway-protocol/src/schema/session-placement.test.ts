@@ -4,9 +4,7 @@ import {
   SessionPlacementSchema,
   SessionPlacementStateSchema,
   validateSessionsDispatchParams,
-  validateSessionsDispatchResult,
   validateSessionsReclaimParams,
-  validateSessionsReclaimResult,
 } from "../index.js";
 
 const placementStates = [
@@ -239,53 +237,6 @@ describe("session dispatch protocol schemas", () => {
     ).toBe(false);
   });
 
-  it("accepts only active worker ownership in successful dispatch results", () => {
-    const active = {
-      state: "active" as const,
-      ...basePlacement,
-      ...workerOwnedFields,
-    };
-    expect(
-      validateSessionsDispatchResult({
-        ok: true,
-        key: "agent:main:dispatch",
-        sessionId: "session-1",
-        placement: active,
-      }),
-    ).toBe(true);
-    expect(
-      validateSessionsDispatchResult({
-        ok: true,
-        key: "agent:main:dispatch",
-        sessionId: "session-1",
-        placement: {
-          state: "failed",
-          ...basePlacement,
-          recoveryError: "worker admission failed",
-        },
-      }),
-    ).toBe(false);
-  });
-
-  it("accepts only reclaimed ownership in successful reclaim results", () => {
-    expect(
-      validateSessionsReclaimResult({
-        ok: true,
-        key: "agent:main:dispatch",
-        sessionId: "session-1",
-        placement: { state: "reclaimed", ...basePlacement, ...workerOwnedFields },
-      }),
-    ).toBe(true);
-    expect(
-      validateSessionsReclaimResult({
-        ok: true,
-        key: "agent:main:dispatch",
-        sessionId: "session-1",
-        placement: { state: "active", ...basePlacement, ...workerOwnedFields },
-      }),
-    ).toBe(false);
-  });
-
   it("rejects unknown placement fields", () => {
     expect(
       Value.Check(SessionPlacementSchema, {
@@ -297,21 +248,7 @@ describe("session dispatch protocol schemas", () => {
     ).toBe(false);
   });
 
-  it("rejects extra fields in dispatch params and results", () => {
-    const active = {
-      state: "active" as const,
-      ...basePlacement,
-      ...workerOwnedFields,
-    };
-    expect(
-      validateSessionsDispatchResult({
-        ok: true,
-        key: "agent:main:dispatch",
-        sessionId: "session-1",
-        placement: active,
-        extra: true,
-      }),
-    ).toBe(false);
+  it("rejects extra fields in dispatch params", () => {
     expect(
       validateSessionsDispatchParams({
         key: "agent:main:dispatch",

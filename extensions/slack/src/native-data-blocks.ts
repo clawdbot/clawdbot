@@ -1,4 +1,5 @@
 // Shared detection and text fallback for Slack's native chart and table blocks.
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { renderSlackBlockFallbackText } from "./blocks-fallback.js";
 import {
   hasSlackDataTableBlock,
@@ -13,6 +14,8 @@ import {
 
 export const SLACK_MALFORMED_NATIVE_DATA_FALLBACK =
   "Slack could not render this chart or table data.";
+const SLACK_RESPONSE_URL_BODY_LIMIT_BYTES = 16 * 1024;
+const SLACK_RESPONSE_URL_BODY_TIMEOUT_MS = 30_000;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -47,6 +50,48 @@ export function isSlackInvalidBlocksError(error: unknown): boolean {
     (typeof rawResponseData === "string" ? rawResponseData : undefined) ??
     record?.error;
   return typeof code === "string" && code.trim().toLowerCase() === "invalid_blocks";
+}
+
+type SlackResponseLike = {
+  status: number;
+};
+
+function isSlackResponseLike(value: unknown): value is SlackResponseLike {
+  const record = asRecord(value);
+  const body = asRecord(record?.body);
+  return (
+    typeof record?.status === "number" &&
+    (typeof record.arrayBuffer === "function" || typeof body?.getReader === "function")
+  );
+}
+
+/** Consume Bolt 5's native response_url body under strict time and byte bounds. */
+export async function isSlackInvalidBlocksResponse(response: unknown): Promise<boolean> {
+  if (!isSlackResponseLike(response)) {
+    return isSlackInvalidBlocksError(response);
+  }
+  try {
+    const body = await readResponseTextLimited(
+      response as Response,
+      SLACK_RESPONSE_URL_BODY_LIMIT_BYTES,
+      { timeoutMs: SLACK_RESPONSE_URL_BODY_TIMEOUT_MS },
+    );
+    if (body.trim().toLowerCase() === "invalid_blocks") {
+      return true;
+    }
+    return isSlackInvalidBlocksError(JSON.parse(body));
+  } catch {
+    return false;
+  }
+}
+
+/** Bolt 5 omits the response body from RespondError; 400 is contextual here. */
+export function isSlackNativeResponseUrlRejection(error: unknown): boolean {
+  if (isSlackInvalidBlocksError(error)) {
+    return true;
+  }
+  const record = asRecord(error);
+  return record?.code === "slack_bolt_respond_error" && record.statusCode === 400;
 }
 
 /** Extract a complete accessible summary from a supported native data block. */

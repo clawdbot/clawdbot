@@ -35,7 +35,9 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
 });
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
-  loadModelCatalog: loadModelCatalogMock,
+  getPreparedModelCatalogSnapshot: loadModelCatalogMock,
+  resolveAgentDir: (_cfg: OpenClawConfig, agentId: string) => `/tmp/agents/${agentId}/agent`,
+  resolveAgentWorkspaceDir: (_cfg: OpenClawConfig, agentId: string) => `/tmp/workspaces/${agentId}`,
   resolveHumanDelayConfig: () => undefined,
 }));
 
@@ -231,7 +233,7 @@ describe("createDiscordNativeCommand option wiring", () => {
 
   beforeEach(() => {
     clearRuntimeConfigSnapshot();
-    loadModelCatalogMock.mockReset().mockResolvedValue([]);
+    loadModelCatalogMock.mockReset().mockReturnValue({ entries: [], routeVariants: [] });
     logVerboseMock.mockReset();
     loggerWarnMock.mockReset();
   });
@@ -284,7 +286,6 @@ describe("createDiscordNativeCommand option wiring", () => {
       focusedValue: "",
     });
 
-    expect(loadModelCatalogMock).toHaveBeenCalledWith({ cacheOnly: true });
     expect(loadModelCatalogMock).toHaveBeenCalledWith({ config: cfg });
   });
 
@@ -318,6 +319,7 @@ describe("createDiscordNativeCommand option wiring", () => {
       resolveChoiceContext: async () => ({
         provider: "openai",
         model: "gpt-5.6-luna",
+        agentId: "agent-a",
         agentRuntime,
       }),
     });
@@ -336,6 +338,11 @@ describe("createDiscordNativeCommand option wiring", () => {
 
     const codexRespond = await runAutocomplete(autocomplete, params);
     expect(codexRespond).toHaveBeenCalledWith([{ name: "max", value: "max" }]);
+    expect(loadModelCatalogMock).toHaveBeenCalledWith({
+      config: {},
+      agentId: "agent-a",
+      agentDir: "/tmp/agents/agent-a/agent",
+    });
 
     agentRuntime = "openclaw";
     const openclawRespond = await runAutocomplete(autocomplete, params);

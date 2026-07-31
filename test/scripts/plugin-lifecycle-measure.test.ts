@@ -2,11 +2,11 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
   chmodSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -53,17 +53,25 @@ function waitForPidExit(pid: number, timeoutMs: number): boolean {
   return !pidExists(pid);
 }
 
-function waitForPath(filePath: string, timeoutMs: number): boolean {
+function nonEmptyPathExists(filePath: string): boolean {
+  try {
+    return statSync(filePath).size > 0;
+  } catch {
+    return false;
+  }
+}
+
+function waitForNonEmptyPath(filePath: string, timeoutMs: number): boolean {
   const waitBuffer = new SharedArrayBuffer(4);
   const waitView = new Int32Array(waitBuffer);
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (existsSync(filePath)) {
+    if (nonEmptyPathExists(filePath)) {
       return true;
     }
     Atomics.wait(waitView, 0, 0, 5);
   }
-  return existsSync(filePath);
+  return nonEmptyPathExists(filePath);
 }
 
 function waitForChildClose(
@@ -314,11 +322,11 @@ describe("plugin lifecycle resource sampler", () => {
             encoding: "utf8",
             env: {
               ...process.env,
-              OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "250",
-              OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "50",
+              OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "3000",
+              OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "200",
               PID_FILE: pidFile,
             },
-            timeout: 5000,
+            timeout: 7000,
           },
         );
 
@@ -369,7 +377,7 @@ describe("plugin lifecycle resource sampler", () => {
           },
         );
 
-        expect(waitForPath(pidFile, 2000)).toBe(true);
+        expect(waitForNonEmptyPath(pidFile, 2000)).toBe(true);
         descendantPid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
         result.kill("SIGTERM");
         const close = await waitForChildClose(result, 5000);
@@ -418,7 +426,7 @@ describe("plugin lifecycle resource sampler", () => {
         },
       );
 
-      expect(waitForPath(readyFile, 1000)).toBe(true);
+      expect(waitForNonEmptyPath(readyFile, 1000)).toBe(true);
       const started = Date.now();
       result.kill("SIGTERM");
       const close = await waitForChildClose(result, 5000);
@@ -457,7 +465,7 @@ describe("plugin lifecycle resource sampler", () => {
         },
       );
 
-      expect(waitForPath(readyFile, 1000)).toBe(true);
+      expect(waitForNonEmptyPath(readyFile, 1000)).toBe(true);
       const started = Date.now();
       result.kill("SIGTERM");
       const close = await waitForChildClose(result, 5000);

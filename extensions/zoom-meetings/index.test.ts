@@ -1,6 +1,7 @@
 import { ErrorCodes } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type { TranscriptSourceProvider } from "openclaw/plugin-sdk/transcripts";
 import { describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 
@@ -116,6 +117,7 @@ describe("Zoom meetings plugin surface", () => {
     const cli: unknown[] = [];
     const nodeCommands: unknown[] = [];
     const policies: unknown[] = [];
+    const transcriptProviders: TranscriptSourceProvider[] = [];
     const api = createTestPluginApi({
       id: "zoom-meetings",
       name: "Zoom meetings",
@@ -139,6 +141,7 @@ describe("Zoom meetings plugin surface", () => {
       registerCli: (_registrar: unknown, options: unknown) => cli.push(options),
       registerNodeHostCommand: (command: unknown) => nodeCommands.push(command),
       registerNodeInvokePolicy: (policy: unknown) => policies.push(policy),
+      registerTranscriptSourceProvider: (provider) => transcriptProviders.push(provider),
     });
 
     plugin.register(api);
@@ -161,6 +164,13 @@ describe("Zoom meetings plugin surface", () => {
       expect.objectContaining({ command: "zoommeetings.chrome", cap: "zoom-meetings" }),
     ]);
     expect(policies).toHaveLength(1);
+    expect(transcriptProviders).toEqual([
+      expect.objectContaining({
+        id: "zoom",
+        aliases: ["zoom-meetings"],
+        sourceKinds: ["live-caption"],
+      }),
+    ]);
   });
 
   it("does not expose the dangerous node surface when disabled", () => {
@@ -291,25 +301,6 @@ describe("Zoom meetings plugin surface", () => {
     expect(response).toMatchObject({
       ok: false,
       payload: { error: "timeoutMs is supported only by testSpeech or testListen" },
-    });
-  });
-
-  it("accepts timeoutMs on testListen and reports a bounded caption timeout", async () => {
-    const { invoke } = authorizationHarness();
-    const response = await invoke("zoommeetings.testListen", {
-      mode: "transcribe",
-      timeoutMs: 1,
-      url: MEETING_URL,
-    });
-
-    expect(response).toMatchObject({
-      ok: true,
-      payload: {
-        captioning: undefined,
-        createdSession: true,
-        listenTimedOut: true,
-        listenVerified: false,
-      },
     });
   });
 

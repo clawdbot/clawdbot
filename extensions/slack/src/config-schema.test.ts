@@ -18,6 +18,11 @@ function expectSlackConfigIssue(config: unknown, path: string) {
 }
 
 describe("slack config schema", () => {
+  it("accepts capability arrays and rejects retired interactive reply objects", () => {
+    expectSlackConfigValid({ capabilities: ["presentation"] });
+    expectSlackConfigIssue({ capabilities: { interactiveReplies: true } }, "capabilities");
+  });
+
   it("accepts explicit Enterprise Grid org-install mode", () => {
     expectSlackConfigValid({ enterpriseOrgInstall: true });
     expectSlackConfigValid({ accounts: { org: { enterpriseOrgInstall: true } } });
@@ -40,39 +45,39 @@ describe("slack config schema", () => {
     }
   });
 
-  it('defaults identity to "bot"', () => {
+  it('defaults postAs to "bot"', () => {
     const res = SlackConfigSchema.safeParse({ accounts: { work: {} } });
 
     expect(res.success).toBe(true);
     if (res.success) {
-      expect(res.data.identity).toBe("bot");
-      expect(res.data.accounts?.work?.identity).toBeUndefined();
-      expect(res.data.accounts?.work?.identity ?? res.data.identity).toBe("bot");
+      expect(res.data.postAs).toBe("bot");
+      expect(res.data.accounts?.work?.postAs).toBeUndefined();
+      expect(res.data.accounts?.work?.postAs ?? res.data.postAs).toBe("bot");
     }
   });
 
-  it('accepts identity="user" with a user token and socket companion app', () => {
+  it('accepts postAs="user" with a user token and socket companion app', () => {
     expectSlackConfigValid({
-      identity: "user",
+      postAs: "user",
       userToken: "test-user-token",
       appToken: "test-app-token",
     });
   });
 
-  it('accepts identity="user" with a user token and HTTP companion app', () => {
+  it('accepts postAs="user" with a user token and HTTP companion app', () => {
     expectSlackConfigValid({
-      identity: "user",
+      postAs: "user",
       mode: "http",
       userToken: "test-user-token",
       signingSecret: "test-signing-secret",
     });
   });
 
-  it("allows account entries to inherit the top-level user identity", () => {
+  it("allows account entries to inherit the top-level user postAs", () => {
     const cfg = {
       channels: {
         slack: {
-          identity: "user" as const,
+          postAs: "user" as const,
           userToken: "test-user-token",
           appToken: "test-app-token",
           accounts: { work: {} },
@@ -84,11 +89,11 @@ describe("slack config schema", () => {
     expect(resolveSlackAccount({ cfg, accountId: "work" }).identity).toBe("user");
   });
 
-  it("keeps user tokens and companion app tokens active for user identity", () => {
+  it("keeps user tokens and companion app tokens active for user postAs", () => {
     const cfg = {
       channels: {
         slack: {
-          identity: "user" as const,
+          postAs: "user" as const,
           userToken: "test-user-token",
           appToken: "test-app-token",
         },
@@ -104,9 +109,9 @@ describe("slack config schema", () => {
     expect(account.appTokenSource).toBe("config");
   });
 
-  it("accepts inherited and relay companion-app transports for user identity", () => {
+  it("accepts inherited and relay companion-app transports for user postAs", () => {
     expectSlackConfigValid({
-      identity: "user",
+      postAs: "user",
       userToken: "test-user-token",
       appToken: "test-app-token",
       accounts: {
@@ -114,7 +119,7 @@ describe("slack config schema", () => {
       },
     });
     expectSlackConfigValid({
-      identity: "user",
+      postAs: "user",
       mode: "relay",
       userToken: "test-user-token",
       relay: {
@@ -125,8 +130,8 @@ describe("slack config schema", () => {
     });
   });
 
-  it("defers user-identity user-token presence to runtime", () => {
-    expectSlackConfigValid({ identity: "user" });
+  it("defers user-postAs user-token presence to runtime", () => {
+    expectSlackConfigValid({ postAs: "user" });
   });
 
   it("keeps presence events off by default and accepts account/channel modes", () => {
@@ -211,6 +216,26 @@ describe("slack config schema", () => {
     );
   });
 
+  it("accepts account allowlist policy inherited from the channel", () => {
+    expectSlackConfigValid({
+      allowFrom: ["U123"],
+      botToken: "fake",
+      appToken: "fake",
+      accounts: {
+        work: { dmPolicy: "allowlist", botToken: "fake", appToken: "fake" },
+      },
+    });
+  });
+
+  it("accepts progress commentary in streaming config", () => {
+    expectSlackConfigValid({
+      streaming: {
+        mode: "progress",
+        progress: { commentary: true },
+      },
+    });
+  });
+
   it("rejects legacy nested DM access keys", () => {
     expectSlackConfigIssue({ dm: { policy: "open", allowFrom: ["U123"] } }, "dm");
   });
@@ -224,22 +249,24 @@ describe("slack config schema", () => {
     });
   });
 
-  it("accepts Socket Mode ping/pong transport tuning", () => {
-    expectSlackConfigValid({
-      mode: "socket",
-      socketMode: {
-        clientPingTimeout: 15_000,
-        serverPingTimeout: 45_000,
-        pingPongLoggingEnabled: true,
-      },
-      accounts: {
-        ops: {
-          socketMode: {
-            clientPingTimeout: 20_000,
+  it("rejects retired Socket Mode ping/pong transport tuning", () => {
+    expect(
+      SlackConfigSchema.safeParse({
+        mode: "socket",
+        socketMode: {
+          clientPingTimeout: 15_000,
+          serverPingTimeout: 45_000,
+          pingPongLoggingEnabled: true,
+        },
+        accounts: {
+          ops: {
+            socketMode: {
+              clientPingTimeout: 20_000,
+            },
           },
         },
-      },
-    });
+      }).success,
+    ).toBe(false);
   });
 
   it("accepts relay mode with a SecretInput auth token", () => {
@@ -272,16 +299,17 @@ describe("slack config schema", () => {
     );
   });
 
-  it("rejects invalid Socket Mode ping/pong transport tuning", () => {
-    expectSlackConfigIssue(
-      {
-        socketMode: {
-          clientPingTimeout: 0,
-        },
-      },
-      "socketMode.clientPingTimeout",
-    );
-  });
+  it.each(["http", "relay"] as const)(
+    "does not require %s transport credentials when Slack is disabled",
+    (mode) => {
+      expectSlackConfigValid({ enabled: false, mode });
+      expectSlackConfigValid({
+        enabled: false,
+        mode,
+        accounts: { ops: { mode } },
+      });
+    },
+  );
 
   it("accepts per-channel replyToMode", () => {
     expectSlackConfigValid({
@@ -354,6 +382,89 @@ describe("slack config schema", () => {
 
   it("rejects HTTP mode without signing secret", () => {
     expectSlackConfigIssue({ mode: "http" }, "signingSecret");
+  });
+
+  it("rejects implicit account HTTP mode without signing secret", () => {
+    expectSlackConfigIssue({ mode: "http", accounts: {} }, "signingSecret");
+  });
+
+  it("accepts inherited account HTTP mode with an account signing secret", () => {
+    expectSlackConfigValid({
+      mode: "http",
+      accounts: {
+        ops: {
+          botToken: "test-bot-token",
+          signingSecret: "test-ops-signing-secret",
+          webhookPath: "/slack/events/ops",
+        },
+      },
+    });
+  });
+
+  it("accepts inherited account HTTP mode with a signing secret SecretRef", () => {
+    expectSlackConfigValid({
+      mode: "http",
+      accounts: {
+        ops: {
+          botToken: "test-bot-token",
+          signingSecret: {
+            source: "env",
+            provider: "default",
+            id: "SLACK_OPS_SIGNING_SECRET",
+          },
+          webhookPath: "/slack/events/ops",
+        },
+      },
+    });
+  });
+
+  it("accepts independently signed accounts inheriting HTTP mode", () => {
+    expectSlackConfigValid({
+      mode: "http",
+      accounts: {
+        ops: {
+          botToken: "test-ops-bot-token",
+          signingSecret: "test-ops-signing-secret",
+          webhookPath: "/slack/events/ops",
+        },
+        support: {
+          botToken: "test-support-bot-token",
+          signingSecret: "test-support-signing-secret",
+          webhookPath: "/slack/events/support",
+        },
+      },
+    });
+  });
+
+  it("skips disabled accounts inheriting HTTP mode", () => {
+    expectSlackConfigValid({
+      mode: "http",
+      accounts: {
+        disabled: { enabled: false },
+        ops: {
+          botToken: "test-bot-token",
+          signingSecret: "test-ops-signing-secret",
+        },
+      },
+    });
+    expectSlackConfigValid({
+      mode: "http",
+      accounts: { ops: { enabled: false } },
+    });
+  });
+
+  it("reports a missing inherited HTTP signing secret on its account only", () => {
+    const result = SlackConfigSchema.safeParse({
+      mode: "http",
+      accounts: { ops: { botToken: "test-bot-token" } },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((issue) => issue.path.join("."))).toEqual([
+        "accounts.ops.signingSecret",
+      ]);
+    }
   });
 
   it("accepts account HTTP mode when base signing secret is set", () => {

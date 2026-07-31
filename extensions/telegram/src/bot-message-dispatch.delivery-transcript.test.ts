@@ -10,7 +10,7 @@ import {
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
   editMessageTelegram,
-  emitInternalMessageSentHook,
+  emitTelegramMessageSentHooks,
   expectDraftStreamParams,
   expectRecordFields,
   loadSessionStore,
@@ -85,7 +85,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
     expect(answerDraftStream.stop).toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(editMessageTelegram).not.toHaveBeenCalled();
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+    expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
       content: "Final answer",
       messageId: 2001,
     });
@@ -209,8 +209,20 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
       text: "Done already: timeoutSeconds is now 7200s.",
       timestamp: transcriptTimestamp,
     });
+    const recordResults: boolean[] = [];
     setupDraftStreams({ answerMessageId: 1497 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      const streamParams = mockCallArg(createTelegramDraftStream) as Parameters<
+        NonNullable<TelegramBotDeps["createTelegramDraftStream"]>
+      >[0];
+      await streamParams.onProviderMessage?.({
+        chat: { id: 123, type: "private", first_name: "Keshav" },
+        message_thread_id: 777,
+        message_id: 1497,
+        date: 1_779_425_461,
+        text: "Initial streamed text",
+        from: { id: 999, is_bot: true, first_name: "Telegram Bot Name" },
+      });
       await dispatcherOptions.deliver(
         { text: "Done already: timeoutSeconds is now 7200s." },
         { kind: "final" },
@@ -224,9 +236,15 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
       telegramCfg: { name: "Configured Agent" },
       telegramDeps: {
         ...telegramDepsForTest,
-        recordOutboundMessageForPromptContext: recordOutboundMessageForPromptContextActual,
+        recordOutboundMessageForPromptContext: async (params) => {
+          const recorded = await recordOutboundMessageForPromptContextActual(params);
+          recordResults.push(recorded);
+          return recorded;
+        },
       },
     });
+
+    expect(recordResults).toEqual([true, true]);
 
     const cache = createTelegramMessageCache({
       scope: resolveTelegramMessageCacheScope(storePath),
@@ -277,6 +295,10 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
         partIndex: 0,
         finalPart: true,
       },
+    });
+    expect(streamedReply?.node.threadBinding).toEqual({
+      kind: "provider-observed-v1",
+      threadId: "777",
     });
   });
 
@@ -596,7 +618,7 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-transcript", () => {
 
     expect(answerDraftStream.update).toHaveBeenCalledWith(fullAnswer);
     expect(answerDraftStream.update).not.toHaveBeenCalledWith(truncatedFinal);
-    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+    expectRecordFields(mockCallArg(emitTelegramMessageSentHooks), {
       content: fullAnswer,
       messageId: 2001,
     });

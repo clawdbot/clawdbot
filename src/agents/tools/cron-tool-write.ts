@@ -24,15 +24,40 @@ export function assertNoCronShellExecution(value: unknown): void {
   }
   // command/cwd are intentionally not recovered by the model-facing
   // canonicalizer. Reject them before recovery so they cannot be dropped.
+  // Stream argv is the one legitimate model-facing exception: it is
+  // authorized by the Gateway's cron.triggers.enabled gate, matching
+  // trigger-script trust rather than ordinary agent exec policy.
+  const isStreamSchedule = schedule?.kind === "stream";
   if (
     value.command !== undefined ||
     value.cwd !== undefined ||
-    schedule?.command !== undefined ||
-    schedule?.cwd !== undefined
+    (!isStreamSchedule && (schedule?.command !== undefined || schedule?.cwd !== undefined))
   ) {
     throw new Error(
       "cron command/cwd fields cannot be set through the agent cron tool; use the CLI or Gateway API.",
     );
+  }
+  if (isStreamSchedule) {
+    // The gateway's CronScheduleSchema requires a complete argv for a stream
+    // schedule (schedule as a whole is optional on patches, but a present
+    // schedule is never partial), and normalizeCronJobPatch/Create can let a
+    // malformed non-array command survive instead of dropping it. Validate
+    // the shape here so a bad call fails locally with a clear message
+    // instead of a confusing downstream gateway rejection.
+    const command = schedule.command;
+    const isValidArgv =
+      Array.isArray(command) &&
+      command.length > 0 &&
+      command.every((entry) => typeof entry === "string" && entry.length > 0);
+    if (!isValidArgv) {
+      throw new Error("cron stream schedules require a non-empty command argv array.");
+    }
+    if (
+      schedule.cwd !== undefined &&
+      (typeof schedule.cwd !== "string" || schedule.cwd.length === 0)
+    ) {
+      throw new Error("cron stream schedule cwd must be a non-empty string.");
+    }
   }
 }
 

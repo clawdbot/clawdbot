@@ -7,6 +7,7 @@ import { resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
+import { buildCodexHookRequester } from "./hook-requester.js";
 import {
   buildCodexNativeHookRelayDisabledConfig,
   buildCodexNativeHookRelayConfig,
@@ -53,7 +54,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     developerInstructions: buildRenderedCodexDeveloperInstructions(),
     prompt: turnState.codexTurnPromptText,
     trajectoryRecorder: hostTrajectoryRecorder,
-    trajectorySessionFile: params.trajectorySessionFile,
     tools: toolBridge.availableSpecs,
     warn: (message, fields) => embeddedAgentLog.warn(message, fields),
   });
@@ -183,6 +183,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     timeoutMs: params.timeoutMs,
     timeoutFloorMs: options.startupTimeoutFloorMs,
   });
+  const requesterChannel = params.messageChannel ?? params.messageProvider;
+  const requester = buildCodexHookRequester(params);
   const buildNativeHookRelayFinalConfigPatch = (
     decision: { action: "resume"; binding: CodexAppServerThreadBinding } | { action: "start" },
   ) => {
@@ -202,6 +204,15 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       config: params.config,
       runId: params.runId,
       channelId: hookChannelId,
+      ...(requester ? { requester } : {}),
+      approvalContext: {
+        trigger: params.trigger,
+        approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+        turnSourceChannel: requesterChannel,
+        turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
+        turnSourceAccountId: params.agentAccountId,
+        turnSourceThreadId: params.currentThreadTs,
+      },
       attemptTimeoutMs: params.timeoutMs,
       startupTimeoutMs,
       turnStartTimeoutMs: params.timeoutMs,

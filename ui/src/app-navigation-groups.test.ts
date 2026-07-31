@@ -9,6 +9,7 @@ import {
   normalizeSidebarEntries,
   parseSidebarEntry,
   serializeSidebarEntry,
+  settingsNavigationOwnerRoute,
   sidebarMoreRoutes,
 } from "./app-navigation.ts";
 
@@ -16,12 +17,8 @@ const settingsRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.route
 
 describe("sidebar entries", () => {
   it("keeps operational destinations visible by default", () => {
-    expect(DEFAULT_SIDEBAR_ENTRIES).toEqual([
-      "route:custodian",
-      "route:usage",
-      "route:cron",
-      "route:plugins",
-    ]);
+    expect(DEFAULT_SIDEBAR_ENTRIES).toEqual(["route:cron", "route:plugins"]);
+    expect(DEFAULT_SIDEBAR_ENTRIES).not.toContain("route:usage");
   });
 
   it("drops retired routes from persisted entries", () => {
@@ -47,8 +44,8 @@ describe("sidebar entries", () => {
 
   it("keeps settings pages out of the customizable sidebar", () => {
     for (const routeId of [
+      "custodian",
       "channels",
-      "config",
       "security",
       "notifications",
       "advanced",
@@ -56,17 +53,19 @@ describe("sidebar entries", () => {
       expect(SIDEBAR_NAV_ROUTES).not.toContain(routeId);
       expect(settingsRoutes).toContain(routeId);
     }
-    expect(
-      settingsRoutes
-        .filter((routeId) => routeId !== "custodian")
-        .every((routeId) => isSettingsNavigationRoute(routeId)),
-    ).toBe(true);
-    expect(isSettingsNavigationRoute("custodian")).toBe(false);
+    expect(settingsRoutes.every((routeId) => isSettingsNavigationRoute(routeId))).toBe(true);
   });
 
   it("keeps model setup as a settings subpage without a sidebar entry", () => {
     expect(settingsRoutes).not.toContain("model-setup");
     expect(isSettingsNavigationRoute("model-setup")).toBe(true);
+    expect(settingsNavigationOwnerRoute("model-setup")).toBe("model-providers");
+  });
+
+  it("keeps Agent Defaults routed as an Agents subpage without a sidebar entry", () => {
+    expect(settingsRoutes).not.toContain("ai-agents");
+    expect(isSettingsNavigationRoute("ai-agents")).toBe(true);
+    expect(settingsNavigationOwnerRoute("ai-agents")).toBe("agents");
   });
 
   it("keeps devices in connection settings and drops stale pinned entries", () => {
@@ -92,16 +91,18 @@ describe("sidebar entries", () => {
     expect(settingsRoutes).not.toContain("plugins");
   });
 
-  it("round-trips route and session entries", () => {
+  it("round-trips route, Workboard, and session entries", () => {
     expect(parseSidebarEntry("route:usage")).toEqual({ type: "route", route: "usage" });
     expect(parseSidebarEntry("session:agent:main:test")).toEqual({
       type: "session",
       key: "agent:main:test",
     });
+    expect(parseSidebarEntry("workboard:ops")).toEqual({ type: "workboard", boardId: "ops" });
     expect(serializeSidebarEntry({ type: "route", route: "plugins" })).toBe("route:plugins");
     expect(serializeSidebarEntry({ type: "session", key: "agent:main:test" })).toBe(
       "session:agent:main:test",
     );
+    expect(serializeSidebarEntry({ type: "workboard", boardId: "ops" })).toBe("workboard:ops");
   });
 
   it("normalizes persisted entries, dropping malformed and duplicate values", () => {
@@ -120,10 +121,11 @@ describe("sidebar entries", () => {
     expect(normalizeSidebarEntries([])).toEqual([]);
   });
 
-  it("keeps OpenClaw pinnable and linked from Settings without Settings chrome", () => {
-    expect(SIDEBAR_NAV_ROUTES).toContain("custodian");
+  it("keeps OpenClaw only in Settings and drops stale sidebar pins", () => {
+    expect(SIDEBAR_NAV_ROUTES).not.toContain("custodian");
     expect(settingsRoutes).toContain("custodian");
-    expect(isSettingsNavigationRoute("custodian")).toBe(false);
+    expect(isSettingsNavigationRoute("custodian")).toBe(true);
+    expect(normalizeSidebarEntries(["route:custodian", "route:usage"])).toEqual(["route:usage"]);
   });
 
   it("falls back to null for non-list values so callers use defaults", () => {

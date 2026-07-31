@@ -20,6 +20,13 @@ export const PluginApprovalRequestParamsSchema = closedObject({
   pluginId: Type.Optional(NonEmptyString),
   title: Type.String({ minLength: 1, maxLength: PLUGIN_APPROVAL_TITLE_MAX_LENGTH }),
   description: Type.String({ minLength: 1, maxLength: PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH }),
+  detail: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 16_384,
+      description: "Reviewer-surface-only detail; not delivered to channels or push notifications.",
+    }),
+  ),
   severity: Type.Optional(Type.String({ enum: ["info", "warning", "critical"] })),
   toolName: Type.Optional(Type.String()),
   toolCallId: Type.Optional(Type.String()),

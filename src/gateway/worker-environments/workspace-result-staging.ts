@@ -17,6 +17,7 @@ import { reconciliationEntries } from "./workspace-reconcile-derived-paths.js";
 import { absoluteEntryMatches, localPath } from "./workspace-reconcile-fs.js";
 import {
   applyStagedWorkerWorkspace,
+  changedEntryPaths,
   inspectAcceptedWorkerWorkspace,
   type WorkerWorkspaceApplyResult,
 } from "./workspace-reconcile.js";
@@ -38,35 +39,12 @@ function gitCommand(cwd: string, args: string[]): string[] {
   return ["git", "-c", `core.hooksPath=${DISABLED_GIT_HOOKS_PATH}`, "-C", cwd, ...args];
 }
 
-function sameEntry(
-  left: WorkerWorkspaceManifestEntry | undefined,
-  right: WorkerWorkspaceManifestEntry | undefined,
-): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function changedPaths(
-  base: WorkerWorkspaceManifest,
-  current: WorkerWorkspaceManifest,
-): Set<string> {
-  const baseByPath = new Map(
-    reconciliationEntries(base.entries).map((entry) => [entry.path, entry]),
-  );
-  const currentByPath = new Map(
-    reconciliationEntries(current.entries).map((entry) => [entry.path, entry]),
-  );
-  return new Set(
-    [...new Set([...baseByPath.keys(), ...currentByPath.keys()])].filter(
-      (entryPath) => !sameEntry(baseByPath.get(entryPath), currentByPath.get(entryPath)),
-    ),
-  );
-}
-
 export function workerWorkspaceTransferPaths(
   current: WorkerWorkspaceManifest,
   base: WorkerWorkspaceManifest,
 ): string[] {
-  const changed = changedPaths(base, current);
+  // Staging is directory-agnostic because it transfers file and symlink bytes only.
+  const changed = changedEntryPaths(base, current);
   const paths = reconciliationEntries(current.entries)
     .filter((entry) => changed.has(entry.path))
     .map((entry) => {
@@ -276,7 +254,7 @@ async function stageWorkerWorkspaceResult(params: {
       `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
     );
   }
-  const changed = changedPaths(base, current);
+  const changed = changedEntryPaths(base, current);
   const blobs: Array<{ entry: WorkerWorkspaceManifestEntry; mark: number; content: Buffer }> = [];
   let totalBytes = 0;
   for (const [index, entry] of entries.entries()) {
@@ -456,6 +434,11 @@ export async function applyStagedWorkerWorkspaceResult(params: {
   expectedBaseManifestRef: string;
   alreadyAccepted?: boolean;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
+  publishAcceptedManifest?: (accepted: {
+    manifestRef: string;
+    manifest: WorkerWorkspaceManifest;
+    conflictPaths: string[];
+  }) => Promise<void>;
 }): Promise<WorkerWorkspaceApplyResult & { changed: boolean }> {
   const root = await fs.realpath(params.root);
   const staged = await loadStagedWorkerWorkspace(root, params.stagedResultRef);
@@ -476,10 +459,10 @@ export async function applyStagedWorkerWorkspaceResult(params: {
     params.journal.commit(accepted.manifestRef);
     return {
       ...accepted,
-      changed: changedPaths(staged.base, staged.current).size > 0,
+      changed: changedEntryPaths(staged.base, staged.current).size > 0,
     };
   }
-  const changed = changedPaths(staged.base, staged.current);
+  const changed = changedEntryPaths(staged.base, staged.current);
   const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-staged-result-"));
   try {
     for (const entry of reconciliationEntries(staged.current.entries)) {
@@ -509,6 +492,7 @@ export async function applyStagedWorkerWorkspaceResult(params: {
       base: staged.base,
       current: staged.current,
       journal: params.journal,
+      publishAcceptedManifest: params.publishAcceptedManifest,
     });
     return { ...applied, changed: changed.size > 0 };
   } finally {
@@ -522,6 +506,11 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
   currentManifestRef: string;
   baseManifestRaw: string;
   currentManifestRaw: string;
+  publishAcceptedManifest?: (accepted: {
+    manifestRef: string;
+    manifest: WorkerWorkspaceManifest;
+    conflictPaths: string[];
+  }) => Promise<void>;
 }): Promise<{
   applyPreparedStagedResult(): Promise<void>;
   getAppliedWorkspaceResult(): WorkerWorkspaceApplyResult | undefined;
@@ -552,6 +541,7 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
         stagedResultRef: candidateRef,
         expectedBaseManifestRef: params.request.baseManifestRef,
         journal: params.request.journal,
+        publishAcceptedManifest: params.publishAcceptedManifest,
       });
     },
     getAppliedWorkspaceResult: () => appliedWorkspaceResult,

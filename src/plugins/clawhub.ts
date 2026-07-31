@@ -1219,6 +1219,7 @@ export async function installPluginFromClawHub(
     } & Extract<InstallPluginResult, { ok: true }> & {
         clawhub: ClawHubPluginInstallRecordFields;
         packageName: string;
+        warning?: string;
       })
   | ClawHubInstallFailure
   | Extract<InstallPluginResult, { ok: false }>
@@ -1485,6 +1486,7 @@ export async function installPluginFromClawHub(
     }
     return {
       ...installResult,
+      ...(trustResult?.warning ? { warning: trustResult.warning } : {}),
       packageName: canonicalPackageName,
       clawhub: {
         source: "clawhub",
