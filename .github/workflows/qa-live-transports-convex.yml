@@ -58,6 +58,16 @@ on:
         required: false
         default: false
         type: boolean
+    secrets:
+      OPENAI_API_KEY:
+        description: OpenAI API key used by live QA scenarios
+        required: false
+      OPENCLAW_QA_CONVEX_SITE_URL:
+        description: Convex credential broker URL
+        required: false
+      OPENCLAW_QA_CONVEX_SECRET_CI:
+        description: Convex CI credential
+        required: false
   workflow_dispatch:
     inputs:
       ref:

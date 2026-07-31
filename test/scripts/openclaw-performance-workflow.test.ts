@@ -211,6 +211,15 @@ describe("OpenClaw performance workflow", () => {
     expect(run.indexOf("pnpm build")).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
   });
 
+  it("runs only gateway startup cases advertised by the frozen target", () => {
+    const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
+
+    expect(run).toContain("scripts/bench-gateway-startup.ts --help");
+    expect(run).toContain('grep -Fxq "$startup_case"');
+    expect(run).toContain('"${startup_case_args[@]}"');
+    expect(run).toContain("required default case");
+  });
+
   it("keeps source gateway health waits within one startup budget", () => {
     const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
     const deadline = "gateway_ready_deadline=$((SECONDS + gateway_ready_timeout_seconds))";

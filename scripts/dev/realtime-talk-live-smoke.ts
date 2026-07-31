@@ -213,6 +213,10 @@ function transcriptIncludesMarker(transcripts: string[], marker: string): boolea
   return normalizeTranscript(transcripts.join(" ")).includes(normalizeTranscript(marker));
 }
 
+function resolveGatewayRelayModulePath(repoRoot = process.cwd()): string {
+  return `/@fs/${repoRoot.replaceAll("\\", "/")}/ui/src/pages/chat/realtime-talk-gateway-relay.ts`;
+}
+
 async function sendPcmAudioInChunks(
   bridge: RealtimeVoiceBridge,
   audio: Buffer,
@@ -899,10 +903,8 @@ async function smokeGatewayRelayBrowser(browser: Browser): Promise<SmokeResult> 
   const dir = await mkdtemp(path.join(tmpdir(), "openclaw-realtime-talk-"));
   try {
     const { createServer } = await import("vite");
-    const repoRoot = process.cwd().replaceAll("\\", "/");
-    const relayModulePath = JSON.stringify(
-      `/@fs/${repoRoot}/ui/src/ui/chat/realtime-talk-gateway-relay.ts`,
-    );
+    const repoRoot = process.cwd();
+    const relayModulePath = JSON.stringify(resolveGatewayRelayModulePath(repoRoot));
     await writeFile(
       path.join(dir, "index.html"),
       '<!doctype html><meta charset="utf-8"><script type="module" src="/main.ts"></script>',
@@ -910,8 +912,6 @@ async function smokeGatewayRelayBrowser(browser: Browser): Promise<SmokeResult> 
     await writeFile(
       path.join(dir, "main.ts"),
       `
-const { GatewayRelayRealtimeTalkTransport } = await import(${relayModulePath});
-
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const listeners = new Set();
 const requests = [];
@@ -951,6 +951,7 @@ const client = {
 };
 
 try {
+  const { GatewayRelayRealtimeTalkTransport } = await import(${relayModulePath});
   const transport = new GatewayRelayRealtimeTalkTransport(
     {
       provider: "smoke",
@@ -1013,9 +1014,14 @@ try {
 `,
     );
     server = await createServer({
+      configFile: path.join(repoRoot, "ui/vite.config.ts"),
       root: dir,
       logLevel: "silent",
-      server: { host: "127.0.0.1", port: 0 },
+      server: {
+        host: "127.0.0.1",
+        port: 0,
+        fs: { allow: [dir, repoRoot] },
+      },
     });
     await server.listen();
     const address = server.httpServer?.address();
@@ -1154,6 +1160,7 @@ export const testing = {
   parseRealtimeSmokeArgs,
   readOpenAIRealtimeBrowserResponseText,
   readBoundedText,
+  resolveGatewayRelayModulePath,
   resolveOpenAIHttpTimeoutMs,
   sendPcmAudioInChunks,
   transcriptIncludesMarker,

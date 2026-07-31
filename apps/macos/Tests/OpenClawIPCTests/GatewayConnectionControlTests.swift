@@ -57,7 +57,7 @@ private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
             if !sentChallenge {
                 sentChallenge = true
                 return .string("""
-                {"type":"event","event":"connect.challenge","payload":{"nonce":"test-nonce"}}
+                {"type":"event","event":"connect.challenge","payload":{"nonce":"test-nonce","ts":1777777777000}}
                 """)
             }
             if let request = latestUnrespondedRequest() {

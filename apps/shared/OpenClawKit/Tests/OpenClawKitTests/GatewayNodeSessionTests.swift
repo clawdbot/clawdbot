@@ -397,7 +397,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         let frame: [String: Any] = [
             "type": "event",
             "event": "connect.challenge",
-            "payload": ["nonce": nonce],
+            "payload": ["nonce": nonce, "ts": 1_800_000_000_000],
         ]
         return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
     }

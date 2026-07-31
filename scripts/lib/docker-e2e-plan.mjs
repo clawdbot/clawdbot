@@ -497,6 +497,63 @@ function applyLiveRetries(poolLanes, retries) {
   return poolLanes.map((poolLane) => (poolLane.live ? { ...poolLane, retries } : poolLane));
 }
 
+const PNPM_NON_SCRIPT_COMMANDS = new Set([
+  "add",
+  "audit",
+  "config",
+  "dlx",
+  "exec",
+  "fetch",
+  "install",
+  "pack",
+  "publish",
+  "rebuild",
+  "remove",
+]);
+
+function candidatePackageScripts(candidatePackageRoot) {
+  if (!candidatePackageRoot) {
+    return undefined;
+  }
+  const packageJson = JSON.parse(
+    readFileSync(resolve(candidatePackageRoot, "package.json"), "utf8"),
+  );
+  if (!packageJson || typeof packageJson !== "object" || Array.isArray(packageJson)) {
+    throw new Error("Candidate package manifest must be an object");
+  }
+  if (
+    packageJson.scripts !== undefined &&
+    (!packageJson.scripts ||
+      typeof packageJson.scripts !== "object" ||
+      Array.isArray(packageJson.scripts))
+  ) {
+    throw new Error("Candidate package manifest has an invalid scripts field");
+  }
+  return new Set(
+    Object.entries(packageJson.scripts ?? {})
+      .filter(([, command]) => typeof command === "string")
+      .map(([name]) => name),
+  );
+}
+
+function requiredPackageScripts(poolLane) {
+  return [...poolLane.command.matchAll(/\bpnpm\s+(?:run\s+)?([a-z][a-z0-9:-]*)/giu)]
+    .map(([, script]) => script)
+    .filter((script) => !PNPM_NON_SCRIPT_COMMANDS.has(script));
+}
+
+function filterUnavailableCandidateScriptLanes(poolLanes, candidatePackageRoot) {
+  const scripts = candidatePackageScripts(candidatePackageRoot);
+  if (!scripts) {
+    return poolLanes;
+  }
+  // The trusted catalog can add lanes before a frozen candidate has their scripts.
+  // Only schedule package-script commands the selected candidate can execute.
+  return poolLanes.filter((poolLane) =>
+    requiredPackageScripts(poolLane).every((script) => scripts.has(script)),
+  );
+}
+
 export function laneWeight(poolLane) {
   return Math.max(1, poolLane.weight ?? 1);
 }
@@ -726,8 +783,16 @@ export function resolveDockerE2ePlan(options) {
       : options.liveMode === "only"
         ? []
         : applyLiveMode(retriedTailLanes, options.liveMode);
-  const orderedLanes = options.orderLanes(configuredLanes, options.timingStore);
-  const orderedTailLanes = options.orderLanes(configuredTailLanes, options.timingStore);
+  const availableLanes = filterUnavailableCandidateScriptLanes(
+    configuredLanes,
+    options.candidatePackageRoot,
+  );
+  const availableTailLanes = filterUnavailableCandidateScriptLanes(
+    configuredTailLanes,
+    options.candidatePackageRoot,
+  );
+  const orderedLanes = options.orderLanes(availableLanes, options.timingStore);
+  const orderedTailLanes = options.orderLanes(availableTailLanes, options.timingStore);
   return {
     omittedUnsupportedLaneNames: [...omittedUnsupportedLaneNames],
     orderedLanes,

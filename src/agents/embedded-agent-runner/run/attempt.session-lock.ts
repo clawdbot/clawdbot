@@ -24,6 +24,15 @@ type LockOptions = Omit<SessionKeyLockOptions, "targetKind"> & {
 };
 const PROMPT_DISPOSE_SETTLE_TIMEOUT_MS = 5_000;
 
+function createPromptSubmissionAbortError(reason: unknown): Error {
+  if (reason instanceof Error) {
+    return reason;
+  }
+  return reason === undefined
+    ? new Error("attempt aborted before prompt submission")
+    : new Error("attempt aborted before prompt submission", { cause: reason });
+}
+
 export type EmbeddedAttemptSessionFileOwner = {
   sessionFileKey: string;
   release(): void;
@@ -53,8 +62,9 @@ export type EmbeddedAttemptSessionLockController = {
   publishOwnedSessionFileSnapshot(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean;
   publishValidatedSessionFileSnapshot(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean;
   readTrustedCurrentSessionFileSnapshot(): Promise<undefined>;
+  isPromptSubmissionBlockedError(error: unknown): boolean;
   releaseForPrompt(): Promise<void>;
-  releaseHeldLockForAbort(options?: { terminal?: boolean }): Promise<void>;
+  releaseHeldLockForAbort(options?: { reason?: unknown; terminal?: boolean }): Promise<void>;
   refreshAfterOwnedSessionWrite(): void;
   reacquireAfterPrompt(): Promise<void>;
   withSessionWriteLock<T>(
@@ -101,7 +111,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   };
   let disposed = false;
   let promptAborted = false;
-  let promptSubmissionBlocked = false;
+  let promptSubmissionBlockedError: Error | undefined;
   let takeoverDetected = false;
   const assertInitialLockOwned = (): void => {
     try {
@@ -277,8 +287,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         if (disposed) {
           throw new Error("attempt disposed before prompt submission");
         }
-        if (promptSubmissionBlocked) {
-          throw new Error("attempt aborted before prompt submission");
+        if (promptSubmissionBlockedError) {
+          throw promptSubmissionBlockedError;
         }
         if (cleanupStarted) {
           throw new Error("attempt cleanup started before prompt submission");
@@ -293,9 +303,13 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         });
       });
     },
+    isPromptSubmissionBlockedError: (error) =>
+      promptSubmissionBlockedError !== undefined && error === promptSubmissionBlockedError,
     releaseHeldLockForAbort: async (options) => {
       promptAborted = true;
-      promptSubmissionBlocked ||= options?.terminal !== false;
+      if (options?.terminal !== false && !promptSubmissionBlockedError) {
+        promptSubmissionBlockedError = createPromptSubmissionAbortError(options?.reason);
+      }
     },
     refreshAfterOwnedSessionWrite: () => {},
     reacquireAfterPrompt: async () => {

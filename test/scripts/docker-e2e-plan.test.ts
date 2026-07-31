@@ -54,6 +54,12 @@ function planFor(
   }).plan;
 }
 
+function writeCandidatePackage(scripts: Record<string, string>): string {
+  const root = tempDirs.make("openclaw-docker-plan-candidate-");
+  writeFileSync(join(root, "package.json"), JSON.stringify({ scripts }));
+  return root;
+}
+
 function requireFirstLane(plan: ReturnType<typeof planFor>) {
   const [lane] = plan.lanes;
   if (!lane) {
@@ -120,6 +126,47 @@ function bundledPluginSweepLane(index: number): ReturnType<typeof summarizeLane>
 }
 
 describe("scripts/lib/docker-e2e-plan", () => {
+  it("omits a package-script lane unavailable from the candidate", () => {
+    const plan = planFor({
+      candidatePackageRoot: writeCandidatePackage({}),
+      selectedLaneNames: ["update-run-package-self-upgrade"],
+    });
+
+    expect(plan.lanes).toEqual([]);
+  });
+
+  it("keeps a package-script lane available from the candidate", () => {
+    const plan = planFor({
+      candidatePackageRoot: writeCandidatePackage({
+        "test:docker:update-run-package-self-upgrade": "node test.mjs",
+      }),
+      selectedLaneNames: ["update-run-package-self-upgrade"],
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual(["update-run-package-self-upgrade"]);
+  });
+
+  it("fails when the selected candidate package manifest is missing", () => {
+    expect(() =>
+      planFor({
+        candidatePackageRoot: tempDirs.make("openclaw-docker-plan-missing-package-"),
+        selectedLaneNames: ["update-run-package-self-upgrade"],
+      }),
+    ).toThrow(/package\.json/);
+  });
+
+  it("fails when the selected candidate package manifest is malformed", () => {
+    const root = tempDirs.make("openclaw-docker-plan-malformed-package-");
+    writeFileSync(join(root, "package.json"), "{");
+
+    expect(() =>
+      planFor({
+        candidatePackageRoot: root,
+        selectedLaneNames: ["update-run-package-self-upgrade"],
+      }),
+    ).toThrow(SyntaxError);
+  });
+
   it("finds a named lane through the expanded catalog", () => {
     expect(findLaneByName("plugin-binding-command-escape")?.name).toBe(
       "plugin-binding-command-escape",

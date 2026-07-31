@@ -2,6 +2,7 @@
 
 import type { OverlayHandle } from "@earendil-works/pi-tui";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { Result } from "@openclaw/normalization-core/result";
 import { describe, expect, it, vi } from "vitest";
 import {
   createSessionProjection,
@@ -35,6 +36,7 @@ type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void)
 type SetSessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>);
 type ConsumeCompletedRunMock = ReturnType<typeof vi.fn> & ((runId: string) => boolean);
 type FlushPendingHistoryRefreshMock = ReturnType<typeof vi.fn> & (() => void);
+type RefreshAgentsMock = ReturnType<typeof vi.fn> & (() => Promise<Result<void, string>>);
 
 function createOverlayHandle(): OverlayHandle {
   return {
@@ -131,6 +133,9 @@ function createHarness(params?: {
   consumeCompletedRunForPendingSend?: ConsumeCompletedRunMock;
   isRunObserved?: (runId: string) => boolean;
   flushPendingHistoryRefreshIfIdle?: FlushPendingHistoryRefreshMock;
+  refreshAgents?: RefreshAgentsMock;
+  agentDefaultId?: string;
+  agents?: Array<{ id: string; kind?: "agent" | "system"; name?: string }>;
 }) {
   const sendChat =
     params?.sendChat ??
@@ -172,12 +177,17 @@ function createHarness(params?: {
   const requestExit = vi.fn();
   const abortActive =
     params?.abortActive ?? (vi.fn().mockResolvedValue(undefined) as AbortActiveMock);
+  const refreshAgents =
+    params?.refreshAgents ??
+    (vi.fn().mockResolvedValue({ ok: true, value: undefined }) as RefreshAgentsMock);
   const runAuthFlow: RunAuthFlow | undefined =
     params?.runAuthFlow ??
     (params?.opts?.local
       ? (vi.fn().mockResolvedValue({ exitCode: 0, signal: null }) as unknown as RunAuthFlow)
       : undefined);
   const state = {
+    agentDefaultId: params?.agentDefaultId ?? "main",
+    agents: params?.agents ?? [],
     currentAgentId: params?.currentAgentId ?? "main",
     currentSessionKey: params?.currentSessionKey ?? "agent:main:main",
     currentSessionId: params?.currentSessionId ?? null,
@@ -219,7 +229,7 @@ function createHarness(params?: {
     refreshSessionInfo: refreshSessionInfo as never,
     loadHistory,
     setSession,
-    refreshAgents: vi.fn(),
+    refreshAgents,
     abortActive,
     setActivityStatus,
     formatSessionKey: vi.fn(),
@@ -272,11 +282,55 @@ function createHarness(params?: {
     forgetLocalBtwRunId,
     requestExit,
     abortActive,
+    refreshAgents,
     state,
   };
 }
 
 describe("tui command handlers", () => {
+  it("does not open the agent picker from a cached roster after refresh failure", async () => {
+    const refreshAgents = vi
+      .fn()
+      .mockResolvedValue({ ok: false, error: "gateway unavailable" }) as RefreshAgentsMock;
+    const { handleCommand, openOverlay, requestRender } = createHarness({
+      refreshAgents,
+      agents: [{ id: "cached", name: "Cached Agent" }],
+    });
+
+    await handleCommand("/agents");
+
+    expect(refreshAgents).toHaveBeenCalledTimes(1);
+    expect(openOverlay).not.toHaveBeenCalled();
+    expect(requestRender).toHaveBeenCalled();
+  });
+
+  it("opens the agent picker only after a successful refresh", async () => {
+    const refreshAgents = vi
+      .fn()
+      .mockResolvedValue({ ok: true, value: undefined }) as RefreshAgentsMock;
+    const { handleCommand, openOverlay } = createHarness({
+      refreshAgents,
+      agentDefaultId: "team-lead",
+      agents: [
+        { id: "team-lead", name: "Lead Agent" },
+        { id: "system-agent", kind: "system", name: "System Agent" },
+      ],
+    });
+
+    await handleCommand("/agents");
+
+    expect(refreshAgents).toHaveBeenCalledTimes(1);
+    expect(openOverlay).toHaveBeenCalledTimes(1);
+    const selector = firstMockArg(openOverlay, "openOverlay") as SelectableOverlay;
+    expect(selector.items).toEqual([
+      {
+        value: "team-lead",
+        label: "team-lead (Lead Agent)",
+        description: "default",
+      },
+    ]);
+  });
+
   it("bounds session picker hydration to recent TUI sessions", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       sessions: [
