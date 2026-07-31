@@ -4,7 +4,6 @@ import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
@@ -31,7 +30,7 @@ import type { CronJob, CronRunDiagnostics } from "../types.js";
 import {
   resolveCronModelSelection,
   resolveCronModelSelectionOwner,
-  resolveCronThinkingCatalog,
+  resolveCronThinkingSelection,
 } from "./model-selection.js";
 import { buildCronAgentDefaultsConfig, resolveCronActiveRuntimeConfig } from "./run-config.js";
 import { buildCurrentConversationContextBlock } from "./run-current-context.js";
@@ -76,7 +75,6 @@ import {
   logWarn,
   mapHookExternalContentSource,
   normalizeAgentId,
-  normalizeThinkLevel,
   resolveAgentConfig,
   resolveAgentDir,
   resolveAgentTimeoutMs,
@@ -124,7 +122,7 @@ export type PreparedCronRunContext = {
   useSubagentFallbacks: boolean;
   inheritDefaultFallbacksForAgentStringModel: boolean;
   modelFallbacksOverride?: string[];
-  thinkLevel: ThinkLevel | undefined;
+  thinkLevel: import("../../auto-reply/thinking.js").ThinkLevel | undefined;
   thinkingCatalog: ModelCatalogEntry[];
   timeoutMs: number;
   preflightDiagnostics?: CronRunDiagnostics;
@@ -148,7 +146,6 @@ export async function prepareCronRunContext(params: {
 }): Promise<CronPreparationResult> {
   const { input } = params;
   const requestedRuntimeCfg = resolveCronActiveRuntimeConfig(input.cfg);
-  const requestedDefaultAgentId = resolveDefaultAgentId(requestedRuntimeCfg);
   const requestedAgentId =
     typeof input.agentId === "string" && input.agentId.trim()
       ? input.agentId
@@ -156,7 +153,7 @@ export async function prepareCronRunContext(params: {
         ? input.job.agentId
         : undefined;
   const normalizedRequested = requestedAgentId ? normalizeAgentId(requestedAgentId) : undefined;
-  const initialAgentId = normalizedRequested ?? requestedDefaultAgentId;
+  const initialAgentId = normalizedRequested ?? resolveDefaultAgentId(requestedRuntimeCfg);
   const initialAgentDir = resolveAgentDir(requestedRuntimeCfg, initialAgentId);
   const initialWorkspaceDir = resolveAgentWorkspaceDir(requestedRuntimeCfg, initialAgentId);
   const modelOwner = await resolveCronModelSelectionOwner({
@@ -373,7 +370,6 @@ export async function prepareCronRunContext(params: {
       };
     }
     const cfgWithAgentDefaults = resolvedModelSelection.cfgWithAgentDefaults;
-    let thinkingCatalog = modelOwner.modelCatalog.entries;
     const ownerAgentConfig = resolveAgentConfig(modelOwner.config, modelOwner.agentId);
     const matchesDefaultFallbackAgentStringModel =
       typeof ownerAgentConfig?.model === "string" &&
@@ -454,21 +450,16 @@ export async function prepareCronRunContext(params: {
       provider = selectedPreflightCandidate.provider;
       model = selectedPreflightCandidate.model;
     }
-    const hooksGmailThinking = isGmailHook
-      ? normalizeThinkLevel(runtimeCfg.hooks?.gmail?.thinking)
-      : undefined;
-    const jobThink = normalizeThinkLevel(
-      (input.job.payload.kind === "agentTurn" ? input.job.payload.thinking : undefined) ??
-        undefined,
-    );
-    const sessionThink = normalizeThinkLevel(cronSession.sessionEntry.thinkingLevel);
-    if ((jobThink ?? hooksGmailThinking ?? sessionThink) !== "off") {
-      thinkingCatalog = await resolveCronThinkingCatalog({
+    const { catalog: thinkingCatalog, requestedThinkLevel: requestedThinkLevelOverride } =
+      await resolveCronThinkingSelection({
         owner: modelOwner,
         provider,
         model,
+        jobThinking:
+          input.job.payload.kind === "agentTurn" ? input.job.payload.thinking : undefined,
+        hookThinking: isGmailHook ? runtimeCfg.hooks?.gmail?.thinking : undefined,
+        sessionThinking: cronSession.sessionEntry.thinkingLevel,
       });
-    }
     const effectiveAgentRuntime = resolveEffectiveAgentRuntime({
       cfg: cfgWithAgentDefaults,
       provider,
@@ -477,8 +468,7 @@ export async function prepareCronRunContext(params: {
       sessionKey: agentSessionKey,
       sessionEntry: cronSession.sessionEntry,
     });
-    let requestedThinkLevel: ThinkLevel | undefined =
-      jobThink ?? hooksGmailThinking ?? sessionThink;
+    let requestedThinkLevel = requestedThinkLevelOverride;
     if (!requestedThinkLevel) {
       requestedThinkLevel = resolveThinkingDefault({
         cfg: cfgWithAgentDefaults,

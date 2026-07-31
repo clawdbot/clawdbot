@@ -1,6 +1,7 @@
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
+import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
 /** Resolves provider/model precedence for isolated cron runs. */
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -128,6 +129,25 @@ export async function resolveCronThinkingCatalog(params: {
       workspaceDir: params.owner.workspaceDir,
     })
   ).entries;
+}
+
+export async function resolveCronThinkingSelection(params: {
+  owner: ResolvedPublishedModelCatalogOwner;
+  provider: string;
+  model: string;
+  jobThinking?: string;
+  hookThinking?: string;
+  sessionThinking?: string;
+}): Promise<{ catalog: ModelCatalogEntry[]; requestedThinkLevel: ThinkLevel | undefined }> {
+  const requestedThinkLevel =
+    normalizeThinkLevel(params.jobThinking) ??
+    normalizeThinkLevel(params.hookThinking) ??
+    normalizeThinkLevel(params.sessionThinking);
+  const catalog =
+    requestedThinkLevel === "off"
+      ? params.owner.modelCatalog.entries
+      : await resolveCronThinkingCatalog(params);
+  return { catalog, requestedThinkLevel };
 }
 
 /** Resolves the effective model for an isolated cron run across defaults, agents, hooks, payload, and session state. */
