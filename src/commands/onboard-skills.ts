@@ -118,8 +118,8 @@ function isBrewOnlyInstallableSkill(skill: {
 }
 
 function isTrustedAutoInstallableSkill(skill: { bundled: boolean; source: string }): boolean {
-  // Onboarding can auto-run bundled recipes without another prompt. Workspace
-  // skill metadata is mutable project input, so those installs stay explicit.
+  // Onboarding can offer bundled recipes in its explicit consent prompt. Workspace
+  // skill metadata is mutable project input, so those installs stay excluded.
   return skill.bundled && skill.source === "openclaw-bundled";
 }
 
@@ -263,11 +263,25 @@ export async function setupSkills(
     return next;
   }
   if (installable.length > 0) {
-    await prompter.note(
-      installable.map((skill) => `${skill.name}: ${formatSkillHint(skill)}`).join("\n"),
-      t("wizard.skills.installDeps"),
-    );
-    const selectedSkills = installable;
+    const selected = await prompter.multiselect({
+      message: t("wizard.skills.installDeps"),
+      options: [
+        {
+          value: "__skip__",
+          label: t("common.skipForNow"),
+          hint: t("wizard.skills.skipDepsHint"),
+        },
+        ...installable.map((skill) => ({
+          value: skill.name,
+          label: `${skill.emoji ?? "🧩"} ${skill.name}`,
+          hint: formatSkillHint(skill),
+        })),
+      ],
+    });
+    const selectedNames = selected.includes("__skip__") ? [] : selected;
+    const selectedSkills = selectedNames
+      .map((name) => installable.find((skill) => skill.name === name))
+      .filter((skill): skill is (typeof installable)[number] => skill !== undefined);
 
     const needsNodeManagerPrompt = selectedSkills.some((skill) =>
       skill.install.some((option) => option.kind === "node"),
