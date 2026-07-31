@@ -336,6 +336,21 @@ describe("mime detection", () => {
     expect(mime).toBe("audio/aac");
   });
 
+  it.each([
+    { form: "AIFF", fileName: "voice.aiff" },
+    { form: "AIFC", fileName: "voice.aifc" },
+  ])("detects $form audio from its authentic container signature", async ({ form, fileName }) => {
+    const buffer = Buffer.alloc(64);
+    buffer.write("FORM", 0, "ascii");
+    buffer.writeUInt32BE(buffer.length - 8, 4);
+    buffer.write(form, 8, "ascii");
+
+    await expectDetectedMime({
+      input: { buffer, filePath: fileName },
+      expected: "audio/aiff",
+    });
+  });
+
   it("detects Apple CAF audio by magic bytes when file-type does not recognize the container", async () => {
     // CAF files start with the four-byte ASCII tag "caff". `file-type` v22 has
     // no native CAF detector, so without the manual magic-byte fallback the
@@ -393,6 +408,12 @@ describe("mimeTypeFromFilePath", () => {
     { filePath: "photo.jpg", expected: "image/jpeg" },
     { filePath: "photo.JPG", expected: "image/jpeg" },
     { filePath: "voice.mp3", expected: "audio/mpeg" },
+    { filePath: "voice.aiff", expected: "audio/aiff" },
+    { filePath: "voice.AIFF", expected: "audio/aiff" },
+    { filePath: "voice.aif", expected: "audio/aiff" },
+    { filePath: "voice.AIF", expected: "audio/aiff" },
+    { filePath: "voice.aifc", expected: "audio/aiff" },
+    { filePath: "voice.AIFC", expected: "audio/aiff" },
     { filePath: "voice.m2a", expected: "audio/mpeg" },
     { filePath: "audiobook.m4b", expected: "audio/mp4" },
     { filePath: "voice.oga", expected: "audio/ogg" },
@@ -449,6 +470,10 @@ describe("extensionForMime", () => {
     { mime: "image/heic-sequence", expected: ".heic" },
     { mime: "image/heif", expected: ".heif" },
     { mime: "image/heif-sequence", expected: ".heif" },
+    { mime: "audio/aiff", expected: ".aiff" },
+    { mime: "audio/x-aiff", expected: ".aiff" },
+    { mime: "Audio/AIFF", expected: ".aiff" },
+    { mime: "AUDIO/X-AIFF; codecs=pcm", expected: ".aiff" },
     { mime: "audio/mpeg", expected: ".mp3" },
     { mime: "audio/mp3", expected: ".mp3" },
     { mime: "audio/ogg", expected: ".ogg" },
@@ -494,6 +519,12 @@ describe("isAudioFileName", () => {
   it.each([
     { fileName: "audiobook.M4B", expected: true },
     { fileName: "voice.mp3", expected: true },
+    { fileName: "voice.aiff", expected: true },
+    { fileName: "voice.AIFF", expected: true },
+    { fileName: "voice.aif", expected: true },
+    { fileName: "voice.AIF", expected: true },
+    { fileName: "voice.aifc", expected: true },
+    { fileName: "voice.AIFC", expected: true },
     { fileName: "voice.caf", expected: true },
     { fileName: "voice.M2A", expected: true },
     { fileName: "voice.oga", expected: true },
