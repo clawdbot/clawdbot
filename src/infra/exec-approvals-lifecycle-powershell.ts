@@ -50,6 +50,18 @@ const POWERSHELL_COMMON_OPTIONS_WITH_VALUE = new Set([
   "-warningaction",
   "-warningvariable",
 ]);
+const POWERSHELL_COMMON_OPTION_ALIASES = new Map([
+  ["-ea", "-erroraction"],
+  ["-ev", "-errorvariable"],
+  ["-ia", "-informationaction"],
+  ["-iv", "-informationvariable"],
+  ["-ob", "-outbuffer"],
+  ["-ov", "-outvariable"],
+  ["-pv", "-pipelinevariable"],
+  ["-proga", "-progressaction"],
+  ["-wa", "-warningaction"],
+  ["-wv", "-warningvariable"],
+]);
 const POWERSHELL_SOURCE_SELECTOR_OPTIONS = new Set([
   "-displayname",
   "-id",
@@ -64,6 +76,18 @@ const POWERSHELL_PIPELINE_OBJECT_MUTATION_RE =
 
 function optionName(token: string): string {
   return token.trim().toLowerCase().split(/[=:]/u, 1)[0] ?? "";
+}
+
+function resolvePowerShellCommonOptionName(token: string): string {
+  const name = optionName(token);
+  const alias = POWERSHELL_COMMON_OPTION_ALIASES.get(name);
+  if (alias) {
+    return alias;
+  }
+  const matches = [...POWERSHELL_COMMON_OPTIONS_WITH_VALUE].filter((candidate) =>
+    candidate.startsWith(name),
+  );
+  return matches.length === 1 ? (matches[0] ?? name) : name;
 }
 
 function resolveOptionName(token: string): string {
@@ -153,7 +177,7 @@ function isUnfilteredPowerShellProcessOrServiceSource(argv: readonly string[]): 
   }
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index]?.trim() ?? "";
-    const name = optionName(token);
+    const name = resolvePowerShellCommonOptionName(token);
     if (POWERSHELL_SOURCE_SELECTOR_OPTIONS.has(name)) {
       return false;
     }
@@ -271,6 +295,7 @@ function parsePowerShellAlias(
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index]?.trim() ?? "";
     const option = optionName(token);
+    const commonOption = resolvePowerShellCommonOptionName(token);
     if (["-n", "-name"].includes(option)) {
       name = inlineOptionValue(token) ?? argv[++index];
     } else if (["-literalpath", "-path"].includes(option)) {
@@ -278,6 +303,10 @@ function parsePowerShellAlias(
     } else if (["-v", "-value"].includes(option)) {
       value = inlineOptionValue(token) ?? argv[++index];
     } else if (POWERSHELL_ALIAS_OPTIONS_WITH_VALUE.has(option)) {
+      if (inlineOptionValue(token) === undefined) {
+        index += 1;
+      }
+    } else if (POWERSHELL_COMMON_OPTIONS_WITH_VALUE.has(commonOption)) {
       if (inlineOptionValue(token) === undefined) {
         index += 1;
       }
@@ -530,6 +559,7 @@ function parseStartProcessArgv(
   for (let index = 1; index < argv.length; index += 1) {
     const token = argv[index]?.trim() ?? "";
     const name = resolveOptionName(token);
+    const commonOption = resolvePowerShellCommonOptionName(token);
     if (name === "-filepath") {
       filePath = inlineOptionValue(token) ?? argv[++index];
       continue;
@@ -550,6 +580,12 @@ function parseStartProcessArgv(
       continue;
     }
     if (START_PROCESS_FLAGS.has(name)) {
+      continue;
+    }
+    if (POWERSHELL_COMMON_OPTIONS_WITH_VALUE.has(commonOption)) {
+      if (inlineOptionValue(token) === undefined) {
+        index += 1;
+      }
       continue;
     }
     if (START_PROCESS_OPTIONS_WITH_VALUE.has(name)) {

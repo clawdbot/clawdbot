@@ -203,6 +203,24 @@ describe("OpenClaw PowerShell lifecycle edges", () => {
     },
   );
 
+  it.each([
+    ["Set-Alias -ErrorAction Stop oc openclaw; oc gateway restart", ["oc", "gateway", "restart"]],
+    ["Set-Alias -EA Stop oc openclaw; oc gateway restart", ["oc", "gateway", "restart"]],
+    [
+      "Start-Process -ErrorAction Stop openclaw -ArgumentList gateway,restart",
+      ["Start-Process", "-ErrorAction", "Stop", "openclaw", "-ArgumentList", "gateway,restart"],
+    ],
+    [
+      "Start-Process -EA Stop openclaw -ArgumentList gateway,restart",
+      ["Start-Process", "-EA", "Stop", "openclaw", "-ArgumentList", "gateway,restart"],
+    ],
+  ] as Array<[string, string[]]>)(
+    "consumes PowerShell common-parameter values: %s",
+    (command, argv) => {
+      expect(requiresApproval(command, argv)).toBe(true);
+    },
+  );
+
   it("resolves environment-backed PowerShell alias targets", () => {
     const command = "Set-Alias oc $env:TOOL; oc gateway restart";
     expect(requiresApproval(command, ["oc", "gateway", "restart"], { TOOL: "openclaw" })).toBe(
