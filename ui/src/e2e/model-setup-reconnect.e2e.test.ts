@@ -69,6 +69,7 @@ describeControlUiE2e("Control UI model setup same-client reconnect", () => {
       expect(response?.status()).toBe(200);
       await page.getByText("provider/original-model").waitFor();
       const initialDetections = (await gateway.getRequests("openclaw.setup.detect")).length;
+      const initialConnections = (await gateway.getRequests("connect")).length;
       await gateway.setMethodResponse(
         "openclaw.setup.detect",
         detection("provider/reconnected-model"),
@@ -76,6 +77,9 @@ describeControlUiE2e("Control UI model setup same-client reconnect", () => {
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "model setup reconnect proof");
       await expect.poll(async () => page.getByText("provider/original-model").count()).toBe(0);
+      await expect
+        .poll(async () => (await gateway.getRequests("connect")).length)
+        .toBeGreaterThan(initialConnections);
       await gateway.resolveDeferred("connect");
       await expect
         .poll(async () => (await gateway.getRequests("openclaw.setup.detect")).length)
