@@ -18,7 +18,10 @@ function tool(name: string, description?: string): Tool {
 function createClient(params?: {
   connectError?: Error;
   tools?: Tool[];
-  list?: (params?: { cursor?: string }) => Promise<{ tools: Tool[]; nextCursor?: string }>;
+  list?: (
+    params?: { cursor?: string },
+    options?: { timeout?: number },
+  ) => Promise<{ tools: Tool[]; nextCursor?: string }>;
   call?: (options?: { timeout?: number; signal?: AbortSignal }) => Promise<CallToolResult>;
 }) {
   return {
@@ -28,8 +31,8 @@ function createClient(params?: {
         throw params.connectError;
       }
     }),
-    listTools: vi.fn(async (input?: { cursor?: string }) =>
-      params?.list ? await params.list(input) : { tools: params?.tools ?? [] },
+    listTools: vi.fn(async (input?: { cursor?: string }, options?: { timeout?: number }) =>
+      params?.list ? await params.list(input, options) : { tools: params?.tools ?? [] },
     ),
     callTool: vi.fn(
       async (
@@ -234,6 +237,34 @@ describe("node host MCP manager", () => {
     await manager.close();
   });
 
+  it("requests a second page when the opaque cursor is an empty string", async () => {
+    const client = createClient({
+      list: async (params) => {
+        if (params === undefined) {
+          return { tools: [tool("first")], nextCursor: "" };
+        }
+        expect(params).toEqual({ cursor: "" });
+        return { tools: [tool("second")] };
+      },
+    });
+    const manager = await startNodeHostMcpManager(
+      { docs: { command: "docs" } },
+      { createClient: () => client, resolveTransport: () => transport, warn: vi.fn() },
+    );
+
+    expect(client.listTools).toHaveBeenCalledTimes(2);
+    expect(client.listTools.mock.calls.map((call) => call[0])).toEqual([
+      undefined,
+      { cursor: "" },
+    ]);
+    expect(manager.descriptors.map((descriptor) => descriptor.mcp?.tool)).toEqual([
+      "first",
+      "second",
+    ]);
+
+    await manager.close();
+  });
+
   it("isolates a repeated pagination cursor while a sibling server survives", async () => {
     const looping = createClient({
       list: async () => ({ tools: [tool("loop")], nextCursor: "same" }),
@@ -289,6 +320,52 @@ describe("node host MCP manager", () => {
     expect(manager.descriptors.map((descriptor) => descriptor.name)).toEqual(["healthy_search"]);
 
     await manager.close();
+  });
+
+  it("isolates slow unique-cursor pagination at one catalog deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    try {
+      let page = 0;
+      const slow = createClient({
+        list: async () => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 30);
+          });
+          page += 1;
+          return { tools: [tool(`tool-${page}`)], nextCursor: `cursor-${page}` };
+        },
+      });
+      const healthy = createClient({ tools: [tool("search")] });
+      const warn = vi.fn();
+      const starting = startNodeHostMcpManager(
+        { slow: { command: "slow" }, healthy: { command: "healthy" } },
+        {
+          createClient: (serverName) => (serverName === "slow" ? slow : healthy),
+          resolveTransport: () => ({ ...transport, requestTimeoutMs: 50 }),
+          warn,
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(50);
+      const manager = await starting;
+
+      expect(slow.listTools).toHaveBeenCalledTimes(2);
+      expect(slow.listTools.mock.calls.map((call) => call[1]?.timeout)).toEqual([50, 20]);
+      expect(slow.close).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("timed out after 50ms"));
+      expect(manager.descriptors.map((descriptor) => descriptor.name)).toEqual(["healthy_search"]);
+      await expect(manager.callMcpTool({ server: "healthy", tool: "search" })).resolves.toEqual({
+        content: [{ type: "text", text: "ok" }],
+      });
+
+      await vi.advanceTimersByTimeAsync(10);
+      await manager.close();
+      expect(healthy.close).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("isolates an oversized multi-page catalog at the accumulated byte ceiling", async () => {
