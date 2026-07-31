@@ -1894,7 +1894,6 @@ describe("runMemoryFlushIfNeeded", () => {
   it.each(["user", "auto"] as const)(
     "passes resolved context budget and $authProfileIdSource auth profile to preflight compaction",
     async (authProfileIdSource) => {
-      const sessionFile = path.join(rootDir, "budget-session.jsonl");
       const sessionEntry: SessionEntry = {
         sessionId: "session",
         updatedAt: Date.now(),
