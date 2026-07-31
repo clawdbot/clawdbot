@@ -527,6 +527,28 @@ export function createClickClackClient(options: ClientOptions) {
       );
       return data.message;
     },
+    /**
+     * Publishes an ephemeral realtime signal such as native agent progress.
+     * These frames are intentionally not persisted as messages.
+     */
+    publishEphemeral: async (params: {
+      workspaceId: string;
+      channelId?: string;
+      conversationId?: string;
+      type: "typing.started" | "typing.stopped" | "presence.changed" | "agent.progress";
+      payload?: Record<string, unknown>;
+    }): Promise<void> => {
+      await request<{ event?: ClickClackEvent }>("/api/realtime/ephemeral", {
+        method: "POST",
+        body: JSON.stringify({
+          workspace_id: params.workspaceId,
+          ...(params.channelId ? { channel_id: params.channelId } : {}),
+          ...(params.conversationId ? { direct_conversation_id: params.conversationId } : {}),
+          type: params.type,
+          payload: params.payload ?? {},
+        }),
+      });
+    },
     createDirectMessage: async (
       conversationId: string,
       body: string,

@@ -920,6 +920,35 @@ describe("ClickClack HTTP client", () => {
     const init = fetchMock.mock.calls[0]?.[1];
     expect(requestBodyJson(init)).toEqual({ body: "longer" });
   });
+
+  it("POSTs ephemeral agent progress frames to the realtime endpoint", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      Response.json({ event: { id: "evt_1" } }, { status: 202 }),
+    );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "placeholder",
+      fetch: fetchMock,
+    });
+
+    await client.publishEphemeral({
+      workspaceId: "wsp_1",
+      channelId: "chn_1",
+      type: "agent.progress",
+      payload: { op: "append", turn_id: "msg_1" },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://clickclack.example/api/realtime/ephemeral",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(requestBodyJson(fetchMock.mock.calls[0]?.[1])).toEqual({
+      workspace_id: "wsp_1",
+      channel_id: "chn_1",
+      type: "agent.progress",
+      payload: { op: "append", turn_id: "msg_1" },
+    });
+  });
 });
 
 describe("createClickClackClient websocket", () => {
