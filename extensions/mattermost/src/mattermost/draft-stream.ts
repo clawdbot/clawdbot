@@ -38,6 +38,8 @@ type MattermostDraftStream = {
   updateAssistantText: (text: string) => void;
   flush: () => Promise<void>;
   postId: () => string | undefined;
+  /** Returns the last text successfully sent to the current draft post, or "" if none. */
+  latestSentText: () => string;
   clear: () => Promise<void>;
   discardPending: () => Promise<void>;
   seal: () => Promise<void>;
@@ -418,6 +420,7 @@ export function createMattermostDraftStream(params: {
     updateAssistantText,
     flush,
     postId: () => currentGeneration.postId,
+    latestSentText: () => currentGeneration.lastSentText,
     clear,
     discardPending,
     seal,

@@ -12,6 +12,7 @@ import {
   listMessageReceiptPlatformIds,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
+import { isReplyPayloadNonTerminalToolErrorWarning } from "openclaw/plugin-sdk/reply-payload";
 import type { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import type { MattermostPost } from "./client.js";
@@ -295,6 +296,16 @@ export async function dispatchMattermostInboundTurn(
         // Final text uses only confirmed-visible generations, so join prior boundary work before deciding whether to edit in place.
         await draftStream.settleBoundaries();
         progressDraft.markFinalReplyStarted();
+      }
+      // Skip non-terminal tool-error warnings when the streaming answer is already visible
+      // in the draft post. Without this guard the warning would edit the draft post in place,
+      // replacing the streamed answer the user can already see.
+      if (
+        info.kind === "final" &&
+        isReplyPayloadNonTerminalToolErrorWarning(payloadEntry) &&
+        (previewState.finalizedViaPreviewPost || draftStream.latestSentText() !== "")
+      ) {
+        return;
       }
       // A visible same-thread final can be a send or an in-place draft edit; either path records participation.
       let threadParticipationRecorded = false;
