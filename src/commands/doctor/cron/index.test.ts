@@ -15,6 +15,7 @@ import {
 import { cronStoreKey } from "../../../cron/store/key.js";
 import { readCronTaskRunHistoryPage } from "../../../cron/task-run-history.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { withRestoredMocks } from "../../../test-utils/vitest-spies.js";
 import {
   collectLegacyCronStoreHealthFindings,
@@ -246,7 +247,7 @@ describe("collectLegacyCronStoreHealthFindings", () => {
         expect.objectContaining({
           checkId: "core/doctor/legacy-cron-store",
           severity: "warning",
-          path: storePath,
+          path: resolveOpenClawStateSqlitePath(),
           requirement: "legacy-notify-fallback",
         }),
       ]),
@@ -292,6 +293,21 @@ describe("collectLegacyCronStoreHealthFindings", () => {
       }),
     ]);
     await expect(readPersistedJobs(storePath)).resolves.toEqual([]);
+  });
+
+  it("attributes SQLite-only cron findings to the canonical state database", async () => {
+    const storePath = await makeTempStorePath();
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(path.dirname(storePath)));
+    await writeCurrentCronStore(storePath, [createCurrentCronJob({ notify: true })]);
+
+    const findings = await collectLegacyCronStoreHealthFindings({ cfg: {} });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        path: resolveOpenClawStateSqlitePath(),
+        requirement: "legacy-notify-fallback",
+      }),
+    ]);
   });
 
   it("returns no findings for an already-normalized empty cron store", async () => {
@@ -389,6 +405,11 @@ describe("maybeRepairLegacyCronStore", () => {
         },
         state: {},
       },
+      createCurrentCronJob({
+        id: "disabled-pinned",
+        enabled: false,
+        payload: { kind: "agentTurn", message: "Dormant job", model: "ollama/qwen3" },
+      }),
     ]);
     const prompter = makePrompter(true);
 
@@ -410,6 +431,8 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoteContaining("2 jobs set `payload.model`", "Cron");
     expectNoteContaining("Provider namespaces: anthropic=1, openai=1", "Cron");
     expectNoteContaining("2 jobs use a different model than `agents.defaults.model`", "Cron");
+    expectNoNoteContaining("ollama", "Cron");
+    expectNoNoteContaining("jobs.json", "Cron");
 
     const jobs = await readPersistedJobs(storePath);
     const job = requirePersistedJob(jobs, 0);
@@ -1400,6 +1423,7 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoNoteContaining("Legacy cron job storage detected", "Cron");
     expectNoteContaining("Cron store issues detected", "Cron");
     expectNoteContaining("1 job still uses legacy", "Cron");
+    expectNoNoteContaining("jobs.json", "Cron");
   });
 
   it("advises on isolated shell-prompt jobs without a non-actionable --fix repair note (#94655)", async () => {
